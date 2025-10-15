@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = ["location"]
+
+
+
+[workspace.package]
+name = "waterui-kit"
+version = "0.1.0"
+edition = "2024"
+authors = ["Lexo Liu"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/water-rs/kit"
+description = "Kit utilities and helpers for WaterUI"
+keywords = ["kit", "utilities", "helpers", "waterui"]
+categories = ["gui", "development-tools"]
+
+[package]
+name = "waterui-kit"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository = "https://github.com/water-rs/kit"
+description = "Kit utilities and helpers for WaterUI"
+keywords = ["kit", "utilities", "helpers", "waterui"]
+categories = ["gui", "development-tools"]
+
+[dependencies]
+core-foundation.workspace = true
+
+
+[workspace.dependencies]
+core-foundation = "0.10"
+executor-core = { version = "0.6.0", features = ["std"]}
+log = "0.4.28"
+nami = "0.6.2"
+serde = "1"
+
+[workspace.lints]
+rust.missing_docs = "warn"
+rust.missing_debug_implementations = "warn"
+clippy.all = "warn"
+clippy.style = "warn"
+clippy.correctness = "warn"
+clippy.complexity = "warn"
+clippy.suspicious = "warn"
+clippy.perf = "warn"
+clippy.pedantic = "warn"
+clippy.nursery = "warn"
+clippy.cargo = "warn"

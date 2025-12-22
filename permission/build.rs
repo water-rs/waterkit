@@ -1,4 +1,4 @@
-//! Build script for waterkit-location.
+//! Build script for waterkit-permission.
 //!
 //! Handles platform-specific code generation:
 //! - Apple: Swift bridge generation
@@ -38,7 +38,7 @@ fn build_apple() {}
 
 #[cfg(target_os = "android")]
 fn build_android() {
-    const KOTLIN_FILE_RELATIVE_PATH: &str = "src/sys/android/LocationHelper.kt";
+    const KOTLIN_FILE_RELATIVE_PATH: &str = "src/sys/android/PermissionHelper.kt";
 
     println!("cargo:rerun-if-changed={KOTLIN_FILE_RELATIVE_PATH}");
 
@@ -65,8 +65,8 @@ fn build_android() {
 
     let class_file = classes_dir
         .join("waterkit")
-        .join("location")
-        .join("LocationHelper.class");
+        .join("permission")
+        .join("PermissionHelper.class");
 
     let d8_jar_path = android_build::android_d8_jar(None).expect("Failed to find d8.jar");
 

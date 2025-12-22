@@ -1,11 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["location"]
-
+members = ["permission", "location"]
 
 
 [workspace.package]
-name = "waterui-kit"
 version = "0.1.0"
 edition = "2024"
 authors = ["Lexo Liu"]
@@ -17,7 +15,7 @@ keywords = ["kit", "utilities", "helpers", "waterui"]
 categories = ["gui", "development-tools"]
 
 [package]
-name = "waterui-kit"
+name = "waterkit"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
@@ -29,15 +27,26 @@ keywords = ["kit", "utilities", "helpers", "waterui"]
 categories = ["gui", "development-tools"]
 
 [dependencies]
-core-foundation.workspace = true
 
 
 [workspace.dependencies]
-core-foundation = "0.10"
-executor-core = { version = "0.6.0", features = ["std"]}
-log = "0.4.28"
-nami = "0.6.2"
-serde = "1"
+# Cross-platform
+futures = "0.3"
+
+# Apple platforms
+swift-bridge = "0.1"
+swift-bridge-build = "0.1"
+
+# Android
+jni = "0.21"
+android-build = "0.1"
+
+# Windows
+windows = { version = "0.58", features = ["Devices_Geolocation", "Foundation"] }
+
+# Linux
+zbus = "4"
+
 
 [workspace.lints]
 rust.missing_docs = "warn"

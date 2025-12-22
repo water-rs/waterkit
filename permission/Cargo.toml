@@ -1,19 +1,18 @@
 [package]
-name = "waterkit-location"
+name = "waterkit-permission"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository = "https://github.com/water-rs/kit"
-description = "Cross-platform location access for WaterUI"
-keywords = ["location", "gps", "geolocation", "ios", "android"]
+description = "Cross-platform permission request handling for WaterUI"
+keywords = ["permission", "ios", "android", "macos", "windows"]
 categories = ["gui", "os"]
 
 [lints]
 workspace = true
 
 [dependencies]
-waterkit-permission = { path = "../permission" }
 
 [build-dependencies]
 

@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 
 [build-dependencies]
+android-build.workspace = true
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
@@ -26,9 +27,6 @@ swift-bridge-build.workspace = true
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
-
-[target.'cfg(target_os = "android")'.build-dependencies]
-android-build.workspace = true
 
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]

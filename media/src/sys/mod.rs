@@ -1,4 +1,10 @@
-//! Platform-specific media control implementations.
+//! Platform-specific media center integrations.
+//!
+//! Audio playback is handled by rodio across all platforms.
+//! This module provides the platform-specific "Now Playing" integrations.
+
+use crate::{MediaCommandHandler, MediaMetadata, PlaybackState};
+use std::time::Duration;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple;
@@ -12,18 +18,87 @@ mod windows;
 #[cfg(target_os = "linux")]
 mod linux;
 
-// Re-export platform implementations
+// Keep MediaSessionInner for backwards compatibility
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-pub(crate) use apple::{AudioPlayerInner, MediaSessionInner};
+pub(crate) use apple::{MediaCenterInner, MediaSessionInner};
 
 #[cfg(target_os = "android")]
-pub(crate) use android::{AudioPlayerInner, MediaSessionInner};
+pub(crate) use android::MediaSessionInner;
 
 #[cfg(target_os = "windows")]
-pub(crate) use windows::{AudioPlayerInner, MediaSessionInner};
+pub(crate) use windows::MediaSessionInner;
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::{AudioPlayerInner, MediaSessionInner};
+pub(crate) use linux::MediaSessionInner;
+
+/// Platform-specific media center integration.
+///
+/// Handles "Now Playing" display and media command callbacks.
+pub(crate) struct MediaCenterIntegration {
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    inner: apple::MediaCenterInner,
+    
+    #[cfg(target_os = "windows")]
+    inner: windows::MediaCenterInner,
+    
+    #[cfg(target_os = "linux")]
+    inner: linux::MediaCenterInner,
+    
+    #[cfg(target_os = "android")]
+    inner: android::MediaCenterInner,
+    
+    #[cfg(not(any(
+        target_os = "ios",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "windows",
+        target_os = "linux"
+    )))]
+    inner: FallbackMediaCenter,
+}
+
+impl MediaCenterIntegration {
+    pub fn new() -> Result<Self, String> {
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        let inner = apple::MediaCenterInner::new()?;
+        
+        #[cfg(target_os = "windows")]
+        let inner = windows::MediaCenterInner::new()?;
+        
+        #[cfg(target_os = "linux")]
+        let inner = linux::MediaCenterInner::new()?;
+        
+        #[cfg(target_os = "android")]
+        let inner = android::MediaCenterInner::new()?;
+        
+        #[cfg(not(any(
+            target_os = "ios",
+            target_os = "macos",
+            target_os = "android",
+            target_os = "windows",
+            target_os = "linux"
+        )))]
+        let inner = FallbackMediaCenter;
+        
+        Ok(Self { inner })
+    }
+    
+    pub fn update(&self, metadata: &MediaMetadata, state: &PlaybackState) {
+        self.inner.update(metadata, state);
+    }
+    
+    pub fn clear(&self) {
+        self.inner.clear();
+    }
+    
+    pub fn set_command_handler(&self, handler: Box<dyn MediaCommandHandler>) {
+        self.inner.set_command_handler(handler);
+    }
+    
+    pub fn run_loop(&self, duration: Duration) {
+        self.inner.run_loop(duration);
+    }
+}
 
 // Fallback for unsupported platforms
 #[cfg(not(any(
@@ -33,12 +108,34 @@ pub(crate) use linux::{AudioPlayerInner, MediaSessionInner};
     target_os = "windows",
     target_os = "linux"
 )))]
+struct FallbackMediaCenter;
+
+#[cfg(not(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "android",
+    target_os = "windows",
+    target_os = "linux"
+)))]
+impl FallbackMediaCenter {
+    fn update(&self, _metadata: &MediaMetadata, _state: &PlaybackState) {}
+    fn clear(&self) {}
+    fn set_command_handler(&self, _handler: Box<dyn MediaCommandHandler>) {}
+    fn run_loop(&self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
+}
+
+// Also keep fallback MediaSessionInner for backwards compatibility
+#[cfg(not(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "android",
+    target_os = "windows",
+    target_os = "linux"
+)))]
 mod fallback {
-    use crate::player::PlayerState;
-    use crate::{MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlayerError};
-    use std::path::Path;
-    use std::sync::{Arc, RwLock};
-    use std::time::Duration;
+    use crate::{MediaCommandHandler, MediaError, MediaMetadata, PlaybackState};
 
     #[derive(Debug)]
     pub struct MediaSessionInner;
@@ -75,77 +172,6 @@ mod fallback {
             Err(MediaError::NotSupported)
         }
     }
-
-    #[derive(Debug)]
-    pub struct AudioPlayerInner;
-
-    impl AudioPlayerInner {
-        pub fn new() -> Result<Self, PlayerError> {
-            Err(PlayerError::Unknown("platform not supported".into()))
-        }
-
-        pub fn play_file(&self, _path: &Path) -> Result<(), PlayerError> {
-            Err(PlayerError::Unknown("platform not supported".into()))
-        }
-
-        pub fn play_url(&self, _url: &str) -> Result<(), PlayerError> {
-            Err(PlayerError::Unknown("platform not supported".into()))
-        }
-
-        pub fn pause(&self) -> Result<(), PlayerError> {
-            Err(PlayerError::Unknown("platform not supported".into()))
-        }
-
-        pub fn resume(&self) -> Result<(), PlayerError> {
-            Err(PlayerError::Unknown("platform not supported".into()))
-        }
-
-        pub fn stop(&self) -> Result<(), PlayerError> {
-            Err(PlayerError::Unknown("platform not supported".into()))
-        }
-
-        pub fn seek(&self, _position: Duration) -> Result<(), PlayerError> {
-            Err(PlayerError::Unknown("platform not supported".into()))
-        }
-
-        pub fn position(&self) -> Option<Duration> {
-            None
-        }
-
-        pub fn duration(&self) -> Option<Duration> {
-            None
-        }
-
-        pub fn state(&self) -> PlayerState {
-            PlayerState::Stopped
-        }
-
-        pub fn set_volume(&self, _volume: f32) -> Result<(), PlayerError> {
-            Err(PlayerError::Unknown("platform not supported".into()))
-        }
-
-        pub fn update_now_playing(
-            &self,
-            _metadata: &MediaMetadata,
-            _state: &PlaybackState,
-        ) -> Result<(), PlayerError> {
-            Err(PlayerError::Unknown("platform not supported".into()))
-        }
-
-        pub fn clear_now_playing(&self) -> Result<(), PlayerError> {
-            Err(PlayerError::Unknown("platform not supported".into()))
-        }
-
-        pub fn register_command_handler(
-            &self,
-            _handler: Arc<RwLock<Option<Box<dyn MediaCommandHandler>>>>,
-        ) {
-        }
-
-        pub fn run_loop(&self, duration: Duration) {
-            std::thread::sleep(duration);
-        }
-    }
 }
 
 #[cfg(not(any(
@@ -155,5 +181,4 @@ mod fallback {
     target_os = "windows",
     target_os = "linux"
 )))]
-pub(crate) use fallback::{AudioPlayerInner, MediaSessionInner};
-
+pub(crate) use fallback::MediaSessionInner;

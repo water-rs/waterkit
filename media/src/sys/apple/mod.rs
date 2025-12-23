@@ -344,3 +344,54 @@ impl AudioPlayerInner {
     }
 }
 
+// MARK: - Media Center Integration (for new rodio-based player)
+
+/// Media center integration for Apple platforms.
+/// Uses MPNowPlayingInfoCenter and MPRemoteCommandCenter.
+pub struct MediaCenterInner;
+
+impl MediaCenterInner {
+    pub fn new() -> Result<Self, String> {
+        convert_result(ffi::media_session_init())
+            .map_err(|e| e.to_string())?;
+        Ok(Self)
+    }
+    
+    pub fn update(&self, metadata: &MediaMetadata, state: &PlaybackState) {
+        let ffi_metadata = ffi::MediaMetadataFFI {
+            title: metadata.title.clone().unwrap_or_default(),
+            artist: metadata.artist.clone().unwrap_or_default(),
+            album: metadata.album.clone().unwrap_or_default(),
+            artwork_url: metadata.artwork_url.clone().unwrap_or_default(),
+            duration_secs: metadata.duration.map(|d| d.as_secs_f64()).unwrap_or(-1.0),
+        };
+        let _ = ffi::media_session_set_metadata(ffi_metadata);
+        
+        let status = match state.status {
+            PlaybackStatus::Stopped => 0,
+            PlaybackStatus::Paused => 1,
+            PlaybackStatus::Playing => 2,
+        };
+        let ffi_state = ffi::PlaybackStateFFI {
+            status,
+            position_secs: state.position.map(|d| d.as_secs_f64()).unwrap_or(-1.0),
+            rate: state.rate,
+        };
+        let _ = ffi::media_session_set_playback_state(ffi_state);
+    }
+    
+    pub fn clear(&self) {
+        let _ = ffi::media_session_clear();
+    }
+    
+    pub fn set_command_handler(&self, handler: Box<dyn MediaCommandHandler>) {
+        if let Ok(mut guard) = COMMAND_HANDLER.write() {
+            *guard = Some(handler);
+        }
+        ffi::media_session_register_command_handler();
+    }
+    
+    pub fn run_loop(&self, duration: std::time::Duration) {
+        ffi::media_session_run_loop(duration.as_secs_f64());
+    }
+}

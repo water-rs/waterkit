@@ -10,3 +10,4 @@ path = "src/main.rs"
 
 [dependencies]
 waterkit-media = { path = "../../../media" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

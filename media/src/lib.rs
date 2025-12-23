@@ -9,7 +9,7 @@
 mod player;
 mod sys;
 
-pub use player::{AudioPlayer, AudioPlayerBuilder, AudioSource, PlayerError, PlayerState};
+pub use player::{rodio, AudioDevice, AudioPlayer, AudioPlayerBuilder, PlayerError, PlayerState};
 
 use std::time::Duration;
 

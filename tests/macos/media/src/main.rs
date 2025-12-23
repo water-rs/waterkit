@@ -1,24 +1,114 @@
 //! macOS test binary for waterkit-media.
 //!
-//! Run with: cargo run -p waterkit-media-test
+//! Run with: cargo run -p waterkit-media-test [options] [audio_file]
 //!
-//! This will play audio and show "Now Playing" info in Control Center.
-//! Use the media controls to test command handling.
+//! Options:
+//!   --title <title>      Set the track title
+//!   --artist <artist>    Set the artist name
+//!   --album <album>      Set the album name
+//!   --artwork <path>     Set artwork image path
+//!
+//! Examples:
+//!   cargo run -p waterkit-media-test
+//!   cargo run -p waterkit-media-test /tmp/song.mp3
+//!   cargo run -p waterkit-media-test --title "My Song" --artist "Artist" /tmp/song.mp3
 
 use std::time::Duration;
 use waterkit_media::{AudioPlayer, MediaCommand};
 
-fn main() {
+fn parse_args() -> (Option<String>, Option<String>, Option<String>, Option<String>, Option<String>) {
+    let args: Vec<String> = std::env::args().collect();
+    let mut title = None;
+    let mut artist = None;
+    let mut album = None;
+    let mut artwork = None;
+    let mut audio_file = None;
+    
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--title" if i + 1 < args.len() => {
+                title = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--artist" if i + 1 < args.len() => {
+                artist = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--album" if i + 1 < args.len() => {
+                album = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--artwork" if i + 1 < args.len() => {
+                artwork = Some(args[i + 1].clone());
+                i += 2;
+            }
+            arg if !arg.starts_with("--") => {
+                audio_file = Some(arg.to_string());
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    
+    (audio_file, title, artist, album, artwork)
+}
+
+fn expand_path(path: &str) -> String {
+    if path.starts_with("~/") {
+        let home = std::env::var("HOME").unwrap_or_default();
+        path.replacen("~", &home, 1)
+    } else {
+        path.to_string()
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let (audio_file, title, artist, album, artwork) = parse_args();
+    
     println!("=== Waterkit Media AudioPlayer Test (macOS) ===\n");
 
+    // List available devices
+    println!("Available audio devices:");
+    match AudioPlayer::list_devices() {
+        Ok(devices) => {
+            for (i, device) in devices.iter().enumerate() {
+                println!("  [{}] {}", i, device.name());
+            }
+        }
+        Err(e) => println!("  (error: {})", e),
+    }
+    println!();
+
+    // Determine metadata
+    let track_title = title.unwrap_or_else(|| {
+        audio_file.as_ref()
+            .map(|f| std::path::Path::new(f).file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Test Audio")
+                .to_string())
+            .unwrap_or_else(|| "Test Audio".to_string())
+    });
+    let track_artist = artist.unwrap_or_else(|| "Unknown Artist".to_string());
+    let track_album = album.unwrap_or_else(|| "Unknown Album".to_string());
+    
     // Create audio player with metadata
     println!("Creating audio player...");
-    let player = match AudioPlayer::new()
-        .title("Test Audio")
-        .artist("Waterkit Test")
-        .album("Test Album")
-        .build()
-    {
+    let mut builder = AudioPlayer::new()
+        .title(&track_title)
+        .artist(&track_artist)
+        .album(&track_album);
+    
+    // Add artwork if provided (convert local path to file:// URL)
+    if let Some(art_path) = artwork {
+        let expanded = expand_path(&art_path);
+        let artwork_url = format!("file://{}", expanded);
+        builder = builder.artwork_url(&artwork_url);
+        println!("Artwork: {}", expanded);
+    }
+    
+    let player = match builder.build() {
         Ok(p) => {
             println!("✓ Audio player created\n");
             p
@@ -29,79 +119,57 @@ fn main() {
         }
     };
 
-    // Try to play a test audio URL (public domain music)
-    // This is a short audio sample from the Internet Archive
-    let test_url = "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg";
-    
-    println!("Playing test audio from URL...");
-    println!("URL: {}", test_url);
-    match player.play_url(test_url) {
-        Ok(()) => println!("✓ Audio playback started\n"),
-        Err(e) => {
-            println!("✗ Failed to play audio: {}\n", e);
-            println!("Note: Audio playback is required for Now Playing to work on macOS.");
-            println!("The test will continue but Now Playing may not appear.\n");
+    // Print metadata
+    println!("Now Playing:");
+    println!("  Title:  {}", track_title);
+    println!("  Artist: {}", track_artist);
+    println!("  Album:  {}", track_album);
+    println!();
+
+    // Play audio
+    if let Some(file_path) = audio_file {
+        let expanded_path = expand_path(&file_path);
+        
+        println!("Playing: {}", expanded_path);
+        match player.play_file(&expanded_path) {
+            Ok(()) => println!("✓ Audio playback started\n"),
+            Err(e) => {
+                println!("✗ Failed to play file: {}\n", e);
+                return;
+            }
         }
+    } else {
+        // Default: play a sine wave test tone
+        println!("No file specified, playing 440Hz test tone...");
+        {
+            use waterkit_media::rodio::source::{SineWave, Source};
+            let source = SineWave::new(440.0)
+                .take_duration(Duration::from_secs(5))
+                .amplify(0.3);
+            player.sink().append(source);
+        }
+        println!("✓ Test tone playing\n");
     }
 
     // Register command handler
-    println!("Registering command handler...");
     player.set_command_handler(|cmd: MediaCommand| {
         match cmd {
-            MediaCommand::Play => {
-                println!("📱 Command: Play");
-            }
-            MediaCommand::Pause => {
-                println!("📱 Command: Pause");
-            }
-            MediaCommand::PlayPause => {
-                println!("📱 Command: Play/Pause");
-            }
-            MediaCommand::Stop => {
-                println!("📱 Command: Stop");
-            }
-            MediaCommand::Next => {
-                println!("📱 Command: Next");
-            }
-            MediaCommand::Previous => {
-                println!("📱 Command: Previous");
-            }
-            MediaCommand::Seek(pos) => {
-                println!("📱 Command: Seek to {:?}", pos);
-            }
-            _ => {
-                println!("📱 Command: {:?}", cmd);
-            }
+            MediaCommand::Play => println!("📱 Play"),
+            MediaCommand::Pause => println!("📱 Pause"),
+            MediaCommand::PlayPause => println!("📱 Play/Pause"),
+            MediaCommand::Stop => println!("📱 Stop"),
+            _ => println!("📱 {:?}", cmd),
         }
     });
-    println!("✓ Command handler registered\n");
 
-    // Print current state
-    if let Some(duration) = player.duration() {
-        println!("Audio duration: {:?}", duration);
-    }
     println!("Playing: {}", player.is_playing());
-    println!("");
+    println!("Volume: {:.0}%", player.volume() * 100.0);
+    println!();
+    println!("Press Ctrl+C to stop...\n");
 
-    println!("========================================");
-    println!("Check Control Center (top-right menu bar)");
-    println!("for 'Now Playing' information!");
-    println!("");
-    println!("Try using media keys or Control Center");
-    println!("to send commands. This test will run");
-    println!("for 30 seconds...");
-    println!("========================================\n");
+    // Wait until audio finishes or 10 minutes max
+    player.run_loop(Duration::from_secs(600));
 
-    // Run event loop for 30 seconds
-    player.run_loop(Duration::from_secs(30));
-
-    // Clean up
-    println!("\nCleaning up...");
-    match player.stop() {
-        Ok(()) => println!("✓ Playback stopped"),
-        Err(e) => println!("⚠ {}", e),
-    }
-
-    println!("\n=== Test Complete ===");
+    player.stop();
+    println!("\n=== Playback Complete ===");
 }
-

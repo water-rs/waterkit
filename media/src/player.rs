@@ -1,25 +1,37 @@
 //! Cross-platform audio player with media center integration.
 //!
-//! This module provides an ergonomic API for playing audio files and URLs
-//! with automatic "Now Playing" integration on all supported platforms.
+//! Uses `rodio` for audio playback on all platforms, with platform-specific
+//! media center integrations (MPNowPlayingInfoCenter, SMTC, MPRIS, MediaSession).
 
 use crate::{MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
+use std::fs::File;
+use std::io::{BufReader, Read};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-/// Audio source to play.
+// Re-export rodio for advanced users
+pub use rodio;
+
+/// Audio output device.
 #[derive(Debug, Clone)]
-pub enum AudioSource {
-    /// Local file path.
-    File(std::path::PathBuf),
-    /// Remote URL.
-    Url(String),
+pub struct AudioDevice {
+    name: String,
+    // Device handle is not Clone, so we store the name and recreate when needed
 }
 
-impl<P: AsRef<Path>> From<P> for AudioSource {
-    fn from(path: P) -> Self {
-        Self::File(path.as_ref().to_path_buf())
+impl AudioDevice {
+    /// Get the device name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl std::fmt::Display for AudioDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
     }
 }
 
@@ -36,16 +48,18 @@ pub enum PlayerState {
 }
 
 /// Errors that can occur during audio playback.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum PlayerError {
+    /// Failed to initialize audio output.
+    OutputInitFailed(String),
     /// Failed to load the audio source.
     LoadFailed(String),
     /// Playback operation failed.
     PlaybackFailed(String),
     /// The audio format is not supported.
     UnsupportedFormat(String),
-    /// Media session error.
-    MediaSessionError(MediaError),
+    /// No audio device available.
+    NoDevice,
     /// An unknown error occurred.
     Unknown(String),
 }
@@ -53,10 +67,11 @@ pub enum PlayerError {
 impl std::fmt::Display for PlayerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::OutputInitFailed(msg) => write!(f, "failed to init audio output: {msg}"),
             Self::LoadFailed(msg) => write!(f, "failed to load audio: {msg}"),
             Self::PlaybackFailed(msg) => write!(f, "playback failed: {msg}"),
-            Self::UnsupportedFormat(msg) => write!(f, "unsupported audio format: {msg}"),
-            Self::MediaSessionError(err) => write!(f, "media session error: {err}"),
+            Self::UnsupportedFormat(msg) => write!(f, "unsupported format: {msg}"),
+            Self::NoDevice => write!(f, "no audio device available"),
             Self::Unknown(msg) => write!(f, "unknown error: {msg}"),
         }
     }
@@ -64,15 +79,29 @@ impl std::fmt::Display for PlayerError {
 
 impl std::error::Error for PlayerError {}
 
-impl From<MediaError> for PlayerError {
-    fn from(err: MediaError) -> Self {
-        Self::MediaSessionError(err)
+impl Clone for PlayerError {
+    fn clone(&self) -> Self {
+        match self {
+            Self::OutputInitFailed(s) => Self::OutputInitFailed(s.clone()),
+            Self::LoadFailed(s) => Self::LoadFailed(s.clone()),
+            Self::PlaybackFailed(s) => Self::PlaybackFailed(s.clone()),
+            Self::UnsupportedFormat(s) => Self::UnsupportedFormat(s.clone()),
+            Self::NoDevice => Self::NoDevice,
+            Self::Unknown(s) => Self::Unknown(s.clone()),
+        }
     }
 }
 
-/// Builder for creating an [`AudioPlayer`] with metadata.
-#[derive(Debug, Clone, Default)]
+impl From<MediaError> for PlayerError {
+    fn from(err: MediaError) -> Self {
+        Self::Unknown(err.to_string())
+    }
+}
+
+/// Builder for creating an [`AudioPlayer`].
+#[derive(Debug, Default)]
 pub struct AudioPlayerBuilder {
+    device: Option<String>,
     title: Option<String>,
     artist: Option<String>,
     album: Option<String>,
@@ -86,28 +115,35 @@ impl AudioPlayerBuilder {
         Self::default()
     }
 
-    /// Set the title for the audio.
+    /// Set a specific output device (optional, uses default if not set).
+    #[must_use]
+    pub fn device(mut self, device: &AudioDevice) -> Self {
+        self.device = Some(device.name.clone());
+        self
+    }
+
+    /// Set the title for media center display.
     #[must_use]
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
     }
 
-    /// Set the artist for the audio.
+    /// Set the artist for media center display.
     #[must_use]
     pub fn artist(mut self, artist: impl Into<String>) -> Self {
         self.artist = Some(artist.into());
         self
     }
 
-    /// Set the album for the audio.
+    /// Set the album for media center display.
     #[must_use]
     pub fn album(mut self, album: impl Into<String>) -> Self {
         self.album = Some(album.into());
         self
     }
 
-    /// Set the artwork URL for the audio.
+    /// Set the artwork URL for media center display.
     #[must_use]
     pub fn artwork_url(mut self, url: impl Into<String>) -> Self {
         self.artwork_url = Some(url.into());
@@ -118,15 +154,18 @@ impl AudioPlayerBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error if the audio player fails to initialize.
+    /// Returns an error if the audio output cannot be initialized.
     pub fn build(self) -> Result<AudioPlayer, PlayerError> {
-        AudioPlayer::with_metadata(MediaMetadata {
-            title: self.title,
-            artist: self.artist,
-            album: self.album,
-            artwork_url: self.artwork_url,
-            duration: None,
-        })
+        AudioPlayer::new_internal(
+            self.device,
+            MediaMetadata {
+                title: self.title,
+                artist: self.artist,
+                album: self.album,
+                artwork_url: self.artwork_url,
+                duration: None,
+            },
+        )
     }
 }
 
@@ -136,31 +175,43 @@ impl AudioPlayerBuilder {
 ///
 /// ```no_run
 /// use waterkit_media::AudioPlayer;
-/// use std::time::Duration;
 ///
+/// // Simple usage with default device
 /// let player = AudioPlayer::new()
 ///     .title("My Song")
 ///     .artist("My Artist")
 ///     .build()?;
 ///
-/// player.play_file("/path/to/song.mp3")?;
+/// player.play_file("song.mp3")?;
+/// # Ok::<(), waterkit_media::PlayerError>(())
+/// ```
 ///
-/// // Run event loop for media key support (required on macOS CLI apps)
-/// player.run_loop(Duration::from_secs(30));
+/// # Device Selection
+///
+/// ```no_run
+/// use waterkit_media::AudioPlayer;
+///
+/// let devices = AudioPlayer::list_devices()?;
+/// let player = AudioPlayer::new()
+///     .device(&devices[0])
+///     .build()?;
 /// # Ok::<(), waterkit_media::PlayerError>(())
 /// ```
 pub struct AudioPlayer {
-    inner: crate::sys::AudioPlayerInner,
+    // Keep stream alive - must not be dropped while sink is in use
+    _stream: OutputStream,
+    stream_handle: OutputStreamHandle,
+    sink: Sink,
     metadata: Arc<RwLock<MediaMetadata>>,
-    #[allow(dead_code)]
-    command_handler: Arc<RwLock<Option<Box<dyn MediaCommandHandler>>>>,
+    state: Arc<RwLock<PlayerState>>,
+    media_center: crate::sys::MediaCenterIntegration,
 }
 
 impl std::fmt::Debug for AudioPlayer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AudioPlayer")
-            .field("inner", &self.inner)
             .field("metadata", &self.metadata)
+            .field("state", &self.state)
             .finish_non_exhaustive()
     }
 }
@@ -172,165 +223,211 @@ impl AudioPlayer {
         AudioPlayerBuilder::new()
     }
 
-    /// Create an audio player with the given metadata.
-    fn with_metadata(metadata: MediaMetadata) -> Result<Self, PlayerError> {
-        let inner = crate::sys::AudioPlayerInner::new()?;
+    /// List available audio output devices.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if devices cannot be enumerated.
+    pub fn list_devices() -> Result<Vec<AudioDevice>, PlayerError> {
+        use rodio::cpal::traits::{DeviceTrait, HostTrait};
+        
+        let host = rodio::cpal::default_host();
+        let devices: Vec<AudioDevice> = host
+            .output_devices()
+            .map_err(|e| PlayerError::Unknown(format!("failed to list devices: {e}")))?
+            .filter_map(|d| d.name().ok().map(|name| AudioDevice { name }))
+            .collect();
+        
+        Ok(devices)
+    }
+
+    fn new_internal(
+        _device_name: Option<String>,
+        metadata: MediaMetadata,
+    ) -> Result<Self, PlayerError> {
+        // TODO: Support specific device selection
+        // For now, always use default device
+        let (stream, stream_handle) = OutputStream::try_default()
+            .map_err(|e| PlayerError::OutputInitFailed(e.to_string()))?;
+        
+        let sink = Sink::try_new(&stream_handle)
+            .map_err(|e| PlayerError::OutputInitFailed(e.to_string()))?;
+        
+        let media_center = crate::sys::MediaCenterIntegration::new()
+            .map_err(|e| PlayerError::Unknown(format!("media center init failed: {e}")))?;
+        
         Ok(Self {
-            inner,
+            _stream: stream,
+            stream_handle,
+            sink,
             metadata: Arc::new(RwLock::new(metadata)),
-            command_handler: Arc::new(RwLock::new(None)),
+            state: Arc::new(RwLock::new(PlayerState::Stopped)),
+            media_center,
         })
     }
 
-    /// Play audio from a file path.
+    /// Play audio from a file.
     ///
     /// # Errors
     ///
-    /// Returns an error if the file cannot be loaded or played.
+    /// Returns an error if the file cannot be loaded or decoded.
     pub fn play_file(&self, path: impl AsRef<Path>) -> Result<(), PlayerError> {
         let path = path.as_ref();
-        self.inner.play_file(path)?;
-        self.update_now_playing()?;
+        let file = File::open(path)
+            .map_err(|e| PlayerError::LoadFailed(format!("{}: {e}", path.display())))?;
+        
+        let source = Decoder::new(BufReader::new(file))
+            .map_err(|e| PlayerError::UnsupportedFormat(e.to_string()))?;
+        
+        self.sink.stop();
+        self.sink.append(source);
+        self.sink.play();
+        
+        self.set_state(PlayerState::Playing);
+        self.update_media_center();
         Ok(())
     }
 
-    /// Play audio from a URL.
+    /// Play audio from a URL (async).
     ///
     /// # Errors
     ///
-    /// Returns an error if the URL cannot be loaded or played.
-    pub fn play_url(&self, url: &str) -> Result<(), PlayerError> {
-        self.inner.play_url(url)?;
-        self.update_now_playing()?;
+    /// Returns an error if the URL cannot be loaded.
+    pub async fn play_url(&self, url: &str) -> Result<(), PlayerError> {
+        // Fetch audio data using zenwave
+        let response = zenwave::get(url)
+            .await
+            .map_err(|e| PlayerError::LoadFailed(e.to_string()))?;
+        
+        let data = response.into_body().into_bytes()
+            .await
+            .map_err(|e| PlayerError::LoadFailed(e.to_string()))?;
+        
+        let cursor = std::io::Cursor::new(data);
+        let source = Decoder::new(cursor)
+            .map_err(|e| PlayerError::UnsupportedFormat(e.to_string()))?;
+        
+        self.sink.stop();
+        self.sink.append(source);
+        self.sink.play();
+        
+        self.set_state(PlayerState::Playing);
+        self.update_media_center();
         Ok(())
     }
 
     /// Pause playback.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if pausing fails.
-    pub fn pause(&self) -> Result<(), PlayerError> {
-        self.inner.pause()?;
-        self.update_now_playing()?;
-        Ok(())
+    pub fn pause(&self) {
+        self.sink.pause();
+        self.set_state(PlayerState::Paused);
+        self.update_media_center();
     }
 
     /// Resume playback.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if resuming fails.
-    pub fn resume(&self) -> Result<(), PlayerError> {
-        self.inner.resume()?;
-        self.update_now_playing()?;
-        Ok(())
+    pub fn resume(&self) {
+        self.sink.play();
+        self.set_state(PlayerState::Playing);
+        self.update_media_center();
     }
 
-    /// Stop playback.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if stopping fails.
-    pub fn stop(&self) -> Result<(), PlayerError> {
-        self.inner.stop()?;
-        self.inner.clear_now_playing()?;
-        Ok(())
+    /// Stop playback and clear the queue.
+    pub fn stop(&self) {
+        self.sink.stop();
+        self.set_state(PlayerState::Stopped);
+        self.media_center.clear();
     }
 
-    /// Seek to a specific position.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if seeking fails.
-    pub fn seek(&self, position: Duration) -> Result<(), PlayerError> {
-        self.inner.seek(position)?;
-        self.update_now_playing()?;
-        Ok(())
+    /// Set volume (0.0 to 1.0).
+    pub fn set_volume(&self, volume: f32) {
+        self.sink.set_volume(volume.clamp(0.0, 1.0));
     }
 
-    /// Get the current playback position.
+    /// Get current volume.
     #[must_use]
-    pub fn position(&self) -> Option<Duration> {
-        self.inner.position()
-    }
-
-    /// Get the total duration of the current audio.
-    #[must_use]
-    pub fn duration(&self) -> Option<Duration> {
-        self.inner.duration()
+    pub fn volume(&self) -> f32 {
+        self.sink.volume()
     }
 
     /// Check if audio is currently playing.
     #[must_use]
     pub fn is_playing(&self) -> bool {
-        self.inner.state() == PlayerState::Playing
+        !self.sink.is_paused() && !self.sink.empty()
+    }
+
+    /// Check if playback is paused.
+    #[must_use]
+    pub fn is_paused(&self) -> bool {
+        self.sink.is_paused()
+    }
+
+    /// Check if the playback queue is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.sink.empty()
     }
 
     /// Get the current player state.
     #[must_use]
     pub fn state(&self) -> PlayerState {
-        self.inner.state()
+        *self.state.read().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Set the volume (0.0 to 1.0).
+    /// Get direct access to the underlying rodio Sink.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if setting volume fails.
-    pub fn set_volume(&self, volume: f32) -> Result<(), PlayerError> {
-        self.inner.set_volume(volume.clamp(0.0, 1.0))
+    /// Use this for advanced audio manipulation.
+    #[must_use]
+    pub fn sink(&self) -> &Sink {
+        &self.sink
     }
 
-    /// Set the handler for media commands (from media keys, Control Center, etc.).
-    ///
-    /// The handler is called when the user interacts with system media controls.
+    /// Set the handler for media commands (from media keys, etc.).
     pub fn set_command_handler<F>(&self, handler: F)
     where
         F: Fn(MediaCommand) + Send + Sync + 'static,
     {
-        let handler = ClosureHandler(handler);
-        if let Ok(mut guard) = self.command_handler.write() {
-            *guard = Some(Box::new(handler));
+        self.media_center.set_command_handler(Box::new(ClosureHandler(handler)));
+    }
+
+    /// Update metadata (title, artist, etc.).
+    pub fn set_metadata(&self, metadata: MediaMetadata) {
+        if let Ok(mut m) = self.metadata.write() {
+            *m = metadata;
         }
-        self.inner.register_command_handler(self.command_handler.clone());
+        self.update_media_center();
     }
 
-    /// Run the event loop for the specified duration.
-    ///
-    /// On macOS, this runs `CFRunLoop` which is required for media key events
-    /// in CLI apps. GUI apps using AppKit/SwiftUI do not need this.
-    ///
-    /// On other platforms, this simply sleeps for the duration.
+    /// Run the event loop (required on some platforms for media key events).
     pub fn run_loop(&self, duration: Duration) {
-        self.inner.run_loop(duration);
+        self.media_center.run_loop(duration);
     }
 
-    /// Update the "Now Playing" information.
-    fn update_now_playing(&self) -> Result<(), PlayerError> {
-        let mut metadata = self.metadata.write().map_err(|e| {
-            PlayerError::Unknown(format!("lock poisoned: {e}"))
-        })?;
+    fn set_state(&self, state: PlayerState) {
+        if let Ok(mut s) = self.state.write() {
+            *s = state;
+        }
+    }
+
+    fn update_media_center(&self) {
+        let metadata = self.metadata.read().ok();
+        let state = self.state();
         
-        // Update duration from the player
-        metadata.duration = self.inner.duration();
-        
-        let state = match self.inner.state() {
+        let playback_state = match state {
             PlayerState::Playing => PlaybackState {
                 status: PlaybackStatus::Playing,
-                position: self.inner.position(),
+                position: None, // TODO: track position
                 rate: 1.0,
             },
             PlayerState::Paused => PlaybackState {
                 status: PlaybackStatus::Paused,
-                position: self.inner.position(),
+                position: None,
                 rate: 0.0,
             },
             PlayerState::Stopped => PlaybackState::stopped(),
         };
         
-        self.inner.update_now_playing(&metadata, &state)?;
-        Ok(())
+        if let Some(m) = metadata {
+            self.media_center.update(&m, &playback_state);
+        }
     }
 }
 
@@ -345,4 +442,3 @@ where
         (self.0)(command);
     }
 }
-

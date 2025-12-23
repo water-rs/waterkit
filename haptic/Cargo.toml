@@ -1,0 +1,37 @@
+[package]
+name = "waterkit-haptic"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository = "https://github.com/water-rs/kit"
+description = "Cross-platform haptic feedback/vibration for WaterUI"
+keywords = ["haptic", "vibration", "feedback", "ios", "android"]
+categories = ["gui", "os"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# Apple platforms (iOS, macOS)
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+swift-bridge-build.workspace = true
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true
+
+[build-dependencies]
+android-build.workspace = true
+
+# Windows
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = ["Devices_Haptics", "Foundation"] }
+
+# Linux
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus.workspace = true
+futures.workspace = true

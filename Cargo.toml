@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["permission", "location", "media", "tests/android/rust", "tests/macos/location", "tests/macos/media"]
+members = ["permission", "location", "media", "tests/android/rust", "tests/macos/location", "tests/macos/media", "haptic"]
 
 
 [workspace.package]

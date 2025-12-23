@@ -1,12 +1,15 @@
-//! Cross-platform media control.
+//! Cross-platform media control and audio playback.
 //!
-//! This crate provides a unified API for controlling media playback and
-//! publishing "Now Playing" information across iOS, macOS, Android, Windows,
-//! and Linux platforms.
+//! This crate provides a unified API for controlling media playback,
+//! publishing "Now Playing" information, and playing audio across
+//! iOS, macOS, Android, Windows, and Linux platforms.
 
 #![warn(missing_docs)]
 
+mod player;
 mod sys;
+
+pub use player::{AudioPlayer, AudioPlayerBuilder, AudioSource, PlayerError, PlayerState};
 
 use std::time::Duration;
 
@@ -239,5 +242,25 @@ impl MediaSession {
     /// This removes "Now Playing" information from system controls.
     pub fn clear(&self) -> Result<(), MediaError> {
         self.inner.clear()
+    }
+
+    /// Run the main event loop for the specified duration.
+    ///
+    /// On macOS, this runs `CFRunLoop` which is required for
+    /// `MPRemoteCommandCenter` to receive and dispatch events in CLI apps.
+    /// GUI apps using AppKit or SwiftUI do not need this.
+    ///
+    /// On other platforms, this simply sleeps for the duration.
+    #[cfg(target_os = "macos")]
+    pub fn run_loop(&self, duration: std::time::Duration) {
+        self.inner.run_loop(duration);
+    }
+
+    /// Run the main event loop for the specified duration.
+    ///
+    /// On non-macOS platforms, this simply sleeps for the duration.
+    #[cfg(not(target_os = "macos"))]
+    pub fn run_loop(&self, duration: std::time::Duration) {
+        std::thread::sleep(duration);
     }
 }

@@ -2,76 +2,86 @@
 //!
 //! Run with: cargo run -p waterkit-media-test
 //!
-//! This will display "Now Playing" info in Control Center for 30 seconds.
+//! This will play audio and show "Now Playing" info in Control Center.
 //! Use the media controls to test command handling.
 
-use std::sync::Arc;
 use std::time::Duration;
-use waterkit_media::{MediaCommand, MediaCommandHandler, MediaMetadata, MediaSession, PlaybackState};
-
-struct TestHandler;
-
-impl MediaCommandHandler for TestHandler {
-    fn on_command(&self, command: MediaCommand) {
-        println!("📱 Received command: {:?}", command);
-    }
-}
+use waterkit_media::{AudioPlayer, MediaCommand};
 
 fn main() {
-    println!("=== Waterkit Media Test (macOS) ===\n");
+    println!("=== Waterkit Media AudioPlayer Test (macOS) ===\n");
 
-    // Create media session
-    println!("Creating media session...");
-    let session = match MediaSession::new() {
-        Ok(s) => {
-            println!("✓ Media session created\n");
-            s
+    // Create audio player with metadata
+    println!("Creating audio player...");
+    let player = match AudioPlayer::new()
+        .title("Test Audio")
+        .artist("Waterkit Test")
+        .album("Test Album")
+        .build()
+    {
+        Ok(p) => {
+            println!("✓ Audio player created\n");
+            p
         }
         Err(e) => {
-            println!("✗ Failed to create session: {}\n", e);
+            println!("✗ Failed to create player: {}\n", e);
             return;
         }
     };
 
-    // Request audio focus
-    println!("Requesting audio focus...");
-    match session.request_audio_focus() {
-        Ok(()) => println!("✓ Audio focus granted\n"),
-        Err(e) => println!("⚠ Audio focus issue: {}\n", e),
-    }
-
-    // Set metadata
-    println!("Setting media metadata...");
-    let metadata = MediaMetadata::new()
-        .title("Test Song")
-        .artist("Waterkit Test Artist")
-        .album("Test Album")
-        .duration(Duration::from_secs(180));
-
-    match session.set_metadata(&metadata) {
-        Ok(()) => {
-            println!("✓ Metadata set:");
-            println!("  Title:    {}", metadata.title.as_deref().unwrap_or("-"));
-            println!("  Artist:   {}", metadata.artist.as_deref().unwrap_or("-"));
-            println!("  Album:    {}", metadata.album.as_deref().unwrap_or("-"));
-            println!("  Duration: {:?}\n", metadata.duration);
+    // Try to play a test audio URL (public domain music)
+    // This is a short audio sample from the Internet Archive
+    let test_url = "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg";
+    
+    println!("Playing test audio from URL...");
+    println!("URL: {}", test_url);
+    match player.play_url(test_url) {
+        Ok(()) => println!("✓ Audio playback started\n"),
+        Err(e) => {
+            println!("✗ Failed to play audio: {}\n", e);
+            println!("Note: Audio playback is required for Now Playing to work on macOS.");
+            println!("The test will continue but Now Playing may not appear.\n");
         }
-        Err(e) => println!("✗ Failed to set metadata: {}\n", e),
-    }
-
-    // Set playback state
-    println!("Setting playback state to Playing...");
-    match session.set_playback_state(&PlaybackState::playing(Duration::from_secs(30))) {
-        Ok(()) => println!("✓ Playback state: Playing at 0:30\n"),
-        Err(e) => println!("✗ Failed to set state: {}\n", e),
     }
 
     // Register command handler
     println!("Registering command handler...");
-    match session.set_command_handler(TestHandler) {
-        Ok(()) => println!("✓ Command handler registered\n"),
-        Err(e) => println!("⚠ Command handler issue: {}\n", e),
+    player.set_command_handler(|cmd: MediaCommand| {
+        match cmd {
+            MediaCommand::Play => {
+                println!("📱 Command: Play");
+            }
+            MediaCommand::Pause => {
+                println!("📱 Command: Pause");
+            }
+            MediaCommand::PlayPause => {
+                println!("📱 Command: Play/Pause");
+            }
+            MediaCommand::Stop => {
+                println!("📱 Command: Stop");
+            }
+            MediaCommand::Next => {
+                println!("📱 Command: Next");
+            }
+            MediaCommand::Previous => {
+                println!("📱 Command: Previous");
+            }
+            MediaCommand::Seek(pos) => {
+                println!("📱 Command: Seek to {:?}", pos);
+            }
+            _ => {
+                println!("📱 Command: {:?}", cmd);
+            }
+        }
+    });
+    println!("✓ Command handler registered\n");
+
+    // Print current state
+    if let Some(duration) = player.duration() {
+        println!("Audio duration: {:?}", duration);
     }
+    println!("Playing: {}", player.is_playing());
+    println!("");
 
     println!("========================================");
     println!("Check Control Center (top-right menu bar)");
@@ -82,19 +92,16 @@ fn main() {
     println!("for 30 seconds...");
     println!("========================================\n");
 
-    // Keep running for 30 seconds to allow testing
-    std::thread::sleep(Duration::from_secs(30));
+    // Run event loop for 30 seconds
+    player.run_loop(Duration::from_secs(30));
 
     // Clean up
     println!("\nCleaning up...");
-    match session.abandon_audio_focus() {
-        Ok(()) => println!("✓ Audio focus abandoned"),
-        Err(e) => println!("⚠ {}", e),
-    }
-    match session.clear() {
-        Ok(()) => println!("✓ Session cleared"),
+    match player.stop() {
+        Ok(()) => println!("✓ Playback stopped"),
         Err(e) => println!("⚠ {}", e),
     }
 
     println!("\n=== Test Complete ===");
 }
+

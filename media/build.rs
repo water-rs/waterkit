@@ -29,10 +29,12 @@ fn build_apple() {
 
     // Swift source and generated bridge header file
     let swift_source = manifest_dir.join("src/sys/apple/MediaHelper.swift");
+    let audio_player_swift = manifest_dir.join("src/sys/apple/AudioPlayerHelper.swift");
     let bridge_rs = "src/sys/apple/mod.rs";
 
     println!("cargo:rerun-if-changed={bridge_rs}");
     println!("cargo:rerun-if-changed={}", swift_source.display());
+    println!("cargo:rerun-if-changed={}", audio_player_swift.display());
 
     // 1. Generate Swift bridge code
     let bridges = vec![bridge_rs];
@@ -59,10 +61,11 @@ fn build_apple() {
     let core_content = fs::read_to_string(&core_swift).expect("Failed to read SwiftBridgeCore.swift");
     let gen_content = fs::read_to_string(&gen_swift).expect("Failed to read generated swift");
     let impl_content = fs::read_to_string(&swift_source).expect("Failed to read MediaHelper.swift");
+    let audio_player_content = fs::read_to_string(&audio_player_swift).expect("Failed to read AudioPlayerHelper.swift");
 
     fs::write(
         &combined_swift,
-        format!("{}\n{}\n{}", core_content, gen_content, impl_content),
+        format!("{}\n{}\n{}\n{}", core_content, gen_content, impl_content, audio_player_content),
     )
     .expect("Failed to write combined Swift file");
 
@@ -150,8 +153,8 @@ fn build_apple() {
     // Link required frameworks
     println!("cargo:rustc-link-lib=framework=Foundation");
     println!("cargo:rustc-link-lib=framework=MediaPlayer");
+    println!("cargo:rustc-link-lib=framework=AVFoundation");
     if target.contains("ios") {
-        println!("cargo:rustc-link-lib=framework=AVFoundation");
         println!("cargo:rustc-link-lib=framework=UIKit");
     } else {
         println!("cargo:rustc-link-lib=framework=AppKit");

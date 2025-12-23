@@ -1,0 +1,39 @@
+[package]
+name = "waterkit-fs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository = "https://github.com/water-rs/kit"
+description = "Cross-platform file system utilities for WaterUI"
+keywords = ["fs", "filesystem", "file-picker", "sandbox", "cross-platform"]
+categories = ["filesystem", "os"]
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Apple platforms (iOS, macOS)
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge = { workspace = true, features = ["async"] }
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+swift-bridge-build.workspace = true
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true
+
+[build-dependencies]
+android-build.workspace = true
+
+# Desktop (Windows, macOS, Linux)
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+dirs = "6.0"
+
+# Windows specific features (if needed via rfd/dirs are usually automatic)
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = ["Foundation"] }

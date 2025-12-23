@@ -1,0 +1,40 @@
+[package]
+name = "waterkit-media"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository = "https://github.com/water-rs/kit"
+description = "Cross-platform media control for WaterUI"
+keywords = ["media", "nowplaying", "mpris", "ios", "android"]
+categories = ["gui", "multimedia"]
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[build-dependencies]
+
+# Apple platforms (iOS, macOS)
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+swift-bridge-build.workspace = true
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true
+
+[target.'cfg(target_os = "android")'.build-dependencies]
+android-build.workspace = true
+
+# Windows
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = ["Media_Playback", "Media_Control", "Foundation", "Storage_Streams"] }
+
+# Linux
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus.workspace = true
+futures.workspace = true

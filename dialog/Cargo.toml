@@ -26,6 +26,7 @@ jni.workspace = true
 # Desktop (macOS, Windows, Linux)
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 native-dialog = "0.7"
+rfd = "0.16"
 
 [build-dependencies]
 android-build.workspace = true

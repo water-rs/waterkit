@@ -25,13 +25,14 @@ public func clipboard_get_text() -> Optional<String> {
     #endif
 }
 
-public func clipboard_set_text(text: String) {
+public func clipboard_set_text(text: RustString) {
+    let swiftText = text.toString()
     #if os(iOS)
-    UIPasteboard.general.string = text
+    UIPasteboard.general.string = swiftText
     #elseif os(macOS)
     let pb = NSPasteboard.general
     pb.clearContents()
-    pb.setString(text, forType: .string)
+    pb.setString(swiftText, forType: .string)
     #endif
 }
 
@@ -96,7 +97,7 @@ public func clipboard_set_image(image: SwiftImageData) {
     // Copy data
     var data = Data(capacity: width * height * 4)
     for i in 0..<image.bytes.len() {
-        if let byte = image.bytes.get(index: i) {
+        if let byte = image.bytes.get(index: UInt(i)) {
              data.append(byte)
         }
     }

@@ -1,7 +1,7 @@
 //! Build script for waterkit-clipboard.
 //!
 //! Handles platform-specific code generation:
-//! - Apple: Swift bridge generation
+//! - Apple: Swift bridge generation + Swift compilation
 //! - Android: Kotlin → DEX compilation
 
 use std::{env, path::PathBuf, process::Command};
@@ -9,7 +9,7 @@ use std::{env, path::PathBuf, process::Command};
 fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
 
-    // Apple platforms: generate Swift bridge
+    // Apple platforms: generate Swift bridge and compile Swift
     if target_os == "ios" || target_os == "macos" {
         build_apple();
     }
@@ -20,27 +20,144 @@ fn main() {
     }
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos"))]
 fn build_apple() {
+    use std::fs;
+
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
 
-    // Only iOS currently planned for swift-bridge, but we generally point to a file that exists.
-    // I need to create this file later.
-    let bridges = vec!["src/sys/apple/mod.rs"];
-    for bridge in &bridges {
-        println!("cargo:rerun-if-changed={bridge}");
+    // Swift source and generated bridge header file
+    let swift_source = manifest_dir.join("src/sys/apple/clipboard.swift");
+    let bridge_rs = "src/sys/apple/mod.rs";
+
+    println!("cargo:rerun-if-changed={bridge_rs}");
+    println!("cargo:rerun-if-changed={}", swift_source.display());
+
+    // 1. Generate Swift bridge code
+    let bridges = vec![bridge_rs];
+    swift_bridge_build::parse_bridges(bridges)
+        .write_all_concatenated(out_dir.clone(), env!("CARGO_PKG_NAME"));
+
+    // 2. Create combined bridging header
+    let core_h = out_dir.join("SwiftBridgeCore.h");
+    let pkg_h = out_dir.join("waterkit-clipboard/waterkit-clipboard.h");
+    let bridging_h = out_dir.join("Bridging-Header.h");
+
+    let bridging_content = format!(
+        "#include \"{}\"\n#include \"{}\"\n",
+        core_h.display(),
+        pkg_h.display()
+    );
+    fs::write(&bridging_h, bridging_content).expect("Failed to write bridging header");
+
+    // 3. Concatenate all Swift sources into one file
+    let core_swift = out_dir.join("SwiftBridgeCore.swift");
+    let gen_swift = out_dir.join("waterkit-clipboard/waterkit-clipboard.swift");
+    let combined_swift = out_dir.join("CombinedClipboard.swift");
+
+    let core_content = fs::read_to_string(&core_swift).expect("Failed to read SwiftBridgeCore.swift");
+    let gen_content = fs::read_to_string(&gen_swift).expect("Failed to read generated swift");
+    let impl_content = fs::read_to_string(&swift_source).expect("Failed to read clipboard.swift");
+
+    fs::write(
+        &combined_swift,
+        format!("{}\n{}\n{}", core_content, gen_content, impl_content),
+    )
+    .expect("Failed to write combined Swift file");
+
+    // 4. Compile Swift to object file
+    let obj_file = out_dir.join("ClipboardHelper.o");
+
+    let target = env::var("TARGET").unwrap();
+    let sdk = if target.contains("ios") {
+        "iphoneos"
+    } else {
+        "macosx"
+    };
+
+    let sdk_path = String::from_utf8(
+        Command::new("xcrun")
+            .args(["--sdk", sdk, "--show-sdk-path"])
+            .output()
+            .expect("xcrun failed")
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+
+    let mut swiftc = Command::new("swiftc");
+    swiftc
+        .arg("-emit-object")
+        .arg("-o")
+        .arg(&obj_file)
+        .arg("-sdk")
+        .arg(&sdk_path)
+        .arg("-import-objc-header")
+        .arg(&bridging_h)
+        .arg("-parse-as-library")
+        .arg("-module-name")
+        .arg("ClipboardHelper")
+        .arg(&combined_swift);
+
+    // Add target triple for cross-compilation
+    if target.contains("ios") {
+        swiftc.arg("-target").arg("arm64-apple-ios14.0");
+    } else if target.contains("aarch64") {
+        swiftc.arg("-target").arg("arm64-apple-macos11.0");
+    } else {
+        swiftc.arg("-target").arg("x86_64-apple-macos11.0");
     }
 
-    #[cfg(any(target_os = "ios", target_os = "macos"))]
-    {
-        swift_bridge_build::parse_bridges(bridges)
-            .write_all_concatenated(out_dir.clone(), env!("CARGO_PKG_NAME"));
+    let output = swiftc.output().expect("Failed to run swiftc");
+    if !output.status.success() {
+        eprintln!("Swift compilation command: swiftc args: {:?}", swiftc.get_args().collect::<Vec<_>>());
+        eprintln!("Swift compilation failed:");
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        panic!("Swift compilation failed");
     }
 
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
-    {
-        let _ = (out_dir, bridges);
+    // Create static library from object file
+    let lib_file = out_dir.join("libClipboardHelper.a");
+    let ar_status = Command::new("ar")
+        .args(["rcs", lib_file.to_str().unwrap(), obj_file.to_str().unwrap()])
+        .status()
+        .expect("Failed to run ar");
+    assert!(ar_status.success(), "ar failed");
+
+    // Link the Swift library
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static=ClipboardHelper");
+
+    // Link Swift runtime
+    let toolchain_dir = String::from_utf8(
+        Command::new("xcrun")
+            .args(["--find", "swiftc"])
+            .output()
+            .expect("xcrun --find swiftc failed")
+            .stdout,
+    )
+    .unwrap();
+    let toolchain_lib = PathBuf::from(toolchain_dir.trim())
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("lib/swift/macosx");
+    println!("cargo:rustc-link-search=native={}", toolchain_lib.display());
+
+    // Link required frameworks
+    println!("cargo:rustc-link-lib=framework=Foundation");
+    if target.contains("ios") {
+        println!("cargo:rustc-link-lib=framework=UIKit");
+    } else {
+        println!("cargo:rustc-link-lib=framework=AppKit");
     }
 }
+
+#[cfg(not(any(target_os = "ios", target_os = "macos")))]
+fn build_apple() {}
 
 fn build_android() {
     const KOTLIN_FILE_RELATIVE_PATH: &str = "src/sys/android/ClipboardHelper.kt";

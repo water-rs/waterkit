@@ -3,7 +3,7 @@
 //! Audio playback is handled by rodio across all platforms.
 //! This module provides the platform-specific "Now Playing" integrations.
 
-use crate::{MediaCommandHandler, MediaMetadata, PlaybackState};
+use crate::{MediaCommand, MediaMetadata, PlaybackState};
 use std::time::Duration;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
@@ -91,12 +91,12 @@ impl MediaCenterIntegration {
         self.inner.clear();
     }
     
-    pub fn set_command_handler(&self, handler: Box<dyn MediaCommandHandler>) {
-        self.inner.set_command_handler(handler);
-    }
-    
     pub fn run_loop(&self, duration: Duration) {
         self.inner.run_loop(duration);
+    }
+    
+    pub fn poll_command(&self) -> Option<MediaCommand> {
+        self.inner.poll_command()
     }
 }
 
@@ -120,9 +120,11 @@ struct FallbackMediaCenter;
 impl FallbackMediaCenter {
     fn update(&self, _metadata: &MediaMetadata, _state: &PlaybackState) {}
     fn clear(&self) {}
-    fn set_command_handler(&self, _handler: Box<dyn MediaCommandHandler>) {}
     fn run_loop(&self, duration: Duration) {
         std::thread::sleep(duration);
+    }
+    fn poll_command(&self) -> Option<MediaCommand> {
+        None
     }
 }
 

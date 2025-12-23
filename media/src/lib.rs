@@ -9,7 +9,7 @@
 mod player;
 mod sys;
 
-pub use player::{rodio, AudioDevice, AudioPlayer, AudioPlayerBuilder, PlayerError, PlayerState};
+pub use player::{AudioDevice, AudioPlayer, AudioPlayerBuilder, PlayerError, PlayerState, rodio};
 
 use std::time::Duration;
 
@@ -169,7 +169,9 @@ impl std::fmt::Display for MediaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotSupported => write!(f, "media control not supported on this platform"),
-            Self::InitializationFailed(msg) => write!(f, "failed to initialize media session: {msg}"),
+            Self::InitializationFailed(msg) => {
+                write!(f, "failed to initialize media session: {msg}")
+            }
             Self::UpdateFailed(msg) => write!(f, "failed to update media state: {msg}"),
             Self::AudioFocusDenied => write!(f, "audio focus was denied"),
             Self::Unknown(msg) => write!(f, "unknown error: {msg}"),
@@ -209,17 +211,6 @@ impl MediaSession {
     /// Update the current playback state.
     pub fn set_playback_state(&self, state: &PlaybackState) -> Result<(), MediaError> {
         self.inner.set_playback_state(state)
-    }
-
-    /// Set the handler for media commands.
-    ///
-    /// The handler will be called when the user interacts with system
-    /// media controls (lock screen, notification, keyboard media keys, etc.).
-    pub fn set_command_handler<H: MediaCommandHandler + 'static>(
-        &self,
-        handler: H,
-    ) -> Result<(), MediaError> {
-        self.inner.set_command_handler(Box::new(handler))
     }
 
     /// Request audio focus.

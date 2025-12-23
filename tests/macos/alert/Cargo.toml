@@ -1,0 +1,8 @@
+[package]
+name = "waterkit-alert-test"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+waterkit-alert = { path = "../../../alert" }
+tokio = { workspace = true, features = ["full"] }

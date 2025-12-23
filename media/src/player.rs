@@ -4,9 +4,9 @@
 //! media center integrations (MPNowPlayingInfoCenter, SMTC, MPRIS, MediaSession).
 
 use crate::{MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::BufReader;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -197,75 +197,15 @@ impl AudioPlayerBuilder {
 ///     .build()?;
 /// # Ok::<(), waterkit_media::PlayerError>(())
 /// ```
-pub struct AudioPlayer {
-    // Keep stream alive - must not be dropped while sink is in use
-    _stream: OutputStream,
-    stream_handle: OutputStreamHandle,
+/// Thread-safe controller for audio playback and media center integration.
+pub struct AudioController {
     sink: Sink,
     metadata: Arc<RwLock<MediaMetadata>>,
     state: Arc<RwLock<PlayerState>>,
     media_center: crate::sys::MediaCenterIntegration,
 }
 
-impl std::fmt::Debug for AudioPlayer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AudioPlayer")
-            .field("metadata", &self.metadata)
-            .field("state", &self.state)
-            .finish_non_exhaustive()
-    }
-}
-
-impl AudioPlayer {
-    /// Create a new audio player builder.
-    #[must_use]
-    pub fn new() -> AudioPlayerBuilder {
-        AudioPlayerBuilder::new()
-    }
-
-    /// List available audio output devices.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if devices cannot be enumerated.
-    pub fn list_devices() -> Result<Vec<AudioDevice>, PlayerError> {
-        use rodio::cpal::traits::{DeviceTrait, HostTrait};
-        
-        let host = rodio::cpal::default_host();
-        let devices: Vec<AudioDevice> = host
-            .output_devices()
-            .map_err(|e| PlayerError::Unknown(format!("failed to list devices: {e}")))?
-            .filter_map(|d| d.name().ok().map(|name| AudioDevice { name }))
-            .collect();
-        
-        Ok(devices)
-    }
-
-    fn new_internal(
-        _device_name: Option<String>,
-        metadata: MediaMetadata,
-    ) -> Result<Self, PlayerError> {
-        // TODO: Support specific device selection
-        // For now, always use default device
-        let (stream, stream_handle) = OutputStream::try_default()
-            .map_err(|e| PlayerError::OutputInitFailed(e.to_string()))?;
-        
-        let sink = Sink::try_new(&stream_handle)
-            .map_err(|e| PlayerError::OutputInitFailed(e.to_string()))?;
-        
-        let media_center = crate::sys::MediaCenterIntegration::new()
-            .map_err(|e| PlayerError::Unknown(format!("media center init failed: {e}")))?;
-        
-        Ok(Self {
-            _stream: stream,
-            stream_handle,
-            sink,
-            metadata: Arc::new(RwLock::new(metadata)),
-            state: Arc::new(RwLock::new(PlayerState::Stopped)),
-            media_center,
-        })
-    }
-
+impl AudioController {
     /// Play audio from a file.
     ///
     /// # Errors
@@ -279,12 +219,18 @@ impl AudioPlayer {
         let source = Decoder::new(BufReader::new(file))
             .map_err(|e| PlayerError::UnsupportedFormat(e.to_string()))?;
         
+        // Get duration from source and update metadata
+        let duration = source.total_duration();
+        if let (Some(d), Ok(mut m)) = (duration, self.metadata.write()) {
+            m.duration = Some(d);
+        }
+        
         self.sink.stop();
         self.sink.append(source);
         self.sink.play();
         
         self.set_state(PlayerState::Playing);
-        self.update_media_center();
+        self.update_now_playing();
         Ok(())
     }
 
@@ -312,7 +258,7 @@ impl AudioPlayer {
         self.sink.play();
         
         self.set_state(PlayerState::Playing);
-        self.update_media_center();
+        self.update_now_playing();
         Ok(())
     }
 
@@ -320,14 +266,34 @@ impl AudioPlayer {
     pub fn pause(&self) {
         self.sink.pause();
         self.set_state(PlayerState::Paused);
-        self.update_media_center();
+        self.update_now_playing();
     }
 
     /// Resume playback.
     pub fn resume(&self) {
         self.sink.play();
         self.set_state(PlayerState::Playing);
-        self.update_media_center();
+        self.update_now_playing();
+    }
+
+    /// Seek to a specific position.
+    pub fn seek(&self, position: Duration) {
+        let _ = self.sink.try_seek(position);
+        self.update_now_playing();
+    }
+
+    /// Seek forward by a specific duration.
+    pub fn seek_forward(&self, duration: Duration) {
+        let current = self.sink.get_pos();
+        let new_pos = current + duration;
+        self.seek(new_pos);
+    }
+
+    /// Seek backward by a specific duration.
+    pub fn seek_backward(&self, duration: Duration) {
+        let current = self.sink.get_pos();
+        let new_pos = current.saturating_sub(duration);
+        self.seek(new_pos);
     }
 
     /// Stop playback and clear the queue.
@@ -393,7 +359,7 @@ impl AudioPlayer {
         if let Ok(mut m) = self.metadata.write() {
             *m = metadata;
         }
-        self.update_media_center();
+        self.update_now_playing();
     }
 
     /// Run the event loop (required on some platforms for media key events).
@@ -407,19 +373,24 @@ impl AudioPlayer {
         }
     }
 
-    fn update_media_center(&self) {
+    /// Update the media center with current playback state.
+    /// Call periodically to keep progress bar updated.
+    pub fn update_now_playing(&self) {
         let metadata = self.metadata.read().ok();
         let state = self.state();
+        
+        // Get position from sink
+        let position = Some(self.sink.get_pos());
         
         let playback_state = match state {
             PlayerState::Playing => PlaybackState {
                 status: PlaybackStatus::Playing,
-                position: None, // TODO: track position
+                position,
                 rate: 1.0,
             },
             PlayerState::Paused => PlaybackState {
                 status: PlaybackStatus::Paused,
-                position: None,
+                position,
                 rate: 0.0,
             },
             PlayerState::Stopped => PlaybackState::stopped(),
@@ -428,6 +399,144 @@ impl AudioPlayer {
         if let Some(m) = metadata {
             self.media_center.update(&m, &playback_state);
         }
+    }
+    
+    /// Get the current playback position.
+    pub fn current_position(&self) -> Duration {
+        self.sink.get_pos()
+    }
+    
+    /// Get the track duration.
+    pub fn duration(&self) -> Option<Duration> {
+        self.metadata.read().ok().and_then(|m| m.duration)
+    }
+
+    /// Handle a media command with default behavior.
+    pub fn handle_command(&self, cmd: MediaCommand) {
+        match cmd {
+            MediaCommand::Play => self.resume(),
+            MediaCommand::Pause => self.pause(),
+            MediaCommand::PlayPause => {
+                if self.is_playing() {
+                    self.pause();
+                } else {
+                    self.resume();
+                }
+            }
+            MediaCommand::Stop => self.stop(),
+            MediaCommand::Seek(pos) => self.seek(pos),
+            MediaCommand::SeekForward(delta) => self.seek_forward(delta),
+            MediaCommand::SeekBackward(delta) => self.seek_backward(delta),
+            _ => {
+                // Other commands not handled by default
+            }
+        }
+    }
+}
+
+/// Cross-platform audio player with media center integration.
+pub struct AudioPlayer {
+    // Keep stream alive - must not be dropped while sink is in use
+    _stream: OutputStream,
+    #[allow(dead_code)]
+    stream_handle: OutputStreamHandle,
+    /// The thread-safe controller for the audio player.
+    controller: Arc<AudioController>,
+}
+
+
+impl std::fmt::Debug for AudioPlayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AudioPlayer")
+            .field("controller", &"AudioController")
+            .finish_non_exhaustive()
+    }
+}
+
+impl AudioPlayer {
+    /// Create a new audio player builder.
+    #[must_use]
+    pub fn new() -> AudioPlayerBuilder {
+        AudioPlayerBuilder::new()
+    }
+
+    /// List available audio output devices.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if devices cannot be enumerated.
+    pub fn list_devices() -> Result<Vec<AudioDevice>, PlayerError> {
+        use rodio::cpal::traits::{DeviceTrait, HostTrait};
+        
+        let host = rodio::cpal::default_host();
+        let devices: Vec<AudioDevice> = host
+            .output_devices()
+            .map_err(|e| PlayerError::Unknown(format!("failed to list devices: {e}")))?
+            .filter_map(|d| d.name().ok().map(|name| AudioDevice { name }))
+            .collect();
+        
+        Ok(devices)
+    }
+
+    fn new_internal(
+        _device_name: Option<String>,
+        metadata: MediaMetadata,
+    ) -> Result<Self, PlayerError> {
+        // TODO: Support specific device selection
+        // For now, always use default device
+        let (stream, stream_handle) = OutputStream::try_default()
+            .map_err(|e| PlayerError::OutputInitFailed(e.to_string()))?;
+        
+        let sink = Sink::try_new(&stream_handle)
+            .map_err(|e| PlayerError::OutputInitFailed(e.to_string()))?;
+        
+        let media_center = crate::sys::MediaCenterIntegration::new()
+            .map_err(|e| PlayerError::Unknown(format!("media center init failed: {e}")))?;
+        
+        let controller = Arc::new(AudioController {
+            sink,
+            metadata: Arc::new(RwLock::new(metadata)),
+            state: Arc::new(RwLock::new(PlayerState::Stopped)),
+            media_center,
+        });
+
+        Ok(Self {
+            _stream: stream,
+            stream_handle,
+            controller,
+        })
+    }
+
+    /// Get the audio controller.
+    pub fn controller(&self) -> Arc<AudioController> {
+        Arc::clone(&self.controller)
+    }
+
+    /// Set the default command handler.
+    ///
+    /// This will automatically handle Play, Pause, PlayPause, Stop, and Seek commands.
+    pub fn set_default_handler(&self) {
+        let controller = Arc::clone(&self.controller);
+        self.controller.set_command_handler(move |cmd| {
+            controller.handle_command(cmd);
+        });
+    }
+
+}
+
+impl std::ops::Deref for AudioPlayer {
+    type Target = AudioController;
+
+    fn deref(&self) -> &Self::Target {
+        &self.controller
+    }
+}
+
+impl Drop for AudioPlayer {
+    fn drop(&mut self) {
+        // RAII: Clear media center when player is dropped
+        self.controller.stop();
+        self.controller.media_center.clear();
     }
 }
 

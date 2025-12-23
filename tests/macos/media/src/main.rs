@@ -7,12 +7,9 @@
 //!   --artist <artist>    Set the artist name
 //!   --album <album>      Set the album name
 //!   --artwork <path>     Set artwork image path
-//!
-//! Examples:
-//!   cargo run -p waterkit-media-test
-//!   cargo run -p waterkit-media-test /tmp/song.mp3
-//!   cargo run -p waterkit-media-test --title "My Song" --artist "Artist" /tmp/song.mp3
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use waterkit_media::{AudioPlayer, MediaCommand};
 
@@ -63,23 +60,10 @@ fn expand_path(path: &str) -> String {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let (audio_file, title, artist, album, artwork) = parse_args();
     
     println!("=== Waterkit Media AudioPlayer Test (macOS) ===\n");
-
-    // List available devices
-    println!("Available audio devices:");
-    match AudioPlayer::list_devices() {
-        Ok(devices) => {
-            for (i, device) in devices.iter().enumerate() {
-                println!("  [{}] {}", i, device.name());
-            }
-        }
-        Err(e) => println!("  (error: {})", e),
-    }
-    println!();
 
     // Determine metadata
     let track_title = title.unwrap_or_else(|| {
@@ -144,32 +128,35 @@ async fn main() {
         {
             use waterkit_media::rodio::source::{SineWave, Source};
             let source = SineWave::new(440.0)
-                .take_duration(Duration::from_secs(5))
+                .take_duration(Duration::from_secs(30))
                 .amplify(0.3);
             player.sink().append(source);
         }
         println!("✓ Test tone playing\n");
     }
 
-    // Register command handler
-    player.set_command_handler(|cmd: MediaCommand| {
-        match cmd {
-            MediaCommand::Play => println!("📱 Play"),
-            MediaCommand::Pause => println!("📱 Pause"),
-            MediaCommand::PlayPause => println!("📱 Play/Pause"),
-            MediaCommand::Stop => println!("📱 Stop"),
-            _ => println!("📱 {:?}", cmd),
-        }
-    });
+    // Use default command handler which handles Play, Pause, Stop, Seek, etc. automatically
+    player.set_default_handler();
 
-    println!("Playing: {}", player.is_playing());
-    println!("Volume: {:.0}%", player.volume() * 100.0);
+    println!("Controls:");
+    println!("  - Use media keys or Control Center to pause/play/seek");
+    println!("  - Press Ctrl+C to stop");
     println!();
-    println!("Press Ctrl+C to stop...\n");
 
-    // Wait until audio finishes or 10 minutes max
-    player.run_loop(Duration::from_secs(600));
+    // Main loop - handle commands and keep playing
+    while !player.sink().empty() || player.sink().is_paused() {
+        // Check if stopped manually (via command)
+        if player.state() == waterkit_media::PlayerState::Stopped {
+            break;
+        }
 
-    player.stop();
+        // Update progress bar periodically
+        player.update_now_playing();
+        
+        player.run_loop(Duration::from_millis(500));
+    }
+
+
+    // RAII Drop will clear the media session
     println!("\n=== Playback Complete ===");
 }

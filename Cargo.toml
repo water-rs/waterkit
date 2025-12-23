@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["permission", "location"]
+members = ["permission", "location", "media", "tests/android/rust", "tests/macos/location", "tests/macos/media"]
 
 
 [workspace.package]
@@ -46,6 +46,9 @@ windows = { version = "0.58", features = ["Devices_Geolocation", "Foundation"] }
 
 # Linux
 zbus = "4"
+
+# Testing
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 
 [workspace.lints]

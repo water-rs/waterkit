@@ -1,0 +1,14 @@
+[package]
+name = "waterkit-location-test"
+version = "0.1.0"
+edition = "2021"
+description = "macOS test for waterkit-location"
+
+[[bin]]
+name = "location-test"
+path = "src/main.rs"
+
+[dependencies]
+waterkit-location = { path = "../../../location" }
+waterkit-permission = { path = "../../../permission" }
+tokio.workspace = true

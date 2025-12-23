@@ -1,0 +1,15 @@
+[package]
+name = "waterkit-test"
+version = "0.1.0"
+edition = "2021"
+description = "Android test harness for waterkit crates"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+jni = "0.21"
+
+# Add waterkit crates to test here
+waterkit-permission = { path = "../../../permission" }
+waterkit-location = { path = "../../../location" }

@@ -1,19 +1,19 @@
 [package]
-name = "waterkit-alert"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-repository = "https://github.com/water-rs/kit"
-description = "Cross-platform native alerts/popups for WaterUI"
-keywords = ["alert", "popup", "dialog", "native", "gui"]
+name = "waterkit-dialog"
+version = "0.1.0"
+edition = "2024"
+authors = ["Lexo Liu"]
+license = "MIT"
+description = "Cross-platform native dialogs/alerts for WaterUI"
+keywords = ["dialog", "alert", "popup", "gui", "native"]
 categories = ["gui", "os"]
+repository = "https://github.com/water-rs/kit"
 
 [lints]
 workspace = true
 
 [dependencies]
-futures.workspace = true
+futures = { workspace = true }
 
 # iOS
 [target.'cfg(target_os = "ios")'.dependencies]
@@ -32,6 +32,3 @@ android-build.workspace = true
 
 [target.'cfg(target_os = "ios")'.build-dependencies]
 swift-bridge-build.workspace = true
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["full"] }

@@ -1,4 +1,4 @@
-use crate::{Alert, AlertType};
+use crate::{Dialog, DialogType};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -20,11 +20,11 @@ mod ffi {
     }
     
     extern "Rust" {
-        fn on_alert_result(cb_id: u64, result: bool);
+        fn on_dialog_result(cb_id: u64, result: bool);
     }
 }
 
-fn on_alert_result(cb_id: u64, result: bool) {
+fn on_dialog_result(cb_id: u64, result: bool) {
     if let Ok(mut map) = callbacks().lock() {
         if let Some(tx) = map.remove(&cb_id) {
             let _ = tx.send(result);
@@ -32,37 +32,37 @@ fn on_alert_result(cb_id: u64, result: bool) {
     }
 }
 
-pub async fn show_alert(alert: Alert) -> Result<(), String> {
+pub async fn show_alert(dialog: Dialog) -> Result<(), String> {
     let (tx, rx) = oneshot::channel();
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
     callbacks().lock().unwrap().insert(id, tx);
     
-    let type_str = match alert.type_ {
-        AlertType::Info => "info",
-        AlertType::Warning => "warning",
-        AlertType::Error => "error",
+    let type_str = match dialog.type_ {
+        DialogType::Info => "info",
+        DialogType::Warning => "warning",
+        DialogType::Error => "error",
     };
     
-    ffi::show_alert_bridge(&alert.title, &alert.message, type_str, id);
+    ffi::show_alert_bridge(&dialog.title, &dialog.message, type_str, id);
     
     let _ = rx.await;
     Ok(())
 }
 
-pub async fn show_confirm(alert: Alert) -> Result<bool, String> {
+pub async fn show_confirm(dialog: Dialog) -> Result<bool, String> {
     let (tx, rx) = oneshot::channel();
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
     callbacks().lock().unwrap().insert(id, tx);
     
-    let type_str = match alert.type_ {
-        AlertType::Info => "info",
-        AlertType::Warning => "warning",
-        AlertType::Error => "error",
+    let type_str = match dialog.type_ {
+        DialogType::Info => "info",
+        DialogType::Warning => "warning",
+        DialogType::Error => "error",
     };
     
-    ffi::show_confirm_bridge(&alert.title, &alert.message, type_str, id);
+    ffi::show_confirm_bridge(&dialog.title, &dialog.message, type_str, id);
     
     rx.await.map_err(|_| "Cancelled".to_string())
 }

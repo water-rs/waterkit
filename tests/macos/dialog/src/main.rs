@@ -1,9 +1,10 @@
-use waterkit_alert::{Alert, AlertType};
+use waterkit_dialog::{Alert, AlertType};
 
 #[tokio::main]
 async fn main() {
     println!("Testing Alert...");
     
+    /*
     // Test Info Alert
     println!("Showing Info Alert...");
     Alert::new("Alert Test", "This is a native alert on macOS.")
@@ -35,4 +36,25 @@ async fn main() {
             .await
             .expect("Failed to show result");
     }
+    */
+
+    // Test Printer Dialog
+    println!("Showing Printer Dialog...");
+    use waterkit_dialog::PrinterDialog;
+    let printed = PrinterDialog::new()
+        .show()
+        .await
+        .expect("Failed to show printer dialog");
+    println!("Printer Dialog result: {}", printed);
+
+    // Test File Picker
+    println!("Showing File Picker...");
+    use waterkit_dialog::FileDialog;
+    let file = FileDialog::new()
+        .with_title("Select a file")
+        .add_filter("Text", &["txt", "rs"])
+        .show_open_single_file()
+        .await
+        .expect("Failed to show file picker");
+    println!("File selected: {:?}", file);
 }

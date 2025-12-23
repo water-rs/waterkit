@@ -1,11 +1,11 @@
-//! Android alert implementation using JNI.
+//! Android dialog implementation using JNI.
 
-use crate::{Alert, AlertType};
+use crate::{Dialog, DialogType};
 use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
 use std::sync::OnceLock;
 
-/// Embedded DEX bytecode containing AlertHelper class.
+/// Embedded DEX bytecode containing DialogHelper class.
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
 /// Cached class loader.
@@ -17,7 +17,7 @@ pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), Stri
         return Ok(());
     }
 
-    // Standard DEX loading boilerplate (same as haptic/location)
+    // Standard DEX loading boilerplate
     let cache_dir = env
         .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
         .and_then(|v| v.l())
@@ -29,7 +29,7 @@ pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), Stri
         .map_err(|e| format!("JNI error getAbsolutePath: {e}"))?;
 
     let dex_path = format!(
-        "{}/waterkit_alert.dex",
+        "{}/waterkit_dialog.dex",
         env.get_string((&cache_path).into())
             .map_err(|e| format!("JNI error get_string: {e}"))?
             .to_str()
@@ -79,7 +79,7 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<jni::objects::JClass<'a>
         .ok_or_else(|| "Class loader not initialized".to_string())?;
 
     let helper_class_name = env
-        .new_string("waterkit.alert.AlertHelper")
+        .new_string("waterkit.dialog.DialogHelper")
         .map_err(|e| format!("JNI error new_string name: {e}"))?;
 
     let helper_class = env
@@ -98,18 +98,18 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<jni::objects::JClass<'a>
 pub fn show_alert_with_context(
     env: &mut JNIEnv,
     context: &JObject,
-    alert: &Alert,
+    dialog: &Dialog,
 ) -> Result<(), String> {
     init_with_context(env, context)?;
 
     let helper_jclass = get_helper_class(env)?;
     
-    let title = env.new_string(&alert.title).map_err(|e| e.to_string())?;
-    let message = env.new_string(&alert.message).map_err(|e| e.to_string())?;
+    let title = env.new_string(&dialog.title).map_err(|e| e.to_string())?;
+    let message = env.new_string(&dialog.message).map_err(|e| e.to_string())?;
 
     env.call_static_method(
         helper_jclass,
-        "showAlert",
+        "showDialog",
         "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V",
         &[
             JValue::Object(context),
@@ -117,7 +117,7 @@ pub fn show_alert_with_context(
             JValue::Object(&message),
         ],
     )
-    .map_err(|e| format!("JNI error showAlert: {e}"))?;
+    .map_err(|e| format!("JNI error showDialog: {e}"))?;
 
     Ok(())
 }
@@ -125,14 +125,14 @@ pub fn show_alert_with_context(
 pub fn show_confirm_with_context(
     env: &mut JNIEnv,
     context: &JObject,
-    alert: &Alert,
+    dialog: &Dialog,
 ) -> Result<bool, String> {
     init_with_context(env, context)?;
 
     let helper_jclass = get_helper_class(env)?;
     
-    let title = env.new_string(&alert.title).map_err(|e| e.to_string())?;
-    let message = env.new_string(&alert.message).map_err(|e| e.to_string())?;
+    let title = env.new_string(&dialog.title).map_err(|e| e.to_string())?;
+    let message = env.new_string(&dialog.message).map_err(|e| e.to_string())?;
 
     let result = env.call_static_method(
         helper_jclass,
@@ -152,10 +152,10 @@ pub fn show_confirm_with_context(
 }
 
 // Public API stubs calling for context
-pub async fn show_alert(_alert: Alert) -> Result<(), String> {
+pub async fn show_alert(_dialog: Dialog) -> Result<(), String> {
     Err("Android: use show_alert_with_context() with JNIEnv and Context".into())
 }
 
-pub async fn show_confirm(_alert: Alert) -> Result<bool, String> {
+pub async fn show_confirm(_dialog: Dialog) -> Result<bool, String> {
     Err("Android: use show_confirm_with_context() with JNIEnv and Context".into())
 }

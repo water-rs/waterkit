@@ -1,4 +1,4 @@
-//! Build script for waterkit-alert.
+//! Build script for waterkit-dialog.
 
 use std::{env, path::PathBuf, process::Command};
 
@@ -19,6 +19,7 @@ fn main() {
 fn build_ios() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
+    // NOTE: Make sure this path exists in your source tree!
     let bridges = vec!["src/sys/apple/mod.rs"];
     for bridge in &bridges {
         println!("cargo:rerun-if-changed={bridge}");
@@ -37,7 +38,7 @@ fn build_ios() {
 }
 
 fn build_android() {
-    const KOTLIN_FILE_RELATIVE_PATH: &str = "src/sys/android/AlertHelper.kt";
+    const KOTLIN_FILE_RELATIVE_PATH: &str = "src/sys/android/DialogHelper.kt";
 
     println!("cargo:rerun-if-changed={KOTLIN_FILE_RELATIVE_PATH}");
 

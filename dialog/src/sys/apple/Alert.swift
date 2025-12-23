@@ -1,11 +1,16 @@
 import Foundation
+#if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
-func show_alert_bridge(title: RustString, message: RustString, type_str: RustString, cb_id: UInt64) {
+func show_alert_bridge(title: RustStr, message: RustStr, type_str: RustStr, cb_id: UInt64) {
     let titleStr = title.toString()
     let messageStr = message.toString()
     
     DispatchQueue.main.async {
+        #if os(iOS)
         guard let topVC = getTopViewController() else {
             on_alert_result(cb_id, false)
             return
@@ -16,14 +21,24 @@ func show_alert_bridge(title: RustString, message: RustString, type_str: RustStr
             on_alert_result(cb_id, true)
         })
         topVC.present(alert, animated: true)
+        #elseif os(macOS)
+        let alert = NSAlert()
+        alert.messageText = titleStr
+        alert.informativeText = messageStr
+        alert.alertStyle = .informational // simplified mapping
+        alert.addButton(withTitle: "OK")
+        let _ = alert.runModal()
+        on_alert_result(cb_id, true)
+        #endif
     }
 }
 
-func show_confirm_bridge(title: RustString, message: RustString, type_str: RustString, cb_id: UInt64) {
+func show_confirm_bridge(title: RustStr, message: RustStr, type_str: RustStr, cb_id: UInt64) {
     let titleStr = title.toString()
     let messageStr = message.toString()
     
     DispatchQueue.main.async {
+        #if os(iOS)
         guard let topVC = getTopViewController() else {
             on_alert_result(cb_id, false)
             return
@@ -37,9 +52,20 @@ func show_confirm_bridge(title: RustString, message: RustString, type_str: RustS
             on_alert_result(cb_id, false)
         })
         topVC.present(alert, animated: true)
+        #elseif os(macOS)
+        let alert = NSAlert()
+        alert.messageText = titleStr
+        alert.informativeText = messageStr
+        alert.alertStyle = .warning // simplified
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        let response = alert.runModal()
+        on_alert_result(cb_id, response == .alertFirstButtonReturn)
+        #endif
     }
 }
 
+#if os(iOS)
 private func getTopViewController() -> UIViewController? {
     let keyWindow = UIApplication.shared.connectedScenes
         .filter({$0.activationState == .foregroundActive})
@@ -55,3 +81,4 @@ private func getTopViewController() -> UIViewController? {
     }
     return top
 }
+#endif

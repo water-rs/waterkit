@@ -1,8 +1,8 @@
 [package]
-name = "waterkit-alert-test"
+name = "waterkit-dialog-test"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-waterkit-alert = { path = "../../../alert" }
+waterkit-dialog = { path = "../../../dialog" }
 tokio = { workspace = true, features = ["full"] }

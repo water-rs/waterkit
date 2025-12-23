@@ -3,8 +3,9 @@
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple;
 
+/// Android platform implementation.
 #[cfg(target_os = "android")]
-mod android;
+pub mod android;
 
 #[cfg(target_os = "windows")]
 mod windows;

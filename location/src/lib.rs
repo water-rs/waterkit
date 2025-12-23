@@ -5,7 +5,8 @@
 
 #![warn(missing_docs)]
 
-mod sys;
+/// Platform-specific implementations.
+pub mod sys;
 
 pub use waterkit_permission::{Permission, PermissionStatus};
 

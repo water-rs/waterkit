@@ -108,9 +108,10 @@ pub fn get_location_with_context(
         .l()
         .map_err(|e| LocationError::Unknown(format!("loadClass result: {e}")))?;
 
+    let helper_jclass: jni::objects::JClass = (&helper_class).into();
     let result = env
         .call_static_method(
-            (&helper_class).into(),
+            helper_jclass,
             "getLastKnownLocation",
             "(Landroid/content/Context;)[D",
             &[JValue::Object(context)],

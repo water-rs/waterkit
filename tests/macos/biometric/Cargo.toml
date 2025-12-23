@@ -1,0 +1,17 @@
+[package]
+name = "waterkit-biometric-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+waterkit-biometric = { path = "../../../biometric" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+# Apple platforms (iOS, macOS)
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+swift-bridge-build.workspace = true
+
+[build-dependencies]

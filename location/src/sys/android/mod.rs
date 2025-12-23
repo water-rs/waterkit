@@ -108,7 +108,7 @@ pub fn get_location_with_context(
         .l()
         .map_err(|e| LocationError::Unknown(format!("loadClass result: {e}")))?;
 
-    let helper_jclass: jni::objects::JClass = (&helper_class).into();
+    let helper_jclass: jni::objects::JClass = helper_class.into();
     let result = env
         .call_static_method(
             helper_jclass,
@@ -121,16 +121,21 @@ pub fn get_location_with_context(
         .map_err(|e| LocationError::Unknown(format!("getLastKnownLocation result: {e}")))?;
 
     // Parse double array result
-    let array = env
-        .get_double_array_elements(result.as_raw().cast(), jni::objects::ReleaseMode::NoCopyBack)
-        .map_err(|e| LocationError::Unknown(format!("get_double_array: {e}")))?;
+    let result_array: jni::objects::JDoubleArray = result.into();
+    let len = env
+        .get_array_length(&result_array)
+        .map_err(|e| LocationError::Unknown(format!("get_array_length: {e}")))? as usize;
 
-    let len = array.len();
     if len < 1 {
         return Err(LocationError::NotAvailable);
     }
 
-    let success = unsafe { *array.as_ptr() };
+    // Copy array elements to a Rust buffer
+    let mut buf = vec![0.0f64; len];
+    env.get_double_array_region(&result_array, 0, &mut buf)
+        .map_err(|e| LocationError::Unknown(format!("get_double_array_region: {e}")))?;
+
+    let success = buf[0];
     if success < 0.5 {
         return Err(LocationError::NotAvailable);
     }
@@ -139,17 +144,14 @@ pub fn get_location_with_context(
         return Err(LocationError::Unknown("Invalid result array".into()));
     }
 
-    unsafe {
-        let ptr = array.as_ptr();
-        Ok(Location {
-            latitude: *ptr.add(1),
-            longitude: *ptr.add(2),
-            altitude: Some(*ptr.add(3)),
-            horizontal_accuracy: Some(*ptr.add(4)),
-            vertical_accuracy: None,
-            timestamp: *ptr.add(5) as u64,
-        })
-    }
+    Ok(Location {
+        latitude: buf[1],
+        longitude: buf[2],
+        altitude: Some(buf[3]),
+        horizontal_accuracy: Some(buf[4]),
+        vertical_accuracy: None,
+        timestamp: buf[5] as u64,
+    })
 }
 
 // Async wrapper for the public API (requires runtime context)

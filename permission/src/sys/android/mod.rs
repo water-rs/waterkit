@@ -150,7 +150,7 @@ pub fn check_with_activity(
         .l()
         .map_err(|e| PermissionError::Unknown(format!("loadClass result: {e}")))?;
 
-    let helper_jclass: jni::objects::JClass = (&helper_class).into();
+    let helper_jclass: jni::objects::JClass = helper_class.into();
     let result = env
         .call_static_method(
             helper_jclass,

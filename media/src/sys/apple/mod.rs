@@ -1,8 +1,7 @@
 //! Apple platform (iOS/macOS) media control implementation using swift-bridge.
 
-use crate::player::PlayerState;
-use crate::{MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus, PlayerError};
-use std::sync::{Arc, RwLock};
+use crate::{MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
+use std::sync::RwLock;
 
 #[swift_bridge::bridge]
 mod ffi {
@@ -209,142 +208,7 @@ impl MediaSessionInner {
     }
 }
 
-// MARK: - Audio Player
 
-fn convert_player_result(result: ffi::PlayerResultFFI) -> Result<(), PlayerError> {
-    match result {
-        ffi::PlayerResultFFI::Success => Ok(()),
-        ffi::PlayerResultFFI::LoadFailed => {
-            Err(PlayerError::LoadFailed("Failed to load audio".into()))
-        }
-        ffi::PlayerResultFFI::PlaybackFailed => {
-            Err(PlayerError::PlaybackFailed("Playback failed".into()))
-        }
-        ffi::PlayerResultFFI::UnsupportedFormat => {
-            Err(PlayerError::UnsupportedFormat("Audio format not supported".into()))
-        }
-    }
-}
-
-/// Global command handler for audio player
-static PLAYER_COMMAND_HANDLER: RwLock<Option<Arc<RwLock<Option<Box<dyn MediaCommandHandler>>>>>> =
-    RwLock::new(None);
-
-#[derive(Debug)]
-pub struct AudioPlayerInner;
-
-impl AudioPlayerInner {
-    pub fn new() -> Result<Self, PlayerError> {
-        convert_player_result(ffi::audio_player_init())?;
-        Ok(Self)
-    }
-
-    pub fn play_file(&self, path: &std::path::Path) -> Result<(), PlayerError> {
-        let path_str = path.to_string_lossy().to_string();
-        convert_player_result(ffi::audio_player_play_file(path_str))
-    }
-
-    pub fn play_url(&self, url: &str) -> Result<(), PlayerError> {
-        convert_player_result(ffi::audio_player_play_url(url.to_string()))
-    }
-
-    pub fn pause(&self) -> Result<(), PlayerError> {
-        convert_player_result(ffi::audio_player_pause())
-    }
-
-    pub fn resume(&self) -> Result<(), PlayerError> {
-        convert_player_result(ffi::audio_player_resume())
-    }
-
-    pub fn stop(&self) -> Result<(), PlayerError> {
-        convert_player_result(ffi::audio_player_stop())
-    }
-
-    pub fn seek(&self, position: std::time::Duration) -> Result<(), PlayerError> {
-        convert_player_result(ffi::audio_player_seek(position.as_secs_f64()))
-    }
-
-    pub fn position(&self) -> Option<std::time::Duration> {
-        let state = ffi::audio_player_get_state();
-        if state.position_secs >= 0.0 {
-            Some(std::time::Duration::from_secs_f64(state.position_secs))
-        } else {
-            None
-        }
-    }
-
-    pub fn duration(&self) -> Option<std::time::Duration> {
-        let state = ffi::audio_player_get_state();
-        if state.duration_secs >= 0.0 {
-            Some(std::time::Duration::from_secs_f64(state.duration_secs))
-        } else {
-            None
-        }
-    }
-
-    pub fn state(&self) -> PlayerState {
-        let state = ffi::audio_player_get_state();
-        match state.state {
-            0 => PlayerState::Stopped,
-            1 => PlayerState::Paused,
-            2 => PlayerState::Playing,
-            _ => PlayerState::Stopped,
-        }
-    }
-
-    pub fn set_volume(&self, volume: f32) -> Result<(), PlayerError> {
-        convert_player_result(ffi::audio_player_set_volume(volume))
-    }
-
-    pub fn update_now_playing(
-        &self,
-        metadata: &MediaMetadata,
-        state: &PlaybackState,
-    ) -> Result<(), PlayerError> {
-        let ffi_metadata = ffi::MediaMetadataFFI {
-            title: metadata.title.clone().unwrap_or_default(),
-            artist: metadata.artist.clone().unwrap_or_default(),
-            album: metadata.album.clone().unwrap_or_default(),
-            artwork_url: metadata.artwork_url.clone().unwrap_or_default(),
-            duration_secs: metadata.duration.map(|d| d.as_secs_f64()).unwrap_or(-1.0),
-        };
-        convert_result(ffi::media_session_set_metadata(ffi_metadata))?;
-
-        let status = match state.status {
-            PlaybackStatus::Stopped => 0,
-            PlaybackStatus::Paused => 1,
-            PlaybackStatus::Playing => 2,
-        };
-        let ffi_state = ffi::PlaybackStateFFI {
-            status,
-            position_secs: state.position.map(|d| d.as_secs_f64()).unwrap_or(-1.0),
-            rate: state.rate,
-        };
-        convert_result(ffi::media_session_set_playback_state(ffi_state))?;
-        Ok(())
-    }
-
-    pub fn clear_now_playing(&self) -> Result<(), PlayerError> {
-        convert_result(ffi::media_session_clear())?;
-        Ok(())
-    }
-
-    pub fn register_command_handler(
-        &self,
-        handler: Arc<RwLock<Option<Box<dyn MediaCommandHandler>>>>,
-    ) {
-        if let Ok(mut guard) = PLAYER_COMMAND_HANDLER.write() {
-            *guard = Some(handler);
-        }
-        ffi::media_session_register_command_handler();
-    }
-
-    pub fn run_loop(&self, duration: std::time::Duration) {
-        ffi::media_session_run_loop(duration.as_secs_f64());
-    }
-}
-
-// MARK: - Media Center Integration (for new rodio-based player)
 
 /// Media center integration for Apple platforms.
 /// Uses MPNowPlayingInfoCenter and MPRemoteCommandCenter.

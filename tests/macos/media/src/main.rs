@@ -8,10 +8,8 @@
 //!   --album <album>      Set the album name
 //!   --artwork <path>     Set artwork image path
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
-use waterkit_media::{AudioPlayer, MediaCommand};
+use waterkit_media::AudioPlayer;
 
 fn parse_args() -> (Option<String>, Option<String>, Option<String>, Option<String>, Option<String>) {
     let args: Vec<String> = std::env::args().collect();

@@ -20,7 +20,7 @@ mod linux;
 
 // Keep MediaSessionInner for backwards compatibility
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-pub(crate) use apple::{MediaCenterInner, MediaSessionInner};
+pub(crate) use apple::MediaSessionInner;
 
 #[cfg(target_os = "android")]
 pub(crate) use android::MediaSessionInner;

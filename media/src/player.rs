@@ -198,11 +198,21 @@ impl AudioPlayerBuilder {
 /// # Ok::<(), waterkit_media::PlayerError>(())
 /// ```
 /// Thread-safe controller for audio playback and media center integration.
+/// Thread-safe controller for audio playback and media center integration.
 pub struct AudioController {
     sink: Sink,
     metadata: Arc<RwLock<MediaMetadata>>,
     state: Arc<RwLock<PlayerState>>,
     media_center: crate::sys::MediaCenterIntegration,
+}
+
+impl std::fmt::Debug for AudioController {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AudioController")
+            .field("metadata", &self.metadata)
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AudioController {

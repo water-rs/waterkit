@@ -5,7 +5,8 @@
 
 #![warn(missing_docs)]
 
-mod sys;
+/// Platform-specific implementations.
+pub mod sys;
 
 /// Types of permissions that can be requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

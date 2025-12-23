@@ -1,0 +1,32 @@
+[package]
+name = "waterkit-notification"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository = "https://github.com/water-rs/kit"
+description = "Cross-platform local notification for WaterUI"
+keywords = ["notification", "ios", "android", "macos", "windows", "linux"]
+categories = ["gui", "os"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# Desktop platforms (Linux, Windows, macOS)
+[target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dependencies]
+notify-rust = "4"
+
+# iOS
+[target.'cfg(target_os = "ios")'.dependencies]
+swift-bridge.workspace = true
+
+[target.'cfg(target_os = "ios")'.build-dependencies]
+swift-bridge-build.workspace = true
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true
+
+[build-dependencies]
+android-build.workspace = true

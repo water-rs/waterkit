@@ -1,15 +1,29 @@
 [package]
-name = "waterkit-test"
+name = "waterkit-test-android"
 version = "0.1.0"
-edition = "2021"
-description = "Android test harness for waterkit crates"
+edition = "2024"
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-jni = "0.21"
+jni = { workspace = true }
+waterkit-dialog = { path = "../../../dialog" } # Still need core deps if helper uses them?
 
-# Add waterkit crates to test here
-waterkit-permission = { path = "../../../permission" }
-waterkit-location = { path = "../../../location" }
+# DYNAMIC DEPENDENCY SLOT
+# This will be overwritten by the CLI tool.
+# waterkit_content = { path = "..." }
+
+# For now, we point to a dummy or default implementation?
+# Or we make it optional?
+# To compile initially, we might need a default content crate.
+# Let's point to dialog helper for now? No, that's not executable.
+# We'll just comment it out and let the CLI insert it.
+# Actually, for `cargo check` to work on the harness, it needs to point somewhere valid.
+# Let's point to `tests/macos/dialog` as a dummy content crate if compatible?
+# macOS/dialog has a main.rs, not lib.rs.
+# We need a dummy lib crate.
+# Or we just don't compile this crate manually, only via CLI.
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Android specific deps

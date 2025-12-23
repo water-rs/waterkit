@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["permission", "location", "media", "tests/android/rust", "tests/macos/location", "tests/macos/media", "tests/macos/alert", "haptic", "notification", "alert"]
+members = ["permission", "location", "media", "tests/android/rust", "tests/macos/location", "tests/macos/media", "tests/macos/dialog", "tests/macos/biometric", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret"]
 
 
 [workspace.package]
@@ -32,6 +32,7 @@ categories = ["gui", "development-tools"]
 [workspace.dependencies]
 # Cross-platform
 futures = "0.3"
+thiserror = "1"
 
 # Apple platforms
 swift-bridge = "0.1"

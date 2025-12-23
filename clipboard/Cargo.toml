@@ -1,0 +1,36 @@
+[package]
+name = "waterkit-clipboard"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository = "https://github.com/water-rs/kit"
+description = "Cross-platform clipboard access for WaterUI"
+keywords = ["clipboard", "copy", "paste", "waterui"]
+categories = ["gui", "os"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# Desktop (Windows, Linux)
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+arboard = "3"
+
+# Apple platforms (iOS, macOS)
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+swift-bridge-build.workspace = true
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true
+
+[build-dependencies]
+android-build.workspace = true
+
+# Linux
+[dev-dependencies]
+image = "0.25"

@@ -1,0 +1,39 @@
+[package]
+name = "waterkit-system"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+# Common
+thiserror = "1.0"
+
+# Desktop (System Info & Thermal)
+[target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
+sysinfo = "0.30"
+
+# Windows Connectivity
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Networking_Connectivity",
+] }
+
+# Linux Connectivity (Using netdev for now as fallback/helper if needed, but maybe just sysinfo is enough for some?)
+# Actually netdev is good for interface listing. 
+# We'll see if we need it. Let's add it for Linux mainly.
+[target.'cfg(target_os = "linux")'.dependencies]
+netdev = "0.30"
+
+# Apple (iOS/macOS)
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+swift-bridge = { workspace = true, features = [] }
+swift-rs = "1.0.6"
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
+[build-dependencies]
+swift-bridge-build = "0.1"
+android-build = "0.1"

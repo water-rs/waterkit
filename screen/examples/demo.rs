@@ -30,8 +30,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     
-    // 4. Capture Screen
+    // 4. Capture Screen or Pick (if requested, but demo just shows basic usage)
+    // Uncomment to test picker:
+    /*
+    println!("Launching System Picker...");
+    match waterkit_screen::pick_and_capture().await {
+        Ok(bytes) => {
+             println!("Picked and captured {} bytes.", bytes.len());
+             std::fs::write("picked.png", bytes)?;
+        },
+        Err(e) => println!("Pick failed: {}", e),
+    }
+    */
+    
+    // Existing capture logic
     if !screen_list.is_empty() {
+
         println!("Capturing main screen (index 0)...");
         match capture_screen(0) {
             Ok(bytes) => {

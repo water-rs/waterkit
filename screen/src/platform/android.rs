@@ -109,3 +109,7 @@ pub async fn set_brightness(val: f32) -> Result<(), Error> {
     
     Ok(())
 }
+
+pub async fn pick_and_capture() -> Result<Vec<u8>, Error> {
+    Err(Error::Unsupported)
+}

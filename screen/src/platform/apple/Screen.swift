@@ -21,7 +21,7 @@ public func set_screen_brightness(value: Float) {
     UIScreen.main.brightness = CGFloat(value)
 }
 
-public func capture_main_screen() -> RustVec<UInt8>? {
+public func capture_main_screen() -> RustVec<UInt8> {
     // Capture the snapshot of the key window
     // This needs to run on main thread
     var result: RustVec<UInt8>? = nil
@@ -50,9 +50,14 @@ public func capture_main_screen() -> RustVec<UInt8>? {
             for byte in data {
                 vec.push(value: byte)
             }
-            result = vec
+            result = vec // Should return it
         }
     }
     
-    return result
+    // If result nil, return empty
+    return result ?? RustVec()
+}
+
+public func show_picker_and_capture() {
+    // Stub for iOS
 }

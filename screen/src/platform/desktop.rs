@@ -47,3 +47,8 @@ pub async fn set_brightness(_val: f32) -> Result<(), Error> {
     // Err(Error::Unsupported)
     Ok(())
 }
+
+#[cfg(not(target_os = "macos"))]
+pub async fn pick_and_capture() -> Result<Vec<u8>, Error> {
+    Err(Error::Unsupported)
+}

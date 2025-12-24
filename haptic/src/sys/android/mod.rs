@@ -1,8 +1,8 @@
 //! Android haptic implementation using JNI.
 
 use crate::{HapticError, HapticFeedback};
-use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
+use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode containing HapticHelper class.

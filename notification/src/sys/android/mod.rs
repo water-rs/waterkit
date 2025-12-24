@@ -1,7 +1,7 @@
 //! Android notification implementation using JNI.
 
-use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
+use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode containing NotificationHelper class.
@@ -38,8 +38,7 @@ pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), Stri
     );
 
     // Write DEX bytes to file
-    std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| format!("write DEX failed: {e}"))?;
+    std::fs::write(&dex_path, DEX_BYTES).map_err(|e| format!("write DEX failed: {e}"))?;
 
     // Create DexClassLoader
     let dex_path_jstring = env
@@ -85,9 +84,7 @@ pub fn show_notification_with_context(
 ) -> Result<(), String> {
     init_with_context(env, context)?;
 
-    let class_loader = CLASS_LOADER
-        .get()
-        .ok_or("Class loader not initialized")?;
+    let class_loader = CLASS_LOADER.get().ok_or("Class loader not initialized")?;
 
     let helper_class_name = env
         .new_string("waterkit.notification.NotificationHelper")
@@ -105,9 +102,13 @@ pub fn show_notification_with_context(
         .map_err(|e| format!("loadClass result: {e}"))?;
 
     let helper_jclass: jni::objects::JClass = helper_class.into();
-    
-    let jtitle = env.new_string(title).map_err(|e| format!("new_string: {e}"))?;
-    let jbody = env.new_string(body).map_err(|e| format!("new_string: {e}"))?;
+
+    let jtitle = env
+        .new_string(title)
+        .map_err(|e| format!("new_string: {e}"))?;
+    let jbody = env
+        .new_string(body)
+        .map_err(|e| format!("new_string: {e}"))?;
 
     env.call_static_method(
         helper_jclass,

@@ -3,8 +3,8 @@
 //! Lists cameras, allows selection, and renders the camera feed to a window.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use std::thread;
+use std::time::{Duration, Instant};
 use waterkit_camera::{Camera, CameraInfo, FrameFormat};
 use winit::{
     application::ApplicationHandler,
@@ -333,7 +333,11 @@ impl State {
         // Check for dropped frames
         let dropped = self.camera.dropped_frame_count();
         if dropped > self.last_dropped_frames {
-            println!("WARN: Dropped {} frames (total: {})", dropped - self.last_dropped_frames, dropped);
+            println!(
+                "WARN: Dropped {} frames (total: {})",
+                dropped - self.last_dropped_frames,
+                dropped
+            );
             self.last_dropped_frames = dropped;
         }
 
@@ -341,10 +345,13 @@ impl State {
         if let Ok(frame) = self.camera.get_frame() {
             // If frame size changed, recreate texture and bind group
             if frame.width != self.texture_width || frame.height != self.texture_height {
-                println!("Frame size changed to {}x{}, recreating texture", frame.width, frame.height);
+                println!(
+                    "Frame size changed to {}x{}, recreating texture",
+                    frame.width, frame.height
+                );
                 self.texture_width = frame.width;
                 self.texture_height = frame.height;
-                
+
                 self.texture = self.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("camera_texture"),
                     size: wgpu::Extent3d {
@@ -359,8 +366,10 @@ impl State {
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
-                
-                let view = self.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                let view = self
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
                 self.bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("texture_bind_group"),
                     layout: &self.bind_group_layout,
@@ -376,7 +385,7 @@ impl State {
                     ],
                 });
             }
-            
+
             // Convert to RGBA and update texture
             let rgba = match frame.format {
                 FrameFormat::Rgba => frame.data,
@@ -431,7 +440,8 @@ impl State {
         let elapsed = now.duration_since(self.last_fps_update);
         if elapsed.as_secs_f32() >= 1.0 {
             let fps = self.frame_count as f32 / elapsed.as_secs_f32();
-            self.window.set_title(&format!("Camera Preview - {:.1} FPS", fps));
+            self.window
+                .set_title(&format!("Camera Preview - {:.1} FPS", fps));
             self.frame_count = 0;
             self.last_fps_update = now;
         }

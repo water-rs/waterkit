@@ -1,8 +1,8 @@
 //! Android location implementation using JNI.
 
 use crate::{Location, LocationError};
-use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
+use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode containing LocationHelper class.
@@ -124,7 +124,8 @@ pub fn get_location_with_context(
     let result_array: jni::objects::JDoubleArray = result.into();
     let len = env
         .get_array_length(&result_array)
-        .map_err(|e| LocationError::Unknown(format!("get_array_length: {e}")))? as usize;
+        .map_err(|e| LocationError::Unknown(format!("get_array_length: {e}")))?
+        as usize;
 
     if len < 1 {
         return Err(LocationError::NotAvailable);

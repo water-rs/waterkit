@@ -250,13 +250,13 @@ impl CameraInner {
         let bytes_per_pixel = native.format.bytes_per_pixel();
         let size = (native.width * native.height) as usize * bytes_per_pixel;
         let mut data = vec![0u8; size];
-        
+
         unsafe {
             camera_copy_frame_data(data.as_mut_ptr(), size);
         }
-        
+
         self.consume_frame();
-        
+
         Ok(CameraFrame::new(
             data,
             native.width,
@@ -284,7 +284,7 @@ impl CameraInner {
     pub fn resolution(&self) -> Resolution {
         *self.resolution.lock().unwrap()
     }
-    
+
     /// Get dropped frame count.
     #[must_use]
     #[allow(clippy::unused_self)]
@@ -314,28 +314,28 @@ impl CameraInner {
     /// Returns a `CameraError` if the photo cannot be taken.
     pub fn take_photo(&self) -> Result<CameraFrame, CameraError> {
         convert_result(ffi::camera_take_photo(), "take_photo")?;
-        
+
         let len = ffi::camera_get_photo_len();
         if len <= 0 {
-             return Err(CameraError::CaptureFailed("Empty photo data".into()));
+            return Err(CameraError::CaptureFailed("Empty photo data".into()));
         }
-        
+
         #[allow(clippy::cast_sign_loss)]
         let mut data = vec![0u8; len as usize];
         unsafe {
             #[allow(clippy::cast_sign_loss)]
             camera_copy_photo_data(data.as_mut_ptr(), len as u64);
         }
-        
+
         // Return with current resolution (though JPEG might differ)
         let res = self.resolution();
-        
+
         Ok(CameraFrame::new(
             data,
-            res.width, 
+            res.width,
             res.height,
             FrameFormat::Jpeg,
-            None
+            None,
         ))
     }
 
@@ -345,7 +345,10 @@ impl CameraInner {
     /// Returns a `CameraError` if recording cannot be started.
     #[allow(clippy::unused_self)]
     pub fn start_recording(&self, path: &str) -> Result<(), CameraError> {
-        convert_result(ffi::camera_start_recording(path.to_string()), "start_recording")
+        convert_result(
+            ffi::camera_start_recording(path.to_string()),
+            "start_recording",
+        )
     }
 
     /// Stop recording video.

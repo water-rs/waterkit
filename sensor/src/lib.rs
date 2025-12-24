@@ -88,7 +88,7 @@ pub struct Accelerometer;
 
 impl Accelerometer {
     /// Check if the accelerometer is available.
-    #[must_use] 
+    #[must_use]
     pub fn is_available() -> bool {
         sys::accelerometer_available()
     }
@@ -116,7 +116,7 @@ pub struct Gyroscope;
 
 impl Gyroscope {
     /// Check if the gyroscope is available.
-    #[must_use] 
+    #[must_use]
     pub fn is_available() -> bool {
         sys::gyroscope_available()
     }
@@ -144,7 +144,7 @@ pub struct Magnetometer;
 
 impl Magnetometer {
     /// Check if the magnetometer is available.
-    #[must_use] 
+    #[must_use]
     pub fn is_available() -> bool {
         sys::magnetometer_available()
     }
@@ -172,7 +172,7 @@ pub struct Barometer;
 
 impl Barometer {
     /// Check if the barometer is available.
-    #[must_use] 
+    #[must_use]
     pub fn is_available() -> bool {
         sys::barometer_available()
     }
@@ -202,7 +202,7 @@ pub struct AmbientLight;
 
 impl AmbientLight {
     /// Check if the ambient light sensor is available.
-    #[must_use] 
+    #[must_use]
     pub fn is_available() -> bool {
         sys::ambient_light_available()
     }

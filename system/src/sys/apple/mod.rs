@@ -1,4 +1,4 @@
-use crate::{ConnectivityInfo, ConnectionType, SystemLoad, ThermalState};
+use crate::{ConnectionType, ConnectivityInfo, SystemLoad, ThermalState};
 
 #[swift_bridge::bridge]
 mod ffi {

@@ -5,8 +5,8 @@
 use crate::recorder::{AudioBuffer, AudioFormat, InputDevice, RecordError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 
 /// Desktop audio recorder using cpal.
@@ -89,9 +89,10 @@ impl AudioRecorderInner {
                 &config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     if recording.load(Ordering::Relaxed)
-                        && let Ok(mut buf) = buffer.lock() {
-                            buf.extend_from_slice(data);
-                        }
+                        && let Ok(mut buf) = buffer.lock()
+                    {
+                        buf.extend_from_slice(data);
+                    }
                 },
                 |err| {
                     eprintln!("Audio input error: {err}");

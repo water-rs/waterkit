@@ -1,45 +1,53 @@
-# waterkit-camera
+# Waterkit Camera
 
-Cross-platform camera streaming for WaterUI with efficient WGPU texture integration.
+Cross-platform camera access and streaming library.
 
 ## Features
 
-- **Camera Enumeration**: List available cameras with metadata
-- **Frame Capture**: Stream frames from camera devices
-- **WGPU Integration**: Efficient frame-to-texture conversion
-- **Cross-Platform**: iOS, macOS, Android, Windows, Linux
+- **Device Enumeration**: List available cameras (front, back, external).
+- **Preview Stream**: Get raw frame data for rendering (compatible with `wgpu`).
+- **Capture**: Take high-quality photos.
+- **Controls**: (Roadmap) Focus, Zoom, Flash.
+
+## Installation
+
+```toml
+[dependencies]
+waterkit-camera = "0.1"
+# OR
+waterkit = { version = "0.1", features = ["camera"] }
+```
+
+## Platform Support
+
+| Platform | Backend |
+| :--- | :--- |
+| **macOS/iOS** | AVFoundation (Native Swift) |
+| **Android** | Camera2 API (Native Kotlin) |
+| **Windows/Linux** | `nokhwa` (Rust) |
 
 ## Usage
 
 ```rust
-use waterkit_camera::{Camera, CameraFrame};
+use waterkit_camera::{CameraManager, CameraPosition};
 
-// List cameras
-let cameras = Camera::list()?;
-
-// Open default camera
-let mut camera = Camera::open_default()?;
-
-// Start capturing
-camera.start()?;
-
-// Get a frame
-let frame: CameraFrame = camera.get_frame()?;
-
-// Write to WGPU texture
-frame.write_to_texture(&queue, &texture);
+async fn start_camera() {
+    let manager = CameraManager::new().await.unwrap();
+    
+    // Get list of cameras
+    let cameras = manager.get_devices().await.unwrap();
+    
+    // Select the back camera
+    if let Some(back_cam) = cameras.iter().find(|c| c.position == CameraPosition::Back) {
+        let stream = manager.start_stream(back_cam).await.unwrap();
+        
+        // Use stream with wgpu or other renderer
+        // stream.get_frame()...
+    }
+}
 ```
 
-## Platform Backends
+## Permissions
 
-| Platform | Backend |
-|----------|---------|
-| macOS | AVCaptureSession via swift-bridge |
-| iOS | AVCaptureSession via swift-bridge |
-| Windows | nokhwa (MSMF) |
-| Linux | nokhwa (V4L2) |
-| Android | Camera2 API via JNI |
-
-## License
-
-MIT
+**iOS**: Add `NSCameraUsageDescription`.
+**Android**: Add `<uses-permission android:name="android.permission.CAMERA" />`.

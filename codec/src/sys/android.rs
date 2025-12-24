@@ -1,6 +1,6 @@
 //! Android MediaCodec implementation.
 
-use crate::{VideoEncoder, VideoDecoder, CodecError, Frame, CodecType};
+use crate::{CodecError, CodecType, Frame, VideoDecoder, VideoEncoder};
 
 pub struct AndroidEncoder;
 

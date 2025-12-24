@@ -1,9 +1,9 @@
 //! Android permission implementation using JNI.
 
 use crate::{Permission, PermissionError, PermissionStatus};
+use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
 use jni::sys::jint;
-use jni::JNIEnv;
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode containing PermissionHelper class.
@@ -88,12 +88,7 @@ pub fn init_with_activity(env: &mut JNIEnv, activity: &JObject) -> Result<(), Pe
         .map_err(|e| PermissionError::Unknown(format!("new_string failed: {e}")))?;
 
     let parent_loader = env
-        .call_method(
-            context,
-            "getClassLoader",
-            "()Ljava/lang/ClassLoader;",
-            &[],
-        )
+        .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
         .map_err(|e| PermissionError::Unknown(format!("getClassLoader failed: {e}")))?
         .l()
         .map_err(|e| PermissionError::Unknown(format!("getClassLoader result: {e}")))?;
@@ -177,7 +172,7 @@ pub(crate) async fn check(permission: Permission) -> PermissionStatus {
 }
 
 pub(crate) async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
-    // Without JNI context, we can't request permissions  
+    // Without JNI context, we can't request permissions
     // The application must use the Android Activity API directly
     let _ = permission;
     Err(PermissionError::Unknown(

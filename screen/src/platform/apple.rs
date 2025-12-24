@@ -11,20 +11,20 @@ mod ffi {
         // Swift function declarations
         fn get_screen_brightness() -> f32;
         fn set_screen_brightness(value: f32);
-        
+
         // Return PNG bytes (iOS snapshot)
-        fn capture_main_screen() -> Vec<u8>; 
-        
+        fn capture_main_screen() -> Vec<u8>;
+
         // macOS picker
         fn show_picker_and_capture();
-        
+
         // High-speed ScreenCaptureKit streaming (macOS 12.3+)
         fn init_sck_stream() -> bool;
         fn stop_sck_stream();
         fn get_latest_frame() -> Vec<u8>;
         fn get_frame_count() -> u32;
         fn reset_frame_count();
-        
+
         // Zero-copy IOSurface access
         fn get_iosurface_ptr() -> u64;
         fn get_iosurface_sequence() -> u32;
@@ -46,12 +46,12 @@ static PICKER_SENDER: OnceLock<Mutex<Option<PickerSender>>> = OnceLock::new();
 fn on_picker_result(data: Vec<u8>) {
     if let Some(mutex) = PICKER_SENDER.get()
         && let Ok(mut lock) = mutex.lock()
-            && let Some(sender) = lock.take() {
-                let res = if data.is_empty() { None } else { Some(data) };
-                let _ = sender.send(res);
-            }
+        && let Some(sender) = lock.take()
+    {
+        let res = if data.is_empty() { None } else { Some(data) };
+        let _ = sender.send(res);
+    }
 }
-
 
 #[cfg(target_os = "ios")]
 pub fn capture_screen(display_index: usize) -> Result<Vec<u8>, Error> {
@@ -59,7 +59,7 @@ pub fn capture_screen(display_index: usize) -> Result<Vec<u8>, Error> {
     if display_index != 0 {
         return Err(Error::MonitorNotFound);
     }
-    
+
     let bytes = ffi::capture_main_screen();
     if bytes.is_empty() {
         Err(Error::Platform("Failed to capture screen".into()))
@@ -86,7 +86,7 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     Ok(vec![ScreenInfo {
         id: 0,
         name: "Main Screen".into(),
-        width: 0, 
+        width: 0,
         height: 0,
         scale_factor: 1.0,
         is_primary: true,
@@ -102,15 +102,17 @@ pub async fn pick_and_capture() -> Result<Vec<u8>, Error> {
 #[cfg(target_os = "macos")]
 pub async fn pick_and_capture() -> Result<Vec<u8>, Error> {
     let (tx, rx) = oneshot::channel();
-    
+
     {
         let mutex = PICKER_SENDER.get_or_init(|| Mutex::new(None));
-        let mut lock = mutex.lock().map_err(|_| Error::Platform("Lock error".into()))?;
+        let mut lock = mutex
+            .lock()
+            .map_err(|_| Error::Platform("Lock error".into()))?;
         *lock = Some(tx);
     }
-    
+
     ffi::show_picker_and_capture();
-    
+
     match rx.await {
         Ok(Some(bytes)) => Ok(bytes),
         Ok(None) => Err(Error::Platform("Picker cancelled or failed".into())),
@@ -119,7 +121,7 @@ pub async fn pick_and_capture() -> Result<Vec<u8>, Error> {
 }
 
 /// High-speed ScreenCaptureKit-based screen capturer (macOS 12.3+).
-/// 
+///
 /// Uses `SCStream` for 60fps+ capable frame capture.
 /// Much faster than CGWindowListCreateImage-based approaches.
 #[cfg(target_os = "macos")]
@@ -131,7 +133,7 @@ pub struct SCKCapturer {
 impl SCKCapturer {
     /// Initialize the `ScreenCaptureKit` stream.
     /// Returns None if SCK is not available (macOS < 12.3).
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Option<Self> {
         if ffi::init_sck_stream() {
             Some(Self { _private: () })
@@ -148,23 +150,25 @@ impl SCKCapturer {
         if ffi::init_sck_stream() {
             Ok(Self { _private: () })
         } else {
-            Err(Error::Platform("Failed to initialize ScreenCaptureKit".into()))
+            Err(Error::Platform(
+                "Failed to initialize ScreenCaptureKit".into(),
+            ))
         }
     }
-    
+
     /// Get the latest captured frame as raw BGRA bytes.
     /// Returns (width, height, data) or None if no frame available yet.
-    #[must_use] 
+    #[must_use]
     pub fn get_frame(&self) -> Option<crate::RawCapture> {
         let data = ffi::get_latest_frame();
         if data.len() < 8 {
             return None;
         }
-        
+
         // Decode width and height from first 8 bytes
         let width = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
         let height = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-        
+
         // Check if this is dimensions-only response (9th byte = 0xFF)
         if data.len() == 9 && data[8] == 0xFF {
             // SCK stream is running, return dummy frame with dimensions
@@ -185,7 +189,7 @@ impl SCKCapturer {
     }
 
     /// Get the latest frame if pixel data is available (skips dimension-only replies).
-    #[must_use] 
+    #[must_use]
     pub fn latest_frame(&self) -> Option<crate::RawCapture> {
         let frame = self.get_frame()?;
         if frame.data.is_empty() {
@@ -196,32 +200,32 @@ impl SCKCapturer {
     }
 
     /// Get the most recently reported frame dimensions.
-    #[must_use] 
+    #[must_use]
     pub fn dimensions(&self) -> Option<(u32, u32)> {
         self.get_frame().map(|frame| (frame.width, frame.height))
     }
-    
+
     /// Get the number of unique frames captured by `ScreenCaptureKit`.
-    #[must_use] 
+    #[must_use]
     pub fn frame_count(&self) -> u32 {
         ffi::get_frame_count()
     }
-    
+
     /// Reset the frame counter.
     pub fn reset_frame_count(&self) {
         ffi::reset_frame_count();
     }
-    
+
     /// Get the raw `IOSurface` pointer for zero-copy GPU access.
     /// Returns None if no `IOSurface` is available.
-    #[must_use] 
+    #[must_use]
     pub fn iosurface_ptr(&self) -> Option<u64> {
         let ptr = ffi::get_iosurface_ptr();
         if ptr == 0 { None } else { Some(ptr) }
     }
-    
+
     /// Get the `IOSurface` sequence number to detect new frames.
-    #[must_use] 
+    #[must_use]
     pub fn iosurface_sequence(&self) -> u32 {
         ffi::get_iosurface_sequence()
     }

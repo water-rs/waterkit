@@ -1,6 +1,6 @@
 use crate::ImageData;
-use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
+use jni::objects::{GlobalRef, JObject, JValue};
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
@@ -89,58 +89,79 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<jni::objects::JClass<'a>
     Ok(helper_class.into())
 }
 
-pub fn get_text_with_context(env: &mut JNIEnv, context: &JObject) -> Result<Option<String>, String> {
+pub fn get_text_with_context(
+    env: &mut JNIEnv,
+    context: &JObject,
+) -> Result<Option<String>, String> {
     init_with_context(env, context)?;
     let helper_class = get_helper_class(env)?;
-    
-    let result = env.call_static_method(
-        helper_class,
-        "getText",
-        "(Landroid/content/Context;)Ljava/lang/String;",
-        &[JValue::Object(context)]
-    ).map_err(|e| format!("JNI error getText: {e}"))?;
+
+    let result = env
+        .call_static_method(
+            helper_class,
+            "getText",
+            "(Landroid/content/Context;)Ljava/lang/String;",
+            &[JValue::Object(context)],
+        )
+        .map_err(|e| format!("JNI error getText: {e}"))?;
 
     let obj = result.l().map_err(|e| format!("JNI error result: {e}"))?;
     if obj.is_null() {
         Ok(None)
     } else {
-        let text = env.get_string(obj.into()).map_err(|e| format!("JNI error get_string: {e}"))?;
+        let text = env
+            .get_string(obj.into())
+            .map_err(|e| format!("JNI error get_string: {e}"))?;
         Ok(Some(text.into()))
     }
 }
 
-pub fn set_text_with_context(env: &mut JNIEnv, context: &JObject, text: String) -> Result<(), String> {
+pub fn set_text_with_context(
+    env: &mut JNIEnv,
+    context: &JObject,
+    text: String,
+) -> Result<(), String> {
     init_with_context(env, context)?;
     let helper_class = get_helper_class(env)?;
-    
-    let jtext = env.new_string(text).map_err(|e| format!("JNI error new_string: {e}"))?;
+
+    let jtext = env
+        .new_string(text)
+        .map_err(|e| format!("JNI error new_string: {e}"))?;
 
     env.call_static_method(
         helper_class,
         "setText",
         "(Landroid/content/Context;Ljava/lang/String;)V",
-        &[JValue::Object(context), JValue::Object(&jtext)]
-    ).map_err(|e| format!("JNI error setText: {e}"))?;
+        &[JValue::Object(context), JValue::Object(&jtext)],
+    )
+    .map_err(|e| format!("JNI error setText: {e}"))?;
 
     Ok(())
 }
 
-pub fn get_image_with_context(env: &mut JNIEnv, context: &JObject) -> Result<Option<ImageData>, String> {
+pub fn get_image_with_context(
+    env: &mut JNIEnv,
+    context: &JObject,
+) -> Result<Option<ImageData>, String> {
     init_with_context(env, context)?;
     let helper_class = get_helper_class(env)?;
 
-    let result = env.call_static_method(
-        helper_class,
-        "getImage",
-        "(Landroid/content/Context;)[B",
-        &[JValue::Object(context)]
-    ).map_err(|e| format!("JNI error getImage: {e}"))?;
+    let result = env
+        .call_static_method(
+            helper_class,
+            "getImage",
+            "(Landroid/content/Context;)[B",
+            &[JValue::Object(context)],
+        )
+        .map_err(|e| format!("JNI error getImage: {e}"))?;
 
     let obj = result.l().map_err(|e| format!("JNI error result: {e}"))?;
     if obj.is_null() {
         Ok(None)
     } else {
-        let auto_array = env.convert_byte_array(obj.into()).map_err(|e| format!("JNI error convert_byte_array: {e}"))?;
+        let auto_array = env
+            .convert_byte_array(obj.into())
+            .map_err(|e| format!("JNI error convert_byte_array: {e}"))?;
         // We don't get width/height from the bytes easily without decoding.
         // arboard expects width/height.
         // We might need to decode the image in Types (on Java side or Rust side).
@@ -157,9 +178,12 @@ pub fn get_image_with_context(env: &mut JNIEnv, context: &JObject) -> Result<Opt
     }
 }
 
-
-pub fn set_image_with_context(env: &mut JNIEnv, context: &JObject, _image: ImageData) -> Result<(), String> {
-     Err("set_image not implemented on Android".into())
+pub fn set_image_with_context(
+    env: &mut JNIEnv,
+    context: &JObject,
+    _image: ImageData,
+) -> Result<(), String> {
+    Err("set_image not implemented on Android".into())
 }
 
 // Public API stubs

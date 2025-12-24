@@ -1,9 +1,9 @@
 //! Desktop camera implementation using nokhwa.
 
 use crate::{CameraError, CameraFrame, CameraInfo, FrameFormat, Resolution};
+use nokhwa::Camera as NokhwaCamera;
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType};
-use nokhwa::Camera as NokhwaCamera;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]

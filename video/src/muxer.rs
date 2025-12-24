@@ -25,7 +25,7 @@ pub enum CodecType {
 }
 
 /// Video writer for creating MP4/MOV files.
-/// 
+///
 /// Note: This is a simplified writer. For production use, consider
 /// using the full mp4 crate API or `AVFoundation` on Apple platforms.
 #[derive(Debug)]
@@ -49,7 +49,7 @@ impl VideoWriter {
     /// * `height` - Video height in pixels  
     /// * `fps` - Frames per second
     /// * `codec` - Video codec (H264 or H265)
-    /// 
+    ///
     /// # Errors
     /// Returns [`VideoError::Io`] if the file cannot be created.
     pub fn new<P: AsRef<Path>>(
@@ -61,7 +61,7 @@ impl VideoWriter {
     ) -> Result<Self, VideoError> {
         let file = File::create(path)?;
         let writer_buf = BufWriter::new(file);
-        
+
         Ok(Self {
             file: writer_buf,
             width,
@@ -72,23 +72,23 @@ impl VideoWriter {
             codec_config: None,
         })
     }
-    
+
     /// Set codec configuration (hvcC/avcC atom data).
     pub fn set_codec_config(&mut self, config: Vec<u8>) {
         self.codec_config = Some(config);
     }
-    
+
     /// Write a video sample (encoded frame).
-    /// 
+    ///
     /// # Errors
     /// Returns an error if the sample cannot be written (currently always returns Ok).
     pub fn write_sample(&mut self, data: &[u8], is_keyframe: bool) -> Result<(), VideoError> {
         self.samples.push((data.to_vec(), is_keyframe));
         Ok(())
     }
-    
+
     /// Finish writing and close the file.
-    /// 
+    ///
     /// # Errors
     /// Returns [`VideoError::Io`] if writing to the file fails.
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
@@ -96,47 +96,47 @@ impl VideoWriter {
         if self.codec_config.is_none() {
             eprintln!("Warning: No codec config provided. File may be invalid.");
         }
-        
+
         let mut w = self.file;
-        
+
         // 1. Write ftyp
         w.write_u32::<BigEndian>(20)?; // Size
         w.write_all(b"ftyp")?;
         w.write_all(b"qt  ")?; // Major brand
         w.write_u32::<BigEndian>(20_050_300)?; // Minor version
         w.write_all(b"qt  ")?; // Compatible brands
-        
+
         // 2. Write mdat
         // Calculate mdat size
         let mdat_data_size: u64 = self.samples.iter().map(|(d, _)| d.len() as u64).sum();
         let mdat_box_size = 8 + mdat_data_size;
-        
+
         // We use 64-bit size for safety if large, but standard uses 32-bit if < 4GB.
         // For simplicity, let's stick to 32-bit for now, assuming < 4GB.
         // If > 4GB, we should use size=1 and 64-bit large size.
         // Let's assume < 4GB for test.
         w.write_u32::<BigEndian>(mdat_box_size as u32)?;
         w.write_all(b"mdat")?;
-        
+
         let mut sample_sizes = Vec::with_capacity(self.samples.len());
         let mut sample_offsets = Vec::with_capacity(self.samples.len());
         let mut sync_samples = Vec::new();
         let mut current_offset = 20 + 8; // ftyp + mdat header
-        
+
         for (i, (data, is_keyframe)) in self.samples.iter().enumerate() {
             w.write_all(data)?;
             sample_sizes.push(data.len() as u32);
             sample_offsets.push(current_offset as u32);
             current_offset += data.len() as u64;
-            
+
             if *is_keyframe {
                 sync_samples.push((i + 1) as u32); // 1-based index
             }
         }
-        
+
         // 3. Write moov
         // Note: write_box_header is moved to the top level
-        
+
         // We need to buffer moov content or calculate size recursively.
         // Buffering is easier.
         let mut moov = Vec::new();
@@ -144,32 +144,38 @@ impl VideoWriter {
             let w = &mut moov;
             // mvhd
             {
-               let mut mvhd = Vec::new();
-               let mw = &mut mvhd;
-               mw.write_u32::<BigEndian>(0)?; // Version/Flags
-               mw.write_u32::<BigEndian>(0)?; // Creation time
+                let mut mvhd = Vec::new();
+                let mw = &mut mvhd;
+                mw.write_u32::<BigEndian>(0)?; // Version/Flags
+                mw.write_u32::<BigEndian>(0)?; // Creation time
                 mw.write_u32::<BigEndian>(0)?; // Modification time
                 mw.write_u32::<BigEndian>(self.fps)?; // Timescale
                 mw.write_u32::<BigEndian>(self.samples.len() as u32)?; // Duration (assuming 1 unit per frame with timescale=fps)
                 mw.write_u32::<BigEndian>(0x0001_0000)?; // Rate (1.0)
-               mw.write_u16::<BigEndian>(0x0100)?; // Volume (1.0)
+                mw.write_u16::<BigEndian>(0x0100)?; // Volume (1.0)
                 mw.write_all(&[0u8; 10])?; // Reserved
                 // Matrix (unity)
-                mw.write_u32::<BigEndian>(0x0001_0000)?; mw.write_u32::<BigEndian>(0)?; mw.write_u32::<BigEndian>(0)?;
-                mw.write_u32::<BigEndian>(0)?; mw.write_u32::<BigEndian>(0x0001_0000)?; mw.write_u32::<BigEndian>(0)?;
-                mw.write_u32::<BigEndian>(0)?; mw.write_u32::<BigEndian>(0)?; mw.write_u32::<BigEndian>(0x4000_0000)?;
-               mw.write_all(&[0u8; 24])?; // Pre-defined
-               mw.write_u32::<BigEndian>(2)?; // Next track ID
-               
-               write_box_header(w, b"mvhd", mvhd.len() as u64)?;
-               w.write_all(&mvhd)?;
+                mw.write_u32::<BigEndian>(0x0001_0000)?;
+                mw.write_u32::<BigEndian>(0)?;
+                mw.write_u32::<BigEndian>(0)?;
+                mw.write_u32::<BigEndian>(0)?;
+                mw.write_u32::<BigEndian>(0x0001_0000)?;
+                mw.write_u32::<BigEndian>(0)?;
+                mw.write_u32::<BigEndian>(0)?;
+                mw.write_u32::<BigEndian>(0)?;
+                mw.write_u32::<BigEndian>(0x4000_0000)?;
+                mw.write_all(&[0u8; 24])?; // Pre-defined
+                mw.write_u32::<BigEndian>(2)?; // Next track ID
+
+                write_box_header(w, b"mvhd", mvhd.len() as u64)?;
+                w.write_all(&mvhd)?;
             }
-            
+
             // trak
             {
                 let mut trak = Vec::new();
                 let tw = &mut trak;
-                
+
                 // tkhd
                 {
                     let mut tkhd = Vec::new();
@@ -186,23 +192,23 @@ impl VideoWriter {
                     thw.write_u16::<BigEndian>(0)?; // Volume
                     thw.write_u16::<BigEndian>(0)?; // Reserved
                     // Matrix (unity)
-                    thw.write_all(&[ // Same matrix as mvhd
-                        0x00, 0x01, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0,
-                        0, 0, 0, 0, 0x00, 0x01, 0x00, 0x00, 0, 0, 0, 0,
-                        0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0x00, 0x00, 0x00
+                    thw.write_all(&[
+                        // Same matrix as mvhd
+                        0x00, 0x01, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x01,
+                        0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0x00, 0x00, 0x00,
                     ])?;
                     thw.write_u32::<BigEndian>(self.width << 16)?; // Width (fixed point 16.16)
                     thw.write_u32::<BigEndian>(self.height << 16)?; // Height (fixed point 16.16)
-                    
+
                     write_box_header(tw, b"tkhd", tkhd.len() as u64)?;
                     tw.write_all(&tkhd)?;
                 }
-                
+
                 // mdia
                 {
                     let mut mdia = Vec::new();
                     let mw = &mut mdia;
-                    
+
                     // mdhd
                     {
                         let mut mdhd = Vec::new();
@@ -214,11 +220,11 @@ impl VideoWriter {
                         mhw.write_u32::<BigEndian>(self.samples.len() as u32)?; // Duration
                         mhw.write_u16::<BigEndian>(0)?; // Language (0)
                         mhw.write_u16::<BigEndian>(0)?; // Pre-defined
-                        
+
                         write_box_header(mw, b"mdhd", mdhd.len() as u64)?;
                         mw.write_all(&mdhd)?;
                     }
-                    
+
                     // hdlr
                     {
                         let mut hdlr = Vec::new();
@@ -228,16 +234,16 @@ impl VideoWriter {
                         hw.write_all(b"vide")?; // Component sub-type
                         hw.write_all(&[0u8; 12])?; // Reserved
                         hw.write_all(b"VideoHandler\0")?; // Component name
-                        
+
                         write_box_header(mw, b"hdlr", hdlr.len() as u64)?;
                         mw.write_all(&hdlr)?;
                     }
-                    
+
                     // minf
                     {
                         let mut minf = Vec::new();
                         let miw = &mut minf;
-                        
+
                         // vmhd
                         {
                             let mut vmhd = Vec::new();
@@ -245,51 +251,51 @@ impl VideoWriter {
                             vmw.write_u32::<BigEndian>(0x0000_0001)?; // Version/Flags
                             vmw.write_u16::<BigEndian>(0)?; // Graphics mode
                             vmw.write_all(&[0u8; 6])?; // Opcolor
-                            
+
                             write_box_header(miw, b"vmhd", vmhd.len() as u64)?;
                             miw.write_all(&vmhd)?;
                         }
-                        
+
                         // dinf
                         {
                             let mut dinf = Vec::new();
                             let dw = &mut dinf;
-                            
+
                             // dref
                             let mut dref = Vec::new();
                             let drw = &mut dref;
                             drw.write_u32::<BigEndian>(0)?; // Version/Flags
                             drw.write_u32::<BigEndian>(1)?; // Entry count
-                            
-                            // url 
+
+                            // url
                             let mut url = Vec::new();
                             url.write_u32::<BigEndian>(0x0000_0001)?; // Version/Flags (self-contained)
                             write_box_header(drw, b"url ", url.len() as u64)?;
                             drw.write_all(&url)?;
-                            
+
                             write_box_header(dw, b"dref", dref.len() as u64)?;
                             dw.write_all(&dref)?;
-                            
+
                             write_box_header(miw, b"dinf", dinf.len() as u64)?;
                             miw.write_all(&dinf)?;
                         }
-                        
+
                         // stbl
                         {
                             let mut stbl = Vec::new();
                             let sw = &mut stbl;
-                            
+
                             // stsd
                             {
                                 let mut stsd = Vec::new();
                                 let ssw = &mut stsd;
                                 ssw.write_u32::<BigEndian>(0)?; // Version/Flags
                                 ssw.write_u32::<BigEndian>(1)?; // Entry count
-                                
+
                                 // VisualSampleEntry (hvc1 or avc1)
                                 let mut entry = Vec::new();
                                 let ew = &mut entry;
-                                
+
                                 ew.write_all(&[0u8; 6])?; // Reserved
                                 ew.write_u16::<BigEndian>(1)?; // Data ref index
                                 ew.write_u16::<BigEndian>(0)?; // Pre-defined
@@ -305,27 +311,35 @@ impl VideoWriter {
                                 ew.write_all(&[0u8; 31])?; // Padding
                                 ew.write_u16::<BigEndian>(0x0018)?; // Depth
                                 ew.write_i16::<BigEndian>(-1)?; // Pre-defined
-                                
+
                                 // Codec Config Box (avcC or hvcC)
                                 if let Some(config) = &self.codec_config {
                                     // Use 'hvcC' if HEVC, 'avcC' if H264
-                                    let tag = if self.codec == CodecType::H265 { b"hvcC" } else { b"avcC" };
-                                    
+                                    let tag = if self.codec == CodecType::H265 {
+                                        b"hvcC"
+                                    } else {
+                                        b"avcC"
+                                    };
+
                                     // Wrap config payload in box header
                                     let box_size = 8 + config.len() as u32;
                                     ew.write_u32::<BigEndian>(box_size)?;
                                     ew.write_all(tag)?;
                                     ew.write_all(config)?;
                                 }
-                                
-                                let type_code = if self.codec == CodecType::H265 { b"hev1" } else { b"avc1" };
+
+                                let type_code = if self.codec == CodecType::H265 {
+                                    b"hev1"
+                                } else {
+                                    b"avc1"
+                                };
                                 write_box_header(ssw, type_code, entry.len() as u64)?;
                                 ssw.write_all(&entry)?;
-                                
+
                                 write_box_header(sw, b"stsd", stsd.len() as u64)?;
                                 sw.write_all(&stsd)?;
                             }
-                            
+
                             // stts (time to sample)
                             {
                                 let mut stts = Vec::new();
@@ -334,7 +348,7 @@ impl VideoWriter {
                                 stw.write_u32::<BigEndian>(1)?; // Entry count
                                 stw.write_u32::<BigEndian>(self.samples.len() as u32)?; // Sample count
                                 stw.write_u32::<BigEndian>(1)?; // Sample delta
-                                
+
                                 write_box_header(sw, b"stts", stts.len() as u64)?;
                                 sw.write_all(&stts)?;
                             }
@@ -345,7 +359,7 @@ impl VideoWriter {
                                 let scw = &mut stsc;
                                 scw.write_u32::<BigEndian>(0)?; // Version/Flags
                                 scw.write_u32::<BigEndian>(1)?; // Entry count
-                                
+
                                 // 1 entry: first chunk = 1, samples per chunk = 1, description index = 1
                                 // We are writing 1 sample per chunk because we write samples individually in mdat loop
                                 // and sample_offsets array corresponds to each sample.
@@ -353,11 +367,11 @@ impl VideoWriter {
                                 scw.write_u32::<BigEndian>(1)?; // First chunk
                                 scw.write_u32::<BigEndian>(1)?; // Samples per chunk
                                 scw.write_u32::<BigEndian>(1)?; // Sample description index
-                                
+
                                 write_box_header(sw, b"stsc", stsc.len() as u64)?;
                                 sw.write_all(&stsc)?;
                             }
-                            
+
                             // stss (sync samples)
                             {
                                 let mut stss = Vec::new();
@@ -367,11 +381,11 @@ impl VideoWriter {
                                 for &idx in &sync_samples {
                                     ssw.write_u32::<BigEndian>(idx)?;
                                 }
-                                
+
                                 write_box_header(sw, b"stss", stss.len() as u64)?;
                                 sw.write_all(&stss)?;
                             }
-                            
+
                             // stsz (sample sizes)
                             {
                                 let mut stsz = Vec::new();
@@ -382,11 +396,11 @@ impl VideoWriter {
                                 for &size in &sample_sizes {
                                     szw.write_u32::<BigEndian>(size)?;
                                 }
-                                
+
                                 write_box_header(sw, b"stsz", stsz.len() as u64)?;
                                 sw.write_all(&stsz)?;
                             }
-                             
+
                             // stco (chunk offsets - 32 bit)
                             {
                                 let mut stco = Vec::new();
@@ -396,50 +410,54 @@ impl VideoWriter {
                                 for &offset in &sample_offsets {
                                     cow.write_u32::<BigEndian>(offset)?;
                                 }
-                                
+
                                 write_box_header(sw, b"stco", stco.len() as u64)?;
                                 sw.write_all(&stco)?;
                             }
-                            
+
                             write_box_header(miw, b"stbl", stbl.len() as u64)?;
                             miw.write_all(&stbl)?;
                         }
-                        
+
                         write_box_header(mw, b"minf", minf.len() as u64)?;
                         mw.write_all(&minf)?;
                     }
-                    
+
                     write_box_header(tw, b"mdia", mdia.len() as u64)?;
                     tw.write_all(&mdia)?;
                 }
-                
+
                 write_box_header(w, b"trak", trak.len() as u64)?;
                 w.write_all(&trak)?;
             }
         }
-        
+
         write_box_header(&mut w, b"moov", moov.len() as u64)?;
         w.write_all(&moov)?;
 
         w.flush()?;
         Ok(())
     }
-    
+
     /// Get the number of frames written.
-    #[must_use] 
+    #[must_use]
     pub const fn frame_count(&self) -> u64 {
         self.samples.len() as u64
     }
-    
+
     /// Get video dimensions.
-    #[must_use] 
+    #[must_use]
     pub const fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
     }
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn write_box_header<W: Write>(w: &mut W, type_str: &[u8], size_content: u64) -> std::io::Result<()> {
+fn write_box_header<W: Write>(
+    w: &mut W,
+    type_str: &[u8],
+    size_content: u64,
+) -> std::io::Result<()> {
     w.write_u32::<BigEndian>((8 + size_content) as u32)?;
     w.write_all(type_str)?;
     Ok(())

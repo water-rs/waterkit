@@ -1,5 +1,5 @@
 //! Stub implementation for unsupported platforms (e.g. Linux for now).
-use crate::{VideoEncoder, VideoDecoder, CodecError, Frame, CodecType};
+use crate::{CodecError, CodecType, Frame, VideoDecoder, VideoEncoder};
 
 pub struct StubEncoder;
 

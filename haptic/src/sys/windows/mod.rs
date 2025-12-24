@@ -52,7 +52,7 @@ pub(crate) async fn feedback(style: HapticFeedback) -> Result<(), HapticError> {
         let waveform = feedback
             .Waveform()
             .map_err(|e| HapticError::Unknown(e.to_string()))?;
-        
+
         if waveform == waveform_id {
             controller
                 .SendHapticFeedback(&feedback)

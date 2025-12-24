@@ -1,17 +1,20 @@
-use waterkit_screen::{capture_screen, get_brightness, screens, set_brightness};
 use std::io::Write;
+use waterkit_screen::{capture_screen, get_brightness, screens, set_brightness};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("WaterKit Screen Demo");
-    
+
     // 1. List screens
     let screen_list = screens()?;
     println!("Found {} screens:", screen_list.len());
     for screen in &screen_list {
-        println!(" - {}: {}x{} (scale: {})", screen.name, screen.width, screen.height, screen.scale_factor);
+        println!(
+            " - {}: {}x{} (scale: {})",
+            screen.name, screen.width, screen.height, screen.scale_factor
+        );
     }
-    
+
     // 2. Get Brightness
     match get_brightness().await {
         Ok(b) => println!("Current brightness: {:.2}", b),
@@ -29,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Brightness set successfully.");
         }
     }
-    
+
     // 4. Capture Screen or Pick (if requested, but demo just shows basic usage)
     // Uncomment to test picker:
     /*
@@ -42,10 +45,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => println!("Pick failed: {}", e),
     }
     */
-    
+
     // Existing capture logic
     if !screen_list.is_empty() {
-
         println!("Capturing main screen (index 0)...");
         match capture_screen(0) {
             Ok(bytes) => {
@@ -54,10 +56,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut file = std::fs::File::create(filename)?;
                 file.write_all(&bytes)?;
                 println!("Saved to {}", filename);
-            },
+            }
             Err(e) => println!("Failed to capture screen: {}", e),
         }
     }
-    
+
     Ok(())
 }

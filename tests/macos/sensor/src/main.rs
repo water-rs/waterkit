@@ -18,19 +18,28 @@ async fn main() {
 
     // Try to read accelerometer
     match Accelerometer::read().await {
-        Ok(data) => println!("Accelerometer: x={:.3}, y={:.3}, z={:.3}", data.x, data.y, data.z),
+        Ok(data) => println!(
+            "Accelerometer: x={:.3}, y={:.3}, z={:.3}",
+            data.x, data.y, data.z
+        ),
         Err(e) => println!("Accelerometer: {}", e),
     }
 
     // Try to read gyroscope
     match Gyroscope::read().await {
-        Ok(data) => println!("Gyroscope:     x={:.3}, y={:.3}, z={:.3}", data.x, data.y, data.z),
+        Ok(data) => println!(
+            "Gyroscope:     x={:.3}, y={:.3}, z={:.3}",
+            data.x, data.y, data.z
+        ),
         Err(e) => println!("Gyroscope:     {}", e),
     }
 
     // Try to read magnetometer
     match Magnetometer::read().await {
-        Ok(data) => println!("Magnetometer:  x={:.3}, y={:.3}, z={:.3}", data.x, data.y, data.z),
+        Ok(data) => println!(
+            "Magnetometer:  x={:.3}, y={:.3}, z={:.3}",
+            data.x, data.y, data.z
+        ),
         Err(e) => println!("Magnetometer:  {}", e),
     }
 

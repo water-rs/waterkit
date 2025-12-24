@@ -1,16 +1,16 @@
 //! Windows media control implementation using SystemMediaTransportControls.
 
-use crate::{MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
-use std::sync::RwLock;
-use windows::Media::Playback::{
-    MediaPlaybackType, MediaPlayer,
+use crate::{
+    MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus,
 };
+use std::sync::RwLock;
+use windows::Foundation::TypedEventHandler;
+use windows::Media::Playback::{MediaPlaybackType, MediaPlayer};
 use windows::Media::{
     MediaPlaybackAutoRepeatMode, MediaPlaybackStatus, MediaPlaybackType as MPType,
     SystemMediaTransportControls, SystemMediaTransportControlsButton,
     SystemMediaTransportControlsButtonPressedEventArgs,
 };
-use windows::Foundation::TypedEventHandler;
 
 /// Global command handler
 static COMMAND_HANDLER: RwLock<Option<Box<dyn MediaCommandHandler>>> = RwLock::new(None);
@@ -90,8 +90,12 @@ impl MediaSessionInner {
 
         // Artwork from URL
         if let Some(ref url) = metadata.artwork_url {
-            if let Ok(uri) = windows::Foundation::Uri::CreateUri(&windows::core::HSTRING::from(url.as_str())) {
-                if let Ok(stream) = windows::Storage::Streams::RandomAccessStreamReference::CreateFromUri(&uri) {
+            if let Ok(uri) =
+                windows::Foundation::Uri::CreateUri(&windows::core::HSTRING::from(url.as_str()))
+            {
+                if let Ok(stream) =
+                    windows::Storage::Streams::RandomAccessStreamReference::CreateFromUri(&uri)
+                {
                     let _ = updater.SetThumbnail(&stream);
                 }
             }

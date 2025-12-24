@@ -42,16 +42,16 @@ pub(crate) use linux::MediaSessionInner;
 pub struct MediaCenterIntegration {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     inner: apple::MediaCenterInner,
-    
+
     #[cfg(target_os = "windows")]
     inner: windows::MediaCenterInner,
-    
+
     #[cfg(target_os = "linux")]
     inner: linux::MediaCenterInner,
-    
+
     #[cfg(target_os = "android")]
     inner: android::MediaCenterInner,
-    
+
     #[cfg(not(any(
         target_os = "ios",
         target_os = "macos",
@@ -66,16 +66,16 @@ impl MediaCenterIntegration {
     pub fn new() -> Result<Self, String> {
         #[cfg(any(target_os = "ios", target_os = "macos"))]
         let inner = apple::MediaCenterInner::new().map_err(|e| e.to_string())?;
-        
+
         #[cfg(target_os = "windows")]
         let inner = windows::MediaCenterInner::new().map_err(|e| e.to_string())?;
-        
+
         #[cfg(target_os = "linux")]
         let inner = linux::MediaCenterInner::new().map_err(|e| e.to_string())?;
-        
+
         #[cfg(target_os = "android")]
         let inner = android::MediaCenterInner::new().map_err(|e| e.to_string())?;
-        
+
         #[cfg(not(any(
             target_os = "ios",
             target_os = "macos",
@@ -84,22 +84,22 @@ impl MediaCenterIntegration {
             target_os = "linux"
         )))]
         let inner = FallbackMediaCenter;
-        
+
         Ok(Self { inner })
     }
-    
+
     pub fn update(&self, metadata: &MediaMetadata, state: &PlaybackState) {
         self.inner.update(metadata, state);
     }
-    
+
     pub fn clear(&self) {
         self.inner.clear();
     }
-    
+
     pub fn run_loop(&self, duration: Duration) {
         self.inner.run_loop(duration);
     }
-    
+
     pub fn poll_command(&self) -> Option<MediaCommand> {
         self.inner.poll_command()
     }

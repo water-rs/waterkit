@@ -4,8 +4,6 @@
 
 use std::fmt;
 
-
-
 /// Audio sample format configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AudioFormat {
@@ -92,7 +90,8 @@ impl AudioBuffer {
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
     pub fn duration_secs(&self) -> f64 {
-        self.samples.len() as f64 / (f64::from(self.format.sample_rate) * f64::from(self.format.channels))
+        self.samples.len() as f64
+            / (f64::from(self.format.sample_rate) * f64::from(self.format.channels))
     }
 }
 
@@ -290,5 +289,3 @@ impl AudioRecorder {
         &self.format
     }
 }
-
-

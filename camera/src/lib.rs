@@ -297,7 +297,9 @@ impl Camera {
     /// Returns [`CameraError::NotFound`] if no camera is available.
     pub fn open_default() -> Result<Self, CameraError> {
         let cameras = Self::list()?;
-        let camera = cameras.first().ok_or_else(|| CameraError::NotFound("no cameras available".into()))?;
+        let camera = cameras
+            .first()
+            .ok_or_else(|| CameraError::NotFound("no cameras available".into()))?;
         Self::open(&camera.id)
     }
 
@@ -401,14 +403,19 @@ impl TryFrom<CameraFrame> for waterkit_codec::Frame {
     type Error = waterkit_codec::CodecError;
 
     fn try_from(frame: CameraFrame) -> Result<Self, Self::Error> {
-        use waterkit_codec::{PixelFormat, CodecError};
         use std::sync::Arc;
+        use waterkit_codec::{CodecError, PixelFormat};
 
         let format = match frame.format {
             FrameFormat::Rgba => PixelFormat::Rgba,
             FrameFormat::Bgra => PixelFormat::Bgra,
             FrameFormat::Nv12 => PixelFormat::Nv12,
-            _ => return Err(CodecError::Unsupported(format!("Unsupported format for codec: {:?}", frame.format))),
+            _ => {
+                return Err(CodecError::Unsupported(format!(
+                    "Unsupported format for codec: {:?}",
+                    frame.format
+                )));
+            }
         };
 
         Ok(Self {

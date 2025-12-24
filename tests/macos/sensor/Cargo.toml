@@ -10,7 +10,7 @@ name = "sensor-test"
 path = "src/main.rs"
 
 [dependencies]
-waterkit-sensor = { path = "../../../sensor" }
+waterkit-sensor.workspace = true
 tokio.workspace = true
 futures = "0.3"
 

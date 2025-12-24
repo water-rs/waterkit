@@ -66,8 +66,9 @@ pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
 
     let (tx, rx) = tokio::sync::oneshot::channel();
     let callback = BiometricCallback { sender: tx };
-    
+
     ffi::biometric_authenticate(reason, callback);
 
-    rx.await.unwrap_or_else(|_| Err(BiometricError::PlatformError("Channel closed".to_string())))
+    rx.await
+        .unwrap_or_else(|_| Err(BiometricError::PlatformError("Channel closed".to_string())))
 }

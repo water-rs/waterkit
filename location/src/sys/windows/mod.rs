@@ -18,7 +18,8 @@ pub(crate) async fn get_location() -> Result<Location, LocationError> {
         _ => return Err(LocationError::NotAvailable),
     }
 
-    let geolocator = Geolocator::new().map_err(|e| LocationError::Unknown(e.message().to_string()))?;
+    let geolocator =
+        Geolocator::new().map_err(|e| LocationError::Unknown(e.message().to_string()))?;
 
     let position = geolocator
         .GetGeopositionAsync()

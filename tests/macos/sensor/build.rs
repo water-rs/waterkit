@@ -24,18 +24,23 @@ fn main() {
         .write_all_concatenated(out_dir.clone(), "waterkit-sensor");
 
     let bridge_header = out_dir.join("waterkit-sensor").join("waterkit-sensor.h");
-    let bridge_swift = out_dir.join("waterkit-sensor").join("waterkit-sensor.swift");
+    let bridge_swift = out_dir
+        .join("waterkit-sensor")
+        .join("waterkit-sensor.swift");
 
     // Compile Swift to static library
     let lib_path = out_dir.join("libsensor_swift.a");
-    
+
     let output = Command::new("swiftc")
         .args([
             "-emit-library",
             "-static",
-            "-module-name", "SensorSwift",
-            "-import-objc-header", bridge_header.to_str().unwrap(),
-            "-o", lib_path.to_str().unwrap(),
+            "-module-name",
+            "SensorSwift",
+            "-import-objc-header",
+            bridge_header.to_str().unwrap(),
+            "-o",
+            lib_path.to_str().unwrap(),
             swift_file.to_str().unwrap(),
             bridge_swift.to_str().unwrap(),
         ])
@@ -43,8 +48,14 @@ fn main() {
         .expect("Failed to run swiftc");
 
     if !output.status.success() {
-        eprintln!("Swift compilation stderr: {}", String::from_utf8_lossy(&output.stderr));
-        eprintln!("Swift compilation stdout: {}", String::from_utf8_lossy(&output.stdout));
+        eprintln!(
+            "Swift compilation stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        eprintln!(
+            "Swift compilation stdout: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
         panic!("Swift compilation failed");
     }
 

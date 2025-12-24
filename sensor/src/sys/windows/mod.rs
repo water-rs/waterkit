@@ -3,9 +3,7 @@
 use crate::{ScalarData, SensorData, SensorError, SensorStream};
 use futures::stream;
 use windows::Devices::Sensors::{
-    Accelerometer as WinAccelerometer,
-    Barometer as WinBarometer,
-    Gyrometer as WinGyrometer,
+    Accelerometer as WinAccelerometer, Barometer as WinBarometer, Gyrometer as WinGyrometer,
     Magnetometer as WinMagnetometer,
 };
 
@@ -22,12 +20,12 @@ pub fn accelerometer_available() -> bool {
 }
 
 pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
-    let sensor = WinAccelerometer::GetDefault()
-        .map_err(|_| SensorError::NotAvailable)?;
-    
-    let reading = sensor.GetCurrentReading()
+    let sensor = WinAccelerometer::GetDefault().map_err(|_| SensorError::NotAvailable)?;
+
+    let reading = sensor
+        .GetCurrentReading()
         .map_err(|e| SensorError::Unknown(e.to_string()))?;
-    
+
     Ok(SensorData {
         x: reading.AccelerationX().unwrap_or(0.0),
         y: reading.AccelerationY().unwrap_or(0.0),
@@ -53,12 +51,12 @@ pub fn gyroscope_available() -> bool {
 }
 
 pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
-    let sensor = WinGyrometer::GetDefault()
-        .map_err(|_| SensorError::NotAvailable)?;
-    
-    let reading = sensor.GetCurrentReading()
+    let sensor = WinGyrometer::GetDefault().map_err(|_| SensorError::NotAvailable)?;
+
+    let reading = sensor
+        .GetCurrentReading()
         .map_err(|e| SensorError::Unknown(e.to_string()))?;
-    
+
     Ok(SensorData {
         x: reading.AngularVelocityX().unwrap_or(0.0),
         y: reading.AngularVelocityY().unwrap_or(0.0),
@@ -84,12 +82,12 @@ pub fn magnetometer_available() -> bool {
 }
 
 pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
-    let sensor = WinMagnetometer::GetDefault()
-        .map_err(|_| SensorError::NotAvailable)?;
-    
-    let reading = sensor.GetCurrentReading()
+    let sensor = WinMagnetometer::GetDefault().map_err(|_| SensorError::NotAvailable)?;
+
+    let reading = sensor
+        .GetCurrentReading()
         .map_err(|e| SensorError::Unknown(e.to_string()))?;
-    
+
     Ok(SensorData {
         x: reading.MagneticFieldX().unwrap_or(0.0),
         y: reading.MagneticFieldY().unwrap_or(0.0),
@@ -115,12 +113,12 @@ pub fn barometer_available() -> bool {
 }
 
 pub async fn barometer_read() -> Result<ScalarData, SensorError> {
-    let sensor = WinBarometer::GetDefault()
-        .map_err(|_| SensorError::NotAvailable)?;
-    
-    let reading = sensor.GetCurrentReading()
+    let sensor = WinBarometer::GetDefault().map_err(|_| SensorError::NotAvailable)?;
+
+    let reading = sensor
+        .GetCurrentReading()
         .map_err(|e| SensorError::Unknown(e.to_string()))?;
-    
+
     Ok(ScalarData {
         value: reading.StationPressureInHectopascals().unwrap_or(0.0),
         timestamp: timestamp_now(),

@@ -1,5 +1,5 @@
-use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
+use jni::objects::{GlobalRef, JObject, JValue};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 

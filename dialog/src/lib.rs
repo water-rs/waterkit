@@ -38,7 +38,7 @@ impl Dialog {
     }
 
     /// Set the dialog type.
-    #[must_use] 
+    #[must_use]
     pub const fn with_type(mut self, type_: DialogType) -> Self {
         self.type_ = type_;
         self
@@ -76,7 +76,7 @@ pub struct FileDialog {
 
 impl FileDialog {
     /// Create a new file dialog.
-    #[must_use] 
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             title: None,
@@ -86,14 +86,14 @@ impl FileDialog {
     }
 
     /// Set the title of the dialog.
-    #[must_use] 
+    #[must_use]
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
     }
 
     /// Set the starting location.
-    #[must_use] 
+    #[must_use]
     pub fn set_location(mut self, path: impl Into<std::path::PathBuf>) -> Self {
         self.location = Some(path.into());
         self
@@ -101,11 +101,14 @@ impl FileDialog {
 
     /// Add a file extension filter.
     /// Usage: `add_filter("Image", &["png", "jpg"])`
-    #[must_use] 
+    #[must_use]
     pub fn add_filter(mut self, name: impl Into<String>, extensions: &[&str]) -> Self {
         self.filters.push((
             name.into(),
-            extensions.iter().map(std::string::ToString::to_string).collect(),
+            extensions
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
         ));
         self
     }
@@ -117,7 +120,7 @@ impl FileDialog {
     pub async fn show_open_single_file(self) -> Result<Option<std::path::PathBuf>, String> {
         sys::show_open_single_file(self).await
     }
-    
+
     // Future: show_open_multiple_files, show_save_single_file
 }
 

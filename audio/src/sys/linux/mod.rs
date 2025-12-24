@@ -1,12 +1,14 @@
 //! Linux media control implementation using MPRIS D-Bus.
 
-use crate::{MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
+use crate::{
+    MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus,
+};
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use zbus::zvariant::{ObjectPath, Value};
-use zbus::{interface, Connection, ConnectionBuilder};
+use zbus::{Connection, ConnectionBuilder, interface};
 
 /// Global command handler
 static COMMAND_HANDLER: RwLock<Option<Box<dyn MediaCommandHandler>>> = RwLock::new(None);
@@ -71,7 +73,10 @@ struct MprisPlayer;
 impl MprisPlayer {
     #[zbus(property)]
     fn playback_status(&self) -> String {
-        let status = CURRENT_STATUS.read().map(|s| *s).unwrap_or(PlaybackStatus::Stopped);
+        let status = CURRENT_STATUS
+            .read()
+            .map(|s| *s)
+            .unwrap_or(PlaybackStatus::Stopped);
         match status {
             PlaybackStatus::Playing => "Playing".to_string(),
             PlaybackStatus::Paused => "Paused".to_string(),
@@ -238,10 +243,7 @@ impl MediaSessionInner {
         }
 
         if let Some(ref artist) = metadata.artist {
-            mpris_metadata.insert(
-                "xesam:artist".to_string(),
-                Value::new(vec![artist.clone()]),
-            );
+            mpris_metadata.insert("xesam:artist".to_string(), Value::new(vec![artist.clone()]));
         }
 
         if let Some(ref album) = metadata.album {

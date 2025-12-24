@@ -37,25 +37,55 @@ pub(crate) use linux::*;
 mod fallback {
     use crate::{ScalarData, SensorData, SensorError, SensorStream};
 
-    pub fn accelerometer_available() -> bool { false }
-    pub async fn accelerometer_read() -> Result<SensorData, SensorError> { Err(SensorError::NotAvailable) }
-    pub fn accelerometer_watch(_interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> { Err(SensorError::NotAvailable) }
+    pub fn accelerometer_available() -> bool {
+        false
+    }
+    pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
+        Err(SensorError::NotAvailable)
+    }
+    pub fn accelerometer_watch(_interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+        Err(SensorError::NotAvailable)
+    }
 
-    pub fn gyroscope_available() -> bool { false }
-    pub async fn gyroscope_read() -> Result<SensorData, SensorError> { Err(SensorError::NotAvailable) }
-    pub fn gyroscope_watch(_interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> { Err(SensorError::NotAvailable) }
+    pub fn gyroscope_available() -> bool {
+        false
+    }
+    pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
+        Err(SensorError::NotAvailable)
+    }
+    pub fn gyroscope_watch(_interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+        Err(SensorError::NotAvailable)
+    }
 
-    pub fn magnetometer_available() -> bool { false }
-    pub async fn magnetometer_read() -> Result<SensorData, SensorError> { Err(SensorError::NotAvailable) }
-    pub fn magnetometer_watch(_interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> { Err(SensorError::NotAvailable) }
+    pub fn magnetometer_available() -> bool {
+        false
+    }
+    pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
+        Err(SensorError::NotAvailable)
+    }
+    pub fn magnetometer_watch(_interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+        Err(SensorError::NotAvailable)
+    }
 
-    pub fn barometer_available() -> bool { false }
-    pub async fn barometer_read() -> Result<ScalarData, SensorError> { Err(SensorError::NotAvailable) }
-    pub fn barometer_watch(_interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> { Err(SensorError::NotAvailable) }
+    pub fn barometer_available() -> bool {
+        false
+    }
+    pub async fn barometer_read() -> Result<ScalarData, SensorError> {
+        Err(SensorError::NotAvailable)
+    }
+    pub fn barometer_watch(_interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
+        Err(SensorError::NotAvailable)
+    }
 
-    pub fn ambient_light_available() -> bool { false }
-    pub async fn ambient_light_read() -> Result<ScalarData, SensorError> { Err(SensorError::NotAvailable) }
-    pub fn ambient_light_watch(_interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> { Err(SensorError::NotAvailable) }
+    pub fn ambient_light_available() -> bool {
+        false
+    }
+    pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
+        Err(SensorError::NotAvailable)
+    }
+    pub fn ambient_light_watch(_interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
+        Err(SensorError::NotAvailable)
+    }
 }
 
 #[cfg(not(any(

@@ -1,5 +1,5 @@
-use crate::{ConnectivityInfo, ConnectionType, SystemLoad, ThermalState};
-use jni::objects::{JObject, JValue, GlobalRef};
+use crate::{ConnectionType, ConnectivityInfo, SystemLoad, ThermalState};
+use jni::objects::{GlobalRef, JObject, JValue};
 use jni::{JNIEnv, JavaVM};
 use std::sync::OnceLock;
 
@@ -12,7 +12,9 @@ pub fn init(env: &mut JNIEnv, context: JObject) {
     let vm = env.get_java_vm().expect("Failed to get JavaVM");
     let _ = JAVA_VM.set(vm);
 
-    let global_ctx = env.new_global_ref(context).expect("Failed to create global ref");
+    let global_ctx = env
+        .new_global_ref(context)
+        .expect("Failed to create global ref");
     let _ = CONTEXT.set(global_ctx);
 }
 
@@ -30,12 +32,16 @@ where
 pub fn get_connectivity_info() -> ConnectivityInfo {
     let result = with_jni(|env, ctx| {
         let class = env.find_class("com/waterkit/system/SystemHelper").ok()?;
-        let result = env.call_static_method(
-            class,
-            "getConnectivity",
-            "(Landroid/content/Context;)I",
-            &[JValue::Object(ctx)],
-        ).ok()?.i().ok()?;
+        let result = env
+            .call_static_method(
+                class,
+                "getConnectivity",
+                "(Landroid/content/Context;)I",
+                &[JValue::Object(ctx)],
+            )
+            .ok()?
+            .i()
+            .ok()?;
         Some(result)
     });
 
@@ -58,12 +64,16 @@ pub fn get_connectivity_info() -> ConnectivityInfo {
 pub fn get_thermal_state() -> ThermalState {
     let result = with_jni(|env, ctx| {
         let class = env.find_class("com/waterkit/system/SystemHelper").ok()?;
-        let result = env.call_static_method(
-            class,
-            "getThermalState",
-            "(Landroid/content/Context;)I",
-            &[JValue::Object(ctx)],
-        ).ok()?.i().ok()?;
+        let result = env
+            .call_static_method(
+                class,
+                "getThermalState",
+                "(Landroid/content/Context;)I",
+                &[JValue::Object(ctx)],
+            )
+            .ok()?
+            .i()
+            .ok()?;
         Some(result)
     });
 
@@ -81,12 +91,16 @@ pub fn get_thermal_state() -> ThermalState {
 pub fn get_system_load() -> SystemLoad {
     let result = with_jni(|env, ctx| {
         let class = env.find_class("com/waterkit/system/SystemHelper").ok()?;
-        let load_info = env.call_static_method(
-            class,
-            "getSystemLoad",
-            "(Landroid/content/Context;)Lcom/waterkit/system/SystemHelper$LoadInfo;",
-            &[JValue::Object(ctx)],
-        ).ok()?.l().ok()?;
+        let load_info = env
+            .call_static_method(
+                class,
+                "getSystemLoad",
+                "(Landroid/content/Context;)Lcom/waterkit/system/SystemHelper$LoadInfo;",
+                &[JValue::Object(ctx)],
+            )
+            .ok()?
+            .l()
+            .ok()?;
 
         let cpu = env.get_field(&load_info, "cpu", "F").ok()?.f().ok()?;
         let mem_used = env.get_field(&load_info, "memUsed", "J").ok()?.j().ok()?;

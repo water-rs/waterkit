@@ -36,7 +36,11 @@ pub use linux::*;
     target_os = "linux"
 )))]
 /// Save a secret (fallback).
-pub async fn set(_service: &str, _account: &str, _password: &str) -> Result<(), crate::SecretError> {
+pub async fn set(
+    _service: &str,
+    _account: &str,
+    _password: &str,
+) -> Result<(), crate::SecretError> {
     Err(crate::SecretError::System("Unsupported platform".into()))
 }
 

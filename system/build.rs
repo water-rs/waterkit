@@ -59,7 +59,8 @@ fn build_apple() {
     let gen_swift = out_dir.join("waterkit-system/waterkit-system.swift");
     let combined_swift = out_dir.join("CombinedSystem.swift");
 
-    let core_content = fs::read_to_string(&core_swift).expect("Failed to read SwiftBridgeCore.swift");
+    let core_content =
+        fs::read_to_string(&core_swift).expect("Failed to read SwiftBridgeCore.swift");
     let gen_content = fs::read_to_string(&gen_swift).expect("Failed to read generated swift");
     let impl_content = fs::read_to_string(&swift_source).expect("Failed to read System.swift");
 
@@ -116,7 +117,10 @@ fn build_apple() {
 
     let output = swiftc.output().expect("Failed to run swiftc");
     if !output.status.success() {
-        eprintln!("Swift compilation command: swiftc args: {:?}", swiftc.get_args().collect::<Vec<_>>());
+        eprintln!(
+            "Swift compilation command: swiftc args: {:?}",
+            swiftc.get_args().collect::<Vec<_>>()
+        );
         eprintln!("Swift compilation failed:");
         eprintln!("{}", String::from_utf8_lossy(&output.stderr));
         panic!("Swift compilation failed");
@@ -125,7 +129,11 @@ fn build_apple() {
     // Create static library from object file
     let lib_file = out_dir.join("libSystemHelper.a");
     let ar_status = Command::new("ar")
-        .args(["rcs", lib_file.to_str().unwrap(), obj_file.to_str().unwrap()])
+        .args([
+            "rcs",
+            lib_file.to_str().unwrap(),
+            obj_file.to_str().unwrap(),
+        ])
         .status()
         .expect("Failed to run ar");
     assert!(ar_status.success(), "ar failed");
@@ -191,7 +199,10 @@ fn build_android() {
         .expect("Failed to run kotlinc");
 
     if !kotlinc_output.status.success() {
-        eprintln!("kotlinc stderr: {}", String::from_utf8_lossy(&kotlinc_output.stderr));
+        eprintln!(
+            "kotlinc stderr: {}",
+            String::from_utf8_lossy(&kotlinc_output.stderr)
+        );
         panic!("kotlinc compilation failed");
     }
 
@@ -219,9 +230,7 @@ fn build_android() {
         java_run.arg(class_file);
     }
 
-    let d8_result = java_run
-        .run()
-        .expect("failed to run d8");
+    let d8_result = java_run.run().expect("failed to run d8");
 
     assert!(d8_result.success(), "D8 dexing failed");
 }

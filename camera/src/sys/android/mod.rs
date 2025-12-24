@@ -1,8 +1,8 @@
 //! Android camera implementation using Camera2 API via JNI.
 
 use crate::{CameraError, CameraFrame, CameraInfo, FrameFormat, Resolution};
-use jni::objects::{GlobalRef, JObject, JString, JValue};
 use jni::JNIEnv;
+use jni::objects::{GlobalRef, JObject, JString, JValue};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Embedded DEX bytecode containing CameraHelper class.
@@ -142,13 +142,28 @@ pub fn list_cameras_with_context(env: &mut JNIEnv) -> Result<Vec<CameraInfo>, Ca
         let inner = env.get_object_array_element(&array, i).ok();
         if let Some(inner) = inner {
             let inner_array = unsafe { jni::objects::JObjectArray::from_raw(inner.into_raw()) };
-            let id: JString = env.get_object_array_element(&inner_array, 0).ok().map(|o| o.into()).unwrap_or_default();
-            let name: JString = env.get_object_array_element(&inner_array, 1).ok().map(|o| o.into()).unwrap_or_default();
-            let is_front: JString = env.get_object_array_element(&inner_array, 2).ok().map(|o| o.into()).unwrap_or_default();
+            let id: JString = env
+                .get_object_array_element(&inner_array, 0)
+                .ok()
+                .map(|o| o.into())
+                .unwrap_or_default();
+            let name: JString = env
+                .get_object_array_element(&inner_array, 1)
+                .ok()
+                .map(|o| o.into())
+                .unwrap_or_default();
+            let is_front: JString = env
+                .get_object_array_element(&inner_array, 2)
+                .ok()
+                .map(|o| o.into())
+                .unwrap_or_default();
 
             let id_str = env.get_string(&id).map(|s| s.into()).unwrap_or_default();
             let name_str = env.get_string(&name).map(|s| s.into()).unwrap_or_default();
-            let is_front_str: String = env.get_string(&is_front).map(|s| s.into()).unwrap_or_default();
+            let is_front_str: String = env
+                .get_string(&is_front)
+                .map(|s| s.into())
+                .unwrap_or_default();
 
             cameras.push(CameraInfo {
                 id: id_str,

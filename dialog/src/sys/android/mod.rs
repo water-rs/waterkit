@@ -1,8 +1,8 @@
 //! Android dialog implementation using JNI.
 
 use crate::{Dialog, DialogType};
-use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
+use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode containing DialogHelper class.
@@ -36,8 +36,7 @@ pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), Stri
             .map_err(|e| format!("JNI error to_str: {e}"))?
     );
 
-    std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| format!("Failed to write DEX: {e}"))?;
+    std::fs::write(&dex_path, DEX_BYTES).map_err(|e| format!("Failed to write DEX: {e}"))?;
 
     let dex_path_jstring = env
         .new_string(&dex_path)
@@ -103,7 +102,7 @@ pub fn show_alert_with_context(
     init_with_context(env, context)?;
 
     let helper_jclass = get_helper_class(env)?;
-    
+
     let title = env.new_string(&dialog.title).map_err(|e| e.to_string())?;
     let message = env.new_string(&dialog.message).map_err(|e| e.to_string())?;
 
@@ -130,23 +129,24 @@ pub fn show_confirm_with_context(
     init_with_context(env, context)?;
 
     let helper_jclass = get_helper_class(env)?;
-    
+
     let title = env.new_string(&dialog.title).map_err(|e| e.to_string())?;
     let message = env.new_string(&dialog.message).map_err(|e| e.to_string())?;
 
-    let result = env.call_static_method(
-        helper_jclass,
-        "showConfirm",
-        "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)Z",
-        &[
-            JValue::Object(context),
-            JValue::Object(&title),
-            JValue::Object(&message),
-        ],
-    )
-    .map_err(|e| format!("JNI error showConfirm: {e}"))?
-    .z()
-    .map_err(|e| format!("JNI error return value: {e}"))?;
+    let result = env
+        .call_static_method(
+            helper_jclass,
+            "showConfirm",
+            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)Z",
+            &[
+                JValue::Object(context),
+                JValue::Object(&title),
+                JValue::Object(&message),
+            ],
+        )
+        .map_err(|e| format!("JNI error showConfirm: {e}"))?
+        .z()
+        .map_err(|e| format!("JNI error return value: {e}"))?;
 
     Ok(result)
 }

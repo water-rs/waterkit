@@ -13,7 +13,7 @@ fn main() {
                 image.height,
                 image.bytes.len()
             );
-            
+
             // Save to file for preview
             match image::save_buffer(
                 "clipboard_preview.png",

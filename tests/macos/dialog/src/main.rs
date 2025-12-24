@@ -3,7 +3,7 @@ use waterkit_dialog::FileDialog;
 #[tokio::main]
 async fn main() {
     println!("Testing Dialog...");
-    
+
     // Test File Picker
     println!("Showing File Picker...");
     match FileDialog::new()

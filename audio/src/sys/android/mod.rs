@@ -1,8 +1,8 @@
 //! Android media control implementation using JNI and MediaSession.
 
 use crate::{MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
-use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
+use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode containing MediaSessionHelper class.
@@ -107,10 +107,7 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JObject<'a>, MediaError>
 }
 
 /// Create a media session using the Context.
-pub fn create_session_with_context(
-    env: &mut JNIEnv,
-    context: &JObject,
-) -> Result<(), MediaError> {
+pub fn create_session_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), MediaError> {
     init_with_context(env, context)?;
 
     let helper_class = get_helper_class(env)?;

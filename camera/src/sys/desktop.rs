@@ -118,4 +118,12 @@ impl CameraInner {
     pub fn dropped_frame_count(&self) -> u64 {
         0
     }
+
+    pub fn set_hdr(&self, _enabled: bool) -> Result<(), CameraError> {
+        Err(CameraError::NotSupported)
+    }
+
+    pub fn hdr_enabled(&self) -> bool {
+        false
+    }
 }

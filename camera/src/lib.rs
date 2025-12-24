@@ -343,4 +343,18 @@ impl Camera {
     pub fn dropped_frame_count(&self) -> u64 {
         self.inner.dropped_frame_count()
     }
+
+    /// Enable or disable HDR mode.
+    ///
+    /// # Errors
+    /// Returns `NotSupported` if the camera or backend does not support HDR/HLG.
+    pub fn set_hdr(&self, enabled: bool) -> Result<(), CameraError> {
+        self.inner.set_hdr(enabled)
+    }
+
+    /// Check if HDR mode is currently enabled.
+    #[must_use]
+    pub fn hdr_enabled(&self) -> bool {
+        self.inner.hdr_enabled()
+    }
 }

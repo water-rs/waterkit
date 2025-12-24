@@ -165,7 +165,21 @@ func camera_open(device_id: RustString) -> CameraResultFFI {
     captureSession = session
     videoOutput = output
     currentDevice = device
-    
+
+    // Enable HDR by default if supported (iOS only)
+    #if os(iOS)
+    if device.activeFormat.isVideoHDRSupported {
+        do {
+            try device.lockForConfiguration()
+            device.automaticallyAdjustsVideoHDREnabled = false
+            device.isVideoHDREnabled = true
+            device.unlockForConfiguration()
+        } catch {
+            print("Failed to enable HDR: \(error)")
+        }
+    }
+    #endif
+
     return .Success
 }
 
@@ -358,4 +372,41 @@ func camera_get_resolution_height() -> UInt32 {
     case .cif352x288: return 288
     default: return 720
     }
+}
+
+// MARK: - HDR Control
+
+func camera_set_hdr(enabled: Bool) -> CameraResultFFI {
+    #if os(iOS)
+    guard let device = currentDevice else {
+        return .OpenFailed
+    }
+    
+    if !device.activeFormat.isVideoHDRSupported {
+        return .NotSupported
+    }
+    
+    do {
+        try device.lockForConfiguration()
+        device.automaticallyAdjustsVideoHDREnabled = false
+        device.isVideoHDREnabled = enabled
+        device.unlockForConfiguration()
+        return .Success
+    } catch {
+        return .OpenFailed
+    }
+    #else
+    return .NotSupported
+    #endif
+}
+
+func camera_get_hdr() -> Bool {
+    #if os(iOS)
+    guard let device = currentDevice else {
+        return false
+    }
+    return device.isVideoHDREnabled
+    #else
+    return false
+    #endif
 }

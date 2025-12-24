@@ -44,6 +44,9 @@ mod ffi {
         fn camera_get_resolution_width() -> u32;
         fn camera_get_resolution_height() -> u32;
         fn camera_get_dropped_frame_count() -> u64;
+
+        fn camera_set_hdr(enabled: bool) -> CameraResultFFI;
+        fn camera_get_hdr() -> bool;
     }
 }
 
@@ -244,6 +247,14 @@ impl CameraInner {
     
     pub fn dropped_frame_count(&self) -> u64 {
         ffi::camera_get_dropped_frame_count()
+    }
+
+    pub fn set_hdr(&self, enabled: bool) -> Result<(), CameraError> {
+        convert_result(ffi::camera_set_hdr(enabled), "set_hdr")
+    }
+
+    pub fn hdr_enabled(&self) -> bool {
+        ffi::camera_get_hdr()
     }
 }
 

@@ -31,15 +31,14 @@ pub fn find_android_jar() -> Option<PathBuf> {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if let Some(api_str) = name_str.strip_prefix("android-") {
-                if let Ok(api) = api_str.parse::<u32>() {
-                    if api > best_api {
-                        let jar = entry.path().join("android.jar");
-                        if jar.exists() {
-                            best_api = api;
-                            best_path = Some(jar);
-                        }
-                    }
+            if let Some(api_str) = name_str.strip_prefix("android-")
+                && let Ok(api) = api_str.parse::<u32>()
+                && api > best_api
+            {
+                let jar = entry.path().join("android.jar");
+                if jar.exists() {
+                    best_api = api;
+                    best_path = Some(jar);
                 }
             }
         }
@@ -71,11 +70,9 @@ pub fn find_d8_jar() -> Option<PathBuf> {
 
             // Check if this version has d8.jar
             let d8_path = entry.path().join("lib").join("d8.jar");
-            if d8_path.exists() {
-                if best_version.as_ref().map_or(true, |v| &name_str > v) {
-                    best_version = Some(name_str);
-                    best_path = Some(d8_path);
-                }
+            if d8_path.exists() && best_version.as_ref().is_none_or(|v| &name_str > v) {
+                best_version = Some(name_str);
+                best_path = Some(d8_path);
             }
         }
     }

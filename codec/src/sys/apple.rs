@@ -709,6 +709,7 @@ impl AppleEncoder {
 }
 
 impl VideoEncoder for AppleEncoder {
+    #[allow(clippy::too_many_lines)]
     fn encode(&mut self, frame: &Frame) -> Result<Vec<u8>, CodecError> {
         // Validate dimensions
         if frame.width != self.width || frame.height != self.height {
@@ -944,6 +945,7 @@ impl IOSurfaceFrame {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 extern "C" fn decode_callback(
     decompression_output_ref_con: *mut c_void,
     _source_frame_ref_con: *mut c_void,
@@ -1330,6 +1332,7 @@ impl AppleDecoder {
     /// # Errors
     ///
     /// Returns `CodecError::DecodingFailed` if decoding fails or the decoder is not configured for CPU output.
+    #[allow(clippy::too_many_lines)]
     pub fn decode(
         &mut self,
         data: &[u8],
@@ -1467,6 +1470,7 @@ impl AppleDecoder {
     /// # Errors
     ///
     /// Returns `CodecError::DecodingFailed` if decoding fails or the decoder is not configured for `IOSurface` output.
+    #[allow(clippy::too_many_lines)]
     pub fn decode_surface(
         &mut self,
         data: &[u8],

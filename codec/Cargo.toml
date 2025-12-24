@@ -1,0 +1,39 @@
+[package]
+name = "waterkit-codec"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "High-performance video/image codec with hardware acceleration"
+categories = ["multimedia", "encoding", "decoding"]
+
+[dependencies]
+thiserror.workspace = true
+log = "0.4"
+cfg-if = "1.0"
+rav1e = { version = "0.8", optional = true }
+dav1d = { version = "0.11", optional = true }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2 = "0.6"
+objc2-video-toolbox = "0.3"
+objc2-core-media = "0.3"
+objc2-core-video = "0.3"
+objc2-core-foundation = "0.3"
+objc2-foundation = "0.3"
+
+[target.'cfg(target_os = "android")'.dependencies]
+media-codec = "0.7"
+jni.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = ["Win32_Media_MediaFoundation"] }
+
+[features]
+default = ["av1"]
+av1 = ["dep:rav1e", "dep:dav1d"]
+
+[lints]
+workspace = true

@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-waterkit-camera = { path = "../../../camera" }
+waterkit-camera = { path = "../../../camera", features = ["codec"] }
 winit = "0.30"
 wgpu = "24"
 pollster = "0.4"

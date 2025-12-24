@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["permission", "location", "media", "tests/android/rust", "tests/macos/location", "tests/macos/media", "tests/macos/dialog", "tests/macos/biometric", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret"]
+members = ["permission", "location", "audio", "tests/android/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system"]
 
 
 [workspace.package]

@@ -22,10 +22,6 @@ wgpu.workspace = true
 byteorder = { workspace = true }
 mp4 = { workspace = true }
 
-# Windowed playback
-winit = { workspace = true }
-pollster = { workspace = true }
-
 # Apple platforms: VideoToolbox hardware codec
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 objc2 = { workspace = true }

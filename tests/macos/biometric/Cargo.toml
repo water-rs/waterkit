@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-waterkit-biometric = { path = "../../../biometric" }
+waterkit-biometric.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 # Apple platforms (iOS, macOS)

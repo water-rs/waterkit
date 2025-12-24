@@ -1,6 +1,6 @@
 [package]
 name = "waterkit-codec"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -12,7 +12,7 @@ keywords = ["video", "audio", "codec", "hardware"]
 
 [dependencies]
 thiserror.workspace = true
-log.workspace = true
+
 cfg-if.workspace = true
 rav1e = { workspace = true, optional = true }
 dav1d = { workspace = true, optional = true }

@@ -5,9 +5,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
-waterkit-camera = { path = "../../../camera", features = ["codec"] }
-winit = "0.30"
+waterkit-camera = { workspace = true, features = ["codec"] }
+winit.workspace = true
 wgpu.workspace = true
-pollster = "0.4"
+pollster.workspace = true
 env_logger = "0.11"
-bytemuck = { version = "1", features = ["derive"] }

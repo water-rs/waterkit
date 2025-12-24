@@ -17,6 +17,6 @@ name = "waterkit-profiler"
 path = "src/profiler.rs"
 
 [dependencies]
-waterkit-codec = { path = "../../../codec", features = ["av1"] }
-waterkit-screen = { path = "../../../screen" }
+waterkit-codec = { workspace = true, features = ["av1"] }
+waterkit-screen.workspace = true
 env_logger = "0.11"

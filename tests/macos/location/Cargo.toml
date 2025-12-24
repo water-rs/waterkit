@@ -10,6 +10,6 @@ name = "location-test"
 path = "src/main.rs"
 
 [dependencies]
-waterkit-location = { path = "../../../location" }
-waterkit-permission = { path = "../../../permission" }
+waterkit-location.workspace = true
+waterkit-permission.workspace = true
 tokio.workspace = true

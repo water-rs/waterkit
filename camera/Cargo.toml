@@ -13,7 +13,6 @@ categories = ["multimedia", "gui"]
 workspace = true
 
 [dependencies]
-thiserror.workspace = true
 
 # WGPU for texture integration
 wgpu.workspace = true

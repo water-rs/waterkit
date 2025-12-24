@@ -5,5 +5,5 @@ edition = "2024"
 publish = false
 
 [dependencies]
-waterkit-dialog = { path = "../../../dialog" }
+waterkit-dialog.workspace = true
 tokio = { workspace = true, features = ["full"] }

@@ -8,11 +8,10 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-jni = { workspace = true }
-waterkit-dialog = { path = "../../../dialog" } # Still need core deps if helper uses them?
+jni.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 android_logger = "0.15"
-log = "0.4"
+log.workspace = true
 waterkit_content = { path = "../../../sensor", package = "waterkit-sensor" }
 # waterkit_content = { path = "/Users/lexoliu/Coding/kit/sensor" }
 

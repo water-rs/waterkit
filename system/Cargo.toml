@@ -11,8 +11,6 @@ categories.workspace = true
 readme.workspace = true
 
 [dependencies]
-# Common
-thiserror.workspace = true
 
 # Desktop (System Info & Thermal)
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
@@ -37,8 +35,8 @@ swift-rs.workspace = true
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
-jni = "0.21"
+jni.workspace = true
 
 [build-dependencies]
-swift-bridge-build = "0.1"
-android-build = "0.1"
+swift-bridge-build.workspace = true
+android-build.workspace = true

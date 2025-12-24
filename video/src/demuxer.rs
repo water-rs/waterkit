@@ -2,6 +2,8 @@
 
 use crate::VideoError;
 use std::path::Path;
+use byteorder::{BigEndian, WriteBytesExt};
+use std::io::Write;
 
 /// A decoded video frame.
 #[derive(Clone)]
@@ -77,6 +79,7 @@ pub struct VideoReader {
     samples: Vec<(Vec<u8>, u64, bool)>, // (data, pts, is_keyframe)
     codec_config: Option<Vec<u8>>,
     current_index: usize,
+    timescale: u32,
 }
 
 impl VideoReader {
@@ -93,6 +96,7 @@ impl VideoReader {
         let mut height = 0u32;
         let mut sample_count = 0u32;
         let mut codec_config: Option<Vec<u8>> = None;
+        let mut timescale = 0u32;
         
         for track in reader.tracks().values() {
             let track_type = track.track_type()
@@ -102,20 +106,31 @@ impl VideoReader {
                 width = track.width() as u32;
                 height = track.height() as u32;
                 sample_count = track.sample_count();
+                timescale = track.timescale();
                 
                 let stsd = &track.trak.mdia.minf.stbl.stsd;
                 
-                // Check for HEVC (hev1)
-                if let Some(hev1) = &stsd.hev1 {
-                     // hev1.hvcc is HvcCBox directly
-                     let hvcc = &hev1.hvcc;
-                     use mp4::WriteBox;
-                     use std::io::Cursor;
-                     let mut buf = Vec::new();
-                     let mut cursor = Cursor::new(&mut buf);
-                     if hvcc.write_box(&mut cursor).is_ok() {
-                         codec_config = Some(buf);
-                     }
+                // Check for HEVC (hev1) - mp4 crate's HvcCBox is broken (discards all data)
+                // We must read raw hvcC bytes directly from the file
+                if stsd.hev1.is_some() {
+                    // Read raw hvcC by scanning file for the atom
+                    use std::io::{Read, Seek, SeekFrom};
+                    let mut file = std::fs::File::open(&path)?;
+                    let mut buf = vec![0u8; file.metadata()?.len() as usize];
+                    file.read_exact(&mut buf)?;
+                    
+                    // Find hvcC box in file (search for 'hvcC' signature)
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"hvcC") {
+                        // hvcC box starts 4 bytes before (that's the size field)
+                        if pos >= 4 {
+                            let size_pos = pos - 4;
+                            let box_size = u32::from_be_bytes([buf[size_pos], buf[size_pos+1], buf[size_pos+2], buf[size_pos+3]]) as usize;
+                            if size_pos + box_size <= buf.len() && box_size > 8 {
+                                // Extract the full box (including header) for decoder compatibility
+                                codec_config = Some(buf[size_pos..size_pos + box_size].to_vec());
+                            }
+                        }
+                    }
                 } 
                 // Check for AVC (avc1)
                 else if let Some(avc1) = &stsd.avc1 {
@@ -151,7 +166,13 @@ impl VideoReader {
             samples,
             codec_config,
             current_index: 0,
+            timescale,
         })
+    }
+    
+    /// Get timescale.
+    pub fn timescale(&self) -> u32 {
+        self.timescale
     }
     
     /// Get video dimensions.
@@ -174,6 +195,11 @@ impl VideoReader {
         let sample = self.samples[self.current_index].clone();
         self.current_index += 1;
         Some(sample)
+    }
+
+    /// Iterate over samples from the current position.
+    pub fn samples(&mut self) -> impl Iterator<Item = (Vec<u8>, u64, bool)> + '_ {
+        std::iter::from_fn(move || self.read_sample())
     }
     
     /// Get codec configuration (avcC or hvcC raw data).

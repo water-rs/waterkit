@@ -2,8 +2,9 @@
 
 use objc2::rc::Retained;
 use objc2_core_media::{
-    kCMVideoCodecType_H264, kCMVideoCodecType_HEVC, CMSampleBuffer, CMTime,
+    kCMVideoCodecType_H264, kCMVideoCodecType_HEVC, CMSampleBuffer, CMTime, CMBlockBuffer, CMSampleTimingInfo,
 };
+
 use objc2_video_toolbox::{
     VTCompressionSession, VTCompressionSessionCreate, VTEncodeInfoFlags,
 };
@@ -226,10 +227,13 @@ unsafe extern "C-unwind" fn encode_callback(
                         );
                         
                         if status != 0 {
+                            eprintln!("GetHEVCParameterSetAtIndex failed at index {}: {}", index, status);
                             break;
                         }
                         
                         let data = std::slice::from_raw_parts(ptr, size).to_vec();
+                        eprintln!("Found HEVC NAL at index {}: len={}, type={}", index, size, (data[0] >> 1) & 0x3F);
+                        
                         // Parse NAL type
                         // HEVC NAL header is 2 bytes.
                         // Type is bits 1-6 of first byte. (Forbidden bit 0, Type 6 bits, LayerId 6 bits, TemporalId 3 bits)
@@ -441,9 +445,12 @@ unsafe extern "C-unwind" fn encode_callback(
                              if len > 20 && !ptr.is_null() { // Basic check: > 20 bytes for HEVC
                                  let config_bytes = std::slice::from_raw_parts(ptr, len as usize).to_vec();
                                  if let Ok(mut lock) = context.codec_config.lock() {
+                                     eprintln!("Found atomic hvcC extension with size {}: {:02X?}", len, config_bytes);
                                      *lock = Some(config_bytes);
                                      found_config = true;
                                  }
+                             } else {
+                                 eprintln!("Ignored atomic hvcC extension with size {}", len);
                              }
                          }
                          CFRelease(key_str);
@@ -451,6 +458,7 @@ unsafe extern "C-unwind" fn encode_callback(
                 }
                 
                 if !found_config {
+                     eprintln!("Attempting manual properties extraction...");
                      // Try manual construction
                      let manual_config = construct_hevc_config(format_desc);
                      if let Some(config) = manual_config {
@@ -875,6 +883,8 @@ struct VTDecompressionOutputCallbackRecord {
 
 struct DecoderContext {
     decoded_frames: Mutex<Vec<Frame>>,
+    width: u32,
+    height: u32,
 }
 
 /// Apple VideoToolbox hardware decoder.
@@ -898,6 +908,7 @@ extern "C" fn decode_callback(
     _presentation_time_stamp: CMTime,
     _presentation_duration: CMTime,
 ) {
+
     if status != 0 {
         eprintln!("VTDecompressionSession callback error: {}", status);
         return;
@@ -913,7 +924,18 @@ extern "C" fn decode_callback(
     let image_buffer_ref = unsafe { &*image_buffer };
 
     unsafe {
-        use objc2_core_video::CVPixelBufferLockFlags;
+        use objc2_core_video::{CVPixelBufferLockFlags, CVPixelBufferGetPixelFormatType};
+        
+        // Check actual pixel format
+        let pixel_format = CVPixelBufferGetPixelFormatType(image_buffer_ref);
+        // kCVPixelFormatType_32BGRA = 0x42475241 = 'BGRA'
+        // kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange = 0x34323076 = '420v' (NV12)
+        // kCVPixelFormatType_420YpCbCr8BiPlanarFullRange = 0x34323066 = '420f'
+        let is_bgra = pixel_format == 0x42475241;
+        let is_nv12 = pixel_format == 0x34323076 || pixel_format == 0x34323066;
+        
+
+        
         // Lock base address
         if CVPixelBufferLockBaseAddress(image_buffer_ref, CVPixelBufferLockFlags(0)) == 0 {
             let width = objc2_core_video::CVPixelBufferGetWidth(image_buffer_ref);
@@ -921,28 +943,74 @@ extern "C" fn decode_callback(
             let bytes_per_row = CVPixelBufferGetBytesPerRow(image_buffer_ref);
             let base_addr = CVPixelBufferGetBaseAddress(image_buffer_ref);
             
-            // Assume BGRA for now (we request it)
             if !base_addr.is_null() {
-                // Copy strictly tightly packed RGBA
-                let mut data = Vec::with_capacity((width * height * 4) as usize);
-                let src_stride = bytes_per_row;
-                // Copy row by row to remove stride padding
-                for row in 0..height {
-                    let src = (base_addr as *const u8).add(row * src_stride);
-                    let row_slice = std::slice::from_raw_parts(src, (width * 4) as usize);
-                    data.extend_from_slice(row_slice);
+                // Crop dimensions to expected size (handling padding)
+                let expected_width = unsafe { (*(decompression_output_ref_con as *const DecoderContext)).width };
+                let expected_height = unsafe { (*(decompression_output_ref_con as *const DecoderContext)).height };
+                
+                // Ensure we don't read out of bounds
+                let copy_width = (width as u32).min(expected_width);
+                let copy_height = (height as u32).min(expected_height);
+                
+                let mut data = Vec::with_capacity((copy_width * copy_height * 4) as usize);
+                
+                if is_bgra {
+                    // Direct copy for BGRA
+                    let src_stride = bytes_per_row;
+                    for row in 0..copy_height {
+                        let src = (base_addr as *const u8).add(row as usize * src_stride);
+                        let row_slice = std::slice::from_raw_parts(src, (copy_width * 4) as usize);
+                        data.extend_from_slice(row_slice);
+                    }
+                } else if is_nv12 {
+                    // NV12 to BGRA conversion
+                    // NV12 format: Y plane followed by interleaved UV plane
+                    use objc2_core_video::{CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane};
+                    let y_plane = CVPixelBufferGetBaseAddressOfPlane(image_buffer_ref, 0) as *const u8;
+                    let uv_plane = CVPixelBufferGetBaseAddressOfPlane(image_buffer_ref, 1) as *const u8;
+                    let y_stride = CVPixelBufferGetBytesPerRowOfPlane(image_buffer_ref, 0);
+                    let uv_stride = CVPixelBufferGetBytesPerRowOfPlane(image_buffer_ref, 1);
+                    
+                    for row in 0..copy_height {
+                        let r = row as usize;
+                        for col in 0..copy_width {
+                            let c = col as usize;
+                            let y = *y_plane.add(r * y_stride + c) as i32;
+                            let u = *uv_plane.add((r / 2) * uv_stride + (c / 2) * 2) as i32;
+                            let v = *uv_plane.add((r / 2) * uv_stride + (c / 2) * 2 + 1) as i32;
+                            
+                            // YUV to RGB conversion (BT.601)
+                            let val_c = y - 16;
+                            let val_d = u - 128;
+                            let val_e = v - 128;
+                            
+                            let red = ((298 * val_c + 409 * val_e + 128) >> 8).clamp(0, 255) as u8;
+                            let green = ((298 * val_c - 100 * val_d - 208 * val_e + 128) >> 8).clamp(0, 255) as u8;
+                            let blue = ((298 * val_c + 516 * val_d + 128) >> 8).clamp(0, 255) as u8;
+                            
+                            // BGRA order
+                            data.push(blue);
+                            data.push(green);
+                            data.push(red);
+                            data.push(255); // Alpha
+                        }
+                    }
+                } else {
+                    eprintln!("Unsupported pixel format: 0x{:X}", pixel_format);
                 }
                 
-                let frame = Frame {
-                    data: Arc::new(data),
-                    width: width as u32,
-                    height: height as u32,
-                    format: PixelFormat::Bgra, // We requested BGRA
-                    timestamp_ns: 0, // TODO: Use PTS
-                };
-                
-                if let Ok(mut frames) = context.decoded_frames.lock() {
-                    frames.push(frame);
+                if !data.is_empty() {
+                    let frame = Frame {
+                        data: Arc::new(data),
+                        width: copy_width,
+                        height: copy_height,
+                        format: PixelFormat::Bgra,
+                        timestamp_ns: 0,
+                    };
+                    
+                    if let Ok(mut frames) = context.decoded_frames.lock() {
+                        frames.push(frame);
+                    }
                 }
             }
             CVPixelBufferUnlockBaseAddress(image_buffer_ref, CVPixelBufferLockFlags(0));
@@ -952,11 +1020,11 @@ extern "C" fn decode_callback(
 
 impl AppleDecoder {
     /// Create a new Apple hardware decoder.
-    pub fn new(codec: CodecType, config: Option<&[u8]>) -> Result<Self, CodecError> {
+    pub fn new(codec: CodecType, config: Option<&[u8]>, width: u32, height: u32) -> Result<Self, CodecError> {
         if config.is_none() {
              return Err(CodecError::InitializationFailed("Codec config (hvcC/avcC) required".into()));
         }
-        let config_bytes = config.unwrap();
+        let mut config_bytes = config.unwrap();
         
         let codec_type = match codec {
             CodecType::H264 => kCMVideoCodecType_H264,
@@ -964,8 +1032,25 @@ impl AppleDecoder {
             _ => return Err(CodecError::Unsupported(format!("{:?}", codec))),
         };
         
+        // Strip Box Header (size + type) if present. 
+        // MP4/MOV files usually provide the full box (e.g. 00 00 00 23 avcC ...).
+        // VT requires just the payload (AVCDecoderConfigurationRecord).
+        if config_bytes.len() > 8 {
+            let atom_key = match codec {
+                CodecType::H264 => b"avcC",
+                CodecType::H265 => b"hvcC",
+                _ => b"????",
+            };
+            if &config_bytes[4..8] == atom_key {
+                // Strip box header (8 bytes: size + type)
+                config_bytes = &config_bytes[8..];
+            }
+        }
+        
         let context = Arc::new(DecoderContext {
             decoded_frames: Mutex::new(Vec::new()),
+            width,
+            height,
         });
         
         unsafe {
@@ -1032,33 +1117,51 @@ impl AppleDecoder {
                  decompression_output_ref_con: Arc::as_ptr(&context) as *mut c_void,
              };
              
-             // Image buffer attributes: request BGRA
-             // { kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA }
-             let pixel_format_key_str = b"PixelFormatType\0"; // kCVPixelBufferPixelFormatTypeKey
-             let pixel_format_key = CFStringCreateWithCString(kCFAllocatorDefault, pixel_format_key_str.as_ptr() as *const i8, 0x08000100);
+             // Image buffer attributes: request BGRA output
+             // kCVPixelFormatType_32BGRA = 'BGRA' = 0x42475241
+             let pixel_format_bgra: u32 = 0x42475241;
              
-             // Create CFNumber for kCVPixelFormatType_32BGRA
-             // Or simpler: pass None and let it output NV12, then convert?
-             // But we want BGRA for wgpu.
-             // Let's pass None for now to minimize FFI complexity and see if it works. 
-             // Default is usually NV12 (Bi-Planar).
-             // Wait, our callback assumes BGRA/Gets bytes. If NV12, GetBytesPerRow is plane 0.
-             // Let's stick to default (NULL attributes) and check format in callback later or enforce BGRA later.
-             // Actually, if we get NV12, copying purely bytes will be wrong.
-             // Let's live dangerously and request nothing, assume NV12, but our callback treats as flat.
-             // Re-reading callback: it does `CVPixelBufferGetBytesPerRow`. If NV12, this is Y plane.
-             // We need to implement NV12 -> BGRA shader or conversion if we get NV12.
-             // Or we just request BGRA.
+             #[link(name = "CoreFoundation", kind = "framework")]
+             unsafe extern "C" {
+                 fn CFNumberCreate(allocator: *const c_void, theType: i64, valuePtr: *const c_void) -> *const c_void;
+             }
+             
+             // kCFNumberSInt32Type = 3
+             let pixel_format_number = CFNumberCreate(
+                 kCFAllocatorDefault,
+                 3, // kCFNumberSInt32Type
+                 &pixel_format_bgra as *const u32 as *const c_void
+             );
+             
+             // Use proper kCVPixelBufferPixelFormatTypeKey from objc2
+             use objc2_core_video::kCVPixelBufferPixelFormatTypeKey;
+             let pixel_format_key: *const c_void = kCVPixelBufferPixelFormatTypeKey as *const _ as *const c_void;
+             
+             // Create attributes dictionary
+             let attr_keys = [pixel_format_key];
+             let attr_values = [pixel_format_number as *const c_void];
+             let image_buffer_attrs = CFDictionaryCreate(
+                 kCFAllocatorDefault,
+                 attr_keys.as_ptr(),
+                 attr_values.as_ptr(),
+                 1,
+                 &kCFTypeDictionaryKeyCallBacks,
+                 &kCFTypeDictionaryValueCallBacks
+             );
              
              let mut session: *mut c_void = ptr::null_mut();
              let status = VTDecompressionSessionCreate(
                  kCFAllocatorDefault,
                  format_desc,
                  ptr::null(), // decoder specification
-                 ptr::null(), // image buffer attributes (NULL = decoder default)
+                 image_buffer_attrs, // request BGRA output
                  &callback_record as *const _ as *const c_void,
                  &mut session
              );
+             
+             // Don't release pixel_format_key - it's a static constant
+             CFRelease(pixel_format_number);
+             CFRelease(image_buffer_attrs);
              
              if status != 0 {
                  CFRelease(format_desc);
@@ -1089,8 +1192,12 @@ impl Drop for AppleDecoder {
     }
 }
 
-impl VideoDecoder for AppleDecoder {
-    fn decode(&mut self, data: &[u8]) -> Result<Vec<Frame>, CodecError> {
+impl AppleDecoder {
+    pub fn decode(&mut self, data: &[u8], pts: u64, timescale: u32) -> Result<Vec<Frame>, CodecError> {
+        if data.len() < 4 {
+             return Err(CodecError::DecodingFailed("Data too short".into()));
+        }
+
         let mut frames = Vec::new();
         
         unsafe {
@@ -1144,6 +1251,27 @@ impl VideoDecoder for AppleDecoder {
             
             // 2. Create CMSampleBuffer
             let mut sample_buffer: *mut CMSampleBuffer = ptr::null_mut();
+            // Create timing info
+            // Create timing info
+            let pts_time = CMTime {
+                value: pts as i64,
+                timescale: timescale as i32,
+                flags: objc2_core_media::CMTimeFlags(1), // Valid
+                epoch: 0,
+            };
+            let invalid_time = CMTime {
+                value: 0,
+                timescale: 0,
+                flags: objc2_core_media::CMTimeFlags(0),
+                epoch: 0,
+            };
+
+            let timing_info = CMSampleTimingInfo {
+                duration: invalid_time,
+                presentationTimeStamp: pts_time,
+                decodeTimeStamp: invalid_time,
+            };
+
             let status = CMSampleBufferCreate(
                 kCFAllocatorDefault,
                 block_buffer,
@@ -1152,7 +1280,7 @@ impl VideoDecoder for AppleDecoder {
                 ptr::null_mut(),
                 self.format_desc,
                 1, // sampleCount
-                0, ptr::null(), // timing (default)
+                1, &timing_info as *const _ as *const c_void, // timing
                 0, ptr::null(), // size (default)
                 &mut sample_buffer
             );
@@ -1176,6 +1304,12 @@ impl VideoDecoder for AppleDecoder {
                 ptr::null_mut(),
                 &mut info_flags
             );
+            
+            if status != 0 {
+                eprintln!("VTDecompressionSessionDecodeFrame failed: {}", status);
+                CFRelease(sample_buffer as *const c_void);
+                return Err(CodecError::DecodingFailed(format!("Decode failed: {}", status)));
+            }
             
             // CFRelease(sample_buffer); // leak? CMSampleBuffer is CFType.
             // CMSampleBuffer is typedef for opaque struct. We need to release it.

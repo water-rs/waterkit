@@ -136,6 +136,15 @@ impl SCKCapturer {
             None
         }
     }
+
+    /// Initialize the ScreenCaptureKit stream with a descriptive error.
+    pub fn try_new() -> Result<Self, Error> {
+        if ffi::init_sck_stream() {
+            Ok(Self { _private: () })
+        } else {
+            Err(Error::Platform("Failed to initialize ScreenCaptureKit".into()))
+        }
+    }
     
     /// Get the latest captured frame as raw BGRA bytes.
     /// Returns (width, height, data) or None if no frame available yet.
@@ -166,6 +175,21 @@ impl SCKCapturer {
         } else {
             None
         }
+    }
+
+    /// Get the latest frame if pixel data is available (skips dimension-only replies).
+    pub fn latest_frame(&self) -> Option<crate::RawCapture> {
+        let frame = self.get_frame()?;
+        if frame.data.is_empty() {
+            None
+        } else {
+            Some(frame)
+        }
+    }
+
+    /// Get the most recently reported frame dimensions.
+    pub fn dimensions(&self) -> Option<(u32, u32)> {
+        self.get_frame().map(|frame| (frame.width, frame.height))
     }
     
     /// Get the number of unique frames captured by ScreenCaptureKit.

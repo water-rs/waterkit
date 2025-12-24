@@ -1,8 +1,7 @@
 //! Apple platform build utilities.
 
 use std::path::PathBuf;
-use std::process::Command;
-use std::{env, fs};
+use std::{env};
 
 /// Configuration for Swift compilation.
 #[derive(Debug, Clone)]
@@ -85,6 +84,9 @@ pub fn build_apple_bridge(bridges: &[&str]) {
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 #[allow(clippy::too_many_lines)]
 pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
+    use std::process::Command;
+    use std::fs;
+
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
 
@@ -144,7 +146,7 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
     };
 
     let sdk_path = String::from_utf8(
-        Command::new("xcrun")
+        ::new("xcrun")
             .args(["--sdk", sdk, "--show-sdk-path"])
             .output()
             .expect("xcrun failed")
@@ -154,7 +156,7 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
     .trim()
     .to_string();
 
-    let mut swiftc = Command::new("swiftc");
+    let mut swiftc = ::new("swiftc");
     swiftc
         .arg("-emit-object")
         .arg("-o")
@@ -180,7 +182,7 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
     let output = swiftc.output().expect("Failed to run swiftc");
     if !output.status.success() {
         eprintln!(
-            "Swift compilation command: swiftc args: {:?}",
+            "Swift compilation : swiftc args: {:?}",
             swiftc.get_args().collect::<Vec<_>>()
         );
         eprintln!("Swift compilation failed:");

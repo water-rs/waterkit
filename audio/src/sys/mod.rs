@@ -1,10 +1,15 @@
-//! Platform-specific media center integrations.
+//! Platform-specific integrations.
 //!
-//! Audio playback is handled by rodio across all platforms.
-//! This module provides the platform-specific "Now Playing" integrations.
+//! - Audio playback: handled by rodio across all platforms
+//! - Media center: platform-specific "Now Playing" integration
+//! - Recording: cpal on desktop, native on mobile
 
 use crate::{MediaCommand, MediaMetadata, PlaybackState};
 use std::time::Duration;
+
+// Recording - use cpal on all desktop platforms
+mod desktop_record;
+pub(crate) use desktop_record::AudioRecorderInner;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple;

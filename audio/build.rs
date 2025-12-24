@@ -1,4 +1,4 @@
-//! Build script for waterkit-media.
+//! Build script for waterkit-audio.
 //!
 //! Handles platform-specific code generation:
 //! - Apple: Swift bridge generation + Swift compilation
@@ -43,7 +43,7 @@ fn build_apple() {
 
     // 2. Create combined bridging header
     let core_h = out_dir.join("SwiftBridgeCore.h");
-    let pkg_h = out_dir.join("waterkit-media/waterkit-media.h");
+    let pkg_h = out_dir.join("waterkit-audio/waterkit-audio.h");
     let bridging_h = out_dir.join("Bridging-Header.h");
 
     let bridging_content = format!(
@@ -55,7 +55,7 @@ fn build_apple() {
 
     // 3. Concatenate all Swift sources into one file
     let core_swift = out_dir.join("SwiftBridgeCore.swift");
-    let gen_swift = out_dir.join("waterkit-media/waterkit-media.swift");
+    let gen_swift = out_dir.join("waterkit-audio/waterkit-audio.swift");
     let combined_swift = out_dir.join("CombinedMedia.swift");
 
     let core_content = fs::read_to_string(&core_swift).expect("Failed to read SwiftBridgeCore.swift");

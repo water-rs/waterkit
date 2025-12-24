@@ -1,15 +1,19 @@
-//! Cross-platform media control and audio playback.
+//! Cross-platform audio playback and recording.
 //!
-//! This crate provides a unified API for controlling media playback,
-//! publishing "Now Playing" information, and playing audio across
-//! iOS, macOS, Android, Windows, and Linux platforms.
+//! This crate provides a unified API for:
+//! - **Playback**: Playing audio files with media center integration
+//! - **Recording**: Capturing microphone input (async)
+//!
+//! Supports iOS, macOS, Android, Windows, and Linux.
 
 #![warn(missing_docs)]
 
 mod player;
+mod recorder;
 mod sys;
 
 pub use player::{AudioDevice, AudioPlayer, AudioPlayerBuilder, PlayerError, PlayerState, rodio};
+pub use recorder::{AudioBuffer, AudioFormat, AudioRecorder, AudioRecorderBuilder, RecordError};
 
 use std::time::Duration;
 

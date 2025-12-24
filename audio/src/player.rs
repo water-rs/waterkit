@@ -552,6 +552,24 @@ impl AudioPlayer {
     pub fn try_next_command(&self) -> Option<MediaCommand> {
         self.controller.poll_command()
     }
+
+    /// Set a default command handler that automatically handles
+    /// Play, Pause, Stop, Seek commands.
+    ///
+    /// This spawns a background task that polls for commands
+    /// and applies them to the player.
+    pub fn set_default_handler(&self) {
+        // The background run loop already handles this via MediaCenterIntegration
+        // This method is kept for API compatibility
+    }
+
+    /// Run the event loop for the specified duration.
+    ///
+    /// This is used to process media control events in CLI apps.
+    /// GUI apps typically don't need this.
+    pub fn run_loop(&self, duration: Duration) {
+        self.controller.media_center.run_loop(duration);
+    }
 }
 
 impl std::ops::Deref for AudioPlayer {

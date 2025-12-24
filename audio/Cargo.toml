@@ -1,13 +1,13 @@
 [package]
-name = "waterkit-media"
+name = "waterkit-audio"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository = "https://github.com/water-rs/kit"
-description = "Cross-platform media control for WaterUI"
-keywords = ["media", "nowplaying", "mpris", "ios", "android"]
-categories = ["gui", "multimedia"]
+description = "Cross-platform audio playback and recording for WaterUI"
+keywords = ["audio", "recording", "playback", "microphone", "cross-platform"]
+categories = ["multimedia", "gui"]
 
 [lints]
 workspace = true
@@ -15,6 +15,8 @@ workspace = true
 [dependencies]
 # Cross-platform audio playback (default features include vorbis/mp3/flac/wav)
 rodio = "0.19"
+# Cross-platform audio I/O (for recording)
+cpal = "0.15"
 # Async runtime
 tokio = { version = "1", features = ["rt", "sync", "time"] }
 # HTTP client

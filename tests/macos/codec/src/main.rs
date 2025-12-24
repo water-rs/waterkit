@@ -7,7 +7,7 @@
 //! Measures both hardware accelerated (Apple VideoToolbox) and software (AV1/rav1e) encoders.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use waterkit_codec::{Frame, PixelFormat, CodecType, VideoEncoder};
 
 fn create_test_frame(width: u32, height: u32) -> Frame {
@@ -37,12 +37,9 @@ fn benchmark_encoder<E: VideoEncoder>(name: &str, encoder: &mut E, frame: &Frame
     let mut total_bytes = 0usize;
     
     for _ in 0..iterations {
-        match encoder.encode(frame) {
-            Ok(data) => {
-                success_count += 1;
-                total_bytes += data.len();
-            }
-            Err(_) => {}
+        if let Ok(data) = encoder.encode(frame) {
+            success_count += 1;
+            total_bytes += data.len();
         }
     }
     

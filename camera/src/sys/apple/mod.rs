@@ -112,18 +112,18 @@ impl Drop for IOSurfaceHandle {
 impl IOSurfaceHandle {
     /// Check if this is a valid handle.
     #[must_use]
-    pub fn is_valid(&self) -> bool {
+    pub const fn is_valid(&self) -> bool {
         self.0 != 0
     }
 
     /// Get the raw pointer value.
     #[must_use]
-    pub fn as_ptr(&self) -> *mut std::ffi::c_void {
+    pub const fn as_ptr(&self) -> *mut std::ffi::c_void {
         self.0 as *mut std::ffi::c_void
     }
 }
 
-/// Camera frame with optional IOSurface for zero-copy GPU access.
+/// Camera frame with optional `IOSurface` for zero-copy GPU access.
 #[derive(Debug, Clone)]
 pub struct NativeFrame {
     /// Width in pixels
@@ -132,24 +132,31 @@ pub struct NativeFrame {
     pub height: u32,
     /// Pixel format
     pub format: FrameFormat,
-    /// IOSurface handle for zero-copy Metal texture creation
+    /// `IOSurface` handle for zero-copy Metal texture creation
     pub iosurface: IOSurfaceHandle,
 }
 
+/// Internal camera backend for Apple platforms.
 #[derive(Debug)]
 pub struct CameraInner {
     resolution: Arc<Mutex<Resolution>>,
 }
 
 impl CameraInner {
+    /// List available camera devices.
+    ///
+    /// # Errors
+    /// Returns a `CameraError` if enumeration fails.
+    #[allow(clippy::unnecessary_wraps)]
     pub fn list() -> Result<Vec<CameraInfo>, CameraError> {
         let count = ffi::camera_device_count();
+        #[allow(clippy::cast_sign_loss)]
         let mut devices = Vec::with_capacity(count as usize);
 
         for i in 0..count {
-            let id = ffi::camera_device_id(i).to_string();
-            let name = ffi::camera_device_name(i).to_string();
-            let description = ffi::camera_device_description(i).to_string();
+            let id = ffi::camera_device_id(i);
+            let name = ffi::camera_device_name(i);
+            let description = ffi::camera_device_description(i);
             let is_front = ffi::camera_device_is_front(i);
 
             devices.push(CameraInfo {
@@ -167,6 +174,10 @@ impl CameraInner {
         Ok(devices)
     }
 
+    /// Open a camera by its ID.
+    ///
+    /// # Errors
+    /// Returns a `CameraError` if the camera cannot be opened.
     pub fn open(camera_id: &str) -> Result<Self, CameraError> {
         convert_result(ffi::camera_open(camera_id.to_string()), camera_id)?;
         let w = ffi::camera_get_resolution_width();
@@ -179,16 +190,30 @@ impl CameraInner {
         })
     }
 
-    pub fn start(&mut self) -> Result<(), CameraError> {
+    /// Start the camera session.
+    ///
+    /// # Errors
+    /// Returns a `CameraError` if the camera cannot be started.
+    #[allow(clippy::unused_self)]
+    pub fn start(&self) -> Result<(), CameraError> {
         convert_result(ffi::camera_start(), "start")
     }
 
-    pub fn stop(&mut self) -> Result<(), CameraError> {
+    /// Stop the camera session.
+    ///
+    /// # Errors
+    /// Returns a `CameraError` if the camera cannot be stopped.
+    #[allow(clippy::unused_self)]
+    pub fn stop(&self) -> Result<(), CameraError> {
         convert_result(ffi::camera_stop(), "stop")
     }
 
     /// Get the native frame with IOSurface handle for zero-copy GPU access.
-    pub fn get_native_frame(&mut self) -> Result<NativeFrame, CameraError> {
+    ///
+    /// # Errors
+    /// Returns a `CameraError` if no frame is available.
+    #[allow(clippy::unused_self)]
+    pub fn get_native_frame(&self) -> Result<NativeFrame, CameraError> {
         if !ffi::camera_has_frame() {
             return Err(CameraError::CaptureFailed("no frame available".into()));
         }
@@ -207,11 +232,16 @@ impl CameraInner {
     }
 
     /// Consume the current frame (call after processing).
-    pub fn consume_frame(&mut self) {
+    #[allow(clippy::unused_self)]
+    pub fn consume_frame(&self) {
         ffi::camera_consume_frame();
     }
 
-    pub fn get_frame(&mut self) -> Result<CameraFrame, CameraError> {
+    /// Get a camera frame.
+    ///
+    /// # Errors
+    /// Returns a `CameraError` if frame capture fails.
+    pub fn get_frame(&self) -> Result<CameraFrame, CameraError> {
         // Get native frame info and zero-copy handle
         let native = self.get_native_frame()?;
 
@@ -220,10 +250,9 @@ impl CameraInner {
         // is not yet fully implemented or might be optional.
         let bytes_per_pixel = native.format.bytes_per_pixel();
         let size = (native.width * native.height) as usize * bytes_per_pixel;
-        let mut data = Vec::with_capacity(size);
+        let mut data = vec![0u8; size];
         
         unsafe {
-            data.set_len(size);
             camera_copy_frame_data(data.as_mut_ptr(), size);
         }
         
@@ -238,7 +267,11 @@ impl CameraInner {
         ))
     }
 
-    pub fn set_resolution(&mut self, resolution: Resolution) -> Result<(), CameraError> {
+    /// Set camera resolution.
+    ///
+    /// # Errors
+    /// Returns a `CameraError` if the resolution cannot be set.
+    pub fn set_resolution(&self, resolution: Resolution) -> Result<(), CameraError> {
         convert_result(
             ffi::camera_set_resolution(resolution.width, resolution.height),
             "set_resolution",
@@ -247,23 +280,40 @@ impl CameraInner {
         Ok(())
     }
 
+    /// Get current resolution.
+    #[must_use]
     pub fn resolution(&self) -> Resolution {
         *self.resolution.lock().unwrap()
     }
     
+    /// Get dropped frame count.
+    #[must_use]
+    #[allow(clippy::unused_self)]
     pub fn dropped_frame_count(&self) -> u64 {
         ffi::camera_get_dropped_frame_count()
     }
 
+    /// Set HDR mode.
+    ///
+    /// # Errors
+    /// Returns a `CameraError` if HDR cannot be set.
+    #[allow(clippy::unused_self)]
     pub fn set_hdr(&self, enabled: bool) -> Result<(), CameraError> {
         convert_result(ffi::camera_set_hdr(enabled), "set_hdr")
     }
 
+    /// Check if HDR is enabled.
+    #[must_use]
+    #[allow(clippy::unused_self)]
     pub fn hdr_enabled(&self) -> bool {
         ffi::camera_get_hdr()
     }
 
-    pub fn take_photo(&mut self) -> Result<CameraFrame, CameraError> {
+    /// Take a photo.
+    ///
+    /// # Errors
+    /// Returns a `CameraError` if the photo cannot be taken.
+    pub fn take_photo(&self) -> Result<CameraFrame, CameraError> {
         convert_result(ffi::camera_take_photo(), "take_photo")?;
         
         let len = ffi::camera_get_photo_len();
@@ -271,9 +321,10 @@ impl CameraInner {
              return Err(CameraError::CaptureFailed("Empty photo data".into()));
         }
         
-        let mut data = Vec::with_capacity(len as usize);
+        #[allow(clippy::cast_sign_loss)]
+        let mut data = vec![0u8; len as usize];
         unsafe {
-            data.set_len(len as usize);
+            #[allow(clippy::cast_sign_loss)]
             camera_copy_photo_data(data.as_mut_ptr(), len as u64);
         }
         
@@ -289,14 +340,21 @@ impl CameraInner {
         ))
     }
 
-    pub fn start_recording(&mut self, path: &str) -> Result<(), CameraError> {
+    /// Start recording video.
+    ///
+    /// # Errors
+    /// Returns a `CameraError` if recording cannot be started.
+    #[allow(clippy::unused_self)]
+    pub fn start_recording(&self, path: &str) -> Result<(), CameraError> {
         convert_result(ffi::camera_start_recording(path.to_string()), "start_recording")
     }
 
-    pub fn stop_recording(&mut self) -> Result<(), CameraError> {
+    /// Stop recording video.
+    ///
+    /// # Errors
+    /// Returns a `CameraError` if recording cannot be stopped.
+    #[allow(clippy::unused_self)]
+    pub fn stop_recording(&self) -> Result<(), CameraError> {
         convert_result(ffi::camera_stop_recording(), "stop_recording")
     }
 }
-
-// Re-export for external use
-pub use ffi::camera_get_iosurface;

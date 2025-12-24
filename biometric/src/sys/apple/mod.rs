@@ -1,3 +1,5 @@
+//! Apple platform (iOS/macOS) biometric implementation using swift-bridge.
+
 use crate::{BiometricError, BiometricType};
 
 #[swift_bridge::bridge]
@@ -20,6 +22,7 @@ mod ffi {
     }
 }
 
+/// A callback structure for biometric authentication results.
 pub struct BiometricCallback {
     sender: tokio::sync::oneshot::Sender<Result<(), BiometricError>>,
 }
@@ -34,10 +37,14 @@ impl BiometricCallback {
     }
 }
 
+/// Check if biometrics are available on Apple platforms.
+#[allow(clippy::unused_async)]
 pub async fn is_available() -> bool {
     ffi::biometric_is_available()
 }
 
+/// Get the biometric type on Apple platforms.
+#[allow(clippy::unused_async)]
 pub async fn get_biometric_type() -> Option<BiometricType> {
     match ffi::biometric_get_type() {
         1 => Some(BiometricType::Fingerprint),
@@ -47,6 +54,11 @@ pub async fn get_biometric_type() -> Option<BiometricType> {
     }
 }
 
+/// Perform biometric authentication on Apple platforms.
+///
+/// # Errors
+/// Returns `BiometricError::NotAvailable` if biometrics are not ready,
+/// or `BiometricError::PlatformError` if the channel fails.
 pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
     if !is_available().await {
         return Err(BiometricError::NotAvailable);
@@ -57,5 +69,5 @@ pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
     
     ffi::biometric_authenticate(reason, callback);
 
-    rx.await.unwrap_or(Err(BiometricError::PlatformError("Channel closed".to_string())))
+    rx.await.unwrap_or_else(|_| Err(BiometricError::PlatformError("Channel closed".to_string())))
 }

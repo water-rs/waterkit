@@ -9,7 +9,7 @@
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 use std::thread;
 use waterkit_codec::{Frame, PixelFormat, CodecType, VideoEncoder};
@@ -23,14 +23,9 @@ const BUFFER_SIZE: usize = 4; // Number of frames to buffer
 struct CapturedFrame {
     frame: Frame,
     capture_time_ms: f64,
-    frame_number: u64,
 }
 
-struct EncodedResult {
-    data: Vec<u8>,
-    capture_time_ms: f64,
-    encode_time_ms: f64,
-}
+
 
 struct PerformanceStats {
     total_frames: usize,
@@ -132,7 +127,10 @@ fn capture_thread(
                 };
                 
                 // Non-blocking send - drop frame if buffer is full
-                match tx.try_send(CapturedFrame { frame, capture_time_ms: capture_time, frame_number }) {
+                match tx.try_send(CapturedFrame {
+                    frame,
+                    capture_time_ms: capture_time,
+                }) {
                     Ok(_) => frame_number += 1,
                     Err(mpsc::TrySendError::Full(_)) => {
                         // Buffer full, skip this frame

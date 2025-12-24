@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use std::path::{Path, PathBuf};
-use toml_edit::{DocumentMut, Formatted, Item, Value};
+use toml_edit::{DocumentMut, Item, Value};
 
 #[derive(Parser)]
 #[command(name = "waterkit-test")]
@@ -61,7 +61,7 @@ fn run_android(crate_path: &Path) -> Result<()> {
     println!("{}", "🔨 Building Android app...".yellow().bold());
     let status = std::process::Command::new("cargo")
         .current_dir(root_dir) // Run from root
-        .args(&[
+        .args([
             "ndk", 
             "-t", "arm64-v8a", 
             "-o", "tests/android/app/src/main/jniLibs", 
@@ -133,7 +133,7 @@ fn update_harness_dependency(harness_path: &Path, content_crate_path: &Path) -> 
     doc["dependencies"]["waterkit_content"] = Item::Value(Value::InlineTable(table));
     
     println!("DEBUG: Generated TOML content for [dependencies.waterkit_content]:");
-    println!("{}", doc["dependencies"]["waterkit_content"].to_string());
+    println!("{}", doc["dependencies"]["waterkit_content"]);
     
     std::fs::write(harness_path, doc.to_string())
         .context("Failed to write harness Cargo.toml")?;

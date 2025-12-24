@@ -61,10 +61,10 @@ impl FrameFormat {
     #[must_use]
     pub const fn to_wgpu_format(&self) -> wgpu::TextureFormat {
         match self {
-            Self::Rgba => wgpu::TextureFormat::Rgba8Unorm,
             Self::Bgra => wgpu::TextureFormat::Bgra8Unorm,
-            Self::Rgb | Self::Nv12 | Self::Yuy2 => wgpu::TextureFormat::Rgba8Unorm, // Converted
-            Self::Jpeg => wgpu::TextureFormat::Rgba8Unorm, // Needs decoding
+            Self::Rgba | Self::Rgb | Self::Nv12 | Self::Yuy2 | Self::Jpeg => {
+                wgpu::TextureFormat::Rgba8Unorm
+            }
         }
     }
 }
@@ -99,7 +99,7 @@ impl fmt::Debug for CameraFrame {
 impl CameraFrame {
     /// Create a new camera frame.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         data: Vec<u8>,
         width: u32,
         height: u32,
@@ -297,7 +297,7 @@ impl Camera {
     /// Returns an error if no camera is available or it cannot be opened.
     pub fn open_default() -> Result<Self, CameraError> {
         let cameras = Self::list()?;
-        let camera = cameras.first().ok_or(CameraError::NotFound("no cameras available".into()))?;
+        let camera = cameras.first().ok_or_else(|| CameraError::NotFound("no cameras available".into()))?;
         Self::open(&camera.id)
     }
 
@@ -344,6 +344,7 @@ impl Camera {
     }
 
     /// Get the number of dropped frames since start.
+    #[must_use]
     pub fn dropped_frame_count(&self) -> u64 {
         self.inner.dropped_frame_count()
     }
@@ -368,6 +369,9 @@ impl Camera {
     /// On desktop, this returns the next available frame.
     ///
     /// The result format may be `FrameFormat::Jpeg` on mobile.
+    ///
+    /// # Errors
+    /// Returns an error if the photo cannot be taken.
     pub fn take_photo(&mut self) -> Result<CameraFrame, CameraError> {
         self.inner.take_photo()
     }
@@ -376,11 +380,17 @@ impl Camera {
     ///
     /// # Arguments
     /// * `path` - content file path to save the video.
+    ///
+    /// # Errors
+    /// Returns an error if the recording cannot be started.
     pub fn start_recording(&mut self, path: &str) -> Result<(), CameraError> {
         self.inner.start_recording(path)
     }
 
     /// Stop the current video recording.
+    ///
+    /// # Errors
+    /// Returns an error if the recording cannot be stopped.
     pub fn stop_recording(&mut self) -> Result<(), CameraError> {
         self.inner.stop_recording()
     }
@@ -401,7 +411,7 @@ impl TryFrom<CameraFrame> for waterkit_codec::Frame {
             _ => return Err(CodecError::Unsupported(format!("Unsupported format for codec: {:?}", frame.format))),
         };
 
-        Ok(Frame {
+        Ok(Self {
             data: Arc::new(frame.data),
             width: frame.width,
             height: frame.height,

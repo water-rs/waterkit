@@ -54,6 +54,9 @@ impl std::error::Error for HapticError {}
 /// Trigger haptic feedback.
 ///
 /// This function triggers the specified type of haptic feedback on the device.
+///
+/// # Errors
+/// Returns an error if the haptic feedback is not supported or fails to trigger.
 pub async fn feedback(style: HapticFeedback) -> Result<(), HapticError> {
     sys::feedback(style).await
 }

@@ -1,3 +1,5 @@
+//! Apple platform (iOS/macOS) clipboard implementation using swift-bridge.
+
 use crate::ImageData;
 use std::borrow::Cow;
 
@@ -19,14 +21,19 @@ mod ffi {
     }
 }
 
+/// Get text from the Apple system clipboard.
+#[must_use]
 pub fn get_text() -> Option<String> {
     ffi::clipboard_get_text()
 }
 
+/// Set text to the Apple system clipboard.
 pub fn set_text(text: String) {
     ffi::clipboard_set_text(text);
 }
 
+/// Get image from the Apple system clipboard.
+#[must_use]
 pub fn get_image() -> Option<ImageData> {
     let image = ffi::clipboard_get_image();
     if !image.is_valid {
@@ -39,6 +46,7 @@ pub fn get_image() -> Option<ImageData> {
     })
 }
 
+/// Set image to the Apple system clipboard.
 pub fn set_image(image: ImageData) {
     let swift_image = ffi::SwiftImageData {
         width: image.width,

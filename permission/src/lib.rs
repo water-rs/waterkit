@@ -68,6 +68,11 @@ pub async fn check(permission: Permission) -> PermissionStatus {
 ///
 /// If the permission has already been granted or denied, this returns
 /// the current status without showing a prompt.
+///
+/// # Errors
+/// Returns a `PermissionError` if:
+/// - The permission type is not supported on this platform.
+/// - An underlying platform error occurs.
 pub async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
     sys::request(permission).await
 }

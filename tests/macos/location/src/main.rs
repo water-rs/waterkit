@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run -p waterkit-location-test
 
-use waterkit_location::{Location, LocationError, LocationManager};
+use waterkit_location::LocationManager;
 use waterkit_permission::{Permission, PermissionStatus};
 
 #[tokio::main]

@@ -1,0 +1,16 @@
+[package]
+name = "waterkit-video-test"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "waterkit-video-test"
+path = "src/main.rs"
+
+[dependencies]
+waterkit-video = { path = "../../../video" }
+waterkit-screen = { path = "../../../screen" }
+waterkit-codec = { path = "../../../codec" }
+wgpu = "24"
+winit = "0.30"
+pollster = "0.4"

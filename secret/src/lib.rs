@@ -25,12 +25,17 @@ pub enum SecretError {
     InvalidInput(String),
 }
 
-/// A secure secret entry.
+/// A manager for secure secret storage.
 #[derive(Debug)]
 pub struct SecretManager;
 
 impl SecretManager {
     /// Save a secret.
+    ///
+    /// # Errors
+    /// Returns a `SecretError` if:
+    /// - The service name is empty.
+    /// - The underlying system storage fails.
     pub async fn set(service: &str, account: &str, password: &str) -> Result<(), SecretError> {
         if service.is_empty() {
             return Err(SecretError::InvalidInput("service cannot be empty".into()));
@@ -39,6 +44,12 @@ impl SecretManager {
     }
 
     /// Retrieve a secret.
+    ///
+    /// # Errors
+    /// Returns a `SecretError` if:
+    /// - The service name is empty.
+    /// - The secret is not found.
+    /// - The underlying system storage fails.
     pub async fn get(service: &str, account: &str) -> Result<String, SecretError> {
         if service.is_empty() {
             return Err(SecretError::InvalidInput("service cannot be empty".into()));
@@ -47,6 +58,11 @@ impl SecretManager {
     }
 
     /// Delete a secret.
+    ///
+    /// # Errors
+    /// Returns a `SecretError` if:
+    /// - The service name is empty.
+    /// - The underlying system storage fails.
     pub async fn delete(service: &str, account: &str) -> Result<(), SecretError> {
         if service.is_empty() {
             return Err(SecretError::InvalidInput("service cannot be empty".into()));

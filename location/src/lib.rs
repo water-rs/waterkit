@@ -64,6 +64,13 @@ impl LocationManager {
     /// Get the current device location.
     ///
     /// This will request location permission if not already granted.
+    ///
+    /// # Errors
+    /// Returns a `LocationError` if:
+    /// - Permission is denied.
+    /// - Location services are disabled.
+    /// - The request times out.
+    /// - Location is not available.
     pub async fn get_location() -> Result<Location, LocationError> {
         // Check/request permission first
         let status = waterkit_permission::request(Permission::Location)
@@ -80,6 +87,9 @@ impl LocationManager {
     /// Get the current location without checking permissions.
     ///
     /// Use this if you've already verified permission status.
+    ///
+    /// # Errors
+    /// Returns a `LocationError` if the location cannot be retrieved.
     pub async fn get_location_unchecked() -> Result<Location, LocationError> {
         sys::get_location().await
     }

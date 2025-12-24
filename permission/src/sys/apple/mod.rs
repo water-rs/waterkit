@@ -27,7 +27,7 @@ mod ffi {
     }
 }
 
-fn permission_to_ffi(permission: Permission) -> ffi::PermissionType {
+const fn permission_to_ffi(permission: Permission) -> ffi::PermissionType {
     match permission {
         Permission::Location => ffi::PermissionType::Location,
         Permission::Camera => ffi::PermissionType::Camera,
@@ -38,7 +38,7 @@ fn permission_to_ffi(permission: Permission) -> ffi::PermissionType {
     }
 }
 
-fn status_from_ffi(result: ffi::PermissionResult) -> PermissionStatus {
+const fn status_from_ffi(result: ffi::PermissionResult) -> PermissionStatus {
     match result {
         ffi::PermissionResult::NotDetermined => PermissionStatus::NotDetermined,
         ffi::PermissionResult::Restricted => PermissionStatus::Restricted,
@@ -47,12 +47,17 @@ fn status_from_ffi(result: ffi::PermissionResult) -> PermissionStatus {
     }
 }
 
-pub(crate) async fn check(permission: Permission) -> PermissionStatus {
+/// Check the status of a permission on Apple platforms.
+pub async fn check(permission: Permission) -> PermissionStatus {
     let result = ffi::check_permission(permission_to_ffi(permission));
     status_from_ffi(result)
 }
 
-pub(crate) async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
+/// Request a permission on Apple platforms.
+///
+/// # Errors
+/// Always returns `Ok` as Apple's request API returns the status directly.
+pub async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
     let result = ffi::request_permission(permission_to_ffi(permission));
     Ok(status_from_ffi(result))
 }

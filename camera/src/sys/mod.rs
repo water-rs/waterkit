@@ -1,25 +1,25 @@
 //! Platform-specific camera implementations.
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-mod apple;
+pub mod apple;
 
 #[cfg(target_os = "android")]
-mod android;
+pub mod android;
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
-mod desktop;
+pub mod desktop;
 
 // Apple platforms
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-pub(crate) use apple::CameraInner;
+pub use apple::CameraInner;
 
 // Android
 #[cfg(target_os = "android")]
-pub(crate) use android::CameraInner;
+pub use android::CameraInner;
 
 // Desktop (Windows, Linux) - use nokhwa
 #[cfg(any(target_os = "windows", target_os = "linux"))]
-pub(crate) use desktop::CameraInner;
+pub use desktop::CameraInner;
 
 // Fallback for unsupported platforms
 #[cfg(not(any(
@@ -30,7 +30,7 @@ pub(crate) use desktop::CameraInner;
     target_os = "linux"
 )))]
 mod fallback {
-    use super::*;
+    use crate::{CameraError, CameraFrame, CameraInfo, Resolution};
 
     #[derive(Debug)]
     pub struct CameraInner;
@@ -44,19 +44,19 @@ mod fallback {
             Err(CameraError::NotSupported)
         }
 
-        pub fn start(&mut self) -> Result<(), CameraError> {
+        pub fn start(&self) -> Result<(), CameraError> {
             Err(CameraError::NotSupported)
         }
 
-        pub fn stop(&mut self) -> Result<(), CameraError> {
+        pub fn stop(&self) -> Result<(), CameraError> {
             Err(CameraError::NotSupported)
         }
 
-        pub fn get_frame(&mut self) -> Result<CameraFrame, CameraError> {
+        pub fn get_frame(&self) -> Result<CameraFrame, CameraError> {
             Err(CameraError::NotSupported)
         }
 
-        pub fn set_resolution(&mut self, _resolution: Resolution) -> Result<(), CameraError> {
+        pub fn set_resolution(&self, _resolution: Resolution) -> Result<(), CameraError> {
             Err(CameraError::NotSupported)
         }
 
@@ -76,15 +76,15 @@ mod fallback {
             false
         }
 
-        pub fn take_photo(&mut self) -> Result<CameraFrame, CameraError> {
+        pub fn take_photo(&self) -> Result<CameraFrame, CameraError> {
             Err(CameraError::NotSupported)
         }
 
-        pub fn start_recording(&mut self, _path: &str) -> Result<(), CameraError> {
+        pub fn start_recording(&self, _path: &str) -> Result<(), CameraError> {
             Err(CameraError::NotSupported)
         }
 
-        pub fn stop_recording(&mut self) -> Result<(), CameraError> {
+        pub fn stop_recording(&self) -> Result<(), CameraError> {
             Err(CameraError::NotSupported)
         }
     }
@@ -97,12 +97,13 @@ mod fallback {
     target_os = "windows",
     target_os = "linux"
 )))]
-pub(crate) use fallback::CameraInner;
+pub use fallback::CameraInner;
 
 // Export NativeHandle for platform-specific zero-copy access
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 pub type NativeHandle = apple::IOSurfaceHandle;
 
 #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+/// Opaque handle for platform-specific zero-copy frame access.
 #[derive(Debug, Clone, Copy)]
 pub struct NativeHandle;

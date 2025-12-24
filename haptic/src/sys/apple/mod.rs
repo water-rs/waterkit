@@ -22,7 +22,7 @@ mod ffi {
     }
 }
 
-pub(crate) async fn feedback(style: HapticFeedback) -> Result<(), HapticError> {
+pub async fn feedback(style: HapticFeedback) -> Result<(), HapticError> {
     let swift_style = match style {
         HapticFeedback::Light => ffi::SwiftHapticFeedback::Light,
         HapticFeedback::Medium => ffi::SwiftHapticFeedback::Medium,

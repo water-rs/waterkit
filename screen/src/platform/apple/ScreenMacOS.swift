@@ -222,23 +222,46 @@ class SCKStreamCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen, let pixelBuffer = sampleBuffer.imageBuffer else { return }
         
-        // Get dimensions (fast)
+        // Lock pixel buffer
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else { return }
         
         // Get IOSurface for zero-copy GPU access
         let ioSurface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue()
         
-        // Store frame info and IOSurface
+        // Copy frame data (handle stride)
+        let expectedBytesPerRow = width * 4
+        var rawData = [UInt8](repeating: 0, count: width * height * 4)
+        
+        if bytesPerRow == expectedBytesPerRow {
+            rawData.withUnsafeMutableBytes { dest in
+                dest.copyBytes(from: UnsafeRawBufferPointer(start: baseAddress, count: width * height * 4))
+            }
+        } else {
+            let src = baseAddress.assumingMemoryBound(to: UInt8.self)
+            for row in 0..<height {
+                let srcRow = src.advanced(by: row * bytesPerRow)
+                let dstOffset = row * expectedBytesPerRow
+                rawData.withUnsafeMutableBytes { dest in
+                    dest.baseAddress!.advanced(by: dstOffset).copyMemory(from: srcRow, byteCount: expectedBytesPerRow)
+                }
+            }
+        }
+        
+        // Store frame
         frameLock.lock()
+        lastCapturedFrame = rawData
         frameWidth = UInt32(width)
         frameHeight = UInt32(height)
         frameSequence += 1
         
-        // Store IOSurface reference (retain for GPU access)
         if let surface = ioSurface {
-            // Note: We need to explicitly retain if we want to keep it beyond callback
-            // For now, store for immediate access
             lastIOSurface = surface
             ioSurfaceSequence += 1
         }

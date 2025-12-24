@@ -29,7 +29,11 @@ mod ffi {
     }
 }
 
-pub(crate) async fn get_location() -> Result<Location, LocationError> {
+/// Get the current location on Apple platforms.
+///
+/// # Errors
+/// Returns a `LocationError` if the location cannot be retrieved.
+pub async fn get_location() -> Result<Location, LocationError> {
     match ffi::get_current_location() {
         ffi::LocationResult::Success(data) => Ok(Location {
             latitude: data.latitude,

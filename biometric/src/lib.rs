@@ -1,3 +1,10 @@
+//! Cross-platform biometric authentication.
+//!
+//! This crate provides a unified API for biometric authentication (TouchID, FaceID, Fingerprint, etc.)
+//! across iOS, macOS, Android, and Windows.
+
+#![warn(missing_docs)]
+
 mod sys;
 
 use thiserror::Error;
@@ -5,9 +12,9 @@ use thiserror::Error;
 /// The type of biometric authentication available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BiometricType {
-    /// Fingerprint authentication (TouchID, Android Fingerprint, etc.)
+    /// Fingerprint authentication (`TouchID`, Android Fingerprint, etc.)
     Fingerprint,
-    /// Facial recognition (FaceID, Android Face Unlock, Windows Hello Face)
+    /// Facial recognition (`FaceID`, Android Face Unlock, Windows Hello Face)
     Face,
     /// Iris scanning
     Iris,
@@ -37,9 +44,13 @@ pub async fn is_available() -> bool {
     sys::is_available().await
 }
 
-/// request biometric authentication with a reason.
+/// Request biometric authentication with a reason.
 ///
-/// Returns `Ok(())` if authentication was successful, or an error otherwise.
+/// # Errors
+/// Returns a `BiometricError` if:
+/// - Biometric authentication is not available.
+/// - The user cancels the authentication.
+/// - Authentication fails.
 pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
     sys::authenticate(reason).await
 }

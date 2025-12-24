@@ -11,14 +11,22 @@
 use std::time::Duration;
 use waterkit_audio::AudioPlayer;
 
-fn parse_args() -> (Option<String>, Option<String>, Option<String>, Option<String>, Option<String>) {
+struct Args {
+    audio_file: Option<String>,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    artwork: Option<String>,
+}
+
+fn parse_args() -> Args {
     let args: Vec<String> = std::env::args().collect();
     let mut title = None;
     let mut artist = None;
     let mut album = None;
     let mut artwork = None;
     let mut audio_file = None;
-    
+
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -45,51 +53,61 @@ fn parse_args() -> (Option<String>, Option<String>, Option<String>, Option<Strin
             _ => i += 1,
         }
     }
-    
-    (audio_file, title, artist, album, artwork)
+
+    Args {
+        audio_file,
+        title,
+        artist,
+        album,
+        artwork,
+    }
 }
 
 fn expand_path(path: &str) -> String {
     if path.starts_with("~/") {
         let home = std::env::var("HOME").unwrap_or_default();
-        path.replacen("~", &home, 1)
+        path.replacen('~', &home, 1)
     } else {
         path.to_string()
     }
 }
 
 fn main() {
-    let (audio_file, title, artist, album, artwork) = parse_args();
-    
+    let args = parse_args();
+
     println!("=== Waterkit Media AudioPlayer Test (macOS) ===\n");
 
     // Determine metadata
-    let track_title = title.unwrap_or_else(|| {
-        audio_file.as_ref()
-            .map(|f| std::path::Path::new(f).file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("Test Audio")
-                .to_string())
+    let track_title = args.title.unwrap_or_else(|| {
+        args.audio_file
+            .as_ref()
+            .map(|f| {
+                std::path::Path::new(f)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Test Audio")
+                    .to_string()
+            })
             .unwrap_or_else(|| "Test Audio".to_string())
     });
-    let track_artist = artist.unwrap_or_else(|| "Unknown Artist".to_string());
-    let track_album = album.unwrap_or_else(|| "Unknown Album".to_string());
-    
+    let track_artist = args.artist.unwrap_or_else(|| "Unknown Artist".to_string());
+    let track_album = args.album.unwrap_or_else(|| "Unknown Album".to_string());
+
     // Create audio player with metadata
     println!("Creating audio player...");
     let mut builder = AudioPlayer::new()
         .title(&track_title)
         .artist(&track_artist)
         .album(&track_album);
-    
+
     // Add artwork if provided (convert local path to file:// URL)
-    if let Some(art_path) = artwork {
+    if let Some(art_path) = args.artwork {
         let expanded = expand_path(&art_path);
         let artwork_url = format!("file://{}", expanded);
         builder = builder.artwork_url(&artwork_url);
         println!("Artwork: {}", expanded);
     }
-    
+
     let mut player = match builder.build() {
         Ok(p) => {
             println!("✓ Audio player created\n");
@@ -109,9 +127,9 @@ fn main() {
     println!();
 
     // Play audio
-    if let Some(file_path) = audio_file {
+    if let Some(file_path) = args.audio_file {
         let expanded_path = expand_path(&file_path);
-        
+
         println!("Playing: {}", expanded_path);
         match player.play_file(&expanded_path) {
             Ok(()) => println!("✓ Audio playback started\n"),
@@ -150,10 +168,9 @@ fn main() {
 
         // Update progress bar periodically
         player.update_now_playing();
-        
+
         player.run_loop(Duration::from_millis(500));
     }
-
 
     // RAII Drop will clear the media session
     println!("\n=== Playback Complete ===");

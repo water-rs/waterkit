@@ -1,0 +1,22 @@
+[package]
+name = "waterkit-sensor-test"
+version = "0.1.0"
+edition = "2021"
+description = "macOS test for waterkit-sensor"
+
+[[bin]]
+name = "sensor-test"
+path = "src/main.rs"
+
+[dependencies]
+waterkit-sensor = { path = "../../../sensor" }
+tokio.workspace = true
+futures = "0.3"
+
+# Apple platforms (iOS, macOS)
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+swift-bridge-build.workspace = true
+

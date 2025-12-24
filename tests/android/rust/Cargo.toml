@@ -9,6 +9,12 @@ crate-type = ["cdylib"]
 [dependencies]
 jni = { workspace = true }
 waterkit-dialog = { path = "../../../dialog" } # Still need core deps if helper uses them?
+tokio = { workspace = true, features = ["macros", "rt"] }
+android_logger = "0.13"
+log = "0.4"
+waterkit_content = { path = "/Users/lexoliu/Coding/kit/sensor", package = "waterkit-sensor" }
+# waterkit_content = { path = "/Users/lexoliu/Coding/kit/sensor" }
+
 
 # DYNAMIC DEPENDENCY SLOT
 # This will be overwritten by the CLI tool.

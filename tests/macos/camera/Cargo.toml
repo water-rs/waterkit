@@ -1,0 +1,13 @@
+[package]
+name = "waterkit-camera-test"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+waterkit-camera = { path = "../../../camera" }
+winit = "0.30"
+wgpu = "24"
+pollster = "0.4"
+env_logger = "0.11"
+bytemuck = { version = "1", features = ["derive"] }

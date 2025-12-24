@@ -1,0 +1,14 @@
+[package]
+name = "waterkit-audio-test"
+version = "0.1.0"
+edition = "2021"
+description = "macOS test for waterkit-audio"
+
+[[bin]]
+name = "audio-test"
+path = "src/main.rs"
+
+[dependencies]
+waterkit-audio = { path = "../../../audio" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+

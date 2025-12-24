@@ -104,26 +104,40 @@ fn run_macos(crate_path: &Path) -> Result<()> {
 }
 
 fn update_harness_dependency(harness_path: &Path, content_crate_path: &Path) -> Result<()> {
+    // 1. Get crate name from content crate Cargo.toml
+    let content_cargo_path = content_crate_path.join("Cargo.toml");
+    let content_toml_str = std::fs::read_to_string(&content_cargo_path)
+        .context("Failed to read content Cargo.toml")?;
+    let content_doc = content_toml_str.parse::<DocumentMut>()
+        .context("Failed to parse content Cargo.toml")?;
+    
+    let package_name = content_doc["package"]["name"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Failed to get package name from {}", content_cargo_path.display()))?;
+
+    // 2. Update harness Cargo.toml
     let toml_str = std::fs::read_to_string(harness_path)
         .context("Failed to read harness Cargo.toml")?;
         
     let mut doc = toml_str.parse::<DocumentMut>()
         .context("Failed to parse harness Cargo.toml")?;
 
-    // We assume the harness has [dependencies] section
-    // We want to add/update: waterkit_content = { path = "..." }
+    // We want to add/update: waterkit_content = { package = "name", path = "..." }
     
     let path_str = content_crate_path.to_str().unwrap();
     
-    // Using inline table for { path = "..." }
     let mut table = toml_edit::InlineTable::default();
     table.insert("path", Value::from(path_str));
+    table.insert("package", Value::from(package_name));
     
     doc["dependencies"]["waterkit_content"] = Item::Value(Value::InlineTable(table));
+    
+    println!("DEBUG: Generated TOML content for [dependencies.waterkit_content]:");
+    println!("{}", doc["dependencies"]["waterkit_content"].to_string());
     
     std::fs::write(harness_path, doc.to_string())
         .context("Failed to write harness Cargo.toml")?;
         
-    println!("Updated harness dependency to: {}", path_str);
+    println!("Updated harness dependency to: {} (package: {})", path_str, package_name);
     Ok(())
 }

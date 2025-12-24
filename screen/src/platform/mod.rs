@@ -40,8 +40,9 @@ pub use android::*;
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios", target_os = "android")))]
 mod dummy {
-    use crate::{Error, ScreenInfo};
+    use crate::{Error, ScreenInfo, RawCapture};
     pub fn capture_screen(_idx: usize) -> Result<Vec<u8>, Error> { Err(Error::Unsupported) }
+    pub fn capture_screen_raw(_idx: usize) -> Result<RawCapture, Error> { Err(Error::Unsupported) }
     pub async fn pick_and_capture() -> Result<Vec<u8>, Error> { Err(Error::Unsupported) }
     pub async fn get_brightness() -> Result<f32, Error> { Err(Error::Unsupported) }
     pub async fn set_brightness(_val: f32) -> Result<(), Error> { Err(Error::Unsupported) }

@@ -87,6 +87,29 @@ pub fn capture_screen(display_index: usize) -> Result<Vec<u8>, Error> {
     platform::capture_screen(display_index)
 }
 
+/// Raw screen capture result.
+#[derive(Debug, Clone)]
+pub struct RawCapture {
+    /// RGBA pixel data.
+    pub data: Vec<u8>,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+}
+
+/// Capture the screen content as raw RGBA bytes (no PNG encoding).
+///
+/// This is faster than [capture_screen] as it skips PNG compression.
+/// Useful for real-time encoding pipelines.
+///
+/// # Arguments
+///
+/// * `display_index` - The 0-based index of the screen to capture.
+pub fn capture_screen_raw(display_index: usize) -> Result<RawCapture, Error> {
+    platform::capture_screen_raw(display_index)
+}
+
 /// Pick a screen or window using the system-provided picker and capture it.
 ///
 /// This provides a more privacy-conscious way of capturing content as it does not

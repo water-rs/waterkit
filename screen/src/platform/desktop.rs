@@ -17,6 +17,23 @@ pub fn capture_screen(display_index: usize) -> Result<Vec<u8>, Error> {
     Ok(buffer)
 }
 
+pub fn capture_screen_raw(display_index: usize) -> Result<crate::RawCapture, Error> {
+    let screens = screenshots::Screen::all().map_err(|e| Error::Platform(e.to_string()))?;
+    let screen = screens.get(display_index).ok_or(Error::MonitorNotFound)?;
+    
+    let image = screen.capture().map_err(|e| Error::Platform(e.to_string()))?;
+    
+    // Image is already RGBA from screenshots crate
+    let width = image.width();
+    let height = image.height();
+    
+    Ok(crate::RawCapture {
+        data: image.into_raw(),
+        width,
+        height,
+    })
+}
+
 pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     let screens = screenshots::Screen::all().map_err(|e| Error::Platform(e.to_string()))?;
     

@@ -2,6 +2,7 @@
 name = "waterkit-test-android"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [lib]
 crate-type = ["cdylib"]
@@ -10,7 +11,7 @@ crate-type = ["cdylib"]
 jni = { workspace = true }
 waterkit-dialog = { path = "../../../dialog" } # Still need core deps if helper uses them?
 tokio = { workspace = true, features = ["macros", "rt"] }
-android_logger = "0.13"
+android_logger = "0.15"
 log = "0.4"
 waterkit_content = { path = "/Users/lexoliu/Coding/kit/sensor", package = "waterkit-sensor" }
 # waterkit_content = { path = "/Users/lexoliu/Coding/kit/sensor" }

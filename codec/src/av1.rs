@@ -2,6 +2,7 @@
 
 use crate::{VideoEncoder, VideoDecoder, CodecError, Frame, PixelFormat};
 use rav1e::prelude::*;
+use std::fmt;
 use std::sync::Arc;
 
 /// AV1 software encoder using rav1e.
@@ -14,8 +15,21 @@ pub struct Av1Encoder {
 unsafe impl Send for Av1Encoder {}
 unsafe impl Sync for Av1Encoder {}
 
+impl fmt::Debug for Av1Encoder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Av1Encoder")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Av1Encoder {
     /// Create a new AV1 encoder.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CodecError::InitializationFailed` if `rav1e` context creation fails.
     pub fn new(width: usize, height: usize) -> Result<Self, CodecError> {
         let cfg = Config::new()
             .with_encoder_config(EncoderConfig {
@@ -44,28 +58,28 @@ impl Av1Encoder {
         let mut u_plane = vec![0u8; uv_size];
         let mut v_plane = vec![0u8; uv_size];
         
-        for row in 0..height {
-            for col in 0..width {
-                let idx = (row * width + col) * 4;
-                let r = rgba[idx] as i32;
-                let g = rgba[idx + 1] as i32;
-                let b = rgba[idx + 2] as i32;
+        for row_idx in 0..height {
+            for col_idx in 0..width {
+                let px_idx = (row_idx * width + col_idx) * 4;
+                let r_val = i32::from(rgba[px_idx]);
+                let g_val = i32::from(rgba[px_idx + 1]);
+                let b_val = i32::from(rgba[px_idx + 2]);
                 
                 // BT.601 RGB to YUV conversion
-                let y = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
-                y_plane[row * width + col] = y.clamp(0, 255) as u8;
+                let y_val = ((66 * r_val + 129 * g_val + 25 * b_val + 128) >> 8) + 16;
+                y_plane[row_idx * width + col_idx] = u8::try_from(y_val.clamp(0, 255)).unwrap_or(0);
                 
                 // Subsample U and V (every 2x2 block)
-                if row % 2 == 0 && col % 2 == 0 {
-                    let u = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
-                    let v = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+                if row_idx % 2 == 0 && col_idx % 2 == 0 {
+                    let u_val = ((-38 * r_val - 74 * g_val + 112 * b_val + 128) >> 8) + 128;
+                    let v_val = ((112 * r_val - 94 * g_val - 18 * b_val + 128) >> 8) + 128;
                     
-                    let uv_row = row / 2;
-                    let uv_col = col / 2;
+                    let uv_row = row_idx / 2;
+                    let uv_col = col_idx / 2;
                     let uv_idx = uv_row * (width / 2) + uv_col;
                     
-                    u_plane[uv_idx] = u.clamp(0, 255) as u8;
-                    v_plane[uv_idx] = v.clamp(0, 255) as u8;
+                    u_plane[uv_idx] = u8::try_from(u_val.clamp(0, 255)).unwrap_or(0);
+                    v_plane[uv_idx] = u8::try_from(v_val.clamp(0, 255)).unwrap_or(0);
                 }
             }
         }
@@ -178,9 +192,7 @@ impl VideoEncoder for Av1Encoder {
                 Ok(pkt) => {
                     output.extend_from_slice(&pkt.data);
                 }
-                Err(EncoderStatus::Encoded) => break,
-                Err(EncoderStatus::NeedMoreData) => break,
-                Err(EncoderStatus::LimitReached) => break,
+                Err(EncoderStatus::Encoded | EncoderStatus::NeedMoreData | EncoderStatus::LimitReached) => break,
                 Err(e) => return Err(CodecError::EncodingFailed(e.to_string())),
             }
         }
@@ -197,12 +209,22 @@ pub struct Av1Decoder {
 unsafe impl Send for Av1Decoder {}
 unsafe impl Sync for Av1Decoder {}
 
+impl fmt::Debug for Av1Decoder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Av1Decoder").finish()
+    }
+}
+
 impl Av1Decoder {
     /// Create a new AV1 decoder.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CodecError::InitializationFailed` if `dav1d` initialization fails.
     pub fn new() -> Result<Self, CodecError> {
         let settings = dav1d::Settings::new();
         let dec = dav1d::Decoder::with_settings(&settings)
-            .map_err(|e| CodecError::InitializationFailed(format!("dav1d init failed: {:?}", e)))?;
+            .map_err(|e| CodecError::InitializationFailed(format!("dav1d init failed: {e:?}")))?;
         
         Ok(Self { dec })
     }
@@ -212,7 +234,7 @@ impl VideoDecoder for Av1Decoder {
     fn decode(&mut self, data: &[u8]) -> Result<Vec<Frame>, CodecError> {
         // Send data to decoder
         self.dec.send_data(data.to_vec(), None, None, None)
-            .map_err(|e| CodecError::DecodingFailed(format!("dav1d send_data failed: {:?}", e)))?;
+            .map_err(|e| CodecError::DecodingFailed(format!("dav1d send_data failed: {e:?}")))?;
         
         let mut frames = Vec::new();
         
@@ -220,8 +242,8 @@ impl VideoDecoder for Av1Decoder {
         loop {
             match self.dec.get_picture() {
                 Ok(pic) => {
-                    let width = pic.width() as u32;
-                    let height = pic.height() as u32;
+                    let width = pic.width();
+                    let height = pic.height();
                     
                     // Extract I420 data from picture
                     let y_stride = pic.stride(dav1d::PlanarImageComponent::Y);
@@ -266,7 +288,7 @@ impl VideoDecoder for Av1Decoder {
                     });
                 }
                 Err(dav1d::Error::Again) => break, // No more pictures available
-                Err(e) => return Err(CodecError::DecodingFailed(format!("dav1d get_picture failed: {:?}", e))),
+                Err(e) => return Err(CodecError::DecodingFailed(format!("dav1d get_picture failed: {e:?}"))),
             }
         }
         

@@ -1,4 +1,4 @@
-use crate::{Error, ScreenInfo};
+use crate::Error;
 
 #[swift_bridge::bridge]
 mod ffi {
@@ -40,17 +40,16 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use tokio::sync::oneshot;
 
-static PICKER_SENDER: OnceLock<Mutex<Option<oneshot::Sender<Option<Vec<u8>>>>>> = OnceLock::new();
+type PickerSender = oneshot::Sender<Option<Vec<u8>>>;
+static PICKER_SENDER: OnceLock<Mutex<Option<PickerSender>>> = OnceLock::new();
 
 fn on_picker_result(data: Vec<u8>) {
-    if let Some(mutex) = PICKER_SENDER.get() {
-        if let Ok(mut lock) = mutex.lock() {
-            if let Some(sender) = lock.take() {
+    if let Some(mutex) = PICKER_SENDER.get()
+        && let Ok(mut lock) = mutex.lock()
+            && let Some(sender) = lock.take() {
                 let res = if data.is_empty() { None } else { Some(data) };
                 let _ = sender.send(res);
             }
-        }
-    }
 }
 
 
@@ -121,7 +120,7 @@ pub async fn pick_and_capture() -> Result<Vec<u8>, Error> {
 
 /// High-speed ScreenCaptureKit-based screen capturer (macOS 12.3+).
 /// 
-/// Uses SCStream for 60fps+ capable frame capture.
+/// Uses `SCStream` for 60fps+ capable frame capture.
 /// Much faster than CGWindowListCreateImage-based approaches.
 #[cfg(target_os = "macos")]
 pub struct SCKCapturer {
@@ -130,8 +129,9 @@ pub struct SCKCapturer {
 
 #[cfg(target_os = "macos")]
 impl SCKCapturer {
-    /// Initialize the ScreenCaptureKit stream.
+    /// Initialize the `ScreenCaptureKit` stream.
     /// Returns None if SCK is not available (macOS < 12.3).
+    #[must_use] 
     pub fn new() -> Option<Self> {
         if ffi::init_sck_stream() {
             Some(Self { _private: () })
@@ -140,7 +140,10 @@ impl SCKCapturer {
         }
     }
 
-    /// Initialize the ScreenCaptureKit stream with a descriptive error.
+    /// Initialize the `ScreenCaptureKit` stream with a descriptive error.
+    ///
+    /// # Errors
+    /// Returns [`Error::Platform`] if `ScreenCaptureKit` initialization fails.
     pub fn try_new() -> Result<Self, Error> {
         if ffi::init_sck_stream() {
             Ok(Self { _private: () })
@@ -151,6 +154,7 @@ impl SCKCapturer {
     
     /// Get the latest captured frame as raw BGRA bytes.
     /// Returns (width, height, data) or None if no frame available yet.
+    #[must_use] 
     pub fn get_frame(&self) -> Option<crate::RawCapture> {
         let data = ffi::get_latest_frame();
         if data.len() < 8 {
@@ -181,6 +185,7 @@ impl SCKCapturer {
     }
 
     /// Get the latest frame if pixel data is available (skips dimension-only replies).
+    #[must_use] 
     pub fn latest_frame(&self) -> Option<crate::RawCapture> {
         let frame = self.get_frame()?;
         if frame.data.is_empty() {
@@ -191,11 +196,13 @@ impl SCKCapturer {
     }
 
     /// Get the most recently reported frame dimensions.
+    #[must_use] 
     pub fn dimensions(&self) -> Option<(u32, u32)> {
         self.get_frame().map(|frame| (frame.width, frame.height))
     }
     
-    /// Get the number of unique frames captured by ScreenCaptureKit.
+    /// Get the number of unique frames captured by `ScreenCaptureKit`.
+    #[must_use] 
     pub fn frame_count(&self) -> u32 {
         ffi::get_frame_count()
     }
@@ -205,14 +212,16 @@ impl SCKCapturer {
         ffi::reset_frame_count();
     }
     
-    /// Get the raw IOSurface pointer for zero-copy GPU access.
-    /// Returns None if no IOSurface is available.
+    /// Get the raw `IOSurface` pointer for zero-copy GPU access.
+    /// Returns None if no `IOSurface` is available.
+    #[must_use] 
     pub fn iosurface_ptr(&self) -> Option<u64> {
         let ptr = ffi::get_iosurface_ptr();
         if ptr == 0 { None } else { Some(ptr) }
     }
     
-    /// Get the IOSurface sequence number to detect new frames.
+    /// Get the `IOSurface` sequence number to detect new frames.
+    #[must_use] 
     pub fn iosurface_sequence(&self) -> u32 {
         ffi::get_iosurface_sequence()
     }
@@ -220,6 +229,13 @@ impl SCKCapturer {
     /// Enable or disable raw frame copy to CPU memory.
     pub fn set_raw_frames_enabled(&self, enabled: bool) {
         ffi::set_raw_frame_capture_enabled(enabled);
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl std::fmt::Debug for SCKCapturer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SCKCapturer").finish()
     }
 }
 

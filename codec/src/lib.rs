@@ -2,8 +2,8 @@
 //!
 //! This crate provides hardware-accelerated encoding and decoding for video and images.
 //! It abstracts over platform-specific APIs:
-//! - **Apple**: VideoToolbox
-//! - **Android**: MediaCodec
+//! - **Apple**: `VideoToolbox`
+//! - **Android**: `MediaCodec`
 //! - **Windows**: Media Foundation
 //! - **Linux**: (TODO: GStreamer/VA-API)
 //!
@@ -11,6 +11,7 @@
 
 #![warn(missing_docs)]
 
+/// Platform-specific implementations.
 pub mod sys;
 
 #[cfg(feature = "av1")]
@@ -57,12 +58,20 @@ pub enum CodecType {
 /// Generic Video Encoder trait.
 pub trait VideoEncoder: Send + Sync {
     /// Encode a frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CodecError::EncodingFailed` if encoding fails.
     fn encode(&mut self, frame: &Frame) -> Result<Vec<u8>, CodecError>;
 }
 
 /// Generic Video Decoder trait.
 pub trait VideoDecoder: Send + Sync {
-    /// Decode a packet.
+    /// Decode a packet into one or more frames.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CodecError::DecodingFailed` if decoding fails.
     fn decode(&mut self, data: &[u8]) -> Result<Vec<Frame>, CodecError>;
 }
 
@@ -89,7 +98,7 @@ impl std::fmt::Debug for Frame {
             .field("height", &self.height)
             .field("format", &self.format)
             .field("timestamp_ns", &self.timestamp_ns)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

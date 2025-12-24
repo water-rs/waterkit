@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+readme.workspace = true
 repository = "https://github.com/water-rs/kit"
 description = "Cross-platform local notification for WaterUI"
 keywords = ["notification", "ios", "android", "macos", "windows", "linux"]
@@ -15,7 +16,7 @@ workspace = true
 [dependencies]
 # Desktop platforms (Linux, Windows, macOS)
 [target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dependencies]
-notify-rust = "4"
+notify-rust = { workspace = true }
 
 # iOS
 [target.'cfg(target_os = "ios")'.dependencies]

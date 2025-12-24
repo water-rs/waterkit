@@ -1,7 +1,7 @@
 //! Cross-platform audio player with media center integration.
 //!
 //! Uses `rodio` for audio playback on all platforms, with platform-specific
-//! media center integrations (MPNowPlayingInfoCenter, SMTC, MPRIS, MediaSession).
+//! media center integrations (`MPNowPlayingInfoCenter`, SMTC, MPRIS, `MediaSession`).
 
 use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
@@ -175,28 +175,28 @@ impl AudioPlayerBuilder {
 /// # Example
 ///
 /// ```no_run
-/// use waterkit_media::AudioPlayer;
+/// use waterkit_audio::AudioPlayer;
 ///
 /// // Simple usage with default device
-/// let player = AudioPlayer::new()
+/// let mut player = AudioPlayer::new()
 ///     .title("My Song")
 ///     .artist("My Artist")
 ///     .build()?;
 ///
 /// player.play_file("song.mp3")?;
-/// # Ok::<(), waterkit_media::PlayerError>(())
+/// # Ok::<(), waterkit_audio::PlayerError>(())
 /// ```
 ///
 /// # Device Selection
 ///
 /// ```no_run
-/// use waterkit_media::AudioPlayer;
+/// use waterkit_audio::AudioPlayer;
 ///
 /// let devices = AudioPlayer::list_devices()?;
 /// let player = AudioPlayer::new()
 ///     .device(&devices[0])
 ///     .build()?;
-/// # Ok::<(), waterkit_media::PlayerError>(())
+/// # Ok::<(), waterkit_audio::PlayerError>(())
 /// ```
 /// Controller for audio playback and media center integration.
 pub struct AudioController {
@@ -248,6 +248,7 @@ impl AudioController {
     /// # Errors
     ///
     /// Returns an error if the URL cannot be loaded.
+    #[allow(clippy::future_not_send)]
     pub async fn play_url(&mut self, url: &str) -> Result<(), PlayerError> {
         // Fetch audio data using zenwave
         let response = zenwave::get(url)
@@ -288,23 +289,21 @@ impl AudioController {
     }
 
     /// Seek to a specific position.
-    pub fn seek(&mut self, position: Duration) {
+    pub fn seek(&self, position: Duration) {
         let _ = self.sink.try_seek(position);
         self.update_now_playing();
     }
 
-    /// Seek forward by a specific duration.
-    pub fn seek_forward(&mut self, duration: Duration) {
-        let current = self.sink.get_pos();
-        let new_pos = current + duration;
-        self.seek(new_pos);
+    /// Seek forward by a duration.
+    pub fn seek_forward(&self, duration: Duration) {
+        let pos = self.current_position() + duration;
+        self.seek(pos);
     }
 
-    /// Seek backward by a specific duration.
-    pub fn seek_backward(&mut self, duration: Duration) {
-        let current = self.sink.get_pos();
-        let new_pos = current.saturating_sub(duration);
-        self.seek(new_pos);
+    /// Seek backward by a duration.
+    pub fn seek_backward(&self, duration: Duration) {
+        let pos = self.current_position().saturating_sub(duration);
+        self.seek(pos);
     }
 
     /// Stop playback and clear the queue.
@@ -345,7 +344,7 @@ impl AudioController {
 
     /// Get the current player state.
     #[must_use]
-    pub fn state(&self) -> PlayerState {
+    pub const fn state(&self) -> PlayerState {
         self.state
     }
 
@@ -353,7 +352,7 @@ impl AudioController {
     ///
     /// Use this for advanced audio manipulation.
     #[must_use]
-    pub fn sink(&self) -> &Sink {
+    pub const fn sink(&self) -> &Sink {
         &self.sink
     }
 
@@ -399,12 +398,12 @@ impl AudioController {
     }
 
     /// Get the track duration.
-    pub fn duration(&self) -> Option<Duration> {
+    pub const fn duration(&self) -> Option<Duration> {
         self.metadata.duration
     }
 
     /// Handle a media command.
-    pub fn handle_command(&mut self, cmd: MediaCommand) {
+    pub fn handle_command(&mut self, cmd: &MediaCommand) {
         match cmd {
             MediaCommand::Play => self.resume(),
             MediaCommand::Pause => self.pause(),
@@ -416,9 +415,9 @@ impl AudioController {
                 }
             }
             MediaCommand::Stop => self.stop(),
-            MediaCommand::Seek(pos) => self.seek(pos),
-            MediaCommand::SeekForward(delta) => self.seek_forward(delta),
-            MediaCommand::SeekBackward(delta) => self.seek_backward(delta),
+            MediaCommand::Seek(pos) => self.seek(*pos),
+            MediaCommand::SeekForward(delta) => self.seek_forward(*delta),
+            MediaCommand::SeekBackward(delta) => self.seek_backward(*delta),
             _ => {
                 // Other commands not handled by default
             }
@@ -449,6 +448,7 @@ impl std::fmt::Debug for AudioPlayer {
 impl AudioPlayer {
     /// Create a new audio player builder.
     #[must_use]
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> AudioPlayerBuilder {
         AudioPlayerBuilder::new()
     }
@@ -524,18 +524,19 @@ impl AudioPlayer {
     /// # Example
     ///
     /// ```no_run
-    /// use waterkit_media::AudioPlayer;
+    /// use waterkit_audio::AudioPlayer;
     ///
-    /// async fn run() -> Result<(), waterkit_media::PlayerError> {
+    /// async fn run() -> Result<(), waterkit_audio::PlayerError> {
     ///     let mut player = AudioPlayer::new().title("Song").build()?;
     ///     player.play_file("song.mp3")?;
     ///
     ///     loop {
     ///         let cmd = player.next_command().await;
-    ///         player.handle_command(cmd);
+    ///         player.handle_command(&cmd);
     ///     }
     /// }
     /// ```
+    #[allow(clippy::future_not_send)]
     pub async fn next_command(&self) -> MediaCommand {
         loop {
             if let Some(cmd) = self.controller.poll_command() {
@@ -558,7 +559,7 @@ impl AudioPlayer {
     ///
     /// This spawns a background task that polls for commands
     /// and applies them to the player.
-    pub fn set_default_handler(&self) {
+    pub const fn set_default_handler(&self) {
         // The background run loop already handles this via MediaCenterIntegration
         // This method is kept for API compatibility
     }

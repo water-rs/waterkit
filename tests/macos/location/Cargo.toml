@@ -2,6 +2,7 @@
 name = "waterkit-location-test"
 version = "0.1.0"
 edition = "2021"
+publish = false
 description = "macOS test for waterkit-location"
 
 [[bin]]

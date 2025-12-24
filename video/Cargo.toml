@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+readme = "README.md"
 repository = "https://github.com/water-rs/kit"
 description = "Cross-platform video muxing, demuxing, and playback for WaterUI"
 keywords = ["video", "mp4", "mov", "muxer", "decoder"]
@@ -18,17 +19,17 @@ wgpu.workspace = true
 
 # MP4/MOV container support
 # MP4/MOV container support
-byteorder = "1.5"
-mp4 = "0.14"
+byteorder = { workspace = true }
+mp4 = { workspace = true }
 
 # Windowed playback
-winit = "0.30"
-pollster = "0.4"
+winit = { workspace = true }
+pollster = { workspace = true }
 
 # Apple platforms: VideoToolbox hardware codec
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSObject", "NSData", "NSDictionary"] }
-objc2-core-media = { version = "0.3", features = ["CMSampleBuffer", "CMTime", "CMFormatDescription"] }
-objc2-core-video = { version = "0.3", features = ["CVBuffer", "CVPixelBuffer", "CVImageBuffer"] }
-objc2-video-toolbox = { version = "0.3", features = ["VTDecompressionSession", "VTSession"] }
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = ["NSObject", "NSData", "NSDictionary"] }
+objc2-core-media = { workspace = true, features = ["CMSampleBuffer", "CMTime", "CMFormatDescription"] }
+objc2-core-video = { workspace = true, features = ["CVBuffer", "CVPixelBuffer", "CVImageBuffer"] }
+objc2-video-toolbox = { workspace = true, features = ["VTDecompressionSession", "VTSession"] }

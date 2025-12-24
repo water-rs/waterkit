@@ -4,18 +4,23 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
 
 [dependencies]
 # Common
-thiserror = "1.0"
+thiserror.workspace = true
 
 # Desktop (System Info & Thermal)
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
-sysinfo = "0.30"
+sysinfo.workspace = true
 
 # Windows Connectivity
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = [
+windows = { workspace = true, features = [
     "Networking_Connectivity",
 ] }
 
@@ -23,12 +28,12 @@ windows = { version = "0.58", features = [
 # Actually netdev is good for interface listing. 
 # We'll see if we need it. Let's add it for Linux mainly.
 [target.'cfg(target_os = "linux")'.dependencies]
-netdev = "0.30"
+netdev.workspace = true
 
 # Apple (iOS/macOS)
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 swift-bridge = { workspace = true, features = [] }
-swift-rs = "1.0.6"
+swift-rs.workspace = true
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]

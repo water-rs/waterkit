@@ -3,7 +3,7 @@ use std::path::PathBuf;
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
     if target_os == "macos" || target_os == "ios" {
-         let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+         let _out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
          
          // Linking the biometrics framework is handled by swift-bridge/rustc usually if we use the bridge,
          // but since we are dependent on the library which has the bridge, we might need to link frameworks.

@@ -60,7 +60,7 @@ impl fmt::Debug for AudioBuffer {
 impl AudioBuffer {
     /// Create a new audio buffer.
     #[must_use]
-    pub fn new(samples: Vec<f32>, format: AudioFormat) -> Self {
+    pub const fn new(samples: Vec<f32>, format: AudioFormat) -> Self {
         Self { samples, format }
     }
 
@@ -72,26 +72,27 @@ impl AudioBuffer {
 
     /// Get the audio format.
     #[must_use]
-    pub fn format(&self) -> &AudioFormat {
+    pub const fn format(&self) -> &AudioFormat {
         &self.format
     }
 
     /// Get the number of samples.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.samples.len()
     }
 
     /// Check if the buffer is empty.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.samples.is_empty()
     }
 
     /// Get duration in seconds.
     #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn duration_secs(&self) -> f64 {
-        self.samples.len() as f64 / (self.format.sample_rate as f64 * self.format.channels as f64)
+        self.samples.len() as f64 / (f64::from(self.format.sample_rate) * f64::from(self.format.channels))
     }
 }
 
@@ -160,14 +161,14 @@ impl AudioRecorderBuilder {
 
     /// Set the sample rate in Hz.
     #[must_use]
-    pub fn sample_rate(mut self, rate: u32) -> Self {
+    pub const fn sample_rate(mut self, rate: u32) -> Self {
         self.sample_rate = Some(rate);
         self
     }
 
     /// Set the number of channels.
     #[must_use]
-    pub fn channels(mut self, channels: u16) -> Self {
+    pub const fn channels(mut self, channels: u16) -> Self {
         self.channels = Some(channels);
         self
     }
@@ -225,6 +226,7 @@ impl fmt::Debug for AudioRecorder {
 impl AudioRecorder {
     /// Create a new audio recorder builder.
     #[must_use]
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> AudioRecorderBuilder {
         AudioRecorderBuilder::new()
     }
@@ -245,31 +247,26 @@ impl AudioRecorder {
         })
     }
 
-    /// Start recording.
-    ///
     /// # Errors
     ///
     /// Returns an error if recording cannot be started.
+    #[allow(clippy::future_not_send)]
     pub async fn start(&mut self) -> Result<(), RecordError> {
         self.inner.start().await
     }
 
-    /// Stop recording.
-    ///
     /// # Errors
     ///
     /// Returns an error if recording cannot be stopped.
+    #[allow(clippy::future_not_send)]
     pub async fn stop(&mut self) -> Result<(), RecordError> {
         self.inner.stop().await
     }
 
-    /// Read the next audio buffer.
-    ///
-    /// This async method yields when audio data is available.
-    ///
     /// # Errors
     ///
     /// Returns an error if reading fails or recording is not active.
+    #[allow(clippy::future_not_send)]
     pub async fn read(&mut self) -> Result<AudioBuffer, RecordError> {
         self.inner.read().await
     }
@@ -289,7 +286,7 @@ impl AudioRecorder {
 
     /// Get the audio format.
     #[must_use]
-    pub fn format(&self) -> &AudioFormat {
+    pub const fn format(&self) -> &AudioFormat {
         &self.format
     }
 }

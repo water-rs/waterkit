@@ -38,19 +38,26 @@ impl Dialog {
     }
 
     /// Set the dialog type.
-    pub fn with_type(mut self, type_: DialogType) -> Self {
+    #[must_use] 
+    pub const fn with_type(mut self, type_: DialogType) -> Self {
         self.type_ = type_;
         self
     }
 
     /// Show the dialog (blocking or modal).
     /// Returns when the user dismisses the dialog.
+    ///
+    /// # Errors
+    /// Returns an error if the native dialog fails to show or is not supported.
     pub async fn show(self) -> Result<(), String> {
         sys::show_alert(self).await
     }
 
     /// Show a confirmation dialog (Yes/No or OK/Cancel).
     /// Returns true if confirmed (Yes/OK), false otherwise.
+    ///
+    /// # Errors
+    /// Returns an error if the native dialog fails to show or is not supported.
     pub async fn show_confirm(self) -> Result<bool, String> {
         sys::show_confirm(self).await
     }
@@ -69,7 +76,8 @@ pub struct FileDialog {
 
 impl FileDialog {
     /// Create a new file dialog.
-    pub fn new() -> Self {
+    #[must_use] 
+    pub const fn new() -> Self {
         Self {
             title: None,
             location: None,
@@ -78,28 +86,34 @@ impl FileDialog {
     }
 
     /// Set the title of the dialog.
+    #[must_use] 
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
     }
 
     /// Set the starting location.
+    #[must_use] 
     pub fn set_location(mut self, path: impl Into<std::path::PathBuf>) -> Self {
         self.location = Some(path.into());
         self
     }
 
     /// Add a file extension filter.
-    /// Usage: .add_filter("Image", &["png", "jpg"])
+    /// Usage: `add_filter("Image", &["png", "jpg"])`
+    #[must_use] 
     pub fn add_filter(mut self, name: impl Into<String>, extensions: &[&str]) -> Self {
         self.filters.push((
             name.into(),
-            extensions.iter().map(|s| s.to_string()).collect(),
+            extensions.iter().map(std::string::ToString::to_string).collect(),
         ));
         self
     }
 
     /// Show the dialog to select a single file to open.
+    ///
+    /// # Errors
+    /// Returns an error if the native dialog fails to show or is not supported.
     pub async fn show_open_single_file(self) -> Result<Option<std::path::PathBuf>, String> {
         sys::show_open_single_file(self).await
     }

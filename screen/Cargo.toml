@@ -13,23 +13,23 @@ categories = ["gui", "os"]
 workspace = true
 
 [dependencies]
-image = "0.24"
+image.workspace = true
 thiserror.workspace = true
 
 # Desktop
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 screenshots = "0.8"
 # brightness = "0.4" # Build failed on macOS
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 swift-bridge.workspace = true
-image = "0.24"
-metal = "0.29"
-core-foundation = "0.10"
-objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSObject"] }
+image.workspace = true
+metal.workspace = true
+core-foundation.workspace = true
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = ["NSObject"] }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
 swift-bridge-build.workspace = true

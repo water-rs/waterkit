@@ -14,13 +14,13 @@ workspace = true
 
 [dependencies]
 # Cross-platform audio playback (default features include vorbis/mp3/flac/wav)
-rodio = "0.19"
+rodio = { workspace = true }
 # Cross-platform audio I/O (for recording)
-cpal = "0.15"
-# Async runtime
-tokio = { version = "1", features = ["rt", "sync", "time"] }
+cpal = { workspace = true }
+# Async runtime (using workspace version but adding features)
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 # HTTP client
-zenwave = { git = "https://github.com/zen-rs/zenwave" }
+zenwave = "0.3"
 
 [build-dependencies]
 android-build.workspace = true
@@ -38,11 +38,11 @@ jni.workspace = true
 
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = ["Media_Playback", "Media_Control", "Foundation", "Storage_Streams"] }
+windows = { workspace = true, features = ["Media_Playback", "Media_Control", "Foundation", "Storage_Streams"] }
 
 # Linux
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
 futures.workspace = true
-mpris-server = "0.8"
+mpris-server = "0.9"
 

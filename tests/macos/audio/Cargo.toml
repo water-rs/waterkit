@@ -2,7 +2,9 @@
 name = "waterkit-audio-test"
 version = "0.1.0"
 edition = "2021"
+publish = false
 description = "macOS test for waterkit-audio"
+
 
 [[bin]]
 name = "audio-test"

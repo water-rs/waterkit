@@ -3,7 +3,7 @@
 //! This crate provides:
 //! - **Muxing**: Write H.264/H.265 video to MP4/MOV containers
 //! - **Demuxing**: Read video samples from containers
-//! - **Hardware Decode**: VideoToolbox (Apple), MediaCodec (Android)
+//! - **Hardware Decode**: `VideoToolbox` (Apple), `MediaCodec` (Android)
 //! - **wgpu Integration**: Render decoded frames to GPU textures
 
 #![warn(missing_docs)]

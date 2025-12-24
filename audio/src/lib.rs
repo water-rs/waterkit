@@ -18,7 +18,7 @@ pub use recorder::{AudioBuffer, AudioFormat, AudioRecorder, AudioRecorderBuilder
 use std::time::Duration;
 
 /// Metadata about the currently playing media.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MediaMetadata {
     /// Title of the media (e.g., song name).
     pub title: Option<String>,
@@ -35,6 +35,7 @@ pub struct MediaMetadata {
 impl MediaMetadata {
     /// Create new empty metadata.
     #[must_use]
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -69,7 +70,7 @@ impl MediaMetadata {
 
     /// Set the duration.
     #[must_use]
-    pub fn duration(mut self, duration: Duration) -> Self {
+    pub const fn duration(mut self, duration: Duration) -> Self {
         self.duration = Some(duration);
         self
     }
@@ -101,7 +102,7 @@ pub struct PlaybackState {
 impl PlaybackState {
     /// Create a new stopped state.
     #[must_use]
-    pub fn stopped() -> Self {
+    pub const fn stopped() -> Self {
         Self {
             status: PlaybackStatus::Stopped,
             position: None,
@@ -111,7 +112,7 @@ impl PlaybackState {
 
     /// Create a new playing state.
     #[must_use]
-    pub fn playing(position: Duration) -> Self {
+    pub const fn playing(position: Duration) -> Self {
         Self {
             status: PlaybackStatus::Playing,
             position: Some(position),
@@ -121,7 +122,7 @@ impl PlaybackState {
 
     /// Create a new paused state.
     #[must_use]
-    pub fn paused(position: Duration) -> Self {
+    pub const fn paused(position: Duration) -> Self {
         Self {
             status: PlaybackStatus::Paused,
             position: Some(position),
@@ -201,6 +202,9 @@ impl MediaSession {
     /// Create a new media session.
     ///
     /// This registers the application with the system's media controls.
+    ///
+    /// # Errors
+    /// Returns [`MediaError::InitializationFailed`] if the session cannot be created.
     pub fn new() -> Result<Self, MediaError> {
         Ok(Self {
             inner: sys::MediaSessionInner::new()?,
@@ -208,11 +212,17 @@ impl MediaSession {
     }
 
     /// Update the currently playing media metadata.
+    ///
+    /// # Errors
+    /// Returns [`MediaError::UpdateFailed`] if the metadata update fails.
     pub fn set_metadata(&self, metadata: &MediaMetadata) -> Result<(), MediaError> {
         self.inner.set_metadata(metadata)
     }
 
     /// Update the current playback state.
+    ///
+    /// # Errors
+    /// Returns [`MediaError::UpdateFailed`] if the state update fails.
     pub fn set_playback_state(&self, state: &PlaybackState) -> Result<(), MediaError> {
         self.inner.set_playback_state(state)
     }
@@ -221,6 +231,9 @@ impl MediaSession {
     ///
     /// Call this before starting playback. On some platforms (Android),
     /// this is required to properly integrate with other audio apps.
+    ///
+    /// # Errors
+    /// Returns [`MediaError::AudioFocusDenied`] if focus is refused.
     pub fn request_audio_focus(&self) -> Result<(), MediaError> {
         self.inner.request_audio_focus()
     }
@@ -228,6 +241,9 @@ impl MediaSession {
     /// Abandon audio focus.
     ///
     /// Call this when stopping playback to allow other apps to play audio.
+    ///
+    /// # Errors
+    /// Returns [`MediaError::UpdateFailed`] if focus cannot be abandoned.
     pub fn abandon_audio_focus(&self) -> Result<(), MediaError> {
         self.inner.abandon_audio_focus()
     }
@@ -235,6 +251,9 @@ impl MediaSession {
     /// Clear the current media session.
     ///
     /// This removes "Now Playing" information from system controls.
+    ///
+    /// # Errors
+    /// Returns [`MediaError::UpdateFailed`] if the session cannot be cleared.
     pub fn clear(&self) -> Result<(), MediaError> {
         self.inner.clear()
     }
@@ -243,7 +262,7 @@ impl MediaSession {
     ///
     /// On macOS, this runs `CFRunLoop` which is required for
     /// `MPRemoteCommandCenter` to receive and dispatch events in CLI apps.
-    /// GUI apps using AppKit or SwiftUI do not need this.
+    /// GUI apps using `AppKit` or `SwiftUI` do not need this.
     ///
     /// On other platforms, this simply sleeps for the duration.
     #[cfg(target_os = "macos")]

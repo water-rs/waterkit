@@ -151,17 +151,19 @@ impl MediaSessionInner {
         Ok(Self)
     }
 
+    #[allow(clippy::unused_self)]
     pub fn set_metadata(&self, metadata: &MediaMetadata) -> Result<(), MediaError> {
         let ffi_metadata = ffi::MediaMetadataFFI {
             title: metadata.title.clone().unwrap_or_default(),
             artist: metadata.artist.clone().unwrap_or_default(),
             album: metadata.album.clone().unwrap_or_default(),
             artwork_url: metadata.artwork_url.clone().unwrap_or_default(),
-            duration_secs: metadata.duration.map(|d| d.as_secs_f64()).unwrap_or(-1.0),
+            duration_secs: metadata.duration.map_or(-1.0, |d| d.as_secs_f64()),
         };
         convert_result(ffi::media_session_set_metadata(ffi_metadata))
     }
 
+    #[allow(clippy::unused_self)]
     pub fn set_playback_state(&self, state: &PlaybackState) -> Result<(), MediaError> {
         let status = match state.status {
             PlaybackStatus::Stopped => 0,
@@ -170,83 +172,88 @@ impl MediaSessionInner {
         };
         let ffi_state = ffi::PlaybackStateFFI {
             status,
-            position_secs: state.position.map(|d| d.as_secs_f64()).unwrap_or(-1.0),
+            position_secs: state.position.map_or(-1.0, |d| d.as_secs_f64()),
             rate: state.rate,
         };
         convert_result(ffi::media_session_set_playback_state(ffi_state))
     }
 
+    #[allow(clippy::unused_self)]
     pub fn request_audio_focus(&self) -> Result<(), MediaError> {
         convert_result(ffi::media_session_request_audio_focus())
     }
 
+    #[allow(clippy::unused_self)]
     pub fn abandon_audio_focus(&self) -> Result<(), MediaError> {
         convert_result(ffi::media_session_abandon_audio_focus())
     }
 
+    #[allow(clippy::unused_self)]
     pub fn clear(&self) -> Result<(), MediaError> {
         convert_result(ffi::media_session_clear())
     }
 
     /// Run the macOS run loop for the specified duration.
     /// This is required for `MPRemoteCommandCenter` to receive events in CLI apps.
+    #[allow(clippy::unused_self)]
     pub fn run_loop(&self, duration: std::time::Duration) {
         ffi::media_session_run_loop(duration.as_secs_f64());
     }
 }
 
 /// Media center integration for Apple platforms.
-/// Uses MPNowPlayingInfoCenter and MPRemoteCommandCenter.
+/// Uses `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter`.
 pub struct MediaCenterInner;
 
 impl MediaCenterInner {
-    pub fn new() -> Result<Self, String> {
-        convert_result(ffi::media_session_init()).map_err(|e| e.to_string())?;
-        Ok(Self)
+    pub fn new() -> Result<Self, MediaError> {
+        convert_result(ffi::media_session_init())?;
+        Ok(Self {})
     }
 
+    #[allow(clippy::unused_self)]
     pub fn update(&self, metadata: &MediaMetadata, state: &PlaybackState) {
         let ffi_metadata = ffi::MediaMetadataFFI {
             title: metadata.title.clone().unwrap_or_default(),
             artist: metadata.artist.clone().unwrap_or_default(),
             album: metadata.album.clone().unwrap_or_default(),
             artwork_url: metadata.artwork_url.clone().unwrap_or_default(),
-            duration_secs: metadata.duration.map(|d| d.as_secs_f64()).unwrap_or(-1.0),
+            duration_secs: metadata.duration.map_or(-1.0, |d| d.as_secs_f64()),
         };
         let _ = ffi::media_session_set_metadata(ffi_metadata);
 
-        let status = match state.status {
-            PlaybackStatus::Stopped => 0,
-            PlaybackStatus::Paused => 1,
-            PlaybackStatus::Playing => 2,
-        };
         let ffi_state = ffi::PlaybackStateFFI {
-            status,
-            position_secs: state.position.map(|d| d.as_secs_f64()).unwrap_or(-1.0),
+            status: match state.status {
+                PlaybackStatus::Stopped => 0,
+                PlaybackStatus::Paused => 1,
+                PlaybackStatus::Playing => 2,
+            },
+            position_secs: state.position.map_or(-1.0, |d| d.as_secs_f64()),
             rate: state.rate,
         };
         let _ = ffi::media_session_set_playback_state(ffi_state);
     }
 
+    #[allow(clippy::unused_self)]
     pub fn clear(&self) {
         let _ = ffi::media_session_clear();
     }
 
+    #[allow(clippy::unused_self)]
     pub fn run_loop(&self, duration: std::time::Duration) {
         // Register command handler to populate the queue
         ffi::media_session_register_command_handler();
         ffi::media_session_run_loop(duration.as_secs_f64());
     }
 
+    #[allow(clippy::unused_self)]
     pub fn poll_command(&self) -> Option<crate::MediaCommand> {
-        if let Ok(mut queue) = COMMAND_QUEUE.write() {
+        COMMAND_QUEUE.write().ok().and_then(|mut queue| {
             if queue.is_empty() {
                 None
             } else {
                 Some(queue.remove(0))
             }
-        } else {
-            None
-        }
+        })
     }
 }

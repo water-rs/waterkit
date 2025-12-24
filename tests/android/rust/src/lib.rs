@@ -2,6 +2,7 @@
 
 #![cfg(target_os = "android")]
 #![allow(non_snake_case)]
+#![allow(clippy::cargo_common_metadata)]
 
 use jni::objects::{JClass, JObject};
 use jni::JNIEnv;

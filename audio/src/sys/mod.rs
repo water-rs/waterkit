@@ -9,7 +9,7 @@ use std::time::Duration;
 
 // Recording - use cpal on all desktop platforms
 mod desktop_record;
-pub(crate) use desktop_record::AudioRecorderInner;
+pub use desktop_record::AudioRecorderInner;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple;
@@ -25,7 +25,7 @@ mod linux;
 
 // Keep MediaSessionInner for backwards compatibility
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-pub(crate) use apple::MediaSessionInner;
+pub use apple::MediaSessionInner;
 
 #[cfg(target_os = "android")]
 pub(crate) use android::MediaSessionInner;
@@ -39,7 +39,7 @@ pub(crate) use linux::MediaSessionInner;
 /// Platform-specific media center integration.
 ///
 /// Handles "Now Playing" display and media command callbacks.
-pub(crate) struct MediaCenterIntegration {
+pub struct MediaCenterIntegration {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     inner: apple::MediaCenterInner,
     
@@ -65,16 +65,16 @@ pub(crate) struct MediaCenterIntegration {
 impl MediaCenterIntegration {
     pub fn new() -> Result<Self, String> {
         #[cfg(any(target_os = "ios", target_os = "macos"))]
-        let inner = apple::MediaCenterInner::new()?;
+        let inner = apple::MediaCenterInner::new().map_err(|e| e.to_string())?;
         
         #[cfg(target_os = "windows")]
-        let inner = windows::MediaCenterInner::new()?;
+        let inner = windows::MediaCenterInner::new().map_err(|e| e.to_string())?;
         
         #[cfg(target_os = "linux")]
-        let inner = linux::MediaCenterInner::new()?;
+        let inner = linux::MediaCenterInner::new().map_err(|e| e.to_string())?;
         
         #[cfg(target_os = "android")]
-        let inner = android::MediaCenterInner::new()?;
+        let inner = android::MediaCenterInner::new().map_err(|e| e.to_string())?;
         
         #[cfg(not(any(
             target_os = "ios",

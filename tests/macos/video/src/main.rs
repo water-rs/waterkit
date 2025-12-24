@@ -1,4 +1,5 @@
 //! Video recording and playback test.
+#![allow(unexpected_cfgs)]
 //!
 //! 1. Record screen for 10 seconds → H.265 → MOV
 //! 2. Read MOV and playback in winit window
@@ -9,9 +10,9 @@ use waterkit_codec::sys::{AppleDecoder, AppleEncoder, IOSurfaceFrame};
 use waterkit_codec::CodecType;
 use waterkit_screen::SCKCapturer;
 use waterkit_video::{VideoReader, VideoWriter};
-use metal::{DeviceRef, MTLPixelFormat, MTLStorageMode, MTLTexture, MTLTextureType, MTLTextureUsage, Texture, TextureDescriptor};
+use metal::{MTLPixelFormat, MTLStorageMode, MTLTextureType, MTLTextureUsage, Texture, TextureDescriptor};
 use objc::runtime::Object;
-use objc::msg_send;
+use objc::{msg_send, sel, sel_impl};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -108,13 +109,13 @@ fn record_screen(output_path: &str, duration_secs: u64) {
                             writer.set_codec_config(config);
                         }
 
-                        let is_keyframe = frame_count % TARGET_FPS as u64 == 0;
+                        let is_keyframe = frame_count.is_multiple_of(TARGET_FPS as u64);
                         if let Err(e) = writer.write_sample(&encoded, is_keyframe) {
                             eprintln!("Failed to write sample: {:?}", e);
                         }
                         frame_count += 1;
                         
-                        if frame_count % 60 == 0 {
+                        if frame_count.is_multiple_of(60) {
                             let elapsed_secs = start.elapsed().as_secs_f64();
                             println!("  {} frames ({:.1}s) [zero-copy]", frame_count, elapsed_secs);
                         }
@@ -141,11 +142,11 @@ struct WgpuState {
     render_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    config: wgpu::SurfaceConfiguration,
+    _config: wgpu::SurfaceConfiguration,
 }
 
 struct VideoPlayer {
-    path: String,
+    _path: String,
     window: Option<Arc<Window>>,
     wgpu_state: Option<WgpuState>,
     reader: VideoReader,
@@ -163,7 +164,7 @@ struct VideoPlayer {
 }
 
 struct GpuFrame {
-    texture: wgpu::Texture,
+    _texture: wgpu::Texture,
     bind_group: wgpu::BindGroup,
     _surface: IOSurfaceFrame,
 }
@@ -173,7 +174,7 @@ impl VideoPlayer {
         let reader = VideoReader::open(&path).expect("Failed to open video");
         println!("Opened video with {} samples", reader.sample_count());
         Self {
-            path,
+            _path: path,
             window: None,
             wgpu_state: None,
             reader,
@@ -194,11 +195,9 @@ impl VideoPlayer {
     fn metal_device(state: &WgpuState) -> metal::Device {
         let mut device_out: Option<metal::Device> = None;
         unsafe {
-            state.device.as_hal::<wgpu::hal::api::Metal, _, _>(|hal_device| {
-                if let Some(hal_device) = hal_device {
-                    device_out = Some(hal_device.raw_device().lock().clone());
-                }
-            });
+             if let Some(hal_device) = state.device.as_hal::<wgpu::hal::api::Metal>() {
+                 device_out = Some(hal_device.raw_device().clone());
+             }
         }
         device_out.expect("Metal device unavailable")
     }
@@ -215,13 +214,14 @@ impl VideoPlayer {
 
         let surface_ptr = frame.iosurface_ptr() as *mut Object;
         let device_ref: &metal::DeviceRef = device.as_ref();
-        let raw: *mut MTLTexture = unsafe {
+        let raw: *mut Texture = unsafe {
             msg_send![device_ref, newTextureWithDescriptor: desc iosurface: surface_ptr plane: 0]
         };
         if raw.is_null() {
             panic!("Failed to create Metal texture from IOSurface");
         }
-        unsafe { Texture::from_ptr(raw) }
+        #[allow(clippy::crosspointer_transmute)]
+        unsafe { std::mem::transmute::<*mut Texture, Texture>(raw) }
     }
 
     fn create_gpu_frame(state: &WgpuState, frame: IOSurfaceFrame) -> GpuFrame {
@@ -279,7 +279,7 @@ impl VideoPlayer {
         });
 
         GpuFrame {
-            texture,
+            _texture: texture,
             bind_group,
             _surface: frame,
         }
@@ -295,7 +295,7 @@ impl VideoPlayer {
         }).await.unwrap();
 
         let (device, queue) = adapter.request_device(
-            &wgpu::DeviceDescriptor::default(), None,
+            &wgpu::DeviceDescriptor::default(),
         ).await.unwrap();
 
         let size = window.inner_size();
@@ -363,9 +363,8 @@ impl VideoPlayer {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
-
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&pipeline_layout),
@@ -388,8 +387,8 @@ impl VideoPlayer {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-             cache: None,
+            multiview_mask: None,
+            cache: None,
         });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -408,7 +407,7 @@ impl VideoPlayer {
             render_pipeline,
             bind_group_layout,
             sampler,
-            config,
+            _config: config,
         });
         self.window = Some(window);
         
@@ -454,13 +453,13 @@ impl ApplicationHandler for VideoPlayer {
                     };
                     
                     // Read and Decode (only if enough time has passed)
-                    if should_decode {
-                        if let Some(decoder) = &mut self.decoder {
+                    if should_decode && self.decoder.is_some() {
+                        let decoder = self.decoder.as_mut().unwrap();
                             // Read sample
                             if let Some((sample_data, pts, _key)) = self.reader.read_sample() {
                                 self.last_frame_time = Some(Instant::now());
                                 self.frame_count += 1;
-                                if self.frame_count % 30 == 0 {
+                                if self.frame_count.is_multiple_of(30) {
                                     println!("Playing frame {}", self.frame_count);
                                 }
                                 
@@ -468,7 +467,7 @@ impl ApplicationHandler for VideoPlayer {
                                 let timescale = self.reader.timescale();
                                 match decoder.decode_surface(&sample_data, pts, timescale) {
                                     Ok(mut frames) => {
-                                        if self.frame_count % 30 == 0 {
+                                        if self.frame_count.is_multiple_of(30) {
                                             println!("Frame {}: decoded, got {} frames", self.frame_count, frames.len());
                                         }
                                         self.last_decoded_len = frames.len();
@@ -491,7 +490,6 @@ impl ApplicationHandler for VideoPlayer {
                             }
                             // Note: no sleep - event loop with ControlFlow::Poll handles timing
                         }
-                    } // end if should_decode
                     
                     // Render
                     let output = state.surface.get_current_texture().unwrap();
@@ -508,10 +506,12 @@ impl ApplicationHandler for VideoPlayer {
                                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                                     store: wgpu::StoreOp::Store,
                                 },
+                                depth_slice: None,
                             })],
                             depth_stencil_attachment: None,
                              timestamp_writes: None,
                              occlusion_query_set: None,
+                             multiview_mask: None,
                         });
                         
                         rpass.set_pipeline(&state.render_pipeline);

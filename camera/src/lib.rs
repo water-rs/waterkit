@@ -273,7 +273,7 @@ impl Camera {
     /// List available cameras on the system.
     ///
     /// # Errors
-    /// Returns an error if camera enumeration fails.
+    /// Returns [`CameraError::EnumerationFailed`] if camera enumeration fails.
     pub fn list() -> Result<Vec<CameraInfo>, CameraError> {
         sys::CameraInner::list()
     }
@@ -281,7 +281,7 @@ impl Camera {
     /// Open a camera by its ID.
     ///
     /// # Errors
-    /// Returns an error if the camera cannot be opened.
+    /// Returns [`CameraError::OpenFailed`] if the camera cannot be opened.
     pub fn open(camera_id: &str) -> Result<Self, CameraError> {
         Ok(Self {
             inner: sys::CameraInner::open(camera_id)?,
@@ -294,7 +294,7 @@ impl Camera {
     /// On mobile, this is typically the back camera.
     ///
     /// # Errors
-    /// Returns an error if no camera is available or it cannot be opened.
+    /// Returns [`CameraError::NotFound`] if no camera is available.
     pub fn open_default() -> Result<Self, CameraError> {
         let cameras = Self::list()?;
         let camera = cameras.first().ok_or_else(|| CameraError::NotFound("no cameras available".into()))?;
@@ -304,7 +304,7 @@ impl Camera {
     /// Start capturing frames.
     ///
     /// # Errors
-    /// Returns an error if the camera cannot be started.
+    /// Returns [`CameraError::StartFailed`] if the camera cannot be started.
     pub fn start(&mut self) -> Result<(), CameraError> {
         self.inner.start()
     }
@@ -312,7 +312,7 @@ impl Camera {
     /// Stop capturing frames.
     ///
     /// # Errors
-    /// Returns an error if the camera cannot be stopped.
+    /// Returns [`CameraError::Unknown`] if the camera cannot be stopped.
     pub fn stop(&mut self) -> Result<(), CameraError> {
         self.inner.stop()
     }
@@ -322,7 +322,7 @@ impl Camera {
     /// This may block until a frame is available.
     ///
     /// # Errors
-    /// Returns an error if frame capture fails.
+    /// Returns [`CameraError::CaptureFailed`] if frame capture fails.
     pub fn get_frame(&mut self) -> Result<CameraFrame, CameraError> {
         self.inner.get_frame()
     }
@@ -332,7 +332,7 @@ impl Camera {
     /// The actual resolution may differ based on camera capabilities.
     ///
     /// # Errors
-    /// Returns an error if the resolution cannot be set.
+    /// Returns [`CameraError::Unknown`] if the resolution cannot be set.
     pub fn set_resolution(&mut self, resolution: Resolution) -> Result<(), CameraError> {
         self.inner.set_resolution(resolution)
     }
@@ -352,7 +352,7 @@ impl Camera {
     /// Enable or disable HDR mode.
     ///
     /// # Errors
-    /// Returns `NotSupported` if the camera or backend does not support HDR/HLG.
+    /// Returns [`CameraError::NotSupported`] if the camera or backend does not support HDR/HLG.
     pub fn set_hdr(&self, enabled: bool) -> Result<(), CameraError> {
         self.inner.set_hdr(enabled)
     }
@@ -371,7 +371,7 @@ impl Camera {
     /// The result format may be `FrameFormat::Jpeg` on mobile.
     ///
     /// # Errors
-    /// Returns an error if the photo cannot be taken.
+    /// Returns [`CameraError::CaptureFailed`] if the photo cannot be taken.
     pub fn take_photo(&mut self) -> Result<CameraFrame, CameraError> {
         self.inner.take_photo()
     }
@@ -382,7 +382,7 @@ impl Camera {
     /// * `path` - content file path to save the video.
     ///
     /// # Errors
-    /// Returns an error if the recording cannot be started.
+    /// Returns [`CameraError::StartFailed`] if the recording cannot be started.
     pub fn start_recording(&mut self, path: &str) -> Result<(), CameraError> {
         self.inner.start_recording(path)
     }
@@ -390,7 +390,7 @@ impl Camera {
     /// Stop the current video recording.
     ///
     /// # Errors
-    /// Returns an error if the recording cannot be stopped.
+    /// Returns [`CameraError::Unknown`] if the recording cannot be stopped.
     pub fn stop_recording(&mut self) -> Result<(), CameraError> {
         self.inner.stop_recording()
     }
@@ -401,7 +401,7 @@ impl TryFrom<CameraFrame> for waterkit_codec::Frame {
     type Error = waterkit_codec::CodecError;
 
     fn try_from(frame: CameraFrame) -> Result<Self, Self::Error> {
-        use waterkit_codec::{Frame, PixelFormat, CodecError};
+        use waterkit_codec::{PixelFormat, CodecError};
         use std::sync::Arc;
 
         let format = match frame.format {

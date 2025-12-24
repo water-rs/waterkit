@@ -34,7 +34,7 @@ struct State {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
+    _config: wgpu::SurfaceConfiguration,
     camera: Camera,
     texture: wgpu::Texture,
     texture_width: u32,
@@ -182,10 +182,10 @@ impl State {
                 ..Default::default()
             })
             .await
-            .ok_or("No adapter")?;
+            .map_err(|_| "No adapter")?;
 
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default(), None)
+        let (device, queue): (wgpu::Device, wgpu::Queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
             .await
             .map_err(|e| format!("Device: {}", e))?;
 
@@ -278,7 +278,7 @@ impl State {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pipeline_layout"),
             bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -303,7 +303,7 @@ impl State {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -314,7 +314,7 @@ impl State {
             surface,
             device,
             queue,
-            config,
+            _config: config,
             camera,
             texture,
             texture_width,
@@ -459,10 +459,12 @@ impl State {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
+                    depth_slice: None,
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             pass.set_pipeline(&self.pipeline);

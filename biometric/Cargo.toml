@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+readme.workspace = true
 repository = "https://github.com/water-rs/kit"
 description = "Cross-platform biometric authentication for WaterUI"
 keywords = ["biometric", "authentication", "touchid", "faceid", "windows-hello"]
@@ -32,4 +33,4 @@ android-build.workspace = true
 
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = ["Security_Credentials_UI", "Foundation"] }
+windows = { workspace = true, features = ["Security_Credentials_UI", "Foundation"] }

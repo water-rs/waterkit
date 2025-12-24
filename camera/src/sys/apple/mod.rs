@@ -1,4 +1,4 @@
-//! Apple platform (iOS/macOS) camera implementation using AVCaptureSession.
+//! Apple platform (iOS/macOS) camera implementation using `AVCaptureSession`.
 //!
 //! Uses Metal texture interop for zero-copy frame rendering with wgpu.
 
@@ -77,18 +77,17 @@ fn convert_result(result: ffi::CameraResultFFI, context: &str) -> Result<(), Cam
     }
 }
 
-fn convert_format(format: u8) -> FrameFormat {
+const fn convert_format(format: u8) -> FrameFormat {
     match format {
         0 => FrameFormat::Rgb,
         1 => FrameFormat::Rgba,
-        2 => FrameFormat::Bgra,
         3 => FrameFormat::Nv12,
         4 => FrameFormat::Yuy2,
         _ => FrameFormat::Bgra,
     }
 }
 
-/// Raw IOSurface handle for zero-copy Metal texture import.
+/// Raw `IOSurface` handle for zero-copy Metal texture import.
 #[derive(Debug)]
 pub struct IOSurfaceHandle(pub u64);
 
@@ -208,7 +207,7 @@ impl CameraInner {
         convert_result(ffi::camera_stop(), "stop")
     }
 
-    /// Get the native frame with IOSurface handle for zero-copy GPU access.
+    /// Get the native frame with `IOSurface` handle for zero-copy GPU access.
     ///
     /// # Errors
     /// Returns a `CameraError` if no frame is available.

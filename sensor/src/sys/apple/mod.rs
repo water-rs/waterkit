@@ -51,7 +51,7 @@ mod ffi {
     }
 }
 
-fn convert_reading(reading: ffi::SensorReading) -> SensorData {
+const fn convert_reading(reading: &ffi::SensorReading) -> SensorData {
     SensorData {
         x: reading.x,
         y: reading.y,
@@ -60,25 +60,25 @@ fn convert_reading(reading: ffi::SensorReading) -> SensorData {
     }
 }
 
-fn convert_scalar(reading: ffi::ScalarReading) -> ScalarData {
+const fn convert_scalar(reading: &ffi::ScalarReading) -> ScalarData {
     ScalarData {
         value: reading.value,
         timestamp: reading.timestamp_ms,
     }
 }
 
-fn convert_result(result: ffi::SensorResult) -> Result<SensorData, SensorError> {
+const fn convert_result(result: ffi::SensorResult) -> Result<SensorData, SensorError> {
     match result {
-        ffi::SensorResult::Success(r) => Ok(convert_reading(r)),
+        ffi::SensorResult::Success(r) => Ok(convert_reading(&r)),
         ffi::SensorResult::NotAvailable => Err(SensorError::NotAvailable),
         ffi::SensorResult::PermissionDenied => Err(SensorError::PermissionDenied),
         ffi::SensorResult::Timeout => Err(SensorError::Timeout),
     }
 }
 
-fn convert_scalar_result(result: ffi::ScalarResult) -> Result<ScalarData, SensorError> {
+const fn convert_scalar_result(result: ffi::ScalarResult) -> Result<ScalarData, SensorError> {
     match result {
-        ffi::ScalarResult::Success(r) => Ok(convert_scalar(r)),
+        ffi::ScalarResult::Success(r) => Ok(convert_scalar(&r)),
         ffi::ScalarResult::NotAvailable => Err(SensorError::NotAvailable),
         ffi::ScalarResult::PermissionDenied => Err(SensorError::PermissionDenied),
         ffi::ScalarResult::Timeout => Err(SensorError::Timeout),
@@ -90,6 +90,7 @@ pub fn accelerometer_available() -> bool {
     ffi::is_accelerometer_available()
 }
 
+#[allow(clippy::unused_async)]
 pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
     convert_result(ffi::read_accelerometer())
 }
@@ -102,7 +103,7 @@ pub fn accelerometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>,
     Ok(Box::pin(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         match ffi::read_accelerometer() {
-            ffi::SensorResult::Success(r) => Some((convert_reading(r), ())),
+            ffi::SensorResult::Success(r) => Some((convert_reading(&r), ())),
             _ => None,
         }
     })))
@@ -113,6 +114,7 @@ pub fn gyroscope_available() -> bool {
     ffi::is_gyroscope_available()
 }
 
+#[allow(clippy::unused_async)]
 pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
     convert_result(ffi::read_gyroscope())
 }
@@ -125,7 +127,7 @@ pub fn gyroscope_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, Sen
     Ok(Box::pin(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         match ffi::read_gyroscope() {
-            ffi::SensorResult::Success(r) => Some((convert_reading(r), ())),
+            ffi::SensorResult::Success(r) => Some((convert_reading(&r), ())),
             _ => None,
         }
     })))
@@ -136,6 +138,7 @@ pub fn magnetometer_available() -> bool {
     ffi::is_magnetometer_available()
 }
 
+#[allow(clippy::unused_async)]
 pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
     convert_result(ffi::read_magnetometer())
 }
@@ -148,7 +151,7 @@ pub fn magnetometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, 
     Ok(Box::pin(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         match ffi::read_magnetometer() {
-            ffi::SensorResult::Success(r) => Some((convert_reading(r), ())),
+            ffi::SensorResult::Success(r) => Some((convert_reading(&r), ())),
             _ => None,
         }
     })))
@@ -159,6 +162,7 @@ pub fn barometer_available() -> bool {
     ffi::is_barometer_available()
 }
 
+#[allow(clippy::unused_async)]
 pub async fn barometer_read() -> Result<ScalarData, SensorError> {
     convert_scalar_result(ffi::read_barometer())
 }
@@ -171,7 +175,7 @@ pub fn barometer_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, Sen
     Ok(Box::pin(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         match ffi::read_barometer() {
-            ffi::ScalarResult::Success(r) => Some((convert_scalar(r), ())),
+            ffi::ScalarResult::Success(r) => Some((convert_scalar(&r), ())),
             _ => None,
         }
     })))
@@ -182,6 +186,7 @@ pub fn ambient_light_available() -> bool {
     ffi::is_ambient_light_available()
 }
 
+#[allow(clippy::unused_async)]
 pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
     convert_scalar_result(ffi::read_ambient_light())
 }
@@ -194,7 +199,7 @@ pub fn ambient_light_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>,
     Ok(Box::pin(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         match ffi::read_ambient_light() {
-            ffi::ScalarResult::Success(r) => Some((convert_scalar(r), ())),
+            ffi::ScalarResult::Success(r) => Some((convert_scalar(&r), ())),
             _ => None,
         }
     })))

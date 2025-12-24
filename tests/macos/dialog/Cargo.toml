@@ -2,6 +2,7 @@
 name = "waterkit-dialog-test"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [dependencies]
 waterkit-dialog = { path = "../../../dialog" }

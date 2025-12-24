@@ -8,25 +8,26 @@ readme = "README.md"
 repository.workspace = true
 description = "High-performance video/image codec with hardware acceleration"
 categories = ["multimedia", "encoding", "decoding"]
+keywords = ["video", "audio", "codec", "hardware"]
 
 [dependencies]
 thiserror.workspace = true
-log = "0.4"
-cfg-if = "1.0"
-rav1e = { version = "0.8", optional = true }
-dav1d = { version = "0.11", optional = true }
+log.workspace = true
+cfg-if.workspace = true
+rav1e = { workspace = true, optional = true }
+dav1d = { workspace = true, optional = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
-objc2 = "0.6"
-objc2-video-toolbox = "0.3"
-objc2-core-media = "0.3"
-objc2-core-video = "0.3"
-objc2-core-foundation = "0.3"
-objc2-foundation = "0.3"
-objc2-io-surface = "0.3"
+objc2.workspace = true
+objc2-video-toolbox.workspace = true
+objc2-core-media.workspace = true
+objc2-core-video.workspace = true
+objc2-core-foundation.workspace = true
+objc2-foundation.workspace = true
+objc2-io-surface.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
-media-codec = "0.7"
+media-codec.workspace = true
 jni.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]

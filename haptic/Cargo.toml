@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+readme.workspace = true
 repository = "https://github.com/water-rs/kit"
 description = "Cross-platform haptic feedback/vibration for WaterUI"
 keywords = ["haptic", "vibration", "feedback", "ios", "android"]
@@ -29,7 +30,7 @@ android-build.workspace = true
 
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = ["Devices_Haptics", "Foundation"] }
+windows = { workspace = true, features = ["Devices_Haptics", "Foundation"] }
 
 # Linux
 [target.'cfg(target_os = "linux")'.dependencies]

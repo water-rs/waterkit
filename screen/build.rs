@@ -1,5 +1,8 @@
+//! Build script for waterkit-screen.
+
 use std::{env, path::PathBuf, process::Command};
 
+#[allow(clippy::too_many_lines, clippy::items_after_statements, clippy::format_push_string)]
 fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -13,13 +16,13 @@ fn main() {
             vec!["src/platform/apple/Screen.swift"]
         };
 
-        println!("cargo:rerun-if-changed={}", bridge_file);
+        println!("cargo:rerun-if-changed={bridge_file}");
         for f in &swift_extra_files {
-            println!("cargo:rerun-if-changed={}", f);
+            println!("cargo:rerun-if-changed={f}");
         }
 
         // 1. Generate Swift bridge code
-        let bridge_out_path = out_dir.join("waterkit-screen-bridge.swift");
+        let _bridge_out_path = out_dir.join("waterkit-screen-bridge.swift");
         swift_bridge_build::parse_bridges(vec![bridge_file])
             .write_all_concatenated(&out_dir, env!("CARGO_PKG_NAME")); // Writes waterkit-screen-swift.swift actually? No, check docs.
             // .write_all_concatenated writes multiple files if package?
@@ -48,7 +51,7 @@ fn main() {
         // Let's compile all .swift files in `out_dir` + my extra files.
         // Swift compilation logic:
         
-        let generated_swift = out_dir.join(format!("{}-swift-bridge.swift", env!("CARGO_PKG_NAME"))); 
+        let _generated_swift = out_dir.join(format!("{}-swift-bridge.swift", env!("CARGO_PKG_NAME"))); 
         // Note: swift-bridge-build might name it slightly differently. 
         // Let's verify location of generated file?
         // `write_all_concatenated` implementation: `path.join(format!("{}-swift-bridge.swift", crate_name))`
@@ -84,7 +87,7 @@ fn main() {
                  if let Ok(entries) = std::fs::read_dir(&potential_bridge) {
                      for entry in entries.flatten() {
                          let path = entry.path();
-                         if path.extension().map(|e| e == "swift").unwrap_or(false) {
+                         if path.extension().is_some_and(|e| e == "swift") {
                              swift_sources.push(path);
                          }
                      }
@@ -102,11 +105,10 @@ fn main() {
         if let Ok(entries) = std::fs::read_dir(&out_dir) {
              for entry in entries.flatten() {
                  let path = entry.path();
-                 if path.extension().map(|e| e == "swift").unwrap_or(false) {
-                     if !swift_sources.contains(&path) {
+                 if path.extension().is_some_and(|e| e == "swift")
+                     && !swift_sources.contains(&path) {
                          swift_sources.push(path);
                      }
-                 }
              }
         }
 
@@ -126,13 +128,11 @@ fn main() {
                     let path = entry.path();
                     if path.is_dir() {
                         collect_headers(&path, headers);
-                    } else if path.extension().map(|e| e == "h").unwrap_or(false) {
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            if name != "Bridging-Header.h" {
+                    } else if path.extension().is_some_and(|e| e == "h")
+                        && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                            && name != "Bridging-Header.h" {
                                 headers.push(path);
                             }
-                        }
-                    }
                 }
             }
         }
@@ -146,7 +146,7 @@ fn main() {
             let mut master_content = String::new();
             for h in &headers {
                 let p_str = h.to_string_lossy();
-                master_content.push_str(&format!("#include \"{}\"\n", p_str));
+                master_content.push_str(&format!("#include \"{p_str}\"\n"));
             }
             std::fs::write(&master_header_path, master_content).expect("Failed to write bridging header");
             
@@ -172,9 +172,7 @@ fn main() {
         // Only verify logic for macOS for now as we are verifying on Desktop. iOS compilation via cargo run is tricky anyway.
         if target_os == "macos" {
              let status = cmd.status().expect("Failed to run swiftc");
-             if !status.success() {
-                 panic!("swiftc failed");
-             }
+             assert!(status.success(), "swiftc failed");
              
              println!("cargo:rustc-link-search=native={}", out_dir.display());
              println!("cargo:rustc-link-lib=static=waterkit_screen");
@@ -187,7 +185,7 @@ fn main() {
              // Swift runtime libraries for async/await (Swift Concurrency)
              // Get the Swift toolchain lib path
              let swift_lib_output = Command::new("xcrun")
-                 .args(&["--toolchain", "default", "-f", "swiftc"])
+                 .args(["--toolchain", "default", "-f", "swiftc"])
                  .output()
                  .ok();
              if let Some(output) = swift_lib_output {
@@ -211,7 +209,7 @@ fn main() {
 
 fn get_sdk_path(sdk: &str) -> String {
     let output = Command::new("xcrun")
-        .args(&["--sdk", sdk, "--show-sdk-path"])
+        .args(["--sdk", sdk, "--show-sdk-path"])
         .output()
         .expect("xcrun failed");
     String::from_utf8(output.stdout).unwrap().trim().to_string()

@@ -24,7 +24,7 @@ pub async fn delete(service: &str, account: &str) -> Result<(), SecretError> {
     let entry = Entry::new(service, account)
         .map_err(|e| SecretError::System(e.to_string()))?;
         
-    match entry.delete_password() {
+    match entry.delete_credential() {
         Ok(_) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(SecretError::System(e.to_string())),

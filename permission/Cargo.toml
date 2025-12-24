@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+readme.workspace = true
 repository = "https://github.com/water-rs/kit"
 description = "Cross-platform permission request handling for WaterUI"
 keywords = ["permission", "ios", "android", "macos", "windows"]

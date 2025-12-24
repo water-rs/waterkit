@@ -1,9 +1,9 @@
 //! Video demuxer and frame representation.
 
 use crate::VideoError;
+use mp4::WriteBox;
+use std::io::{Cursor, Read};
 use std::path::Path;
-use byteorder::{BigEndian, WriteBytesExt};
-use std::io::Write;
 
 /// A decoded video frame.
 #[derive(Clone)]
@@ -43,6 +43,7 @@ impl VideoFrame {
     }
     
     /// Create a wgpu texture suitable for this frame.
+    #[must_use] 
     pub fn create_texture(&self, device: &wgpu::Device) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some("VideoFrame"),
@@ -73,6 +74,7 @@ impl std::fmt::Debug for VideoFrame {
 }
 
 /// Video reader for MP4/MOV files.
+#[derive(Debug)]
 pub struct VideoReader {
     width: u32,
     height: u32,
@@ -84,6 +86,10 @@ pub struct VideoReader {
 
 impl VideoReader {
     /// Open a video file for reading.
+    /// 
+    /// # Errors
+    /// Returns [`VideoError::Io`] if the file cannot be opened.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, VideoError> {
         let file = std::fs::File::open(path.as_ref())?;
         let size = file.metadata()?.len();
@@ -103,8 +109,8 @@ impl VideoReader {
                 .map_err(|e| VideoError::Container(e.to_string()))?;
             if track_type == mp4::TrackType::Video {
                 video_track_id = track.track_id();
-                width = track.width() as u32;
-                height = track.height() as u32;
+                width = u32::from(track.width());
+                height = u32::from(track.height());
                 sample_count = track.sample_count();
                 timescale = track.timescale();
                 
@@ -114,7 +120,6 @@ impl VideoReader {
                 // We must read raw hvcC bytes directly from the file
                 if stsd.hev1.is_some() {
                     // Read raw hvcC by scanning file for the atom
-                    use std::io::{Read, Seek, SeekFrom};
                     let mut file = std::fs::File::open(&path)?;
                     let mut buf = vec![0u8; file.metadata()?.len() as usize];
                     file.read_exact(&mut buf)?;
@@ -135,8 +140,6 @@ impl VideoReader {
                 // Check for AVC (avc1)
                 else if let Some(avc1) = &stsd.avc1 {
                     let avcc = &avc1.avcc;
-                     use mp4::WriteBox;
-                     use std::io::Cursor;
                      let mut buf = Vec::new();
                      let mut cursor = Cursor::new(&mut buf);
                      if avcc.write_box(&mut cursor).is_ok() {
@@ -171,22 +174,26 @@ impl VideoReader {
     }
     
     /// Get timescale.
-    pub fn timescale(&self) -> u32 {
+    #[must_use] 
+    pub const fn timescale(&self) -> u32 {
         self.timescale
     }
     
     /// Get video dimensions.
-    pub fn dimensions(&self) -> (u32, u32) {
+    #[must_use] 
+    pub const fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
     }
     
     /// Get total sample count.
-    pub fn sample_count(&self) -> u32 {
+    #[must_use] 
+    #[allow(clippy::cast_possible_truncation)]
+    pub const fn sample_count(&self) -> u32 {
         self.samples.len() as u32
     }
     
     /// Read the next video sample (encoded data).
-    /// Returns (data, pts_ms, is_keyframe) or None if at end.
+    /// Returns (data, `pts_ms`, `is_keyframe`) or None if at end.
     pub fn read_sample(&mut self) -> Option<(Vec<u8>, u64, bool)> {
         if self.current_index >= self.samples.len() {
             return None;
@@ -203,12 +210,13 @@ impl VideoReader {
     }
     
     /// Get codec configuration (avcC or hvcC raw data).
+    #[must_use] 
     pub fn codec_config(&self) -> Option<&[u8]> {
         self.codec_config.as_deref()
     }
 
     /// Reset to beginning.
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.current_index = 0;
     }
 }

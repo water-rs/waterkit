@@ -36,7 +36,7 @@
 //! waterkit = { version = "0.1", features = ["location", "notification"] }
 //! ```
 //!
-//! ```rust
+//! ```rust, ignore
 //! use waterkit::location;
 //!
 //! async fn get_coords() {

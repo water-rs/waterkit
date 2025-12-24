@@ -87,105 +87,138 @@ pub type SensorStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 pub struct Accelerometer;
 
 impl Accelerometer {
-    /// Check if accelerometer is available on this device.
+    /// Check if the accelerometer is available.
+    #[must_use] 
     pub fn is_available() -> bool {
         sys::accelerometer_available()
     }
 
-    /// Read current accelerometer data.
+    /// Read the current sensor data.
+    ///
+    /// # Errors
+    /// Returns a [`SensorError`] if the sensor is not available.
     pub async fn read() -> Result<SensorData, SensorError> {
         sys::accelerometer_read().await
     }
 
-    /// Watch accelerometer updates at the specified interval.
+    /// Watch for sensor data updates at a specified interval.
     ///
-    /// Returns a Stream that yields `SensorData` at approximately `interval_ms` milliseconds.
+    /// # Errors
+    /// Returns a [`SensorError`] if the sensor is not available.
     pub fn watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
         sys::accelerometer_watch(interval_ms)
     }
 }
 
-/// Gyroscope sensor (measures angular velocity in rad/s).
+/// Gyroscope sensor.
 #[derive(Debug)]
 pub struct Gyroscope;
 
 impl Gyroscope {
-    /// Check if gyroscope is available on this device.
+    /// Check if the gyroscope is available.
+    #[must_use] 
     pub fn is_available() -> bool {
         sys::gyroscope_available()
     }
 
-    /// Read current gyroscope data.
+    /// Read the current sensor data.
+    ///
+    /// # Errors
+    /// Returns a [`SensorError`] if the sensor is not available.
     pub async fn read() -> Result<SensorData, SensorError> {
         sys::gyroscope_read().await
     }
 
-    /// Watch gyroscope updates at the specified interval.
+    /// Watch for sensor data updates at a specified interval.
+    ///
+    /// # Errors
+    /// Returns a [`SensorError`] if the sensor is not available.
     pub fn watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
         sys::gyroscope_watch(interval_ms)
     }
 }
 
-/// Magnetometer sensor (measures magnetic field in μT).
+/// Magnetometer sensor.
 #[derive(Debug)]
 pub struct Magnetometer;
 
 impl Magnetometer {
-    /// Check if magnetometer is available on this device.
+    /// Check if the magnetometer is available.
+    #[must_use] 
     pub fn is_available() -> bool {
         sys::magnetometer_available()
     }
 
-    /// Read current magnetometer data.
+    /// Read the current sensor data.
+    ///
+    /// # Errors
+    /// Returns a [`SensorError`] if the sensor is not available.
     pub async fn read() -> Result<SensorData, SensorError> {
         sys::magnetometer_read().await
     }
 
-    /// Watch magnetometer updates at the specified interval.
+    /// Watch for sensor data updates at a specified interval.
+    ///
+    /// # Errors
+    /// Returns a [`SensorError`] if the sensor is not available.
     pub fn watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
         sys::magnetometer_watch(interval_ms)
     }
 }
 
-/// Barometer sensor (measures atmospheric pressure in hPa).
+/// Barometer sensor.
 #[derive(Debug)]
 pub struct Barometer;
 
 impl Barometer {
-    /// Check if barometer is available on this device.
+    /// Check if the barometer is available.
+    #[must_use] 
     pub fn is_available() -> bool {
         sys::barometer_available()
     }
 
-    /// Read current barometer data.
+    /// Read the current sensor data.
+    ///
+    /// # Errors
+    /// Returns a [`SensorError`] if the sensor is not available.
     pub async fn read() -> Result<ScalarData, SensorError> {
         sys::barometer_read().await
     }
 
-    /// Watch barometer updates at the specified interval.
+    /// Watch for sensor data updates at a specified interval.
+    ///
+    /// # Errors
+    /// Returns a [`SensorError`] if the sensor is not available.
     pub fn watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
         sys::barometer_watch(interval_ms)
     }
 }
 
-/// Ambient light sensor (measures illuminance in lux).
+/// Ambient light sensor.
 ///
-/// Available on macOS (MacBooks) and some mobile devices.
+/// Available on macOS (`MacBooks`) and some mobile devices.
 #[derive(Debug)]
 pub struct AmbientLight;
 
 impl AmbientLight {
-    /// Check if ambient light sensor is available on this device.
+    /// Check if the ambient light sensor is available.
+    #[must_use] 
     pub fn is_available() -> bool {
         sys::ambient_light_available()
     }
 
-    /// Read current ambient light level.
+    /// Read the current sensor data.
+    ///
+    /// # Errors
+    /// Returns a [`SensorError`] if the sensor is not available.
     pub async fn read() -> Result<ScalarData, SensorError> {
         sys::ambient_light_read().await
     }
 
-    /// Watch ambient light updates at the specified interval.
+    /// Watch for sensor data updates at a specified interval.
+    ///
+    /// # Errors
+    /// Returns a [`SensorError`] if the sensor is not available.
     pub fn watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
         sys::ambient_light_watch(interval_ms)
     }

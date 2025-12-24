@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Lexo Liu"]
 license = "MIT"
+readme.workspace = true
 description = "Cross-platform native dialogs/alerts for WaterUI"
 keywords = ["dialog", "alert", "popup", "gui", "native"]
 categories = ["gui", "os"]
@@ -25,8 +26,7 @@ jni.workspace = true
 
 # Desktop (macOS, Windows, Linux)
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-native-dialog = "0.7"
-rfd = "0.16"
+rfd = { workspace = true }
 
 [build-dependencies]
 android-build.workspace = true

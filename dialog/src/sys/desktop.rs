@@ -1,56 +1,67 @@
 use crate::{Dialog, DialogType};
-use native_dialog::{MessageDialog, MessageType};
+use rfd::{MessageDialog, MessageLevel, MessageButtons, MessageDialogResult};
 use futures::channel::oneshot;
 
 /// Show an alert dialog.
+///
+/// # Errors
+/// Returns an error if the native dialog fails to show or is not supported.
 pub async fn show_alert(dialog: Dialog) -> Result<(), String> {
     let (tx, rx) = oneshot::channel();
     
     std::thread::spawn(move || {
-        let type_ = match dialog.type_ {
-            DialogType::Info => MessageType::Info,
-            DialogType::Warning => MessageType::Warning,
-            DialogType::Error => MessageType::Error,
+        let level = match dialog.type_ {
+            DialogType::Info => MessageLevel::Info,
+            DialogType::Warning => MessageLevel::Warning,
+            DialogType::Error => MessageLevel::Error,
         };
 
-        let res = MessageDialog::new()
-            .set_type(type_)
+        MessageDialog::new()
+            .set_level(level)
             .set_title(&dialog.title)
-            .set_text(&dialog.message)
-            .show_alert()
-            .map_err(|e| e.to_string());
+            .set_description(&dialog.message)
+            .set_buttons(MessageButtons::Ok)
+            .show();
         
-        let _ = tx.send(res);
+        let _ = tx.send(Ok::<(), String>(()));
     });
 
     rx.await.map_err(|_| "Cancelled".to_string())?
 }
 
 /// Show a confirmation dialog.
+///
+/// # Errors
+/// Returns an error if the native dialog fails to show or is not supported.
 pub async fn show_confirm(dialog: Dialog) -> Result<bool, String> {
     let (tx, rx) = oneshot::channel();
     
     std::thread::spawn(move || {
-        let type_ = match dialog.type_ {
-            DialogType::Info => MessageType::Info,
-            DialogType::Warning => MessageType::Warning,
-            DialogType::Error => MessageType::Error,
+        let level = match dialog.type_ {
+            DialogType::Info => MessageLevel::Info,
+            DialogType::Warning => MessageLevel::Warning,
+            DialogType::Error => MessageLevel::Error,
         };
 
-        let res = MessageDialog::new()
-            .set_type(type_)
+        let result = MessageDialog::new()
+            .set_level(level)
             .set_title(&dialog.title)
-            .set_text(&dialog.message)
-            .show_confirm()
-            .map_err(|e| e.to_string());
+            .set_description(&dialog.message)
+            .set_buttons(MessageButtons::OkCancel)
+            .show();
         
-        let _ = tx.send(res);
+        let confirmed = matches!(result, MessageDialogResult::Ok | MessageDialogResult::Yes);
+        
+        let _ = tx.send(Ok::<bool, String>(confirmed));
     });
 
     rx.await.map_err(|_| "Cancelled".to_string())?
 }
 
 /// Show a file dialog to open a single file.
+///
+/// # Errors
+/// Returns an error if the native dialog fails to show or is not supported.
 pub async fn show_open_single_file(dialog: crate::FileDialog) -> Result<Option<std::path::PathBuf>, String> {
     let mut builder = rfd::AsyncFileDialog::new();
     
@@ -63,7 +74,7 @@ pub async fn show_open_single_file(dialog: crate::FileDialog) -> Result<Option<s
     }
     
     for (name, extensions) in &dialog.filters {
-        let exts: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
+        let exts: Vec<&str> = extensions.iter().map(std::string::String::as_str).collect();
         builder = builder.add_filter(name, &exts);
     }
 

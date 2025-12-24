@@ -103,8 +103,31 @@ waterkit-video = { path = "video" }
 
 # Cross-platform
 futures = "0.3"
-thiserror = "1"
-wgpu = "24"
+thiserror = "2"
+wgpu = "28"
+metal = "0.33"
+
+# Common
+log = "0.4"
+cfg-if = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+image = "0.25"
+
+# Apple
+core-foundation = "0.10"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-core-media = "0.3"
+objc2-core-video = "0.3"
+objc2-video-toolbox = "0.3"
+objc2-core-foundation = "0.3"
+objc2-io-surface = "0.3"
+objc = "0.2"
+
+# Security
+keyring = "3"
+
 
 # Apple platforms
 swift-bridge = "0.1"
@@ -115,24 +138,47 @@ jni = "0.21"
 android-build = "0.1"
 
 # Windows
-windows = { version = "0.58", features = ["Devices_Geolocation", "Foundation"] }
+windows = { version = "0.62", features = ["Devices_Geolocation", "Foundation"] }
 
 # Linux
-zbus = "4"
+zbus = "5"
 
 # Testing
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 
+# Audio/Video
+rodio = "0.19"
+cpal = "0.15"
+mp4 = "0.14"
+byteorder = "1.5"
+winit = "0.30"
+pollster = "0.4"
+nokhwa = { version = "0.10", features = ["input-native", "output-wgpu"] }
+rav1e = "0.8"
+dav1d = "0.11"
+media-codec = "0.8"
+
+# System/OS
+sysinfo = "0.37"
+dirs = "6.0"
+rfd = "0.16"
+arboard = "3"
+notify-rust = "4"
+futures-timer = "3"
+netdev = "0.40"
+swift-rs = "1.0.6"
+
 [workspace.lints]
 rust.missing_docs = "warn"
 rust.missing_debug_implementations = "warn"
-clippy.all = "warn"
-clippy.style = "warn"
-clippy.correctness = "warn"
-clippy.complexity = "warn"
-clippy.suspicious = "warn"
-clippy.perf = "warn"
-clippy.pedantic = "warn"
-clippy.nursery = "warn"
-clippy.cargo = "warn"
+clippy.all = { level = "warn", priority = -1 }
+clippy.style = { level = "warn", priority = -1 }
+clippy.correctness = { level = "warn", priority = -1 }
+clippy.complexity = { level = "warn", priority = -1 }
+clippy.suspicious = { level = "warn", priority = -1 }
+clippy.perf = { level = "warn", priority = -1 }
+clippy.pedantic = { level = "warn", priority = -1 }
+clippy.nursery = { level = "warn", priority = -1 }
+clippy.cargo = { level = "warn", priority = -1 }
+clippy.multiple_crate_versions = "allow"

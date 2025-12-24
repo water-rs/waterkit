@@ -1,0 +1,35 @@
+[package]
+name = "waterkit-screen"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository = "https://github.com/water-rs/kit"
+description = "Cross-platform screen capture and brightness control for WaterUI"
+keywords = ["screen", "hapture", "brightness", "ios", "android"]
+categories = ["gui", "os"]
+
+[lints]
+workspace = true
+
+[dependencies]
+image = "0.24"
+thiserror.workspace = true
+
+# Desktop
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+screenshots = "0.8"
+# brightness = "0.4" # Build failed on macOS
+tokio = { version = "1", features = ["full"] }
+
+# Apple platforms (iOS, macOS)
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+image = "0.24"
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+swift-bridge-build.workspace = true
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true

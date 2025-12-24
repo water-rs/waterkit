@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["permission", "location", "audio", "tests/android/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video"]
+members = ["waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video"]
 
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 authors = ["Lexo Liu"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/water-rs/kit"
 description = "Kit utilities and helpers for WaterUI"
@@ -135,7 +135,9 @@ swift-bridge-build = "0.1"
 
 # Android
 jni = "0.21"
-android-build = "0.1"
+
+# Build utilities
+waterkit-build = { path = "waterkit-build" }
 
 # Windows
 windows = { version = "0.62", features = ["Devices_Geolocation", "Foundation"] }

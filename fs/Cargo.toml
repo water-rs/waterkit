@@ -20,14 +20,13 @@ workspace = true
 swift-bridge = { workspace = true, features = ["async"] }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
-swift-bridge-build.workspace = true
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
 
 [build-dependencies]
-android-build.workspace = true
+waterkit-build.workspace = true
 
 # Desktop (Windows, macOS, Linux)
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]

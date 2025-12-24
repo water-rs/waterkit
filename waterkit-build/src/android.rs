@@ -1,0 +1,198 @@
+//! Android platform build utilities.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::{env, fs};
+
+/// Configuration for Android/Kotlin builds.
+#[derive(Debug, Clone, Default)]
+pub struct AndroidConfig {
+    /// Additional classpath entries.
+    pub extra_classpath: Vec<PathBuf>,
+}
+
+/// Find the android.jar path from ANDROID_HOME.
+///
+/// # Returns
+/// Path to android.jar, or None if not found.
+#[must_use]
+pub fn find_android_jar() -> Option<PathBuf> {
+    let android_home = env::var("ANDROID_HOME")
+        .or_else(|_| env::var("ANDROID_SDK_ROOT"))
+        .ok()?;
+
+    let platforms_dir = PathBuf::from(&android_home).join("platforms");
+
+    // Find the highest API level
+    let mut best_api = 0u32;
+    let mut best_path = None;
+
+    if let Ok(entries) = fs::read_dir(&platforms_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if let Some(api_str) = name_str.strip_prefix("android-") {
+                if let Ok(api) = api_str.parse::<u32>() {
+                    if api > best_api {
+                        let jar = entry.path().join("android.jar");
+                        if jar.exists() {
+                            best_api = api;
+                            best_path = Some(jar);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    best_path
+}
+
+/// Find the d8.jar path from ANDROID_HOME.
+///
+/// # Returns
+/// Path to d8.jar, or None if not found.
+#[must_use]
+pub fn find_d8_jar() -> Option<PathBuf> {
+    let android_home = env::var("ANDROID_HOME")
+        .or_else(|_| env::var("ANDROID_SDK_ROOT"))
+        .ok()?;
+
+    let build_tools_dir = PathBuf::from(&android_home).join("build-tools");
+
+    // Find the highest version
+    let mut best_version: Option<String> = None;
+    let mut best_path = None;
+
+    if let Ok(entries) = fs::read_dir(&build_tools_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy().to_string();
+
+            // Check if this version has d8.jar
+            let d8_path = entry.path().join("lib").join("d8.jar");
+            if d8_path.exists() {
+                if best_version.as_ref().map_or(true, |v| &name_str > v) {
+                    best_version = Some(name_str);
+                    best_path = Some(d8_path);
+                }
+            }
+        }
+    }
+
+    best_path
+}
+
+/// Compile Kotlin files to DEX for Android.
+///
+/// This handles:
+/// 1. Compiling .kt files to .class using kotlinc
+/// 2. Converting .class to .dex using D8
+///
+/// # Arguments
+/// * `kotlin_files` - Slice of relative paths to Kotlin source files
+///
+/// # Panics
+/// Panics if compilation fails or Android SDK is not found.
+pub fn build_kotlin(kotlin_files: &[&str]) {
+    build_kotlin_with_config(kotlin_files, &AndroidConfig::default());
+}
+
+/// Compile Kotlin files to DEX with custom configuration.
+///
+/// # Arguments
+/// * `kotlin_files` - Slice of relative paths to Kotlin source files
+/// * `config` - Android build configuration
+///
+/// # Panics
+/// Panics if compilation fails or Android SDK is not found.
+pub fn build_kotlin_with_config(kotlin_files: &[&str], config: &AndroidConfig) {
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+
+    // Track changes
+    for kotlin_file in kotlin_files {
+        println!("cargo:rerun-if-changed={kotlin_file}");
+    }
+
+    // Find android.jar
+    let android_jar = find_android_jar().expect("Failed to find android.jar. Is ANDROID_HOME set?");
+
+    // Compile .kt -> .class using kotlinc
+    let classes_dir = out_dir.join("classes");
+    fs::create_dir_all(&classes_dir).expect("Failed to create classes directory");
+
+    let mut kotlinc = Command::new("kotlinc");
+    kotlinc
+        .arg("-classpath")
+        .arg(&android_jar)
+        .arg("-d")
+        .arg(&classes_dir);
+
+    // Add extra classpath entries
+    for cp in &config.extra_classpath {
+        kotlinc.arg("-classpath").arg(cp);
+    }
+
+    // Add Kotlin source files
+    for kotlin_file in kotlin_files {
+        kotlinc.arg(manifest_dir.join(kotlin_file));
+    }
+
+    let kotlinc_output = kotlinc
+        .output()
+        .expect("Failed to run kotlinc - is Kotlin compiler installed?");
+
+    if !kotlinc_output.status.success() {
+        eprintln!(
+            "kotlinc stderr: {}",
+            String::from_utf8_lossy(&kotlinc_output.stderr)
+        );
+        panic!("kotlinc compilation failed");
+    }
+
+    // Find all .class files recursively
+    let mut class_files = Vec::new();
+    find_class_files(&classes_dir, &mut class_files);
+
+    assert!(
+        !class_files.is_empty(),
+        "No .class files generated by kotlinc"
+    );
+
+    // Find d8.jar
+    let d8_jar = find_d8_jar().expect("Failed to find d8.jar. Is Android build-tools installed?");
+
+    // Convert .class -> .dex using D8
+    let mut java = Command::new("java");
+    java.arg("-cp")
+        .arg(&d8_jar)
+        .arg("com.android.tools.r8.D8")
+        .arg("--classpath")
+        .arg(&android_jar)
+        .arg("--output")
+        .arg(&out_dir);
+
+    for class_file in &class_files {
+        java.arg(class_file);
+    }
+
+    let d8_output = java.output().expect("Failed to run D8");
+    if !d8_output.status.success() {
+        eprintln!("D8 stderr: {}", String::from_utf8_lossy(&d8_output.stderr));
+        panic!("D8 dexing failed");
+    }
+}
+
+fn find_class_files(dir: &Path, results: &mut Vec<PathBuf>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                find_class_files(&path, results);
+            } else if path.extension().is_some_and(|e| e == "class") {
+                results.push(path);
+            }
+        }
+    }
+}

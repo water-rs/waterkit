@@ -38,5 +38,4 @@ swift-rs.workspace = true
 jni.workspace = true
 
 [build-dependencies]
-swift-bridge-build.workspace = true
-android-build.workspace = true
+waterkit-build.workspace = true

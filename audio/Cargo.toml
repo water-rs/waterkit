@@ -23,14 +23,13 @@ tokio = { workspace = true, features = ["rt", "sync", "time"] }
 zenwave = "0.3"
 
 [build-dependencies]
-android-build.workspace = true
+waterkit-build.workspace = true
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 swift-bridge.workspace = true
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
-swift-bridge-build.workspace = true
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]

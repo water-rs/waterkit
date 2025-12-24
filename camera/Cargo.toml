@@ -19,7 +19,7 @@ wgpu.workspace = true
 waterkit-codec = { workspace = true, optional = true }
 
 [build-dependencies]
-android-build.workspace = true
+waterkit-build.workspace = true
 
 # ... (rest of file) ...
 
@@ -38,7 +38,6 @@ objc.workspace = true
 core-graphics-types = "0.2"
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
-swift-bridge-build.workspace = true
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]

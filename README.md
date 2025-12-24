@@ -95,4 +95,4 @@ Contributions are welcome! Please check individual crate directories for specifi
 
 ## 📄 License
 
-MIT License
+MIT OR Apache-2.0 License

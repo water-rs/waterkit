@@ -1,0 +1,40 @@
+[package]
+name = "waterkit-camera"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository = "https://github.com/water-rs/kit"
+description = "Cross-platform camera streaming for WaterUI"
+keywords = ["camera", "webcam", "video", "ios", "android"]
+categories = ["multimedia", "gui"]
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+# WGPU for texture integration
+wgpu = "24"
+
+[build-dependencies]
+android-build.workspace = true
+
+# Desktop platforms (Windows, macOS, Linux) - use nokhwa
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+nokhwa = { version = "0.10", features = ["input-native", "output-wgpu"] }
+
+# Apple platforms (iOS, macOS) - use native AVCaptureSession
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+metal = "0.29"
+objc = "0.2"
+core-graphics-types = "0.1"
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+swift-bridge-build.workspace = true
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true

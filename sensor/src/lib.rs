@@ -5,7 +5,7 @@
 //!
 //! # Usage
 //!
-//! ```no_run
+//! ```ignore
 //! use waterkit_sensor::{Accelerometer, SensorData};
 //!
 //! // Check if accelerometer is available

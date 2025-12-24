@@ -320,7 +320,7 @@ impl VideoPlayer {
         surface.configure(&device, &config);
 
         // Simple Shader (Vertex + Fragment)
-        // Draw a full-screen quad (triange strip logic in VS)
+        // Draw a full-screen quad (triangle strip logic in VS)
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(

@@ -13,7 +13,7 @@ waterkit-dialog = { path = "../../../dialog" } # Still need core deps if helper 
 tokio = { workspace = true, features = ["macros", "rt"] }
 android_logger = "0.15"
 log = "0.4"
-waterkit_content = { path = "/Users/lexoliu/Coding/kit/sensor", package = "waterkit-sensor" }
+waterkit_content = { path = "../../../sensor", package = "waterkit-sensor" }
 # waterkit_content = { path = "/Users/lexoliu/Coding/kit/sensor" }
 
 

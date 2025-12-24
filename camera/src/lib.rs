@@ -40,6 +40,8 @@ pub enum FrameFormat {
     Nv12,
     /// YUYV/YUY2 format (YUV 4:2:2).
     Yuy2,
+    /// JPEG format (compressed).
+    Jpeg,
 }
 
 impl FrameFormat {
@@ -51,6 +53,7 @@ impl FrameFormat {
             Self::Rgba | Self::Bgra => 4,
             Self::Nv12 => 1, // Variable, but this is for the Y plane
             Self::Yuy2 => 2,
+            Self::Jpeg => 0, // Compressed
         }
     }
 
@@ -61,6 +64,7 @@ impl FrameFormat {
             Self::Rgba => wgpu::TextureFormat::Rgba8Unorm,
             Self::Bgra => wgpu::TextureFormat::Bgra8Unorm,
             Self::Rgb | Self::Nv12 | Self::Yuy2 => wgpu::TextureFormat::Rgba8Unorm, // Converted
+            Self::Jpeg => wgpu::TextureFormat::Rgba8Unorm, // Needs decoding
         }
     }
 }
@@ -133,7 +137,7 @@ impl CameraFrame {
                 }
                 rgba
             }
-            FrameFormat::Nv12 | FrameFormat::Yuy2 => {
+            FrameFormat::Nv12 | FrameFormat::Yuy2 | FrameFormat::Jpeg => {
                 // YUV conversion would be done here
                 // For now, return empty - platform code should convert before returning
                 vec![0; (self.width * self.height * 4) as usize]
@@ -356,5 +360,53 @@ impl Camera {
     #[must_use]
     pub fn hdr_enabled(&self) -> bool {
         self.inner.hdr_enabled()
+    }
+
+    /// Take a high-quality photo.
+    ///
+    /// On mobile, this uses the system's computational photography pipeline.
+    /// On desktop, this returns the next available frame.
+    ///
+    /// The result format may be `FrameFormat::Jpeg` on mobile.
+    pub fn take_photo(&mut self) -> Result<CameraFrame, CameraError> {
+        self.inner.take_photo()
+    }
+
+    /// Start recording video to the specified file path.
+    ///
+    /// # Arguments
+    /// * `path` - content file path to save the video.
+    pub fn start_recording(&mut self, path: &str) -> Result<(), CameraError> {
+        self.inner.start_recording(path)
+    }
+
+    /// Stop the current video recording.
+    pub fn stop_recording(&mut self) -> Result<(), CameraError> {
+        self.inner.stop_recording()
+    }
+}
+
+#[cfg(feature = "codec")]
+impl TryFrom<CameraFrame> for waterkit_codec::Frame {
+    type Error = waterkit_codec::CodecError;
+
+    fn try_from(frame: CameraFrame) -> Result<Self, Self::Error> {
+        use waterkit_codec::{Frame, PixelFormat, CodecError};
+        use std::sync::Arc;
+
+        let format = match frame.format {
+            FrameFormat::Rgba => PixelFormat::Rgba,
+            FrameFormat::Bgra => PixelFormat::Bgra,
+            FrameFormat::Nv12 => PixelFormat::Nv12,
+            _ => return Err(CodecError::Unsupported(format!("Unsupported format for codec: {:?}", frame.format))),
+        };
+
+        Ok(Frame {
+            data: Arc::new(frame.data),
+            width: frame.width,
+            height: frame.height,
+            format,
+            timestamp_ns: 0, // Todo: Propagate timestamp if available
+        })
     }
 }

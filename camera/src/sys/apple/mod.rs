@@ -47,12 +47,18 @@ mod ffi {
 
         fn camera_set_hdr(enabled: bool) -> CameraResultFFI;
         fn camera_get_hdr() -> bool;
+
+        fn camera_take_photo() -> CameraResultFFI;
+        fn camera_get_photo_len() -> i32;
+        fn camera_start_recording(path: String) -> CameraResultFFI;
+        fn camera_stop_recording() -> CameraResultFFI;
     }
 }
 
 // External C function to bypass swift-bridge limitations for raw pointer
 unsafe extern "C" {
     fn camera_copy_frame_data(buffer: *mut u8, size: usize);
+    fn camera_copy_photo_data(buffer: *mut u8, size: u64);
 }
 
 fn convert_result(result: ffi::CameraResultFFI, context: &str) -> Result<(), CameraError> {
@@ -255,6 +261,40 @@ impl CameraInner {
 
     pub fn hdr_enabled(&self) -> bool {
         ffi::camera_get_hdr()
+    }
+
+    pub fn take_photo(&mut self) -> Result<CameraFrame, CameraError> {
+        convert_result(ffi::camera_take_photo(), "take_photo")?;
+        
+        let len = ffi::camera_get_photo_len();
+        if len <= 0 {
+             return Err(CameraError::CaptureFailed("Empty photo data".into()));
+        }
+        
+        let mut data = Vec::with_capacity(len as usize);
+        unsafe {
+            data.set_len(len as usize);
+            camera_copy_photo_data(data.as_mut_ptr(), len as u64);
+        }
+        
+        // Return with current resolution (though JPEG might differ)
+        let res = self.resolution();
+        
+        Ok(CameraFrame::new(
+            data,
+            res.width, 
+            res.height,
+            FrameFormat::Jpeg,
+            None
+        ))
+    }
+
+    pub fn start_recording(&mut self, path: &str) -> Result<(), CameraError> {
+        convert_result(ffi::camera_start_recording(path.to_string()), "start_recording")
+    }
+
+    pub fn stop_recording(&mut self) -> Result<(), CameraError> {
+        convert_result(ffi::camera_stop_recording(), "stop_recording")
     }
 }
 

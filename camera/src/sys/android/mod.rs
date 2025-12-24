@@ -212,4 +212,16 @@ impl CameraInner {
     pub fn hdr_enabled(&self) -> bool {
         false
     }
+
+    pub fn take_photo(&mut self) -> Result<CameraFrame, CameraError> {
+        Err(CameraError::NotSupported)
+    }
+
+    pub fn start_recording(&mut self, _path: &str) -> Result<(), CameraError> {
+        Err(CameraError::NotSupported)
+    }
+
+    pub fn stop_recording(&mut self) -> Result<(), CameraError> {
+        Err(CameraError::NotSupported)
+    }
 }

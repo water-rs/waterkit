@@ -8,8 +8,14 @@ import Metal
 
 private var captureSession: AVCaptureSession?
 private var videoOutput: AVCaptureVideoDataOutput?
+private var photoOutput: AVCapturePhotoOutput?
+private var movieOutput: AVCaptureMovieFileOutput?
 private var currentDevice: AVCaptureDevice?
 private var cachedDevices: [AVCaptureDevice] = []
+
+// Photo capture state
+private var lastPhotoData: Data?
+private let photoLock = NSLock()
 
 // Frame data - keep CVPixelBuffer for IOSurface access
 private var latestPixelBuffer: CVPixelBuffer?
@@ -162,8 +168,24 @@ func camera_open(device_id: RustString) -> CameraResultFFI {
         return .OpenFailed
     }
     
+    // Add Photo Output
+    let pOutput = AVCapturePhotoOutput()
+    if session.canAddOutput(pOutput) {
+        session.addOutput(pOutput)
+        // High resolution photo support
+        pOutput.isHighResolutionCaptureEnabled = true
+    }
+    
+    // Add Movie File Output
+    let mOutput = AVCaptureMovieFileOutput()
+    if session.canAddOutput(mOutput) {
+        session.addOutput(mOutput)
+    }
+    
     captureSession = session
     videoOutput = output
+    photoOutput = pOutput
+    movieOutput = mOutput
     currentDevice = device
 
     // Enable HDR by default if supported (iOS only)
@@ -409,4 +431,114 @@ func camera_get_hdr() -> Bool {
     #else
     return false
     #endif
+}
+
+// MARK: - Photo Capture
+
+class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
+    let semaphore = DispatchSemaphore(value: 0)
+    var photoData: Data?
+    var error: Error?
+
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        if let error = error {
+            self.error = error
+        } else {
+            self.photoData = photo.fileDataRepresentation()
+        }
+        semaphore.signal()
+    }
+}
+
+func camera_take_photo() -> CameraResultFFI {
+    guard let output = photoOutput else {
+        return .NotSupported
+    }
+    
+    let settings = AVCapturePhotoSettings()
+    #if os(iOS)
+    settings.isHighResolutionPhotoEnabled = true
+    #endif
+    
+    let delegate = PhotoCaptureDelegate()
+    output.capturePhoto(with: settings, delegate: delegate)
+    
+    // Wait for capture to complete
+    let result = delegate.semaphore.wait(timeout: .now() + 10.0)
+    if result == .timedOut {
+        return .CaptureFailed
+    }
+    
+    if let error = delegate.error {
+        print("Photo capture error: \(error)")
+        return .CaptureFailed
+    }
+    
+    guard let data = delegate.photoData else {
+        return .CaptureFailed
+    }
+    
+    photoLock.lock()
+    lastPhotoData = data
+    photoLock.unlock()
+    
+    return .Success
+}
+
+func camera_get_photo_len() -> Int32 {
+    photoLock.lock()
+    let len = lastPhotoData?.count ?? 0
+    photoLock.unlock()
+    return Int32(len)
+}
+
+@_cdecl("camera_copy_photo_data")
+public func camera_copy_photo_data(_ bufferPtr: UInt64, _ size: UInt64) {
+    photoLock.lock()
+    defer { photoLock.unlock() }
+    
+    guard let data = lastPhotoData else { return }
+    guard let buffer = UnsafeMutableRawPointer(bitPattern: UInt(bufferPtr)) else { return }
+    
+    let count = min(Int(size), data.count)
+    data.copyBytes(to: buffer.assumingMemoryBound(to: UInt8.self), count: count)
+}
+
+// MARK: - Video Recording
+
+class MovieRecordingDelegate: NSObject, AVCaptureFileOutputRecordingDelegate {
+    func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
+        if let error = error {
+            print("Finished recording with error: \(error)")
+        } else {
+            print("Finished recording to: \(outputFileURL)")
+        }
+    }
+}
+
+private let recordingDelegate = MovieRecordingDelegate()
+
+func camera_start_recording(path: RustString) -> CameraResultFFI {
+    guard let output = movieOutput else {
+        return .NotSupported
+    }
+    
+    let url = URL(fileURLWithPath: path.toString())
+    
+    // Remove existing file if any
+    try? FileManager.default.removeItem(at: url)
+    
+    output.startRecording(to: url, recordingDelegate: recordingDelegate)
+    return .Success
+}
+
+func camera_stop_recording() -> CameraResultFFI {
+    guard let output = movieOutput else {
+        return .NotSupported
+    }
+    
+    if output.isRecording {
+        output.stopRecording()
+    }
+    return .Success
 }

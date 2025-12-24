@@ -27,9 +27,80 @@ keywords = ["kit", "utilities", "helpers", "waterui"]
 categories = ["gui", "development-tools"]
 
 [dependencies]
+waterkit-permission = { workspace = true, optional = true }
+waterkit-location = { workspace = true, optional = true }
+waterkit-audio = { workspace = true, optional = true }
+waterkit-haptic = { workspace = true, optional = true }
+waterkit-notification = { workspace = true, optional = true }
+waterkit-dialog = { workspace = true, optional = true }
+waterkit-biometric = { workspace = true, optional = true }
+waterkit-clipboard = { workspace = true, optional = true }
+waterkit-fs = { workspace = true, optional = true }
+waterkit-secret = { workspace = true, optional = true }
+waterkit-camera = { workspace = true, optional = true }
+waterkit-sensor = { workspace = true, optional = true }
+waterkit-codec = { workspace = true, optional = true }
+waterkit-screen = { workspace = true, optional = true }
+waterkit-system = { workspace = true, optional = true }
+waterkit-video = { workspace = true, optional = true }
+
+[features]
+default = []
+full = [
+    "permission",
+    "location",
+    "audio",
+    "haptic",
+    "notification",
+    "dialog",
+    "biometric",
+    "clipboard",
+    "fs",
+    "secret",
+    "camera",
+    "sensor",
+    "codec",
+    "screen",
+    "system",
+    "video",
+]
+permission = ["dep:waterkit-permission"]
+location = ["dep:waterkit-location", "permission"]
+audio = ["dep:waterkit-audio"]
+haptic = ["dep:waterkit-haptic"]
+notification = ["dep:waterkit-notification"]
+dialog = ["dep:waterkit-dialog"]
+biometric = ["dep:waterkit-biometric"]
+clipboard = ["dep:waterkit-clipboard"]
+fs = ["dep:waterkit-fs"]
+secret = ["dep:waterkit-secret"]
+camera = ["dep:waterkit-camera"]
+sensor = ["dep:waterkit-sensor"]
+codec = ["dep:waterkit-codec"]
+screen = ["dep:waterkit-screen"]
+system = ["dep:waterkit-system"]
+video = ["dep:waterkit-video"]
 
 
 [workspace.dependencies]
+# Functional Crates
+waterkit-permission = { path = "permission" }
+waterkit-location = { path = "location" }
+waterkit-audio = { path = "audio" }
+waterkit-haptic = { path = "haptic" }
+waterkit-notification = { path = "notification" }
+waterkit-dialog = { path = "dialog" }
+waterkit-biometric = { path = "biometric" }
+waterkit-clipboard = { path = "clipboard" }
+waterkit-fs = { path = "fs" }
+waterkit-secret = { path = "secret" }
+waterkit-camera = { path = "camera" }
+waterkit-sensor = { path = "sensor" }
+waterkit-codec = { path = "codec" }
+waterkit-screen = { path = "screen" }
+waterkit-system = { path = "system" }
+waterkit-video = { path = "video" }
+
 # Cross-platform
 futures = "0.3"
 thiserror = "1"

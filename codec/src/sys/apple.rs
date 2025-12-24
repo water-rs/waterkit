@@ -11,12 +11,12 @@ use objc2_video_toolbox::{
 use objc2_core_video::{
     CVPixelBuffer, CVPixelBufferCreate, CVPixelBufferLockBaseAddress,
     CVPixelBufferUnlockBaseAddress, CVPixelBufferGetBaseAddress,
-    CVPixelBufferGetBytesPerRow, CVPixelBufferGetIOSurface,
+    CVPixelBufferGetBytesPerRow, 
     kCVPixelFormatType_32BGRA,
 };
 use objc2_core_foundation::CFRetained;
 use objc2_io_surface::IOSurfaceRef;
-use crate::{VideoEncoder, VideoDecoder, CodecError, Frame, CodecType, PixelFormat};
+use crate::{VideoEncoder, CodecError, Frame, CodecType, PixelFormat};
 use std::ptr;
 use std::sync::{Arc, Mutex};
 use std::ffi::c_void;
@@ -58,7 +58,7 @@ unsafe extern "C-unwind" fn encode_callback(
     }
     
     // Cast context
-    let context = &*(output_callback_ref_con as *const EncoderContext);
+    let context = unsafe { &*(output_callback_ref_con as *const EncoderContext) };
     
     // Extract encoded data
     unsafe {
@@ -202,7 +202,7 @@ unsafe extern "C-unwind" fn encode_callback(
 
             fn construct_hevc_config(format_desc: *const c_void) -> Option<Vec<u8>> {
                 unsafe {
-                    let mut parameter_set_count = 0;
+                    // Get count first (index 0, pointers null)
                     // Get count first (index 0, pointers null)
                     // Actually GetHEVCParameterSetAtIndex(..., ptr::null_mut(), ...) doesn't return count of ALL sets usually, 
                     // it returns info for specific index.
@@ -429,7 +429,7 @@ unsafe extern "C-unwind" fn encode_callback(
                      // ... existing atomic extraction code ...
                      // create "hvcC" string
                      let hvc_c_str = b"hvcC\0";
-                     let avc_c_str = b"avcC\0"; // Check both or match?
+                     let _avc_c_str = b"avcC\0"; // Check both or match?
                      // We should know codec type from somewhere, but here we can try both or check specific
                      // Ideally we check codec info.
                      // For now, let's focus on hvcC replacement logic.
@@ -726,7 +726,7 @@ impl VideoEncoder for AppleEncoder {
     }
     
     // Convert raw pointer to reference for encoding API
-    let pixel_buffer_ref = unsafe { &*pixel_buffer };
+    let pixel_buffer_ref = pixel_buffer;
     
     // Encode the frame using the session's method
     unsafe {
@@ -928,7 +928,7 @@ pub struct IOSurfaceFrame {
 impl IOSurfaceFrame {
     /// Get the raw IOSurface pointer.
     pub fn iosurface_ptr(&self) -> *mut c_void {
-        self.surface.as_ptr().as_ptr() as *mut c_void
+        CFRetained::as_ptr(&self.surface).as_ptr() as *mut c_void
     }
 }
 
@@ -973,7 +973,16 @@ extern "C" fn decode_callback(
             DecodeOutput::IOSurface => {
                 let width = objc2_core_video::CVPixelBufferGetWidth(image_buffer_ref) as u32;
                 let height = objc2_core_video::CVPixelBufferGetHeight(image_buffer_ref) as u32;
-                if let Some(surface) = CVPixelBufferGetIOSurface(Some(image_buffer_ref)) {
+                
+                // Helper to get IOSurface from CVPixelBuffer
+                #[link(name = "CoreVideo", kind = "framework")]
+                unsafe extern "C" {
+                    fn CVPixelBufferGetIOSurface(pixelBuffer: *const CVPixelBuffer) -> *const IOSurfaceRef;
+                }
+                
+                let surface_raw = CVPixelBufferGetIOSurface(image_buffer_ref);
+                if !surface_raw.is_null() {
+                    let surface = CFRetained::retain(NonNull::new_unchecked(surface_raw as *mut IOSurfaceRef));
                     let frame = IOSurfaceFrame {
                         surface,
                         width,
@@ -998,8 +1007,8 @@ extern "C" fn decode_callback(
                     
                     if !base_addr.is_null() {
                         // Crop dimensions to expected size (handling padding)
-                        let expected_width = unsafe { (*(decompression_output_ref_con as *const DecoderContext)).width };
-                        let expected_height = unsafe { (*(decompression_output_ref_con as *const DecoderContext)).height };
+                        let expected_width = (*(decompression_output_ref_con as *const DecoderContext)).width;
+                        let expected_height = (*(decompression_output_ref_con as *const DecoderContext)).height;
                         
                         // Ensure we don't read out of bounds
                         let copy_width = (width as u32).min(expected_width);

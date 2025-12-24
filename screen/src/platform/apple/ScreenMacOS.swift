@@ -348,7 +348,7 @@ public func get_latest_frame() -> RustVec<UInt8> {
 }
 
 /// Enable or disable raw frame copy to CPU memory.
-public func set_raw_frame_capture_enabled(_ enabled: Bool) {
+public func set_raw_frame_capture_enabled(enabled: Bool) {
     frameLock.lock()
     rawFrameCaptureEnabled = enabled
     if !enabled {

@@ -5,10 +5,13 @@
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use waterkit_codec::sys::{AppleEncoder, AppleDecoder};
-use waterkit_codec::{CodecType, VideoDecoder};
+use waterkit_codec::sys::{AppleDecoder, AppleEncoder, IOSurfaceFrame};
+use waterkit_codec::CodecType;
 use waterkit_screen::SCKCapturer;
 use waterkit_video::{VideoReader, VideoWriter};
+use metal::{DeviceRef, MTLPixelFormat, MTLStorageMode, MTLTexture, MTLTextureType, MTLTextureUsage, Texture, TextureDescriptor};
+use objc::runtime::Object;
+use objc::msg_send;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -39,6 +42,7 @@ fn record_screen(output_path: &str, duration_secs: u64) {
             return;
         }
     };
+    capturer.set_raw_frames_enabled(false);
 
     // Wait for capture to start
     std::thread::sleep(Duration::from_millis(500));
@@ -138,9 +142,6 @@ struct WgpuState {
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     config: wgpu::SurfaceConfiguration,
-    // Persistent video texture (created once, reused)
-    video_texture: Option<wgpu::Texture>,
-    video_bind_group: Option<wgpu::BindGroup>,
 }
 
 struct VideoPlayer {
@@ -149,10 +150,22 @@ struct VideoPlayer {
     wgpu_state: Option<WgpuState>,
     reader: VideoReader,
     decoder: Option<AppleDecoder>,
-    current_texture: Option<wgpu::BindGroup>,
+    current_frame: Option<GpuFrame>,
     start_time: Option<Instant>,
     frame_count: usize,
     last_frame_time: Option<Instant>,
+    decoded_frames_total: u64,
+    render_frames_total: u64,
+    stats_start: Instant,
+    last_title_update: Instant,
+    last_decoded_len: usize,
+    loop_count: u32,
+}
+
+struct GpuFrame {
+    texture: wgpu::Texture,
+    bind_group: wgpu::BindGroup,
+    _surface: IOSurfaceFrame,
 }
 
 impl VideoPlayer {
@@ -165,10 +178,110 @@ impl VideoPlayer {
             wgpu_state: None,
             reader,
             decoder: None,
-            current_texture: None,
+            current_frame: None,
             start_time: None,
             frame_count: 0,
             last_frame_time: None,
+            decoded_frames_total: 0,
+            render_frames_total: 0,
+            stats_start: Instant::now(),
+            last_title_update: Instant::now(),
+            last_decoded_len: 0,
+            loop_count: 0,
+        }
+    }
+
+    fn metal_device(state: &WgpuState) -> metal::Device {
+        let mut device_out: Option<metal::Device> = None;
+        unsafe {
+            state.device.as_hal::<wgpu::hal::api::Metal, _, _>(|hal_device| {
+                if let Some(hal_device) = hal_device {
+                    device_out = Some(hal_device.raw_device().lock().clone());
+                }
+            });
+        }
+        device_out.expect("Metal device unavailable")
+    }
+
+    fn metal_texture_from_iosurface(device: &metal::Device, frame: &IOSurfaceFrame) -> Texture {
+        let desc = TextureDescriptor::new();
+        desc.set_texture_type(MTLTextureType::D2);
+        desc.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        desc.set_width(frame.width as u64);
+        desc.set_height(frame.height as u64);
+        desc.set_mipmap_level_count(1);
+        desc.set_usage(MTLTextureUsage::ShaderRead);
+        desc.set_storage_mode(MTLStorageMode::Shared);
+
+        let surface_ptr = frame.iosurface_ptr() as *mut Object;
+        let device_ref: &metal::DeviceRef = device.as_ref();
+        let raw: *mut MTLTexture = unsafe {
+            msg_send![device_ref, newTextureWithDescriptor: desc iosurface: surface_ptr plane: 0]
+        };
+        if raw.is_null() {
+            panic!("Failed to create Metal texture from IOSurface");
+        }
+        unsafe { Texture::from_ptr(raw) }
+    }
+
+    fn create_gpu_frame(state: &WgpuState, frame: IOSurfaceFrame) -> GpuFrame {
+        let metal_device = Self::metal_device(state);
+        let metal_texture = Self::metal_texture_from_iosurface(&metal_device, &frame);
+
+        let size = wgpu::Extent3d {
+            width: frame.width,
+            height: frame.height,
+            depth_or_array_layers: 1,
+        };
+        let desc = wgpu::TextureDescriptor {
+            label: Some("Video IOSurface"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        };
+
+        let hal_texture = unsafe {
+            wgpu::hal::metal::Device::texture_from_raw(
+                metal_texture,
+                desc.format,
+                MTLTextureType::D2,
+                1,
+                1,
+                wgpu::hal::CopyExtent {
+                    width: frame.width,
+                    height: frame.height,
+                    depth: 1,
+                },
+            )
+        };
+
+        let texture = unsafe {
+            state.device.create_texture_from_hal::<wgpu::hal::api::Metal>(hal_texture, &desc)
+        };
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Video Bind Group"),
+            layout: &state.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&state.sampler),
+                },
+            ],
+        });
+
+        GpuFrame {
+            texture,
+            bind_group,
+            _surface: frame,
         }
     }
 
@@ -296,8 +409,6 @@ impl VideoPlayer {
             bind_group_layout,
             sampler,
             config,
-            video_texture: None,
-            video_bind_group: None,
         });
         self.window = Some(window);
         
@@ -306,7 +417,7 @@ impl VideoPlayer {
         if let Some(config_bytes) = config {
              let (width, height) = self.reader.dimensions();
              println!("Initializing AppleDecoder with {} bytes config ({}x{}): {:02X?}", config_bytes.len(), width, height, config_bytes);
-             self.decoder = Some(AppleDecoder::new(CodecType::H265, Some(config_bytes), width, height).expect("Failed to init decoder"));
+             self.decoder = Some(AppleDecoder::new_zero_copy(CodecType::H265, Some(config_bytes), width, height).expect("Failed to init decoder"));
         } else {
              panic!("No config in MOV file!");
         }
@@ -353,71 +464,17 @@ impl ApplicationHandler for VideoPlayer {
                                     println!("Playing frame {}", self.frame_count);
                                 }
                                 
-                                // Decode - frames returned from previous callback
+                                // Decode - frames returned from previous callback (IOSurface zero-copy)
                                 let timescale = self.reader.timescale();
-                                match decoder.decode(&sample_data, pts, timescale) {
-                                    Ok(frames) => {
+                                match decoder.decode_surface(&sample_data, pts, timescale) {
+                                    Ok(mut frames) => {
                                         if self.frame_count % 30 == 0 {
                                             println!("Frame {}: decoded, got {} frames", self.frame_count, frames.len());
                                         }
-                                        if let Some(frame) = frames.first() {
-                                            let size = wgpu::Extent3d {
-                                                width: frame.width,
-                                                height: frame.height,
-                                                depth_or_array_layers: 1,
-                                            };
-                                            
-                                            // Create texture once (first frame), reuse afterwards
-                                            if state.video_texture.is_none() {
-                                                let texture = state.device.create_texture(&wgpu::TextureDescriptor {
-                                                    label: Some("Video Frame"),
-                                                    size,
-                                                    mip_level_count: 1,
-                                                    sample_count: 1,
-                                                    dimension: wgpu::TextureDimension::D2,
-                                                    format: wgpu::TextureFormat::Bgra8UnormSrgb,
-                                                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                                                    view_formats: &[],
-                                                });
-                                                
-                                                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                                                let bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                                    label: Some("Video Bind Group"),
-                                                    layout: &state.bind_group_layout,
-                                                    entries: &[
-                                                        wgpu::BindGroupEntry {
-                                                            binding: 0,
-                                                            resource: wgpu::BindingResource::TextureView(&view),
-                                                        },
-                                                        wgpu::BindGroupEntry {
-                                                            binding: 1,
-                                                            resource: wgpu::BindingResource::Sampler(&state.sampler),
-                                                        }
-                                                    ],
-                                                });
-                                                
-                                                state.video_texture = Some(texture);
-                                                state.video_bind_group = Some(bind_group);
-                                            }
-                                            
-                                            // Upload new frame data to existing texture
-                                            if let Some(texture) = &state.video_texture {
-                                                state.queue.write_texture(
-                                                    wgpu::TexelCopyTextureInfo {
-                                                        texture,
-                                                        mip_level: 0,
-                                                        origin: wgpu::Origin3d::ZERO,
-                                                        aspect: wgpu::TextureAspect::All,
-                                                    },
-                                                    &frame.data,
-                                                    wgpu::TexelCopyBufferLayout {
-                                                        offset: 0,
-                                                        bytes_per_row: Some(frame.width * 4),
-                                                        rows_per_image: Some(frame.height),
-                                                    },
-                                                    size,
-                                                );
-                                            }
+                                        self.last_decoded_len = frames.len();
+                                        if let Some(frame) = frames.pop() {
+                                            self.decoded_frames_total += 1;
+                                            self.current_frame = Some(Self::create_gpu_frame(state, frame));
                                         }
                                     }
                                     Err(e) => {
@@ -430,6 +487,7 @@ impl ApplicationHandler for VideoPlayer {
                                 self.reader.reset();
                                 self.last_frame_time = None;
                                 self.frame_count = 0;
+                                self.loop_count = self.loop_count.saturating_add(1);
                             }
                             // Note: no sleep - event loop with ControlFlow::Poll handles timing
                         }
@@ -457,14 +515,36 @@ impl ApplicationHandler for VideoPlayer {
                         });
                         
                         rpass.set_pipeline(&state.render_pipeline);
-                        if let Some(bind_group) = &state.video_bind_group {
-                             rpass.set_bind_group(0, bind_group, &[]);
+                        if let Some(frame) = &self.current_frame {
+                             rpass.set_bind_group(0, &frame.bind_group, &[]);
                              rpass.draw(0..3, 0..1); // Full screen triangle
                         }
                     }
                     
                     state.queue.submit(Some(encoder.finish()));
                     output.present();
+                    self.render_frames_total += 1;
+
+                    if self.last_title_update.elapsed() >= Duration::from_millis(500) {
+                        let elapsed = self.stats_start.elapsed().as_secs_f64().max(0.001);
+                        let decode_fps = self.decoded_frames_total as f64 / elapsed;
+                        let render_fps = self.render_frames_total as f64 / elapsed;
+                        let (width, height) = self.reader.dimensions();
+                        let title = format!(
+                            "Video Playback - {}x{} | frame {} | decoded {} | fps d/r {:.1}/{:.1} | loops {}",
+                            width,
+                            height,
+                            self.frame_count,
+                            self.last_decoded_len,
+                            decode_fps,
+                            render_fps,
+                            self.loop_count
+                        );
+                        if let Some(window) = &self.window {
+                            window.set_title(&title);
+                        }
+                        self.last_title_update = Instant::now();
+                    }
                     
                     // Request next frame immediately for benchmark
                     self.window.as_ref().unwrap().request_redraw();

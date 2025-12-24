@@ -11,8 +11,11 @@ use objc2_video_toolbox::{
 use objc2_core_video::{
     CVPixelBuffer, CVPixelBufferCreate, CVPixelBufferLockBaseAddress,
     CVPixelBufferUnlockBaseAddress, CVPixelBufferGetBaseAddress,
-    CVPixelBufferGetBytesPerRow, kCVPixelFormatType_32BGRA,
+    CVPixelBufferGetBytesPerRow, CVPixelBufferGetIOSurface,
+    kCVPixelFormatType_32BGRA,
 };
+use objc2_core_foundation::CFRetained;
+use objc2_io_surface::IOSurfaceRef;
 use crate::{VideoEncoder, VideoDecoder, CodecError, Frame, CodecType, PixelFormat};
 use std::ptr;
 use std::sync::{Arc, Mutex};
@@ -883,8 +886,10 @@ struct VTDecompressionOutputCallbackRecord {
 
 struct DecoderContext {
     decoded_frames: Mutex<Vec<Frame>>,
+    decoded_surfaces: Mutex<Vec<IOSurfaceFrame>>,
     width: u32,
     height: u32,
+    output: DecodeOutput,
 }
 
 /// Apple VideoToolbox hardware decoder.
@@ -894,10 +899,38 @@ pub struct AppleDecoder {
     session: *mut c_void, // VTDecompressionSessionRef
     context: Arc<DecoderContext>,
     format_desc: *const c_void, // CMVideoFormatDescriptionRef
+    output: DecodeOutput,
 }
 
 unsafe impl Send for AppleDecoder {}
 unsafe impl Sync for AppleDecoder {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DecodeOutput {
+    Cpu,
+    IOSurface,
+}
+
+/// Zero-copy decoded frame backed by IOSurface.
+#[derive(Clone)]
+pub struct IOSurfaceFrame {
+    surface: CFRetained<IOSurfaceRef>,
+    /// Frame width in pixels.
+    pub width: u32,
+    /// Frame height in pixels.
+    pub height: u32,
+    /// Format of the data.
+    pub format: PixelFormat,
+    /// Timestamp in nanoseconds.
+    pub timestamp_ns: u64,
+}
+
+impl IOSurfaceFrame {
+    /// Get the raw IOSurface pointer.
+    pub fn iosurface_ptr(&self) -> *mut c_void {
+        self.surface.as_ptr().as_ptr() as *mut c_void
+    }
+}
 
 extern "C" fn decode_callback(
     decompression_output_ref_con: *mut c_void,
@@ -936,84 +969,106 @@ extern "C" fn decode_callback(
         
 
         
-        // Lock base address
-        if CVPixelBufferLockBaseAddress(image_buffer_ref, CVPixelBufferLockFlags(0)) == 0 {
-            let width = objc2_core_video::CVPixelBufferGetWidth(image_buffer_ref);
-            let height = objc2_core_video::CVPixelBufferGetHeight(image_buffer_ref);
-            let bytes_per_row = CVPixelBufferGetBytesPerRow(image_buffer_ref);
-            let base_addr = CVPixelBufferGetBaseAddress(image_buffer_ref);
-            
-            if !base_addr.is_null() {
-                // Crop dimensions to expected size (handling padding)
-                let expected_width = unsafe { (*(decompression_output_ref_con as *const DecoderContext)).width };
-                let expected_height = unsafe { (*(decompression_output_ref_con as *const DecoderContext)).height };
-                
-                // Ensure we don't read out of bounds
-                let copy_width = (width as u32).min(expected_width);
-                let copy_height = (height as u32).min(expected_height);
-                
-                let mut data = Vec::with_capacity((copy_width * copy_height * 4) as usize);
-                
-                if is_bgra {
-                    // Direct copy for BGRA
-                    let src_stride = bytes_per_row;
-                    for row in 0..copy_height {
-                        let src = (base_addr as *const u8).add(row as usize * src_stride);
-                        let row_slice = std::slice::from_raw_parts(src, (copy_width * 4) as usize);
-                        data.extend_from_slice(row_slice);
-                    }
-                } else if is_nv12 {
-                    // NV12 to BGRA conversion
-                    // NV12 format: Y plane followed by interleaved UV plane
-                    use objc2_core_video::{CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane};
-                    let y_plane = CVPixelBufferGetBaseAddressOfPlane(image_buffer_ref, 0) as *const u8;
-                    let uv_plane = CVPixelBufferGetBaseAddressOfPlane(image_buffer_ref, 1) as *const u8;
-                    let y_stride = CVPixelBufferGetBytesPerRowOfPlane(image_buffer_ref, 0);
-                    let uv_stride = CVPixelBufferGetBytesPerRowOfPlane(image_buffer_ref, 1);
-                    
-                    for row in 0..copy_height {
-                        let r = row as usize;
-                        for col in 0..copy_width {
-                            let c = col as usize;
-                            let y = *y_plane.add(r * y_stride + c) as i32;
-                            let u = *uv_plane.add((r / 2) * uv_stride + (c / 2) * 2) as i32;
-                            let v = *uv_plane.add((r / 2) * uv_stride + (c / 2) * 2 + 1) as i32;
-                            
-                            // YUV to RGB conversion (BT.601)
-                            let val_c = y - 16;
-                            let val_d = u - 128;
-                            let val_e = v - 128;
-                            
-                            let red = ((298 * val_c + 409 * val_e + 128) >> 8).clamp(0, 255) as u8;
-                            let green = ((298 * val_c - 100 * val_d - 208 * val_e + 128) >> 8).clamp(0, 255) as u8;
-                            let blue = ((298 * val_c + 516 * val_d + 128) >> 8).clamp(0, 255) as u8;
-                            
-                            // BGRA order
-                            data.push(blue);
-                            data.push(green);
-                            data.push(red);
-                            data.push(255); // Alpha
-                        }
-                    }
-                } else {
-                    eprintln!("Unsupported pixel format: 0x{:X}", pixel_format);
-                }
-                
-                if !data.is_empty() {
-                    let frame = Frame {
-                        data: Arc::new(data),
-                        width: copy_width,
-                        height: copy_height,
+        match context.output {
+            DecodeOutput::IOSurface => {
+                let width = objc2_core_video::CVPixelBufferGetWidth(image_buffer_ref) as u32;
+                let height = objc2_core_video::CVPixelBufferGetHeight(image_buffer_ref) as u32;
+                if let Some(surface) = CVPixelBufferGetIOSurface(Some(image_buffer_ref)) {
+                    let frame = IOSurfaceFrame {
+                        surface,
+                        width,
+                        height,
                         format: PixelFormat::Bgra,
                         timestamp_ns: 0,
                     };
-                    
-                    if let Ok(mut frames) = context.decoded_frames.lock() {
+                    if let Ok(mut frames) = context.decoded_surfaces.lock() {
                         frames.push(frame);
                     }
+                } else {
+                    eprintln!("CVPixelBufferGetIOSurface returned null");
                 }
             }
-            CVPixelBufferUnlockBaseAddress(image_buffer_ref, CVPixelBufferLockFlags(0));
+            DecodeOutput::Cpu => {
+                // Lock base address
+                if CVPixelBufferLockBaseAddress(image_buffer_ref, CVPixelBufferLockFlags(0)) == 0 {
+                    let width = objc2_core_video::CVPixelBufferGetWidth(image_buffer_ref);
+                    let height = objc2_core_video::CVPixelBufferGetHeight(image_buffer_ref);
+                    let bytes_per_row = CVPixelBufferGetBytesPerRow(image_buffer_ref);
+                    let base_addr = CVPixelBufferGetBaseAddress(image_buffer_ref);
+                    
+                    if !base_addr.is_null() {
+                        // Crop dimensions to expected size (handling padding)
+                        let expected_width = unsafe { (*(decompression_output_ref_con as *const DecoderContext)).width };
+                        let expected_height = unsafe { (*(decompression_output_ref_con as *const DecoderContext)).height };
+                        
+                        // Ensure we don't read out of bounds
+                        let copy_width = (width as u32).min(expected_width);
+                        let copy_height = (height as u32).min(expected_height);
+                        
+                        let mut data = Vec::with_capacity((copy_width * copy_height * 4) as usize);
+                        
+                        if is_bgra {
+                            // Direct copy for BGRA
+                            let src_stride = bytes_per_row;
+                            for row in 0..copy_height {
+                                let src = (base_addr as *const u8).add(row as usize * src_stride);
+                                let row_slice = std::slice::from_raw_parts(src, (copy_width * 4) as usize);
+                                data.extend_from_slice(row_slice);
+                            }
+                        } else if is_nv12 {
+                            // NV12 to BGRA conversion
+                            // NV12 format: Y plane followed by interleaved UV plane
+                            use objc2_core_video::{CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane};
+                            let y_plane = CVPixelBufferGetBaseAddressOfPlane(image_buffer_ref, 0) as *const u8;
+                            let uv_plane = CVPixelBufferGetBaseAddressOfPlane(image_buffer_ref, 1) as *const u8;
+                            let y_stride = CVPixelBufferGetBytesPerRowOfPlane(image_buffer_ref, 0);
+                            let uv_stride = CVPixelBufferGetBytesPerRowOfPlane(image_buffer_ref, 1);
+                            
+                            for row in 0..copy_height {
+                                let r = row as usize;
+                                for col in 0..copy_width {
+                                    let c = col as usize;
+                                    let y = *y_plane.add(r * y_stride + c) as i32;
+                                    let u = *uv_plane.add((r / 2) * uv_stride + (c / 2) * 2) as i32;
+                                    let v = *uv_plane.add((r / 2) * uv_stride + (c / 2) * 2 + 1) as i32;
+                                    
+                                    // YUV to RGB conversion (BT.601)
+                                    let val_c = y - 16;
+                                    let val_d = u - 128;
+                                    let val_e = v - 128;
+                                    
+                                    let red = ((298 * val_c + 409 * val_e + 128) >> 8).clamp(0, 255) as u8;
+                                    let green = ((298 * val_c - 100 * val_d - 208 * val_e + 128) >> 8).clamp(0, 255) as u8;
+                                    let blue = ((298 * val_c + 516 * val_d + 128) >> 8).clamp(0, 255) as u8;
+                                    
+                                    // BGRA order
+                                    data.push(blue);
+                                    data.push(green);
+                                    data.push(red);
+                                    data.push(255); // Alpha
+                                }
+                            }
+                        } else {
+                            eprintln!("Unsupported pixel format: 0x{:X}", pixel_format);
+                        }
+                        
+                        if !data.is_empty() {
+                            let frame = Frame {
+                                data: Arc::new(data),
+                                width: copy_width,
+                                height: copy_height,
+                                format: PixelFormat::Bgra,
+                                timestamp_ns: 0,
+                            };
+                            
+                            if let Ok(mut frames) = context.decoded_frames.lock() {
+                                frames.push(frame);
+                            }
+                        }
+                    }
+                    CVPixelBufferUnlockBaseAddress(image_buffer_ref, CVPixelBufferLockFlags(0));
+                }
+            }
         }
     }
 }
@@ -1021,6 +1076,15 @@ extern "C" fn decode_callback(
 impl AppleDecoder {
     /// Create a new Apple hardware decoder.
     pub fn new(codec: CodecType, config: Option<&[u8]>, width: u32, height: u32) -> Result<Self, CodecError> {
+        Self::new_with_output(codec, config, width, height, DecodeOutput::Cpu)
+    }
+
+    /// Create a new Apple hardware decoder that outputs IOSurface-backed frames.
+    pub fn new_zero_copy(codec: CodecType, config: Option<&[u8]>, width: u32, height: u32) -> Result<Self, CodecError> {
+        Self::new_with_output(codec, config, width, height, DecodeOutput::IOSurface)
+    }
+
+    fn new_with_output(codec: CodecType, config: Option<&[u8]>, width: u32, height: u32, output: DecodeOutput) -> Result<Self, CodecError> {
         if config.is_none() {
              return Err(CodecError::InitializationFailed("Codec config (hvcC/avcC) required".into()));
         }
@@ -1049,8 +1113,10 @@ impl AppleDecoder {
         
         let context = Arc::new(DecoderContext {
             decoded_frames: Mutex::new(Vec::new()),
+            decoded_surfaces: Mutex::new(Vec::new()),
             width,
             height,
+            output,
         });
         
         unsafe {
@@ -1172,7 +1238,8 @@ impl AppleDecoder {
                  codec,
                  session,
                  context,
-                 format_desc
+                 format_desc,
+                 output,
              })
         }
     }
@@ -1194,6 +1261,9 @@ impl Drop for AppleDecoder {
 
 impl AppleDecoder {
     pub fn decode(&mut self, data: &[u8], pts: u64, timescale: u32) -> Result<Vec<Frame>, CodecError> {
+        if self.output != DecodeOutput::Cpu {
+            return Err(CodecError::DecodingFailed("Decoder is configured for IOSurface output".into()));
+        }
         if data.len() < 4 {
              return Err(CodecError::DecodingFailed("Data too short".into()));
         }
@@ -1320,11 +1390,14 @@ impl AppleDecoder {
                 return Err(CodecError::DecodingFailed(format!("VTDecodeFrame failed: {}", status)));
             }
             
-            // If async, we should wait.
-            // VTDecompressionSessionWaitForAsynchronousFrames(self.session);
-            // Since we passed 0 flags and callback is likely called on another thread or same thread?
-            // If synchronous, callback is called before return.
-            // Let's assume sync for now.
+            // Ensure async callbacks complete before we drain decoded frames.
+            let wait_status = VTDecompressionSessionWaitForAsynchronousFrames(self.session);
+            if wait_status != 0 {
+                return Err(CodecError::DecodingFailed(format!(
+                    "VTDecompressionSessionWaitForAsynchronousFrames failed: {}",
+                    wait_status
+                )));
+            }
         }
         
         // Collect frames
@@ -1332,6 +1405,130 @@ impl AppleDecoder {
             frames.append(&mut lock);
         }
         
+        Ok(frames)
+    }
+
+    pub fn decode_surface(&mut self, data: &[u8], pts: u64, timescale: u32) -> Result<Vec<IOSurfaceFrame>, CodecError> {
+        if self.output != DecodeOutput::IOSurface {
+            return Err(CodecError::DecodingFailed("Decoder is configured for CPU output".into()));
+        }
+        if data.len() < 4 {
+            return Err(CodecError::DecodingFailed("Data too short".into()));
+        }
+
+        unsafe {
+            // 1. Create CMBlockBuffer wrapping the data
+            let mut block_buffer: *const c_void = ptr::null();
+            let status = CMBlockBufferCreateWithMemoryBlock(
+                kCFAllocatorDefault,
+                ptr::null_mut(),
+                data.len(),
+                kCFAllocatorDefault,
+                ptr::null(),
+                0,
+                data.len(),
+                0,
+                &mut block_buffer
+            );
+            
+            if status != 0 {
+                return Err(CodecError::DecodingFailed(format!("CMBlockBufferCreate failed: {}", status)));
+            }
+            
+             #[link(name = "CoreMedia", kind = "framework")]
+             unsafe extern "C" {
+                 fn CMBlockBufferReplaceDataBytes(
+                     sourceBytes: *const c_void,
+                     destinationBuffer: *const c_void,
+                     offsetIntoDestination: usize,
+                     dataLength: usize
+                 ) -> i32;
+             }
+             
+             let status = CMBlockBufferReplaceDataBytes(
+                 data.as_ptr() as *const c_void,
+                 block_buffer,
+                 0,
+                 data.len()
+             );
+             
+             if status != 0 {
+                  CFRelease(block_buffer);
+                  return Err(CodecError::DecodingFailed(format!("CMBlockBufferReplaceDataBytes failed: {}", status)));
+             }
+            
+            // 2. Create CMSampleBuffer
+            let mut sample_buffer: *mut CMSampleBuffer = ptr::null_mut();
+            let pts_time = CMTime {
+                value: pts as i64,
+                timescale: timescale as i32,
+                flags: objc2_core_media::CMTimeFlags(1),
+                epoch: 0,
+            };
+            let invalid_time = CMTime {
+                value: 0,
+                timescale: 0,
+                flags: objc2_core_media::CMTimeFlags(0),
+                epoch: 0,
+            };
+
+            let timing_info = CMSampleTimingInfo {
+                duration: invalid_time,
+                presentationTimeStamp: pts_time,
+                decodeTimeStamp: invalid_time,
+            };
+
+            let status = CMSampleBufferCreate(
+                kCFAllocatorDefault,
+                block_buffer,
+                1,
+                ptr::null(),
+                ptr::null_mut(),
+                self.format_desc,
+                1,
+                1, &timing_info as *const _ as *const c_void,
+                0, ptr::null(),
+                &mut sample_buffer
+            );
+             
+            CFRelease(block_buffer);
+            
+            if status != 0 {
+                return Err(CodecError::DecodingFailed(format!("CMSampleBufferCreate failed: {}", status)));
+            }
+            
+            let flags = 0;
+            let mut info_flags = 0;
+            
+            let status = VTDecompressionSessionDecodeFrame(
+                self.session,
+                sample_buffer,
+                flags,
+                ptr::null_mut(),
+                &mut info_flags
+            );
+            
+            if status != 0 {
+                eprintln!("VTDecompressionSessionDecodeFrame failed: {}", status);
+                CFRelease(sample_buffer as *const c_void);
+                return Err(CodecError::DecodingFailed(format!("Decode failed: {}", status)));
+            }
+            
+            CFRelease(sample_buffer as *const c_void);
+            
+            let wait_status = VTDecompressionSessionWaitForAsynchronousFrames(self.session);
+            if wait_status != 0 {
+                return Err(CodecError::DecodingFailed(format!(
+                    "VTDecompressionSessionWaitForAsynchronousFrames failed: {}",
+                    wait_status
+                )));
+            }
+        }
+
+        let mut frames = Vec::new();
+        if let Ok(mut lock) = self.context.decoded_surfaces.lock() {
+            frames.append(&mut lock);
+        }
         Ok(frames)
     }
 }

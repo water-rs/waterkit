@@ -28,6 +28,9 @@ mod ffi {
         // Zero-copy IOSurface access
         fn get_iosurface_ptr() -> u64;
         fn get_iosurface_sequence() -> u32;
+
+        // Control raw frame copying (disable for zero-copy pipelines)
+        fn set_raw_frame_capture_enabled(enabled: bool);
     }
 }
 
@@ -212,6 +215,11 @@ impl SCKCapturer {
     /// Get the IOSurface sequence number to detect new frames.
     pub fn iosurface_sequence(&self) -> u32 {
         ffi::get_iosurface_sequence()
+    }
+
+    /// Enable or disable raw frame copy to CPU memory.
+    pub fn set_raw_frames_enabled(&self, enabled: bool) {
+        ffi::set_raw_frame_capture_enabled(enabled);
     }
 }
 

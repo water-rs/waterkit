@@ -145,6 +145,7 @@ fileprivate var frameSequence: UInt32 = 0  // Tracks unique frames delivered
 fileprivate var lastReadSequence: UInt32 = 0  // Last sequence read by Rust
 fileprivate let frameLock = NSLock()
 fileprivate var streamCapturer: SCKStreamCapturer? = nil
+fileprivate var rawFrameCaptureEnabled: Bool = true
 
 // MARK: - Zero-Copy IOSurface Storage
 import IOSurface
@@ -222,45 +223,51 @@ class SCKStreamCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen, let pixelBuffer = sampleBuffer.imageBuffer else { return }
         
-        // Lock pixel buffer
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-        
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
-        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-        
-        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else { return }
         
         // Get IOSurface for zero-copy GPU access
         let ioSurface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue()
         
-        // Copy frame data (handle stride)
-        let expectedBytesPerRow = width * 4
-        var rawData = [UInt8](repeating: 0, count: width * height * 4)
-        
-        if bytesPerRow == expectedBytesPerRow {
-            rawData.withUnsafeMutableBytes { dest in
-                dest.copyBytes(from: UnsafeRawBufferPointer(start: baseAddress, count: width * height * 4))
-            }
-        } else {
-            let src = baseAddress.assumingMemoryBound(to: UInt8.self)
-            for row in 0..<height {
-                let srcRow = src.advanced(by: row * bytesPerRow)
-                let dstOffset = row * expectedBytesPerRow
-                rawData.withUnsafeMutableBytes { dest in
-                    dest.baseAddress!.advanced(by: dstOffset).copyMemory(from: srcRow, byteCount: expectedBytesPerRow)
-                }
-            }
-        }
-        
         // Store frame
         frameLock.lock()
-        lastCapturedFrame = rawData
         frameWidth = UInt32(width)
         frameHeight = UInt32(height)
         frameSequence += 1
         
+        if rawFrameCaptureEnabled {
+            CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+            
+            let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+            guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+                frameLock.unlock()
+                return
+            }
+
+            // Copy frame data (handle stride)
+            let expectedBytesPerRow = width * 4
+            var rawData = [UInt8](repeating: 0, count: width * height * 4)
+            
+            if bytesPerRow == expectedBytesPerRow {
+                rawData.withUnsafeMutableBytes { dest in
+                    dest.copyBytes(from: UnsafeRawBufferPointer(start: baseAddress, count: width * height * 4))
+                }
+            } else {
+                let src = baseAddress.assumingMemoryBound(to: UInt8.self)
+                for row in 0..<height {
+                    let srcRow = src.advanced(by: row * bytesPerRow)
+                    let dstOffset = row * expectedBytesPerRow
+                    rawData.withUnsafeMutableBytes { dest in
+                        dest.baseAddress!.advanced(by: dstOffset).copyMemory(from: srcRow, byteCount: expectedBytesPerRow)
+                    }
+                }
+            }
+            lastCapturedFrame = rawData
+        } else {
+            lastCapturedFrame = nil
+        }
+
         if let surface = ioSurface {
             lastIOSurface = surface
             ioSurfaceSequence += 1
@@ -310,7 +317,7 @@ public func get_latest_frame() -> RustVec<UInt8> {
     frameLock.lock()
     defer { frameLock.unlock() }
     
-    guard let _ = lastCapturedFrame else {
+    if frameWidth == 0 || frameHeight == 0 {
         return RustVec()
     }
     
@@ -329,10 +336,25 @@ public func get_latest_frame() -> RustVec<UInt8> {
     vec.push(value: UInt8((frameHeight >> 16) & 0xFF))
     vec.push(value: UInt8((frameHeight >> 24) & 0xFF))
     
+    if lastCapturedFrame == nil {
+        // Mark as 'dimensions only' by setting 9th byte
+        vec.push(value: 0xFF)
+        return vec
+    }
+
     // Mark as 'dimensions only' by setting 9th byte
     vec.push(value: 0xFF)
-    
     return vec
+}
+
+/// Enable or disable raw frame copy to CPU memory.
+public func set_raw_frame_capture_enabled(_ enabled: Bool) {
+    frameLock.lock()
+    rawFrameCaptureEnabled = enabled
+    if !enabled {
+        lastCapturedFrame = nil
+    }
+    frameLock.unlock()
 }
 
 /// Get the raw pointer to the current IOSurface for zero-copy GPU access.
@@ -355,4 +377,3 @@ public func get_iosurface_sequence() -> UInt32 {
     defer { frameLock.unlock() }
     return ioSurfaceSequence
 }
-

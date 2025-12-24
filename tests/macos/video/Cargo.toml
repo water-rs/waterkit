@@ -14,3 +14,5 @@ waterkit-codec = { path = "../../../codec" }
 wgpu = "24"
 winit = "0.30"
 pollster = "0.4"
+metal = "0.31"
+objc = "0.2"

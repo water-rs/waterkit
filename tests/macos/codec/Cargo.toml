@@ -12,6 +12,10 @@ path = "src/main.rs"
 name = "waterkit-recorder"
 path = "src/recorder.rs"
 
+[[bin]]
+name = "waterkit-profiler"
+path = "src/profiler.rs"
+
 [dependencies]
 waterkit-codec = { path = "../../../codec", features = ["av1"] }
 waterkit-screen = { path = "../../../screen" }

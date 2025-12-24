@@ -110,6 +110,14 @@ pub fn capture_screen_raw(display_index: usize) -> Result<RawCapture, Error> {
     platform::capture_screen_raw(display_index)
 }
 
+/// Re-export ScreenCapturer for high-performance repeated captures.
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+pub use platform::desktop::ScreenCapturer;
+
+/// Re-export SCKCapturer for ScreenCaptureKit-based high-speed capture (macOS 12.3+).
+#[cfg(target_os = "macos")]
+pub use platform::apple::SCKCapturer;
+
 /// Pick a screen or window using the system-provided picker and capture it.
 ///
 /// This provides a more privacy-conscious way of capturing content as it does not

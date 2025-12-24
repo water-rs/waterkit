@@ -183,6 +183,28 @@ fn main() {
              println!("cargo:rustc-link-lib=framework=ScreenCaptureKit"); // For SCK
              println!("cargo:rustc-link-lib=framework=Foundation");
              println!("cargo:rustc-link-lib=framework=Cocoa");
+             
+             // Swift runtime libraries for async/await (Swift Concurrency)
+             // Get the Swift toolchain lib path
+             let swift_lib_output = Command::new("xcrun")
+                 .args(&["--toolchain", "default", "-f", "swiftc"])
+                 .output()
+                 .ok();
+             if let Some(output) = swift_lib_output {
+                 let swiftc_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                 if let Some(toolchain_dir) = std::path::Path::new(&swiftc_path)
+                     .parent()
+                     .and_then(|p| p.parent())
+                 {
+                     let lib_dir = toolchain_dir.join("lib/swift/macosx");
+                     if lib_dir.exists() {
+                         println!("cargo:rustc-link-search=native={}", lib_dir.display());
+                     }
+                 }
+             }
+             // Also try standard Xcode location
+             println!("cargo:rustc-link-arg=-rpath");
+             println!("cargo:rustc-link-arg=/usr/lib/swift");
         }
     }
 }

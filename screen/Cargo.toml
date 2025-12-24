@@ -26,6 +26,10 @@ tokio = { version = "1", features = ["full"] }
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 swift-bridge.workspace = true
 image = "0.24"
+metal = "0.29"
+core-foundation = "0.10"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSObject"] }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
 swift-bridge-build.workspace = true

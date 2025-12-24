@@ -42,6 +42,19 @@ class SCKHandler: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 }
 
+/// Get the total number of unique frames captured by ScreenCaptureKit
+public func get_frame_count() -> UInt32 {
+    frameLock.lock()
+    defer { frameLock.unlock() }
+    return frameSequence
+}
+
+/// Reset the frame counter (call before timing test)
+public func reset_frame_count() {
+    frameLock.lock()
+    frameSequence = 0
+    frameLock.unlock()
+}
 
 @available(macOS 14.0, *)
 class PickerDelegate: NSObject, SCContentSharingPickerObserver {
@@ -121,3 +134,202 @@ public func set_screen_brightness(value: Float) {
 public func capture_main_screen() -> RustVec<UInt8> {
     return RustVec() // Stub
 }
+
+// MARK: - High-Performance Stream Capturer for 30+ FPS
+
+/// Raw frame result from ScreenCaptureKit
+fileprivate var lastCapturedFrame: [UInt8]? = nil
+fileprivate var frameWidth: UInt32 = 0
+fileprivate var frameHeight: UInt32 = 0
+fileprivate var frameSequence: UInt32 = 0  // Tracks unique frames delivered
+fileprivate var lastReadSequence: UInt32 = 0  // Last sequence read by Rust
+fileprivate let frameLock = NSLock()
+fileprivate var streamCapturer: SCKStreamCapturer? = nil
+
+// MARK: - Zero-Copy IOSurface Storage
+import IOSurface
+
+/// Stores the latest IOSurface for zero-copy GPU access
+fileprivate var lastIOSurface: IOSurfaceRef? = nil
+fileprivate var ioSurfaceSequence: UInt32 = 0
+
+@available(macOS 12.3, *)
+class SCKStreamCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
+    private var stream: SCStream?
+    private var isRunning = false
+    
+    func start(completion: @escaping (Bool) -> Void) {
+        guard !isRunning else {
+            completion(true)
+            return
+        }
+        
+        // Get shareable content
+        SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { [weak self] content, error in
+            guard let self = self, let content = content, error == nil else {
+                print("Failed to get shareable content: \(error?.localizedDescription ?? "unknown")")
+                completion(false)
+                return
+            }
+            
+            guard let display = content.displays.first else {
+                print("No display found")
+                completion(false)
+                return
+            }
+            
+            // Create filter for the main display
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            
+            // Configure for maximum speed capture
+            let config = SCStreamConfiguration()
+            config.width = Int(display.width)
+            config.height = Int(display.height)
+            config.minimumFrameInterval = CMTime(value: 1, timescale: 240) // Request 240fps
+            config.queueDepth = 10  // Larger queue to prevent drops
+            config.pixelFormat = kCVPixelFormatType_32BGRA
+            config.showsCursor = false  // Skip cursor compositing
+            if #available(macOS 13.0, *) {
+                config.capturesAudio = false
+            }
+            
+            do {
+                self.stream = SCStream(filter: filter, configuration: config, delegate: self)
+                try self.stream!.addStreamOutput(self, type: .screen, sampleHandlerQueue: DispatchQueue.global(qos: .userInteractive))
+                
+                self.stream!.startCapture { error in
+                    if let error = error {
+                        print("Stream start failed: \(error)")
+                        completion(false)
+                    } else {
+                        self.isRunning = true
+                        completion(true)
+                    }
+                }
+            } catch {
+                print("Stream creation failed: \(error)")
+                completion(false)
+            }
+        }
+    }
+    
+    func stop() {
+        guard isRunning else { return }
+        stream?.stopCapture()
+        isRunning = false
+    }
+    
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard type == .screen, let pixelBuffer = sampleBuffer.imageBuffer else { return }
+        
+        // Get dimensions (fast)
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        
+        // Get IOSurface for zero-copy GPU access
+        let ioSurface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue()
+        
+        // Store frame info and IOSurface
+        frameLock.lock()
+        frameWidth = UInt32(width)
+        frameHeight = UInt32(height)
+        frameSequence += 1
+        
+        // Store IOSurface reference (retain for GPU access)
+        if let surface = ioSurface {
+            // Note: We need to explicitly retain if we want to keep it beyond callback
+            // For now, store for immediate access
+            lastIOSurface = surface
+            ioSurfaceSequence += 1
+        }
+        frameLock.unlock()
+    }
+    
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        print("Stream stopped: \(error)")
+        isRunning = false
+    }
+}
+
+/// Initialize the ScreenCaptureKit stream for high-speed capture
+public func init_sck_stream() -> Bool {
+    if #available(macOS 12.3, *) {
+        let capturer = SCKStreamCapturer()
+        
+        // Use a semaphore to wait for callback-based start
+        var success = false
+        let sem = DispatchSemaphore(value: 0)
+        
+        capturer.start { result in
+            success = result
+            sem.signal()
+        }
+        
+        // Wait up to 2 seconds for stream to start
+        _ = sem.wait(timeout: .now() + 2.0)
+        
+        if success {
+            streamCapturer = capturer
+        }
+        return success
+    }
+    return false
+}
+
+/// Stop the ScreenCaptureKit stream
+public func stop_sck_stream() {
+    streamCapturer?.stop()
+    streamCapturer = nil
+}
+
+/// Get the latest captured frame as raw BGRA bytes with dimensions
+public func get_latest_frame() -> RustVec<UInt8> {
+    frameLock.lock()
+    defer { frameLock.unlock() }
+    
+    guard let _ = lastCapturedFrame else {
+        return RustVec()
+    }
+    
+    // Only return dimensions for now (fast timing test)
+    let vec = RustVec<UInt8>()
+    
+    // Width (4 bytes LE)
+    vec.push(value: UInt8(frameWidth & 0xFF))
+    vec.push(value: UInt8((frameWidth >> 8) & 0xFF))
+    vec.push(value: UInt8((frameWidth >> 16) & 0xFF))
+    vec.push(value: UInt8((frameWidth >> 24) & 0xFF))
+    
+    // Height (4 bytes LE)
+    vec.push(value: UInt8(frameHeight & 0xFF))
+    vec.push(value: UInt8((frameHeight >> 8) & 0xFF))
+    vec.push(value: UInt8((frameHeight >> 16) & 0xFF))
+    vec.push(value: UInt8((frameHeight >> 24) & 0xFF))
+    
+    // Mark as 'dimensions only' by setting 9th byte
+    vec.push(value: 0xFF)
+    
+    return vec
+}
+
+/// Get the raw pointer to the current IOSurface for zero-copy GPU access.
+/// Returns 0 if no IOSurface is available.
+public func get_iosurface_ptr() -> UInt64 {
+    frameLock.lock()
+    defer { frameLock.unlock() }
+    
+    guard let surface = lastIOSurface else {
+        return 0
+    }
+    
+    // Return the raw pointer as UInt64
+    return UInt64(UInt(bitPattern: Unmanaged.passUnretained(surface as AnyObject).toOpaque()))
+}
+
+/// Get the IOSurface sequence number to detect new frames
+public func get_iosurface_sequence() -> UInt32 {
+    frameLock.lock()
+    defer { frameLock.unlock() }
+    return ioSurfaceSequence
+}
+

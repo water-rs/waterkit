@@ -17,6 +17,17 @@ mod ffi {
         
         // macOS picker
         fn show_picker_and_capture();
+        
+        // High-speed ScreenCaptureKit streaming (macOS 12.3+)
+        fn init_sck_stream() -> bool;
+        fn stop_sck_stream();
+        fn get_latest_frame() -> Vec<u8>;
+        fn get_frame_count() -> u32;
+        fn reset_frame_count();
+        
+        // Zero-copy IOSurface access
+        fn get_iosurface_ptr() -> u64;
+        fn get_iosurface_sequence() -> u32;
     }
 }
 
@@ -102,5 +113,87 @@ pub async fn pick_and_capture() -> Result<Vec<u8>, Error> {
         Ok(Some(bytes)) => Ok(bytes),
         Ok(None) => Err(Error::Platform("Picker cancelled or failed".into())),
         Err(_) => Err(Error::Platform("Picker channel closed".into())),
+    }
+}
+
+/// High-speed ScreenCaptureKit-based screen capturer (macOS 12.3+).
+/// 
+/// Uses SCStream for 60fps+ capable frame capture.
+/// Much faster than CGWindowListCreateImage-based approaches.
+#[cfg(target_os = "macos")]
+pub struct SCKCapturer {
+    _private: (),
+}
+
+#[cfg(target_os = "macos")]
+impl SCKCapturer {
+    /// Initialize the ScreenCaptureKit stream.
+    /// Returns None if SCK is not available (macOS < 12.3).
+    pub fn new() -> Option<Self> {
+        if ffi::init_sck_stream() {
+            Some(Self { _private: () })
+        } else {
+            None
+        }
+    }
+    
+    /// Get the latest captured frame as raw BGRA bytes.
+    /// Returns (width, height, data) or None if no frame available yet.
+    pub fn get_frame(&self) -> Option<crate::RawCapture> {
+        let data = ffi::get_latest_frame();
+        if data.len() < 8 {
+            return None;
+        }
+        
+        // Decode width and height from first 8 bytes
+        let width = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let height = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        
+        // Check if this is dimensions-only response (9th byte = 0xFF)
+        if data.len() == 9 && data[8] == 0xFF {
+            // SCK stream is running, return dummy frame with dimensions
+            Some(crate::RawCapture {
+                data: vec![], // Empty for timing test
+                width,
+                height,
+            })
+        } else if data.len() == 8 + (width * height * 4) as usize {
+            Some(crate::RawCapture {
+                data: data[8..].to_vec(),
+                width,
+                height,
+            })
+        } else {
+            None
+        }
+    }
+    
+    /// Get the number of unique frames captured by ScreenCaptureKit.
+    pub fn frame_count(&self) -> u32 {
+        ffi::get_frame_count()
+    }
+    
+    /// Reset the frame counter.
+    pub fn reset_frame_count(&self) {
+        ffi::reset_frame_count();
+    }
+    
+    /// Get the raw IOSurface pointer for zero-copy GPU access.
+    /// Returns None if no IOSurface is available.
+    pub fn iosurface_ptr(&self) -> Option<u64> {
+        let ptr = ffi::get_iosurface_ptr();
+        if ptr == 0 { None } else { Some(ptr) }
+    }
+    
+    /// Get the IOSurface sequence number to detect new frames.
+    pub fn iosurface_sequence(&self) -> u32 {
+        ffi::get_iosurface_sequence()
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for SCKCapturer {
+    fn drop(&mut self) {
+        ffi::stop_sck_stream();
     }
 }

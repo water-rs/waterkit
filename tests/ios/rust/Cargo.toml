@@ -17,6 +17,18 @@ waterkit_content = { path = "../../../sensor", package = "waterkit-sensor" }
 sensor = []
 biometric = []
 location = []
+audio = []
+camera = []
+clipboard = []
+codec = []
+dialog = []
+fs = []
+haptic = []
+notification = []
+permission = []
+secret = []
+system = []
+video = []
 
 [build-dependencies]
 swift-bridge-build.workspace = true

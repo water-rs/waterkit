@@ -12,12 +12,24 @@ jni.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 android_logger = "0.15"
 log.workspace = true
-waterkit_content = { path = "/Users/lexoliu/Coding/kit/location", package = "waterkit-location" }
+waterkit_content = { path = "/Users/lexoliu/Coding/kit/system", package = "waterkit-system" }
 
 [features]
 sensor = []
 biometric = []
 location = []
+audio = []
+camera = []
+clipboard = []
+codec = []
+dialog = []
+fs = []
+haptic = []
+notification = []
+permission = []
+secret = []
+system = []
+video = []
 
 
 # DYNAMIC DEPENDENCY SLOT

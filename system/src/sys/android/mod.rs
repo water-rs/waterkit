@@ -124,7 +124,7 @@ pub fn get_system_load() -> SystemLoad {
 }
 
 // JNI export for initialization from Java/Kotlin
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_system_SystemBridge_nativeInit<'local>(
     mut env: JNIEnv<'local>,
     _class: jni::objects::JClass<'local>,

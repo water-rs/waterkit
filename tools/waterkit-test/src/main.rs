@@ -256,6 +256,30 @@ fn get_crate_feature(package_name: &str) -> Option<&'static str> {
         Some("biometric")
     } else if package_name.contains("location") {
         Some("location")
+    } else if package_name.contains("audio") {
+        Some("audio")
+    } else if package_name.contains("camera") {
+        Some("camera")
+    } else if package_name.contains("clipboard") {
+        Some("clipboard")
+    } else if package_name.contains("codec") {
+        Some("codec")
+    } else if package_name.contains("dialog") {
+        Some("dialog")
+    } else if package_name.contains("fs") {
+        Some("fs")
+    } else if package_name.contains("haptic") {
+        Some("haptic")
+    } else if package_name.contains("notification") {
+        Some("notification")
+    } else if package_name.contains("permission") {
+        Some("permission")
+    } else if package_name.contains("secret") {
+        Some("secret")
+    } else if package_name.contains("system") {
+        Some("system")
+    } else if package_name.contains("video") {
+        Some("video")
     } else {
         None
     }

@@ -11,7 +11,7 @@ crate-type = ["staticlib"]
 swift-bridge.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 log.workspace = true
-waterkit_content = { path = "../../../sensor", package = "waterkit-sensor" }
+waterkit_content = { path = "/Users/lexoliu/Coding/kit/permission", package = "waterkit-permission" }
 
 [features]
 sensor = []

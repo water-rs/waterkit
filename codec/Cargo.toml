@@ -27,6 +27,8 @@ objc2-foundation.workspace = true
 objc2-io-surface.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
+ndk = { version = "0.9", features = ["media", "api-level-29"] }
+ndk-sys = "0.6"
 media-codec.workspace = true
 jni.workspace = true
 

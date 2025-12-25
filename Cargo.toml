@@ -184,3 +184,5 @@ clippy.pedantic = { level = "warn", priority = -1 }
 clippy.nursery = { level = "warn", priority = -1 }
 clippy.cargo = { level = "warn", priority = -1 }
 clippy.multiple_crate_versions = "allow"
+[patch.crates-io]
+futures-rustls = { path = "tools/deps_patch/futures-rustls" }

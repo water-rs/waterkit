@@ -74,7 +74,7 @@ impl MediaCenterIntegration {
         let inner = linux::MediaCenterInner::new().map_err(|e| e.to_string())?;
 
         #[cfg(target_os = "android")]
-        let inner = android::MediaCenterInner::new().map_err(|e| e.to_string())?;
+        let inner = android::MediaCenterInner::new().map_err(|e: crate::MediaError| e.to_string())?;
 
         #[cfg(not(any(
             target_os = "ios",

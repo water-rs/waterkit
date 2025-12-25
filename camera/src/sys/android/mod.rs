@@ -177,39 +177,166 @@ pub fn list_cameras_with_context(env: &mut JNIEnv) -> Result<Vec<CameraInfo>, Ca
     Ok(cameras)
 }
 
-// CameraInner placeholder - Android requires JNI context
+// CameraInner implementation using JNI
 #[derive(Debug)]
 pub struct CameraInner {
     resolution: Arc<Mutex<Resolution>>,
+    camera_id: String,
 }
 
 impl CameraInner {
     pub fn list() -> Result<Vec<CameraInfo>, CameraError> {
-        Err(CameraError::OpenFailed(
-            "Android: use list_cameras_with_context() with JNI context".into(),
-        ))
+        // This should not be called theoretically as the public API calls list_cameras_with_context
+        // But if it is, we can try to use the cached context
+        let mut env = unsafe {
+            let vm = jni::JavaVM::from_raw(ndk_context::android_context().vm().cast())
+                .map_err(|e| CameraError::Unknown(format!("vm attach: {e}")))?;
+            vm.attach_current_thread()
+                .map_err(|e| CameraError::Unknown(format!("env attach: {e}")))?
+        };
+        list_cameras_with_context(&mut env)
     }
 
-    pub fn open(_camera_id: &str) -> Result<Self, CameraError> {
-        Err(CameraError::OpenFailed(
-            "Android: use open_camera_with_context() with JNI context".into(),
-        ))
+    pub fn open(camera_id: &str) -> Result<Self, CameraError> {
+        // Get generic environment
+        let mut env = unsafe {
+            let vm = jni::JavaVM::from_raw(ndk_context::android_context().vm().cast())
+                .map_err(|e| CameraError::Unknown(format!("vm attach: {e}")))?;
+            vm.attach_current_thread()
+                .map_err(|e| CameraError::Unknown(format!("env attach: {e}")))?
+        };
+
+        let helper_class = get_helper_class(&mut env)?;
+        let context = CONTEXT
+            .get()
+            .ok_or_else(|| CameraError::OpenFailed("Context not initialized".into()))?;
+
+        let id_jstr = env
+            .new_string(camera_id)
+            .map_err(|e| CameraError::OpenFailed(format!("new_string: {e}")))?;
+
+        let result = env
+            .call_static_method(
+                (&helper_class).into(),
+                "openCamera",
+                "(Landroid/content/Context;Ljava/lang/String;)Z",
+                &[JValue::Object(context.as_obj()), JValue::Object(&id_jstr)],
+            )
+            .map_err(|e| CameraError::OpenFailed(format!("openCamera: {e}")))?
+            .z()
+            .map_err(|e| CameraError::OpenFailed(format!("openCamera result: {e}")))?;
+
+        if !result {
+            return Err(CameraError::OpenFailed(format!(
+                "Failed to open camera {camera_id}"
+            )));
+        }
+
+        Ok(Self {
+            resolution: Arc::new(Mutex::new(Resolution::HD)),
+            camera_id: camera_id.to_string(),
+        })
     }
 
     pub fn start(&mut self) -> Result<(), CameraError> {
-        Err(CameraError::NotSupported)
+        let mut env = unsafe {
+            let vm = jni::JavaVM::from_raw(ndk_context::android_context().vm().cast())
+                .map_err(|e| CameraError::Unknown(format!("vm attach: {e}")))?;
+            vm.attach_current_thread()
+                .map_err(|e| CameraError::Unknown(format!("env attach: {e}")))?
+        };
+
+        let helper_class = get_helper_class(&mut env)?;
+
+        let result = env
+            .call_static_method((&helper_class).into(), "startCapture", "()Z", &[])
+            .map_err(|e| CameraError::StartFailed(format!("startCapture: {e}")))?
+            .z()
+            .map_err(|e| CameraError::StartFailed(format!("startCapture result: {e}")))?;
+
+        if !result {
+            return Err(CameraError::StartFailed("Failed to start capture".into()));
+        }
+        Ok(())
     }
 
     pub fn stop(&mut self) -> Result<(), CameraError> {
-        Err(CameraError::NotSupported)
+        let mut env = unsafe {
+            let vm = jni::JavaVM::from_raw(ndk_context::android_context().vm().cast())
+                .map_err(|e| CameraError::Unknown(format!("vm attach: {e}")))?;
+            vm.attach_current_thread()
+                .map_err(|e| CameraError::Unknown(format!("env attach: {e}")))?
+        };
+
+        let helper_class = get_helper_class(&mut env)?;
+
+        env.call_static_method((&helper_class).into(), "stopCapture", "()V", &[])
+            .map_err(|e| CameraError::Unknown(format!("stopCapture: {e}")))?;
+
+        Ok(())
     }
 
     pub fn get_frame(&mut self) -> Result<CameraFrame, CameraError> {
-        Err(CameraError::NotSupported)
+        let mut env = unsafe {
+            let vm = jni::JavaVM::from_raw(ndk_context::android_context().vm().cast())
+                .map_err(|e| CameraError::Unknown(format!("vm attach: {e}")))?;
+            vm.attach_current_thread()
+                .map_err(|e| CameraError::Unknown(format!("env attach: {e}")))?
+        };
+
+        let helper_class = get_helper_class(&mut env)?;
+
+        let result = env
+            .call_static_method((&helper_class).into(), "getFrame", "()[B", &[])
+            .map_err(|e| CameraError::CaptureFailed(format!("getFrame: {e}")))?
+            .l()
+            .map_err(|e| CameraError::CaptureFailed(format!("getFrame result: {e}")))?;
+
+        if result.is_null() {
+             // Non-blocking return if no frame, or block? API says "may block".
+             // For now, if null, we can sleep a bit or return an error/empty.
+             // But CameraHelper uses latestFrame which is reset to null.
+             // We should loop or implement blocking in Kotlin.
+             // For simplicity, let's retry a few times or return NotReady/error.
+             // The trait implies blocking is allowed.
+             std::thread::sleep(std::time::Duration::from_millis(16));
+             return self.get_frame(); // Simple recursion for blocking
+        }
+
+        let array: jni::objects::JByteArray = result.into();
+        let bytes = env
+            .convert_byte_array(&array)
+            .map_err(|e| CameraError::CaptureFailed(format!("convert byte array: {e}")))?;
+
+        // Get size
+        let size_result = env
+            .call_static_method((&helper_class).into(), "getFrameSize", "()[I", &[])
+            .map_err(|e| CameraError::CaptureFailed(format!("getFrameSize: {e}")))?
+            .l()
+            .map_err(|e| CameraError::CaptureFailed(format!("getFrameSize result: {e}")))?;
+        
+        let size_array: jni::objects::JIntArray = size_result.into();
+        let mut sizes = [0i32; 2];
+        env.get_int_array_region(&size_array, 0, &mut sizes)
+            .map_err(|e| CameraError::CaptureFailed(format!("get_int_array_region: {e}")))?;
+
+        let width = sizes[0] as u32;
+        let height = sizes[1] as u32;
+
+        Ok(CameraFrame {
+            data: bytes,
+            width,
+            height,
+            format: FrameFormat::Rgba, // Kotlin converts to RGBA
+            native_handle: None,
+        })
     }
 
-    pub fn set_resolution(&mut self, _resolution: Resolution) -> Result<(), CameraError> {
-        Err(CameraError::NotSupported)
+    pub fn set_resolution(&mut self, resolution: Resolution) -> Result<(), CameraError> {
+        // TODO: Update Kotlin side resolution
+        let mut lock = self.resolution.lock().unwrap();
+        *lock = resolution;
+        Ok(())
     }
 
     pub fn resolution(&self) -> Resolution {
@@ -229,7 +356,7 @@ impl CameraInner {
     }
 
     pub fn take_photo(&mut self) -> Result<CameraFrame, CameraError> {
-        Err(CameraError::NotSupported)
+        self.get_frame() // Just take next frame for now
     }
 
     pub fn start_recording(&mut self, _path: &str) -> Result<(), CameraError> {

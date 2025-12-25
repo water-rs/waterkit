@@ -1,6 +1,6 @@
 //! Android media control implementation using JNI and MediaSession.
 
-use crate::{MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
+use crate::{MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
@@ -82,8 +82,10 @@ pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), Medi
     Ok(())
 }
 
+use jni::objects::JClass;
+
 /// Get the MediaSessionHelper class.
-fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JObject<'a>, MediaError> {
+fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, MediaError> {
     let class_loader = CLASS_LOADER
         .get()
         .ok_or_else(|| MediaError::InitializationFailed("Class loader not initialized".into()))?;
@@ -102,8 +104,10 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JObject<'a>, MediaError>
         .map_err(|e| MediaError::Unknown(format!("loadClass: {e}")))?
         .l()
         .map_err(|e| MediaError::Unknown(format!("loadClass result: {e}")))?;
-
-    Ok(helper_class)
+    
+    // helper_class is a JObject representing a Class. Convert to JClass.
+    // Ensure we import JClass.
+    Ok(helper_class.into())
 }
 
 /// Create a media session using the Context.
@@ -112,8 +116,8 @@ pub fn create_session_with_context(env: &mut JNIEnv, context: &JObject) -> Resul
 
     let helper_class = get_helper_class(env)?;
 
-    env.call_static_method(
-        (&helper_class).into(),
+    env.call_static_method::<&JClass, _, _>(
+        &helper_class,
         "createSession",
         "(Landroid/content/Context;)V",
         &[JValue::Object(context)],
@@ -148,8 +152,8 @@ pub fn set_metadata_with_context(
         .map(|d| d.as_millis() as i64)
         .unwrap_or(-1);
 
-    env.call_static_method(
-        (&helper_class).into(),
+    env.call_static_method::<&JClass, _, _>(
+        &helper_class,
         "setMetadata",
         "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V",
         &[
@@ -180,8 +184,8 @@ pub fn set_playback_state_with_context(
 
     let position_ms = state.position.map(|d| d.as_millis() as i64).unwrap_or(-1);
 
-    env.call_static_method(
-        (&helper_class).into(),
+    env.call_static_method::<&JClass, _, _>(
+        &helper_class,
         "setPlaybackState",
         "(IJF)V",
         &[
@@ -200,7 +204,7 @@ pub fn request_audio_focus_with_context(env: &mut JNIEnv) -> Result<(), MediaErr
     let helper_class = get_helper_class(env)?;
 
     let result = env
-        .call_static_method((&helper_class).into(), "requestAudioFocus", "()Z", &[])
+        .call_static_method::<&JClass, _, _>(&helper_class, "requestAudioFocus", "()Z", &[])
         .map_err(|e| MediaError::Unknown(format!("requestAudioFocus: {e}")))?
         .z()
         .map_err(|e| MediaError::Unknown(format!("requestAudioFocus result: {e}")))?;
@@ -216,7 +220,7 @@ pub fn request_audio_focus_with_context(env: &mut JNIEnv) -> Result<(), MediaErr
 pub fn abandon_audio_focus_with_context(env: &mut JNIEnv) -> Result<(), MediaError> {
     let helper_class = get_helper_class(env)?;
 
-    env.call_static_method((&helper_class).into(), "abandonAudioFocus", "()V", &[])
+    env.call_static_method::<&JClass, _, _>(&helper_class, "abandonAudioFocus", "()V", &[])
         .map_err(|e| MediaError::Unknown(format!("abandonAudioFocus: {e}")))?;
 
     Ok(())
@@ -226,7 +230,7 @@ pub fn abandon_audio_focus_with_context(env: &mut JNIEnv) -> Result<(), MediaErr
 pub fn clear_session(env: &mut JNIEnv) -> Result<(), MediaError> {
     let helper_class = get_helper_class(env)?;
 
-    env.call_static_method((&helper_class).into(), "clearSession", "()V", &[])
+    env.call_static_method::<&JClass, _, _>(&helper_class, "clearSession", "()V", &[])
         .map_err(|e| MediaError::Unknown(format!("clearSession: {e}")))?;
 
     Ok(())
@@ -234,9 +238,9 @@ pub fn clear_session(env: &mut JNIEnv) -> Result<(), MediaError> {
 
 // Placeholder for async wrapper (Android requires JNI context)
 #[derive(Debug)]
-pub struct MediaSessionInner;
+pub struct MediaCenterInner;
 
-impl MediaSessionInner {
+impl MediaCenterInner {
     pub fn new() -> Result<Self, MediaError> {
         // Actual initialization requires Context, which must be done via
         // create_session_with_context
@@ -284,4 +288,17 @@ impl MediaSessionInner {
             "Android: use clear_session()".into(),
         ))
     }
+
+    pub fn update(&self, _metadata: &MediaMetadata, _state: &PlaybackState) {
+        // No-op - Android uses Context-based static methods
+    }
+
+    pub fn run_loop(&self, _duration: std::time::Duration) {}
+
+    pub fn poll_command(&self) -> Option<MediaCommand> {
+        None
+    }
 }
+
+// Valid for backwards compat if needed, otherwise just this struct
+pub type MediaSessionInner = MediaCenterInner;

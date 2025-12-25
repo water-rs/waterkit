@@ -20,7 +20,7 @@ cpal = { workspace = true }
 # Async runtime (using workspace version but adding features)
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 # HTTP client
-zenwave = "0.3"
+# zenwave = "0.3"  # Moved to platform-specific sections below
 
 [build-dependencies]
 waterkit-build.workspace = true
@@ -28,20 +28,24 @@ waterkit-build.workspace = true
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 swift-bridge.workspace = true
+zenwave = { version = "0.3", default-features = false, features = ["apple-backend", "ws"] }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
 
-# Android
+# Android - use rustls with ring backend (avoids aws-lc-rs CMake issues)
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
+zenwave = { version = "0.3", default-features = false, features = ["hyper-rustls", "ws"] }
 
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = ["Media_Playback", "Media_Control", "Foundation", "Storage_Streams"] }
+zenwave = "0.3"
 
 # Linux
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
 futures.workspace = true
 mpris-server = "0.9"
+zenwave = "0.3"
 

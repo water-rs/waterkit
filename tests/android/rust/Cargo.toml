@@ -12,7 +12,7 @@ jni.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 android_logger = "0.15"
 log.workspace = true
-waterkit_content = { path = "/Users/lexoliu/Coding/kit/system", package = "waterkit-system" }
+waterkit_content = { path = "/Users/lexoliu/Coding/kit/codec", package = "waterkit-codec" }
 
 [features]
 sensor = []

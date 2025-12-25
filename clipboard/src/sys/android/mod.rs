@@ -1,6 +1,6 @@
 use crate::ImageData;
 use jni::JNIEnv;
-use jni::objects::{GlobalRef, JObject, JValue};
+use jni::objects::{GlobalRef, JByteArray, JObject, JString, JValue};
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
@@ -109,8 +109,9 @@ pub fn get_text_with_context(
     if obj.is_null() {
         Ok(None)
     } else {
+        let jstring = unsafe { JString::from_raw(obj.into_raw()) };
         let text = env
-            .get_string(obj.into())
+            .get_string(&jstring)
             .map_err(|e| format!("JNI error get_string: {e}"))?;
         Ok(Some(text.into()))
     }
@@ -159,8 +160,9 @@ pub fn get_image_with_context(
     if obj.is_null() {
         Ok(None)
     } else {
-        let auto_array = env
-            .convert_byte_array(obj.into())
+        let byte_array = unsafe { JByteArray::from_raw(obj.into_raw()) };
+        let _auto_array = env
+            .convert_byte_array(&byte_array)
             .map_err(|e| format!("JNI error convert_byte_array: {e}"))?;
         // We don't get width/height from the bytes easily without decoding.
         // arboard expects width/height.

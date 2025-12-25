@@ -102,13 +102,11 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         #[cfg(feature = "clipboard")]
         {
             log::info!("Testing waterkit-clipboard...");
-            match waterkit_content::set_text("WaterKit Test") {
-                Ok(_) => log::info!("Clipboard: set_text SUCCESS"),
-                Err(e) => log::error!("Clipboard set_text FAILED: {}", e),
-            }
+            waterkit_content::set_text("WaterKit Test".to_string());
+            log::info!("Clipboard: set_text called");
             match waterkit_content::get_text() {
-                Ok(text) => log::info!("Clipboard: get_text = {:?}", text),
-                Err(e) => log::error!("Clipboard get_text FAILED: {}", e),
+                Some(text) => log::info!("Clipboard: get_text = {:?}", text),
+                None => log::info!("Clipboard: get_text = None"),
             }
         }
 
@@ -129,7 +127,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         #[cfg(feature = "fs")]
         {
             log::info!("Testing waterkit-fs...");
-            match waterkit_content::get_cache_dir() {
+            match waterkit_content::WaterFs::cache_dir() {
                 Some(path) => log::info!("FS cache_dir: {:?}", path),
                 None => log::error!("FS cache_dir: None"),
             }
@@ -159,11 +157,11 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         #[cfg(feature = "secret")]
         {
             log::info!("Testing waterkit-secret...");
-            match waterkit_content::set("test_key", "test_value") {
+            match waterkit_content::SecretManager::set("waterkit", "test", "secret123").await {
                 Ok(_) => log::info!("Secret: set SUCCESS"),
                 Err(e) => log::error!("Secret set FAILED: {}", e),
             }
-            match waterkit_content::get("test_key") {
+            match waterkit_content::SecretManager::get("waterkit", "test").await {
                 Ok(val) => log::info!("Secret: get = {:?}", val),
                 Err(e) => log::error!("Secret get FAILED: {}", e),
             }

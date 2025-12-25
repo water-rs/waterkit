@@ -21,7 +21,7 @@ class MainActivity : AppCompatActivity() {
     
     companion object {
         init {
-            System.loadLibrary("waterkit_test")
+            System.loadLibrary("waterkit_test_android")
         }
     }
     
@@ -32,6 +32,9 @@ class MainActivity : AppCompatActivity() {
     
     // Location crate  
     private external fun testGetLocation(context: android.content.Context): DoubleArray?
+    
+    // Generic runner
+    private external fun runTest(activity: AppCompatActivity)
     
     // ===== End JNI declarations =====
     
@@ -67,7 +70,16 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(logText)
         
-        // ===== Permission Tests =====
+        // Generic Native Test
+        layout.addView(testButton("Run Generic Native Test") {
+            log("Running native test...")
+            Thread {
+                runTest(this)
+                runOnUiThread { log("Native test trigger complete (Check Logcat for details)") }
+            }.start()
+        })
+
+        // Permission Tests
         layout.addView(sectionHeader("Permission Crate"))
         
         layout.addView(testButton("Request Location Permission") {
@@ -99,6 +111,14 @@ class MainActivity : AppCompatActivity() {
         
         scroll.addView(layout)
         setContentView(scroll)
+
+        if (intent.getBooleanExtra("run_test", false)) {
+            log("Auto-running native test...")
+            Thread {
+                runTest(this)
+                runOnUiThread { log("Native test trigger complete") }
+            }.start()
+        }
     }
     
     private fun sectionHeader(title: String) = TextView(this).apply {

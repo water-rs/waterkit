@@ -17,7 +17,7 @@ use jni::objects::{JClass, JObject};
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
     mut _env: JNIEnv,
-    _class: JClass,
+    _this: JObject,
     _activity: JObject,
 ) {
     android_logger::init_once(
@@ -107,4 +107,23 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
 
         log::info!("=== Test Complete ===");
     });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_waterkit_test_MainActivity_testCheckPermission(
+    _env: JNIEnv,
+    _this: JObject,
+    _activity: JObject,
+    _permission_type: i32,
+) -> i32 {
+    3 // Granted
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_waterkit_test_MainActivity_testGetLocation(
+    _env: JNIEnv,
+    _this: JObject,
+    _activity: JObject,
+) -> JObject<'static> {
+    JObject::null()
 }

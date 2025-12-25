@@ -24,6 +24,11 @@ enum Commands {
         /// Path to the crate to run
         crate_path: PathBuf,
     },
+    /// Run a crate on iOS
+    Ios {
+        /// Path to the crate to run
+        crate_path: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -32,6 +37,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Android { crate_path } => run_android(&crate_path),
         Commands::Macos { crate_path } => run_macos(&crate_path),
+        Commands::Ios { crate_path } => run_ios(&crate_path),
     }
 }
 
@@ -114,6 +120,59 @@ fn run_macos(crate_path: &Path) -> Result<()> {
         "⚠️ macOS generic runner not fully implemented yet.".yellow()
     );
     println!("Target crate: {}", crate_path.display());
+
+    Ok(())
+}
+
+fn run_ios(crate_path: &Path) -> Result<()> {
+    println!(
+        "{}",
+        "🚀 Preparing iOS test environment...".green().bold()
+    );
+
+    // 1. Verify crate path
+    let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
+
+    if !crate_path.join("Cargo.toml").exists() {
+        anyhow::bail!("No Cargo.toml found at {}", crate_path.display());
+    }
+
+    println!("Target crate: {}", crate_path.display());
+
+    // 2. Modify tests/ios/rust/Cargo.toml
+    let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap() // tools
+        .parent()
+        .unwrap() // kit (root)
+        .to_path_buf();
+
+    let harness_cargo_path = root_dir.join("tests/ios/rust/Cargo.toml");
+    update_harness_dependency(&harness_cargo_path, &crate_path)?;
+
+    // 3. Build for iOS Simulator
+    println!("{}", "🔨 Building iOS library...".yellow().bold());
+    let status = std::process::Command::new("cargo")
+        .current_dir(root_dir)
+        .args([
+            "build",
+            "--target",
+            "aarch64-apple-ios-sim",
+            "-p",
+            "waterkit-test-ios",
+        ])
+        .status()
+        .context("Failed to run cargo build")?;
+
+    if !status.success() {
+        anyhow::bail!("iOS build failed");
+    }
+
+    println!(
+        "{}",
+        "✅ iOS library built successfully.".green().bold()
+    );
+    println!("You can now run the app via Xcode in tests/ios/app");
 
     Ok(())
 }

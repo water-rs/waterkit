@@ -19,7 +19,17 @@ pub struct AndroidConfig {
 pub fn find_android_jar() -> Option<PathBuf> {
     let android_home = env::var("ANDROID_HOME")
         .or_else(|_| env::var("ANDROID_SDK_ROOT"))
-        .ok()?;
+        .ok()
+        .or_else(|| {
+            // Try common location on macOS
+            let home = env::var("HOME").ok()?;
+            let sdk_path = PathBuf::from(home).join("Library/Android/sdk");
+            if sdk_path.exists() {
+                Some(sdk_path.to_string_lossy().to_string())
+            } else {
+                None
+            }
+        })?;
 
     let platforms_dir = PathBuf::from(&android_home).join("platforms");
 
@@ -55,7 +65,17 @@ pub fn find_android_jar() -> Option<PathBuf> {
 pub fn find_d8_jar() -> Option<PathBuf> {
     let android_home = env::var("ANDROID_HOME")
         .or_else(|_| env::var("ANDROID_SDK_ROOT"))
-        .ok()?;
+        .ok()
+        .or_else(|| {
+            // Try common location on macOS
+            let home = env::var("HOME").ok()?;
+            let sdk_path = PathBuf::from(home).join("Library/Android/sdk");
+            if sdk_path.exists() {
+                Some(sdk_path.to_string_lossy().to_string())
+            } else {
+                None
+            }
+        })?;
 
     let build_tools_dir = PathBuf::from(&android_home).join("build-tools");
 

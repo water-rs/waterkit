@@ -16,6 +16,7 @@ workspace = true
 [dependencies]
 futures.workspace = true
 futures-timer = { workspace = true }
+log.workspace = true
 
 [build-dependencies]
 waterkit-build.workspace = true

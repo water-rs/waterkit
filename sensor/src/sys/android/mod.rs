@@ -68,14 +68,32 @@ fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), SensorEr
             .to_str()
             .map_err(|e| SensorError::Unknown(format!("to_str failed: {e}")))?
     );
+    
+    // Remove if exists to handle previous read-only setting
+    let _ = std::fs::remove_file(&dex_path);
 
+    log::info!("Initializing DEX loader with path: {}", dex_path);
     std::fs::write(&dex_path, DEX_BYTES)
         .map_err(|e| SensorError::Unknown(format!("write DEX failed: {e}")))?;
+
+    // Make DEX read-only as required by modern Android security
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&dex_path)
+            .map_err(|e| SensorError::Unknown(format!("metadata DEX failed: {e}")))?
+            .permissions();
+        perms.set_mode(0o444); // Read-only
+        std::fs::set_permissions(&dex_path, perms)
+            .map_err(|e| SensorError::Unknown(format!("set_permissions DEX failed: {e}")))?;
+        log::info!("DEX file permissions set to read-only (0444)");
+    }
 
     let dex_path_jstring = env
         .new_string(&dex_path)
         .map_err(|e| SensorError::Unknown(format!("new_string failed: {e}")))?;
 
+    log::info!("Creating DexClassLoader...");
     let parent_loader = env
         .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
         .map_err(|e| SensorError::Unknown(format!("getClassLoader failed: {e}")))?
@@ -97,8 +115,12 @@ fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), SensorEr
                 JValue::Object(&parent_loader),
             ],
         )
-        .map_err(|e| SensorError::Unknown(format!("new DexClassLoader: {e}")))?;
+        .map_err(|e| {
+            log::error!("new DexClassLoader failed: {}", e);
+            SensorError::Unknown(format!("new DexClassLoader: {e}"))
+        })?;
 
+    log::info!("DexClassLoader created successfully.");
     let global_ref = env
         .new_global_ref(class_loader)
         .map_err(|e| SensorError::Unknown(format!("new_global_ref: {e}")))?;
@@ -213,8 +235,11 @@ pub fn is_sensor_available_with_context(
     context: &JObject,
     sensor_type: i32,
 ) -> Result<bool, SensorError> {
+    log::info!("Checking sensor availability for type {}...", sensor_type);
     init_with_context(env, context)?;
+    log::info!("Loading helper class...");
     let helper = load_helper_class(env)?;
+    log::info!("Calling isSensorAvailable static method...");
 
     let result = env
         .call_static_method(
@@ -223,10 +248,14 @@ pub fn is_sensor_available_with_context(
             "(Landroid/content/Context;I)Z",
             &[JValue::Object(context), JValue::Int(sensor_type)],
         )
-        .map_err(|e| SensorError::Unknown(format!("isSensorAvailable: {e}")))?
+        .map_err(|e| {
+            log::error!("isSensorAvailable failed: {}", e);
+            SensorError::Unknown(format!("isSensorAvailable: {e}"))
+        })?
         .z()
         .map_err(|e| SensorError::Unknown(format!("isSensorAvailable result: {e}")))?;
 
+    log::info!("Sensor available: {}", result);
     Ok(result)
 }
 

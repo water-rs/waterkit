@@ -146,7 +146,7 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
     };
 
     let sdk_path = String::from_utf8(
-        ::new("xcrun")
+        Command::new("xcrun")
             .args(["--sdk", sdk, "--show-sdk-path"])
             .output()
             .expect("xcrun failed")
@@ -156,7 +156,7 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
     .trim()
     .to_string();
 
-    let mut swiftc = ::new("swiftc");
+    let mut swiftc = Command::new("swiftc");
     swiftc
         .arg("-emit-object")
         .arg("-o")

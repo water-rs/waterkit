@@ -1,0 +1,20 @@
+[package]
+name = "waterkit-test-ios"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+swift-bridge.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+log.workspace = true
+# DYNAMIC DEPENDENCY SLOT
+# waterkit_content = { path = "..." }
+waterkit_content = { path = "/Users/lexoliu/Coding/kit/biometric", package = "waterkit-biometric" }
+
+[build-dependencies]
+swift-bridge-build.workspace = true
+waterkit-build.workspace = true

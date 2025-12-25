@@ -1,4 +1,10 @@
 Cargo.lock
 .DS_Store
 /target
-tests/android/.gradle
+.gradle/
+**/build/
+**/DerivedData/
+tests/android/app/src/main/jniLibs/
+tests/android/gradle_debug.log
+.idea/
+.vscode/

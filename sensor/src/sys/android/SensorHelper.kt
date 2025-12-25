@@ -66,7 +66,7 @@ object SensorHelper {
         }
 
         val handler = Handler(Looper.getMainLooper())
-        manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_FASTEST, handler)
+        manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME, handler)
 
         synchronized(lock) {
             try {
@@ -115,7 +115,7 @@ object SensorHelper {
         }
 
         val handler = Handler(Looper.getMainLooper())
-        manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_FASTEST, handler)
+        manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME, handler)
 
         synchronized(lock) {
             try {
@@ -165,7 +165,7 @@ object SensorHelper {
         }
 
         val handler = Handler(Looper.getMainLooper())
-        manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_FASTEST, handler)
+        manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME, handler)
 
         synchronized(lock) {
             try {

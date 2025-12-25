@@ -5,6 +5,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Handler
+import android.os.Looper
 
 /**
  * Helper class for accessing sensors on Android.
@@ -63,7 +65,8 @@ object SensorHelper {
             override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
         }
 
-        manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_FASTEST)
+        val handler = Handler(Looper.getMainLooper())
+        manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_FASTEST, handler)
 
         synchronized(lock) {
             try {
@@ -111,7 +114,8 @@ object SensorHelper {
             override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
         }
 
-        manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_FASTEST)
+        val handler = Handler(Looper.getMainLooper())
+        manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_FASTEST, handler)
 
         synchronized(lock) {
             try {
@@ -160,7 +164,8 @@ object SensorHelper {
             override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
         }
 
-        manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_FASTEST)
+        val handler = Handler(Looper.getMainLooper())
+        manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_FASTEST, handler)
 
         synchronized(lock) {
             try {

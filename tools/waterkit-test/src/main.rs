@@ -67,20 +67,33 @@ fn run_android(crate_path: &Path) -> Result<()> {
     let harness_cargo_path = root_dir.join("tests/android/rust/Cargo.toml");
     update_harness_dependency(&harness_cargo_path, &crate_path)?;
 
+    // 2.5 Get feature
+    let content_cargo_path = crate_path.join("Cargo.toml");
+    let content_toml_str = std::fs::read_to_string(&content_cargo_path).context("Read content toml")?;
+    let content_doc = content_toml_str.parse::<DocumentMut>().context("Parse content toml")?;
+    let package_name = content_doc["package"]["name"].as_str().unwrap_or("");
+    let feature = get_crate_feature(package_name);
+
     // 3. Run cargo ndk build
     println!("{}", "🔨 Building Android app...".yellow().bold());
+    let mut args = vec![
+        "ndk",
+        "-t",
+        "arm64-v8a",
+        "-o",
+        "tests/android/app/src/main/jniLibs",
+        "build",
+        "-p",
+        "waterkit-test-android",
+    ];
+    if let Some(f) = feature {
+        args.push("--features");
+        args.push(f);
+    }
+
     let status = std::process::Command::new("cargo")
-        .current_dir(root_dir) // Run from root
-        .args([
-            "ndk",
-            "-t",
-            "arm64-v8a",
-            "-o",
-            "tests/android/app/src/main/jniLibs",
-            "build",
-            "-p",
-            "waterkit-test-android", // The harness crate
-        ])
+        .current_dir(&root_dir)
+        .args(&args)
         .status()
         .context("Failed to run cargo ndk")?;
 
@@ -150,17 +163,30 @@ fn run_ios(crate_path: &Path) -> Result<()> {
     let harness_cargo_path = root_dir.join("tests/ios/rust/Cargo.toml");
     update_harness_dependency(&harness_cargo_path, &crate_path)?;
 
+    // 2.5 Get feature
+    let content_cargo_path = crate_path.join("Cargo.toml");
+    let content_toml_str = std::fs::read_to_string(&content_cargo_path).context("Read content toml")?;
+    let content_doc = content_toml_str.parse::<DocumentMut>().context("Parse content toml")?;
+    let package_name = content_doc["package"]["name"].as_str().unwrap_or("");
+    let feature = get_crate_feature(package_name);
+
     // 3. Build for iOS Simulator
     println!("{}", "🔨 Building iOS library...".yellow().bold());
+    let mut args = vec![
+        "build",
+        "--target",
+        "aarch64-apple-ios-sim",
+        "-p",
+        "waterkit-test-ios",
+    ];
+    if let Some(f) = feature {
+        args.push("--features");
+        args.push(f);
+    }
+
     let status = std::process::Command::new("cargo")
-        .current_dir(root_dir)
-        .args([
-            "build",
-            "--target",
-            "aarch64-apple-ios-sim",
-            "-p",
-            "waterkit-test-ios",
-        ])
+        .current_dir(&root_dir)
+        .args(&args)
         .status()
         .context("Failed to run cargo build")?;
 
@@ -221,4 +247,16 @@ fn update_harness_dependency(harness_path: &Path, content_crate_path: &Path) -> 
         path_str, package_name
     );
     Ok(())
+}
+
+fn get_crate_feature(package_name: &str) -> Option<&'static str> {
+    if package_name.contains("sensor") {
+        Some("sensor")
+    } else if package_name.contains("biometric") {
+        Some("biometric")
+    } else if package_name.contains("location") {
+        Some("location")
+    } else {
+        None
+    }
 }

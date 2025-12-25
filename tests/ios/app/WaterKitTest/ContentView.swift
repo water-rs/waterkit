@@ -42,18 +42,11 @@ struct ContentView: View {
                 
                 // Test Buttons
                 List {
-                    Section(header: Text("Biometric")) {
-                        Button("Test Biometric") {
-                            logger.log("Triggering Biometric test...")
-                            // test_biometric() // From Rust
-                            logger.log("✓ Biometric test triggered")
-                        }
-                    }
-                    
-                    Section(header: Text("Location")) {
-                        Button("Test Location") {
-                            logger.log("Triggering Location test...")
-                            logger.log("✓ Location test triggered")
+                    Section(header: Text("Tests")) {
+                        Button("Run All Tests") {
+                            logger.log("Executing run_tests()...")
+                            run_tests()
+                            logger.log("✓ Finalized execution")
                         }
                     }
                 }

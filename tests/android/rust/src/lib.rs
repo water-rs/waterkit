@@ -5,7 +5,7 @@
 #![allow(clippy::cargo_common_metadata)]
 
 use jni::JNIEnv;
-use jni::objects::{JClass, JObject};
+use jni::objects::JObject;
 
 // This harness expects `waterkit_content` to be available.
 // The CLI ensures this dependency is injected.
@@ -31,6 +31,8 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         return;
     }
 
+    let activity_global = _env.new_global_ref(_activity).unwrap();
+
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -38,71 +40,47 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
 
     rt.block_on(async {
         log::info!("=== Generic Android Test Runner ===");
-        log::info!("Checking sensor availability...");
+        let java_vm = _env.get_java_vm().unwrap();
+        let mut env = java_vm.get_env().unwrap();
+        let activity = activity_global.as_obj();
 
-        if waterkit_content::Accelerometer::is_available() {
-            log::info!("Accelerometer: Available");
-            match waterkit_content::Accelerometer::read().await {
-                Ok(data) => log::info!(
-                    "Accelerometer Read: x={:.2} y={:.2} z={:.2}",
-                    data.x,
-                    data.y,
-                    data.z
-                ),
-                Err(e) => log::error!("Accelerometer Read Error: {}", e),
+        #[cfg(feature = "sensor")]
+        {
+            log::info!("Testing waterkit-sensor...");
+            if waterkit_content::Accelerometer::is_available() {
+                log::info!("Accelerometer: Available");
+                match waterkit_content::Accelerometer::read().await {
+                    Ok(data) => log::info!(
+                        "Accelerometer Read: x={:.2} y={:.2} z={:.2}",
+                        data.x, data.y, data.z
+                    ),
+                    Err(e) => log::error!("Accelerometer Read Error: {}", e),
+                }
             }
-        } else {
-            log::warn!("Accelerometer: Not Available");
         }
 
-        if waterkit_content::Gyroscope::is_available() {
-            log::info!("Gyroscope: Available");
-            match waterkit_content::Gyroscope::read().await {
-                Ok(data) => log::info!(
-                    "Gyroscope Read: x={:.2} y={:.2} z={:.2}",
-                    data.x,
-                    data.y,
-                    data.z
-                ),
-                Err(e) => log::error!("Gyroscope Read Error: {}", e),
+        #[cfg(feature = "biometric")]
+        {
+            log::info!("Testing waterkit-biometric...");
+            match waterkit_content::sys::android::authenticate_with_context(&mut env, activity, "Test Auth") {
+                Ok(rx) => {
+                    match rx.await {
+                        Ok(Ok(_)) => log::info!("Biometric Auth SUCCESS"),
+                        Ok(Err(e)) => log::error!("Biometric Auth FAILED: {}", e),
+                        Err(e) => log::error!("Biometric Auth CHANNEL ERROR: {}", e),
+                    }
+                }
+                Err(e) => log::error!("Biometric Init FAILED: {}", e),
             }
-        } else {
-            log::warn!("Gyroscope: Not Available");
         }
 
-        if waterkit_content::Magnetometer::is_available() {
-            log::info!("Magnetometer: Available");
-            match waterkit_content::Magnetometer::read().await {
-                Ok(data) => log::info!(
-                    "Magnetometer Read: x={:.2} y={:.2} z={:.2}",
-                    data.x,
-                    data.y,
-                    data.z
-                ),
-                Err(e) => log::error!("Magnetometer Read Error: {}", e),
+        #[cfg(feature = "location")]
+        {
+            log::info!("Testing waterkit-location...");
+            match waterkit_content::sys::android::get_location_with_context(&mut env, activity) {
+                Ok(loc) => log::info!("Location: lat={}, lon={}", loc.latitude, loc.longitude),
+                Err(e) => log::error!("Location FAILED: {}", e),
             }
-        } else {
-            log::warn!("Magnetometer: Not Available");
-        }
-
-        if waterkit_content::Barometer::is_available() {
-            log::info!("Barometer: Available");
-            match waterkit_content::Barometer::read().await {
-                Ok(data) => log::info!("Barometer Read: {:.2}", data.value),
-                Err(e) => log::error!("Barometer Read Error: {}", e),
-            }
-        } else {
-            log::warn!("Barometer: Not Available");
-        }
-
-        if waterkit_content::AmbientLight::is_available() {
-            log::info!("AmbientLight: Available");
-            match waterkit_content::AmbientLight::read().await {
-                Ok(data) => log::info!("AmbientLight Read: {:.2}", data.value),
-                Err(e) => log::error!("AmbientLight Read Error: {}", e),
-            }
-        } else {
-            log::warn!("AmbientLight: Not Available");
         }
 
         log::info!("=== Test Complete ===");

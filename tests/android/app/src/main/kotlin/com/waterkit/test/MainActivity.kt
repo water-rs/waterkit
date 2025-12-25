@@ -112,8 +112,19 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(layout)
         setContentView(scroll)
 
+        checkIntent(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        checkIntent(intent)
+    }
+
+    private fun checkIntent(intent: android.content.Intent) {
         if (intent.getBooleanExtra("run_test", false)) {
             log("Auto-running native test...")
+            android.util.Log.i("waterkit", "Auto-running native test triggered from intent")
             Thread {
                 runTest(this)
                 runOnUiThread { log("Native test trigger complete") }

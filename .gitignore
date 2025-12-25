@@ -3,8 +3,14 @@ Cargo.lock
 /target
 .gradle/
 **/build/
+**/.build/
 **/DerivedData/
 tests/android/app/src/main/jniLibs/
 tests/android/gradle_debug.log
+tests/ios/app/WaterKitTest.app/
+tests/ios/app/WaterKitTest/Generated/
+tests/ios/app/Info.plist
+WaterKitTest.app/
+tests/app/
 .idea/
 .vscode/

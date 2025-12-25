@@ -2,7 +2,7 @@ use crate::{BiometricError, BiometricType};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jlong};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 /// Embedded DEX bytecode.
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
@@ -18,8 +18,7 @@ static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
 /// Type of callback: tokio::sync::oneshot::Sender<Result<(), BiometricError>>
 type BiometricSender = tokio::sync::oneshot::Sender<Result<(), BiometricError>>;
 
-/// Initialize the DEX class loader. Must be called with a valid Context.
-pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), BiometricError> {
+pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), BiometricError> {
     if CLASS_LOADER.get().is_some() {
         return Ok(());
     }
@@ -45,8 +44,23 @@ pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), Biom
             .map_err(|e| BiometricError::PlatformError(format!("to_str: {e}")))?
     );
 
+    // Remove if exists to handle previous read-only setting
+    let _ = std::fs::remove_file(&dex_path);
+
     std::fs::write(&dex_path, DEX_BYTES)
         .map_err(|e| BiometricError::PlatformError(format!("write DEX: {e}")))?;
+
+    // Make DEX read-only as required by modern Android security
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&dex_path)
+            .map_err(|e| BiometricError::PlatformError(format!("metadata DEX failed: {e}")))?
+            .permissions();
+        perms.set_mode(0o444); // Read-only
+        std::fs::set_permissions(&dex_path, perms)
+            .map_err(|e| BiometricError::PlatformError(format!("set_permissions DEX failed: {e}")))?;
+    }
 
     let dex_path_jstring = env
         .new_string(&dex_path)
@@ -108,7 +122,7 @@ fn register_natives(env: &mut JNIEnv) -> Result<(), BiometricError> {
         .map_err(|e| BiometricError::PlatformError(format!("register_native_methods: {e}")))
 }
 
-fn get_helper_class<'a>(env: &'a mut JNIEnv) -> Result<JClass<'a>, BiometricError> {
+fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, BiometricError> {
     let class_loader = CLASS_LOADER.get().ok_or(BiometricError::PlatformError(
         "Class loader not initialized".into(),
     ))?;
@@ -131,7 +145,7 @@ fn get_helper_class<'a>(env: &'a mut JNIEnv) -> Result<JClass<'a>, BiometricErro
     Ok(helper_class.into())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_waterkit_biometric_BiometricHelper_onResult(
     mut env: JNIEnv,
     _class: JClass,
@@ -140,7 +154,7 @@ pub unsafe extern "system" fn Java_waterkit_biometric_BiometricHelper_onResult(
     error_msg: JString,
 ) {
     let sender_ptr = callback_ptr as *mut BiometricSender;
-    let sender = Box::from_raw(sender_ptr); // Reconstruct Box to take ownership and drop it
+    let sender = unsafe { Box::from_raw(sender_ptr) };
 
     if success != 0 {
         let _ = sender.send(Ok(()));
@@ -178,7 +192,7 @@ pub fn authenticate_with_context(
     context: &JObject,
     reason: &str,
 ) -> Result<tokio::sync::oneshot::Receiver<Result<(), BiometricError>>, BiometricError> {
-    init_with_context(env, context)?;
+    init(env, context)?;
 
     let (tx, rx) = tokio::sync::oneshot::channel();
     let sender_box = Box::new(tx);

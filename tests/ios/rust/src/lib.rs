@@ -47,6 +47,10 @@ fn run_tests() {
         #[cfg(feature = "camera")]
         {
             println!("Testing waterkit-camera...");
+            match waterkit_content::Camera::list() {
+                Ok(cams) => println!("Found {} cameras", cams.len()),
+                Err(e) => println!("Camera list failed: {:?}", e),
+            }
             println!("Camera: API available (display requires View)");
         }
 
@@ -93,7 +97,11 @@ fn run_tests() {
         #[cfg(feature = "notification")]
         {
             println!("Testing waterkit-notification...");
-            println!("Notification: API available");
+            waterkit_content::Notification::new()
+                .title("WaterKit Test")
+                .body("iOS notification is working!")
+                .show();
+            println!("Notification: Sent test notification");
         }
 
         #[cfg(feature = "permission")]

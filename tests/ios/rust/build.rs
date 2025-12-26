@@ -22,6 +22,28 @@ fn main() {
     if std::env::var("CARGO_FEATURE_SENSOR").is_ok() {
         bridges.push("../../../sensor/src/sys/apple/mod.rs".to_string());
     }
+
+    // Add camera bridge if feature enabled
+    if std::env::var("CARGO_FEATURE_CAMERA").is_ok() {
+        bridges.push("../../../camera/src/sys/apple/mod.rs".to_string());
+    }
+
+    // Add location bridge if feature enabled
+    if std::env::var("CARGO_FEATURE_LOCATION").is_ok() {
+        bridges.push("../../../location/src/sys/apple/mod.rs".to_string());
+    }
+
+    // Add permission bridge if feature enabled
+    if std::env::var("CARGO_FEATURE_PERMISSION").is_ok() {
+        bridges.push("../../../permission/src/sys/apple/mod.rs".to_string());
+    }
+
+    // Add notification bridge if feature enabled
+    if std::env::var("CARGO_FEATURE_NOTIFICATION").is_ok() {
+        bridges.push("../../../notification/src/sys/apple/mod.rs".to_string());
+    }
+    
+    // Add other crates as needed...
     
     let bridges_refs: Vec<&str> = bridges.iter().map(|s| s.as_str()).collect();
     

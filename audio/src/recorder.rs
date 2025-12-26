@@ -276,6 +276,12 @@ impl AudioRecorder {
     pub fn try_read(&mut self) -> Option<AudioBuffer> {
         self.inner.try_read()
     }
+    
+    /// Get an async stream of audio buffers.
+    #[must_use]
+    pub fn stream(&self) -> impl futures::Stream<Item = AudioBuffer> {
+        self.inner.receiver()
+    }
 
     /// Check if currently recording.
     #[must_use]

@@ -18,7 +18,10 @@ rodio = { workspace = true }
 # Cross-platform audio I/O (for recording)
 cpal = { workspace = true }
 # Async runtime (using workspace version but adding features)
+# Async runtime (using workspace version but adding features)
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
+async-channel = { workspace = true }
+futures = { workspace = true }
 # HTTP client
 # zenwave = "0.3"  # Moved to platform-specific sections below
 

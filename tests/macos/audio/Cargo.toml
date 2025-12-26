@@ -10,6 +10,12 @@ description = "macOS test for waterkit-audio"
 name = "audio-test"
 path = "src/main.rs"
 
+[[bin]]
+name = "audio-recorder-test"
+path = "src/bin/audio_recorder_test.rs"
+
 [dependencies]
 waterkit-audio.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+futures = { workspace = true }
 

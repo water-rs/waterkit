@@ -5,7 +5,7 @@
 use crate::recorder::{AudioBuffer, AudioFormat, InputDevice, RecordError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicBool, Ordering},
 };
 
@@ -14,7 +14,9 @@ pub struct AudioRecorderInner {
     device: cpal::Device,
     format: AudioFormat,
     stream: Option<cpal::Stream>,
-    buffer: Arc<Mutex<Vec<f32>>>,
+    // Channel for streaming audio data
+    sender: Option<async_channel::Sender<AudioBuffer>>,
+    receiver: async_channel::Receiver<AudioBuffer>,
     recording: Arc<AtomicBool>,
 }
 
@@ -58,11 +60,15 @@ impl AudioRecorderInner {
                 .ok_or_else(|| RecordError::DeviceNotFound("no default device".into()))?
         };
 
+        // Create unbound channel for audio data
+        let (sender, receiver) = async_channel::unbounded();
+
         Ok(Self {
             device,
             format,
             stream: None,
-            buffer: Arc::new(Mutex::new(Vec::new())),
+            sender: Some(sender),
+            receiver,
             recording: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -80,18 +86,27 @@ impl AudioRecorderInner {
             buffer_size: cpal::BufferSize::Default,
         };
 
-        let buffer = Arc::clone(&self.buffer);
         let recording = Arc::clone(&self.recording);
+        
+        // We need a sender for the callback
+        let sender = if let Some(s) = &self.sender {
+            s.clone()
+        } else {
+            return Err(RecordError::StartFailed("Recoder is in invalid state".into()));
+        };
+        
+        let format = self.format;
 
         let stream = self
             .device
             .build_input_stream(
                 &config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if recording.load(Ordering::Relaxed)
-                        && let Ok(mut buf) = buffer.lock()
-                    {
-                        buf.extend_from_slice(data);
+                    if recording.load(Ordering::Relaxed) {
+                        let samples = data.to_vec();
+                        let buffer = AudioBuffer::new(samples, format);
+                        // Ignore errors if receiver is dropped
+                        let _ = sender.try_send(buffer);
                     }
                 },
                 |err| {
@@ -130,39 +145,25 @@ impl AudioRecorderInner {
             return Err(RecordError::NotRecording);
         }
 
-        // Wait until we have some data
-        loop {
-            {
-                let mut buf = self.buffer.lock().unwrap();
-                if !buf.is_empty() {
-                    let samples = std::mem::take(&mut *buf);
-                    drop(buf);
-                    // The original instruction implies a callback `self.on_data` here,
-                    // but `self.on_data` is not defined in the struct or provided in the diff.
-                    // To maintain syntactic correctness and faithfulness to the provided diff snippet,
-                    // while also acknowledging the original return type, we'll keep the return.
-                    // If `self.on_data` were defined, this line would be `(self.on_data)(AudioBuffer::new(samples, self.format));`
-                    return Ok(AudioBuffer::new(samples, self.format));
-                }
-            }
-            // Yield to async runtime
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        self.receiver.recv().await.map_err(|e| RecordError::ReadFailed(e.to_string()))
     }
 
     /// Try to read without waiting.
     pub fn try_read(&self) -> Option<AudioBuffer> {
-        let mut buf = self.buffer.lock().ok()?;
-        if buf.is_empty() {
-            return None;
-        }
-        let samples = std::mem::take(&mut *buf);
-        drop(buf);
-        Some(AudioBuffer::new(samples, self.format))
+        self.receiver.try_recv().ok()
     }
 
     /// Check if recording.
     pub fn is_recording(&self) -> bool {
         self.recording.load(Ordering::Relaxed)
+    }
+
+    pub fn split(self) -> (crate::sys::AudioRecorderInner, async_channel::Receiver<AudioBuffer>) {
+        let receiver = self.receiver.clone();
+        (self, receiver)
+    }
+
+    pub fn receiver(&self) -> async_channel::Receiver<AudioBuffer> {
+        self.receiver.clone()
     }
 }

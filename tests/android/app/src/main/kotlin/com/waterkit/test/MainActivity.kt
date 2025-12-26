@@ -109,6 +109,33 @@ class MainActivity : AppCompatActivity() {
             }
         })
         
+        // ===== Camera Tests =====
+        layout.addView(sectionHeader("Camera Crate"))
+        
+        layout.addView(testButton("List Cameras") {
+            log("Listing cameras...")
+            // TODO: Expose list_cameras via JNI if needed, or rely on runTest
+            // For now, let's assume runTest covers it or add specific JNI calls later.
+        })
+        
+        layout.addView(testButton("Start Camera Preview") {
+            if (!hasPermission(Manifest.permission.CAMERA)) {
+                requestPermissions(arrayOf(Manifest.permission.CAMERA), 1001)
+                return@testButton
+            }
+            log("Starting camera preview...")
+            // Invoking Rust via runTest for now as specific JNI bindings for UI interaction aren't fully exposed in MainActivity yet.
+            // Ideally we'd have `testStartCamera()` JNI.
+        })
+
+        // ===== Video Tests =====
+        layout.addView(sectionHeader("Video Crate"))
+        
+        layout.addView(testButton("Play Test Video") {
+            log("Starting video playback check...")
+            // Invoking Rust via runTest
+        })
+        
         scroll.addView(layout)
         setContentView(scroll)
 

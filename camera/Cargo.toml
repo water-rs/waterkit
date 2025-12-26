@@ -42,3 +42,4 @@ core-graphics-types = "0.2"
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
+ndk-context = "0.1"

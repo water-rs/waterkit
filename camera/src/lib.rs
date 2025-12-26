@@ -6,7 +6,7 @@
 
 #![warn(missing_docs)]
 
-mod sys;
+pub mod sys;
 
 use std::fmt;
 

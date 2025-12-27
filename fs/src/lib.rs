@@ -4,7 +4,8 @@
 //! such as documents and cache folders across iOS, macOS, Android, Windows, and Linux.
 
 /// Platform-specific implementations.
-pub mod sys;
+#[cfg(any(target_os = "ios", target_os = "android"))]
+mod sys;
 
 use std::path::PathBuf;
 

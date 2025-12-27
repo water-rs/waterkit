@@ -6,7 +6,7 @@
 #![warn(missing_docs)]
 
 /// Platform-specific implementations.
-pub mod sys;
+mod sys;
 
 /// Errors that can occur when accessing secrets.
 #[derive(Debug, thiserror::Error)]

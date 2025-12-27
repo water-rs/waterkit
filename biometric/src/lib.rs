@@ -4,7 +4,7 @@
 #![warn(missing_docs)]
 
 /// Platform-specific implementations.
-pub mod sys;
+mod sys;
 
 use thiserror::Error;
 

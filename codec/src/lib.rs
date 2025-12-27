@@ -12,7 +12,7 @@
 #![warn(missing_docs)]
 
 /// Platform-specific implementations.
-pub mod sys;
+mod sys;
 
 #[cfg(feature = "av1")]
 pub mod av1;

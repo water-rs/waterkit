@@ -156,35 +156,24 @@ pub enum MediaCommand {
 }
 
 /// Errors that can occur with media control.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum MediaError {
     /// Media control is not supported on this platform.
+    #[error("media control not supported on this platform")]
     NotSupported,
     /// Failed to initialize media session.
+    #[error("failed to initialize media session: {0}")]
     InitializationFailed(String),
     /// Failed to update media state.
+    #[error("failed to update media state: {0}")]
     UpdateFailed(String),
     /// Audio focus was not granted.
+    #[error("audio focus was denied")]
     AudioFocusDenied,
     /// An unknown error occurred.
+    #[error("unknown error: {0}")]
     Unknown(String),
 }
-
-impl std::fmt::Display for MediaError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotSupported => write!(f, "media control not supported on this platform"),
-            Self::InitializationFailed(msg) => {
-                write!(f, "failed to initialize media session: {msg}")
-            }
-            Self::UpdateFailed(msg) => write!(f, "failed to update media state: {msg}"),
-            Self::AudioFocusDenied => write!(f, "audio focus was denied"),
-            Self::Unknown(msg) => write!(f, "unknown error: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for MediaError {}
 
 /// Handler for media commands from system controls.
 pub trait MediaCommandHandler: Send + Sync {

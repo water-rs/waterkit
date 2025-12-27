@@ -26,7 +26,7 @@
 #![warn(missing_docs)]
 
 /// Platform-specific implementations.
-pub mod sys;
+mod sys;
 
 use futures::Stream;
 use std::pin::Pin;
@@ -54,30 +54,21 @@ pub struct ScalarData {
 }
 
 /// Errors that can occur when accessing sensors.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum SensorError {
     /// Sensor is not available on this device.
+    #[error("sensor not available")]
     NotAvailable,
     /// Sensor access permission denied.
+    #[error("sensor permission denied")]
     PermissionDenied,
     /// Sensor read timed out.
+    #[error("sensor read timed out")]
     Timeout,
     /// An unknown error occurred.
+    #[error("unknown error: {0}")]
     Unknown(String),
 }
-
-impl std::fmt::Display for SensorError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotAvailable => write!(f, "sensor not available"),
-            Self::PermissionDenied => write!(f, "sensor permission denied"),
-            Self::Timeout => write!(f, "sensor read timed out"),
-            Self::Unknown(msg) => write!(f, "unknown error: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for SensorError {}
 
 /// A boxed Stream of sensor data.
 pub type SensorStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;

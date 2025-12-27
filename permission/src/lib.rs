@@ -6,7 +6,7 @@
 #![warn(missing_docs)]
 
 /// Platform-specific implementations.
-pub mod sys;
+mod sys;
 
 /// Types of permissions that can be requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -40,24 +40,15 @@ pub enum PermissionStatus {
 }
 
 /// Errors that can occur when requesting permissions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum PermissionError {
     /// The permission type is not supported on this platform.
+    #[error("permission not supported on this platform")]
     NotSupported,
     /// An unknown error occurred.
+    #[error("unknown error: {0}")]
     Unknown(String),
 }
-
-impl std::fmt::Display for PermissionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotSupported => write!(f, "permission not supported on this platform"),
-            Self::Unknown(msg) => write!(f, "unknown error: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for PermissionError {}
 
 /// Check the current status of a permission without requesting it.
 pub async fn check(permission: Permission) -> PermissionStatus {

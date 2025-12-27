@@ -6,7 +6,7 @@
 #![warn(missing_docs)]
 
 /// Platform-specific implementations.
-pub mod sys;
+mod sys;
 
 pub use waterkit_permission::{Permission, PermissionStatus};
 
@@ -28,33 +28,24 @@ pub struct Location {
 }
 
 /// Errors that can occur when accessing location.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum LocationError {
     /// Location permission was not granted.
+    #[error("location permission denied")]
     PermissionDenied,
     /// Location services are disabled on the device.
+    #[error("location services disabled")]
     ServiceDisabled,
     /// Location request timed out.
+    #[error("location request timed out")]
     Timeout,
     /// Location is not available.
+    #[error("location not available")]
     NotAvailable,
     /// An unknown error occurred.
+    #[error("unknown error: {0}")]
     Unknown(String),
 }
-
-impl std::fmt::Display for LocationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::PermissionDenied => write!(f, "location permission denied"),
-            Self::ServiceDisabled => write!(f, "location services disabled"),
-            Self::Timeout => write!(f, "location request timed out"),
-            Self::NotAvailable => write!(f, "location not available"),
-            Self::Unknown(msg) => write!(f, "unknown error: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for LocationError {}
 
 /// Manager for accessing device location.
 #[derive(Debug)]

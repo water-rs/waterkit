@@ -6,66 +6,91 @@ use futures::StreamExt;
 use std::time::Duration;
 use waterkit_audio::AudioRecorder;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Waterkit AudioRecorder Async Test ===\n");
 
-    // 1. Initialize Recorder
-    println!("Initializing recorder...");
-    let mut recorder = AudioRecorder::new()
-        .sample_rate(44100)
-        .channels(1)
-        .build()?;
-    println!("✓ Recorder initialized");
+    futures::executor::block_on(async {
+        // 1. Initialize Recorder
+        println!("Initializing recorder...");
+        let mut recorder = AudioRecorder::new()
+            .sample_rate(44100)
+            .channels(1)
+            .build()?;
+        println!("✓ Recorder initialized");
 
-    // 2. Start Recording
-    println!("Starting recording...");
-    recorder.start().await?;
-    println!("✓ Recording started");
+        // 2. Start Recording
+        println!("Starting recording...");
+        recorder.start().await?;
+        println!("✓ Recording started");
 
-    // 3. Consume Stream
-    println!("Capturing audio for 3 seconds...");
-    {
-        let stream = recorder.stream();
-        tokio::pin!(stream);
-        
-        let mut packet_count = 0;
-        let mut total_samples = 0;
+        // 3. Consume Stream
+        println!("Capturing audio for 3 seconds...");
+        {
+            let stream = recorder.stream();
+            futures::pin_mut!(stream);
 
-        // Use a timeout to stop test
-        let timeout = tokio::time::sleep(Duration::from_secs(3));
-        tokio::pin!(timeout);
+            let mut packet_count = 0;
+            let mut total_samples: usize = 0;
+            let start = std::time::Instant::now();
 
-        loop {
-            tokio::select! {
-                Some(buffer) = stream.next() => {
-                    packet_count += 1;
-                    total_samples += buffer.len();
-                    if packet_count % 10 == 0 {
-                        print!(".");
-                        use std::io::Write;
-                        std::io::stdout().flush()?;
-                    }
-                }
-                _ = &mut timeout => {
+            loop {
+                use futures::FutureExt;
+                let mut next_packet = stream.next().fuse();
+                let mut timeout = futures_timer::Delay::new(
+                    Duration::from_secs(3).saturating_sub(start.elapsed()),
+                )
+                .fuse();
+
+                if start.elapsed() >= Duration::from_secs(3) {
                     println!("\nTime's up!");
                     break;
                 }
+
+                futures::select! {
+                     packet = next_packet => {
+                        if let Some(buffer) = packet {
+                            packet_count += 1;
+                            total_samples += buffer.len();
+                            if packet_count % 10 == 0 {
+                                print!(".");
+                                use std::io::Write;
+                                let _ = std::io::stdout().flush();
+                            }
+                        } else {
+                            break; // Stream ended
+                        }
+                     },
+                     _ = timeout => {
+                         println!("\nTime's up!");
+                         break;
+                     }
+                }
+            }
+            println!(
+                "\nCaptured {} packets, {} total samples",
+                packet_count, total_samples
+            );
+            println!(
+                "Average packet size: {:.1} samples",
+                total_samples as f64
+                    / if packet_count > 0 {
+                        packet_count as f64
+                    } else {
+                        1.0
+                    }
+            );
+
+            if packet_count == 0 {
+                return Err("No audio data received".into());
             }
         }
-        println!("\nCaptured {} packets, {} total samples", packet_count, total_samples);
-        println!("Average packet size: {:.1} samples", total_samples as f64 / if packet_count > 0 { packet_count as f64 } else { 1.0 });
 
-        if packet_count == 0 {
-             return Err("No audio data received".into());
-        }
-    }
+        // 4. Stop Recording
+        println!("Stopping recording...");
+        recorder.stop().await?;
+        println!("✓ Recording stopped");
 
-    // 4. Stop Recording
-    println!("Stopping recording...");
-    recorder.stop().await?;
-    println!("✓ Recording stopped");
-
-    println!("\n=== Test PASSED ===");
-    Ok(())
+        println!("\n=== Test PASSED ===");
+        Ok(())
+    })
 }

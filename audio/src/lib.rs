@@ -12,7 +12,7 @@ mod player;
 mod recorder;
 mod sys;
 
-pub use player::{AudioDevice, AudioPlayer, AudioPlayerBuilder, PlayerError, PlayerState, rodio};
+pub use player::{AudioDevice, AudioPlayer, PlayerError, rodio};
 pub use recorder::{AudioBuffer, AudioFormat, AudioRecorder, AudioRecorderBuilder, RecordError};
 
 use std::time::Duration;
@@ -247,23 +247,5 @@ impl MediaSession {
         self.inner.clear()
     }
 
-    /// Run the main event loop for the specified duration.
-    ///
-    /// On macOS, this runs `CFRunLoop` which is required for
-    /// `MPRemoteCommandCenter` to receive and dispatch events in CLI apps.
-    /// GUI apps using `AppKit` or `SwiftUI` do not need this.
-    ///
-    /// On other platforms, this simply sleeps for the duration.
-    #[cfg(target_os = "macos")]
-    pub fn run_loop(&self, duration: std::time::Duration) {
-        self.inner.run_loop(duration);
-    }
-
-    /// Run the main event loop for the specified duration.
-    ///
-    /// On non-macOS platforms, this simply sleeps for the duration.
-    #[cfg(not(target_os = "macos"))]
-    pub fn run_loop(&self, duration: std::time::Duration) {
-        std::thread::sleep(duration);
-    }
+    // run_loop is now handled automatically in the background
 }

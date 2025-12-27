@@ -72,106 +72,104 @@ fn expand_path(path: &str) -> String {
     }
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args();
 
     println!("=== Waterkit Media AudioPlayer Test (macOS) ===\n");
 
-    // Determine metadata
-    let track_title = args.title.unwrap_or_else(|| {
-        args.audio_file
-            .as_ref()
-            .map(|f| {
-                std::path::Path::new(f)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("Test Audio")
-                    .to_string()
-            })
-            .unwrap_or_else(|| "Test Audio".to_string())
-    });
-    let track_artist = args.artist.unwrap_or_else(|| "Unknown Artist".to_string());
-    let track_album = args.album.unwrap_or_else(|| "Unknown Album".to_string());
-
-    // Create audio player with metadata
-    println!("Creating audio player...");
-    let mut builder = AudioPlayer::new()
-        .title(&track_title)
-        .artist(&track_artist)
-        .album(&track_album);
-
-    // Add artwork if provided (convert local path to file:// URL)
-    if let Some(art_path) = args.artwork {
-        let expanded = expand_path(&art_path);
-        let artwork_url = format!("file://{}", expanded);
-        builder = builder.artwork_url(&artwork_url);
-        println!("Artwork: {}", expanded);
-    }
-
-    let mut player = match builder.build() {
-        Ok(p) => {
-            println!("✓ Audio player created\n");
-            p
-        }
-        Err(e) => {
-            println!("✗ Failed to create player: {}\n", e);
-            return;
-        }
-    };
-
-    // Print metadata
-    println!("Now Playing:");
-    println!("  Title:  {}", track_title);
-    println!("  Artist: {}", track_artist);
-    println!("  Album:  {}", track_album);
-    println!();
-
-    // Play audio
-    if let Some(file_path) = args.audio_file {
+    let player = if let Some(file_path) = args.audio_file {
         let expanded_path = expand_path(&file_path);
+        println!("Opening: {}", expanded_path);
 
-        println!("Playing: {}", expanded_path);
-        match player.play_file(&expanded_path) {
-            Ok(()) => println!("✓ Audio playback started\n"),
-            Err(e) => {
-                println!("✗ Failed to play file: {}\n", e);
-                return;
-            }
+        let p = AudioPlayer::open(&expanded_path)?;
+        println!("✓ Audio opened");
+
+        // Apply overrides
+        let mut p = p;
+        if let Some(t) = args.title {
+            p = p.title(t);
         }
+        if let Some(a) = args.artist {
+            p = p.artist(a);
+        }
+        if let Some(a) = args.album {
+            p = p.album(a);
+        }
+        if let Some(art) = args.artwork {
+            let expanded = expand_path(&art);
+            let url = format!("file://{}", expanded);
+            p = p.artwork_url(url);
+            println!("Artwork: {}", expanded);
+        }
+
+        println!("\nNow Playing (Metadata):");
+        println!("  Title:  {:?}", p.metadata().title);
+        println!("  Artist: {:?}", p.metadata().artist);
+        println!("  Album:  {:?}", p.metadata().album);
+        println!();
+
+        println!("Starting playback...");
+        p.play();
+        p
     } else {
-        // Default: play a sine wave test tone
-        println!("No file specified, playing 440Hz test tone...");
-        {
-            use waterkit_audio::rodio::source::{SineWave, Source};
-            let source = SineWave::new(440.0)
-                .take_duration(Duration::from_secs(30))
-                .amplify(0.3);
-            player.sink().append(source);
-        }
-        println!("✓ Test tone playing\n");
-    }
-
-    // Use default command handler which handles Play, Pause, Stop, Seek, etc. automatically
-    player.set_default_handler();
+        println!("No file specified. Usage: cargo run -p waterkit-audio-test -- <file> [options]");
+        return Ok(());
+    };
 
     println!("Controls:");
     println!("  - Use media keys or Control Center to pause/play/seek");
     println!("  - Press Ctrl+C to stop");
     println!();
 
-    // Main loop - handle commands and keep playing
-    while !player.sink().empty() || player.sink().is_paused() {
-        // Check if stopped manually (via command)
-        if player.state() == waterkit_audio::PlayerState::Stopped {
-            break;
-        }
+    // Commands channel
+    let commands = player.commands();
+    // We need to poll commands. Since we are in sync main, we can stick to a simple loop
+    // that sleeps and occasionally polls if we had a blocking iterator,
+    // but commands() returns a Stream.
 
-        // Update progress bar periodically
-        player.update_now_playing();
+    // We can just sleep and let the background thread handle everything,
+    // AS LONG AS we don't need to do custom handling in this main thread.
+    // The player background thread handles polling commands and putting them in the queue.
+    // But SOMEONE needs to read the queue and call handle().
 
-        player.run_loop(Duration::from_millis(500));
-    }
+    // Since we are in a sync main, let's spawn a thread to handle commands using block_on
+    // or just run a loop here.
 
-    // RAII Drop will clear the media session
+    let player_ref = &player;
+    std::thread::scope(|s| {
+        s.spawn(move || {
+            // Simple blocking loop to print status
+            loop {
+                if !player_ref.is_playing()
+                    && player_ref.position().as_secs() > 0
+                    && player_ref
+                        .metadata()
+                        .duration
+                        .map_or(false, |d| player_ref.position() >= d)
+                {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1000));
+            }
+        });
+
+        // Run async command handler on main thread
+        futures::executor::block_on(async {
+            use futures::StreamExt;
+            let commands = commands; // move into async block
+            futures::pin_mut!(commands);
+
+            while let Some(cmd) = commands.next().await {
+                println!("Received command: {:?}", cmd);
+                player_ref.handle(&cmd);
+
+                if matches!(cmd, waterkit_audio::MediaCommand::Stop) {
+                    break;
+                }
+            }
+        });
+    });
+
     println!("\n=== Playback Complete ===");
+    Ok(())
 }

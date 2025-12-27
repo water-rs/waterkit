@@ -74,7 +74,8 @@ impl MediaCenterIntegration {
         let inner = linux::MediaCenterInner::new().map_err(|e| e.to_string())?;
 
         #[cfg(target_os = "android")]
-        let inner = android::MediaCenterInner::new().map_err(|e: crate::MediaError| e.to_string())?;
+        let inner =
+            android::MediaCenterInner::new().map_err(|e: crate::MediaError| e.to_string())?;
 
         #[cfg(not(any(
             target_os = "ios",
@@ -96,7 +97,8 @@ impl MediaCenterIntegration {
         self.inner.clear();
     }
 
-    pub fn run_loop(&self, duration: Duration) {
+    // run_loop is now handled internally by platform implementations
+    pub(crate) fn run_loop(&self, duration: Duration) {
         self.inner.run_loop(duration);
     }
 
@@ -125,9 +127,11 @@ struct FallbackMediaCenter;
 impl FallbackMediaCenter {
     fn update(&self, _metadata: &MediaMetadata, _state: &PlaybackState) {}
     fn clear(&self) {}
+    // run_loop used by background thread
     fn run_loop(&self, duration: Duration) {
         std::thread::sleep(duration);
     }
+
     fn poll_command(&self) -> Option<MediaCommand> {
         None
     }

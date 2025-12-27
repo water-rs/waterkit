@@ -205,12 +205,7 @@ impl MediaSessionInner {
         let conn_clone = Arc::clone(&connection);
 
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create tokio runtime");
-
-            rt.block_on(async {
+            smol::block_on(async {
                 match start_dbus_service().await {
                     Ok(conn) => {
                         if let Ok(mut guard) = conn_clone.write() {

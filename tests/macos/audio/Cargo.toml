@@ -16,6 +16,6 @@ path = "src/bin/audio_recorder_test.rs"
 
 [dependencies]
 waterkit-audio.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+futures-timer = "3.0"
 futures = { workspace = true }
 

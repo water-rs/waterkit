@@ -1,15 +1,15 @@
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-mod desktop;
+pub mod desktop;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub use desktop::*;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-mod apple;
+pub mod apple;
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 pub use apple::*;
 
 #[cfg(target_os = "android")]
-mod android;
+pub mod android;
 #[cfg(target_os = "android")]
 pub use android::*;
 

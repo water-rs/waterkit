@@ -5,10 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 readme.workspace = true
-repository = "https://github.com/water-rs/kit"
-description = "Cross-platform biometric authentication for WaterUI"
-keywords = ["biometric", "authentication", "touchid", "faceid", "windows-hello"]
-categories = ["gui", "os"]
+repository.workspace = true
+description = "Cross-platform biometric authentication (FaceID, Fingerprint)"
+keywords = ["biometric", "authentication", "faceid", "touchid", "fingerprint"]
+categories = ["os", "gui"]
 
 [lints]
 workspace = true

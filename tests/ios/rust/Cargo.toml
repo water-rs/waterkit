@@ -11,7 +11,21 @@ crate-type = ["staticlib"]
 swift-bridge.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 log.workspace = true
-waterkit_content = { path = "/Users/lexoliu/Coding/kit/notification", package = "waterkit-notification" }
+waterkit-sensor.workspace = true
+waterkit-biometric.workspace = true
+waterkit-location.workspace = true
+waterkit-audio.workspace = true
+waterkit-camera.workspace = true
+waterkit-clipboard.workspace = true
+waterkit-codec.workspace = true
+waterkit-dialog.workspace = true
+waterkit-fs.workspace = true
+waterkit-haptic.workspace = true
+waterkit-notification.workspace = true
+waterkit-permission.workspace = true
+waterkit-secret.workspace = true
+waterkit-system.workspace = true
+waterkit-video.workspace = true
 
 [features]
 sensor = []

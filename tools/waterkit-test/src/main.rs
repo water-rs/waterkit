@@ -69,8 +69,11 @@ fn run_android(crate_path: &Path) -> Result<()> {
 
     // 2.5 Get feature
     let content_cargo_path = crate_path.join("Cargo.toml");
-    let content_toml_str = std::fs::read_to_string(&content_cargo_path).context("Read content toml")?;
-    let content_doc = content_toml_str.parse::<DocumentMut>().context("Parse content toml")?;
+    let content_toml_str =
+        std::fs::read_to_string(&content_cargo_path).context("Read content toml")?;
+    let content_doc = content_toml_str
+        .parse::<DocumentMut>()
+        .context("Parse content toml")?;
     let package_name = content_doc["package"]["name"].as_str().unwrap_or("");
     let feature = get_crate_feature(package_name);
 
@@ -138,10 +141,7 @@ fn run_macos(crate_path: &Path) -> Result<()> {
 }
 
 fn run_ios(crate_path: &Path) -> Result<()> {
-    println!(
-        "{}",
-        "🚀 Preparing iOS test environment...".green().bold()
-    );
+    println!("{}", "🚀 Preparing iOS test environment...".green().bold());
 
     // 1. Verify crate path
     let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
@@ -165,8 +165,11 @@ fn run_ios(crate_path: &Path) -> Result<()> {
 
     // 2.5 Get feature
     let content_cargo_path = crate_path.join("Cargo.toml");
-    let content_toml_str = std::fs::read_to_string(&content_cargo_path).context("Read content toml")?;
-    let content_doc = content_toml_str.parse::<DocumentMut>().context("Parse content toml")?;
+    let content_toml_str =
+        std::fs::read_to_string(&content_cargo_path).context("Read content toml")?;
+    let content_doc = content_toml_str
+        .parse::<DocumentMut>()
+        .context("Parse content toml")?;
     let package_name = content_doc["package"]["name"].as_str().unwrap_or("");
     let feature = get_crate_feature(package_name);
 
@@ -196,45 +199,57 @@ fn run_ios(crate_path: &Path) -> Result<()> {
 
     // 4. Swift Compile
     println!("{}", "🍎 Compiling Swift app...".yellow().bold());
-    
+
     // Scan for extra .swift sources in the target crate
     let mut extra_swift_sources = Vec::new();
     let sys_apple_dir = crate_path.join("src/sys/apple");
+    #[allow(clippy::collapsible_if)]
     if sys_apple_dir.exists() {
         if let Ok(entries) = std::fs::read_dir(sys_apple_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |ext| ext == "swift") {
+                if path.extension().is_some_and(|ext| ext == "swift") {
                     println!("Found extra Swift source: {}", path.display());
                     extra_swift_sources.push(path);
                 }
             }
         }
     }
-    
+
     // Ensure Generated directory exists (usually done by build script, but ensure path logic is sound)
-    
+
     // 4.1 Get SDK Path
     let sdk_path_output = std::process::Command::new("xcrun")
-        .args(&["--sdk", "iphonesimulator", "--show-sdk-path"])
+        .args(["--sdk", "iphonesimulator", "--show-sdk-path"])
         .output()
         .context("Failed to get SDK path")?;
-    let sdk_path = String::from_utf8(sdk_path_output.stdout)?.trim().to_string();
+    let sdk_path = String::from_utf8(sdk_path_output.stdout)?
+        .trim()
+        .to_string();
 
     let mut swiftc_cmd = std::process::Command::new("xcrun");
     swiftc_cmd
         .current_dir(&root_dir)
         .arg("swiftc")
-        .arg("-target").arg("arm64-apple-ios17.0-simulator") // Target iOS 17 (Sim)
-        .arg("-sdk").arg(&sdk_path)
-        .arg("-I").arg("tests/ios/app/WaterKitTest/Generated")
-        .arg("-import-objc-header").arg("tests/ios/app/WaterKitTest/Generated/Bridging-Header.h")
-        .arg("-L").arg("target/aarch64-apple-ios-sim/debug")
+        .arg("-target")
+        .arg("arm64-apple-ios17.0-simulator") // Target iOS 17 (Sim)
+        .arg("-sdk")
+        .arg(&sdk_path)
+        .arg("-I")
+        .arg("tests/ios/app/WaterKitTest/Generated")
+        .arg("-import-objc-header")
+        .arg("tests/ios/app/WaterKitTest/Generated/Bridging-Header.h")
+        .arg("-L")
+        .arg("target/aarch64-apple-ios-sim/debug")
         .arg("-lwaterkit_test_ios")
-        .arg("-framework").arg("CoreFoundation")
-        .arg("-framework").arg("Security")
-        .arg("-framework").arg("Foundation")
-        .arg("-framework").arg("SwiftUI")
+        .arg("-framework")
+        .arg("CoreFoundation")
+        .arg("-framework")
+        .arg("Security")
+        .arg("-framework")
+        .arg("Foundation")
+        .arg("-framework")
+        .arg("SwiftUI")
         .arg("tests/ios/app/WaterKitTest/WaterKitTestApp.swift")
         .arg("tests/ios/app/WaterKitTest/ContentView.swift")
         .arg("tests/ios/app/WaterKitTest/Generated/SwiftBridgeCore.swift")
@@ -246,7 +261,8 @@ fn run_ios(crate_path: &Path) -> Result<()> {
     }
 
     let status = swiftc_cmd
-        .arg("-o").arg("WaterKitTestBinary")
+        .arg("-o")
+        .arg("WaterKitTestBinary")
         .status()
         .context("Failed to compile Swift app")?;
 
@@ -261,35 +277,38 @@ fn run_ios(crate_path: &Path) -> Result<()> {
         std::fs::remove_dir_all(&app_dir)?;
     }
     std::fs::create_dir_all(&app_dir)?;
-    
+
     std::fs::rename(
         root_dir.join("WaterKitTestBinary"),
-        app_dir.join("WaterKitTest")
+        app_dir.join("WaterKitTest"),
     )?;
-    
+
     std::fs::copy(
         root_dir.join("tests/ios/app/Info.plist"),
-        app_dir.join("Info.plist")
+        app_dir.join("Info.plist"),
     )?;
 
     // 6. Codesign
     println!("{}", "🔑 Codesigning...".yellow().bold());
     let status = std::process::Command::new("codesign")
-        .args(&["-s", "-", "WaterKitTest.app"])
+        .args(["-s", "-", "WaterKitTest.app"])
         .current_dir(&root_dir)
         .status()
         .context("Failed to codesign")?;
-        
+
     if !status.success() {
         anyhow::bail!("Codesign failed");
     }
-    
+
     // 7. Install & Launch
-    println!("{}", "📱 Installing to Simulator (Booted)...".yellow().bold());
+    println!(
+        "{}",
+        "📱 Installing to Simulator (Booted)...".yellow().bold()
+    );
     let simulator_id = "booted"; // Use "booted" to target the active simulator automatically!
-    
+
     let status = std::process::Command::new("xcrun")
-        .args(&["simctl", "install", simulator_id, "WaterKitTest.app"])
+        .args(["simctl", "install", simulator_id, "WaterKitTest.app"])
         .current_dir(&root_dir)
         .status()
         .context("Failed to install to simulator")?;
@@ -300,7 +319,13 @@ fn run_ios(crate_path: &Path) -> Result<()> {
 
     println!("{}", "🚀 Launching app...".green().bold());
     let status = std::process::Command::new("xcrun")
-        .args(&["simctl", "launch", "--console", simulator_id, "com.waterkit.test"])
+        .args([
+            "simctl",
+            "launch",
+            "--console",
+            simulator_id,
+            "com.waterkit.test",
+        ])
         .current_dir(&root_dir)
         .status()
         .context("Failed to launch app")?;

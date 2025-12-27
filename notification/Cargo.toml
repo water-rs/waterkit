@@ -5,10 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 readme.workspace = true
-repository = "https://github.com/water-rs/kit"
-description = "Cross-platform local notification for WaterUI"
-keywords = ["notification", "ios", "android", "macos", "windows", "linux"]
-categories = ["gui", "os"]
+repository.workspace = true
+description = "System notifications and alerts"
+keywords = ["notification", "alert", "push", "toast"]
+categories = ["os", "gui"]
 
 [lints]
 workspace = true

@@ -1,3 +1,4 @@
+//! Screen capture demo.
 use std::io::Write;
 use waterkit_screen::{capture_screen, get_brightness, screens, set_brightness};
 
@@ -17,17 +18,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Get Brightness
     match get_brightness().await {
-        Ok(b) => println!("Current brightness: {:.2}", b),
-        Err(e) => println!("Failed to get brightness: {}", e),
+        Ok(b) => println!("Current brightness: {b:.2}"),
+        Err(e) => println!("Failed to get brightness: {e}"),
     }
 
     // 3. Set Brightness (Ask user or just try setting to current)
     // Be careful not to black out screen.
     // Let's just set it to itself to test API.
     if let Ok(b) = get_brightness().await {
-        println!("Setting brightness to {:.2}...", b);
+        println!("Setting brightness to {b:.2}...");
         if let Err(e) = set_brightness(b).await {
-            println!("Failed to set brightness: {}", e);
+            println!("Failed to set brightness: {e}");
         } else {
             println!("Brightness set successfully.");
         }
@@ -55,9 +56,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let filename = "screenshot.png";
                 let mut file = std::fs::File::create(filename)?;
                 file.write_all(&bytes)?;
-                println!("Saved to {}", filename);
+                println!("Saved to {filename}");
             }
-            Err(e) => println!("Failed to capture screen: {}", e),
+            Err(e) => println!("Failed to capture screen: {e}"),
         }
     }
 

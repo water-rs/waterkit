@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-repository = "https://github.com/water-rs/kit"
-description = "Cross-platform screen capture and brightness control for WaterUI"
-keywords = ["screen", "hapture", "brightness", "ios", "android"]
-categories = ["gui", "os"]
+readme.workspace = true
+repository.workspace = true
+description = "Screen capture and display management"
+keywords = ["screen", "display", "capture", "screenshot"]
+categories = ["os", "gui"]
 
 [lints]
 workspace = true

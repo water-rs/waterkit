@@ -1,3 +1,4 @@
+//! Hello World notification demo.
 use waterkit_notification::Notification;
 
 fn main() {

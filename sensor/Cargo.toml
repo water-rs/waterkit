@@ -5,16 +5,17 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 readme.workspace = true
-repository = "https://github.com/water-rs/kit"
-description = "Cross-platform sensor access (accelerometer, gyroscope, magnetometer, barometer) for WaterUI"
-keywords = ["sensor", "accelerometer", "gyroscope", "ios", "android"]
-categories = ["gui", "os"]
+repository.workspace = true
+description = "Cross-platform sensor access"
+keywords = ["sensor", "accelerometer", "gyroscope", "magnetometer"]
+categories = ["os", "gui"]
 
 [lints]
 workspace = true
 
 [dependencies]
 futures.workspace = true
+thiserror = { workspace = true }
 futures-timer = { workspace = true }
 log.workspace = true
 

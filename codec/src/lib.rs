@@ -12,7 +12,13 @@
 #![warn(missing_docs)]
 
 /// Platform-specific implementations.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 mod sys;
+
+/// Platform-specific implementations.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[doc(hidden)]
+pub mod sys;
 
 #[cfg(feature = "av1")]
 pub mod av1;

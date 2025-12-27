@@ -1,5 +1,7 @@
+//! Dialog demonstration utility.
 use waterkit_dialog::{Dialog, DialogType};
 
+/// Runs the dialog demonstration.
 pub async fn run() {
     println!("Running Dialog Demo...");
 
@@ -17,10 +19,7 @@ pub async fn run() {
         .unwrap_or(false);
 
     if result {
-        let _ = Dialog::new("Result", "Accepted!")
-            .show()
-            .await;
-
+        let _ = Dialog::new("Result", "Accepted!").show().await;
     } else {
         let _ = Dialog::new("Result", "Declined!")
             .with_type(DialogType::Error)
@@ -33,19 +32,21 @@ pub async fn run() {
         .show()
         .await;
 
-    let picker = waterkit_dialog::PhotoPicker::new()
-        .with_media_type(waterkit_dialog::MediaType::Image);
+    let picker =
+        waterkit_dialog::PhotoPicker::new().with_media_type(waterkit_dialog::MediaType::Image);
 
     match picker.pick().await {
         Ok(Some(handle)) => {
-            let _ = Dialog::new("Picker Result", "Media selected. Loading...").show().await;
+            let _ = Dialog::new("Picker Result", "Media selected. Loading...")
+                .show()
+                .await;
             match handle.load().await {
                 Ok(path) => {
-                    let msg = format!("Loaded: {:?}", path);
+                    let msg = format!("Loaded: {}", path.display());
                     let _ = Dialog::new("Success", &msg).show().await;
                 }
                 Err(e) => {
-                    let msg = format!("Load Error: {}", e);
+                    let msg = format!("Load Error: {e}");
                     let _ = Dialog::new("Error", &msg)
                         .with_type(DialogType::Error)
                         .show()
@@ -57,7 +58,7 @@ pub async fn run() {
             let _ = Dialog::new("Picker Result", "No selection").show().await;
         }
         Err(e) => {
-            let msg = format!("Error: {}", e);
+            let msg = format!("Error: {e}");
             let _ = Dialog::new("Picker Error", &msg)
                 .with_type(DialogType::Error)
                 .show()

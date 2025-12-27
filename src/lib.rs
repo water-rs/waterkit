@@ -47,49 +47,65 @@
 //! ```
 
 #[cfg(feature = "audio")]
+#[doc(inline)]
 pub use waterkit_audio as audio;
 
 #[cfg(feature = "biometric")]
+#[doc(inline)]
 pub use waterkit_biometric as biometric;
 
 #[cfg(feature = "camera")]
+#[doc(inline)]
 pub use waterkit_camera as camera;
 
 #[cfg(feature = "clipboard")]
+#[doc(inline)]
 pub use waterkit_clipboard as clipboard;
 
 #[cfg(feature = "codec")]
+#[doc(inline)]
 pub use waterkit_codec as codec;
 
 #[cfg(feature = "dialog")]
+#[doc(inline)]
 pub use waterkit_dialog as dialog;
 
 #[cfg(feature = "fs")]
+#[doc(inline)]
 pub use waterkit_fs as fs;
 
 #[cfg(feature = "haptic")]
+#[doc(inline)]
 pub use waterkit_haptic as haptic;
 
 #[cfg(feature = "location")]
+#[doc(inline)]
 pub use waterkit_location as location;
 
 #[cfg(feature = "notification")]
+#[doc(inline)]
 pub use waterkit_notification as notification;
 
 #[cfg(feature = "permission")]
+#[doc(inline)]
 pub use waterkit_permission as permission;
 
 #[cfg(feature = "screen")]
+#[doc(inline)]
 pub use waterkit_screen as screen;
 
 #[cfg(feature = "secret")]
+#[doc(inline)]
 pub use waterkit_secret as secret;
 
 #[cfg(feature = "sensor")]
+#[doc(inline)]
 pub use waterkit_sensor as sensor;
 
 #[cfg(feature = "system")]
+#[doc(inline)]
 pub use waterkit_system as system;
 
 #[cfg(feature = "video")]
+#[doc(inline)]
 pub use waterkit_video as video;

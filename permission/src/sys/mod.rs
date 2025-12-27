@@ -14,17 +14,18 @@ mod windows;
 mod linux;
 
 // Re-export platform implementations
+// Re-export platform implementations
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-pub(crate) use apple::{check, request};
+pub use apple::{check, request};
 
 #[cfg(target_os = "android")]
-pub(crate) use android::{check, request};
+pub use android::{check, request};
 
 #[cfg(target_os = "windows")]
-pub(crate) use windows::{check, request};
+pub use windows::{check, request};
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::{check, request};
+pub use linux::{check, request};
 
 // Fallback for unsupported platforms (compile-time stub)
 #[cfg(not(any(

@@ -5,16 +5,18 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 readme.workspace = true
-repository = "https://github.com/water-rs/kit"
-description = "Cross-platform location access for WaterUI"
-keywords = ["location", "gps", "geolocation", "ios", "android"]
-categories = ["gui", "os"]
+repository.workspace = true
+description = "Cross-platform location and GPS services"
+keywords = ["location", "gps", "geolocation", "maps"]
+categories = ["os", "gui"]
 
 [lints]
 workspace = true
 
 [dependencies]
+
 waterkit-permission = { workspace = true }
+thiserror = { workspace = true }
 
 [build-dependencies]
 waterkit-build.workspace = true

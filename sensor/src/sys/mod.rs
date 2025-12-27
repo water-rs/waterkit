@@ -15,16 +15,16 @@ mod linux;
 
 // Re-export platform implementations
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-pub(crate) use apple::*;
+pub use apple::*;
 
 #[cfg(target_os = "android")]
-pub(crate) use android::*;
+pub use android::*;
 
 #[cfg(target_os = "windows")]
-pub(crate) use windows::*;
+pub use windows::*;
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::*;
+pub use linux::*;
 
 // Fallback for unsupported platforms
 #[cfg(not(any(
@@ -95,4 +95,4 @@ mod fallback {
     target_os = "windows",
     target_os = "linux"
 )))]
-pub(crate) use fallback::*;
+pub use fallback::*;

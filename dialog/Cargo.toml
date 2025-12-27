@@ -5,9 +5,9 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 readme.workspace = true
-description = "Cross-platform native dialogs/alerts for WaterUI"
-keywords = ["dialog", "alert", "popup", "gui", "native"]
-categories = ["gui", "os"]
+description = "Native dialogs and pickers"
+keywords = ["dialog", "picker", "native", "alert"]
+categories = ["os", "gui"]
 repository = "https://github.com/water-rs/kit"
 
 [lints]

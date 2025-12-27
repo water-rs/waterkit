@@ -4,11 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description.workspace = true
-repository.workspace = true
-keywords.workspace = true
-categories.workspace = true
-readme.workspace = true
+description = "System information and power management"
+keywords = ["system", "os", "thermal", "battery", "info"]
+categories = ["os", "gui"]
+readme = "README.md"
+repository = "https://github.com/water-rs/kit"
 
 [dependencies]
 

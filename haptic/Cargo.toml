@@ -5,10 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 readme.workspace = true
-repository = "https://github.com/water-rs/kit"
-description = "Cross-platform haptic feedback/vibration for WaterUI"
-keywords = ["haptic", "vibration", "feedback", "ios", "android"]
-categories = ["gui", "os"]
+repository.workspace = true
+description = "Cross-platform haptic feedback and vibrations"
+keywords = ["haptic", "vibration", "feedback"]
+categories = ["os", "gui"]
 
 [lints]
 workspace = true

@@ -14,17 +14,18 @@ mod windows;
 mod linux;
 
 // Re-export platform implementations
+// Re-export platform implementations
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-pub(crate) use apple::feedback;
+pub use apple::feedback;
 
 #[cfg(target_os = "android")]
-pub(crate) use android::feedback;
+pub use android::feedback;
 
 #[cfg(target_os = "windows")]
-pub(crate) use windows::feedback;
+pub use windows::feedback;
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::feedback;
+pub use linux::feedback;
 
 // Fallback for unsupported platforms
 #[cfg(not(any(

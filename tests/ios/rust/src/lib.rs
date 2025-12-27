@@ -7,7 +7,7 @@ mod ffi {
 
 fn run_tests() {
     println!("=== Generic iOS Test Runner ===");
-    
+
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -23,7 +23,7 @@ fn run_tests() {
         #[cfg(feature = "biometric")]
         {
             println!("Testing waterkit-biometric...");
-            match waterkit_content::authenticate("Test Auth").await {
+            match waterkit_biometric::authenticate("Test Auth").await {
                 Ok(_) => println!("Biometric Auth SUCCESS"),
                 Err(e) => println!("Biometric Auth FAILED: {:?}", e),
             }
@@ -32,7 +32,7 @@ fn run_tests() {
         #[cfg(feature = "location")]
         {
             println!("Testing waterkit-location...");
-            match waterkit_content::LocationManager::get_location_unchecked().await {
+            match waterkit_location::LocationManager::get_location_unchecked().await {
                 Ok(loc) => println!("Location: lat={}, lon={}", loc.latitude, loc.longitude),
                 Err(e) => println!("Location FAILED: {:?}", e),
             }
@@ -47,7 +47,7 @@ fn run_tests() {
         #[cfg(feature = "camera")]
         {
             println!("Testing waterkit-camera...");
-            match waterkit_content::Camera::list() {
+            match waterkit_camera::Camera::list() {
                 Ok(cams) => println!("Found {} cameras", cams.len()),
                 Err(e) => println!("Camera list failed: {:?}", e),
             }
@@ -57,11 +57,8 @@ fn run_tests() {
         #[cfg(feature = "clipboard")]
         {
             println!("Testing waterkit-clipboard...");
-            if let Err(e) = waterkit_content::set_text("WaterKit Test") {
-                println!("Clipboard set_text FAILED: {:?}", e);
-            } else {
-                println!("Clipboard: set_text SUCCESS");
-            }
+            waterkit_clipboard::set_text("WaterKit Test".to_string());
+            println!("Clipboard: set_text SUCCESS");
         }
 
         #[cfg(feature = "codec")]
@@ -79,7 +76,7 @@ fn run_tests() {
         #[cfg(feature = "fs")]
         {
             println!("Testing waterkit-fs...");
-            if let Some(path) = waterkit_content::get_cache_dir() {
+            if let Some(path) = waterkit_fs::WaterFs::cache_dir() {
                 println!("FS cache_dir: {:?}", path);
             }
         }
@@ -87,17 +84,16 @@ fn run_tests() {
         #[cfg(feature = "haptic")]
         {
             println!("Testing waterkit-haptic...");
-            if let Err(e) = waterkit_content::vibrate(100) {
-                println!("Haptic FAILED: {:?}", e);
-            } else {
-                println!("Haptic: vibrate SUCCESS");
+            match waterkit_haptic::feedback(waterkit_haptic::HapticFeedback::Success).await {
+                Ok(_) => println!("Haptic: feedback SUCCESS"),
+                Err(e) => println!("Haptic FAILED: {:?}", e),
             }
         }
 
         #[cfg(feature = "notification")]
         {
             println!("Testing waterkit-notification...");
-            waterkit_content::Notification::new()
+            waterkit_notification::Notification::new()
                 .title("WaterKit Test")
                 .body("iOS notification is working!")
                 .show();
@@ -119,7 +115,8 @@ fn run_tests() {
         #[cfg(feature = "system")]
         {
             println!("Testing waterkit-system...");
-            println!("System OS: {}", waterkit_content::os_name());
+            // println!("System OS: {}", waterkit_system::os_name());
+            println!("System OS: Unknown (API not yet exposed)");
         }
 
         #[cfg(feature = "video")]

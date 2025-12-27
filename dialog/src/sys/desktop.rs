@@ -26,7 +26,8 @@ pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
         let _ = tx.send(());
     });
 
-    rx.await.map_err(|_| DialogError::PlatformError("Dialog panicked or channel closed".into()))
+    rx.await
+        .map_err(|_| DialogError::PlatformError("Dialog panicked or channel closed".into()))
 }
 
 /// Show a confirmation dialog.
@@ -55,7 +56,8 @@ pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
         let _ = tx.send(confirmed);
     });
 
-    rx.await.map_err(|_| DialogError::PlatformError("Dialog panicked or channel closed".into()))
+    rx.await
+        .map_err(|_| DialogError::PlatformError("Dialog panicked or channel closed".into()))
 }
 
 /// Show a file dialog to open a single file.
@@ -84,11 +86,6 @@ pub async fn show_open_single_file(
 
     Ok(result.map(|f| f.path().to_path_buf()))
 }
-
-/// Show a photo picker.
-///
-/// # Errors
-/// Returns an error if the native dialog fails to show or is not supported.
 
 /// A native handle to a selected media file.
 #[derive(Debug, Clone)]

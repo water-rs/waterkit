@@ -1,7 +1,9 @@
+//! Clipboard reading demo.
+#![allow(clippy::cast_possible_truncation, clippy::ignored_unit_patterns)]
 fn main() {
     println!("Reading clipboard...");
     match waterkit_clipboard::get_text() {
-        Some(text) => println!("Clipboard text content:\n{}", text),
+        Some(text) => println!("Clipboard text content:\n{text}"),
         None => println!("Clipboard does not contain text."),
     }
 
@@ -23,7 +25,7 @@ fn main() {
                 image::ColorType::Rgba8,
             ) {
                 Ok(_) => println!("Image saved to clipboard_preview.png"),
-                Err(e) => println!("Failed to save image: {}", e),
+                Err(e) => println!("Failed to save image: {e}"),
             }
         }
         None => println!("Clipboard does not contain image."),

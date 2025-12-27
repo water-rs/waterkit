@@ -53,14 +53,14 @@ mod ffi {
         fn camera_start_recording(path: String) -> CameraResultFFI;
         fn camera_stop_recording() -> CameraResultFFI;
     }
-    
+
     extern "Rust" {
         fn camera_dummy_vec_result() -> Vec<CameraResultFFI>;
     }
 }
 
-fn camera_dummy_vec_result() -> Vec<ffi::CameraResultFFI> {
-    vec![]
+const fn camera_dummy_vec_result() -> Vec<ffi::CameraResultFFI> {
+    Vec::new()
 }
 
 // External C function to bypass swift-bridge limitations for raw pointer

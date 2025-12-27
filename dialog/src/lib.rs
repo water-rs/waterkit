@@ -1,5 +1,5 @@
-//! Cross-platform native dialogs/alerts for WaterUI.
-//! 
+//! Cross-platform native dialogs/alerts for `WaterUI`.
+//!
 //! This crate provides a unified API for displaying native UI elements:
 //! - Alerts ([`Dialog`])
 //! - Confirmations ([`Dialog::show_confirm`])
@@ -7,9 +7,9 @@
 //! - Photo Picker ([`PhotoPicker`])
 //!
 //! Platforms supported:
-//! - macOS (via `rfd` / AppKit)
+//! - macOS (via `rfd` / `AppKit`)
 //! - Android (via JNI / Kotlin)
-//! - iOS (via Swift Bridge / UIKit)
+//! - iOS (via Swift Bridge / `UIKit`)
 
 #![warn(missing_docs)]
 
@@ -84,7 +84,7 @@ pub struct FileDialog {
     pub title: Option<String>,
     /// Starting directory
     pub location: Option<std::path::PathBuf>,
-    /// File filters name -> [extensions]
+    /// File filters name -> `extensions`
     pub filters: Vec<(String, Vec<String>)>,
 }
 
@@ -135,7 +135,6 @@ impl FileDialog {
         sys::show_open_single_file(self).await
     }
 
-
     // Future: show_open_multiple_files, show_save_single_file
 }
 
@@ -144,7 +143,6 @@ impl Default for FileDialog {
         Self::new()
     }
 }
-
 
 /// Type of media to pick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,10 +204,8 @@ impl PhotoPicker {
     /// # Errors
     /// Returns an error if the picker fails to show or is not supported.
     pub async fn pick(self) -> Result<Option<PhotoHandle>, DialogError> {
-        match sys::show_photo_picker(self).await? {
-            Some(handle) => Ok(Some(PhotoHandle { handle })),
-            None => Ok(None),
-        }
+        (sys::show_photo_picker(self).await?)
+            .map_or(Ok(None), |handle| Ok(Some(PhotoHandle { handle })))
     }
 }
 

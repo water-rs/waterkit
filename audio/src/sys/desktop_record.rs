@@ -87,14 +87,16 @@ impl AudioRecorderInner {
         };
 
         let recording = Arc::clone(&self.recording);
-        
+
         // We need a sender for the callback
         let sender = if let Some(s) = &self.sender {
             s.clone()
         } else {
-            return Err(RecordError::StartFailed("Recoder is in invalid state".into()));
+            return Err(RecordError::StartFailed(
+                "Recoder is in invalid state".into(),
+            ));
         };
-        
+
         let format = self.format;
 
         let stream = self
@@ -145,7 +147,10 @@ impl AudioRecorderInner {
             return Err(RecordError::NotRecording);
         }
 
-        self.receiver.recv().await.map_err(|e| RecordError::ReadFailed(e.to_string()))
+        self.receiver
+            .recv()
+            .await
+            .map_err(|e| RecordError::ReadFailed(e.to_string()))
     }
 
     /// Try to read without waiting.
@@ -154,7 +159,7 @@ impl AudioRecorderInner {
     }
 
     /// Read audio buffer synchronously (blocking).
-    /// 
+    ///
     /// Use this method when calling from a non-async context (e.g., a dedicated thread).
     /// This is more reliable than using `pollster::block_on(read())` as it doesn't
     /// depend on async runtime waker semantics.
@@ -163,7 +168,9 @@ impl AudioRecorderInner {
             return Err(RecordError::NotRecording);
         }
 
-        self.receiver.recv_blocking().map_err(|e| RecordError::ReadFailed(e.to_string()))
+        self.receiver
+            .recv_blocking()
+            .map_err(|e| RecordError::ReadFailed(e.to_string()))
     }
 
     /// Check if recording.
@@ -171,7 +178,8 @@ impl AudioRecorderInner {
         self.recording.load(Ordering::Relaxed)
     }
 
-    pub fn split(self) -> (crate::sys::AudioRecorderInner, async_channel::Receiver<AudioBuffer>) {
+    #[allow(dead_code)]
+    pub fn split(self) -> (Self, async_channel::Receiver<AudioBuffer>) {
         let receiver = self.receiver.clone();
         (self, receiver)
     }

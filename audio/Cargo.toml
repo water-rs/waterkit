@@ -4,16 +4,18 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-repository = "https://github.com/water-rs/kit"
-description = "Cross-platform audio playback and recording for WaterUI"
-keywords = ["audio", "recording", "playback", "microphone", "cross-platform"]
-categories = ["multimedia", "gui"]
+readme.workspace = true
+repository.workspace = true
+description = "Cross-platform audio playback and recording"
+keywords = ["audio", "sound", "playback", "recording", "multimedia"]
+categories = ["multimedia::audio", "gui"]
 
 [lints]
 workspace = true
 
 [dependencies]
 # Cross-platform audio playback (default features include vorbis/mp3/flac/wav)
+thiserror = { workspace = true }
 rodio = { workspace = true }
 # Cross-platform audio I/O (for recording)
 cpal = { workspace = true }

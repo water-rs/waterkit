@@ -1,6 +1,6 @@
 # Waterkit Audio
 
-Cross-platform audio playback and recording library for WaterUI.
+Cross-platform audio playback and recording library.
 
 ## Features
 

@@ -101,6 +101,7 @@ pub use fallback::CameraInner;
 
 // Export NativeHandle for platform-specific zero-copy access
 #[cfg(any(target_os = "ios", target_os = "macos"))]
+#[allow(dead_code)]
 pub type NativeHandle = apple::IOSurfaceHandle;
 
 #[cfg(not(any(target_os = "ios", target_os = "macos")))]

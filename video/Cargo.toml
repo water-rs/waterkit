@@ -4,11 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-readme = "README.md"
-repository = "https://github.com/water-rs/kit"
-description = "Cross-platform video muxing, demuxing, and playback for WaterUI"
-keywords = ["video", "mp4", "mov", "muxer", "decoder"]
-categories = ["multimedia", "encoding"]
+readme.workspace = true
+repository.workspace = true
+description = "Video playback and processing"
+keywords = ["video", "playback", "mp4", "mov", "hardware"]
+categories = ["multimedia::video", "gui"]
 
 [lints]
 workspace = true

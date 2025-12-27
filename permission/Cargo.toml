@@ -5,15 +5,16 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 readme.workspace = true
-repository = "https://github.com/water-rs/kit"
-description = "Cross-platform permission request handling for WaterUI"
-keywords = ["permission", "ios", "android", "macos", "windows"]
-categories = ["gui", "os"]
+repository.workspace = true
+description = "Unified permission management (Camera, Mike, Location)"
+keywords = ["permission", "privacy", "security", "access"]
+categories = ["os", "gui"]
 
 [lints]
 workspace = true
 
 [dependencies]
+thiserror = { workspace = true }
 
 [build-dependencies]
 waterkit-build.workspace = true

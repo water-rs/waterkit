@@ -5,10 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 readme.workspace = true
-repository = "https://github.com/water-rs/kit"
-description = "Cross-platform file system utilities for WaterUI"
-keywords = ["fs", "filesystem", "file-picker", "sandbox", "cross-platform"]
-categories = ["filesystem", "os"]
+repository.workspace = true
+description = "File system and path utilities"
+keywords = ["fs", "filesystem", "paths", "io"]
+categories = ["filesystem", "gui"]
 
 [lints]
 workspace = true

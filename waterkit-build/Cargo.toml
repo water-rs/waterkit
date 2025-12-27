@@ -6,8 +6,8 @@ authors.workspace = true
 license.workspace = true
 readme.workspace = true
 repository.workspace = true
-description = "Shared build utilities for waterkit crates"
-keywords = ["build", "swift", "android", "kotlin"]
+description = "Shared build utilities crates"
+keywords = ["build", "swift", "kotlin", "automation"]
 categories = ["development-tools::build-utils"]
 
 [dependencies]

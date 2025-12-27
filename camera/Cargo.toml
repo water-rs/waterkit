@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+readme.workspace = true
 repository = "https://github.com/water-rs/kit"
-description = "Cross-platform camera streaming for WaterUI"
-keywords = ["camera", "webcam", "video", "ios", "android"]
-categories = ["multimedia", "gui"]
+description = "Cross-platform camera and video streaming"
+keywords = ["camera", "video", "streaming", "ios", "android"]
+categories = ["multimedia::video", "gui"]
 
 [lints]
 workspace = true

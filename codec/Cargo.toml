@@ -4,11 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-readme = "README.md"
+readme.workspace = true
 repository.workspace = true
-description = "High-performance video/image codec with hardware acceleration"
-categories = ["multimedia", "encoding", "decoding"]
-keywords = ["video", "audio", "codec", "hardware"]
+description = "Cross-platform video and audio codec support"
+keywords = ["codec", "video", "audio", "av1", "h264", "h265"]
+categories = ["multimedia::video", "multimedia::audio"]
 
 [dependencies]
 thiserror.workspace = true

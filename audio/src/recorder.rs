@@ -289,9 +289,8 @@ impl AudioRecorder {
     pub fn read_blocking(&mut self) -> Result<AudioBuffer, RecordError> {
         self.inner.read_blocking()
     }
-    
+
     /// Get an async stream of audio buffers.
-    #[must_use]
     pub fn stream(&self) -> impl futures::Stream<Item = AudioBuffer> {
         self.inner.receiver()
     }

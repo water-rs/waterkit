@@ -5,10 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 readme.workspace = true
-repository = "https://github.com/water-rs/kit"
-description = "Cross-platform clipboard access for WaterUI"
-keywords = ["clipboard", "copy", "paste", "waterui"]
-categories = ["gui", "os"]
+repository.workspace = true
+description = "Cross-platform clipboard management"
+keywords = ["clipboard", "copy", "paste"]
+categories = ["os", "gui"]
 
 [lints]
 workspace = true

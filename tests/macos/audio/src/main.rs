@@ -1,12 +1,12 @@
 //! macOS test binary for waterkit-audio.
 //!
-//! Run with: cargo run -p waterkit-audio-test [options] [audio_file]
+//! Run with: `cargo run -p waterkit-audio-test [options] [audio_file]`
 //!
 //! Options:
-//!   --title <title>      Set the track title
-//!   --artist <artist>    Set the artist name
-//!   --album <album>      Set the album name
-//!   --artwork <path>     Set artwork image path
+//!   `--title <title>`      Set the track title
+//!   `--artist <artist>`    Set the artist name
+//!   `--album <album>`      Set the album name
+//!   `--artwork <path>`     Set artwork image path
 
 use std::time::Duration;
 use waterkit_audio::AudioPlayer;

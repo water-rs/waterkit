@@ -8,13 +8,102 @@
 
 mod sys;
 
-use std::fmt;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub use sys::apple::IOSurfaceHandle;
 
-/// Re-export wgpu for texture integration.
-pub use wgpu;
+/// Information about a camera device.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CameraInfo {
+    /// Unique identifier.
+    pub id: String,
+    /// Human-readable name.
+    pub name: String,
+    /// Optional description.
+    pub description: Option<String>,
+    /// Whether the camera is front-facing.
+    pub is_front_facing: bool,
+}
 
-// ... (CameraInfo, FrameFormat, CameraFrame impls unchanged but I need to be careful with line numbers)
-// Note: I will only replace `pub mod sys` and `CameraError` definition and impls.
+/// Pixel format of a camera frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FrameFormat {
+    /// RGB 8-bit.
+    Rgb,
+    /// RGBA 8-bit.
+    Rgba,
+    /// BGRA 8-bit.
+    Bgra,
+    /// NV12 (YUV 4:2:0 bi-planar).
+    Nv12,
+    /// YUY2 (YUV 4:2:2).
+    Yuy2,
+    /// JPEG compressed.
+    Jpeg,
+}
+
+impl FrameFormat {
+    /// Get bytes per pixel (approximate for planar formats).
+    #[must_use]
+    pub const fn bytes_per_pixel(&self) -> usize {
+        match self {
+            Self::Rgb => 3,
+            Self::Rgba | Self::Bgra => 4,
+            Self::Nv12 => 1, // 1.5 actually, handled specially
+            Self::Yuy2 => 2,
+            Self::Jpeg => 0, // Variable
+        }
+    }
+}
+
+/// A captured camera frame.
+#[derive(Debug, Clone)]
+pub struct CameraFrame {
+    /// Raw pixel data.
+    pub data: Vec<u8>,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Pixel format.
+    pub format: FrameFormat,
+    /// Optional platform-specific handle (e.g. `IOSurface`).
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub iosurface: Option<IOSurfaceHandle>,
+}
+
+impl CameraFrame {
+    /// Create a new frame.
+    #[must_use]
+    pub const fn new(
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+        format: FrameFormat,
+        #[cfg(any(target_os = "macos", target_os = "ios"))] iosurface: Option<IOSurfaceHandle>,
+    ) -> Self {
+        Self {
+            data,
+            width,
+            height,
+            format,
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            iosurface,
+        }
+    }
+
+    /// Convert frame data to RGBA.
+    ///
+    /// Currently only a stub for non-RGB/RGBA formats.
+    #[must_use]
+    pub fn to_rgba(&self) -> Vec<u8> {
+        // TODO: Implement actual conversion for NV12, YUY2, JPEG
+        #[allow(clippy::match_same_arms)]
+        match self.format {
+            FrameFormat::Rgba => self.data.clone(),
+            _ => self.data.clone(),
+        }
+    }
+}
 
 // ... skipping to CameraError ...
 

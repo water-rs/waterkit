@@ -1,5 +1,4 @@
-use std::thread;
-use std::time::Duration;
+//! System info demo.
 use waterkit_system::{get_connectivity_info, get_system_load, get_thermal_state};
 
 fn main() {

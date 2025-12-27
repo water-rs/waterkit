@@ -14,17 +14,18 @@ mod windows;
 mod linux;
 
 // Re-export platform implementations
+// Re-export platform implementations
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-pub(crate) use apple::get_location;
+pub use apple::get_location;
 
 #[cfg(target_os = "android")]
-pub(crate) use android::get_location;
+pub use android::get_location;
 
 #[cfg(target_os = "windows")]
-pub(crate) use windows::get_location;
+pub use windows::get_location;
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::get_location;
+pub use linux::get_location;
 
 // Fallback for unsupported platforms
 #[cfg(not(any(

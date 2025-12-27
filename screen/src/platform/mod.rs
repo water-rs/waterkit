@@ -47,18 +47,22 @@ pub use android::*;
 )))]
 mod dummy {
     use crate::{Error, RawCapture, ScreenInfo};
+
     pub fn capture_screen(_idx: usize) -> Result<Vec<u8>, Error> {
         Err(Error::Unsupported)
     }
     pub fn capture_screen_raw(_idx: usize) -> Result<RawCapture, Error> {
         Err(Error::Unsupported)
     }
+    #[allow(clippy::unused_async)]
     pub async fn pick_and_capture() -> Result<Vec<u8>, Error> {
         Err(Error::Unsupported)
     }
+    #[allow(clippy::unused_async)]
     pub async fn get_brightness() -> Result<f32, Error> {
         Err(Error::Unsupported)
     }
+    #[allow(clippy::unused_async)]
     pub async fn set_brightness(_val: f32) -> Result<(), Error> {
         Err(Error::Unsupported)
     }

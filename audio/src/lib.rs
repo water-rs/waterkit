@@ -10,9 +10,11 @@
 
 mod player;
 mod recorder;
+mod shutdown;
 mod sys;
 
 pub use player::{AudioDevice, AudioPlayer, PlayerError, rodio};
+pub use shutdown::{ShutdownHandle, ShutdownReceiver};
 pub use recorder::{AudioBuffer, AudioFormat, AudioRecorder, AudioRecorderBuilder, RecordError};
 
 use std::time::Duration;

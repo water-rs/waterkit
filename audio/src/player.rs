@@ -3,15 +3,17 @@
 //! Uses `rodio` for audio playback on all platforms, with platform-specific
 //! media center integrations (`MPNowPlayingInfoCenter`, SMTC, MPRIS, `MediaSession`).
 
-use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
+use crate::shutdown::ShutdownHandle;
+use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState};
 use futures::Stream;
 use lofty::prelude::*;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use std::cell::Cell;
 use std::fs::File;
 use std::io::BufReader;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 // Re-export rodio for advanced users
@@ -94,8 +96,13 @@ pub struct AudioPlayer {
     metadata: MediaMetadata,
     media_center: Arc<crate::sys::MediaCenterIntegration>,
 
+    // Deferred metadata updates: builder methods set this flag,
+    // first action (play/pause/seek) flushes to media center
+    metadata_dirty: Cell<bool>,
+
     // Background worker
-    run_loop_running: Arc<AtomicBool>,
+    shutdown_handle: ShutdownHandle,
+    background_thread: Option<JoinHandle<()>>,
     command_receiver: async_channel::Receiver<MediaCommand>,
 }
 
@@ -123,7 +130,7 @@ impl AudioPlayer {
 
         // 1. Initialize audio output in background thread (to keep OutputStream !Send contained)
         let (handle_tx, handle_rx) = std::sync::mpsc::channel();
-        let run_loop_running = Arc::new(AtomicBool::new(true));
+        let (shutdown_handle, shutdown_rx) = ShutdownHandle::new();
 
         let media_center = Arc::new(
             crate::sys::MediaCenterIntegration::new()
@@ -132,8 +139,7 @@ impl AudioPlayer {
 
         let (cmd_tx, cmd_rx) = async_channel::unbounded();
 
-        {
-            let running = Arc::clone(&run_loop_running);
+        let background_thread = {
             let mc = Arc::clone(&media_center);
             let tx = cmd_tx;
 
@@ -152,10 +158,9 @@ impl AudioPlayer {
                     return;
                 }
 
-                // Run loop
-                // Ensure media center is active for this thread if needed
+                // Run loop until shutdown is signaled
                 if let Ok(local_mc) = crate::sys::MediaCenterIntegration::new() {
-                    while running.load(Ordering::Relaxed) {
+                    while !shutdown_rx.is_shutdown() {
                         // Run platform loop step
                         local_mc.run_loop(Duration::from_millis(50));
 
@@ -167,8 +172,8 @@ impl AudioPlayer {
                 }
 
                 // _stream dropped here
-            });
-        }
+            })
+        };
 
         // Receive handle
         let stream_handle = handle_rx
@@ -195,12 +200,12 @@ impl AudioPlayer {
         }
 
         // Try extracting tags with lofty
-        if let Ok(tagged_file) = lofty::read_from_path(path) {
-            if let Some(tag) = tagged_file.primary_tag() {
-                metadata.title = tag.title().map(String::from);
-                metadata.artist = tag.artist().map(String::from);
-                metadata.album = tag.album().map(String::from);
-            }
+        if let Ok(tagged_file) = lofty::read_from_path(path)
+            && let Some(tag) = tagged_file.primary_tag()
+        {
+            metadata.title = tag.title().map(String::from);
+            metadata.artist = tag.artist().map(String::from);
+            metadata.album = tag.album().map(String::from);
         }
 
         // Fallback to filename if title is missing
@@ -220,35 +225,128 @@ impl AudioPlayer {
             sink: Arc::new(sink),
             metadata,
             media_center,
-            run_loop_running,
+            metadata_dirty: Cell::new(false),
+            shutdown_handle,
+            background_thread: Some(background_thread),
             command_receiver: cmd_rx,
         })
     }
 
     /// Open audio from a URL (async).
     ///
+    /// Fetches audio data from the URL and creates a player.
     /// Note: Metadata extraction from URL streams is limited compared to local files.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the URL cannot be fetched or the audio format is unsupported.
     #[allow(clippy::future_not_send)]
-    pub async fn open_url(_url: &str) -> Result<Self, PlayerError> {
+    pub async fn open_url(url: &str) -> Result<Self, PlayerError> {
         // Fetch audio data
-        // For now using simple GET, in future use robust http client
-        // This is a placeholder for the actual HTTP implementation
-        // The previous implementation used `zenwave` which is mocked/feature-gated
+        let response = zenwave::get(url)
+            .await
+            .map_err(|e| PlayerError::LoadFailed(format!("HTTP request failed: {e}")))?;
 
-        // For simplicity in this rewrite, we'll return an error until
-        // the HTTP client is fully properly integrated or use the previous logic
-        Err(PlayerError::LoadFailed(
-            "URL playback not fully implemented in rewrite yet".into(),
-        ))
+        let bytes =
+            response.into_body().into_bytes().await.map_err(|e| {
+                PlayerError::LoadFailed(format!("Failed to read response body: {e}"))
+            })?;
+
+        // Create a cursor for in-memory decoding
+        let cursor = std::io::Cursor::new(bytes);
+
+        // Initialize audio output and media center in background thread
+        let (stream_handle_tx, stream_handle_rx) = std::sync::mpsc::channel();
+        let (shutdown_handle, shutdown_rx) = ShutdownHandle::new();
+
+        let media_center = Arc::new(
+            crate::sys::MediaCenterIntegration::new()
+                .map_err(|e| PlayerError::Unknown(format!("media center init failed: {e}")))?,
+        );
+
+        let (cmd_tx, cmd_rx) = async_channel::unbounded();
+
+        let background_thread = {
+            let mc = Arc::clone(&media_center);
+
+            std::thread::spawn(move || {
+                let (_stream, stream_handle) = match OutputStream::try_default() {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        let _ = stream_handle_tx.send(Err(e.to_string()));
+                        return;
+                    }
+                };
+                let _ = stream_handle_tx.send(Ok(stream_handle));
+
+                // Run loop until shutdown is signaled (fixes thread leak)
+                if let Ok(local_mc) = crate::sys::MediaCenterIntegration::new() {
+                    while !shutdown_rx.is_shutdown() {
+                        local_mc.run_loop(Duration::from_millis(50));
+                        if let Some(cmd) = mc.poll_command().or_else(|| local_mc.poll_command()) {
+                            let _ = cmd_tx.send_blocking(cmd);
+                        }
+                    }
+                }
+                // _stream dropped here, thread exits cleanly
+            })
+        };
+
+        let stream_handle = stream_handle_rx
+            .recv()
+            .map_err(|_| PlayerError::OutputInitFailed("Background thread died".into()))?
+            .map_err(PlayerError::OutputInitFailed)?;
+
+        let sink = Sink::try_new(&stream_handle)
+            .map_err(|e| PlayerError::OutputInitFailed(e.to_string()))?;
+
+        // Decode audio
+        let source =
+            Decoder::new(cursor).map_err(|e| PlayerError::UnsupportedFormat(e.to_string()))?;
+
+        // Get duration if available
+        let mut metadata = MediaMetadata::default();
+        if let Some(d) = source.total_duration() {
+            metadata.duration = Some(d);
+        }
+
+        // Use URL as fallback title
+        metadata.title = Some(
+            url.rsplit('/')
+                .next()
+                .unwrap_or("Stream")
+                .split('?')
+                .next()
+                .unwrap_or("Stream")
+                .to_string(),
+        );
+
+        // Setup playback
+        sink.append(source);
+        sink.pause(); // Start paused
+
+        media_center.update(&metadata, &PlaybackState::paused(Duration::ZERO));
+
+        Ok(Self {
+            stream_handle,
+            sink: Arc::new(sink),
+            metadata,
+            media_center,
+            metadata_dirty: Cell::new(false),
+            shutdown_handle,
+            background_thread: Some(background_thread),
+            command_receiver: cmd_rx,
+        })
     }
 
     // --- Builder Methods ---
+    // These methods defer media center updates until the first action (play, pause, etc.)
 
     /// Set the title.
     #[must_use]
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.metadata.title = Some(title.into());
-        self.update_now_playing();
+        self.metadata_dirty.set(true);
         self
     }
 
@@ -256,7 +354,7 @@ impl AudioPlayer {
     #[must_use]
     pub fn artist(mut self, artist: impl Into<String>) -> Self {
         self.metadata.artist = Some(artist.into());
-        self.update_now_playing();
+        self.metadata_dirty.set(true);
         self
     }
 
@@ -264,7 +362,7 @@ impl AudioPlayer {
     #[must_use]
     pub fn album(mut self, album: impl Into<String>) -> Self {
         self.metadata.album = Some(album.into());
-        self.update_now_playing();
+        self.metadata_dirty.set(true);
         self
     }
 
@@ -272,26 +370,39 @@ impl AudioPlayer {
     #[must_use]
     pub fn artwork_url(mut self, url: impl Into<String>) -> Self {
         self.metadata.artwork_url = Some(url.into());
-        self.update_now_playing();
+        self.metadata_dirty.set(true);
         self
     }
 
     // --- Playback Control ---
 
+    /// Flush pending metadata updates to the media center.
+    ///
+    /// Called automatically before playback actions.
+    fn flush_metadata(&self) {
+        if self.metadata_dirty.get() {
+            self.update_now_playing();
+            self.metadata_dirty.set(false);
+        }
+    }
+
     /// Start playback.
     pub fn play(&self) {
+        self.flush_metadata();
         self.sink.play();
         self.update_now_playing();
     }
 
     /// Pause playback.
     pub fn pause(&self) {
+        self.flush_metadata();
         self.sink.pause();
         self.update_now_playing();
     }
 
     /// Toggle playback state.
     pub fn toggle_play_pause(&self) {
+        self.flush_metadata();
         if self.is_playing() {
             self.pause();
         } else {
@@ -301,6 +412,7 @@ impl AudioPlayer {
 
     /// Stop playback.
     pub fn stop(&self) {
+        self.flush_metadata();
         self.sink.stop();
         self.media_center.clear();
         self.update_now_playing();
@@ -308,6 +420,7 @@ impl AudioPlayer {
 
     /// Seek to a specific position.
     pub fn seek(&self, position: Duration) {
+        self.flush_metadata();
         let _ = self.sink.try_seek(position);
         self.update_now_playing();
     }
@@ -343,7 +456,8 @@ impl AudioPlayer {
     }
 
     /// Get total duration.
-    pub fn duration(&self) -> Option<Duration> {
+    #[must_use]
+    pub const fn duration(&self) -> Option<Duration> {
         self.metadata.duration
     }
 
@@ -413,7 +527,15 @@ impl AudioPlayer {
 
 impl Drop for AudioPlayer {
     fn drop(&mut self) {
-        self.run_loop_running.store(false, Ordering::Relaxed);
+        // ShutdownHandle is dropped automatically, signaling background thread to exit.
+        // We explicitly drop it first to ensure the signal is sent before we try to join.
+        drop(std::mem::replace(&mut self.shutdown_handle, ShutdownHandle::default()));
+
+        // Wait for background thread to exit cleanly
+        if let Some(handle) = self.background_thread.take() {
+            let _ = handle.join();
+        }
+
         self.media_center.clear();
     }
 }

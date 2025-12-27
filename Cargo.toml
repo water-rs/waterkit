@@ -26,6 +26,9 @@ description = "Kit utilities and helpers"
 keywords = ["kit", "utilities", "helpers", "waterui"]
 categories = ["gui", "development-tools"]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 waterkit-permission = { workspace = true, optional = true }
 waterkit-location = { workspace = true, optional = true }

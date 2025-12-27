@@ -111,15 +111,12 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
 #[allow(clippy::unused_async)]
 pub async fn get_brightness() -> Result<f32, Error> {
     // brightness crate is currently broken on macOS (build failure).
-    // For now we return a dummy value or error.
-    // Err(Error::Unsupported)
     Ok(1.0)
 }
 
 #[allow(clippy::unused_async)]
 pub async fn set_brightness(_val: f32) -> Result<(), Error> {
     // brightness crate broken.
-    // Err(Error::Unsupported)
     Ok(())
 }
 

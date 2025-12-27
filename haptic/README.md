@@ -1,12 +1,13 @@
 # Waterkit Haptic
 
-Haptic feedback and vibration control.
+Cross-platform haptic feedback and vibration control.
 
 ## Features
 
-- **Impact**: Light, Medium, Heavy impact styles.
-- **Notification**: Success, Warning, Error feedback patterns.
-- **Selection**: Subtle tick for UI selection changes.
+- **Impact feedback** with customizable intensity (0.0-1.0)
+- **Notification feedback** for success, warning, and error states
+- **Selection feedback** for UI selection changes
+- **Custom patterns** via builder API for complex vibration sequences
 
 ## Installation
 
@@ -17,27 +18,65 @@ waterkit-haptic = "0.1"
 
 ## Platform Support
 
-| Platform | Backend |
-| :--- | :--- |
-| **iOS** | `UIImpactFeedbackGenerator`, `UINotificationFeedbackGenerator` |
-| **Android** | `Vibrator` / `HapticFeedbackConstants` |
-| **Desktop** | *No-op (ignored safe)* |
+| Platform | Backend | Features |
+| :--- | :--- | :--- |
+| **iOS** | `UIImpactFeedbackGenerator`, Core Haptics | Full support including custom patterns |
+| **macOS** | `NSHapticFeedbackManager` | Basic feedback only |
+| **Android** | `VibrationEffect` | Full support with amplitude control |
+| **Windows** | `SimpleHapticsController` | Basic feedback with intensity |
+| **Linux** | N/A | Not supported (no haptic hardware) |
 
 ## Usage
 
 ```rust
-use waterkit_haptic::{HapticFeedback, ImpactStyle, NotificationType};
+use waterkit_haptic::{Haptic, HapticPattern, Intensity};
+use std::time::Duration;
 
-async fn feedback() {
-    let haptics = HapticFeedback::new().await.unwrap();
-    
-    // UI Selection tick
-    haptics.selection_changed().await;
-    
-    // Heavy impact
-    haptics.impact(ImpactStyle::Heavy).await;
-    
-    // Success notification
-    haptics.notification(NotificationType::Success).await;
+fn main() -> Result<(), waterkit_haptic::HapticError> {
+    // Check availability
+    if !Haptic::is_available() {
+        return Ok(());
+    }
+
+    // Simple impact feedback
+    Haptic::impact(Intensity::MEDIUM)?;
+
+    // Use predefined intensity levels
+    Haptic::impact(Intensity::LOW)?;
+    Haptic::impact(Intensity::HIGH)?;
+    Haptic::impact(Intensity::MAX)?;
+
+    // Or custom intensity (0.0-1.0)
+    Haptic::impact(Intensity::new(0.7))?;
+
+    // Selection feedback (light tap)
+    Haptic::selection()?;
+
+    // Notification feedback
+    Haptic::notification_success()?;
+    Haptic::notification_warning()?;
+    Haptic::notification_error()?;
+
+    // Custom pattern
+    let pattern = HapticPattern::builder()
+        .add(Duration::from_millis(100), Intensity::MAX)
+        .pause(Duration::from_millis(50))
+        .add(Duration::from_millis(200), Intensity::MEDIUM)
+        .pause(Duration::from_millis(50))
+        .add(Duration::from_millis(100), Intensity::LOW)
+        .build();
+
+    Haptic::play(&pattern)?;
+
+    Ok(())
 }
 ```
+
+## Intensity Levels
+
+| Constant | Value | Use Case |
+| :--- | :--- | :--- |
+| `Intensity::LOW` | 0.25 | Subtle feedback |
+| `Intensity::MEDIUM` | 0.5 | Default feedback |
+| `Intensity::HIGH` | 0.75 | Strong feedback |
+| `Intensity::MAX` | 1.0 | Maximum intensity |

@@ -3,7 +3,6 @@
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple;
 
-/// Android platform implementation.
 #[cfg(target_os = "android")]
 pub mod android;
 
@@ -14,18 +13,29 @@ mod windows;
 mod linux;
 
 // Re-export platform implementations
-// Re-export platform implementations
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-pub use apple::feedback;
+pub use apple::{
+    impact, is_available, notification_error, notification_success, notification_warning,
+    play_pattern, selection,
+};
 
 #[cfg(target_os = "android")]
-pub use android::feedback;
+pub use android::{
+    impact, is_available, notification_error, notification_success, notification_warning,
+    play_pattern, selection,
+};
 
 #[cfg(target_os = "windows")]
-pub use windows::feedback;
+pub use windows::{
+    impact, is_available, notification_error, notification_success, notification_warning,
+    play_pattern, selection,
+};
 
 #[cfg(target_os = "linux")]
-pub use linux::feedback;
+pub use linux::{
+    impact, is_available, notification_error, notification_success, notification_warning,
+    play_pattern, selection,
+};
 
 // Fallback for unsupported platforms
 #[cfg(not(any(
@@ -35,6 +45,43 @@ pub use linux::feedback;
     target_os = "windows",
     target_os = "linux"
 )))]
-pub(crate) async fn feedback(_style: crate::HapticFeedback) -> Result<(), crate::HapticError> {
-    Err(crate::HapticError::NotSupported)
+mod fallback {
+    use crate::{HapticError, HapticPattern, Intensity};
+
+    pub fn is_available() -> bool {
+        false
+    }
+
+    pub fn impact(_intensity: Intensity) -> Result<(), HapticError> {
+        Err(HapticError::NotSupported)
+    }
+
+    pub fn selection() -> Result<(), HapticError> {
+        Err(HapticError::NotSupported)
+    }
+
+    pub fn notification_success() -> Result<(), HapticError> {
+        Err(HapticError::NotSupported)
+    }
+
+    pub fn notification_warning() -> Result<(), HapticError> {
+        Err(HapticError::NotSupported)
+    }
+
+    pub fn notification_error() -> Result<(), HapticError> {
+        Err(HapticError::NotSupported)
+    }
+
+    pub fn play_pattern(_pattern: &HapticPattern) -> Result<(), HapticError> {
+        Err(HapticError::NotSupported)
+    }
 }
+
+#[cfg(not(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "android",
+    target_os = "windows",
+    target_os = "linux"
+)))]
+pub use fallback::*;

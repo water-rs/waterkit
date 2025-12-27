@@ -1,8 +1,8 @@
 //! Android haptic implementation using JNI.
 
-use crate::{HapticError, HapticFeedback};
-use jni::JNIEnv;
+use crate::{HapticError, HapticPattern, HapticStep, Intensity};
 use jni::objects::{GlobalRef, JObject, JValue};
+use jni::JNIEnv;
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode containing HapticHelper class.
@@ -10,17 +10,6 @@ static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"
 
 /// Cached class loader for the embedded DEX.
 static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
-
-// Haptic style constants matching Kotlin side
-const STYLE_LIGHT: i32 = 0;
-const STYLE_MEDIUM: i32 = 1;
-const STYLE_HEAVY: i32 = 2;
-const STYLE_RIGID: i32 = 3;
-const STYLE_SOFT: i32 = 4;
-const STYLE_SELECTION: i32 = 5;
-const STYLE_SUCCESS: i32 = 6;
-const STYLE_WARNING: i32 = 7;
-const STYLE_ERROR: i32 = 8;
 
 /// Initialize the DEX class loader. Must be called with a valid Context.
 pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), HapticError> {
@@ -89,60 +78,211 @@ pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), Hapt
     Ok(())
 }
 
-/// Trigger haptic feedback using the Context.
-pub fn feedback_with_context(
-    env: &mut JNIEnv,
-    context: &JObject,
-    style: HapticFeedback,
-) -> Result<(), HapticError> {
-    init_with_context(env, context)?;
-
+fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JObject<'a>, HapticError> {
     let class_loader = CLASS_LOADER
         .get()
-        .ok_or_else(|| HapticError::Unknown("Class loader not initialized".into()))?;
+        .ok_or_else(|| HapticError::InitFailed("Class loader not initialized".into()))?;
 
     let helper_class_name = env
         .new_string("waterkit.haptic.HapticHelper")
         .map_err(|e| HapticError::Unknown(format!("new_string: {e}")))?;
 
-    let helper_class = env
-        .call_method(
-            class_loader.as_obj(),
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
-            &[JValue::Object(&helper_class_name)],
-        )
-        .map_err(|e| HapticError::Unknown(format!("loadClass: {e}")))?
-        .l()
-        .map_err(|e| HapticError::Unknown(format!("loadClass result: {e}")))?;
+    env.call_method(
+        class_loader.as_obj(),
+        "loadClass",
+        "(Ljava/lang/String;)Ljava/lang/Class;",
+        &[JValue::Object(&helper_class_name)],
+    )
+    .map_err(|e| HapticError::Unknown(format!("loadClass: {e}")))?
+    .l()
+    .map_err(|e| HapticError::Unknown(format!("loadClass result: {e}")))
+}
 
-    let style_id = match style {
-        HapticFeedback::Light => STYLE_LIGHT,
-        HapticFeedback::Medium => STYLE_MEDIUM,
-        HapticFeedback::Heavy => STYLE_HEAVY,
-        HapticFeedback::Rigid => STYLE_RIGID,
-        HapticFeedback::Soft => STYLE_SOFT,
-        HapticFeedback::Selection => STYLE_SELECTION,
-        HapticFeedback::Success => STYLE_SUCCESS,
-        HapticFeedback::Warning => STYLE_WARNING,
-        HapticFeedback::Error => STYLE_ERROR,
-    };
+/// Check if haptic feedback is available (requires context).
+pub fn is_available_with_context(env: &mut JNIEnv, context: &JObject) -> Result<bool, HapticError> {
+    init_with_context(env, context)?;
 
+    let helper_class = get_helper_class(env)?;
     let helper_jclass: jni::objects::JClass = helper_class.into();
+
+    let result = env
+        .call_static_method(
+            helper_jclass,
+            "isAvailable",
+            "(Landroid/content/Context;)Z",
+            &[JValue::Object(context)],
+        )
+        .map_err(|e| HapticError::Unknown(format!("isAvailable call failed: {e}")))?
+        .z()
+        .map_err(|e| HapticError::Unknown(format!("isAvailable result: {e}")))?;
+
+    Ok(result)
+}
+
+/// Trigger impact feedback with context.
+pub fn impact_with_context(
+    env: &mut JNIEnv,
+    context: &JObject,
+    intensity: Intensity,
+) -> Result<(), HapticError> {
+    init_with_context(env, context)?;
+
+    let helper_class = get_helper_class(env)?;
+    let helper_jclass: jni::objects::JClass = helper_class.into();
+
     env.call_static_method(
         helper_jclass,
-        "feedback",
-        "(Landroid/content/Context;I)V",
-        &[JValue::Object(context), JValue::Int(style_id)],
+        "impact",
+        "(Landroid/content/Context;F)V",
+        &[JValue::Object(context), JValue::Float(intensity.value())],
     )
-    .map_err(|e| HapticError::Unknown(format!("feedback call failed: {e}")))?;
+    .map_err(|e| HapticError::Unknown(format!("impact call failed: {e}")))?;
 
     Ok(())
 }
 
-// Async wrapper for the public API (stub)
-pub(crate) async fn feedback(_style: HapticFeedback) -> Result<(), HapticError> {
+/// Trigger selection feedback with context.
+pub fn selection_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), HapticError> {
+    init_with_context(env, context)?;
+
+    let helper_class = get_helper_class(env)?;
+    let helper_jclass: jni::objects::JClass = helper_class.into();
+
+    env.call_static_method(
+        helper_jclass,
+        "selection",
+        "(Landroid/content/Context;)V",
+        &[JValue::Object(context)],
+    )
+    .map_err(|e| HapticError::Unknown(format!("selection call failed: {e}")))?;
+
+    Ok(())
+}
+
+/// Trigger notification feedback with context.
+pub fn notification_with_context(
+    env: &mut JNIEnv,
+    context: &JObject,
+    notification_type: i32,
+) -> Result<(), HapticError> {
+    init_with_context(env, context)?;
+
+    let helper_class = get_helper_class(env)?;
+    let helper_jclass: jni::objects::JClass = helper_class.into();
+
+    env.call_static_method(
+        helper_jclass,
+        "notification",
+        "(Landroid/content/Context;I)V",
+        &[JValue::Object(context), JValue::Int(notification_type)],
+    )
+    .map_err(|e| HapticError::Unknown(format!("notification call failed: {e}")))?;
+
+    Ok(())
+}
+
+/// Play a custom haptic pattern with context.
+pub fn play_pattern_with_context(
+    env: &mut JNIEnv,
+    context: &JObject,
+    pattern: &HapticPattern,
+) -> Result<(), HapticError> {
+    init_with_context(env, context)?;
+
+    // Convert pattern to timings and amplitudes arrays
+    let mut timings = Vec::with_capacity(pattern.steps().len());
+    let mut amplitudes = Vec::with_capacity(pattern.steps().len());
+
+    for step in pattern.steps() {
+        match step {
+            HapticStep::Vibrate { duration, intensity } => {
+                timings.push(duration.as_millis() as i64);
+                amplitudes.push((intensity.value() * 255.0) as i32);
+            }
+            HapticStep::Pause(duration) => {
+                timings.push(duration.as_millis() as i64);
+                amplitudes.push(0);
+            }
+        }
+    }
+
+    let helper_class = get_helper_class(env)?;
+    let helper_jclass: jni::objects::JClass = helper_class.into();
+
+    // Create Java long[] for timings
+    let timings_array = env
+        .new_long_array(timings.len() as i32)
+        .map_err(|e| HapticError::Unknown(format!("new_long_array: {e}")))?;
+    env.set_long_array_region(&timings_array, 0, &timings)
+        .map_err(|e| HapticError::Unknown(format!("set_long_array_region: {e}")))?;
+
+    // Create Java int[] for amplitudes
+    let amplitudes_array = env
+        .new_int_array(amplitudes.len() as i32)
+        .map_err(|e| HapticError::Unknown(format!("new_int_array: {e}")))?;
+    env.set_int_array_region(&amplitudes_array, 0, &amplitudes)
+        .map_err(|e| HapticError::Unknown(format!("set_int_array_region: {e}")))?;
+
+    let result = env
+        .call_static_method(
+            helper_jclass,
+            "playPattern",
+            "(Landroid/content/Context;[J[I)Z",
+            &[
+                JValue::Object(context),
+                JValue::Object(&timings_array),
+                JValue::Object(&amplitudes_array),
+            ],
+        )
+        .map_err(|e| HapticError::Unknown(format!("playPattern call failed: {e}")))?
+        .z()
+        .map_err(|e| HapticError::Unknown(format!("playPattern result: {e}")))?;
+
+    if result {
+        Ok(())
+    } else {
+        Err(HapticError::Unknown("pattern playback failed".into()))
+    }
+}
+
+// Public API stubs - Android requires Context for all haptic operations
+pub fn is_available() -> bool {
+    // Cannot check without context, assume true
+    true
+}
+
+pub fn impact(_intensity: Intensity) -> Result<(), HapticError> {
     Err(HapticError::Unknown(
-        "Android: use feedback_with_context() with Context".into(),
+        "Android: use impact_with_context() with Context".into(),
+    ))
+}
+
+pub fn selection() -> Result<(), HapticError> {
+    Err(HapticError::Unknown(
+        "Android: use selection_with_context() with Context".into(),
+    ))
+}
+
+pub fn notification_success() -> Result<(), HapticError> {
+    Err(HapticError::Unknown(
+        "Android: use notification_with_context() with Context".into(),
+    ))
+}
+
+pub fn notification_warning() -> Result<(), HapticError> {
+    Err(HapticError::Unknown(
+        "Android: use notification_with_context() with Context".into(),
+    ))
+}
+
+pub fn notification_error() -> Result<(), HapticError> {
+    Err(HapticError::Unknown(
+        "Android: use notification_with_context() with Context".into(),
+    ))
+}
+
+pub fn play_pattern(_pattern: &HapticPattern) -> Result<(), HapticError> {
+    Err(HapticError::Unknown(
+        "Android: use play_pattern_with_context() with Context".into(),
     ))
 }

@@ -276,6 +276,19 @@ impl AudioRecorder {
     pub fn try_read(&mut self) -> Option<AudioBuffer> {
         self.inner.try_read()
     }
+
+    /// Read audio data synchronously (blocking).
+    ///
+    /// Use this method when calling from a non-async context (e.g., a dedicated thread).
+    /// This is more reliable than using `pollster::block_on(read())` as it doesn't
+    /// depend on async runtime waker semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading fails or recording is not active.
+    pub fn read_blocking(&mut self) -> Result<AudioBuffer, RecordError> {
+        self.inner.read_blocking()
+    }
     
     /// Get an async stream of audio buffers.
     #[must_use]

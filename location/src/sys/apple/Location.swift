@@ -57,7 +57,7 @@ func get_current_location() -> LocationResult {
         return .NotAvailable
     }
     
-    let timestampMs = UInt64(location.timestamp.timeIntervalSince1970 * 1000)
+    let timestampMs = Int64(location.timestamp.timeIntervalSince1970 * 1000)
     let data = LocationData(
         latitude: location.coordinate.latitude,
         longitude: location.coordinate.longitude,

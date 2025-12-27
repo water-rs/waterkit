@@ -14,9 +14,9 @@ categories = ["os", "gui"]
 workspace = true
 
 [dependencies]
-
 waterkit-permission = { workspace = true }
 thiserror = { workspace = true }
+jiff = { workspace = true }
 
 [build-dependencies]
 waterkit-build.workspace = true

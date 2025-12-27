@@ -1,6 +1,6 @@
 //! Android location implementation using JNI.
 
-use crate::{Location, LocationError};
+use crate::{Location, LocationError, Timestamp};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
@@ -160,14 +160,15 @@ pub fn get_location_with_context(
         return Err(LocationError::Unknown("Invalid result array".into()));
     }
 
-    Ok(Location {
-        latitude: buf[1],
-        longitude: buf[2],
-        altitude: Some(buf[3]),
-        horizontal_accuracy: Some(buf[4]),
-        vertical_accuracy: None,
-        timestamp: buf[5] as u64,
-    })
+    // Android returns timestamp as milliseconds since Unix epoch
+    #[allow(clippy::cast_possible_truncation)]
+    let timestamp_ms = buf[5] as i64;
+    let timestamp = Timestamp::from_millisecond(timestamp_ms)
+        .map_err(|e| LocationError::Unknown(e.to_string()))?;
+
+    Ok(Location::new(buf[1], buf[2], timestamp)
+        .with_altitude(buf[3])
+        .with_horizontal_accuracy(buf[4]))
 }
 
 // Async wrapper for the public API (requires runtime context)

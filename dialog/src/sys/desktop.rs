@@ -1,4 +1,4 @@
-use crate::{Dialog, DialogType};
+use crate::{Dialog, DialogError, DialogType};
 use futures::channel::oneshot;
 use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 
@@ -6,7 +6,7 @@ use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 ///
 /// # Errors
 /// Returns an error if the native dialog fails to show or is not supported.
-pub async fn show_alert(dialog: Dialog) -> Result<(), String> {
+pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
     let (tx, rx) = oneshot::channel();
 
     std::thread::spawn(move || {
@@ -23,17 +23,17 @@ pub async fn show_alert(dialog: Dialog) -> Result<(), String> {
             .set_buttons(MessageButtons::Ok)
             .show();
 
-        let _ = tx.send(Ok::<(), String>(()));
+        let _ = tx.send(());
     });
 
-    rx.await.map_err(|_| "Cancelled".to_string())?
+    rx.await.map_err(|_| DialogError::PlatformError("Dialog panicked or channel closed".into()))
 }
 
 /// Show a confirmation dialog.
 ///
 /// # Errors
 /// Returns an error if the native dialog fails to show or is not supported.
-pub async fn show_confirm(dialog: Dialog) -> Result<bool, String> {
+pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
     let (tx, rx) = oneshot::channel();
 
     std::thread::spawn(move || {
@@ -52,10 +52,10 @@ pub async fn show_confirm(dialog: Dialog) -> Result<bool, String> {
 
         let confirmed = matches!(result, MessageDialogResult::Ok | MessageDialogResult::Yes);
 
-        let _ = tx.send(Ok::<bool, String>(confirmed));
+        let _ = tx.send(confirmed);
     });
 
-    rx.await.map_err(|_| "Cancelled".to_string())?
+    rx.await.map_err(|_| DialogError::PlatformError("Dialog panicked or channel closed".into()))
 }
 
 /// Show a file dialog to open a single file.
@@ -64,7 +64,7 @@ pub async fn show_confirm(dialog: Dialog) -> Result<bool, String> {
 /// Returns an error if the native dialog fails to show or is not supported.
 pub async fn show_open_single_file(
     dialog: crate::FileDialog,
-) -> Result<Option<std::path::PathBuf>, String> {
+) -> Result<Option<std::path::PathBuf>, DialogError> {
     let mut builder = rfd::AsyncFileDialog::new();
 
     if let Some(location) = &dialog.location {
@@ -83,4 +83,40 @@ pub async fn show_open_single_file(
     let result = builder.pick_file().await;
 
     Ok(result.map(|f| f.path().to_path_buf()))
+}
+
+/// Show a photo picker.
+///
+/// # Errors
+/// Returns an error if the native dialog fails to show or is not supported.
+
+/// A native handle to a selected media file.
+#[derive(Debug, Clone)]
+pub struct Selection(std::path::PathBuf);
+
+/// Load the media from a handle.
+pub async fn load_media(handle: Selection) -> Result<std::path::PathBuf, DialogError> {
+    Ok(handle.0)
+}
+
+/// Show a photo picker.
+///
+/// # Errors
+/// Returns an error if the native dialog fails to show or is not supported.
+pub async fn show_photo_picker(
+    picker: crate::PhotoPicker,
+) -> Result<Option<Selection>, DialogError> {
+    let mut builder = rfd::AsyncFileDialog::new();
+
+    let exts = match picker.media_type {
+        crate::MediaType::Image => vec!["png", "jpg", "jpeg", "gif", "bmp", "webp", "heic"],
+        crate::MediaType::Video => vec!["mp4", "mov", "avi", "mkv", "webm"],
+        crate::MediaType::LivePhoto => vec!["png", "jpg", "jpeg", "heic", "mov"], // Fallback
+    };
+
+    builder = builder.add_filter("Media", &exts);
+
+    let result = builder.pick_file().await;
+
+    Ok(result.map(|f| Selection(f.path().to_path_buf())))
 }

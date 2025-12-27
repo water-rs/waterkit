@@ -1,9 +1,23 @@
-//! Cross-platform native dialogs/alerts.
+//! Cross-platform native dialogs/alerts for WaterUI.
+//! 
+//! This crate provides a unified API for displaying native UI elements:
+//! - Alerts ([`Dialog`])
+//! - Confirmations ([`Dialog::show_confirm`])
+//! - File Open/Save Dialogs ([`FileDialog`])
+//! - Photo Picker ([`PhotoPicker`])
+//!
+//! Platforms supported:
+//! - macOS (via `rfd` / AppKit)
+//! - Android (via JNI / Kotlin)
+//! - iOS (via Swift Bridge / UIKit)
 
 #![warn(missing_docs)]
 
-/// Platform-specific implementations.
-pub mod sys;
+// Internal platform-specific implementations.
+mod sys;
+
+mod error;
+pub use error::*;
 
 /// Types of dialogs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +63,7 @@ impl Dialog {
     ///
     /// # Errors
     /// Returns an error if the native dialog fails to show or is not supported.
-    pub async fn show(self) -> Result<(), String> {
+    pub async fn show(self) -> Result<(), DialogError> {
         sys::show_alert(self).await
     }
 
@@ -58,7 +72,7 @@ impl Dialog {
     ///
     /// # Errors
     /// Returns an error if the native dialog fails to show or is not supported.
-    pub async fn show_confirm(self) -> Result<bool, String> {
+    pub async fn show_confirm(self) -> Result<bool, DialogError> {
         sys::show_confirm(self).await
     }
 }
@@ -117,14 +131,89 @@ impl FileDialog {
     ///
     /// # Errors
     /// Returns an error if the native dialog fails to show or is not supported.
-    pub async fn show_open_single_file(self) -> Result<Option<std::path::PathBuf>, String> {
+    pub async fn show_open_single_file(self) -> Result<Option<std::path::PathBuf>, DialogError> {
         sys::show_open_single_file(self).await
     }
+
 
     // Future: show_open_multiple_files, show_save_single_file
 }
 
 impl Default for FileDialog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+
+/// Type of media to pick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaType {
+    /// Images only.
+    Image,
+    /// Videos only.
+    Video,
+    /// Live Photos only (iOS). Falls back to Image on other platforms.
+    LivePhoto,
+}
+
+/// A handle to a selected photo/media.
+///
+/// Use `load()` to download or copy the media to a local temporary file.
+#[derive(Debug, Clone)]
+pub struct PhotoHandle {
+    handle: sys::Selection,
+}
+
+impl PhotoHandle {
+    /// Load the media to a local file.
+    ///
+    /// This may involve downloading from the cloud (e.g., iCloud, Google Photos).
+    /// Returns the path to the local file.
+    ///
+    /// # Errors
+    /// Returns an error if loading fails.
+    pub async fn load(self) -> Result<std::path::PathBuf, DialogError> {
+        sys::load_media(self.handle).await
+    }
+}
+
+/// A native photo picker.
+#[derive(Debug, Clone)]
+pub struct PhotoPicker {
+    /// Type of media to pick.
+    pub media_type: MediaType,
+}
+
+impl PhotoPicker {
+    /// Create a new photo picker.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            media_type: MediaType::Image,
+        }
+    }
+
+    /// Set the media type to pick.
+    #[must_use]
+    pub const fn with_media_type(mut self, media_type: MediaType) -> Self {
+        self.media_type = media_type;
+        self
+    }
+
+    /// Show the photo picker and return a handle to the selected media.
+    ///
+    /// # Errors
+    /// Returns an error if the picker fails to show or is not supported.
+    pub async fn pick(self) -> Result<Option<PhotoHandle>, DialogError> {
+        match sys::show_photo_picker(self).await? {
+            Some(handle) => Ok(Some(PhotoHandle { handle })),
+            None => Ok(None),
+        }
+    }
+}
+
+impl Default for PhotoPicker {
     fn default() -> Self {
         Self::new()
     }

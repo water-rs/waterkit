@@ -15,6 +15,7 @@ workspace = true
 
 [dependencies]
 futures = { workspace = true }
+thiserror = { workspace = true }
 
 # iOS
 [target.'cfg(target_os = "ios")'.dependencies]

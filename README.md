@@ -4,7 +4,7 @@
 
 Waterkit is designed to work seamlessly with **WaterUI**, but can be used independently in any Rust project.
 
-## ✨ Modules
+## Modules
 
 Waterkit is organized into focused, independent crates. You can use the main `waterkit` crate with feature flags, or depend on individual crates directly.
 
@@ -43,7 +43,7 @@ If you want everything:
 waterkit = { version = "0.1", features = ["full"] }
 ```
 
-## 🍎 Platform Support
+## Platform Support
 
 Waterkit uses a mix of pure Rust crates and native bridges (Swift/Kotlin) to achieve maximum compatibility and performance.
 
@@ -55,7 +55,7 @@ Waterkit uses a mix of pure Rust crates and native bridges (Swift/Kotlin) to ach
 | **Windows** | ✅ Supported | `windows-rs`, Win32 APIs |
 | **Linux** | 🚧 Beta | DBus, various system crates |
 
-## 🛠️ Usage Example
+## Usage Example
 
 Here's a quick example of using multiple modules together:
 
@@ -89,10 +89,10 @@ async fn example() {
 }
 ```
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please check individual crate directories for specific implementation details.
 
-## 📄 License
+## License
 
 MIT OR Apache-2.0 License

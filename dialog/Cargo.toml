@@ -4,11 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-readme.workspace = true
+readme = "README.md"
 description = "Native dialogs and pickers"
 keywords = ["dialog", "picker", "native", "alert"]
 categories = ["os", "gui"]
-repository = "https://github.com/water-rs/kit"
+repository.workspace = true
 
 [lints]
 workspace = true

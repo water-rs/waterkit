@@ -1,4 +1,4 @@
-//! Cross-platform clipboard access for `WaterUI`.
+//! Cross-platform clipboard access.
 //!
 //! This crate provides a unified API for interacting with the system clipboard
 //! across macOS, Windows, Linux, Android, and iOS.

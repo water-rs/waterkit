@@ -1,4 +1,4 @@
-//! Cross-platform native dialogs/alerts for `WaterUI`.
+//! Cross-platform native dialogs/alerts.
 //!
 //! This crate provides a unified API for displaying native UI elements:
 //! - Alerts ([`Dialog`])

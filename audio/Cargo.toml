@@ -19,11 +19,12 @@ thiserror = { workspace = true }
 rodio = { workspace = true }
 # Cross-platform audio I/O (for recording)
 cpal = { workspace = true }
-# Async runtime (using workspace version but adding features)
-# Async runtime (using workspace version but adding features)
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
+# Audio metadata extraction
+lofty = "0.21"
+# Async primitives (runtime-agnostic)
 async-channel = { workspace = true }
 futures = { workspace = true }
+futures-timer = { workspace = true }
 # HTTP client
 # zenwave = "0.3"  # Moved to platform-specific sections below
 
@@ -53,4 +54,5 @@ zbus.workspace = true
 futures.workspace = true
 mpris-server = "0.9"
 zenwave = "0.3"
+smol = "2"
 

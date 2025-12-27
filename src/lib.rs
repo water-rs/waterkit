@@ -1,6 +1,6 @@
 //! # Waterkit
 //!
-//! A comprehensive, cross-platform utility kit for building modern applications with WaterUI.
+//! A comprehensive, cross-platform utility kit for building modern applications.
 //!
 //! Waterkit provides a unified API for common system functionalities, including audio, video,
 //! camera, location, permissions, and more, across macOS, iOS, Android, Windows, and Linux.

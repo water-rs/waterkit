@@ -1,6 +1,6 @@
 //! Linux location implementation using GeoClue2 D-Bus service.
 
-use crate::{Location, LocationError};
+use crate::{Location, LocationError, Timestamp};
 
 pub(crate) async fn get_location() -> Result<Location, LocationError> {
     use zbus::Connection;
@@ -111,15 +111,16 @@ pub(crate) async fn get_location() -> Result<Location, LocationError> {
         )
         .await;
 
-    Ok(Location {
-        latitude,
-        longitude,
-        altitude,
-        horizontal_accuracy: accuracy,
-        vertical_accuracy: None,
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0),
-    })
+    let timestamp = Timestamp::now();
+
+    let mut location = Location::new(latitude, longitude, timestamp);
+
+    if let Some(alt) = altitude {
+        location = location.with_altitude(alt);
+    }
+    if let Some(acc) = accuracy {
+        location = location.with_horizontal_accuracy(acc);
+    }
+
+    Ok(location)
 }

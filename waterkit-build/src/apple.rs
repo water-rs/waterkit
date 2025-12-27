@@ -1,7 +1,8 @@
 //! Apple platform build utilities.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::{env};
+use std::env;
 
 /// Configuration for Swift compilation.
 #[derive(Debug, Clone)]
@@ -43,29 +44,78 @@ impl AppleSwiftConfig {
     }
 }
 
+/// A Swift bridge crate definition for multi-crate compilation.
+///
+/// Used with [`compile_multi_swift`] to compile Swift code from multiple
+/// dependent crates into a single static library for a test binary.
+#[derive(Debug, Clone)]
+pub struct SwiftBridgeCrate {
+    /// Path to the crate's bridge module (absolute path).
+    pub bridge_rs: PathBuf,
+    /// Swift source files to include (absolute paths).
+    pub swift_sources: Vec<PathBuf>,
+    /// Frameworks required by this crate.
+    pub frameworks: Vec<String>,
+}
+
+impl SwiftBridgeCrate {
+    /// Create a new Swift bridge crate definition.
+    ///
+    /// # Arguments
+    /// * `bridge_rs` - Absolute path to the Rust bridge module (e.g., `crate/src/sys/apple/mod.rs`)
+    #[must_use]
+    pub fn new(bridge_rs: impl Into<PathBuf>) -> Self {
+        Self {
+            bridge_rs: bridge_rs.into(),
+            swift_sources: Vec::new(),
+            frameworks: Vec::new(),
+        }
+    }
+
+    /// Add a Swift source file.
+    #[must_use]
+    pub fn swift_source(mut self, path: impl Into<PathBuf>) -> Self {
+        self.swift_sources.push(path.into());
+        self
+    }
+
+    /// Add a framework to link.
+    #[must_use]
+    pub fn framework(mut self, name: impl Into<String>) -> Self {
+        self.frameworks.push(name.into());
+        self
+    }
+}
+
 /// Generate Swift bridge code from bridge modules.
 ///
 /// This is for crates that only need bridge generation, not full Swift compilation.
 ///
 /// # Arguments
-/// * `bridges` - Slice of paths to Rust bridge modules (e.g., "src/sys/apple/mod.rs")
-pub fn build_apple_bridge(bridges: &[&str]) {
+/// * `bridges` - Iterator of paths to Rust bridge modules (e.g., "src/sys/apple/mod.rs")
+pub fn build_apple_bridge(bridges: impl IntoIterator<Item = impl AsRef<str>>) {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let pkg_name = env::var("CARGO_PKG_NAME").unwrap();
 
-    for bridge in bridges {
+    let bridges: Vec<String> = bridges
+        .into_iter()
+        .map(|b| b.as_ref().to_string())
+        .collect();
+
+    for bridge in &bridges {
         println!("cargo:rerun-if-changed={bridge}");
     }
 
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     {
-        swift_bridge_build::parse_bridges(bridges.to_vec())
+        let bridge_refs: Vec<&str> = bridges.iter().map(String::as_str).collect();
+        swift_bridge_build::parse_bridges(bridge_refs)
             .write_all_concatenated(out_dir, &pkg_name);
     }
 
     #[cfg(not(any(target_os = "ios", target_os = "macos")))]
     {
-        let _ = (out_dir, pkg_name);
+        let _ = (out_dir, pkg_name, bridges);
     }
 }
 
@@ -232,3 +282,207 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
 /// No-op on non-Apple platforms.
 #[cfg(not(any(target_os = "ios", target_os = "macos")))]
 pub fn compile_swift(_bridge_rs: &str, _config: &AppleSwiftConfig) {}
+
+/// Compile multiple Swift bridge crates into a single static library.
+///
+/// This is for test binaries that depend on multiple Swift-bridge crates.
+/// It combines all bridge definitions and Swift sources into one compilation unit.
+///
+/// # Arguments
+/// * `lib_name` - Name for the output static library (e.g., "LocationTest")
+/// * `crates` - Iterator of Swift bridge crate definitions
+///
+/// # Example
+///
+/// ```ignore
+/// use waterkit_build::{compile_multi_swift, SwiftBridgeCrate};
+/// use std::path::PathBuf;
+///
+/// fn main() {
+///     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+///     let location = manifest_dir.join("../../../location");
+///     let permission = manifest_dir.join("../../../permission");
+///
+///     compile_multi_swift("LocationTest", [
+///         SwiftBridgeCrate::new(location.join("src/sys/apple/mod.rs"))
+///             .swift_source(location.join("src/sys/apple/Location.swift"))
+///             .framework("CoreLocation"),
+///         SwiftBridgeCrate::new(permission.join("src/sys/apple/mod.rs"))
+///             .swift_source(permission.join("src/sys/apple/Permission.swift"))
+///             .framework("CoreLocation")
+///             .framework("AVFoundation")
+///             .framework("Photos")
+///             .framework("Contacts")
+///             .framework("EventKit"),
+///     ]);
+/// }
+/// ```
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+pub fn compile_multi_swift(
+    lib_name: &str,
+    crates: impl IntoIterator<Item = SwiftBridgeCrate>,
+) {
+    use std::fs;
+    use std::process::Command;
+
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let crates: Vec<SwiftBridgeCrate> = crates.into_iter().collect();
+
+    // Collect all bridge paths and set up rerun-if-changed
+    let bridge_strings: Vec<String> = crates
+        .iter()
+        .map(|c| c.bridge_rs.to_string_lossy().into_owned())
+        .collect();
+
+    for krate in &crates {
+        println!("cargo:rerun-if-changed={}", krate.bridge_rs.display());
+        for source in &krate.swift_sources {
+            println!("cargo:rerun-if-changed={}", source.display());
+        }
+    }
+    println!("cargo:rerun-if-changed=build.rs");
+
+    let bridges: Vec<&str> = bridge_strings.iter().map(String::as_str).collect();
+
+    // Generate Swift bridge code for all crates
+    swift_bridge_build::parse_bridges(bridges).write_all_concatenated(&out_dir, lib_name);
+
+    // Paths to generated files
+    let core_swift = out_dir.join("SwiftBridgeCore.swift");
+    let gen_swift = out_dir.join(format!("{lib_name}/{lib_name}.swift"));
+    let core_h = out_dir.join("SwiftBridgeCore.h");
+    let gen_h = out_dir.join(format!("{lib_name}/{lib_name}.h"));
+
+    // Combine all Swift sources
+    let mut combined = fs::read_to_string(&core_swift).expect("Failed to read SwiftBridgeCore.swift");
+    combined.push('\n');
+    combined.push_str(&fs::read_to_string(&gen_swift).expect("Failed to read generated swift"));
+
+    for krate in &crates {
+        for source in &krate.swift_sources {
+            combined.push('\n');
+            combined.push_str(
+                &fs::read_to_string(source)
+                    .unwrap_or_else(|_| panic!("Failed to read {}", source.display())),
+            );
+        }
+    }
+
+    let combined_swift = out_dir.join(format!("Combined{lib_name}.swift"));
+    fs::write(&combined_swift, combined).expect("Failed to write combined Swift file");
+
+    // Create bridging header
+    let bridging_h = out_dir.join("Bridging-Header.h");
+    let bridging_content = format!(
+        "#include \"{}\"\n#include \"{}\"\n",
+        core_h.display(),
+        gen_h.display()
+    );
+    fs::write(&bridging_h, bridging_content).expect("Failed to write bridging header");
+
+    // Get SDK path
+    let target = env::var("TARGET").unwrap();
+    let sdk = if target.contains("ios") {
+        "iphoneos"
+    } else {
+        "macosx"
+    };
+
+    let sdk_path = String::from_utf8(
+        Command::new("xcrun")
+            .args(["--sdk", sdk, "--show-sdk-path"])
+            .output()
+            .expect("xcrun failed")
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+
+    // Compile Swift to object file
+    let obj_file = out_dir.join(format!("{lib_name}.o"));
+
+    let mut swiftc = Command::new("swiftc");
+    swiftc
+        .arg("-emit-object")
+        .arg("-o")
+        .arg(&obj_file)
+        .arg("-sdk")
+        .arg(&sdk_path)
+        .arg("-import-objc-header")
+        .arg(&bridging_h)
+        .arg("-parse-as-library")
+        .arg("-module-name")
+        .arg(lib_name)
+        .arg(&combined_swift);
+
+    // Add target triple
+    if target.contains("ios") {
+        swiftc.arg("-target").arg("arm64-apple-ios14.0");
+    } else if target.contains("aarch64") {
+        swiftc.arg("-target").arg("arm64-apple-macos12.3");
+    } else {
+        swiftc.arg("-target").arg("x86_64-apple-macos12.3");
+    }
+
+    let output = swiftc.output().expect("Failed to run swiftc");
+    if !output.status.success() {
+        eprintln!(
+            "Swift compilation: swiftc args: {:?}",
+            swiftc.get_args().collect::<Vec<_>>()
+        );
+        eprintln!("Swift compilation failed:");
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        panic!("Swift compilation failed");
+    }
+
+    // Create static library
+    let lib_file = out_dir.join(format!("lib{lib_name}.a"));
+    let ar_status = Command::new("ar")
+        .args(["rcs", lib_file.to_str().unwrap(), obj_file.to_str().unwrap()])
+        .status()
+        .expect("Failed to run ar");
+    assert!(ar_status.success(), "ar failed");
+
+    // Link the static library
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static={lib_name}");
+
+    // Link Swift runtime
+    let toolchain_dir = String::from_utf8(
+        Command::new("xcrun")
+            .args(["--find", "swiftc"])
+            .output()
+            .expect("xcrun --find swiftc failed")
+            .stdout,
+    )
+    .unwrap();
+    let toolchain_lib = PathBuf::from(toolchain_dir.trim())
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("lib/swift/macosx");
+    println!("cargo:rustc-link-search=native={}", toolchain_lib.display());
+
+    // Collect and deduplicate frameworks, always include Foundation
+    let mut frameworks: HashSet<String> = HashSet::new();
+    frameworks.insert("Foundation".to_string());
+    for krate in &crates {
+        for fw in &krate.frameworks {
+            frameworks.insert(fw.clone());
+        }
+    }
+
+    for framework in &frameworks {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
+}
+
+/// No-op on non-Apple platforms.
+#[cfg(not(any(target_os = "ios", target_os = "macos")))]
+pub fn compile_multi_swift(
+    _lib_name: &str,
+    _crates: impl IntoIterator<Item = SwiftBridgeCrate>,
+) {
+}

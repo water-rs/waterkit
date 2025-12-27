@@ -1,6 +1,6 @@
 //! Apple platform (iOS/macOS) location implementation using swift-bridge.
 
-use crate::{Location, LocationError};
+use crate::{Location, LocationError, Timestamp};
 
 #[swift_bridge::bridge]
 mod ffi {
@@ -12,7 +12,7 @@ mod ffi {
         altitude: f64,
         horizontal_accuracy: f64,
         vertical_accuracy: f64,
-        timestamp_ms: u64,
+        timestamp_ms: i64,
     }
 
     // Result type for location requests
@@ -35,26 +35,24 @@ mod ffi {
 /// Returns a `LocationError` if the location cannot be retrieved.
 pub async fn get_location() -> Result<Location, LocationError> {
     match ffi::get_current_location() {
-        ffi::LocationResult::Success(data) => Ok(Location {
-            latitude: data.latitude,
-            longitude: data.longitude,
-            altitude: if data.altitude.is_nan() {
-                None
-            } else {
-                Some(data.altitude)
-            },
-            horizontal_accuracy: if data.horizontal_accuracy < 0.0 {
-                None
-            } else {
-                Some(data.horizontal_accuracy)
-            },
-            vertical_accuracy: if data.vertical_accuracy < 0.0 {
-                None
-            } else {
-                Some(data.vertical_accuracy)
-            },
-            timestamp: data.timestamp_ms,
-        }),
+        ffi::LocationResult::Success(data) => {
+            let timestamp = Timestamp::from_millisecond(data.timestamp_ms)
+                .map_err(|e| LocationError::Unknown(e.to_string()))?;
+
+            let mut location = Location::new(data.latitude, data.longitude, timestamp);
+
+            if !data.altitude.is_nan() {
+                location = location.with_altitude(data.altitude);
+            }
+            if data.horizontal_accuracy >= 0.0 {
+                location = location.with_horizontal_accuracy(data.horizontal_accuracy);
+            }
+            if data.vertical_accuracy >= 0.0 {
+                location = location.with_vertical_accuracy(data.vertical_accuracy);
+            }
+
+            Ok(location)
+        }
         ffi::LocationResult::PermissionDenied => Err(LocationError::PermissionDenied),
         ffi::LocationResult::ServiceDisabled => Err(LocationError::ServiceDisabled),
         ffi::LocationResult::Timeout => Err(LocationError::Timeout),

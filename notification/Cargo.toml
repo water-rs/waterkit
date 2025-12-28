@@ -14,15 +14,19 @@ categories = ["os", "gui"]
 workspace = true
 
 [dependencies]
-# Desktop platforms (Linux, Windows, macOS)
+thiserror.workspace = true
+
+# Desktop platforms (Linux, Windows, macOS unbundled)
 [target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dependencies]
 notify-rust = { workspace = true }
 
-# iOS
-[target.'cfg(target_os = "ios")'.dependencies]
-swift-bridge.workspace = true
+# Linux - for opening URLs when action buttons are clicked
+[target.'cfg(target_os = "linux")'.dependencies]
+open = "5"
 
-[target.'cfg(target_os = "ios")'.build-dependencies]
+# Apple platforms (iOS, macOS) - use native UserNotifications
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]

@@ -1,0 +1,9 @@
+[package]
+name = "waterkit-notification-test"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+waterkit-notification.workspace = true
+core-foundation-sys = "0.8"

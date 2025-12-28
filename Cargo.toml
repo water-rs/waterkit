@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video"]
+members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video"]
 
 
 [workspace.package]
@@ -48,7 +48,7 @@ waterkit-system = { workspace = true, optional = true }
 waterkit-video = { workspace = true, optional = true }
 
 [features]
-default = []
+default = ["full"]
 full = [
     "permission",
     "location",
@@ -139,6 +139,7 @@ swift-bridge-build = "0.1"
 
 # Android
 jni = "0.21"
+ndk-context = "0.1"
 
 # Build utilities
 waterkit-build = { path = "waterkit-build" }
@@ -165,11 +166,15 @@ rav1e = "0.8"
 dav1d = "0.11"
 media-codec = "0.8"
 
+# Time
+jiff = "0.2"
+
 # System/OS
 sysinfo = "0.37"
 dirs = "6.0"
 rfd = "0.16"
 arboard = "3"
+clipboard-rs = { version = "0.3", features = ["image"] }
 notify-rust = "4"
 futures-timer = "3"
 netdev = "0.40"

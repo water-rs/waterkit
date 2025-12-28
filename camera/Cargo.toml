@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 readme = "README.md"
 repository = "https://github.com/water-rs/waterkit"
-description = "Cross-platform camera and video streaming"
+description = "Cross-platform camera and video streaming with GPU-first frame delivery"
 keywords = ["camera", "video", "streaming", "ios", "android"]
 categories = ["multimedia::video", "gui"]
 
@@ -15,18 +15,22 @@ workspace = true
 
 [dependencies]
 thiserror = { workspace = true }
-
-# WGPU for texture integration
 wgpu.workspace = true
+futures.workspace = true
+async-channel.workspace = true
+
 waterkit-codec = { workspace = true, optional = true }
 
 [build-dependencies]
 waterkit-build.workspace = true
 
-# ... (rest of file) ...
-
 [features]
 codec = ["dep:waterkit-codec"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+pollster = "0.4"
+winit.workspace = true
 
 # Desktop platforms (Windows, macOS, Linux) - use nokhwa
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
@@ -44,4 +48,4 @@ core-graphics-types = "0.2"
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
-ndk-context = "0.1"
+ndk-context.workspace = true

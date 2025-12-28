@@ -30,9 +30,14 @@ pub use desktop::CameraInner;
     target_os = "linux"
 )))]
 mod fallback {
-    use crate::{CameraError, CameraFrame, CameraInfo, Resolution};
+    use crate::{
+        CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, Frame, Photo,
+        Resolution,
+    };
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    #[derive(Debug)]
     pub struct CameraInner;
 
     impl CameraInner {
@@ -40,52 +45,72 @@ mod fallback {
             Err(CameraError::NotSupported)
         }
 
-        pub fn open(_camera_id: &str) -> Result<Self, CameraError> {
+        pub async fn open(
+            _camera_id: &str,
+            _config: CameraConfig,
+            _device: Arc<wgpu::Device>,
+            _queue: Arc<wgpu::Queue>,
+        ) -> Result<Self, CameraError> {
             Err(CameraError::NotSupported)
         }
 
-        pub fn start(&self) -> Result<(), CameraError> {
+        pub fn capabilities(&self) -> &CameraCapabilities {
+            static EMPTY: CameraCapabilities = CameraCapabilities {
+                resolutions: Vec::new(),
+                frame_rates: Vec::new(),
+                iso_range: None,
+                exposure_duration_range: None,
+                supports_exposure_compensation: false,
+                supports_manual_focus: false,
+                supports_manual_white_balance: false,
+                zoom_range: None,
+                supports_hdr: false,
+                stabilization_modes: Vec::new(),
+                has_flash: false,
+                has_torch: false,
+            };
+            &EMPTY
+        }
+
+        pub fn apply_controls(&mut self, _controls: &CameraControls) -> Result<(), CameraError> {
             Err(CameraError::NotSupported)
         }
 
-        pub fn stop(&self) -> Result<(), CameraError> {
-            Err(CameraError::NotSupported)
-        }
-
-        pub fn get_frame(&self) -> Result<CameraFrame, CameraError> {
-            Err(CameraError::NotSupported)
-        }
-
-        pub fn set_resolution(&self, _resolution: Resolution) -> Result<(), CameraError> {
-            Err(CameraError::NotSupported)
+        pub fn controls(&self) -> &CameraControls {
+            static EMPTY: CameraControls = CameraControls {
+                exposure: None,
+                focus: None,
+                white_balance: None,
+                zoom: None,
+                flash: None,
+                hdr: None,
+                stabilization: None,
+            };
+            &EMPTY
         }
 
         pub fn resolution(&self) -> Resolution {
             Resolution::HD
         }
 
-        pub fn dropped_frame_count(&self) -> u64 {
-            0
+        pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
+            futures::stream::empty()
         }
 
-        pub fn set_hdr(&self, _enabled: bool) -> Result<(), CameraError> {
+        pub async fn capture_photo(&self) -> Result<Photo, CameraError> {
             Err(CameraError::NotSupported)
         }
 
-        pub fn hdr_enabled(&self) -> bool {
-            false
-        }
-
-        pub fn take_photo(&self) -> Result<CameraFrame, CameraError> {
+        pub fn start_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
             Err(CameraError::NotSupported)
         }
 
-        pub fn start_recording(&self, _path: &str) -> Result<(), CameraError> {
+        pub fn stop_recording(&mut self) -> Result<(), CameraError> {
             Err(CameraError::NotSupported)
         }
 
-        pub fn stop_recording(&self) -> Result<(), CameraError> {
-            Err(CameraError::NotSupported)
+        pub fn recording_duration(&self) -> Duration {
+            Duration::ZERO
         }
     }
 }
@@ -98,13 +123,3 @@ mod fallback {
     target_os = "linux"
 )))]
 pub use fallback::CameraInner;
-
-// Export NativeHandle for platform-specific zero-copy access
-#[cfg(any(target_os = "ios", target_os = "macos"))]
-#[allow(dead_code)]
-pub type NativeHandle = apple::IOSurfaceHandle;
-
-#[cfg(not(any(target_os = "ios", target_os = "macos")))]
-/// Opaque handle for platform-specific zero-copy frame access.
-#[derive(Debug, Clone, Copy)]
-pub struct NativeHandle;

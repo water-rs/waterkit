@@ -1,8 +1,8 @@
 //! Android camera implementation using Camera2 API via JNI.
 
 use crate::{CameraError, CameraFrame, CameraInfo, FrameFormat, Resolution};
+use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
 use jni::JNIEnv;
-use jni::objects::{GlobalRef, JObject, JString, JValue, JClass};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Embedded DEX bytecode containing CameraHelper class.
@@ -12,27 +12,30 @@ static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"
 /// Cached class loader for the embedded DEX.
 static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
 
-/// Cached context reference.
-static CONTEXT: OnceLock<GlobalRef> = OnceLock::new();
-
-/// Initialize the DEX class loader with a valid Android Context.
-///
-/// # Safety
-/// The `context` must be a valid Android Context JObject.
-pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), CameraError> {
-    init_with_context(env, context)
+fn get_vm_and_context() -> (jni::JavaVM, JObject<'static>) {
+    let android_ctx = ndk_context::android_context();
+    let vm = unsafe { jni::JavaVM::from_raw(android_ctx.vm().cast()).unwrap() };
+    let context = unsafe { JObject::from_raw(android_ctx.context().cast()) };
+    (vm, context)
 }
 
-pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), CameraError> {
+fn ensure_dex_loaded() -> Result<(), CameraError> {
     if CLASS_LOADER.get().is_some() {
         return Ok(());
     }
 
-    // Store context for later use
-    let context_ref = env
-        .new_global_ref(context)
-        .map_err(|e| CameraError::OpenFailed(format!("new_global_ref context: {e}")))?;
-    let _ = CONTEXT.set(context_ref);
+    let (vm, context) = get_vm_and_context();
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| CameraError::OpenFailed(format!("attach_current_thread: {e}")))?;
+
+    init_with_context(&mut env, &context)
+}
+
+fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), CameraError> {
+    if CLASS_LOADER.get().is_some() {
+        return Ok(());
+    }
 
     // Write DEX to cache directory
     let cache_dir = env
@@ -120,18 +123,15 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, CameraError>
 }
 
 /// List cameras using the Kotlin helper.
-pub fn list_cameras_with_context(env: &mut JNIEnv) -> Result<Vec<CameraInfo>, CameraError> {
+fn list_cameras_internal(env: &mut JNIEnv, context: &JObject) -> Result<Vec<CameraInfo>, CameraError> {
     let helper_class = get_helper_class(env)?;
-    let context = CONTEXT
-        .get()
-        .ok_or_else(|| CameraError::OpenFailed("Context not initialized".into()))?;
 
     let result = env
         .call_static_method(
             &helper_class,
             "listCameras",
             "(Landroid/content/Context;)[[Ljava/lang/String;",
-            &[JValue::Object(context.as_obj())],
+            &[JValue::Object(context)],
         )
         .map_err(|e| CameraError::EnumerationFailed(format!("listCameras: {e}")))?
         .l()
@@ -190,32 +190,22 @@ pub struct CameraInner {
 
 impl CameraInner {
     pub fn list() -> Result<Vec<CameraInfo>, CameraError> {
-        // This should not be called theoretically as the public API calls list_cameras_with_context
-        // But if it is, we can try to use the cached context
-        let vm = unsafe {
-            jni::JavaVM::from_raw(ndk_context::android_context().vm().cast())
-                .map_err(|e| CameraError::Unknown(format!("vm attach: {e}")))?
-        };
+        ensure_dex_loaded()?;
+        let (vm, context) = get_vm_and_context();
         let mut env = vm
             .attach_current_thread()
             .map_err(|e| CameraError::Unknown(format!("env attach: {e}")))?;
-        list_cameras_with_context(&mut env)
+        list_cameras_internal(&mut env, &context)
     }
 
     pub fn open(camera_id: &str) -> Result<Self, CameraError> {
-        // Get generic environment
-        let vm = unsafe {
-            jni::JavaVM::from_raw(ndk_context::android_context().vm().cast())
-                .map_err(|e| CameraError::Unknown(format!("vm attach: {e}")))?
-        };
+        ensure_dex_loaded()?;
+        let (vm, context) = get_vm_and_context();
         let mut env = vm
             .attach_current_thread()
             .map_err(|e| CameraError::Unknown(format!("env attach: {e}")))?;
 
         let helper_class = get_helper_class(&mut env)?;
-        let context = CONTEXT
-            .get()
-            .ok_or_else(|| CameraError::OpenFailed("Context not initialized".into()))?;
 
         let id_jstr = env
             .new_string(camera_id)
@@ -226,7 +216,7 @@ impl CameraInner {
                 &helper_class,
                 "openCamera",
                 "(Landroid/content/Context;Ljava/lang/String;)Z",
-                &[JValue::Object(context.as_obj()), JValue::Object(&id_jstr)],
+                &[JValue::Object(&context), JValue::Object(&id_jstr)],
             )
             .map_err(|e| CameraError::OpenFailed(format!("openCamera: {e}")))?
             .z()
@@ -245,10 +235,7 @@ impl CameraInner {
     }
 
     pub fn start(&mut self) -> Result<(), CameraError> {
-        let vm = unsafe {
-            jni::JavaVM::from_raw(ndk_context::android_context().vm().cast())
-                .map_err(|e| CameraError::Unknown(format!("vm attach: {e}")))?
-        };
+        let (vm, _context) = get_vm_and_context();
         let mut env = vm
             .attach_current_thread()
             .map_err(|e| CameraError::Unknown(format!("env attach: {e}")))?;
@@ -268,10 +255,7 @@ impl CameraInner {
     }
 
     pub fn stop(&mut self) -> Result<(), CameraError> {
-        let vm = unsafe {
-            jni::JavaVM::from_raw(ndk_context::android_context().vm().cast())
-                .map_err(|e| CameraError::Unknown(format!("vm attach: {e}")))?
-        };
+        let (vm, _context) = get_vm_and_context();
         let mut env = vm
             .attach_current_thread()
             .map_err(|e| CameraError::Unknown(format!("env attach: {e}")))?;
@@ -285,10 +269,7 @@ impl CameraInner {
     }
 
     pub fn get_frame(&mut self) -> Result<CameraFrame, CameraError> {
-        let vm = unsafe {
-            jni::JavaVM::from_raw(ndk_context::android_context().vm().cast())
-                .map_err(|e| CameraError::Unknown(format!("vm attach: {e}")))?
-        };
+        let (vm, _context) = get_vm_and_context();
         let mut env = vm
             .attach_current_thread()
             .map_err(|e| CameraError::Unknown(format!("env attach: {e}")))?;

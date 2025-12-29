@@ -1,8 +1,8 @@
-//! Test notification with actions in a bundled macOS app.
+//! Test notification with actions, quick reply, and updates in a bundled macOS app.
 
 use std::fs::OpenOptions;
 use std::io::Write;
-use waterkit_notification::{Action, Notification};
+use waterkit_notification::{Action, Notification, TextInputAction};
 
 fn log(msg: &str) {
     // Write to a fixed log path relative to the executable
@@ -28,20 +28,36 @@ unsafe extern "C" {
     ) -> i32;
 }
 
+fn run_loop_for(seconds: f64) {
+    let iterations = (seconds * 10.0) as u32;
+    for _ in 0..iterations {
+        unsafe {
+            let mode = core_foundation_sys::runloop::kCFRunLoopDefaultMode;
+            CFRunLoopRunInMode(mode.cast(), 0.1, false);
+        }
+    }
+}
+
 fn main() {
-    log("Sending notification with action buttons...");
+    // Test 1: Notification with quick reply
+    log("=== Test 1: Quick Reply ===");
+    log("Sending notification with quick reply...");
 
     match Notification::new()
-        .title("WaterKit Notification Test")
-        .body("Click an action button to open the URL")
-        .subtitle("From bundled app")
-        .action(Action::new("Visit WaterUI", "https://waterui.dev"))
-        .action(Action::new("Dismiss", "waterui://dismiss"))
+        .title("New Message from WaterKit")
+        .body("Hey, how are you?")
+        .subtitle("Quick reply test")
+        .text_input_action(
+            TextInputAction::new("reply", "Reply")
+                .placeholder("Type a message...")
+                .submit_label("Send"),
+        )
+        .action(Action::new("View", "https://waterui.dev"))
         .show()
     {
-        Ok(_) => {
-            log("Notification sent successfully!");
-            log("Click an action button within 30 seconds...");
+        Ok(_handle) => {
+            log("Notification sent!");
+            log("Try clicking 'Reply' to test quick reply...");
         }
         Err(e) => {
             log(&format!("Failed to send notification: {e}"));
@@ -49,17 +65,64 @@ fn main() {
         }
     }
 
-    // Run the CFRunLoop to process notification callbacks
-    // This allows the UNUserNotificationCenterDelegate to receive action events
-    log("Running event loop for 30 seconds...");
-    for _ in 0..300 {
-        // Run loop for 0.1 seconds at a time
-        unsafe {
-            // kCFRunLoopDefaultMode
-            let mode = core_foundation_sys::runloop::kCFRunLoopDefaultMode;
-            CFRunLoopRunInMode(mode.cast(), 0.1, false);
+    run_loop_for(5.0);
+
+    // Test 2: Notification update using handle
+    log("\n=== Test 2: Notification Update ===");
+    log("Simulating download progress...");
+
+    // Show initial notification and keep the handle
+    let handle = match Notification::new()
+        .title("Downloading file.zip")
+        .body("0% complete")
+        .subtitle("Update test")
+        .show()
+    {
+        Ok(h) => {
+            log("Initial notification sent (0%)");
+            h
         }
+        Err(e) => {
+            log(&format!("Failed to send initial notification: {e}"));
+            return;
+        }
+    };
+
+    run_loop_for(0.5);
+
+    // Update using the handle
+    for progress in (20..=100).step_by(20) {
+        match handle
+            .update()
+            .title("Downloading file.zip")
+            .body(format!("{progress}% complete"))
+            .subtitle("Update test")
+            .show()
+        {
+            Ok(_) => log(&format!("Updated to {progress}%")),
+            Err(e) => {
+                log(&format!("Failed to update: {e}"));
+                return;
+            }
+        }
+        run_loop_for(0.5);
     }
+
+    // Final update with action
+    match handle
+        .update()
+        .title("Download Complete!")
+        .body("file.zip is ready")
+        .subtitle("Update test")
+        .action(Action::new("Open", "https://waterui.dev"))
+        .show()
+    {
+        Ok(_) => log("Download complete notification sent!"),
+        Err(e) => log(&format!("Failed to send final notification: {e}")),
+    }
+
+    log("\nWaiting 10 seconds for interactions...");
+    run_loop_for(10.0);
 
     log("Test complete.");
 }

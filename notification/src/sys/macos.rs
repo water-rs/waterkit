@@ -31,10 +31,7 @@ fn is_bundled_app() -> bool {
         return false;
     };
 
-    app_dir
-        .extension()
-        .is_some_and(|ext| ext == "app")
-        && contents_dir.join("Info.plist").exists()
+    app_dir.extension().is_some_and(|ext| ext == "app") && contents_dir.join("Info.plist").exists()
 }
 
 /// Show a notification on macOS.

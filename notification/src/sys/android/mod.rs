@@ -1,7 +1,7 @@
 //! Android notification implementation using JNI.
 
-use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
+use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
 
 use crate::{InterruptionLevel, Notification, NotificationError};
@@ -168,7 +168,9 @@ pub fn show_notification_with_context(
 }
 
 /// Show a notification (fails on Android without context).
-pub fn show_notification(_notification: &Notification) -> Result<NotificationHandleInner, NotificationError> {
+pub fn show_notification(
+    _notification: &Notification,
+) -> Result<NotificationHandleInner, NotificationError> {
     Err(NotificationError::Platform(
         "Android requires show_with_context() with a valid Context".into(),
     ))

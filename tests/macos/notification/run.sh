@@ -24,6 +24,19 @@ cp target/debug/waterkit-notification-test "$MACOS_DIR/waterkit-notification-tes
 # Copy Info.plist
 cp tests/macos/notification/Info.plist "$CONTENTS_DIR/Info.plist"
 
+# Fix Swift runtime library paths using install_name_tool
+# The Swift runtime libraries are in the Xcode toolchain
+SWIFT_LIB_PATH="/usr/lib/swift"
+if [ -d "$SWIFT_LIB_PATH" ]; then
+    install_name_tool -add_rpath "$SWIFT_LIB_PATH" "$MACOS_DIR/waterkit-notification-test" 2>/dev/null || true
+fi
+
+# Also add the Xcode toolchain path as fallback
+XCODE_SWIFT_LIB="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx"
+if [ -d "$XCODE_SWIFT_LIB" ]; then
+    install_name_tool -add_rpath "$XCODE_SWIFT_LIB" "$MACOS_DIR/waterkit-notification-test" 2>/dev/null || true
+fi
+
 # Ad-hoc sign the app bundle
 codesign --force --sign - "$APP_DIR"
 

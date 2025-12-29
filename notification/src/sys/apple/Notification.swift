@@ -7,10 +7,18 @@ import UIKit
 import AppKit
 #endif
 
-// Simple JSON parsing for actions
+// Simple JSON parsing for URL actions
 struct NotificationAction: Codable {
     let label: String
     let url: String
+}
+
+// JSON parsing for text input actions
+struct TextInputActionDef: Codable {
+    let id: String
+    let label: String
+    let placeholder: String
+    let submitLabel: String
 }
 
 // Delegate to handle notification actions
@@ -24,7 +32,16 @@ class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     ) {
         let actionId = response.actionIdentifier
 
-        // actionId is the URL to open
+        // Handle text input response
+        if let textResponse = response as? UNTextInputNotificationResponse {
+            let userText = textResponse.userText
+            // Log for debugging - in a real app, this would call back to Rust
+            NSLog("[WaterKit] Text input received: actionId=\(actionId), text=\(userText)")
+            completionHandler()
+            return
+        }
+
+        // actionId is the URL to open for URL actions
         if actionId != UNNotificationDefaultActionIdentifier &&
            actionId != UNNotificationDismissActionIdentifier {
             if let url = URL(string: actionId) {
@@ -76,11 +93,13 @@ func addNotificationAsync(center: UNUserNotificationCenter, request: UNNotificat
 // MARK: - Main async implementation
 
 func showNotificationAsync(
+    id: String,
     title: String,
     body: String,
     subtitle: String,
     interruptionLevel: UInt8,
-    actionsJson: String
+    actionsJson: String,
+    textInputActionsJson: String
 ) async -> Bool {
     // On macOS, UNUserNotificationCenter requires a valid app bundle
     #if os(macOS)
@@ -126,26 +145,44 @@ func showNotificationAsync(
         }
     }
 
-    // Parse and set up actions
+    // Collect all actions (URL actions + text input actions)
+    var allActions: [UNNotificationAction] = []
+
+    // Parse URL actions
     if !actionsJson.isEmpty,
        let data = actionsJson.data(using: .utf8),
-       let actions = try? JSONDecoder().decode([NotificationAction].self, from: data),
-       !actions.isEmpty {
-
-        // Create UNNotificationAction objects using URL as identifier
-        let notificationActions = actions.map { action in
-            UNNotificationAction(
+       let actions = try? JSONDecoder().decode([NotificationAction].self, from: data) {
+        for action in actions {
+            allActions.append(UNNotificationAction(
                 identifier: action.url,
                 title: action.label,
                 options: [.foreground]
-            )
+            ))
         }
+    }
 
-        // Create a unique category for this notification
-        let categoryId = "waterkit_\(UUID().uuidString)"
+    // Parse text input actions
+    if !textInputActionsJson.isEmpty,
+       let data = textInputActionsJson.data(using: .utf8),
+       let textActions = try? JSONDecoder().decode([TextInputActionDef].self, from: data) {
+        for action in textActions {
+            allActions.append(UNTextInputNotificationAction(
+                identifier: action.id,
+                title: action.label,
+                options: [.foreground],
+                textInputButtonTitle: action.submitLabel,
+                textInputPlaceholder: action.placeholder
+            ))
+        }
+    }
+
+    // Register category if we have any actions
+    if !allActions.isEmpty {
+        // Use notification ID as category base for consistency
+        let categoryId = "waterkit_\(id)"
         let category = UNNotificationCategory(
             identifier: categoryId,
-            actions: notificationActions,
+            actions: allActions,
             intentIdentifiers: [],
             options: []
         )
@@ -155,8 +192,10 @@ func showNotificationAsync(
         content.categoryIdentifier = categoryId
     }
 
+    // Use the provided ID as the request identifier
+    // Using the same ID will replace an existing notification
     let request = UNNotificationRequest(
-        identifier: UUID().uuidString,
+        identifier: id,
         content: content,
         trigger: nil
     )
@@ -167,16 +206,20 @@ func showNotificationAsync(
 // MARK: - FFI entry point (sync wrapper for async code)
 
 public func show_notification_swift(
+    id: RustStr,
     title: RustStr,
     body: RustStr,
     subtitle: RustStr,
     interruption_level: UInt8,
-    actions_json: RustStr
+    actions_json: RustStr,
+    text_input_actions_json: RustStr
 ) -> Bool {
+    let idStr = id.toString()
     let titleStr = title.toString()
     let bodyStr = body.toString()
     let subtitleStr = subtitle.toString()
     let actionsStr = actions_json.toString()
+    let textInputActionsStr = text_input_actions_json.toString()
 
     // Use a semaphore to bridge sync FFI to async Swift
     let semaphore = DispatchSemaphore(value: 0)
@@ -184,11 +227,13 @@ public func show_notification_swift(
 
     Task {
         result = await showNotificationAsync(
+            id: idStr,
             title: titleStr,
             body: bodyStr,
             subtitle: subtitleStr,
             interruptionLevel: interruption_level,
-            actionsJson: actionsStr
+            actionsJson: actionsStr,
+            textInputActionsJson: textInputActionsStr
         )
         semaphore.signal()
     }

@@ -14,6 +14,30 @@ use crate::{InterruptionLevel, Sound};
 #[derive(Debug)]
 pub struct NotificationHandleInner;
 
+/// Global map to track notification IDs to D-Bus IDs for updates (Linux only).
+/// Key: our string ID, Value: D-Bus numeric ID returned by the notification server.
+#[cfg(target_os = "linux")]
+mod id_tracker {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    static NOTIFICATION_ID_MAP: Mutex<Option<HashMap<String, u32>>> = Mutex::new(None);
+
+    pub fn get(id: &str) -> Option<u32> {
+        NOTIFICATION_ID_MAP
+            .lock()
+            .ok()
+            .and_then(|map| map.as_ref().and_then(|m| m.get(id).copied()))
+    }
+
+    pub fn set(id: &str, dbus_id: u32) {
+        if let Ok(mut guard) = NOTIFICATION_ID_MAP.lock() {
+            let map = guard.get_or_insert_with(HashMap::new);
+            map.insert(id.to_string(), dbus_id);
+        }
+    }
+}
+
 /// Show a notification using notify-rust.
 pub fn show_notification(
     notification: &Notification,
@@ -21,6 +45,14 @@ pub fn show_notification(
     let mut n = NrNotification::new();
 
     n.summary(&notification.title).body(&notification.body);
+
+    // Set ID for notification replacement/update (Linux only - D-Bus supports this)
+    #[cfg(target_os = "linux")]
+    if let Some(ref id) = notification.id {
+        if let Some(dbus_id) = id_tracker::get(id) {
+            n.id(dbus_id);
+        }
+    }
 
     if let Some(ref app) = notification.app_name {
         n.appname(app);
@@ -87,6 +119,11 @@ pub fn show_notification(
         let handle = n
             .show()
             .map_err(|e| NotificationError::Platform(e.to_string()))?;
+
+        // Store the D-Bus ID for future updates
+        if let Some(ref id) = notification.id {
+            id_tracker::set(id, handle.id());
+        }
 
         // If there are actions, spawn a handler thread to open URLs on click
         if !notification.actions.is_empty() {

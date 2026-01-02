@@ -6,30 +6,31 @@ authors.workspace = true
 license.workspace = true
 readme.workspace = true
 repository.workspace = true
-description = "Screen capture and display management"
-keywords = ["screen", "display", "capture", "screenshot"]
-categories = ["os", "gui"]
+description = "GPU-first zero-copy screen capture with wgpu texture output"
+keywords = ["screen", "display", "capture", "gpu", "wgpu"]
+categories = ["os", "gui", "multimedia"]
 
 [lints]
 workspace = true
 
 [dependencies]
 thiserror.workspace = true
+wgpu.workspace = true
+async-channel.workspace = true
+image.workspace = true
 
-# Desktop
+# Desktop (screenshots crate for simple screenshot)
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 screenshots = "0.8"
-# brightness = "0.4" # Build failed on macOS
-tokio = { workspace = true, features = ["full"] }
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 swift-bridge.workspace = true
-
 metal.workspace = true
 core-foundation.workspace = true
 objc2.workspace = true
 objc2-foundation = { workspace = true, features = ["NSObject"] }
+objc2-io-surface.workspace = true
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
 waterkit-build.workspace = true
@@ -37,3 +38,8 @@ waterkit-build.workspace = true
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+pollster = "0.4"
+winit = "0.30"

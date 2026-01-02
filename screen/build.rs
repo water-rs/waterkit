@@ -9,9 +9,9 @@ fn main() {
         let target = std::env::var("TARGET").unwrap();
 
         let swift_source = if target_os == "macos" {
-            "src/platform/apple/ScreenMacOS.swift"
+            "src/sys/apple/ScreenMacOS.swift"
         } else {
-            "src/platform/apple/Screen.swift"
+            "src/sys/apple/Screen.swift"
         };
 
         let mut config = AppleSwiftConfig::new("waterkit-screen", "ScreenHelper")
@@ -24,7 +24,7 @@ fn main() {
             config = config.framework("Cocoa").framework("ScreenCaptureKit");
         }
 
-        waterkit_build::compile_swift("src/platform/apple.rs", &config);
+        waterkit_build::compile_swift("src/sys/apple/mod.rs", &config);
 
         // Swift runtime for async/await
         if target_os == "macos" {

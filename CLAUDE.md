@@ -86,8 +86,11 @@ pub enum SomeError {
 - You are not allowed to revert or restore files or hide problems. If you find a bug, fix it properly rather than working around it.
 - Do not leave legacy code for fallback. If a feature is deprecated, remove all related code.
 - No simplify, no stub, no fallback, no patch.
+- No backward compatibility, just remove the old API
 - Import third-party crates instead of writing your own implementation. Less code is better.
 </important>
+
+
 
 ## Key Dependencies
 

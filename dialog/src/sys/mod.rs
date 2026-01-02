@@ -2,13 +2,13 @@
 mod desktop;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use desktop::{
-    load_media, show_alert, show_confirm, show_open_single_file, show_photo_picker, Selection,
+    Selection, load_media, show_alert, show_confirm, show_open_single_file, show_photo_picker,
 };
 
 #[cfg(target_os = "android")]
 mod android;
 #[cfg(target_os = "android")]
-pub use android::{load_media, show_alert, show_confirm, show_photo_picker, Selection};
+pub use android::{Selection, load_media, show_alert, show_confirm, show_photo_picker};
 
 #[cfg(target_os = "android")]
 pub async fn show_open_single_file(
@@ -20,7 +20,7 @@ pub async fn show_open_single_file(
 #[cfg(target_os = "ios")]
 mod apple;
 #[cfg(target_os = "ios")]
-pub use apple::{load_media, show_alert, show_confirm, show_photo_picker, NativeHandle};
+pub use apple::{NativeHandle, load_media, show_alert, show_confirm, show_photo_picker};
 
 #[cfg(target_os = "ios")]
 pub async fn show_open_single_file(

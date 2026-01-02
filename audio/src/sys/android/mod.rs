@@ -1,6 +1,8 @@
 //! Android media control implementation using JNI and MediaSession.
 
-use crate::{MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
+use crate::{
+    MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus,
+};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
@@ -104,7 +106,7 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, MediaError> 
         .map_err(|e| MediaError::Unknown(format!("loadClass: {e}")))?
         .l()
         .map_err(|e| MediaError::Unknown(format!("loadClass result: {e}")))?;
-    
+
     // helper_class is a JObject representing a Class. Convert to JClass.
     // Ensure we import JClass.
     Ok(helper_class.into())

@@ -1,8 +1,8 @@
 //! Android camera implementation using Camera2 API via JNI.
 
 use crate::{CameraError, CameraFrame, CameraInfo, FrameFormat, Resolution};
-use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
 use jni::JNIEnv;
+use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// Embedded DEX bytecode containing CameraHelper class.
@@ -123,7 +123,10 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, CameraError>
 }
 
 /// List cameras using the Kotlin helper.
-fn list_cameras_internal(env: &mut JNIEnv, context: &JObject) -> Result<Vec<CameraInfo>, CameraError> {
+fn list_cameras_internal(
+    env: &mut JNIEnv,
+    context: &JObject,
+) -> Result<Vec<CameraInfo>, CameraError> {
     let helper_class = get_helper_class(env)?;
 
     let result = env
@@ -283,14 +286,14 @@ impl CameraInner {
             .map_err(|e| CameraError::CaptureFailed(format!("getFrame result: {e}")))?;
 
         if result.is_null() {
-             // Non-blocking return if no frame, or block? API says "may block".
-             // For now, if null, we can sleep a bit or return an error/empty.
-             // But CameraHelper uses latestFrame which is reset to null.
-             // We should loop or implement blocking in Kotlin.
-             // For simplicity, let's retry a few times or return NotReady/error.
-             // The trait implies blocking is allowed.
-             std::thread::sleep(std::time::Duration::from_millis(16));
-             return self.get_frame(); // Simple recursion for blocking
+            // Non-blocking return if no frame, or block? API says "may block".
+            // For now, if null, we can sleep a bit or return an error/empty.
+            // But CameraHelper uses latestFrame which is reset to null.
+            // We should loop or implement blocking in Kotlin.
+            // For simplicity, let's retry a few times or return NotReady/error.
+            // The trait implies blocking is allowed.
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            return self.get_frame(); // Simple recursion for blocking
         }
 
         let array: jni::objects::JByteArray = result.into();
@@ -304,7 +307,7 @@ impl CameraInner {
             .map_err(|e| CameraError::CaptureFailed(format!("getFrameSize: {e}")))?
             .l()
             .map_err(|e| CameraError::CaptureFailed(format!("getFrameSize result: {e}")))?;
-        
+
         let size_array: jni::objects::JIntArray = size_result.into();
         let mut sizes = [0i32; 2];
         env.get_int_array_region(&size_array, 0, &mut sizes)

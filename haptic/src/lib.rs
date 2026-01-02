@@ -178,8 +178,10 @@ impl HapticPatternBuilder {
     /// Add a vibration step.
     #[must_use]
     pub fn add(mut self, duration: Duration, intensity: Intensity) -> Self {
-        self.steps
-            .push(HapticStep::Vibrate { duration, intensity });
+        self.steps.push(HapticStep::Vibrate {
+            duration,
+            intensity,
+        });
         self
     }
 

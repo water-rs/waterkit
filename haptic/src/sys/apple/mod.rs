@@ -12,8 +12,11 @@ mod ffi {
         fn haptic_impact(intensity: f32);
         fn haptic_selection();
         fn haptic_notification(notification_type: i32);
-        fn haptic_play_pattern(timings: Vec<i32>, intensities: Vec<f32>, is_pause: Vec<bool>)
-            -> bool;
+        fn haptic_play_pattern(
+            timings: Vec<i32>,
+            intensities: Vec<f32>,
+            is_pause: Vec<bool>,
+        ) -> bool;
     }
 }
 
@@ -53,7 +56,10 @@ pub fn play_pattern(pattern: &HapticPattern) -> Result<(), HapticError> {
 
     for step in pattern.steps() {
         match step {
-            HapticStep::Vibrate { duration, intensity } => {
+            HapticStep::Vibrate {
+                duration,
+                intensity,
+            } => {
                 // Saturate at i32::MAX for extremely long durations
                 let ms = duration.as_millis().min(i32::MAX as u128) as i32;
                 timings.push(ms);

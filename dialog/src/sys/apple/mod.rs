@@ -1,11 +1,9 @@
-use crate::{Dialog, DialogType, DialogError};
+use crate::{Dialog, DialogError, DialogType};
 use futures::channel::oneshot;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-
-
 
 #[derive(Debug, Clone)]
 pub struct Selection(u64);
@@ -67,7 +65,6 @@ fn on_load_media_result(cb_id: u64, path: Option<String>) {
         }
     }
 }
-
 
 pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
     let (tx, rx) = oneshot::channel();
@@ -134,6 +131,8 @@ pub async fn load_media(handle: Selection) -> Result<std::path::PathBuf, DialogE
     let res = rx.await.map_err(|_| DialogError::Cancelled)?;
     match res {
         Some(path) => Ok(std::path::PathBuf::from(path)),
-        None => Err(DialogError::PlatformError("Failed to load media (conversion failed)".to_string())),
+        None => Err(DialogError::PlatformError(
+            "Failed to load media (conversion failed)".to_string(),
+        )),
     }
 }

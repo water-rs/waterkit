@@ -14,8 +14,8 @@ mod shutdown;
 mod sys;
 
 pub use player::{AudioDevice, AudioPlayer, PlayerError, rodio};
-pub use shutdown::{ShutdownHandle, ShutdownReceiver};
 pub use recorder::{AudioBuffer, AudioFormat, AudioRecorder, AudioRecorderBuilder, RecordError};
+pub use shutdown::{ShutdownHandle, ShutdownReceiver};
 
 use std::time::Duration;
 

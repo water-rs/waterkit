@@ -6,14 +6,16 @@ authors.workspace = true
 license.workspace = true
 readme = "README.md"
 repository.workspace = true
-description = "Cross-platform video and audio codec support"
-keywords = ["codec", "video", "audio", "av1", "h264", "h265"]
-categories = ["multimedia::video", "multimedia::audio"]
+description = "GPU-first zero-copy video codec with wgpu texture output"
+keywords = ["codec", "video", "wgpu", "gpu", "h264", "h265", "av1"]
+categories = ["multimedia::video", "graphics"]
 
 [dependencies]
 thiserror.workspace = true
-
 cfg-if.workspace = true
+wgpu.workspace = true
+
+# Software fallback codecs (private, not exposed in public API)
 rav1e = { workspace = true, optional = true }
 dav1d = { workspace = true, optional = true }
 
@@ -25,6 +27,7 @@ objc2-core-video.workspace = true
 objc2-core-foundation.workspace = true
 objc2-foundation.workspace = true
 objc2-io-surface.workspace = true
+metal.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 ndk = { version = "0.9", features = ["media", "api-level-29"] }
@@ -36,8 +39,8 @@ jni.workspace = true
 windows = { workspace = true, features = ["Win32_Media_MediaFoundation"] }
 
 [features]
-default = ["av1"]
-av1 = ["dep:rav1e", "dep:dav1d"]
+default = ["software-fallback"]
+software-fallback = ["dep:rav1e", "dep:dav1d"]
 
 [lints]
 workspace = true

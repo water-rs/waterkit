@@ -2,8 +2,8 @@
 
 use crate::{ScalarData, SensorData, SensorError, SensorStream};
 use futures::stream;
+use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
-use jni::{JNIEnv, JavaVM};
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode containing SensorHelper class.
@@ -11,37 +11,6 @@ static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"
 
 /// Cached class loader for the embedded DEX.
 static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
-/// Global reference to the Android Context.
-static GLOBAL_CONTEXT: OnceLock<GlobalRef> = OnceLock::new();
-/// Global reference to the Java VM.
-static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
-
-/// Initialize the sensor subsystem with a Context.
-/// This must be called before using any sensor APIs on Android.
-pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), SensorError> {
-    if GLOBAL_CONTEXT.get().is_some() {
-        return Ok(());
-    }
-
-    // Initialize DEX loader
-    init_with_context(env, context)?;
-
-    // Store JavaVM
-    if JAVA_VM.get().is_none() {
-        let vm = env
-            .get_java_vm()
-            .map_err(|e| SensorError::Unknown(format!("get_java_vm failed: {e}")))?;
-        let _ = JAVA_VM.set(vm);
-    }
-
-    // Store Context
-    let context_ref = env
-        .new_global_ref(context)
-        .map_err(|e| SensorError::Unknown(format!("new_global_ref context failed: {e}")))?;
-    let _ = GLOBAL_CONTEXT.set(context_ref);
-
-    Ok(())
-}
 
 /// Initialize the DEX class loader (internal).
 fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), SensorError> {
@@ -68,7 +37,7 @@ fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), SensorEr
             .to_str()
             .map_err(|e| SensorError::Unknown(format!("to_str failed: {e}")))?
     );
-    
+
     // Remove if exists to handle previous read-only setting
     let _ = std::fs::remove_file(&dex_path);
 
@@ -152,23 +121,24 @@ fn load_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<jni::objects::JClass<'a
     Ok(helper_class.into())
 }
 
-fn get_env_and_context() -> Result<(jni::AttachGuard<'static>, JObject<'static>), SensorError> {
-    let vm = JAVA_VM
-        .get()
-        .ok_or_else(|| SensorError::Unknown("JavaVM not initialized. Call init() first.".into()))?;
-    let context_ref = GLOBAL_CONTEXT.get().ok_or_else(|| {
-        SensorError::Unknown("Context not initialized. Call init() first.".into())
-    })?;
+fn get_vm_and_context() -> (jni::JavaVM, JObject<'static>) {
+    let android_ctx = ndk_context::android_context();
+    let vm = unsafe { jni::JavaVM::from_raw(android_ctx.vm().cast()).unwrap() };
+    let context = unsafe { JObject::from_raw(android_ctx.context().cast()) };
+    (vm, context)
+}
 
-    let env = vm
+fn ensure_dex_loaded() -> Result<(), SensorError> {
+    if CLASS_LOADER.get().is_some() {
+        return Ok(());
+    }
+
+    let (vm, context) = get_vm_and_context();
+    let mut env = vm
         .attach_current_thread()
         .map_err(|e| SensorError::Unknown(format!("attach_current_thread failed: {e}")))?;
 
-    let context = context_ref.as_obj();
-    let local_ref = env
-        .new_local_ref(context)
-        .map_err(|e| SensorError::Unknown(format!("new_local_ref failed: {e}")))?;
-    Ok((env, local_ref))
+    init_with_context(&mut env, &context)
 }
 
 fn parse_sensor_result(env: &mut JNIEnv, result: JObject) -> Result<SensorData, SensorError> {
@@ -326,19 +296,94 @@ pub fn read_light_with_context(
     parse_scalar_result(env, result)
 }
 
-// --- Parameter-less API Implementation using Global Context ---
+// --- Parameter-less API Implementation using ndk-context ---
+
+fn is_sensor_available_internal(sensor_type: i32) -> bool {
+    ensure_dex_loaded().ok();
+    let (vm, context) = get_vm_and_context();
+    let Ok(mut env) = vm.attach_current_thread() else {
+        return false;
+    };
+    let Ok(helper) = load_helper_class(&mut env) else {
+        return false;
+    };
+    env.call_static_method(
+        helper,
+        "isSensorAvailable",
+        "(Landroid/content/Context;I)Z",
+        &[JValue::Object(&context), JValue::Int(sensor_type)],
+    )
+    .ok()
+    .and_then(|v| v.z().ok())
+    .unwrap_or(false)
+}
+
+fn read_sensor_internal(sensor_type: i32) -> Result<SensorData, SensorError> {
+    ensure_dex_loaded()?;
+    let (vm, context) = get_vm_and_context();
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| SensorError::Unknown(format!("attach_current_thread: {e}")))?;
+    let helper = load_helper_class(&mut env)?;
+    let result = env
+        .call_static_method(
+            helper,
+            "readSensor",
+            "(Landroid/content/Context;I)[D",
+            &[JValue::Object(&context), JValue::Int(sensor_type)],
+        )
+        .map_err(|e| SensorError::Unknown(format!("readSensor: {e}")))?
+        .l()
+        .map_err(|e| SensorError::Unknown(format!("readSensor result: {e}")))?;
+    parse_sensor_result(&mut env, result)
+}
+
+fn read_pressure_internal() -> Result<ScalarData, SensorError> {
+    ensure_dex_loaded()?;
+    let (vm, context) = get_vm_and_context();
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| SensorError::Unknown(format!("attach_current_thread: {e}")))?;
+    let helper = load_helper_class(&mut env)?;
+    let result = env
+        .call_static_method(
+            helper,
+            "readPressure",
+            "(Landroid/content/Context;)[D",
+            &[JValue::Object(&context)],
+        )
+        .map_err(|e| SensorError::Unknown(format!("readPressure: {e}")))?
+        .l()
+        .map_err(|e| SensorError::Unknown(format!("readPressure result: {e}")))?;
+    parse_scalar_result(&mut env, result)
+}
+
+fn read_light_internal() -> Result<ScalarData, SensorError> {
+    ensure_dex_loaded()?;
+    let (vm, context) = get_vm_and_context();
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| SensorError::Unknown(format!("attach_current_thread: {e}")))?;
+    let helper = load_helper_class(&mut env)?;
+    let result = env
+        .call_static_method(
+            helper,
+            "readLight",
+            "(Landroid/content/Context;)[D",
+            &[JValue::Object(&context)],
+        )
+        .map_err(|e| SensorError::Unknown(format!("readLight: {e}")))?
+        .l()
+        .map_err(|e| SensorError::Unknown(format!("readLight result: {e}")))?;
+    parse_scalar_result(&mut env, result)
+}
 
 pub fn accelerometer_available() -> bool {
-    if let Ok((mut env, context)) = get_env_and_context() {
-        is_sensor_available_with_context(&mut env, &context, 1).unwrap_or(false)
-    } else {
-        false
-    }
+    is_sensor_available_internal(1)
 }
 
 pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
-    let (mut env, context) = get_env_and_context()?;
-    read_sensor_with_context(&mut env, &context, 1)
+    read_sensor_internal(1)
 }
 
 pub fn accelerometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
@@ -356,16 +401,11 @@ pub fn accelerometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>,
 }
 
 pub fn gyroscope_available() -> bool {
-    if let Ok((mut env, context)) = get_env_and_context() {
-        is_sensor_available_with_context(&mut env, &context, 4).unwrap_or(false)
-    } else {
-        false
-    }
+    is_sensor_available_internal(4)
 }
 
 pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
-    let (mut env, context) = get_env_and_context()?;
-    read_sensor_with_context(&mut env, &context, 4)
+    read_sensor_internal(4)
 }
 
 pub fn gyroscope_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
@@ -383,16 +423,11 @@ pub fn gyroscope_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, Sen
 }
 
 pub fn magnetometer_available() -> bool {
-    if let Ok((mut env, context)) = get_env_and_context() {
-        is_sensor_available_with_context(&mut env, &context, 2).unwrap_or(false)
-    } else {
-        false
-    }
+    is_sensor_available_internal(2)
 }
 
 pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
-    let (mut env, context) = get_env_and_context()?;
-    read_sensor_with_context(&mut env, &context, 2)
+    read_sensor_internal(2)
 }
 
 pub fn magnetometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
@@ -410,16 +445,11 @@ pub fn magnetometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, 
 }
 
 pub fn barometer_available() -> bool {
-    if let Ok((mut env, context)) = get_env_and_context() {
-        is_sensor_available_with_context(&mut env, &context, 6).unwrap_or(false)
-    } else {
-        false
-    }
+    is_sensor_available_internal(6)
 }
 
 pub async fn barometer_read() -> Result<ScalarData, SensorError> {
-    let (mut env, context) = get_env_and_context()?;
-    read_pressure_with_context(&mut env, &context)
+    read_pressure_internal()
 }
 
 pub fn barometer_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
@@ -437,16 +467,11 @@ pub fn barometer_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, Sen
 }
 
 pub fn ambient_light_available() -> bool {
-    if let Ok((mut env, context)) = get_env_and_context() {
-        is_sensor_available_with_context(&mut env, &context, 5).unwrap_or(false)
-    } else {
-        false
-    }
+    is_sensor_available_internal(5)
 }
 
 pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
-    let (mut env, context) = get_env_and_context()?;
-    read_light_with_context(&mut env, &context)
+    read_light_internal()
 }
 
 pub fn ambient_light_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {

@@ -1,32 +1,16 @@
 use crate::{ConnectionType, ConnectivityInfo, SystemLoad, ThermalState};
-use jni::objects::{GlobalRef, JObject, JValue};
-use jni::{JNIEnv, JavaVM};
-use std::sync::OnceLock;
-
-static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
-static CONTEXT: OnceLock<GlobalRef> = OnceLock::new();
-
-/// Initialize the system module with Android context.
-/// Must be called from Java/Kotlin before using system info functions.
-pub fn init(env: &mut JNIEnv, context: JObject) {
-    let vm = env.get_java_vm().expect("Failed to get JavaVM");
-    let _ = JAVA_VM.set(vm);
-
-    let global_ctx = env
-        .new_global_ref(context)
-        .expect("Failed to create global ref");
-    let _ = CONTEXT.set(global_ctx);
-}
+use jni::JNIEnv;
+use jni::objects::{JObject, JValue};
 
 fn with_jni<T, F>(f: F) -> Option<T>
 where
-    F: FnOnce(&mut JNIEnv, &JObject) -> Option<T>,
+    F: FnOnce(&mut JNIEnv, JObject<'_>) -> Option<T>,
 {
-    let vm = JAVA_VM.get()?;
-    let ctx = CONTEXT.get()?;
-
+    let android_ctx = ndk_context::android_context();
+    let vm = unsafe { jni::JavaVM::from_raw(android_ctx.vm().cast()).ok()? };
+    let context = unsafe { JObject::from_raw(android_ctx.context().cast()) };
     let mut env = vm.attach_current_thread().ok()?;
-    f(&mut env, ctx.as_obj())
+    f(&mut env, context)
 }
 
 pub fn get_connectivity_info() -> ConnectivityInfo {
@@ -37,7 +21,7 @@ pub fn get_connectivity_info() -> ConnectivityInfo {
                 class,
                 "getConnectivity",
                 "(Landroid/content/Context;)I",
-                &[JValue::Object(ctx)],
+                &[JValue::Object(&ctx)],
             )
             .ok()?
             .i()
@@ -69,7 +53,7 @@ pub fn get_thermal_state() -> ThermalState {
                 class,
                 "getThermalState",
                 "(Landroid/content/Context;)I",
-                &[JValue::Object(ctx)],
+                &[JValue::Object(&ctx)],
             )
             .ok()?
             .i()
@@ -96,7 +80,7 @@ pub fn get_system_load() -> SystemLoad {
                 class,
                 "getSystemLoad",
                 "(Landroid/content/Context;)Lcom/waterkit/system/SystemHelper$LoadInfo;",
-                &[JValue::Object(ctx)],
+                &[JValue::Object(&ctx)],
             )
             .ok()?
             .l()
@@ -121,14 +105,4 @@ pub fn get_system_load() -> SystemLoad {
             memory_total: 0,
         },
     }
-}
-
-// JNI export for initialization from Java/Kotlin
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_com_waterkit_system_SystemBridge_nativeInit<'local>(
-    mut env: JNIEnv<'local>,
-    _class: jni::objects::JClass<'local>,
-    context: JObject<'local>,
-) {
-    init(&mut env, context);
 }

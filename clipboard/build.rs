@@ -3,18 +3,16 @@
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
 
-    if target_os == "ios" || target_os == "macos" {
+    // iOS uses Swift bridge (macOS uses clipboard-rs)
+    if target_os == "ios" {
         use waterkit_build::AppleSwiftConfig;
 
         let config = AppleSwiftConfig::new("waterkit-clipboard", "ClipboardHelper")
             .swift_source("src/sys/apple/clipboard.swift")
-            .framework("Foundation");
-
-        #[cfg(target_os = "ios")]
-        let config = config.framework("UIKit");
-
-        #[cfg(target_os = "macos")]
-        let config = config.framework("AppKit");
+            .framework("Foundation")
+            .framework("UIKit")
+            .framework("UniformTypeIdentifiers")
+            .framework("MobileCoreServices");
 
         waterkit_build::compile_swift("src/sys/apple/mod.rs", &config);
     }

@@ -30,4 +30,6 @@ mod android;
 mod apple;
 
 pub use android::{AndroidConfig, build_kotlin, find_android_jar, find_d8_jar};
-pub use apple::{AppleSwiftConfig, SwiftBridgeCrate, build_apple_bridge, compile_multi_swift, compile_swift};
+pub use apple::{
+    AppleSwiftConfig, SwiftBridgeCrate, build_apple_bridge, compile_multi_swift, compile_swift,
+};

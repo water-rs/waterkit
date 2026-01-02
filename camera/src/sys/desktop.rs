@@ -18,9 +18,9 @@ use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, Frame, Photo,
     PixelFormat, Resolution, StabilizationMode,
 };
+use nokhwa::Camera as NokhwaCamera;
 use nokhwa::pixel_format::RgbAFormat;
 use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType};
-use nokhwa::Camera as NokhwaCamera;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -72,10 +72,9 @@ impl CameraInner {
             .map(CameraIndex::Index)
             .unwrap_or_else(|_| CameraIndex::String(camera_id.to_string()));
 
-        let requested =
-            RequestedFormat::<RgbAFormat>::new(RequestedFormatType::HighestResolution(
-                nokhwa::utils::Resolution::new(config.resolution.width, config.resolution.height),
-            ));
+        let requested = RequestedFormat::<RgbAFormat>::new(RequestedFormatType::HighestResolution(
+            nokhwa::utils::Resolution::new(config.resolution.width, config.resolution.height),
+        ));
 
         let mut camera = NokhwaCamera::new(index, requested)
             .map_err(|e| CameraError::OpenFailed(e.to_string()))?;

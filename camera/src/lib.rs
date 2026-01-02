@@ -109,7 +109,8 @@ impl Frame {
     /// Create a texture view for rendering.
     #[must_use]
     pub fn view(&self) -> wgpu::TextureView {
-        self.texture.create_view(&wgpu::TextureViewDescriptor::default())
+        self.texture
+            .create_view(&wgpu::TextureViewDescriptor::default())
     }
 
     /// Frame width in pixels.
@@ -163,11 +164,20 @@ pub struct Resolution {
 
 impl Resolution {
     /// Standard 720p resolution.
-    pub const HD: Self = Self { width: 1280, height: 720 };
+    pub const HD: Self = Self {
+        width: 1280,
+        height: 720,
+    };
     /// Standard 1080p resolution.
-    pub const FULL_HD: Self = Self { width: 1920, height: 1080 };
+    pub const FULL_HD: Self = Self {
+        width: 1920,
+        height: 1080,
+    };
     /// Standard 4K resolution.
-    pub const UHD: Self = Self { width: 3840, height: 2160 };
+    pub const UHD: Self = Self {
+        width: 3840,
+        height: 2160,
+    };
 }
 
 impl Default for Resolution {

@@ -1,8 +1,8 @@
 //! Android haptic implementation using JNI.
 
 use crate::{HapticError, HapticPattern, HapticStep, Intensity};
-use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
+use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode containing HapticHelper class.
@@ -195,7 +195,10 @@ pub fn play_pattern_with_context(
 
     for step in pattern.steps() {
         match step {
-            HapticStep::Vibrate { duration, intensity } => {
+            HapticStep::Vibrate {
+                duration,
+                intensity,
+            } => {
                 timings.push(duration.as_millis() as i64);
                 amplitudes.push((intensity.value() * 255.0) as i32);
             }

@@ -529,7 +529,10 @@ impl Drop for AudioPlayer {
     fn drop(&mut self) {
         // ShutdownHandle is dropped automatically, signaling background thread to exit.
         // We explicitly drop it first to ensure the signal is sent before we try to join.
-        drop(std::mem::replace(&mut self.shutdown_handle, ShutdownHandle::default()));
+        drop(std::mem::replace(
+            &mut self.shutdown_handle,
+            ShutdownHandle::default(),
+        ));
 
         // Wait for background thread to exit cleanly
         if let Some(handle) = self.background_thread.take() {

@@ -51,13 +51,13 @@ pub(crate) async fn get_location() -> Result<Location, LocationError> {
     const FILETIME_UNIX_DIFF: i64 = 11_644_473_600;
     let unix_seconds = (filetime / 10_000_000) - FILETIME_UNIX_DIFF;
 
-    let timestamp = Timestamp::from_second(unix_seconds)
-        .map_err(|e| LocationError::Unknown(e.to_string()))?;
+    let timestamp =
+        Timestamp::from_second(unix_seconds).map_err(|e| LocationError::Unknown(e.to_string()))?;
 
     let accuracy = coord.Accuracy().ok().map(|a| a.GetDouble().unwrap_or(0.0));
 
-    let mut location = Location::new(pos.Latitude, pos.Longitude, timestamp)
-        .with_altitude(pos.Altitude);
+    let mut location =
+        Location::new(pos.Latitude, pos.Longitude, timestamp).with_altitude(pos.Altitude);
 
     if let Some(acc) = accuracy {
         location = location.with_horizontal_accuracy(acc);

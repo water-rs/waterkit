@@ -124,9 +124,7 @@ unsafe extern "C" {
 fn convert_result(result: ffi::CameraResultFFI, context: &str) -> Result<(), CameraError> {
     match result {
         ffi::CameraResultFFI::Success => Ok(()),
-        ffi::CameraResultFFI::NotSupported => {
-            Err(CameraError::ControlNotSupported(context.into()))
-        }
+        ffi::CameraResultFFI::NotSupported => Err(CameraError::ControlNotSupported(context.into())),
         ffi::CameraResultFFI::EnumerationFailed => {
             Err(CameraError::EnumerationFailed(context.into()))
         }
@@ -234,8 +232,7 @@ fn create_texture_from_pixelbuffer(
 
     // Copy pixel data
     let data_size = bytes_per_row * height as usize;
-    let pixel_data =
-        unsafe { std::slice::from_raw_parts(base_address as *const u8, data_size) };
+    let pixel_data = unsafe { std::slice::from_raw_parts(base_address as *const u8, data_size) };
 
     // Create texture
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -389,7 +386,10 @@ impl CameraInner {
                 Resolution::UHD,
                 Resolution::FULL_HD,
                 Resolution::HD,
-                Resolution { width: 640, height: 480 },
+                Resolution {
+                    width: 640,
+                    height: 480,
+                },
             ],
             frame_rates: vec![30, 60],
             iso_range: if iso_max > iso_min {
@@ -411,11 +411,7 @@ impl CameraInner {
             zoom_range: {
                 let min = ffi::camera_get_zoom_min();
                 let max = ffi::camera_get_zoom_max();
-                if max > min {
-                    Some((min, max))
-                } else {
-                    None
-                }
+                if max > min { Some((min, max)) } else { None }
             },
             supports_hdr: ffi::camera_supports_hdr(),
             stabilization_modes,
@@ -490,7 +486,11 @@ impl CameraInner {
 
         // Stabilization
         if let Some(stabilization) = controls.stabilization {
-            if !self.capabilities.stabilization_modes.contains(&stabilization) {
+            if !self
+                .capabilities
+                .stabilization_modes
+                .contains(&stabilization)
+            {
                 return Err(CameraError::ControlNotSupported(format!(
                     "stabilization {stabilization:?}"
                 )));
@@ -554,7 +554,10 @@ impl CameraInner {
                     "exposure_compensation".into(),
                 ));
             }
-            convert_result(ffi::camera_set_exposure_compensation(ev), "exposure_compensation")?;
+            convert_result(
+                ffi::camera_set_exposure_compensation(ev),
+                "exposure_compensation",
+            )?;
         }
 
         self.controls.exposure = Some(exposure.clone());
@@ -599,10 +602,16 @@ impl CameraInner {
     fn apply_white_balance(&mut self, wb: &WhiteBalanceControl) -> Result<(), CameraError> {
         let mode = match wb.mode {
             WhiteBalanceMode::Auto => 0,
-            WhiteBalanceMode::Manual | WhiteBalanceMode::Daylight | WhiteBalanceMode::Cloudy
-            | WhiteBalanceMode::Tungsten | WhiteBalanceMode::Fluorescent => 1,
+            WhiteBalanceMode::Manual
+            | WhiteBalanceMode::Daylight
+            | WhiteBalanceMode::Cloudy
+            | WhiteBalanceMode::Tungsten
+            | WhiteBalanceMode::Fluorescent => 1,
         };
-        convert_result(ffi::camera_set_white_balance_mode(mode), "white_balance_mode")?;
+        convert_result(
+            ffi::camera_set_white_balance_mode(mode),
+            "white_balance_mode",
+        )?;
 
         // Set temperature for presets or manual
         let temperature = match wb.mode {
@@ -616,7 +625,9 @@ impl CameraInner {
 
         if let Some(kelvin) = temperature {
             if !self.capabilities.supports_manual_white_balance {
-                return Err(CameraError::ControlNotSupported("manual_white_balance".into()));
+                return Err(CameraError::ControlNotSupported(
+                    "manual_white_balance".into(),
+                ));
             }
             convert_result(
                 ffi::camera_set_white_balance_temperature(kelvin),
@@ -647,22 +658,21 @@ impl CameraInner {
                 let raw_frame = receiver.recv().await.ok()?;
 
                 // Create wgpu texture from CVPixelBuffer
-                let texture = match create_texture_from_pixelbuffer(
+                let texture = if let Ok(tex) = create_texture_from_pixelbuffer(
                     &device,
                     &queue,
                     raw_frame.pixelbuffer_handle,
                     raw_frame.width,
                     raw_frame.height,
                 ) {
-                    Ok(tex) => tex,
-                    Err(_) => {
-                        // Release CVPixelBuffer on error
-                        unsafe {
-                            camera_release_pixelbuffer(raw_frame.pixelbuffer_handle);
-                        }
-                        // Continue to next frame
-                        return Some((None, (device, queue, receiver)));
+                    tex
+                } else {
+                    // Release CVPixelBuffer on error
+                    unsafe {
+                        camera_release_pixelbuffer(raw_frame.pixelbuffer_handle);
                     }
+                    // Continue to next frame
+                    return Some((None, (device, queue, receiver)));
                 };
 
                 // Release the CVPixelBuffer now that we've created the texture
@@ -750,10 +760,7 @@ impl CameraInner {
 
     pub fn start_recording(&mut self, path: &Path) -> Result<(), CameraError> {
         let path_str = path.to_string_lossy().to_string();
-        convert_result(
-            ffi::camera_start_recording(path_str),
-            "start_recording",
-        )
+        convert_result(ffi::camera_start_recording(path_str), "start_recording")
     }
 
     pub fn stop_recording(&mut self) -> Result<(), CameraError> {

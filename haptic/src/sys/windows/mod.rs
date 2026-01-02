@@ -2,8 +2,8 @@
 
 use crate::{HapticError, HapticPattern, HapticStep, Intensity};
 use windows::Devices::Haptics::{
-    KnownSimpleHapticsControllerWaveforms, SimpleHapticsController, SimpleHapticsControllerFeedback,
-    VibrationAccessStatus, VibrationDevice,
+    KnownSimpleHapticsControllerWaveforms, SimpleHapticsController,
+    SimpleHapticsControllerFeedback, VibrationAccessStatus, VibrationDevice,
 };
 
 fn get_controller() -> Result<SimpleHapticsController, HapticError> {
@@ -123,7 +123,10 @@ pub fn play_pattern(pattern: &HapticPattern) -> Result<(), HapticError> {
     // Fall back to playing sequential feedbacks with delays
     for step in pattern.steps() {
         match step {
-            HapticStep::Vibrate { duration, intensity } => {
+            HapticStep::Vibrate {
+                duration,
+                intensity,
+            } => {
                 if let Some(feedback) = find_feedback(&controller, click_id) {
                     controller
                         .SendHapticFeedbackWithIntensity(&feedback, intensity.value().into())

@@ -318,8 +318,8 @@ impl ApplicationHandler for App {
         self.sampler = Some(sampler);
 
         // Open camera
-        let camera = pollster::block_on(Camera::open_default(device, queue))
-            .expect("Failed to open camera");
+        let camera =
+            pollster::block_on(Camera::open_default(device, queue)).expect("Failed to open camera");
         println!(
             "Camera opened: {}x{}",
             camera.resolution().width,

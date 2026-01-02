@@ -1,4 +1,4 @@
-use crate::{Dialog, DialogType, DialogError};
+use crate::{Dialog, DialogError, DialogType};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
@@ -18,8 +18,12 @@ pub fn show_alert_with_context(
 
     let helper_jclass = get_helper_class(env).map_err(DialogError::PlatformError)?;
 
-    let title = env.new_string(&dialog.title).map_err(|e| DialogError::PlatformError(e.to_string()))?;
-    let message = env.new_string(&dialog.message).map_err(|e| DialogError::PlatformError(e.to_string()))?;
+    let title = env
+        .new_string(&dialog.title)
+        .map_err(|e| DialogError::PlatformError(e.to_string()))?;
+    let message = env
+        .new_string(&dialog.message)
+        .map_err(|e| DialogError::PlatformError(e.to_string()))?;
 
     env.call_static_method(
         helper_jclass,
@@ -45,8 +49,12 @@ pub fn show_confirm_with_context(
 
     let helper_jclass = get_helper_class(env).map_err(DialogError::PlatformError)?;
 
-    let title = env.new_string(&dialog.title).map_err(|e| DialogError::PlatformError(e.to_string()))?;
-    let message = env.new_string(&dialog.message).map_err(|e| DialogError::PlatformError(e.to_string()))?;
+    let title = env
+        .new_string(&dialog.title)
+        .map_err(|e| DialogError::PlatformError(e.to_string()))?;
+    let message = env
+        .new_string(&dialog.message)
+        .map_err(|e| DialogError::PlatformError(e.to_string()))?;
 
     let result = env
         .call_static_method(
@@ -128,7 +136,9 @@ pub fn load_media_with_context(
         .map_err(|e| DialogError::PlatformError(format!("JNI error loadMedia return: {e}")))?;
 
     if result.is_null() {
-        Err(DialogError::PlatformError("Failed to load media (returned null)".to_string()))
+        Err(DialogError::PlatformError(
+            "Failed to load media (returned null)".to_string(),
+        ))
     } else {
         let path_str = env
             .get_string((&result).into())
@@ -139,21 +149,29 @@ pub fn load_media_with_context(
 
 // Public API stubs calling for context
 pub async fn show_alert(_dialog: Dialog) -> Result<(), DialogError> {
-    Err(DialogError::PlatformError("Android: use show_alert_with_context() with JNIEnv and Context".into()))
+    Err(DialogError::PlatformError(
+        "Android: use show_alert_with_context() with JNIEnv and Context".into(),
+    ))
 }
 
 pub async fn show_confirm(_dialog: Dialog) -> Result<bool, DialogError> {
-    Err(DialogError::PlatformError("Android: use show_confirm_with_context() with JNIEnv and Context".into()))
+    Err(DialogError::PlatformError(
+        "Android: use show_confirm_with_context() with JNIEnv and Context".into(),
+    ))
 }
 
 pub async fn show_photo_picker(
     _picker: crate::PhotoPicker,
 ) -> Result<Option<Selection>, DialogError> {
-    Err(DialogError::PlatformError("Android: use show_photo_picker_with_context() with JNIEnv and Context".into()))
+    Err(DialogError::PlatformError(
+        "Android: use show_photo_picker_with_context() with JNIEnv and Context".into(),
+    ))
 }
 
 pub async fn load_media(_handle: Selection) -> Result<std::path::PathBuf, DialogError> {
-    Err(DialogError::PlatformError("Android: use load_media_with_context() with JNIEnv and Context".into()))
+    Err(DialogError::PlatformError(
+        "Android: use load_media_with_context() with JNIEnv and Context".into(),
+    ))
 }
 
 /// Embedded DEX bytecode containing DialogHelper class.
@@ -299,7 +317,6 @@ pub fn show_confirm_with_context(
         .z()
         .map_err(|e| format!("JNI error return value: {e}"))?;
 
-
     Ok(result)
 }
 
@@ -383,9 +400,7 @@ pub async fn show_confirm(_dialog: Dialog) -> Result<bool, String> {
     Err("Android: use show_confirm_with_context() with JNIEnv and Context".into())
 }
 
-pub async fn show_photo_picker(
-    _picker: crate::PhotoPicker,
-) -> Result<Option<Selection>, String> {
+pub async fn show_photo_picker(_picker: crate::PhotoPicker) -> Result<Option<Selection>, String> {
     Err("Android: use show_photo_picker_with_context() with JNIEnv and Context".into())
 }
 

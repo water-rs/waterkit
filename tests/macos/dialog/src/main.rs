@@ -19,8 +19,8 @@ async fn main() {
 
     // Test Photo Picker
     println!("\nShowing Photo Picker (Images)...");
-    let picker = waterkit_dialog::PhotoPicker::new()
-        .with_media_type(waterkit_dialog::MediaType::Image);
+    let picker =
+        waterkit_dialog::PhotoPicker::new().with_media_type(waterkit_dialog::MediaType::Image);
 
     match picker.pick().await {
         Ok(Some(handle)) => {

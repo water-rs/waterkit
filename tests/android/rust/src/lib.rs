@@ -25,7 +25,12 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
     );
 
     // Feature-gated initialization for crates that require it
-    #[cfg(any(feature = "sensor", feature = "biometric", feature = "location", feature = "camera"))]
+    #[cfg(any(
+        feature = "sensor",
+        feature = "biometric",
+        feature = "location",
+        feature = "camera"
+    ))]
     {
         if let Err(e) = waterkit_content::sys::android::init(&mut _env, &_activity) {
             log::error!("Failed to initialize subsystem: {}", e);
@@ -54,7 +59,9 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
                 match waterkit_content::Accelerometer::read().await {
                     Ok(data) => log::info!(
                         "Accelerometer Read: x={:.2} y={:.2} z={:.2}",
-                        data.x, data.y, data.z
+                        data.x,
+                        data.y,
+                        data.z
                     ),
                     Err(e) => log::error!("Accelerometer Read Error: {}", e),
                 }
@@ -64,14 +71,16 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         #[cfg(feature = "biometric")]
         {
             log::info!("Testing waterkit-biometric...");
-            match waterkit_content::sys::android::authenticate_with_context(&mut env, activity, "Test Auth") {
-                Ok(rx) => {
-                    match rx.await {
-                        Ok(Ok(_)) => log::info!("Biometric Auth SUCCESS"),
-                        Ok(Err(e)) => log::error!("Biometric Auth FAILED: {}", e),
-                        Err(e) => log::error!("Biometric Auth CHANNEL ERROR: {}", e),
-                    }
-                }
+            match waterkit_content::sys::android::authenticate_with_context(
+                &mut env,
+                activity,
+                "Test Auth",
+            ) {
+                Ok(rx) => match rx.await {
+                    Ok(Ok(_)) => log::info!("Biometric Auth SUCCESS"),
+                    Ok(Err(e)) => log::error!("Biometric Auth FAILED: {}", e),
+                    Err(e) => log::error!("Biometric Auth CHANNEL ERROR: {}", e),
+                },
                 Err(e) => log::error!("Biometric Init FAILED: {}", e),
             }
         }
@@ -105,11 +114,13 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
                         log::info!("  - ID: {}, Name: {}", cam.id, cam.name);
                     }
                     if let Some(first) = cameras.first() {
-                         log::info!("Attempting to open camera: {}", first.id);
-                         match Camera::open(&first.id) {
-                             Ok(_) => log::info!("Camera open SUCCESS (Note: Start requires surface/callback setup)"),
-                             Err(e) => log::error!("Camera open FAILED: {}", e),
-                         }
+                        log::info!("Attempting to open camera: {}", first.id);
+                        match Camera::open(&first.id) {
+                            Ok(_) => log::info!(
+                                "Camera open SUCCESS (Note: Start requires surface/callback setup)"
+                            ),
+                            Err(e) => log::error!("Camera open FAILED: {}", e),
+                        }
                     }
                 }
                 Err(e) => log::error!("Camera List FAILED: {}", e),
@@ -136,7 +147,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
             // Since we don't have a raw stream handy, we just check if symbols load by calling into it.
             // `AndroidDecoder::new` is not public, accessed via `VideoDecoder` trait or `Decoder::new`?
             // `waterkit_codec::Decoder::new`?
-            // Let's assume verifying the crate compiles and runs this far is good for now, 
+            // Let's assume verifying the crate compiles and runs this far is good for now,
             // as complete decode loop requires data.
             log::info!("Codec: Runtime linking verified (ndk/MediaCodec symbols resolved)");
         }

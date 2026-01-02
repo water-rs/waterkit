@@ -1,8 +1,8 @@
 //! Apple platform build utilities.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::env;
+use std::path::PathBuf;
 
 /// Configuration for Swift compilation.
 #[derive(Debug, Clone)]
@@ -109,8 +109,7 @@ pub fn build_apple_bridge(bridges: impl IntoIterator<Item = impl AsRef<str>>) {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     {
         let bridge_refs: Vec<&str> = bridges.iter().map(String::as_str).collect();
-        swift_bridge_build::parse_bridges(bridge_refs)
-            .write_all_concatenated(out_dir, &pkg_name);
+        swift_bridge_build::parse_bridges(bridge_refs).write_all_concatenated(out_dir, &pkg_name);
     }
 
     #[cfg(not(any(target_os = "ios", target_os = "macos")))]
@@ -134,8 +133,8 @@ pub fn build_apple_bridge(bridges: impl IntoIterator<Item = impl AsRef<str>>) {
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 #[allow(clippy::too_many_lines)]
 pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
-    use std::process::Command;
     use std::fs;
+    use std::process::Command;
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -318,10 +317,7 @@ pub fn compile_swift(_bridge_rs: &str, _config: &AppleSwiftConfig) {}
 /// }
 /// ```
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-pub fn compile_multi_swift(
-    lib_name: &str,
-    crates: impl IntoIterator<Item = SwiftBridgeCrate>,
-) {
+pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = SwiftBridgeCrate>) {
     use std::fs;
     use std::process::Command;
 
@@ -354,7 +350,8 @@ pub fn compile_multi_swift(
     let gen_h = out_dir.join(format!("{lib_name}/{lib_name}.h"));
 
     // Combine all Swift sources
-    let mut combined = fs::read_to_string(&core_swift).expect("Failed to read SwiftBridgeCore.swift");
+    let mut combined =
+        fs::read_to_string(&core_swift).expect("Failed to read SwiftBridgeCore.swift");
     combined.push('\n');
     combined.push_str(&fs::read_to_string(&gen_swift).expect("Failed to read generated swift"));
 
@@ -439,7 +436,11 @@ pub fn compile_multi_swift(
     // Create static library
     let lib_file = out_dir.join(format!("lib{lib_name}.a"));
     let ar_status = Command::new("ar")
-        .args(["rcs", lib_file.to_str().unwrap(), obj_file.to_str().unwrap()])
+        .args([
+            "rcs",
+            lib_file.to_str().unwrap(),
+            obj_file.to_str().unwrap(),
+        ])
         .status()
         .expect("Failed to run ar");
     assert!(ar_status.success(), "ar failed");
@@ -481,8 +482,4 @@ pub fn compile_multi_swift(
 
 /// No-op on non-Apple platforms.
 #[cfg(not(any(target_os = "ios", target_os = "macos")))]
-pub fn compile_multi_swift(
-    _lib_name: &str,
-    _crates: impl IntoIterator<Item = SwiftBridgeCrate>,
-) {
-}
+pub fn compile_multi_swift(_lib_name: &str, _crates: impl IntoIterator<Item = SwiftBridgeCrate>) {}

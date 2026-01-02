@@ -8,7 +8,7 @@ import EventKit
 // Swift implementations of the functions declared in extern "Swift" block.
 // swift-bridge generates the FFI glue - we just implement the functions.
 
-func check_permission(_ permission: PermissionType) -> PermissionResult {
+func check_permission(permission: PermissionType) -> PermissionResult {
     switch permission {
     case .Location:
         return checkLocationPermission()
@@ -25,7 +25,7 @@ func check_permission(_ permission: PermissionType) -> PermissionResult {
     }
 }
 
-func request_permission(_ permission: PermissionType) -> PermissionResult {
+func request_permission(permission: PermissionType) -> PermissionResult {
     switch permission {
     case .Location:
         return requestLocationPermission()
@@ -44,10 +44,76 @@ func request_permission(_ permission: PermissionType) -> PermissionResult {
 
 // MARK: - Request Implementations
 
+class LocationPermissionDelegate: NSObject, CLLocationManagerDelegate {
+    var authorizationStatus: CLAuthorizationStatus?
+    var completed = false
+    var isFirstCallback = true
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let status = manager.authorizationStatus
+        // Skip the first callback which fires immediately with current status
+        if isFirstCallback {
+            isFirstCallback = false
+            // If already determined on first callback, we're done
+            if status != .notDetermined {
+                authorizationStatus = status
+                completed = true
+            }
+            return
+        }
+        // Subsequent callbacks indicate actual status change
+        authorizationStatus = status
+        completed = true
+    }
+}
+
+private var locationManager: CLLocationManager?
+private var locationDelegate: LocationPermissionDelegate?
+
 private func requestLocationPermission() -> PermissionResult {
-    // Location requires a delegate, so we can only check current status
-    // The app should create a CLLocationManager instance and call requestWhenInUseAuthorization()
+    let manager = CLLocationManager()
+    let delegate = LocationPermissionDelegate()
+    manager.delegate = delegate
+
+    // Keep references alive
+    locationManager = manager
+    locationDelegate = delegate
+
+    // Check if already determined
+    let currentStatus = manager.authorizationStatus
+    if currentStatus != .notDetermined {
+        return statusFromCLAuthorizationStatus(currentStatus)
+    }
+
+    // Request authorization
+    manager.requestWhenInUseAuthorization()
+
+    // Run the main run loop to allow the authorization dialog to appear
+    let timeout = Date().addingTimeInterval(60)
+    while !delegate.completed && Date() < timeout {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+
+    if let status = delegate.authorizationStatus {
+        return statusFromCLAuthorizationStatus(status)
+    }
+
     return checkLocationPermission()
+}
+
+private func statusFromCLAuthorizationStatus(_ status: CLAuthorizationStatus) -> PermissionResult {
+    switch status {
+    case .notDetermined:
+        return .NotDetermined
+    case .restricted:
+        return .Restricted
+    case .denied:
+        return .Denied
+    case .authorizedAlways, .authorizedWhenInUse:
+        return .Granted
+    @unknown default:
+        return .NotDetermined
+    }
 }
 
 private func requestCameraPermission() -> PermissionResult {
@@ -110,9 +176,16 @@ private func requestCalendarPermission() -> PermissionResult {
     let semaphore = DispatchSemaphore(value: 0)
     var result: PermissionResult = .NotDetermined
     let store = EKEventStore()
-    store.requestFullAccessToEvents { granted, _ in
-        result = granted ? .Granted : .Denied
-        semaphore.signal()
+    if #available(macOS 14.0, iOS 17.0, *) {
+        store.requestFullAccessToEvents { granted, _ in
+            result = granted ? .Granted : .Denied
+            semaphore.signal()
+        }
+    } else {
+        store.requestAccess(to: .event) { granted, _ in
+            result = granted ? .Granted : .Denied
+            semaphore.signal()
+        }
     }
     semaphore.wait()
     return result

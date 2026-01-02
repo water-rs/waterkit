@@ -108,6 +108,8 @@ waterkit-video = { path = "video" }
 futures = "0.3"
 async-channel = "2.3"
 thiserror = "2"
+blocking = "1"
+async-io = "2"
 wgpu = "28"
 metal = "0.33"
 
@@ -168,6 +170,9 @@ media-codec = "0.8"
 
 # Time
 jiff = "0.2"
+
+# URL encoding
+percent-encoding = "2.3"
 
 # System/OS
 sysinfo = "0.37"

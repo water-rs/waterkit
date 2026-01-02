@@ -5,36 +5,10 @@
 //! Waterkit provides a unified API for common system functionalities, including audio, video,
 //! camera, location, permissions, and more, across macOS, iOS, Android, Windows, and Linux.
 //!
-//! ## Features
-//!
-//! Waterkit is highly modular. You can enable only the features you need to keep your
-//! dependencies minimal.
-//!
-//! - `audio`: Audio playback and recording.
-//! - `video`: Video playback and muxing/demuxing.
-//! - `camera`: Camera access and photo capture.
-//! - `location`: GPS and geolocation services.
-//! - `permission`: Unified permission request handling.
-//! - `haptic`: Haptic feedback for mobile and desktop.
-//! - `notification`: Local notifications.
-//! - `dialog`: Native system dialogs (alerts, file pickers).
-//! - `biometric`: Biometric authentication (FaceID, Fingerprint).
-//! - `clipboard`: System clipboard access (text and images).
-//! - `fs`: File system utilities and sandboxed access.
-//! - `secret`: Secure storage for sensitive information.
-//! - `sensor`: Device sensors (accelerometer, light, etc.).
-//! - `codec`: Hardware-accelerated video codecs.
-//! - `screen`: Screen capture and display information.
-//! - `system`: System information and power management.
-//!
-//! Use the `full` feature to enable everything.
+//! By default, all features are enabled. If you want to disable some features, you can disable
+//! them by adding `default = []` to your `Cargo.toml`.
 //!
 //! ## Example
-//!
-//! ```toml
-//! [dependencies]
-//! waterkit = { version = "0.1", features = ["location", "notification"] }
-//! ```
 //!
 //! ```rust, ignore
 //! use waterkit::location;

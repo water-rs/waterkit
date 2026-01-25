@@ -36,7 +36,10 @@ media-codec.workspace = true
 jni.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { workspace = true, features = ["Win32_Media_MediaFoundation"] }
+windows = { workspace = true, features = ["Win32_Media_MediaFoundation", "Win32_System_Com"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ffmpeg-next = "7"
 
 [features]
 default = ["software-fallback"]

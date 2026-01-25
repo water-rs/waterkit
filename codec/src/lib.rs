@@ -231,6 +231,12 @@ pub struct Decoder {
 enum DecoderInner {
     #[cfg(target_vendor = "apple")]
     Apple(sys::apple::AppleDecoder),
+    #[cfg(target_os = "android")]
+    Android(sys::android::AndroidDecoder),
+    #[cfg(target_os = "windows")]
+    Windows(sys::windows::WindowsDecoder),
+    #[cfg(target_os = "linux")]
+    Linux(sys::linux::LinuxDecoder),
     #[cfg(feature = "software-fallback")]
     Av1(software::av1::Av1Decoder),
 }
@@ -275,7 +281,57 @@ impl Decoder {
                 )?)
             }
 
-            #[cfg(not(target_vendor = "apple"))]
+            #[cfg(target_os = "android")]
+            CodecType::H264 | CodecType::H265 => {
+                let android_codec = match codec {
+                    CodecType::H264 => sys::android::CodecType::H264,
+                    CodecType::H265 => sys::android::CodecType::H265,
+                    CodecType::Av1 => unreachable!(),
+                };
+                DecoderInner::Android(sys::android::AndroidDecoder::new(
+                    android_codec,
+                    config,
+                    width,
+                    height,
+                )?)
+            }
+
+            #[cfg(target_os = "windows")]
+            CodecType::H264 | CodecType::H265 => {
+                let windows_codec = match codec {
+                    CodecType::H264 => sys::windows::CodecType::H264,
+                    CodecType::H265 => sys::windows::CodecType::H265,
+                    CodecType::Av1 => unreachable!(),
+                };
+                DecoderInner::Windows(sys::windows::WindowsDecoder::new(
+                    windows_codec,
+                    config,
+                    width,
+                    height,
+                )?)
+            }
+
+            #[cfg(target_os = "linux")]
+            CodecType::H264 | CodecType::H265 => {
+                let linux_codec = match codec {
+                    CodecType::H264 => sys::linux::CodecType::H264,
+                    CodecType::H265 => sys::linux::CodecType::H265,
+                    CodecType::Av1 => unreachable!(),
+                };
+                DecoderInner::Linux(sys::linux::LinuxDecoder::new(
+                    linux_codec,
+                    config,
+                    width,
+                    height,
+                )?)
+            }
+
+            #[cfg(not(any(
+                target_vendor = "apple",
+                target_os = "android",
+                target_os = "windows",
+                target_os = "linux"
+            )))]
             CodecType::H264 | CodecType::H265 => {
                 return Err(CodecError::Unsupported(format!(
                     "{codec:?} hardware decoding not available on this platform"
@@ -324,6 +380,54 @@ impl Decoder {
                         surface.width,
                         surface.height,
                         surface.timestamp_ns,
+                    );
+                    frames.push(frame);
+                }
+                Ok(frames)
+            }
+
+            #[cfg(target_os = "android")]
+            DecoderInner::Android(dec) => {
+                let android_frames = dec.decode(data)?;
+                let mut frames = Vec::with_capacity(android_frames.len());
+                for android_frame in android_frames {
+                    let frame = DecodedFrame::from_nv12_data(
+                        android_frame.data,
+                        android_frame.width,
+                        android_frame.height,
+                        android_frame.timestamp_ns,
+                    );
+                    frames.push(frame);
+                }
+                Ok(frames)
+            }
+
+            #[cfg(target_os = "windows")]
+            DecoderInner::Windows(dec) => {
+                let windows_frames = dec.decode(data)?;
+                let mut frames = Vec::with_capacity(windows_frames.len());
+                for windows_frame in windows_frames {
+                    let frame = DecodedFrame::from_nv12_data(
+                        windows_frame.data,
+                        windows_frame.width,
+                        windows_frame.height,
+                        windows_frame.timestamp_ns,
+                    );
+                    frames.push(frame);
+                }
+                Ok(frames)
+            }
+
+            #[cfg(target_os = "linux")]
+            DecoderInner::Linux(dec) => {
+                let linux_frames = dec.decode(data)?;
+                let mut frames = Vec::with_capacity(linux_frames.len());
+                for linux_frame in linux_frames {
+                    let frame = DecodedFrame::from_nv12_data(
+                        linux_frame.data,
+                        linux_frame.width,
+                        linux_frame.height,
+                        linux_frame.timestamp_ns,
                     );
                     frames.push(frame);
                 }
@@ -413,42 +517,66 @@ impl Decoder {
                 Ok(infos)
             }
 
+            #[cfg(target_os = "android")]
+            DecoderInner::Android(dec) => {
+                let android_frames = dec.decode(data)?;
+                copy_frames_to_buffer(android_frames.into_iter().map(|f| (f.data, f.width, f.height, f.timestamp_ns)), output)
+            }
+
+            #[cfg(target_os = "windows")]
+            DecoderInner::Windows(dec) => {
+                let windows_frames = dec.decode(data)?;
+                copy_frames_to_buffer(windows_frames.into_iter().map(|f| (f.data, f.width, f.height, f.timestamp_ns)), output)
+            }
+
+            #[cfg(target_os = "linux")]
+            DecoderInner::Linux(dec) => {
+                let linux_frames = dec.decode(data)?;
+                copy_frames_to_buffer(linux_frames.into_iter().map(|f| (f.data, f.width, f.height, f.timestamp_ns)), output)
+            }
+
             #[cfg(feature = "software-fallback")]
             DecoderInner::Av1(dec) => {
                 let cpu_frames = dec.decode(data)?;
-                let mut infos = Vec::with_capacity(cpu_frames.len());
-                let mut offset = 0;
-
-                for cpu_frame in cpu_frames {
-                    let width = cpu_frame.width;
-                    let height = cpu_frame.height;
-                    let y_size = (width * height) as usize;
-                    let total_bytes = cpu_frame.data.len();
-
-                    if offset + total_bytes > output.len() {
-                        return Err(CodecError::DecodingFailed(format!(
-                            "buffer too small: need {total_bytes} more bytes at offset {offset}"
-                        )));
-                    }
-
-                    output[offset..offset + total_bytes].copy_from_slice(&cpu_frame.data);
-
-                    infos.push(FrameInfo {
-                        width,
-                        height,
-                        timestamp_ns: cpu_frame.timestamp_ns,
-                        y_offset: offset,
-                        uv_offset: offset + y_size,
-                        total_bytes,
-                    });
-
-                    offset += total_bytes;
-                }
-
-                Ok(infos)
+                copy_frames_to_buffer(cpu_frames.into_iter().map(|f| (f.data, f.width, f.height, f.timestamp_ns)), output)
             }
         }
     }
+}
+
+/// Helper to copy decoded frames to an output buffer.
+fn copy_frames_to_buffer(
+    frames: impl Iterator<Item = (Vec<u8>, u32, u32, u64)>,
+    output: &mut [u8],
+) -> Result<Vec<FrameInfo>, CodecError> {
+    let mut infos = Vec::new();
+    let mut offset = 0;
+
+    for (data, width, height, timestamp_ns) in frames {
+        let y_size = (width * height) as usize;
+        let total_bytes = data.len();
+
+        if offset + total_bytes > output.len() {
+            return Err(CodecError::DecodingFailed(format!(
+                "buffer too small: need {total_bytes} more bytes at offset {offset}"
+            )));
+        }
+
+        output[offset..offset + total_bytes].copy_from_slice(&data);
+
+        infos.push(FrameInfo {
+            width,
+            height,
+            timestamp_ns,
+            y_offset: offset,
+            uv_offset: offset + y_size,
+            total_bytes,
+        });
+
+        offset += total_bytes;
+    }
+
+    Ok(infos)
 }
 
 /// Unified video encoder with automatic hardware/software selection.
@@ -459,6 +587,12 @@ pub struct Encoder {
 enum EncoderInner {
     #[cfg(target_vendor = "apple")]
     Apple(sys::apple::AppleEncoder),
+    #[cfg(target_os = "android")]
+    Android(sys::android::AndroidEncoder),
+    #[cfg(target_os = "windows")]
+    Windows(sys::windows::WindowsEncoder),
+    #[cfg(target_os = "linux")]
+    Linux(sys::linux::LinuxEncoder),
     #[cfg(feature = "software-fallback")]
     Av1(Box<software::av1::Av1Encoder>),
 }
@@ -491,7 +625,54 @@ impl Encoder {
                 )?)
             }
 
-            #[cfg(not(target_vendor = "apple"))]
+            #[cfg(target_os = "android")]
+            CodecType::H264 | CodecType::H265 => {
+                let android_codec = match codec {
+                    CodecType::H264 => sys::android::CodecType::H264,
+                    CodecType::H265 => sys::android::CodecType::H265,
+                    CodecType::Av1 => unreachable!(),
+                };
+                EncoderInner::Android(sys::android::AndroidEncoder::new(
+                    android_codec,
+                    width,
+                    height,
+                )?)
+            }
+
+            #[cfg(target_os = "windows")]
+            CodecType::H264 | CodecType::H265 => {
+                let windows_codec = match codec {
+                    CodecType::H264 => sys::windows::CodecType::H264,
+                    CodecType::H265 => sys::windows::CodecType::H265,
+                    CodecType::Av1 => unreachable!(),
+                };
+                EncoderInner::Windows(sys::windows::WindowsEncoder::new(
+                    windows_codec,
+                    width,
+                    height,
+                )?)
+            }
+
+            #[cfg(target_os = "linux")]
+            CodecType::H264 | CodecType::H265 => {
+                let linux_codec = match codec {
+                    CodecType::H264 => sys::linux::CodecType::H264,
+                    CodecType::H265 => sys::linux::CodecType::H265,
+                    CodecType::Av1 => unreachable!(),
+                };
+                EncoderInner::Linux(sys::linux::LinuxEncoder::new(
+                    linux_codec,
+                    width,
+                    height,
+                )?)
+            }
+
+            #[cfg(not(any(
+                target_vendor = "apple",
+                target_os = "android",
+                target_os = "windows",
+                target_os = "linux"
+            )))]
             CodecType::H264 | CodecType::H265 => {
                 return Err(CodecError::Unsupported(format!(
                     "{codec:?} hardware encoding not available on this platform"
@@ -535,6 +716,15 @@ impl Encoder {
             #[cfg(target_vendor = "apple")]
             EncoderInner::Apple(enc) => enc.encode_nv12(data),
 
+            #[cfg(target_os = "android")]
+            EncoderInner::Android(enc) => enc.encode_nv12(data),
+
+            #[cfg(target_os = "windows")]
+            EncoderInner::Windows(enc) => enc.encode_nv12(data),
+
+            #[cfg(target_os = "linux")]
+            EncoderInner::Linux(enc) => enc.encode_nv12(data),
+
             #[cfg(feature = "software-fallback")]
             EncoderInner::Av1(enc) => enc.encode_nv12(data),
         }
@@ -573,6 +763,16 @@ impl Encoder {
         match &self.inner {
             #[cfg(target_vendor = "apple")]
             EncoderInner::Apple(enc) => enc.get_codec_config(),
+
+            #[cfg(target_os = "android")]
+            EncoderInner::Android(enc) => enc.get_codec_config(),
+
+            #[cfg(target_os = "windows")]
+            EncoderInner::Windows(enc) => enc.get_codec_config(),
+
+            #[cfg(target_os = "linux")]
+            EncoderInner::Linux(enc) => enc.get_codec_config(),
+
             #[cfg(feature = "software-fallback")]
             EncoderInner::Av1(_) => None, // AV1 doesn't use codec config atoms
         }

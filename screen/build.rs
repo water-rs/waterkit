@@ -32,4 +32,8 @@ fn main() {
             println!("cargo:rustc-link-arg=/usr/lib/swift");
         }
     }
+
+    if target_os == "android" {
+        waterkit_build::build_kotlin(&["src/sys/android/ScreenHelper.kt"]);
+    }
 }

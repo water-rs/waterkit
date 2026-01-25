@@ -38,6 +38,10 @@ waterkit-build.workspace = true
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
+ndk-context.workspace = true
+
+[target.'cfg(target_os = "android")'.build-dependencies]
+waterkit-build.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

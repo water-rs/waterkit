@@ -13,11 +13,17 @@ pub mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::*;
 
+#[cfg(target_os = "linux")]
+pub mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::*;
+
 #[cfg(not(any(
     target_os = "ios",
     target_os = "macos",
     target_os = "android",
-    target_os = "windows"
+    target_os = "windows",
+    target_os = "linux"
 )))]
 pub mod stub {
     use crate::{BiometricError, BiometricType};
@@ -38,6 +44,7 @@ pub mod stub {
     target_os = "ios",
     target_os = "macos",
     target_os = "android",
-    target_os = "windows"
+    target_os = "windows",
+    target_os = "linux"
 )))]
 pub use stub::*;

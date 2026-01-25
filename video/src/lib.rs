@@ -3,23 +3,39 @@
 //! This crate provides:
 //! - **Muxing**: Write H.264/H.265 video to MP4/MOV containers
 //! - **Demuxing**: Read video samples from containers
-//! - **Hardware Decode**: `VideoToolbox` (Apple), `MediaCodec` (Android)
+//! - **Hardware Decode**: Uses `waterkit-codec` for hardware-accelerated decode
 //! - **wgpu Integration**: Render decoded frames to GPU textures
+//!
+//! # Video Playback Example
+//!
+//! ```ignore
+//! use waterkit_video::{VideoPlayer};
+//! use std::sync::Arc;
+//!
+//! let player = VideoPlayer::open("video.mp4", device.clone(), queue.clone())?;
+//!
+//! while let Some(frame) = player.next_frame()? {
+//!     // Use frame.gpu_frame for rendering
+//!     let y_texture = frame.gpu_frame.y_texture();
+//!     let uv_texture = frame.gpu_frame.uv_texture();
+//! }
+//! ```
 
 #![warn(missing_docs)]
 
 mod demuxer;
 mod muxer;
-
-// Platform-specific (hardware decode) - to be implemented
-// #[cfg(any(target_os = "macos", target_os = "ios"))]
-// mod sys;
+mod player;
 
 pub use demuxer::{VideoFrame, VideoReader};
-pub use muxer::{CodecType, VideoFormat, VideoWriter};
+pub use muxer::{CodecType as MuxerCodecType, VideoFormat, VideoWriter};
+pub use player::{PlayerFrame, VideoPlayer};
 
 /// Re-export wgpu for texture integration.
 pub use wgpu;
+
+/// Re-export codec crate for access to decoder.
+pub use waterkit_codec as codec;
 
 /// Errors that can occur with video operations.
 /// Errors that can occur with video operations.

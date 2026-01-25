@@ -16,16 +16,15 @@ workspace = true
 [dependencies]
 thiserror.workspace = true
 wgpu.workspace = true
+futures.workspace = true
+async-channel.workspace = true
 
-# MP4/MOV container support
 # MP4/MOV container support
 byteorder = { workspace = true }
 mp4 = { workspace = true }
 
-# Apple platforms: VideoToolbox hardware codec
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-objc2 = { workspace = true }
-objc2-foundation = { workspace = true, features = ["NSObject", "NSData", "NSDictionary"] }
-objc2-core-media = { workspace = true, features = ["CMSampleBuffer", "CMTime", "CMFormatDescription"] }
-objc2-core-video = { workspace = true, features = ["CVBuffer", "CVPixelBuffer", "CVImageBuffer"] }
-objc2-video-toolbox = { workspace = true, features = ["VTDecompressionSession", "VTSession"] }
+# Hardware codec support
+waterkit-codec = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -90,7 +90,7 @@ impl VideoPlayer {
 
     /// Get video dimensions (width, height).
     #[must_use]
-    pub fn dimensions(&self) -> (u32, u32) {
+    pub const fn dimensions(&self) -> (u32, u32) {
         self.reader.dimensions()
     }
 
@@ -102,13 +102,13 @@ impl VideoPlayer {
 
     /// Get the total number of samples (frames).
     #[must_use]
-    pub fn sample_count(&self) -> u32 {
+    pub const fn sample_count(&self) -> u32 {
         self.reader.sample_count()
     }
 
     /// Get the timescale of the video.
     #[must_use]
-    pub fn timescale(&self) -> u32 {
+    pub const fn timescale(&self) -> u32 {
         self.reader.timescale()
     }
 
@@ -169,7 +169,7 @@ impl VideoPlayer {
     }
 
     /// Reset playback to the beginning.
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.reader.reset();
         self.frame_index = 0;
     }

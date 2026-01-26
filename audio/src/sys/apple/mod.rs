@@ -192,13 +192,6 @@ impl MediaSessionInner {
     pub fn clear(&self) -> Result<(), MediaError> {
         convert_result(ffi::media_session_clear())
     }
-
-    /// Run the macOS run loop for the specified duration.
-    /// This is required for `MPRemoteCommandCenter` to receive events in CLI apps.
-    #[allow(clippy::unused_self)]
-    pub fn run_loop(&self, duration: std::time::Duration) {
-        ffi::media_session_run_loop(duration.as_secs_f64());
-    }
 }
 
 /// Media center integration for Apple platforms.

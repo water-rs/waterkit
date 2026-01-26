@@ -47,7 +47,7 @@ fn main() {
 
     let bridges_refs: Vec<&str> = bridges.iter().map(|s| s.as_str()).collect();
 
-    waterkit_build::build_apple_bridge(&bridges_refs); // Keeps the cargo rerun logic
+    waterkit_build::build_apple_bridge(bridges_refs); // Keeps the cargo rerun logic
 
     // Manual generation to the specific path
     swift_bridge_build::parse_bridges(bridges)

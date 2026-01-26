@@ -19,19 +19,54 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  lint:
-    name: Lint
+  fmt:
+    name: Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
         with:
-          components: clippy, rustfmt
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-ubuntu
-      - run: cargo fmt --all -- --check
+          shared-key: clippy-${{ matrix.os }}
       - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  cross-check:
+    name: Cross Check (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-ios
+            os: macos-latest
+          - target: aarch64-linux-android
+            os: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cross-${{ matrix.target }}
+      - name: Check (no default features)
+        run: cargo check --target ${{ matrix.target }}
 
   coverage:
     name: Coverage
@@ -50,6 +85,7 @@ jobs:
         with:
           use_oidc: true
           fail_ci_if_error: true
+
   typos:
     name: Typos
     runs-on: ubuntu-latest

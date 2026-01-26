@@ -147,8 +147,8 @@ public func clipboard_set_binary(data: RustVec<UInt8>, mime: RustString) {
     let mimeType = mime.toString()
 
     var bytes = Data(capacity: Int(data.len()))
-    for i in 0..<data.len() {
-        if let byte = data.get(index: i) {
+    for i in 0..<Int(data.len()) {
+        if let byte = data.get(index: UInt(i)) {
             bytes.append(byte)
         }
     }

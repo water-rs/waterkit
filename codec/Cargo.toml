@@ -16,6 +16,8 @@ cfg-if.workspace = true
 wgpu.workspace = true
 
 # Software fallback codecs (private, not exposed in public API)
+# Only enabled on desktop platforms - mobile has hardware codecs
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 rav1e = { workspace = true, optional = true }
 dav1d = { workspace = true, optional = true }
 
@@ -32,7 +34,6 @@ metal.workspace = true
 [target.'cfg(target_os = "android")'.dependencies]
 ndk = { version = "0.9", features = ["media", "api-level-29"] }
 ndk-sys = "0.6"
-media-codec.workspace = true
 jni.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]

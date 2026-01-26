@@ -43,26 +43,26 @@ mod ffi {
 }
 
 fn on_dialog_result(cb_id: u64, result: bool) {
-    if let Ok(mut map) = callbacks().lock() {
-        if let Some(tx) = map.remove(&cb_id) {
-            let _ = tx.send(result);
-        }
+    if let Ok(mut map) = callbacks().lock()
+        && let Some(tx) = map.remove(&cb_id)
+    {
+        let _ = tx.send(result);
     }
 }
 
 fn on_photo_picker_result(cb_id: u64, handle_id: Option<u64>) {
-    if let Ok(mut map) = picker_callbacks().lock() {
-        if let Some(tx) = map.remove(&cb_id) {
-            let _ = tx.send(handle_id.map(Selection));
-        }
+    if let Ok(mut map) = picker_callbacks().lock()
+        && let Some(tx) = map.remove(&cb_id)
+    {
+        let _ = tx.send(handle_id.map(Selection));
     }
 }
 
 fn on_load_media_result(cb_id: u64, path: Option<String>) {
-    if let Ok(mut map) = load_callbacks().lock() {
-        if let Some(tx) = map.remove(&cb_id) {
-            let _ = tx.send(path);
-        }
+    if let Ok(mut map) = load_callbacks().lock()
+        && let Some(tx) = map.remove(&cb_id)
+    {
+        let _ = tx.send(path);
     }
 }
 
@@ -129,10 +129,12 @@ pub async fn load_media(handle: Selection) -> Result<std::path::PathBuf, DialogE
     ffi::load_media_bridge(handle.0, id);
 
     let res = rx.await.map_err(|_| DialogError::Cancelled)?;
-    match res {
-        Some(path) => Ok(std::path::PathBuf::from(path)),
-        None => Err(DialogError::PlatformError(
-            "Failed to load media (conversion failed)".to_string(),
-        )),
-    }
+    res.map_or_else(
+        || {
+            Err(DialogError::PlatformError(
+                "Failed to load media (conversion failed)".to_string(),
+            ))
+        },
+        |path| Ok(std::path::PathBuf::from(path)),
+    )
 }

@@ -3,5 +3,9 @@
 //! These are used when hardware acceleration is unavailable.
 //! Not exposed in public API - users interact only with the unified Decoder/Encoder.
 
-#[cfg(feature = "software-fallback")]
+// Software fallback only available on desktop platforms (where rav1e/dav1d are enabled)
+#[cfg(all(
+    feature = "software-fallback",
+    not(any(target_os = "ios", target_os = "android"))
+))]
 pub mod av1;

@@ -2,6 +2,8 @@
 
 #![allow(clippy::unnecessary_wraps)] // API consistency with other platforms
 #![allow(clippy::needless_pass_by_ref_mut)] // API consistency with other platforms
+#![allow(clippy::unused_self)] // Methods use global UIPasteboard, &self is for API consistency
+#![allow(clippy::missing_const_for_fn)] // FFI calls cannot be const
 
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
@@ -100,19 +102,20 @@ impl ClipboardInner {
 
     /// Get file paths.
     pub fn get_files(&self) -> Result<Vec<PathBuf>, ClipboardError> {
-        if let Some(url) = ffi::clipboard_get_file_url() {
-            if let Some(path) = url.strip_prefix("file://") {
-                // URL decode the path
-                let decoded = percent_encoding::percent_decode_str(path)
-                    .decode_utf8()
-                    .map_err(|e| ClipboardError::Platform(format!("Invalid URL encoding: {e}")))?;
-                return Ok(vec![PathBuf::from(decoded.into_owned())]);
-            }
+        if let Some(url) = ffi::clipboard_get_file_url()
+            && let Some(path) = url.strip_prefix("file://")
+        {
+            // URL decode the path
+            let decoded = percent_encoding::percent_decode_str(path)
+                .decode_utf8()
+                .map_err(|e| ClipboardError::Platform(format!("Invalid URL encoding: {e}")))?;
+            return Ok(vec![PathBuf::from(decoded.into_owned())]);
         }
         Ok(Vec::new())
     }
 
     /// Get image as RGBA.
+    #[allow(clippy::cast_possible_truncation)] // Image dimensions from Swift are always valid u32
     pub fn get_image(&self) -> Result<Option<Image>, ClipboardError> {
         let image = ffi::clipboard_get_image();
         if !image.is_valid {

@@ -11,20 +11,26 @@ mod android;
 pub use android::{Selection, load_media, show_alert, show_confirm, show_photo_picker};
 
 #[cfg(target_os = "android")]
+#[allow(clippy::unused_async)] // Keep async for API consistency with other platforms
 pub async fn show_open_single_file(
     _: crate::FileDialog,
-) -> Result<Option<std::path::PathBuf>, String> {
-    Err("File picker not supported on Android yet".to_string())
+) -> Result<Option<std::path::PathBuf>, crate::DialogError> {
+    Err(crate::DialogError::PlatformError(
+        "File picker not supported on Android yet".to_string(),
+    ))
 }
 
 #[cfg(target_os = "ios")]
 mod apple;
 #[cfg(target_os = "ios")]
-pub use apple::{NativeHandle, load_media, show_alert, show_confirm, show_photo_picker};
+pub use apple::{Selection, load_media, show_alert, show_confirm, show_photo_picker};
 
 #[cfg(target_os = "ios")]
+#[allow(clippy::unused_async)] // Keep async for API consistency with other platforms
 pub async fn show_open_single_file(
     _: crate::FileDialog,
-) -> Result<Option<std::path::PathBuf>, String> {
-    Err("File picker not supported on iOS yet".to_string())
+) -> Result<Option<std::path::PathBuf>, crate::DialogError> {
+    Err(crate::DialogError::PlatformError(
+        "File picker not supported on iOS yet".to_string(),
+    ))
 }

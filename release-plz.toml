@@ -1,0 +1,13 @@
+# release-plz configuration
+# https://release-plz.ieni.dev/docs/config
+
+[workspace]
+# Longer timeout for large workspace with many crates
+publish_timeout = "30m"
+
+# Allow dependencies from same workspace
+allow_dirty = false
+
+# Git release settings
+git_release_enable = true
+git_tag_enable = true

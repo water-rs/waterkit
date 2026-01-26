@@ -134,7 +134,7 @@ pub fn check_with_activity(
         .new_string("waterkit.permission.PermissionHelper")
         .map_err(|e| PermissionError::Unknown(format!("new_string: {e}")))?;
 
-    let helper_class = env
+    let loaded_class = env
         .call_method(
             class_loader.as_obj(),
             "loadClass",
@@ -145,10 +145,10 @@ pub fn check_with_activity(
         .l()
         .map_err(|e| PermissionError::Unknown(format!("loadClass result: {e}")))?;
 
-    let helper_jclass: jni::objects::JClass = helper_class.into();
+    let helper_class: jni::objects::JClass = loaded_class.into();
     let result = env
         .call_static_method(
-            helper_jclass,
+            helper_class,
             "checkPermission",
             "(Landroid/app/Activity;I)I",
             &[
@@ -164,14 +164,14 @@ pub fn check_with_activity(
 }
 
 // Async wrappers for the public API (require runtime context)
-pub(crate) async fn check(permission: Permission) -> PermissionStatus {
+pub async fn check(permission: Permission) -> PermissionStatus {
     // Without JNI context, we can't check permissions
     // The application must call check_with_activity directly
     let _ = permission;
     PermissionStatus::NotDetermined
 }
 
-pub(crate) async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
+pub async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
     // Without JNI context, we can't request permissions
     // The application must use the Android Activity API directly
     let _ = permission;

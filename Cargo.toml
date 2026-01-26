@@ -87,22 +87,22 @@ video = ["dep:waterkit-video"]
 
 [workspace.dependencies]
 # Functional Crates
-waterkit-permission = { path = "permission" }
-waterkit-location = { path = "location" }
-waterkit-audio = { path = "audio" }
-waterkit-haptic = { path = "haptic" }
-waterkit-notification = { path = "notification" }
-waterkit-dialog = { path = "dialog" }
-waterkit-biometric = { path = "biometric" }
-waterkit-clipboard = { path = "clipboard" }
-waterkit-fs = { path = "fs" }
-waterkit-secret = { path = "secret" }
-waterkit-camera = { path = "camera" }
-waterkit-sensor = { path = "sensor" }
-waterkit-codec = { path = "codec" }
-waterkit-screen = { path = "screen" }
-waterkit-system = { path = "system" }
-waterkit-video = { path = "video" }
+waterkit-permission = { path = "permission", version = "0.1.0" }
+waterkit-location = { path = "location", version = "0.1.0" }
+waterkit-audio = { path = "audio", version = "0.1.0" }
+waterkit-haptic = { path = "haptic", version = "0.1.0" }
+waterkit-notification = { path = "notification", version = "0.1.0" }
+waterkit-dialog = { path = "dialog", version = "0.1.0" }
+waterkit-biometric = { path = "biometric", version = "0.1.0" }
+waterkit-clipboard = { path = "clipboard", version = "0.1.0" }
+waterkit-fs = { path = "fs", version = "0.1.0" }
+waterkit-secret = { path = "secret", version = "0.1.0" }
+waterkit-camera = { path = "camera", version = "0.1.0" }
+waterkit-sensor = { path = "sensor", version = "0.1.0" }
+waterkit-codec = { path = "codec", version = "0.1.0" }
+waterkit-screen = { path = "screen", version = "0.1.0" }
+waterkit-system = { path = "system", version = "0.1.0" }
+waterkit-video = { path = "video", version = "0.1.0" }
 
 # Cross-platform
 futures = "0.3"
@@ -144,7 +144,7 @@ jni = "0.21"
 ndk-context = "0.1"
 
 # Build utilities
-waterkit-build = { path = "waterkit-build" }
+waterkit-build = { path = "waterkit-build", version = "0.1.0" }
 
 # Windows
 windows = { version = "0.62", features = ["Devices_Geolocation", "Foundation"] }

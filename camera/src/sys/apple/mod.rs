@@ -189,7 +189,7 @@ unsafe extern "C" {
 }
 
 // Lock flag for read-only access
-const K_CV_PIXEL_BUFFER_LOCK_READ_ONLY: u64 = 0x00000001;
+const K_CV_PIXEL_BUFFER_LOCK_READ_ONLY: u64 = 0x0000_0001;
 
 /// Create a wgpu texture from a `CVPixelBuffer` handle.
 ///
@@ -658,15 +658,13 @@ impl CameraInner {
                 let raw_frame = receiver.recv().await.ok()?;
 
                 // Create wgpu texture from CVPixelBuffer
-                let texture = if let Ok(tex) = create_texture_from_pixelbuffer(
+                let Ok(texture) = create_texture_from_pixelbuffer(
                     &device,
                     &queue,
                     raw_frame.pixelbuffer_handle,
                     raw_frame.width,
                     raw_frame.height,
-                ) {
-                    tex
-                } else {
+                ) else {
                     // Release CVPixelBuffer on error
                     unsafe {
                         camera_release_pixelbuffer(raw_frame.pixelbuffer_handle);

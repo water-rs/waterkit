@@ -462,7 +462,7 @@ impl AudioPlayer {
     }
 
     /// Get the current metadata.
-    pub fn metadata(&self) -> &MediaMetadata {
+    pub const fn metadata(&self) -> &MediaMetadata {
         &self.metadata
     }
 
@@ -511,6 +511,9 @@ impl AudioPlayer {
     }
 
     /// List available audio output devices.
+    ///
+    /// # Errors
+    /// Returns an error if the audio host cannot enumerate output devices.
     pub fn list_devices() -> Result<Vec<AudioDevice>, PlayerError> {
         use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
@@ -529,10 +532,7 @@ impl Drop for AudioPlayer {
     fn drop(&mut self) {
         // ShutdownHandle is dropped automatically, signaling background thread to exit.
         // We explicitly drop it first to ensure the signal is sent before we try to join.
-        drop(std::mem::replace(
-            &mut self.shutdown_handle,
-            ShutdownHandle::default(),
-        ));
+        drop(std::mem::take(&mut self.shutdown_handle));
 
         // Wait for background thread to exit cleanly
         if let Some(handle) = self.background_thread.take() {

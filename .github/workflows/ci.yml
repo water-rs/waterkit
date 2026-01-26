@@ -46,8 +46,8 @@ jobs:
           shared-key: clippy-${{ matrix.os }}
       - run: cargo clippy --all-targets --all-features -- -D warnings
 
-  cross-check:
-    name: Cross Check (${{ matrix.target }})
+  cross-clippy:
+    name: Clippy (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -62,11 +62,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           targets: ${{ matrix.target }}
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: cross-${{ matrix.target }}
-      - name: Check (no default features)
-        run: cargo check --target ${{ matrix.target }}
+      - run: cargo clippy --target ${{ matrix.target }} --all-features -- -D warnings
 
   coverage:
     name: Coverage

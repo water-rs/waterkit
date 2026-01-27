@@ -188,10 +188,26 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
     let obj_file = out_dir.join(format!("{}.o", config.lib_name));
 
     let target = env::var("TARGET").unwrap();
-    let sdk = if target.contains("ios") {
-        "iphoneos"
+    let (sdk, swift_target, swift_runtime_dir) = if target.contains("ios") {
+        let is_simulator = target.contains("ios-sim") || target.contains("apple-ios-sim");
+        let arch = if target.contains("x86_64") {
+            "x86_64"
+        } else {
+            "arm64"
+        };
+        if is_simulator {
+            ("iphonesimulator", format!("{arch}-apple-ios14.0-simulator"), "iphonesimulator")
+        } else {
+            ("iphoneos", format!("{arch}-apple-ios14.0"), "iphoneos")
+        }
     } else {
-        "macosx"
+        // macOS
+        let arch = if target.contains("aarch64") || target.contains("arm64") {
+            "arm64"
+        } else {
+            "x86_64"
+        };
+        ("macosx", format!("{arch}-apple-macos12.3"), "macosx")
     };
 
     let sdk_path = String::from_utf8(
@@ -220,13 +236,7 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
         .arg(&combined_swift);
 
     // Add target triple for cross-compilation
-    if target.contains("ios") {
-        swiftc.arg("-target").arg("arm64-apple-ios14.0");
-    } else if target.contains("aarch64") {
-        swiftc.arg("-target").arg("arm64-apple-macos12.3");
-    } else {
-        swiftc.arg("-target").arg("x86_64-apple-macos12.3");
-    }
+    swiftc.arg("-target").arg(&swift_target);
 
     let output = swiftc.output().expect("Failed to run swiftc");
     if !output.status.success() {
@@ -269,7 +279,7 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
         .unwrap()
         .parent()
         .unwrap()
-        .join("lib/swift/macosx");
+        .join(format!("lib/swift/{swift_runtime_dir}"));
     println!("cargo:rustc-link-search=native={}", toolchain_lib.display());
 
     // Link required frameworks
@@ -379,10 +389,25 @@ pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = Swif
 
     // Get SDK path
     let target = env::var("TARGET").unwrap();
-    let sdk = if target.contains("ios") {
-        "iphoneos"
+    let (sdk, swift_target, swift_runtime_dir) = if target.contains("ios") {
+        let is_simulator = target.contains("ios-sim") || target.contains("apple-ios-sim");
+        let arch = if target.contains("x86_64") {
+            "x86_64"
+        } else {
+            "arm64"
+        };
+        if is_simulator {
+            ("iphonesimulator", format!("{arch}-apple-ios14.0-simulator"), "iphonesimulator")
+        } else {
+            ("iphoneos", format!("{arch}-apple-ios14.0"), "iphoneos")
+        }
     } else {
-        "macosx"
+        let arch = if target.contains("aarch64") || target.contains("arm64") {
+            "arm64"
+        } else {
+            "x86_64"
+        };
+        ("macosx", format!("{arch}-apple-macos12.3"), "macosx")
     };
 
     let sdk_path = String::from_utf8(
@@ -414,13 +439,7 @@ pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = Swif
         .arg(&combined_swift);
 
     // Add target triple
-    if target.contains("ios") {
-        swiftc.arg("-target").arg("arm64-apple-ios14.0");
-    } else if target.contains("aarch64") {
-        swiftc.arg("-target").arg("arm64-apple-macos12.3");
-    } else {
-        swiftc.arg("-target").arg("x86_64-apple-macos12.3");
-    }
+    swiftc.arg("-target").arg(&swift_target);
 
     let output = swiftc.output().expect("Failed to run swiftc");
     if !output.status.success() {
@@ -463,7 +482,7 @@ pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = Swif
         .unwrap()
         .parent()
         .unwrap()
-        .join("lib/swift/macosx");
+        .join(format!("lib/swift/{swift_runtime_dir}"));
     println!("cargo:rustc-link-search=native={}", toolchain_lib.display());
 
     // Collect and deduplicate frameworks, always include Foundation

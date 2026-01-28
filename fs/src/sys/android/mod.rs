@@ -1,9 +1,14 @@
+//! Android filesystem implementation using JNI.
+
+#![allow(dead_code)] // Functions and statics are exported for Android app usage
+#![allow(clippy::similar_names)] // JNI variable naming patterns
+
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-/// Embedded DEX bytecode containing FsHelper class.
+/// Embedded DEX bytecode containing `FsHelper` class.
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
 /// Cached class loader for the embedded DEX.
@@ -25,11 +30,11 @@ pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> jni::errors::Re
         .l()?;
 
     let cache_path_str: String = env.get_string((&cache_path).into())?.into();
-    let dex_path = format!("{}/waterkit_fs.dex", cache_path_str);
+    let dex_path = format!("{cache_path_str}/waterkit_fs.dex");
 
     // Write DEX bytes to file
     std::fs::write(&dex_path, DEX_BYTES).unwrap_or_else(|e| {
-        eprintln!("Failed to write DEX: {}", e);
+        eprintln!("Failed to write DEX: {e}");
     });
 
     // Create DexClassLoader
@@ -94,7 +99,7 @@ fn call_helper_method(
 pub fn documents_dir_with_context(env: &mut JNIEnv, context: &JObject) -> Option<PathBuf> {
     call_helper_method(env, context, "getDocumentsDir")
         .unwrap_or_else(|e| {
-            eprintln!("Error getting documents dir: {}", e);
+            eprintln!("Error getting documents dir: {e}");
             None
         })
         .map(PathBuf::from)
@@ -103,7 +108,7 @@ pub fn documents_dir_with_context(env: &mut JNIEnv, context: &JObject) -> Option
 pub fn cache_dir_with_context(env: &mut JNIEnv, context: &JObject) -> Option<PathBuf> {
     call_helper_method(env, context, "getCacheDir")
         .unwrap_or_else(|e| {
-            eprintln!("Error getting cache dir: {}", e);
+            eprintln!("Error getting cache dir: {e}");
             None
         })
         .map(PathBuf::from)

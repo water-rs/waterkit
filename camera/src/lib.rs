@@ -6,6 +6,8 @@
 //!
 //! The camera API is fully RAII-based: cameras start streaming when opened
 //! and stop when dropped.
+
+#![allow(clippy::missing_const_for_fn)] // Platform implementations vary
 //!
 //! # Example
 //!
@@ -544,6 +546,9 @@ pub enum CameraError {
     /// Recording error.
     #[error("recording error: {0}")]
     RecordingError(String),
+    /// Platform-specific error.
+    #[error("platform error: {0}")]
+    PlatformError(String),
 }
 
 // ============================================================================

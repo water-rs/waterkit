@@ -1,4 +1,6 @@
-//! Android media control implementation using JNI and MediaSession.
+//! Android media control implementation using JNI and `MediaSession`.
+
+#![allow(dead_code)] // Functions and statics are exported for Android app usage
 
 use crate::{
     MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus,
@@ -7,7 +9,7 @@ use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
 
-/// Embedded DEX bytecode containing MediaSessionHelper class.
+/// Embedded DEX bytecode containing `MediaSessionHelper` class.
 /// Generated at build time by kotlinc + D8.
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
@@ -17,7 +19,8 @@ static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
 /// Initialize the DEX class loader. Must be called with a valid Context.
 ///
 /// # Safety
-/// The `context` must be a valid Android Context JObject.
+///
+/// The `context` must be a valid Android Context `JObject`.
 pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), MediaError> {
     if CLASS_LOADER.get().is_some() {
         return Ok(());
@@ -86,7 +89,7 @@ pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), Medi
 
 use jni::objects::JClass;
 
-/// Get the MediaSessionHelper class.
+/// Get the `MediaSessionHelper` class.
 fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, MediaError> {
     let class_loader = CLASS_LOADER
         .get()
@@ -149,10 +152,8 @@ pub fn set_metadata_with_context(
         .new_string(metadata.artwork_url.as_deref().unwrap_or(""))
         .map_err(|e| MediaError::UpdateFailed(format!("new_string artwork_url: {e}")))?;
 
-    let duration_ms = metadata
-        .duration
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(-1);
+    #[allow(clippy::cast_possible_truncation)]
+    let duration_ms = metadata.duration.map_or(-1, |d| d.as_millis() as i64);
 
     env.call_static_method::<&JClass, _, _>(
         &helper_class,
@@ -184,7 +185,8 @@ pub fn set_playback_state_with_context(
         PlaybackStatus::Playing => 2,
     };
 
-    let position_ms = state.position.map(|d| d.as_millis() as i64).unwrap_or(-1);
+    #[allow(clippy::cast_possible_truncation)]
+    let position_ms = state.position.map_or(-1, |d| d.as_millis() as i64);
 
     env.call_static_method::<&JClass, _, _>(
         &helper_class,
@@ -193,6 +195,7 @@ pub fn set_playback_state_with_context(
         &[
             JValue::Int(status),
             JValue::Long(position_ms),
+            #[allow(clippy::cast_possible_truncation)]
             JValue::Float(state.rate as f32),
         ],
     )
@@ -251,18 +254,21 @@ impl MediaCenterInner {
         ))
     }
 
+    #[allow(clippy::unused_self)]
     pub fn set_metadata(&self, _metadata: &MediaMetadata) -> Result<(), MediaError> {
         Err(MediaError::InitializationFailed(
             "Android: use set_metadata_with_context()".into(),
         ))
     }
 
+    #[allow(clippy::unused_self)]
     pub fn set_playback_state(&self, _state: &PlaybackState) -> Result<(), MediaError> {
         Err(MediaError::InitializationFailed(
             "Android: use set_playback_state_with_context()".into(),
         ))
     }
 
+    #[allow(clippy::unused_self)]
     pub fn set_command_handler(
         &self,
         _handler: Box<dyn MediaCommandHandler>,
@@ -273,31 +279,37 @@ impl MediaCenterInner {
         ))
     }
 
+    #[allow(clippy::unused_self)]
     pub fn request_audio_focus(&self) -> Result<(), MediaError> {
         Err(MediaError::InitializationFailed(
             "Android: use request_audio_focus_with_context()".into(),
         ))
     }
 
+    #[allow(clippy::unused_self)]
     pub fn abandon_audio_focus(&self) -> Result<(), MediaError> {
         Err(MediaError::InitializationFailed(
             "Android: use abandon_audio_focus_with_context()".into(),
         ))
     }
 
+    #[allow(clippy::unused_self)]
     pub fn clear(&self) -> Result<(), MediaError> {
         Err(MediaError::InitializationFailed(
             "Android: use clear_session()".into(),
         ))
     }
 
-    pub fn update(&self, _metadata: &MediaMetadata, _state: &PlaybackState) {
+    #[allow(clippy::unused_self)]
+    pub const fn update(&self, _metadata: &MediaMetadata, _state: &PlaybackState) {
         // No-op - Android uses Context-based static methods
     }
 
-    pub fn run_loop(&self, _duration: std::time::Duration) {}
+    #[allow(clippy::unused_self)]
+    pub const fn run_loop(&self, _duration: std::time::Duration) {}
 
-    pub fn poll_command(&self) -> Option<MediaCommand> {
+    #[allow(clippy::unused_self)]
+    pub const fn poll_command(&self) -> Option<MediaCommand> {
         None
     }
 }

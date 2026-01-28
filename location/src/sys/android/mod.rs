@@ -1,12 +1,16 @@
 //! Android location implementation using JNI.
 
+#![allow(dead_code)] // Functions and statics are exported for Android app usage
+#![allow(clippy::similar_names)] // JNI variable naming patterns
+
 use crate::{Location, LocationError, Timestamp};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
 
-/// Embedded DEX bytecode containing LocationHelper class.
-/// Generated at build time by kotlinc + D8.
+/// Embedded DEX bytecode containing `LocationHelper` class.
+///
+/// Generated at build time by `kotlinc` + D8.
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
 /// Cached class loader for the embedded DEX.
@@ -15,7 +19,8 @@ static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
 /// Initialize the DEX class loader. Must be called with a valid Context.
 ///
 /// # Safety
-/// The `context` must be a valid Android Context JObject.
+///
+/// The `context` must be a valid Android Context `JObject`.
 pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), LocationError> {
     if CLASS_LOADER.get().is_some() {
         return Ok(());
@@ -137,10 +142,10 @@ pub fn get_location_with_context(
 
     // Parse double array result
     let result_array: jni::objects::JDoubleArray = result.into();
+    #[allow(clippy::cast_sign_loss)]
     let len = env
         .get_array_length(&result_array)
-        .map_err(|e| LocationError::Unknown(format!("get_array_length: {e}")))?
-        as usize;
+        .map_err(|e| LocationError::Unknown(format!("get_array_length: {e}")))? as usize;
 
     if len < 1 {
         return Err(LocationError::NotAvailable);
@@ -172,7 +177,7 @@ pub fn get_location_with_context(
 }
 
 // Async wrapper for the public API (requires runtime context)
-pub(crate) async fn get_location() -> Result<Location, LocationError> {
+pub async fn get_location() -> Result<Location, LocationError> {
     // Without JNI context, we can't get location
     // The application must call get_location_with_context directly
     Err(LocationError::Unknown(

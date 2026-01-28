@@ -1,12 +1,17 @@
 //! Android sensor implementation using JNI.
 
+#![allow(dead_code)] // Functions and statics are exported for Android app usage
+#![allow(clippy::cast_possible_truncation)] // Intentional truncation for timestamps
+#![allow(clippy::cast_sign_loss)] // Array lengths from JNI
+#![allow(clippy::option_if_let_else)] // Pattern used for readability
+
 use crate::{ScalarData, SensorData, SensorError, SensorStream};
 use futures::stream;
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
 
-/// Embedded DEX bytecode containing SensorHelper class.
+/// Embedded DEX bytecode containing `SensorHelper` class.
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
 /// Cached class loader for the embedded DEX.
@@ -41,7 +46,7 @@ fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), SensorEr
     // Remove if exists to handle previous read-only setting
     let _ = std::fs::remove_file(&dex_path);
 
-    log::info!("Initializing DEX loader with path: {}", dex_path);
+    log::info!("Initializing DEX loader with path: {dex_path}");
     std::fs::write(&dex_path, DEX_BYTES)
         .map_err(|e| SensorError::Unknown(format!("write DEX failed: {e}")))?;
 
@@ -85,7 +90,7 @@ fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), SensorEr
             ],
         )
         .map_err(|e| {
-            log::error!("new DexClassLoader failed: {}", e);
+            log::error!("new DexClassLoader failed: {e}");
             SensorError::Unknown(format!("new DexClassLoader: {e}"))
         })?;
 
@@ -205,7 +210,7 @@ pub fn is_sensor_available_with_context(
     context: &JObject,
     sensor_type: i32,
 ) -> Result<bool, SensorError> {
-    log::info!("Checking sensor availability for type {}...", sensor_type);
+    log::info!("Checking sensor availability for type {sensor_type}...");
     init_with_context(env, context)?;
     log::info!("Loading helper class...");
     let helper = load_helper_class(env)?;
@@ -219,13 +224,13 @@ pub fn is_sensor_available_with_context(
             &[JValue::Object(context), JValue::Int(sensor_type)],
         )
         .map_err(|e| {
-            log::error!("isSensorAvailable failed: {}", e);
+            log::error!("isSensorAvailable failed: {e}");
             SensorError::Unknown(format!("isSensorAvailable: {e}"))
         })?
         .z()
         .map_err(|e| SensorError::Unknown(format!("isSensorAvailable result: {e}")))?;
 
-    log::info!("Sensor available: {}", result);
+    log::info!("Sensor available: {result}");
     Ok(result)
 }
 
@@ -382,6 +387,7 @@ pub fn accelerometer_available() -> bool {
     is_sensor_available_internal(1)
 }
 
+#[allow(clippy::unused_async)]
 pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
     read_sensor_internal(1)
 }
@@ -404,6 +410,7 @@ pub fn gyroscope_available() -> bool {
     is_sensor_available_internal(4)
 }
 
+#[allow(clippy::unused_async)]
 pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
     read_sensor_internal(4)
 }
@@ -426,6 +433,7 @@ pub fn magnetometer_available() -> bool {
     is_sensor_available_internal(2)
 }
 
+#[allow(clippy::unused_async)]
 pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
     read_sensor_internal(2)
 }
@@ -448,6 +456,7 @@ pub fn barometer_available() -> bool {
     is_sensor_available_internal(6)
 }
 
+#[allow(clippy::unused_async)]
 pub async fn barometer_read() -> Result<ScalarData, SensorError> {
     read_pressure_internal()
 }
@@ -470,6 +479,7 @@ pub fn ambient_light_available() -> bool {
     is_sensor_available_internal(5)
 }
 
+#[allow(clippy::unused_async)]
 pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
     read_light_internal()
 }

@@ -1,4 +1,8 @@
 //! Android permission implementation using JNI.
+//!
+//! For Android, the async `check`/`request` functions return defaults since they
+//! lack JNI context. Use `init_with_activity` and `check_with_activity` from
+//! your Android app with a valid Activity reference.
 
 use crate::{Permission, PermissionError, PermissionStatus};
 use jni::JNIEnv;
@@ -6,7 +10,7 @@ use jni::objects::{GlobalRef, JObject, JValue};
 use jni::sys::jint;
 use std::sync::OnceLock;
 
-/// Embedded DEX bytecode containing PermissionHelper class.
+/// Embedded DEX bytecode containing `PermissionHelper` class.
 /// Generated at build time by kotlinc + D8.
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
@@ -22,12 +26,11 @@ const PERMISSION_CONTACTS: jint = 4;
 const PERMISSION_CALENDAR: jint = 5;
 
 /// Status constants (must match Kotlin).
-const STATUS_NOT_DETERMINED: jint = 0;
 const STATUS_RESTRICTED: jint = 1;
 const STATUS_DENIED: jint = 2;
 const STATUS_GRANTED: jint = 3;
 
-fn permission_to_jint(permission: Permission) -> jint {
+const fn permission_to_jint(permission: Permission) -> jint {
     match permission {
         Permission::Location => PERMISSION_LOCATION,
         Permission::Camera => PERMISSION_CAMERA,
@@ -38,7 +41,7 @@ fn permission_to_jint(permission: Permission) -> jint {
     }
 }
 
-fn status_from_jint(status: jint) -> PermissionStatus {
+const fn status_from_jint(status: jint) -> PermissionStatus {
     match status {
         STATUS_GRANTED => PermissionStatus::Granted,
         STATUS_DENIED => PermissionStatus::Denied,
@@ -50,7 +53,10 @@ fn status_from_jint(status: jint) -> PermissionStatus {
 /// Initialize the DEX class loader. Must be called with a valid Activity context.
 ///
 /// # Safety
-/// The `activity` must be a valid Android Activity JObject.
+/// The `activity` must be a valid Android Activity `JObject`.
+///
+/// # Errors
+/// Returns a `PermissionError::Unknown` if DEX loading or class loader creation fails.
 pub fn init_with_activity(env: &mut JNIEnv, activity: &JObject) -> Result<(), PermissionError> {
     if CLASS_LOADER.get().is_some() {
         return Ok(());
@@ -119,6 +125,9 @@ pub fn init_with_activity(env: &mut JNIEnv, activity: &JObject) -> Result<(), Pe
 }
 
 /// Check permission using the Activity context.
+///
+/// # Errors
+/// Returns a `PermissionError::Unknown` if JNI method calls fail.
 pub fn check_with_activity(
     env: &mut JNIEnv,
     activity: &JObject,

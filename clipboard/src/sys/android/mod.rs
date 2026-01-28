@@ -1,7 +1,9 @@
-//! Android clipboard implementation using JNI and ndk_context.
+//! Android clipboard implementation using JNI and `ndk_context`.
 
 #![allow(clippy::unnecessary_wraps)] // API consistency with other platforms
 #![allow(clippy::needless_pass_by_ref_mut)] // API consistency with other platforms
+#![allow(clippy::cast_sign_loss)] // JNI integer conversions
+#![allow(clippy::option_if_let_else)] // Pattern used for readability
 
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
@@ -16,7 +18,7 @@ use std::time::Duration;
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
 
-/// Get JNI environment and context from ndk_context.
+/// Get JNI environment and context from `ndk_context`.
 /// Panics if Android context is not available.
 fn get_jni_env_and_context() -> (jni::JavaVM, GlobalRef) {
     let ctx = ndk_context::android_context();
@@ -44,12 +46,12 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), ClipboardError> {
     // Standard DEX loading boilerplate
     let cache_dir = env
         .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
-        .and_then(|v| v.l())
+        .and_then(jni::objects::JValueGen::l)
         .map_err(|e| ClipboardError::Platform(format!("JNI error getCacheDir: {e}")))?;
 
     let cache_path = env
         .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
-        .and_then(|v| v.l())
+        .and_then(jni::objects::JValueGen::l)
         .map_err(|e| ClipboardError::Platform(format!("JNI error getAbsolutePath: {e}")))?;
 
     let dex_path = format!(
@@ -69,7 +71,7 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), ClipboardError> {
 
     let parent_loader = env
         .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
-        .and_then(|v| v.l())
+        .and_then(jni::objects::JValueGen::l)
         .map_err(|e| ClipboardError::Platform(format!("JNI error getClassLoader: {e}")))?;
 
     let dex_class_loader_class = env
@@ -98,9 +100,7 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), ClipboardError> {
 }
 
 fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<jni::objects::JClass<'a>, ClipboardError> {
-    let class_loader = CLASS_LOADER
-        .get()
-        .ok_or_else(|| ClipboardError::Unavailable)?;
+    let class_loader = CLASS_LOADER.get().ok_or(ClipboardError::Unavailable)?;
 
     let helper_class_name = env
         .new_string("waterkit/clipboard/ClipboardHelper")
@@ -113,7 +113,7 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<jni::objects::JClass<'a>
             "(Ljava/lang/String;)Ljava/lang/Class;",
             &[JValue::Object(&helper_class_name)],
         )
-        .and_then(|v| v.l())
+        .and_then(jni::objects::JValueGen::l)
         .map_err(|e| ClipboardError::Platform(format!("JNI error loadClass: {e}")))?;
 
     Ok(helper_class.into())
@@ -170,7 +170,7 @@ impl ClipboardInner {
                     "(Landroid/content/Context;)Z",
                     &[JValue::Object(context)],
                 )
-                .and_then(|v| v.z())
+                .and_then(jni::objects::JValueGen::z)
                 .unwrap_or(false))
         })
         .unwrap_or(false)
@@ -187,7 +187,7 @@ impl ClipboardInner {
                     "(Landroid/content/Context;)Z",
                     &[JValue::Object(context)],
                 )
-                .and_then(|v| v.z())
+                .and_then(jni::objects::JValueGen::z)
                 .unwrap_or(false))
         })
         .unwrap_or(false)
@@ -204,7 +204,7 @@ impl ClipboardInner {
                     "(Landroid/content/Context;)Z",
                     &[JValue::Object(context)],
                 )
-                .and_then(|v| v.z())
+                .and_then(jni::objects::JValueGen::z)
                 .unwrap_or(false))
         })
         .unwrap_or(false)
@@ -221,7 +221,7 @@ impl ClipboardInner {
                     "(Landroid/content/Context;)Z",
                     &[JValue::Object(context)],
                 )
-                .and_then(|v| v.z())
+                .and_then(jni::objects::JValueGen::z)
                 .unwrap_or(false))
         })
         .unwrap_or(false)
@@ -341,7 +341,7 @@ impl ClipboardInner {
                     "(Landroid/content/Context;)I",
                     &[JValue::Object(context)],
                 )
-                .and_then(|v| v.i())
+                .and_then(jni::objects::JValueGen::i)
                 .unwrap_or(-1);
 
             if width <= 0 {
@@ -356,7 +356,7 @@ impl ClipboardInner {
                     "(Landroid/content/Context;)I",
                     &[JValue::Object(context)],
                 )
-                .and_then(|v| v.i())
+                .and_then(jni::objects::JValueGen::i)
                 .unwrap_or(-1);
 
             if height <= 0 {
@@ -535,7 +535,7 @@ impl ClipboardInner {
                     "(Landroid/content/Context;Ljava/lang/String;)Z",
                     &[JValue::Object(context), JValue::Object(&jpath)],
                 )
-                .and_then(|v| v.z())
+                .and_then(jni::objects::JValueGen::z)
                 .unwrap_or(false);
 
             if !success {
@@ -642,7 +642,7 @@ pub fn start_watch()
                                 "(Landroid/content/Context;)Z",
                                 &[JValue::Object(context.as_obj())],
                             )
-                            .and_then(|v| v.z())
+                            .and_then(jni::objects::JValueGen::z)
                             .unwrap_or(false);
                         let has_html = env
                             .call_static_method(
@@ -651,7 +651,7 @@ pub fn start_watch()
                                 "(Landroid/content/Context;)Z",
                                 &[JValue::Object(context.as_obj())],
                             )
-                            .and_then(|v| v.z())
+                            .and_then(jni::objects::JValueGen::z)
                             .unwrap_or(false);
                         let has_files = env
                             .call_static_method(
@@ -660,7 +660,7 @@ pub fn start_watch()
                                 "(Landroid/content/Context;)Z",
                                 &[JValue::Object(context.as_obj())],
                             )
-                            .and_then(|v| v.z())
+                            .and_then(jni::objects::JValueGen::z)
                             .unwrap_or(false);
                         let has_image = env
                             .call_static_method(
@@ -669,7 +669,7 @@ pub fn start_watch()
                                 "(Landroid/content/Context;)Z",
                                 &[JValue::Object(context.as_obj())],
                             )
-                            .and_then(|v| v.z())
+                            .and_then(jni::objects::JValueGen::z)
                             .unwrap_or(false);
                         (has_text, has_html, has_files, has_image)
                     } else {

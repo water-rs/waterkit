@@ -10,11 +10,27 @@
 //! - macOS (via `rfd` / `AppKit`)
 //! - Android (via JNI / Kotlin)
 //! - iOS (via Swift Bridge / `UIKit`)
+//!
+//! ## Android
+//!
+//! On Android, the async APIs return errors since they lack JNI context.
+//! Use the functions in the [`android`] module with a valid `JNIEnv` and Context.
 
 #![warn(missing_docs)]
 
 // Internal platform-specific implementations.
 mod sys;
+
+/// Android-specific JNI functions for dialog handling.
+///
+/// Use these functions when you have access to the Android Context via JNI.
+#[cfg(target_os = "android")]
+pub mod android {
+    pub use crate::sys::android::{
+        init_with_context, load_media_with_context, show_alert_with_context,
+        show_confirm_with_context, show_photo_picker_with_context, Selection,
+    };
+}
 
 mod error;
 pub use error::*;

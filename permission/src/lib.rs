@@ -2,11 +2,29 @@
 //!
 //! This crate provides a unified API for requesting permissions across
 //! iOS, macOS, Android, Windows, and Linux platforms.
+//!
+//! ## Android
+//!
+//! On Android, the async [`check`] and [`request`] functions return defaults since
+//! they lack JNI context. For actual permission handling, use the JNI-aware functions:
+//!
+//! - [`android::init_with_activity`] - Initialize with an Activity
+//! - [`android::check_with_activity`] - Check permission status
+//!
+//! These require a valid Android Activity reference from your app's JNI layer.
 
 #![warn(missing_docs)]
 
 /// Platform-specific implementations.
 mod sys;
+
+/// Android-specific JNI functions for permission handling.
+///
+/// Use these functions when you have access to the Android Activity context via JNI.
+#[cfg(target_os = "android")]
+pub mod android {
+    pub use crate::sys::android::{check_with_activity, init_with_activity};
+}
 
 /// Types of permissions that can be requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

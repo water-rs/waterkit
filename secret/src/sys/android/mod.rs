@@ -1,8 +1,13 @@
+//! Android secret storage implementation using SharedPreferences.
+
+#![allow(dead_code)] // Functions are exported for Android app usage
+#![allow(clippy::similar_names)] // JNI variable naming patterns
+
 use crate::SecretError;
 use jni::JNIEnv;
 use jni::objects::{JObject, JString, JValue};
 
-/// Helper to attach thread and get JNIEnv, but since our API is async and typically
+/// Helper to attach thread and get `JNIEnv`, but since our API is async and typically
 /// waterkit passes context explicitly or assumes a thread-local JNI env is not available,
 /// we need to follow waterkit's pattern.
 ///
@@ -22,7 +27,7 @@ use jni::objects::{JObject, JString, JValue};
 ///
 /// Given `waterkit` modules usually have `sys::android::function_with_context`,
 /// we follow that pattern.
-
+#[allow(clippy::unused_async)]
 pub async fn set(_service: &str, _account: &str, _password: &str) -> Result<(), SecretError> {
     // On Android, we cannot simply run this without context.
     Err(SecretError::System(
@@ -31,6 +36,7 @@ pub async fn set(_service: &str, _account: &str, _password: &str) -> Result<(), 
 }
 
 /// Retrieve a secret (stub, use `get_with_context`).
+#[allow(clippy::unused_async)]
 pub async fn get(_service: &str, _account: &str) -> Result<String, SecretError> {
     Err(SecretError::System(
         "On Android, use `waterkit_secret::android::get_with_context`".into(),
@@ -38,6 +44,7 @@ pub async fn get(_service: &str, _account: &str) -> Result<String, SecretError> 
 }
 
 /// Delete a secret (stub, use `delete_with_context`).
+#[allow(clippy::unused_async)]
 pub async fn delete(_service: &str, _account: &str) -> Result<(), SecretError> {
     Err(SecretError::System(
         "On Android, use `waterkit_secret::android::delete_with_context`".into(),
@@ -83,7 +90,7 @@ pub fn set_with_context(
         .map_err(|e| SecretError::System(e.to_string()))?;
 
     // key = service + ":" + account
-    let key_str = format!("{}:{}", service, account);
+    let key_str = format!("{service}:{account}");
     let key = env
         .new_string(key_str)
         .map_err(|e| SecretError::System(e.to_string()))?;
@@ -108,7 +115,7 @@ pub fn set_with_context(
 }
 
 /// Retrieve a secret using Android Context.
-/// Note: This implementation uses SharedPreferences which is application-private but does not use hardware-backed KeyStore.
+/// Note: This implementation uses `SharedPreferences` which is application-private but does not use hardware-backed `KeyStore`.
 pub fn get_with_context(
     env: &mut JNIEnv,
     context: &JObject,
@@ -130,7 +137,7 @@ pub fn get_with_context(
         .l()
         .map_err(|e| SecretError::System(e.to_string()))?;
 
-    let key_str = format!("{}:{}", service, account);
+    let key_str = format!("{service}:{account}");
     let key = env
         .new_string(key_str)
         .map_err(|e| SecretError::System(e.to_string()))?;
@@ -193,7 +200,7 @@ pub fn delete_with_context(
         .l()
         .map_err(|e| SecretError::System(e.to_string()))?;
 
-    let key_str = format!("{}:{}", service, account);
+    let key_str = format!("{service}:{account}");
     let key = env
         .new_string(key_str)
         .map_err(|e| SecretError::System(e.to_string()))?;

@@ -64,10 +64,9 @@ pub fn get_thermal_state() -> ThermalState {
     // Android thermal statuses map: 0=None, 1=Light, 2=Moderate, 3=Severe, 4=Critical, 5=Emergency, 6=Shutdown
     match result.unwrap_or(-1) {
         0 => ThermalState::Nominal,
-        1 => ThermalState::Fair,
-        2 => ThermalState::Fair,
+        1 | 2 => ThermalState::Fair,
         3 => ThermalState::Serious,
-        4 | 5 | 6 => ThermalState::Critical,
+        4..=6 => ThermalState::Critical,
         _ => ThermalState::Unknown,
     }
 }

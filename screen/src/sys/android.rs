@@ -1,10 +1,18 @@
-//! Android platform implementation using MediaProjection API.
+//! Android platform implementation using `MediaProjection` API.
 //!
 //! Screen capture on Android requires:
+//!
 //! 1. Call `init()` with the application context
-//! 2. Request permission via Activity (call ScreenHelper.getPermissionIntent() from Kotlin)
+//! 2. Request permission via Activity (call `ScreenHelper.getPermissionIntent()` from Kotlin)
 //! 3. Pass the result to `onPermissionResult()`
 //! 4. Call `startCapture()` to begin screen capture
+
+#![allow(clippy::cast_sign_loss)] // JNI array lengths
+#![allow(clippy::cast_possible_truncation)] // Timestamps
+#![allow(clippy::similar_names)] // JNI variable naming patterns
+#![allow(clippy::option_if_let_else)] // Pattern used for readability
+#![allow(clippy::collapsible_if)] // Readability
+#![allow(clippy::needless_pass_by_value)] // API design
 
 use crate::frame::ScreenFrame;
 use crate::stream::StreamConfig;
@@ -12,10 +20,10 @@ use crate::{Error, ScreenInfo};
 use jni::objects::{GlobalRef, JClass, JObject, JValue};
 use jni::JNIEnv;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use wgpu::{Device, Queue};
 
-/// Embedded DEX bytecode containing ScreenHelper class.
+/// Embedded DEX bytecode containing `ScreenHelper` class.
 /// Generated at build time by kotlinc + D8.
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
@@ -122,28 +130,28 @@ fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), Error> {
     Ok(())
 }
 
-/// Get the ScreenHelper class.
+/// Get the `ScreenHelper` class.
 fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, Error> {
-    let class_loader = CLASS_LOADER
+    let loader = CLASS_LOADER
         .get()
         .ok_or_else(|| Error::Platform("Class loader not initialized".into()))?;
 
-    let helper_class_name = env
+    let class_name = env
         .new_string("waterkit.screen.ScreenHelper")
         .map_err(|e| Error::Platform(format!("new_string: {e}")))?;
 
-    let helper_class = env
+    let loaded = env
         .call_method(
-            class_loader.as_obj(),
+            loader.as_obj(),
             "loadClass",
             "(Ljava/lang/String;)Ljava/lang/Class;",
-            &[JValue::Object(&helper_class_name)],
+            &[JValue::Object(&class_name)],
         )
         .map_err(|e| Error::Platform(format!("loadClass: {e}")))?
         .l()
         .map_err(|e| Error::Platform(format!("loadClass result: {e}")))?;
 
-    Ok(helper_class.into())
+    Ok(loaded.into())
 }
 
 /// Initialize the screen module with Android context.
@@ -242,14 +250,15 @@ pub async fn set_brightness(val: f32) -> Result<(), Error> {
     }
 }
 
-/// Raw frame data from Android MediaProjection.
+/// Raw frame data from Android `MediaProjection`.
 struct RawFrame {
     data: Vec<u8>,
     width: u32,
     height: u32,
+    timestamp_ns: u64,
 }
 
-/// Screen stream using MediaProjection.
+/// Screen stream using `MediaProjection`.
 pub struct ScreenStreamInner {
     device: Arc<Device>,
     queue: Arc<Queue>,
@@ -343,6 +352,10 @@ impl ScreenStreamInner {
                                 data: bytes,
                                 width: w,
                                 height: h,
+                                timestamp_ns: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_nanos() as u64)
+                                    .unwrap_or(0),
                             };
                             let _ = sender.try_send(raw);
                         }
@@ -416,7 +429,13 @@ impl ScreenStreamInner {
             },
         );
 
-        ScreenFrame::new(texture, raw.width, raw.height)
+        ScreenFrame::from_texture(
+            Arc::new(texture),
+            raw.width,
+            raw.height,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            raw.timestamp_ns,
+        )
     }
 
     pub const fn dimensions(&self) -> (u32, u32) {

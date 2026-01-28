@@ -15,7 +15,7 @@ pub enum CodecType {
 }
 
 impl CodecType {
-    fn mime_type(self) -> &'static str {
+    const fn mime_type(self) -> &'static str {
         match self {
             Self::H264 => "video/avc",
             Self::H265 => "video/hevc",
@@ -41,10 +41,13 @@ impl fmt::Debug for AndroidDecoder {
     }
 }
 
+// SAFETY: MediaCodec is only accessed from within the struct methods,
+// and we ensure no concurrent mutable access through &self/&mut self.
+#[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for AndroidDecoder {}
 unsafe impl Sync for AndroidDecoder {}
 
-/// Decoded frame from Android MediaCodec (NV12 format).
+/// Decoded frame from Android `MediaCodec` (NV12 format).
 #[derive(Clone)]
 pub struct AndroidFrame {
     /// NV12 data: Y plane followed by interleaved UV plane.
@@ -75,6 +78,7 @@ impl AndroidDecoder {
     /// * `config` - Codec configuration data (avcC for H264, hvcC for H265). Can be None.
     /// * `width` - Video width in pixels
     /// * `height` - Video height in pixels
+    #[allow(clippy::cast_possible_wrap)] // Video dimensions won't exceed i32::MAX
     pub fn new(
         codec_type: CodecType,
         config: Option<&[u8]>,
@@ -138,7 +142,8 @@ impl AndroidDecoder {
 
     /// Decode compressed video data.
     #[allow(clippy::similar_names)] // y_size, uv_size are intentionally similar
-    pub fn decode(&mut self, data: &[u8]) -> Result<Vec<AndroidFrame>, CodecError> {
+    #[allow(clippy::cast_sign_loss)] // MediaCodec API uses signed integers
+    pub fn decode(&self, data: &[u8]) -> Result<Vec<AndroidFrame>, CodecError> {
         use ndk::media::media_codec::{DequeuedInputBufferResult, DequeuedOutputBufferInfoResult};
 
         // Get input buffer
@@ -147,20 +152,21 @@ impl AndroidDecoder {
             .dequeue_input_buffer(Duration::from_millis(100))
             .map_err(|e| CodecError::DecodingFailed(format!("dequeue_input_buffer: {e}")))?;
 
-        let input_buffer = match input_result {
+        let mut input_buffer = match input_result {
             DequeuedInputBufferResult::Buffer(buf) => buf,
             DequeuedInputBufferResult::TryAgainLater => return Ok(Vec::new()),
         };
 
-        let copy_len = data.len().min(input_buffer.buffer().len());
+        let buffer_slice = input_buffer.buffer_mut();
+        let copy_len = data.len().min(buffer_slice.len());
         // SAFETY: We're writing valid data into the buffer
         for (i, byte) in data[..copy_len].iter().enumerate() {
-            input_buffer.buffer()[i] = MaybeUninit::new(*byte);
+            buffer_slice[i] = MaybeUninit::new(*byte);
         }
 
         // Queue the input buffer
-        input_buffer
-            .queue(0..copy_len, 0, 0)
+        self.codec
+            .queue_input_buffer(input_buffer, 0, copy_len, 0, 0)
             .map_err(|e| CodecError::DecodingFailed(format!("queue_input_buffer: {e}")))?;
 
         // Collect output frames
@@ -175,10 +181,7 @@ impl AndroidDecoder {
             match output_result {
                 DequeuedOutputBufferInfoResult::Buffer(output_buffer) => {
                     let info = output_buffer.info();
-                    let buffer_data = self
-                        .codec
-                        .output_buffer(output_buffer.index())
-                        .ok_or_else(|| CodecError::DecodingFailed("output_buffer unavailable".into()))?;
+                    let buffer_data = output_buffer.buffer();
 
                     // Extract NV12 data
                     let y_size = (self.width * self.height) as usize;
@@ -204,8 +207,8 @@ impl AndroidDecoder {
                     frames.push(frame);
 
                     // Release the output buffer
-                    output_buffer
-                        .release(false)
+                    self.codec
+                        .release_output_buffer(output_buffer, false)
                         .map_err(|e| CodecError::DecodingFailed(format!("release_output_buffer: {e}")))?;
                 }
                 DequeuedOutputBufferInfoResult::TryAgainLater
@@ -245,11 +248,15 @@ impl fmt::Debug for AndroidEncoder {
     }
 }
 
+// SAFETY: MediaCodec is only accessed from within the struct methods,
+// and we ensure no concurrent mutable access through &self/&mut self.
+#[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for AndroidEncoder {}
 unsafe impl Sync for AndroidEncoder {}
 
 impl AndroidEncoder {
     /// Create a new Android hardware encoder.
+    #[allow(clippy::cast_possible_wrap)] // Video dimensions won't exceed i32::MAX
     pub fn new(codec_type: CodecType, width: u32, height: u32) -> Result<Self, CodecError> {
         let mime_type = codec_type.mime_type();
 
@@ -289,6 +296,7 @@ impl AndroidEncoder {
 
     /// Encode NV12 data to compressed video.
     #[allow(clippy::similar_names)] // y_size, uv_size are intentionally similar
+    #[allow(clippy::cast_sign_loss)] // MediaCodec API uses signed integers
     pub fn encode_nv12(&mut self, nv12: &[u8]) -> Result<Vec<u8>, CodecError> {
         use ndk::media::media_codec::{DequeuedInputBufferResult, DequeuedOutputBufferInfoResult};
 
@@ -312,7 +320,7 @@ impl AndroidEncoder {
             .dequeue_input_buffer(Duration::from_millis(100))
             .map_err(|e| CodecError::EncodingFailed(format!("dequeue_input_buffer: {e}")))?;
 
-        let input_buffer = match input_result {
+        let mut input_buffer = match input_result {
             DequeuedInputBufferResult::Buffer(buf) => buf,
             DequeuedInputBufferResult::TryAgainLater => {
                 return Err(CodecError::EncodingFailed("No input buffer available".into()));
@@ -321,16 +329,17 @@ impl AndroidEncoder {
 
         // Copy NV12 data to input buffer
         // SAFETY: We're writing valid data into the buffer
+        let buffer_slice = input_buffer.buffer_mut();
         for (i, byte) in nv12.iter().enumerate() {
-            input_buffer.buffer()[i] = MaybeUninit::new(*byte);
+            buffer_slice[i] = MaybeUninit::new(*byte);
         }
 
         // Queue input buffer with timestamp
         let presentation_time_us = self.frame_count * 33333; // ~30fps
         self.frame_count += 1;
 
-        input_buffer
-            .queue(0..expected_size, presentation_time_us, 0)
+        self.codec
+            .queue_input_buffer(input_buffer, 0, expected_size, presentation_time_us as u64, 0)
             .map_err(|e| CodecError::EncodingFailed(format!("queue_input_buffer: {e}")))?;
 
         // Collect encoded output
@@ -345,10 +354,7 @@ impl AndroidEncoder {
             match output_result {
                 DequeuedOutputBufferInfoResult::Buffer(output_buffer) => {
                     let info = output_buffer.info();
-                    let buffer_data = self
-                        .codec
-                        .output_buffer(output_buffer.index())
-                        .ok_or_else(|| CodecError::EncodingFailed("output_buffer unavailable".into()))?;
+                    let buffer_data = output_buffer.buffer();
 
                     let offset = info.offset() as usize;
                     let size = info.size() as usize;
@@ -362,8 +368,8 @@ impl AndroidEncoder {
                         encoded_data.extend_from_slice(&buffer_data[offset..offset + size]);
                     }
 
-                    output_buffer
-                        .release(false)
+                    self.codec
+                        .release_output_buffer(output_buffer, false)
                         .map_err(|e| CodecError::EncodingFailed(format!("release_output_buffer: {e}")))?;
                 }
                 DequeuedOutputBufferInfoResult::TryAgainLater

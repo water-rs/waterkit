@@ -11,6 +11,9 @@ import java.io.File
 
 /**
  * Helper class for clipboard operations on Android.
+ *
+ * Note: Some operations (setImageFromPath, setBinary) require the host app to configure
+ * a FileProvider in AndroidManifest.xml for proper URI sharing.
  */
 object ClipboardHelper {
 
@@ -205,24 +208,18 @@ object ClipboardHelper {
     /**
      * Set image from a file path.
      * Returns true if successful.
+     *
+     * Note: This uses a file:// URI which only works within the same app.
+     * For cross-app sharing, the host app must implement FileProvider.
      */
     @JvmStatic
     fun setImageFromPath(context: Context, path: String): Boolean {
         return try {
-            val bitmap = BitmapFactory.decodeFile(path) ?: return false
+            val file = File(path)
+            if (!file.exists()) return false
 
-            // Save to cache and create content URI
-            val cacheDir = context.cacheDir
-            val imageFile = File(cacheDir, "clipboard_image.png")
-            imageFile.outputStream().use { out ->
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-            }
-
-            val uri = androidx.core.content.FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                imageFile
-            )
+            // Use file:// URI (works within app, but not for cross-app sharing)
+            val uri = Uri.fromFile(file)
 
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                 ?: return false
@@ -236,6 +233,9 @@ object ClipboardHelper {
 
     /**
      * Set binary data with MIME type.
+     *
+     * Note: This saves data to cache and uses a file:// URI which only works within the same app.
+     * For cross-app sharing, the host app must implement FileProvider.
      */
     @JvmStatic
     fun setBinary(context: Context, data: ByteArray, mime: String) {
@@ -246,11 +246,8 @@ object ClipboardHelper {
             val dataFile = File(cacheDir, "clipboard_data.$extension")
             dataFile.writeBytes(data)
 
-            val uri = androidx.core.content.FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                dataFile
-            )
+            // Use file:// URI (works within app, but not for cross-app sharing)
+            val uri = Uri.fromFile(dataFile)
 
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                 ?: return

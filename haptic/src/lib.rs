@@ -2,6 +2,8 @@
 //!
 //! This crate provides a unified API for triggering haptic feedback (vibration)
 //! across iOS, macOS, Android, Windows, and Linux platforms.
+
+#![allow(clippy::missing_const_for_fn)] // Platform implementations vary
 //!
 //! # Example
 //!

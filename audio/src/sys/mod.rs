@@ -4,6 +4,8 @@
 //! - Media center: platform-specific "Now Playing" integration
 //! - Recording: cpal on desktop, native on mobile
 
+#![allow(clippy::redundant_pub_crate)]
+
 use crate::{MediaCommand, MediaMetadata, PlaybackState};
 use std::time::Duration;
 
@@ -89,19 +91,23 @@ impl MediaCenterIntegration {
         Ok(Self { inner })
     }
 
+    #[allow(clippy::missing_const_for_fn)] // Not const on all platforms
     pub fn update(&self, metadata: &MediaMetadata, state: &PlaybackState) {
         self.inner.update(metadata, state);
     }
 
+    #[allow(clippy::let_unit_value, clippy::ignored_unit_patterns, let_underscore_drop)]
     pub fn clear(&self) {
-        self.inner.clear();
+        let _ = self.inner.clear();
     }
 
     // run_loop is now handled internally by platform implementations
+    #[allow(clippy::missing_const_for_fn)] // Not const on all platforms
     pub(crate) fn run_loop(&self, duration: Duration) {
         self.inner.run_loop(duration);
     }
 
+    #[allow(clippy::missing_const_for_fn)] // Not const on all platforms
     pub fn poll_command(&self) -> Option<MediaCommand> {
         self.inner.poll_command()
     }

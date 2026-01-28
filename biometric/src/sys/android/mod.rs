@@ -1,3 +1,9 @@
+//! Android biometric authentication implementation using JNI.
+
+#![allow(dead_code)] // Functions and statics are exported for Android app usage
+#![allow(clippy::similar_names)] // JNI variable naming patterns
+#![allow(clippy::redundant_closure_for_method_calls)] // Clippy false positive
+
 use crate::{BiometricError, BiometricType};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
@@ -10,12 +16,12 @@ static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"
 /// Cached class loader.
 static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
 
-/// Map to store callbacks: pointer -> Sender
+/// Map to store callbacks: pointer -> Sender.
 /// Note: We cast the raw pointer of the Sender to pass to Java, and cast it back.
 /// Using a map might be safer but passing pointer is standard FFI.
-/// However, Box::into_raw gives a pointer.
+/// However, `Box::into_raw` gives a pointer.
 ///
-/// Type of callback: tokio::sync::oneshot::Sender<Result<(), BiometricError>>
+/// Type of callback: `tokio::sync::oneshot::Sender<Result<(), BiometricError>>`
 type BiometricSender = tokio::sync::oneshot::Sender<Result<(), BiometricError>>;
 
 pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), BiometricError> {
@@ -112,29 +118,29 @@ pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), BiometricError> {
 }
 
 fn register_natives(env: &mut JNIEnv) -> Result<(), BiometricError> {
-    let class = get_helper_class(env)?;
+    let helper = get_helper_class(env)?;
     let native_methods = [jni::NativeMethod {
         name: "onResult".into(),
         sig: "(JZLjava/lang/String;)V".into(),
         fn_ptr: Java_waterkit_biometric_BiometricHelper_onResult as *mut _,
     }];
 
-    env.register_native_methods(class, &native_methods)
+    env.register_native_methods(helper, &native_methods)
         .map_err(|e| BiometricError::PlatformError(format!("register_native_methods: {e}")))
 }
 
 fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, BiometricError> {
-    let class_loader = CLASS_LOADER.get().ok_or(BiometricError::PlatformError(
-        "Class loader not initialized".into(),
-    ))?;
+    let loader = CLASS_LOADER
+        .get()
+        .ok_or_else(|| BiometricError::PlatformError("Class loader not initialized".into()))?;
 
     let helper_class_name = env
         .new_string("waterkit.biometric.BiometricHelper")
         .map_err(|e| BiometricError::PlatformError(format!("new_string: {e}")))?;
 
-    let helper_class = env
+    let loaded = env
         .call_method(
-            class_loader.as_obj(),
+            loader.as_obj(),
             "loadClass",
             "(Ljava/lang/String;)Ljava/lang/Class;",
             &[JValue::Object(&helper_class_name)],
@@ -143,7 +149,7 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, BiometricErr
         .l()
         .map_err(|e| BiometricError::PlatformError(format!("loadClass res: {e}")))?;
 
-    Ok(helper_class.into())
+    Ok(loaded.into())
 }
 
 #[unsafe(no_mangle)]
@@ -162,12 +168,12 @@ pub unsafe extern "system" fn Java_waterkit_biometric_BiometricHelper_onResult(
     } else {
         let error_str: String = env
             .get_string(&error_msg)
-            .map(|s| s.into())
-            .unwrap_or_else(|_| "Unknown JNI error".into());
+            .map_or_else(|_| "Unknown JNI error".into(), Into::into);
         let _ = sender.send(Err(BiometricError::Failed(error_str)));
     }
 }
 
+#[allow(clippy::unused_async)]
 pub async fn is_available() -> bool {
     // Stub: need context to check availability.
     // In waterkit, we usually don't have a global context available in pure Rust async functions
@@ -177,10 +183,12 @@ pub async fn is_available() -> bool {
     false
 }
 
+#[allow(clippy::unused_async)]
 pub async fn get_biometric_type() -> Option<BiometricType> {
     None
 }
 
+#[allow(clippy::unused_async)]
 pub async fn authenticate(_reason: &str) -> Result<(), BiometricError> {
     Err(BiometricError::PlatformError(
         "Android requires authenticate_with_context".into(),

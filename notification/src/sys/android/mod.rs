@@ -1,12 +1,16 @@
 //! Android notification implementation using JNI.
 
+#![allow(dead_code)] // Functions and statics are used by Android app via JNI
+#![allow(clippy::similar_names)] // JNI variable naming patterns
+#![allow(clippy::unused_self)] // API consistency
+
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
 
 use crate::{InterruptionLevel, Notification, NotificationError};
 
-/// Embedded DEX bytecode containing NotificationHelper class.
+/// Embedded DEX bytecode containing `NotificationHelper` class.
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
 /// Cached class loader for the embedded DEX.

@@ -6,7 +6,7 @@ pub use desktop::{
 };
 
 #[cfg(target_os = "android")]
-mod android;
+pub mod android;
 #[cfg(target_os = "android")]
 pub use android::{Selection, load_media, show_alert, show_confirm, show_photo_picker};
 

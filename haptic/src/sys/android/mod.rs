@@ -1,11 +1,16 @@
 //! Android haptic implementation using JNI.
 
+#![allow(dead_code)] // Functions and statics are exported for Android app usage
+#![allow(clippy::cast_possible_truncation)] // Intentional truncation for JNI
+#![allow(clippy::similar_names)] // JNI variable naming patterns
+#![allow(clippy::cast_possible_wrap)] // JNI array size conversions
+
 use crate::{HapticError, HapticPattern, HapticStep, Intensity};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
 
-/// Embedded DEX bytecode containing HapticHelper class.
+/// Embedded DEX bytecode containing `HapticHelper` class.
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
 /// Cached class loader for the embedded DEX.
@@ -249,7 +254,7 @@ pub fn play_pattern_with_context(
 }
 
 // Public API stubs - Android requires Context for all haptic operations
-pub fn is_available() -> bool {
+pub const fn is_available() -> bool {
     // Cannot check without context, assume true
     true
 }

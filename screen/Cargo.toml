@@ -13,6 +13,9 @@ categories = ["os", "gui", "multimedia"]
 [lints]
 workspace = true
 
+[build-dependencies]
+waterkit-build.workspace = true
+
 [dependencies]
 thiserror.workspace = true
 wgpu.workspace = true
@@ -31,16 +34,10 @@ objc2.workspace = true
 objc2-foundation = { workspace = true, features = ["NSObject"] }
 objc2-io-surface.workspace = true
 
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
-waterkit-build.workspace = true
-
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
 ndk-context.workspace = true
-
-[target.'cfg(target_os = "android")'.build-dependencies]
-waterkit-build.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }

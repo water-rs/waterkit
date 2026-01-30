@@ -1,11 +1,12 @@
 //! Camera preview test using winit + wgpu.
 //!
 //! Lists cameras, allows selection, and renders the camera feed to a window.
+//! The camera API returns GPU textures directly for zero-copy rendering.
 
+use futures::StreamExt;
 use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant};
-use waterkit_camera::{Camera, CameraInfo, FrameFormat};
+use std::time::Instant;
+use waterkit_camera::{Camera, CameraConfig, CameraInfo, Frame};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -16,14 +17,19 @@ use winit::{
 
 fn main() {
     env_logger::init();
+
+    // Create tokio runtime for async camera operations
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = App::new();
+    let mut app = App::new(rt);
     event_loop.run_app(&mut app).unwrap();
 }
 
 struct App {
+    rt: tokio::runtime::Runtime,
     state: Option<State>,
     cameras: Vec<CameraInfo>,
     selected_camera: usize,
@@ -32,25 +38,20 @@ struct App {
 struct State {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    _config: wgpu::SurfaceConfiguration,
-    camera: Camera,
-    texture: wgpu::Texture,
-    texture_width: u32,
-    texture_height: u32,
-    bind_group: wgpu::BindGroup,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    config: wgpu::SurfaceConfiguration,
+    frame_rx: async_channel::Receiver<Frame>,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     pipeline: wgpu::RenderPipeline,
-    last_dropped_frames: u64,
+    current_frame: Option<Frame>,
     last_fps_update: Instant,
     frame_count: u32,
 }
 
 impl App {
-    fn new() -> Self {
-        // List cameras at startup
+    fn new(rt: tokio::runtime::Runtime) -> Self {
         let cameras = Camera::list().unwrap_or_default();
 
         println!("\n=== Camera Preview ===\n");
@@ -66,37 +67,10 @@ impl App {
         }
 
         Self {
+            rt,
             state: None,
             cameras,
             selected_camera: 0,
-        }
-    }
-
-    fn open_camera(&mut self, index: usize) {
-        if index >= self.cameras.len() {
-            return;
-        }
-
-        let camera_id = &self.cameras[index].id;
-        println!("Opening camera: {}", self.cameras[index].name);
-
-        if let Some(state) = &mut self.state {
-            // Stop existing camera
-            let _ = state.camera.stop();
-
-            // Open new camera
-            match Camera::open(camera_id) {
-                Ok(mut cam) => {
-                    if let Err(e) = cam.start() {
-                        eprintln!("Failed to start camera: {}", e);
-                        return;
-                    }
-                    state.camera = cam;
-                    self.selected_camera = index;
-                    println!("Camera started!");
-                }
-                Err(e) => eprintln!("Failed to open camera: {}", e),
-            }
         }
     }
 }
@@ -117,7 +91,7 @@ impl ApplicationHandler for App {
                 .unwrap(),
         );
 
-        let state = pollster::block_on(State::new(
+        let state = self.rt.block_on(State::new(
             window.clone(),
             &self.cameras[self.selected_camera].id,
         ));
@@ -138,25 +112,29 @@ impl ApplicationHandler for App {
                     match event.logical_key {
                         Key::Named(NamedKey::Escape) => event_loop.exit(),
                         Key::Character(ref c) => {
-                            if let Ok(num) = c.parse::<usize>() {
-                                self.open_camera(num);
+                            if let Ok(num) = c.parse::<usize>()
+                                && num < self.cameras.len()
+                            {
+                                println!(
+                                    "Switching to camera {} not implemented in streaming mode",
+                                    num
+                                );
                             }
                         }
                         _ => {}
                     }
                 }
             }
+            WindowEvent::Resized(new_size) => {
+                if let Some(state) = &mut self.state {
+                    state.config.width = new_size.width.max(1);
+                    state.config.height = new_size.height.max(1);
+                    state.surface.configure(&state.device, &state.config);
+                }
+            }
             WindowEvent::RedrawRequested => {
                 if let Some(state) = &mut self.state {
-                    match state.update() {
-                        true => {
-                            state.render();
-                        }
-                        false => {
-                            // No new frame, sleep briefly to avoid busy loop
-                            thread::sleep(Duration::from_millis(1));
-                        }
-                    }
+                    state.update_and_render();
                     state.window.request_redraw();
                 }
             }
@@ -169,7 +147,6 @@ impl State {
     async fn new(window: Arc<Window>, camera_id: &str) -> Result<Self, String> {
         let size = window.inner_size();
 
-        // Create wgpu instance
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
         let surface = instance
@@ -184,10 +161,13 @@ impl State {
             .await
             .map_err(|_| "No adapter")?;
 
-        let (device, queue): (wgpu::Device, wgpu::Queue) = adapter
+        let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
             .await
             .map_err(|e| format!("Device: {}", e))?;
+
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
 
         let caps = surface.get_capabilities(&adapter);
         let format = caps.formats[0];
@@ -204,34 +184,30 @@ impl State {
         };
         surface.configure(&device, &config);
 
-        // Open camera
-        let mut camera = Camera::open(camera_id).map_err(|e| format!("Camera: {}", e))?;
-        camera.start().map_err(|e| format!("Start: {}", e))?;
+        // Open camera with GPU device
+        let camera_config = CameraConfig::default();
+        let camera = Camera::open(camera_id, camera_config, device.clone(), queue.clone())
+            .await
+            .map_err(|e| format!("Camera: {}", e))?;
 
         let res = camera.resolution();
+        println!("Camera resolution: {}x{}", res.width, res.height);
 
-        // Create texture for camera frames
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("camera_texture"),
-            size: wgpu::Extent3d {
-                width: res.width,
-                height: res.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
+        // Create channel for frames
+        let (frame_tx, frame_rx) = async_channel::bounded::<Frame>(2);
+
+        // Spawn background task to forward frames from stream to channel
+        tokio::spawn(async move {
+            let mut frames = std::pin::pin!(camera.frames());
+            while let Some(frame) = frames.next().await {
+                // Drop old frames if receiver is slow
+                let _ = frame_tx.try_send(frame);
+            }
         });
 
-        let texture_width = res.width;
-        let texture_height = res.height;
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
 
-        // Create bind group layout and bind group
+        // Create bind group layout
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("texture_bind_group_layout"),
             entries: &[
@@ -254,25 +230,10 @@ impl State {
             ],
         });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("texture_bind_group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-
-        // Create shader
+        // Create shader and pipeline
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -307,133 +268,28 @@ impl State {
             cache: None,
         });
 
-        println!("Camera resolution: {}x{}", res.width, res.height);
-
         Ok(Self {
             window,
             surface,
             device,
             queue,
-            _config: config,
-            camera,
-            texture,
-            texture_width,
-            texture_height,
-            bind_group,
+            config,
+            frame_rx,
             bind_group_layout,
             sampler,
             pipeline,
-            last_dropped_frames: 0,
+            current_frame: None,
             last_fps_update: Instant::now(),
             frame_count: 0,
         })
     }
 
-    fn update(&mut self) -> bool {
-        // Check for dropped frames
-        let dropped = self.camera.dropped_frame_count();
-        if dropped > self.last_dropped_frames {
-            println!(
-                "WARN: Dropped {} frames (total: {})",
-                dropped - self.last_dropped_frames,
-                dropped
-            );
-            self.last_dropped_frames = dropped;
+    fn update_and_render(&mut self) {
+        // Try to get latest frame (non-blocking)
+        while let Ok(frame) = self.frame_rx.try_recv() {
+            self.current_frame = Some(frame);
         }
 
-        // Try to get a camera frame
-        if let Ok(frame) = self.camera.get_frame() {
-            // If frame size changed, recreate texture and bind group
-            if frame.width != self.texture_width || frame.height != self.texture_height {
-                println!(
-                    "Frame size changed to {}x{}, recreating texture",
-                    frame.width, frame.height
-                );
-                self.texture_width = frame.width;
-                self.texture_height = frame.height;
-
-                self.texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("camera_texture"),
-                    size: wgpu::Extent3d {
-                        width: frame.width,
-                        height: frame.height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-
-                let view = self
-                    .texture
-                    .create_view(&wgpu::TextureViewDescriptor::default());
-                self.bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("texture_bind_group"),
-                    layout: &self.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
-                        },
-                    ],
-                });
-            }
-
-            // Convert to RGBA and update texture
-            let rgba = match frame.format {
-                FrameFormat::Rgba => frame.data,
-                FrameFormat::Bgra => {
-                    let mut rgba = frame.data;
-                    for chunk in rgba.chunks_exact_mut(4) {
-                        chunk.swap(0, 2);
-                    }
-                    rgba
-                }
-                FrameFormat::Rgb => {
-                    let mut rgba = Vec::with_capacity(frame.data.len() / 3 * 4);
-                    for chunk in frame.data.chunks_exact(3) {
-                        rgba.extend_from_slice(chunk);
-                        rgba.push(255);
-                    }
-                    rgba
-                }
-                _ => frame.to_rgba(),
-            };
-
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &rgba,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(frame.width * 4),
-                    rows_per_image: Some(frame.height),
-                },
-                wgpu::Extent3d {
-                    width: frame.width,
-                    height: frame.height,
-                    depth_or_array_layers: 1,
-                },
-            );
-
-            return true;
-        }
-
-        false
-    }
-
-    fn render(&mut self) {
         // Calculate FPS
         self.frame_count += 1;
         let now = Instant::now();
@@ -446,6 +302,7 @@ impl State {
             self.last_fps_update = now;
         }
 
+        // Render
         let output = match self.surface.get_current_texture() {
             Ok(t) => t,
             Err(_) => return,
@@ -478,53 +335,28 @@ impl State {
             });
 
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.draw(0..6, 0..1);
+            if let Some(frame) = &self.current_frame {
+                let texture_view = frame.view();
+                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("texture_bind_group"),
+                    layout: &self.bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&texture_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                    ],
+                });
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.draw(0..6, 0..1);
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
     }
 }
-
-const SHADER: &str = r#"
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
-    // Full-screen triangle vertices
-    var positions = array<vec2<f32>, 6>(
-        vec2(-1.0, -1.0),
-        vec2( 1.0, -1.0),
-        vec2(-1.0,  1.0),
-        vec2(-1.0,  1.0),
-        vec2( 1.0, -1.0),
-        vec2( 1.0,  1.0),
-    );
-    
-    var uvs = array<vec2<f32>, 6>(
-        vec2(0.0, 1.0),
-        vec2(1.0, 1.0),
-        vec2(0.0, 0.0),
-        vec2(0.0, 0.0),
-        vec2(1.0, 1.0),
-        vec2(1.0, 0.0),
-    );
-    
-    var out: VertexOutput;
-    out.position = vec4(positions[idx], 0.0, 1.0);
-    out.uv = uvs[idx];
-    return out;
-}
-
-@group(0) @binding(0) var t_texture: texture_2d<f32>;
-@group(0) @binding(1) var s_sampler: sampler;
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(t_texture, s_sampler, in.uv);
-}
-"#;

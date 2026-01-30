@@ -1,39 +1,42 @@
 //! Performance benchmark for waterkit-codec.
 //!
-//! Tests encoding performance using:
-//! - Camera input (low pressure - 1080p@30fps typical)
-//! - Screen capture input (high pressure - 4K@120fps capable)
-//!
-//! Measures both hardware accelerated (Apple VideoToolbox) and software (AV1/rav1e) encoders.
+//! Tests encoding performance using hardware accelerated (Apple VideoToolbox) encoders.
+//! Measures throughput with screen capture as input source.
 
-use std::sync::Arc;
 use std::time::Instant;
-use waterkit_codec::{CodecType, Frame, PixelFormat, VideoEncoder};
+use waterkit_codec::{CodecType, Encoder};
 
-fn create_test_frame(width: u32, height: u32) -> Frame {
-    // Create a dummy RGBA frame for testing
-    let size = (width * height * 4) as usize;
-    let data = vec![128u8; size]; // Flat grey
-    Frame {
-        data: Arc::new(data),
-        width,
-        height,
-        format: PixelFormat::Rgba,
-        timestamp_ns: 0,
+fn create_test_nv12(width: u32, height: u32) -> Vec<u8> {
+    // Create a dummy NV12 frame for testing
+    // Y plane: width * height bytes
+    // UV plane: width * height / 2 bytes (interleaved)
+    let y_size = (width * height) as usize;
+    let uv_size = y_size / 2;
+    let mut data = vec![128u8; y_size + uv_size]; // Flat grey
+
+    // Fill Y plane with gradient
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            data[y * width as usize + x] = ((x + y) % 256) as u8;
+        }
     }
+
+    data
 }
 
-fn benchmark_encoder<E: VideoEncoder>(
+fn benchmark_encoder(
     name: &str,
-    encoder: &mut E,
-    frame: &Frame,
+    encoder: &mut Encoder,
+    nv12_data: &[u8],
     iterations: usize,
 ) -> BenchResult {
     println!("\n=== Benchmarking {} ===", name);
 
     // Warmup
     for _ in 0..5 {
-        let _ = encoder.encode(frame);
+        for result in encoder.encode_nv12(nv12_data) {
+            let _ = result;
+        }
     }
 
     // Timed run
@@ -42,9 +45,16 @@ fn benchmark_encoder<E: VideoEncoder>(
     let mut total_bytes = 0usize;
 
     for _ in 0..iterations {
-        if let Ok(data) = encoder.encode(frame) {
-            success_count += 1;
-            total_bytes += data.len();
+        for result in encoder.encode_nv12(nv12_data) {
+            match result {
+                Ok(data) => {
+                    success_count += 1;
+                    total_bytes += data.len();
+                }
+                Err(e) => {
+                    eprintln!("Encode error: {:?}", e);
+                }
+            }
         }
     }
 
@@ -84,7 +94,7 @@ fn main() {
 
     println!("=================================================");
     println!("   Codec Performance Benchmark");
-    println!("   Camera (Low Pressure) + Screen (High Pressure)");
+    println!("   Hardware Encoding (VideoToolbox)");
     println!("=================================================");
 
     let mut results: Vec<BenchResult> = Vec::new();
@@ -92,34 +102,36 @@ fn main() {
     // =====================================================
     // PHASE 1: Camera-like input (1080p, typical webcam)
     // =====================================================
-    println!("\n>>> PHASE 1: Camera Input (Low Pressure - 1080p)");
+    println!("\n>>> PHASE 1: Camera Input (1080p)");
     {
-        let frame = create_test_frame(1920, 1080);
+        let nv12_data = create_test_nv12(1920, 1080);
 
-        // AV1 software
-        println!("\n--- Software AV1 (rav1e) ---");
-        match waterkit_codec::av1::Av1Encoder::new(1920, 1080) {
+        // VideoToolbox H.264
+        println!("\n--- Hardware H.264 (VideoToolbox) ---");
+        match Encoder::new(CodecType::H264, 1920, 1080) {
             Ok(mut encoder) => {
-                results.push(benchmark_encoder("AV1 (1080p)", &mut encoder, &frame, 10));
+                results.push(benchmark_encoder(
+                    "H.264 VT (1080p)",
+                    &mut encoder,
+                    &nv12_data,
+                    100,
+                ));
             }
             Err(e) => println!("  Failed: {:?}", e),
         }
 
-        // VideoToolbox H.264
-        #[cfg(target_vendor = "apple")]
-        {
-            println!("\n--- Hardware H.264 (VideoToolbox) ---");
-            match waterkit_codec::sys::AppleEncoder::new(CodecType::H264) {
-                Ok(mut encoder) => {
-                    results.push(benchmark_encoder(
-                        "H.264 VT (1080p)",
-                        &mut encoder,
-                        &frame,
-                        100,
-                    ));
-                }
-                Err(e) => println!("  Failed: {:?}", e),
+        // VideoToolbox H.265
+        println!("\n--- Hardware H.265 (VideoToolbox) ---");
+        match Encoder::new(CodecType::H265, 1920, 1080) {
+            Ok(mut encoder) => {
+                results.push(benchmark_encoder(
+                    "H.265 VT (1080p)",
+                    &mut encoder,
+                    &nv12_data,
+                    100,
+                ));
             }
+            Err(e) => println!("  Failed: {:?}", e),
         }
     }
 
@@ -144,94 +156,34 @@ fn main() {
         }
     };
 
-    // Benchmark screen capture speed itself
-    println!("\n--- Screen Capture Latency ---");
-    {
-        let start = Instant::now();
-        let iterations = 10;
-        for _ in 0..iterations {
-            let _ = waterkit_screen::capture_screen_raw(0);
-        }
-        let elapsed = start.elapsed();
-        let fps = iterations as f64 / elapsed.as_secs_f64();
-        println!(
-            "  Screen capture: {:.1} FPS ({:.2} ms/frame)",
-            fps,
-            elapsed.as_secs_f64() * 1000.0 / iterations as f64
-        );
-    }
+    let nv12_data = create_test_nv12(screen_width, screen_height);
 
-    // Get a real screen frame for encoding test
-    let screen_frame = match waterkit_screen::capture_screen_raw(0) {
-        Ok(raw) => {
-            println!("  Captured screen: {}x{}", raw.width, raw.height);
-            Frame {
-                data: Arc::new(raw.data),
-                width: raw.width,
-                height: raw.height,
-                format: PixelFormat::Rgba,
-                timestamp_ns: 0,
-            }
-        }
-        Err(e) => {
-            println!("  Screen capture failed: {:?}, using synthetic 4K frame", e);
-            create_test_frame(screen_width, screen_height)
-        }
-    };
-
-    // AV1 on 4K
-    println!("\n--- Software AV1 (rav1e) on 4K ---");
-    match waterkit_codec::av1::Av1Encoder::new(
-        screen_frame.width as usize,
-        screen_frame.height as usize,
-    ) {
+    // VideoToolbox H.264 on 4K
+    println!("\n--- Hardware H.264 (VideoToolbox) on Screen Size ---");
+    match Encoder::new(CodecType::H264, screen_width, screen_height) {
         Ok(mut encoder) => {
             results.push(benchmark_encoder(
-                "AV1 (4K)",
+                "H.264 VT (4K)",
                 &mut encoder,
-                &screen_frame,
-                5,
+                &nv12_data,
+                50,
             ));
         }
         Err(e) => println!("  Failed: {:?}", e),
     }
 
-    // VideoToolbox H.264 on 4K
-    #[cfg(target_vendor = "apple")]
-    {
-        println!("\n--- Hardware H.264 (VideoToolbox) on 4K ---");
-        match waterkit_codec::sys::AppleEncoder::with_size(
-            CodecType::H264,
-            screen_frame.width,
-            screen_frame.height,
-        ) {
-            Ok(mut encoder) => {
-                results.push(benchmark_encoder(
-                    "H.264 VT (4K)",
-                    &mut encoder,
-                    &screen_frame,
-                    50,
-                ));
-            }
-            Err(e) => println!("  Failed: {:?}", e),
+    // VideoToolbox H.265 on 4K
+    println!("\n--- Hardware H.265 (VideoToolbox) on Screen Size ---");
+    match Encoder::new(CodecType::H265, screen_width, screen_height) {
+        Ok(mut encoder) => {
+            results.push(benchmark_encoder(
+                "H.265 VT (4K)",
+                &mut encoder,
+                &nv12_data,
+                50,
+            ));
         }
-
-        println!("\n--- Hardware H.265 (VideoToolbox) on 4K ---");
-        match waterkit_codec::sys::AppleEncoder::with_size(
-            CodecType::H265,
-            screen_frame.width,
-            screen_frame.height,
-        ) {
-            Ok(mut encoder) => {
-                results.push(benchmark_encoder(
-                    "H.265 VT (4K)",
-                    &mut encoder,
-                    &screen_frame,
-                    50,
-                ));
-            }
-            Err(e) => println!("  Failed: {:?}", e),
-        }
+        Err(e) => println!("  Failed: {:?}", e),
     }
 
     // =====================================================

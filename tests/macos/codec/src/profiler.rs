@@ -1,159 +1,141 @@
-//! Quick profiling test for screen capture bottleneck analysis.
+//! Quick profiling test for screen capture performance.
 //!
-//! Compares legacy capture_screen_raw() vs optimized ScreenCapturer.
+//! Tests screenshot latency and GPU streaming capture throughput.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use waterkit_codec::{CodecType, Frame, PixelFormat, VideoEncoder};
+use waterkit_codec::{CodecType, Encoder};
+use waterkit_screen::{ImageFormat, ScreenStream, StreamConfig, screens, screenshot};
 
 const ITERATIONS: usize = 100;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
+
     println!(
-        "Screen Capture Optimization Test ({} iterations each)\n",
+        "Screen Capture Performance Test ({} iterations each)\n",
         ITERATIONS
     );
 
-    // Get initial capture for dimensions
-    let initial = waterkit_screen::capture_screen_raw(0)?;
-    let width = initial.width;
-    let height = initial.height;
-    println!("Screen: {}x{}\n", width, height);
+    // Get screen info
+    let displays = screens()?;
+    let primary = displays
+        .iter()
+        .find(|d| d.is_primary)
+        .unwrap_or(&displays[0]);
+    println!("Screen: {} ({}x{})\n", primary.name, primary.width, primary.height);
 
-    // Test 1: Legacy capture_screen_raw (calls Screen::all() every time)
-    println!("=== Test 1: capture_screen_raw (per-call Screen::all) ===");
+    // Test 1: Screenshot capture (PNG encoding)
+    println!("=== Test 1: Screenshot Capture (PNG) ===");
     {
         let start = Instant::now();
-        let mut total_capture = Duration::ZERO;
-
         for _ in 0..ITERATIONS {
-            let t = Instant::now();
-            let _ = waterkit_screen::capture_screen_raw(0)?;
-            total_capture += t.elapsed();
+            let _ = screenshot(primary, ImageFormat::Png)?;
         }
-
         let total = start.elapsed();
         println!(
-            "Total: {:?}, Avg capture: {:?}/frame, FPS: {:.1}\n",
+            "Total: {:?}, Avg: {:?}/frame, FPS: {:.1}\n",
             total,
-            total_capture / ITERATIONS as u32,
+            total / ITERATIONS as u32,
             ITERATIONS as f64 / total.as_secs_f64()
         );
     }
 
-    // Test 2: Optimized ScreenCapturer (cached Screen handle)
-    println!("=== Test 2: ScreenCapturer (cached handle) ===");
+    // Test 2: GPU Streaming Capture
+    println!("=== Test 2: GPU Streaming Capture ===");
     {
-        let capturer = waterkit_screen::ScreenCapturer::new(0)?;
+        // Create wgpu device
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
+        let device: Arc<wgpu::Device> = Arc::new(device);
+        let queue: Arc<wgpu::Queue> = Arc::new(queue);
 
+        let config = StreamConfig {
+            target_fps: 120,
+            show_cursor: false,
+        };
+
+        let stream = ScreenStream::start(primary, device.clone(), queue.clone(), &config)?;
+
+        // Wait for stream to warm up
+        std::thread::sleep(Duration::from_millis(500));
+
+        println!("Running 5-second capture test...");
+        let duration = Duration::from_secs(5);
         let start = Instant::now();
-        let mut total_capture = Duration::ZERO;
+        let mut frame_count = 0u64;
 
-        for _ in 0..ITERATIONS {
-            let t = Instant::now();
-            let _ = capturer.capture()?;
-            total_capture += t.elapsed();
+        while start.elapsed() < duration {
+            if stream.try_next_frame().is_some() {
+                frame_count += 1;
+            }
         }
 
         let total = start.elapsed();
-        println!(
-            "Total: {:?}, Avg capture: {:?}/frame, FPS: {:.1}\n",
-            total,
-            total_capture / ITERATIONS as u32,
-            ITERATIONS as f64 / total.as_secs_f64()
-        );
+        let fps = frame_count as f64 / total.as_secs_f64();
+        println!("Duration: {:?}", total);
+        println!("Frames captured: {}", frame_count);
+        println!("**GPU Streaming FPS: {:.1}**\n", fps);
     }
 
-    // Test 3: Full pipeline with encoding (old method)
-    println!("=== Test 3: ScreenCapturer + H.265 Encode ===");
+    // Test 3: GPU Streaming + H.265 Encode
+    println!("=== Test 3: GPU Streaming + H.265 Encode ===");
     {
-        let capturer = waterkit_screen::ScreenCapturer::new(0)?;
-        let mut encoder =
-            waterkit_codec::sys::AppleEncoder::with_size(CodecType::H265, width, height)?;
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
+        let device: Arc<wgpu::Device> = Arc::new(device);
+        let queue: Arc<wgpu::Queue> = Arc::new(queue);
+
+        let config = StreamConfig {
+            target_fps: 60,
+            show_cursor: false,
+        };
+
+        let stream = ScreenStream::start(primary, device.clone(), queue.clone(), &config)?;
+        let (width, height) = stream.dimensions();
+
+        let mut encoder = Encoder::new(CodecType::H265, width, height)?;
+
+        // Wait for stream to warm up
+        std::thread::sleep(Duration::from_millis(500));
 
         let start = Instant::now();
-        let mut total_capture = Duration::ZERO;
-        let mut total_encode = Duration::ZERO;
+        let mut capture_time = Duration::ZERO;
+        let mut encode_time = Duration::ZERO;
+        let mut frame_count = 0usize;
 
         for _ in 0..50 {
             let t = Instant::now();
-            let raw = capturer.capture()?;
-            total_capture += t.elapsed();
+            if let Some(frame) = stream.try_next_frame() {
+                capture_time += t.elapsed();
 
-            let frame = Frame {
-                data: Arc::new(raw.data),
-                width: raw.width,
-                height: raw.height,
-                format: PixelFormat::Rgba,
-                timestamp_ns: 0,
-            };
+                // For encoding, we need NV12 data. The frame is a GPU texture.
+                // In a real pipeline, we'd use IOSurface encoding or read back the texture.
+                // For this benchmark, we'll create dummy NV12 data.
+                let y_size = (frame.width() * frame.height()) as usize;
+                let nv12_data = vec![128u8; y_size + y_size / 2];
 
-            let t = Instant::now();
-            let _ = encoder.encode(&frame)?;
-            total_encode += t.elapsed();
+                let t = Instant::now();
+                for result in encoder.encode_nv12(&nv12_data) {
+                    let _ = result;
+                }
+                encode_time += t.elapsed();
+                frame_count += 1;
+            }
         }
 
         let total = start.elapsed();
         println!("Total: {:?}", total);
-        println!(
-            "Avg capture: {:?}, Avg encode: {:?}",
-            total_capture / 50,
-            total_encode / 50
-        );
-        println!("FPS: {:.1}\n", 50.0 / total.as_secs_f64());
-    }
-
-    // Test 4: ScreenCaptureKit streaming (SCKCapturer) - 120fps target
-    println!("=== Test 4: SCKCapturer 120fps Capture (Zero-Copy IOSurface) ===");
-    {
-        match waterkit_screen::SCKCapturer::new() {
-            Some(capturer) => {
-                // Wait for stream to start producing frames
-                std::thread::sleep(Duration::from_millis(500));
-
-                // Reset counter and run timed test
-                capturer.reset_frame_count();
-                let start_seq = capturer.iosurface_sequence();
-
-                println!("Running 5-second capture test...");
-                let duration = Duration::from_secs(5);
-                let start = Instant::now();
-                let mut iosurface_reads = 0u64;
-
-                // Test: poll IOSurface pointers as fast as possible
-                while start.elapsed() < duration {
-                    if capturer.iosurface_ptr().is_some() {
-                        iosurface_reads += 1;
-                    }
-                }
-
-                let total = start.elapsed();
-                let frame_count = capturer.frame_count();
-                let end_seq = capturer.iosurface_sequence();
-                let unique_frames = end_seq - start_seq;
-
-                let sck_fps = frame_count as f64 / total.as_secs_f64();
-                let ios_fps = unique_frames as f64 / total.as_secs_f64();
-
-                println!("Duration: {:?}", total);
-                println!(
-                    "Callback frames (frame_count): {} ({:.1} fps)",
-                    frame_count, sck_fps
-                );
-                println!(
-                    "IOSurface frames (sequence): {} ({:.1} fps)",
-                    unique_frames, ios_fps
-                );
-                println!(
-                    "IOSurface pointer reads: {} ({:.0}/sec)",
-                    iosurface_reads,
-                    iosurface_reads as f64 / total.as_secs_f64()
-                );
-                println!("**Zero-Copy IOSurface FPS: {:.1}**", ios_fps);
-            }
-            None => {
-                println!("SCKCapturer not available (requires macOS 12.3+)");
-            }
+        println!("Frames processed: {}", frame_count);
+        if frame_count > 0 {
+            println!(
+                "Avg capture: {:?}, Avg encode: {:?}",
+                capture_time / frame_count as u32,
+                encode_time / frame_count as u32
+            );
+            println!("FPS: {:.1}\n", frame_count as f64 / total.as_secs_f64());
         }
     }
 

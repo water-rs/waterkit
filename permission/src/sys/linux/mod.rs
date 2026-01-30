@@ -5,7 +5,7 @@
 //! - Desktop portal systems (Flatpak/Snap sandboxing)
 //! - User groups (e.g., 'video' group for camera access)
 //!
-//! For GeoClue (location), the application just needs to connect to the D-Bus service.
+//! For `GeoClue` (location), the application just needs to connect to the D-Bus service.
 
 use crate::{Permission, PermissionError, PermissionStatus};
 

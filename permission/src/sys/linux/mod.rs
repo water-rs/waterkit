@@ -9,13 +9,13 @@
 
 use crate::{Permission, PermissionError, PermissionStatus};
 
-pub(crate) async fn check(_permission: Permission) -> PermissionStatus {
+pub async fn check(_permission: Permission) -> PermissionStatus {
     // Linux permissions are generally handled at the OS/container level
     // Applications typically have access unless sandboxed
     PermissionStatus::Granted
 }
 
-pub(crate) async fn request(_permission: Permission) -> Result<PermissionStatus, PermissionError> {
+pub async fn request(_permission: Permission) -> Result<PermissionStatus, PermissionError> {
     // No runtime permission prompts on traditional Linux
     // Sandboxed apps (Flatpak/Snap) use portals which handle this differently
     Ok(PermissionStatus::Granted)

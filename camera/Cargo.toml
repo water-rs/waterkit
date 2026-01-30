@@ -13,6 +13,9 @@ categories = ["multimedia::video", "gui"]
 [lints]
 workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["waterkit-codec"]
+
 [dependencies]
 thiserror = { workspace = true }
 wgpu.workspace = true

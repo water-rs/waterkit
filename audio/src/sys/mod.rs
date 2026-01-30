@@ -96,7 +96,11 @@ impl MediaCenterIntegration {
         self.inner.update(metadata, state);
     }
 
-    #[allow(clippy::let_unit_value, clippy::ignored_unit_patterns, let_underscore_drop)]
+    #[allow(
+        clippy::let_unit_value,
+        clippy::ignored_unit_patterns,
+        let_underscore_drop
+    )]
     pub fn clear(&self) {
         let _ = self.inner.clear();
     }

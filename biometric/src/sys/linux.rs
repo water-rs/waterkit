@@ -176,14 +176,26 @@ async fn wait_for_verification(
             if done {
                 match result.as_str() {
                     "verify-match" => Ok(()),
-                    "verify-no-match" => Err(BiometricError::Failed("Fingerprint did not match".into())),
+                    "verify-no-match" => {
+                        Err(BiometricError::Failed("Fingerprint did not match".into()))
+                    }
                     "verify-retry-scan" => Err(BiometricError::Failed("Please try again".into())),
-                    "verify-swipe-too-short" => Err(BiometricError::Failed("Swipe was too short".into())),
-                    "verify-finger-not-centered" => Err(BiometricError::Failed("Finger not centered".into())),
-                    "verify-remove-and-retry" => Err(BiometricError::Failed("Remove and retry".into())),
-                    "verify-disconnected" => Err(BiometricError::PlatformError("Device disconnected".into())),
+                    "verify-swipe-too-short" => {
+                        Err(BiometricError::Failed("Swipe was too short".into()))
+                    }
+                    "verify-finger-not-centered" => {
+                        Err(BiometricError::Failed("Finger not centered".into()))
+                    }
+                    "verify-remove-and-retry" => {
+                        Err(BiometricError::Failed("Remove and retry".into()))
+                    }
+                    "verify-disconnected" => {
+                        Err(BiometricError::PlatformError("Device disconnected".into()))
+                    }
                     "verify-unknown-error" => Err(BiometricError::Failed("Unknown error".into())),
-                    other => Err(BiometricError::Failed(format!("Verification failed: {other}"))),
+                    other => Err(BiometricError::Failed(format!(
+                        "Verification failed: {other}"
+                    ))),
                 }
             } else {
                 // Not done yet, but for simplicity we'll treat intermediate as retry needed

@@ -195,7 +195,8 @@ impl AndroidDecoder {
 
                     let mut nv12_data = vec![0u8; frame_size];
                     let copy_size = actual_size.min(frame_size);
-                    nv12_data[..copy_size].copy_from_slice(&buffer_data[offset..offset + copy_size]);
+                    nv12_data[..copy_size]
+                        .copy_from_slice(&buffer_data[offset..offset + copy_size]);
 
                     let frame = AndroidFrame {
                         data: nv12_data,
@@ -209,7 +210,9 @@ impl AndroidDecoder {
                     // Release the output buffer
                     self.codec
                         .release_output_buffer(output_buffer, false)
-                        .map_err(|e| CodecError::DecodingFailed(format!("release_output_buffer: {e}")))?;
+                        .map_err(|e| {
+                            CodecError::DecodingFailed(format!("release_output_buffer: {e}"))
+                        })?;
                 }
                 DequeuedOutputBufferInfoResult::TryAgainLater
                 | DequeuedOutputBufferInfoResult::OutputFormatChanged
@@ -323,7 +326,9 @@ impl AndroidEncoder {
         let mut input_buffer = match input_result {
             DequeuedInputBufferResult::Buffer(buf) => buf,
             DequeuedInputBufferResult::TryAgainLater => {
-                return Err(CodecError::EncodingFailed("No input buffer available".into()));
+                return Err(CodecError::EncodingFailed(
+                    "No input buffer available".into(),
+                ));
             }
         };
 
@@ -339,7 +344,13 @@ impl AndroidEncoder {
         self.frame_count += 1;
 
         self.codec
-            .queue_input_buffer(input_buffer, 0, expected_size, presentation_time_us as u64, 0)
+            .queue_input_buffer(
+                input_buffer,
+                0,
+                expected_size,
+                presentation_time_us as u64,
+                0,
+            )
             .map_err(|e| CodecError::EncodingFailed(format!("queue_input_buffer: {e}")))?;
 
         // Collect encoded output
@@ -370,7 +381,9 @@ impl AndroidEncoder {
 
                     self.codec
                         .release_output_buffer(output_buffer, false)
-                        .map_err(|e| CodecError::EncodingFailed(format!("release_output_buffer: {e}")))?;
+                        .map_err(|e| {
+                            CodecError::EncodingFailed(format!("release_output_buffer: {e}"))
+                        })?;
                 }
                 DequeuedOutputBufferInfoResult::TryAgainLater
                 | DequeuedOutputBufferInfoResult::OutputFormatChanged
@@ -523,9 +536,5 @@ fn parse_hvcc(data: &[u8]) -> Option<Vec<u8>> {
         }
     }
 
-    if csd.is_empty() {
-        None
-    } else {
-        Some(csd)
-    }
+    if csd.is_empty() { None } else { Some(csd) }
 }

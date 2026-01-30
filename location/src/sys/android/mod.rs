@@ -145,7 +145,8 @@ pub fn get_location_with_context(
     #[allow(clippy::cast_sign_loss)]
     let len = env
         .get_array_length(&result_array)
-        .map_err(|e| LocationError::Unknown(format!("get_array_length: {e}")))? as usize;
+        .map_err(|e| LocationError::Unknown(format!("get_array_length: {e}")))?
+        as usize;
 
     if len < 1 {
         return Err(LocationError::NotAvailable);

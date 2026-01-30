@@ -4,8 +4,8 @@
 //! Use the `*_with_context` functions with a valid `JNIEnv` and Context.
 
 use crate::{Dialog, DialogError};
-use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
+use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode containing `DialogHelper` class.

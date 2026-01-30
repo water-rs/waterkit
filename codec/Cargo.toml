@@ -12,7 +12,6 @@ categories = ["multimedia::video", "graphics"]
 
 [dependencies]
 thiserror.workspace = true
-cfg-if.workspace = true
 wgpu.workspace = true
 
 # Software fallback codecs (private, not exposed in public API)

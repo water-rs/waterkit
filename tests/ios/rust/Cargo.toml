@@ -7,10 +7,21 @@ publish = false
 [lib]
 crate-type = ["staticlib"]
 
+[package.metadata.cargo-machete]
+ignored = [
+    "waterkit-audio",
+    "waterkit-codec",
+    "waterkit-dialog",
+    "waterkit-permission",
+    "waterkit-secret",
+    "waterkit-sensor",
+    "waterkit-system",
+    "waterkit-video",
+]
+
 [dependencies]
 swift-bridge.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
-log.workspace = true
 waterkit-sensor.workspace = true
 waterkit-biometric.workspace = true
 waterkit-location.workspace = true

@@ -532,19 +532,34 @@ impl Decoder {
             #[cfg(target_os = "android")]
             DecoderInner::Android(dec) => {
                 let android_frames = dec.decode(data)?;
-                copy_frames_to_buffer(android_frames.into_iter().map(|f| (f.data, f.width, f.height, f.timestamp_ns)), output)
+                copy_frames_to_buffer(
+                    android_frames
+                        .into_iter()
+                        .map(|f| (f.data, f.width, f.height, f.timestamp_ns)),
+                    output,
+                )
             }
 
             #[cfg(target_os = "windows")]
             DecoderInner::Windows(dec) => {
                 let windows_frames = dec.decode(data)?;
-                copy_frames_to_buffer(windows_frames.into_iter().map(|f| (f.data, f.width, f.height, f.timestamp_ns)), output)
+                copy_frames_to_buffer(
+                    windows_frames
+                        .into_iter()
+                        .map(|f| (f.data, f.width, f.height, f.timestamp_ns)),
+                    output,
+                )
             }
 
             #[cfg(target_os = "linux")]
             DecoderInner::Linux(dec) => {
                 let linux_frames = dec.decode(data)?;
-                copy_frames_to_buffer(linux_frames.into_iter().map(|f| (f.data, f.width, f.height, f.timestamp_ns)), output)
+                copy_frames_to_buffer(
+                    linux_frames
+                        .into_iter()
+                        .map(|f| (f.data, f.width, f.height, f.timestamp_ns)),
+                    output,
+                )
             }
 
             #[cfg(all(
@@ -553,7 +568,12 @@ impl Decoder {
             ))]
             DecoderInner::Av1(dec) => {
                 let cpu_frames = dec.decode(data)?;
-                copy_frames_to_buffer(cpu_frames.into_iter().map(|f| (f.data, f.width, f.height, f.timestamp_ns)), output)
+                copy_frames_to_buffer(
+                    cpu_frames
+                        .into_iter()
+                        .map(|f| (f.data, f.width, f.height, f.timestamp_ns)),
+                    output,
+                )
             }
         }
     }
@@ -685,11 +705,7 @@ impl Encoder {
                     CodecType::H265 => sys::linux::CodecType::H265,
                     CodecType::Av1 => unreachable!(),
                 };
-                EncoderInner::Linux(sys::linux::LinuxEncoder::new(
-                    linux_codec,
-                    width,
-                    height,
-                )?)
+                EncoderInner::Linux(sys::linux::LinuxEncoder::new(linux_codec, width, height)?)
             }
 
             #[cfg(not(any(

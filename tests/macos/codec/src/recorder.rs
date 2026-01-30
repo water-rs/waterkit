@@ -112,10 +112,12 @@ fn capture_thread(
 ) {
     // Create wgpu device for this thread
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-        .expect("No GPU adapter");
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-        .expect("Failed to create device");
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .expect("No GPU adapter");
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            .expect("Failed to create device");
     let device = Arc::new(device);
     let queue = Arc::new(queue);
 
@@ -130,8 +132,8 @@ fn capture_thread(
         show_cursor: true,
     };
 
-    let stream = ScreenStream::start(primary, device, queue, &config)
-        .expect("Failed to start stream");
+    let stream =
+        ScreenStream::start(primary, device, queue, &config).expect("Failed to start stream");
 
     // Wait for stream warmup
     std::thread::sleep(Duration::from_millis(500));
@@ -182,13 +184,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("=================================================");
     println!("   Screen Recording Test");
-    println!("   H.265 @ 30fps for {} seconds", RECORDING_DURATION.as_secs());
+    println!(
+        "   H.265 @ 30fps for {} seconds",
+        RECORDING_DURATION.as_secs()
+    );
     println!("   Using async capture pipeline");
     println!("=================================================");
 
     // Get screen info
     let displays = screens()?;
-    let primary = displays.iter().find(|d| d.is_primary).unwrap_or(&displays[0]);
+    let primary = displays
+        .iter()
+        .find(|d| d.is_primary)
+        .unwrap_or(&displays[0]);
     let width = primary.width;
     let height = primary.height;
     println!("Screen: {} ({}x{})", primary.name, width, height);

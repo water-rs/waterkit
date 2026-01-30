@@ -3,17 +3,19 @@
 use crate::CodecError;
 use std::fmt;
 use std::ptr;
-use windows::core::GUID;
 use windows::Win32::Media::MediaFoundation::{
-    IMFMediaType, IMFSample, IMFTransform, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
-    MFStartup, MFTEnumEx, MFT_CATEGORY_VIDEO_DECODER, MFT_CATEGORY_VIDEO_ENCODER,
-    MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT, MFT_INPUT_STREAM_INFO,
+    IMFMediaType, IMFSample, IMFTransform, MF_E_TRANSFORM_NEED_MORE_INPUT, MF_MT_FRAME_RATE,
+    MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_VERSION,
+    MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFSTARTUP_NOSOCKET, MFStartup,
+    MFT_CATEGORY_VIDEO_DECODER, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE,
+    MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT, MFT_INPUT_STREAM_INFO,
     MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
-    MFT_OUTPUT_STREAM_INFO, MF_E_TRANSFORM_NEED_MORE_INPUT, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
-    MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_VERSION, MFSTARTUP_NOSOCKET,
-    MFVideoInterlace_Progressive,
+    MFT_OUTPUT_STREAM_INFO, MFTEnumEx, MFVideoInterlace_Progressive,
 };
-use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
+use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+};
+use windows::core::GUID;
 
 // Media Foundation GUIDs
 const MF_MT_AVG_BITRATE: GUID = GUID::from_u128(0x20332624_fb0d_4d9e_bd0d_cbf6786c102e);
@@ -216,9 +218,11 @@ impl WindowsDecoder {
                 };
 
                 let mut status = 0u32;
-                let result = self
-                    .transform
-                    .ProcessOutput(0, std::slice::from_mut(&mut output_buffer), &mut status);
+                let result = self.transform.ProcessOutput(
+                    0,
+                    std::slice::from_mut(&mut output_buffer),
+                    &mut status,
+                );
 
                 match result {
                     Ok(()) => {
@@ -306,9 +310,7 @@ impl WindowsEncoder {
 
             // Set output type first for encoders
             let output_type = create_video_type(codec_type.subtype(), width, height)?;
-            output_type
-                .SetUINT32(&MF_MT_AVG_BITRATE, 4_000_000)
-                .ok(); // 4 Mbps
+            output_type.SetUINT32(&MF_MT_AVG_BITRATE, 4_000_000).ok(); // 4 Mbps
 
             transform.SetOutputType(0, &output_type, 0).map_err(|e| {
                 CodecError::InitializationFailed(format!("SetOutputType failed: {e}"))
@@ -392,7 +394,9 @@ impl WindowsEncoder {
                 let output_sample = if self.output_stream_info.dwFlags & 0x100 != 0 {
                     None
                 } else {
-                    Some(create_empty_sample(self.output_stream_info.cbSize as usize)?)
+                    Some(create_empty_sample(
+                        self.output_stream_info.cbSize as usize,
+                    )?)
                 };
 
                 let mut output_buffer = MFT_OUTPUT_DATA_BUFFER {
@@ -403,9 +407,11 @@ impl WindowsEncoder {
                 };
 
                 let mut status = 0u32;
-                let result = self
-                    .transform
-                    .ProcessOutput(0, std::slice::from_mut(&mut output_buffer), &mut status);
+                let result = self.transform.ProcessOutput(
+                    0,
+                    std::slice::from_mut(&mut output_buffer),
+                    &mut status,
+                );
 
                 match result {
                     Ok(()) => {
@@ -472,7 +478,9 @@ fn create_video_type(subtype: GUID, width: u32, height: u32) -> Result<IMFMediaT
     }
 }
 
-fn create_register_type_info(subtype: GUID) -> windows::Win32::Media::MediaFoundation::MFT_REGISTER_TYPE_INFO {
+fn create_register_type_info(
+    subtype: GUID,
+) -> windows::Win32::Media::MediaFoundation::MFT_REGISTER_TYPE_INFO {
     windows::Win32::Media::MediaFoundation::MFT_REGISTER_TYPE_INFO {
         guidMajorType: MFMediaType_Video,
         guidSubtype: subtype,
@@ -527,7 +535,11 @@ fn create_empty_sample(size: usize) -> Result<IMFSample, CodecError> {
     }
 }
 
-fn extract_nv12_frame(sample: &IMFSample, width: u32, height: u32) -> Result<WindowsFrame, CodecError> {
+fn extract_nv12_frame(
+    sample: &IMFSample,
+    width: u32,
+    height: u32,
+) -> Result<WindowsFrame, CodecError> {
     unsafe {
         let buffer = sample
             .GetBufferByIndex(0)

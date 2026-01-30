@@ -15,5 +15,4 @@ waterkit-codec.workspace = true
 wgpu.workspace = true
 winit.workspace = true
 pollster.workspace = true
-metal.workspace = true
-objc.workspace = true
+env_logger = "0.11"

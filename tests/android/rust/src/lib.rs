@@ -48,8 +48,10 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
     rt.block_on(async {
         log::info!("=== Generic Android Test Runner ===");
         let java_vm = _env.get_java_vm().unwrap();
-        let mut env = java_vm.get_env().unwrap();
+        let env = java_vm.get_env().unwrap();
         let activity = activity_global.as_obj();
+        // Suppress unused warnings when no features requiring these are enabled
+        let _ = (&env, &activity);
 
         #[cfg(feature = "sensor")]
         {

@@ -145,7 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     && player_ref
                         .metadata()
                         .duration
-                        .map_or(false, |d| player_ref.position() >= d)
+                        .is_some_and(|d| player_ref.position() >= d)
                 {
                     break;
                 }

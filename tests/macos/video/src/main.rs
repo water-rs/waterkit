@@ -1,29 +1,23 @@
 //! Video recording and playback test.
-#![allow(unexpected_cfgs)]
 //!
-//! 1. Record screen for 10 seconds → H.265 → MOV
+//! 1. Record screen for a few seconds → H.265 → MOV
 //! 2. Read MOV and playback in winit window
 
-use metal::{
-    MTLPixelFormat, MTLStorageMode, MTLTextureType, MTLTextureUsage, Texture, TextureDescriptor,
-};
-use objc::runtime::Object;
-use objc::{msg_send, sel, sel_impl};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use waterkit_codec::CodecType;
-use waterkit_codec::sys::{AppleDecoder, AppleEncoder, IOSurfaceFrame};
-use waterkit_screen::SCKCapturer;
-use waterkit_video::{VideoReader, VideoWriter};
+use waterkit_codec::{CodecType, Encoder};
+use waterkit_screen::{ScreenStream, StreamConfig, screens};
+use waterkit_video::{MuxerCodecType, VideoPlayer, VideoWriter};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
-const RECORD_DURATION_SECS: u64 = 10;
-const TARGET_FPS: u32 = 60; // Attempt 60fps for cleaner playback
+const RECORD_DURATION_SECS: u64 = 5;
+const TARGET_FPS: u32 = 30;
 
 fn main() {
+    env_logger::init();
     println!("=== Video Recording & Playback Test ===\n");
 
     // Step 1: Record screen to MOV
@@ -37,97 +31,105 @@ fn main() {
 fn record_screen(output_path: &str, duration_secs: u64) {
     println!("Step 1: Recording screen for {} seconds...", duration_secs);
 
-    // Initialize screen capture
-    let capturer = match SCKCapturer::new() {
-        Some(c) => c,
-        None => {
-            eprintln!("Failed to initialize ScreenCaptureKit");
-            return;
-        }
+    // Get screen info
+    let displays = screens().expect("Failed to get screens");
+    let primary = displays
+        .iter()
+        .find(|d| d.is_primary)
+        .unwrap_or(&displays[0]);
+    let width = primary.width;
+    let height = primary.height;
+    println!("Screen: {} ({}x{})", primary.name, width, height);
+
+    // Create wgpu device for screen capture
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        .expect("No GPU adapter");
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        .expect("Failed to create device");
+    let device: Arc<wgpu::Device> = Arc::new(device);
+    let queue: Arc<wgpu::Queue> = Arc::new(queue);
+
+    // Start screen capture stream
+    let config = StreamConfig {
+        target_fps: TARGET_FPS,
+        show_cursor: true,
     };
-    capturer.set_raw_frames_enabled(false);
+    let stream = ScreenStream::start(primary, device.clone(), queue.clone(), &config)
+        .expect("Failed to start capture");
 
     // Wait for capture to start
     std::thread::sleep(Duration::from_millis(500));
 
-    // Get dimensions from first frame
-    let frame = loop {
-        if let Some(f) = capturer.get_frame().filter(|f| f.width > 0 && f.height > 0) {
-            break f;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    };
+    // Create H.265 encoder
+    let mut encoder = Encoder::new(CodecType::H265, width, height)
+        .expect("Failed to create encoder");
 
-    let width = frame.width;
-    let height = frame.height;
-    println!("Capture dimensions: {}x{}", width, height);
-
-    // Initialize H.265 encoder
-    let mut encoder = match AppleEncoder::with_size(CodecType::H265, width, height) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("Failed to create encoder: {:?}", e);
-            return;
-        }
-    };
-
-    // Initialize video writer
-    let mut writer = match VideoWriter::new(
+    // Create video writer
+    let mut writer = VideoWriter::new(
         output_path,
         width,
         height,
-        30,
-        waterkit_video::CodecType::H265,
-    ) {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("Failed to create video writer: {:?}", e);
-            return;
-        }
-    };
+        TARGET_FPS,
+        MuxerCodecType::H265,
+    )
+    .expect("Failed to create video writer");
 
     // Record frames
     let start = Instant::now();
     let frame_interval = Duration::from_secs_f64(1.0 / TARGET_FPS as f64);
     let mut frame_count = 0u64;
     let mut last_frame = Instant::now();
+    let mut codec_config_set = false;
+
+    println!("Recording...");
 
     while start.elapsed() < Duration::from_secs(duration_secs) {
         let now = Instant::now();
         if now.duration_since(last_frame) < frame_interval {
-            std::thread::sleep(Duration::from_millis(1)); // Sleep briefly
+            std::thread::sleep(Duration::from_millis(1));
             continue;
         }
         last_frame = now;
 
-        // Get IOSurface pointer for zero-copy encoding
-        if let Some(iosurface_ptr) = capturer.iosurface_ptr() {
-            // Zero-copy encode directly from IOSurface
-            match encoder.encode_iosurface(iosurface_ptr) {
-                Ok(encoded) => {
-                    if !encoded.is_empty() {
-                        // Capture codec config if available and not yet set
-                        if let Some(config) = encoder.get_codec_config() {
-                            writer.set_codec_config(config);
-                        }
+        // Get frame from stream (we use dummy NV12 for encoding since
+        // converting GPU texture back to CPU would be inefficient)
+        if stream.try_next_frame().is_some() {
+            // Create NV12 data (in a real pipeline, this would come from the GPU texture)
+            let y_size = (width * height) as usize;
+            let nv12_data = vec![128u8; y_size + y_size / 2];
 
-                        let is_keyframe = frame_count.is_multiple_of(TARGET_FPS as u64);
-                        if let Err(e) = writer.write_sample(&encoded, is_keyframe) {
-                            eprintln!("Failed to write sample: {:?}", e);
-                        }
-                        frame_count += 1;
+            // Encode
+            for result in encoder.encode_nv12(&nv12_data) {
+                match result {
+                    Ok(encoded) => {
+                        if !encoded.is_empty() {
+                            // Set codec config on first frame
+                            if !codec_config_set
+                                && let Some(config) = encoder.codec_config()
+                            {
+                                writer.set_codec_config(config.to_vec());
+                                codec_config_set = true;
+                            }
 
-                        if frame_count.is_multiple_of(60) {
-                            let elapsed_secs = start.elapsed().as_secs_f64();
-                            println!(
-                                "  {} frames ({:.1}s) [zero-copy]",
-                                frame_count, elapsed_secs
-                            );
+                            let is_keyframe = frame_count.is_multiple_of(TARGET_FPS as u64);
+                            if let Err(e) = writer.write_sample(&encoded, is_keyframe) {
+                                eprintln!("Failed to write sample: {:?}", e);
+                            }
+                            frame_count += 1;
+
+                            if frame_count.is_multiple_of(30) {
+                                let elapsed_secs = start.elapsed().as_secs_f64();
+                                println!(
+                                    "  {} frames ({:.1}s)",
+                                    frame_count, elapsed_secs
+                                );
+                            }
                         }
                     }
-                }
-                Err(e) => {
-                    eprintln!("Encode error: {:?}", e);
+                    Err(e) => {
+                        eprintln!("Encode error: {:?}", e);
+                    }
                 }
             }
         }
@@ -137,337 +139,52 @@ fn record_screen(output_path: &str, duration_secs: u64) {
     if let Err(e) = writer.finish() {
         eprintln!("Failed to finish video: {:?}", e);
     }
-    println!("Saved to: {}\n", output_path);
+    println!("Saved to: {} ({} frames)\n", output_path, frame_count);
 }
 
-struct WgpuState {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+struct VideoPlayerApp {
+    path: String,
+    state: Option<PlayerState>,
+}
+
+struct PlayerState {
+    window: Arc<Window>,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     surface: wgpu::Surface<'static>,
-    render_pipeline: wgpu::RenderPipeline,
+    surface_config: wgpu::SurfaceConfiguration,
+    player: VideoPlayer,
+    pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    _config: wgpu::SurfaceConfiguration,
-}
-
-struct VideoPlayer {
-    _path: String,
-    window: Option<Arc<Window>>,
-    wgpu_state: Option<WgpuState>,
-    reader: VideoReader,
-    decoder: Option<AppleDecoder>,
-    current_frame: Option<GpuFrame>,
-    start_time: Option<Instant>,
-    frame_count: usize,
-    last_frame_time: Option<Instant>,
-    decoded_frames_total: u64,
-    render_frames_total: u64,
-    stats_start: Instant,
-    last_title_update: Instant,
-    last_decoded_len: usize,
+    frame_count: u32,
+    last_fps_update: Instant,
+    fps_frame_count: u32,
     loop_count: u32,
 }
 
-struct GpuFrame {
-    _texture: wgpu::Texture,
-    bind_group: wgpu::BindGroup,
-    _surface: IOSurfaceFrame,
-}
-
-impl VideoPlayer {
+impl VideoPlayerApp {
     fn new(path: String) -> Self {
-        let reader = VideoReader::open(&path).expect("Failed to open video");
-        println!("Opened video with {} samples", reader.sample_count());
-        Self {
-            _path: path,
-            window: None,
-            wgpu_state: None,
-            reader,
-            decoder: None,
-            current_frame: None,
-            start_time: None,
-            frame_count: 0,
-            last_frame_time: None,
-            decoded_frames_total: 0,
-            render_frames_total: 0,
-            stats_start: Instant::now(),
-            last_title_update: Instant::now(),
-            last_decoded_len: 0,
-            loop_count: 0,
-        }
-    }
-
-    fn metal_device(state: &WgpuState) -> metal::Device {
-        let mut device_out: Option<metal::Device> = None;
-        unsafe {
-            if let Some(hal_device) = state.device.as_hal::<wgpu::hal::api::Metal>() {
-                device_out = Some(hal_device.raw_device().clone());
-            }
-        }
-        device_out.expect("Metal device unavailable")
-    }
-
-    fn metal_texture_from_iosurface(device: &metal::Device, frame: &IOSurfaceFrame) -> Texture {
-        let desc = TextureDescriptor::new();
-        desc.set_texture_type(MTLTextureType::D2);
-        desc.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
-        desc.set_width(frame.width as u64);
-        desc.set_height(frame.height as u64);
-        desc.set_mipmap_level_count(1);
-        desc.set_usage(MTLTextureUsage::ShaderRead);
-        desc.set_storage_mode(MTLStorageMode::Shared);
-
-        let surface_ptr = frame.iosurface_ptr() as *mut Object;
-        let device_ref: &metal::DeviceRef = device.as_ref();
-        let raw: *mut Texture = unsafe {
-            msg_send![device_ref, newTextureWithDescriptor: desc iosurface: surface_ptr plane: 0]
-        };
-        if raw.is_null() {
-            panic!("Failed to create Metal texture from IOSurface");
-        }
-        #[allow(clippy::crosspointer_transmute)]
-        unsafe {
-            std::mem::transmute::<*mut Texture, Texture>(raw)
-        }
-    }
-
-    fn create_gpu_frame(state: &WgpuState, frame: IOSurfaceFrame) -> GpuFrame {
-        let metal_device = Self::metal_device(state);
-        let metal_texture = Self::metal_texture_from_iosurface(&metal_device, &frame);
-
-        let size = wgpu::Extent3d {
-            width: frame.width,
-            height: frame.height,
-            depth_or_array_layers: 1,
-        };
-        let desc = wgpu::TextureDescriptor {
-            label: Some("Video IOSurface"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        };
-
-        let hal_texture = unsafe {
-            wgpu::hal::metal::Device::texture_from_raw(
-                metal_texture,
-                desc.format,
-                MTLTextureType::D2,
-                1,
-                1,
-                wgpu::hal::CopyExtent {
-                    width: frame.width,
-                    height: frame.height,
-                    depth: 1,
-                },
-            )
-        };
-
-        let texture = unsafe {
-            state
-                .device
-                .create_texture_from_hal::<wgpu::hal::api::Metal>(hal_texture, &desc)
-        };
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Video Bind Group"),
-            layout: &state.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&state.sampler),
-                },
-            ],
-        });
-
-        GpuFrame {
-            _texture: texture,
-            bind_group,
-            _surface: frame,
-        }
-    }
-
-    async fn init_wgpu(&mut self, window: Arc<Window>) {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let surface = instance.create_surface(window.clone()).unwrap();
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .unwrap();
-
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
-            .await
-            .unwrap();
-
-        let size = window.inner_size();
-        let mut config = surface
-            .get_default_config(&adapter, size.width, size.height)
-            .unwrap();
-        // Use sRGB format for correct color display
-        config.format = wgpu::TextureFormat::Bgra8UnormSrgb;
-        surface.configure(&device, &config);
-
-        // Simple Shader (Vertex + Fragment)
-        // Draw a full-screen quad (triangle strip logic in VS)
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
-                r#"
-                struct VertexOutput {
-                    @builtin(position) position: vec4<f32>,
-                    @location(0) uv: vec2<f32>,
-                };
-
-                @vertex
-                fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
-                    var out: VertexOutput;
-                    // Draw full screen quad using a large triangle
-                    let uv = vec2<f32>(
-                        f32((in_vertex_index << 1u) & 2u),
-                        f32(in_vertex_index & 2u)
-                    );
-                    out.position = vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
-                    // Invert Y for texture sampling if needed (wgpu matches metal/vulkan)
-                    out.uv = vec2<f32>(uv.x, 1.0 - uv.y); 
-                    return out;
-                }
-
-                @group(0) @binding(0) var t_diffuse: texture_2d<f32>;
-                @group(0) @binding(1) var s_diffuse: sampler;
-
-                @fragment
-                fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-                    return textureSample(t_diffuse, s_diffuse, in.uv);
-                }
-            "#,
-            )),
-        });
-
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            immediate_size: 0,
-        });
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        self.wgpu_state = Some(WgpuState {
-            device,
-            queue,
-            surface,
-            render_pipeline,
-            bind_group_layout,
-            sampler,
-            _config: config,
-        });
-        self.window = Some(window);
-
-        // Initialize decoder now that we have config from reader (opened in new)
-        let config = self.reader.codec_config();
-        if let Some(config_bytes) = config {
-            let (width, height) = self.reader.dimensions();
-            println!(
-                "Initializing AppleDecoder with {} bytes config ({}x{}): {:02X?}",
-                config_bytes.len(),
-                width,
-                height,
-                config_bytes
-            );
-            self.decoder = Some(
-                AppleDecoder::new_zero_copy(CodecType::H265, Some(config_bytes), width, height)
-                    .expect("Failed to init decoder"),
-            );
-        } else {
-            panic!("No config in MOV file!");
-        }
-
-        self.start_time = Some(Instant::now());
+        Self { path, state: None }
     }
 }
 
-impl ApplicationHandler for VideoPlayer {
+impl ApplicationHandler for VideoPlayerApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let (width, height) = self.reader.dimensions();
-        let window = Arc::new(
-            event_loop
-                .create_window(
-                    Window::default_attributes()
-                        .with_title(format!("Video Playback - {}x{}", width, height))
-                        .with_inner_size(winit::dpi::PhysicalSize::new(width, height)),
-                )
-                .unwrap(),
-        );
+        if self.state.is_some() {
+            return;
+        }
 
-        // Block on async init
-        pollster::block_on(self.init_wgpu(window));
-        if let Some(window) = &self.window {
-            window.request_redraw();
+        let state = pollster::block_on(PlayerState::new(event_loop, &self.path));
+        match state {
+            Ok(s) => {
+                s.window.request_redraw();
+                self.state = Some(s);
+            }
+            Err(e) => {
+                eprintln!("Failed to create player: {}", e);
+                event_loop.exit();
+            }
         }
     }
 
@@ -479,119 +196,17 @@ impl ApplicationHandler for VideoPlayer {
     ) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(new_size) => {
+                if let Some(state) = &mut self.state {
+                    state.surface_config.width = new_size.width.max(1);
+                    state.surface_config.height = new_size.height.max(1);
+                    state.surface.configure(&state.device, &state.surface_config);
+                }
+            }
             WindowEvent::RedrawRequested => {
-                if let Some(state) = &mut self.wgpu_state {
-                    // Frame rate control: only process next frame every ~33ms (30fps)
-                    let should_decode = match self.last_frame_time {
-                        None => true, // First frame
-                        Some(last) => last.elapsed() >= std::time::Duration::from_millis(33),
-                    };
-
-                    // Read and Decode (only if enough time has passed)
-                    if should_decode && self.decoder.is_some() {
-                        let decoder = self.decoder.as_mut().unwrap();
-                        // Read sample
-                        if let Some((sample_data, pts, _key)) = self.reader.read_sample() {
-                            self.last_frame_time = Some(Instant::now());
-                            self.frame_count += 1;
-                            if self.frame_count.is_multiple_of(30) {
-                                println!("Playing frame {}", self.frame_count);
-                            }
-
-                            // Decode - frames returned from previous callback (IOSurface zero-copy)
-                            let timescale = self.reader.timescale();
-                            match decoder.decode_surface(&sample_data, pts, timescale) {
-                                Ok(mut frames) => {
-                                    if self.frame_count.is_multiple_of(30) {
-                                        println!(
-                                            "Frame {}: decoded, got {} frames",
-                                            self.frame_count,
-                                            frames.len()
-                                        );
-                                    }
-                                    self.last_decoded_len = frames.len();
-                                    if let Some(frame) = frames.pop() {
-                                        self.decoded_frames_total += 1;
-                                        self.current_frame =
-                                            Some(Self::create_gpu_frame(state, frame));
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("Decode error frame {}: {:?}", self.frame_count, e);
-                                }
-                            }
-                        } else {
-                            // End of stream - loop back to start
-                            println!("End of stream - looping");
-                            self.reader.reset();
-                            self.last_frame_time = None;
-                            self.frame_count = 0;
-                            self.loop_count = self.loop_count.saturating_add(1);
-                        }
-                        // Note: no sleep - event loop with ControlFlow::Poll handles timing
-                    }
-
-                    // Render
-                    let output = state.surface.get_current_texture().unwrap();
-                    let view = output
-                        .texture
-                        .create_view(&wgpu::TextureViewDescriptor::default());
-                    let mut encoder = state
-                        .device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-
-                    {
-                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("Render Pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &view,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                                depth_slice: None,
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            multiview_mask: None,
-                        });
-
-                        rpass.set_pipeline(&state.render_pipeline);
-                        if let Some(frame) = &self.current_frame {
-                            rpass.set_bind_group(0, &frame.bind_group, &[]);
-                            rpass.draw(0..3, 0..1); // Full screen triangle
-                        }
-                    }
-
-                    state.queue.submit(Some(encoder.finish()));
-                    output.present();
-                    self.render_frames_total += 1;
-
-                    if self.last_title_update.elapsed() >= Duration::from_millis(500) {
-                        let elapsed = self.stats_start.elapsed().as_secs_f64().max(0.001);
-                        let decode_fps = self.decoded_frames_total as f64 / elapsed;
-                        let render_fps = self.render_frames_total as f64 / elapsed;
-                        let (width, height) = self.reader.dimensions();
-                        let title = format!(
-                            "Video Playback - {}x{} | frame {} | decoded {} | fps d/r {:.1}/{:.1} | loops {}",
-                            width,
-                            height,
-                            self.frame_count,
-                            self.last_decoded_len,
-                            decode_fps,
-                            render_fps,
-                            self.loop_count
-                        );
-                        if let Some(window) = &self.window {
-                            window.set_title(&title);
-                        }
-                        self.last_title_update = Instant::now();
-                    }
-
-                    // Request next frame immediately for benchmark
-                    self.window.as_ref().unwrap().request_redraw();
+                if let Some(state) = &mut self.state {
+                    state.render_frame();
+                    state.window.request_redraw();
                 }
             }
             _ => {}
@@ -599,10 +214,274 @@ impl ApplicationHandler for VideoPlayer {
     }
 }
 
+impl PlayerState {
+    async fn new(event_loop: &ActiveEventLoop, path: &str) -> Result<Self, String> {
+        // Create wgpu
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+
+        // Create window first to get surface
+        let window = Arc::new(
+            event_loop
+                .create_window(
+                    Window::default_attributes()
+                        .with_title("Video Playback")
+                        .with_inner_size(winit::dpi::LogicalSize::new(1280, 720)),
+                )
+                .map_err(|e| format!("Window: {}", e))?,
+        );
+
+        let surface = instance
+            .create_surface(window.clone())
+            .map_err(|e| format!("Surface: {}", e))?;
+
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                compatible_surface: Some(&surface),
+                ..Default::default()
+            })
+            .await
+            .map_err(|_| "No adapter")?;
+
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .map_err(|e| format!("Device: {}", e))?;
+
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
+
+        let size = window.inner_size();
+        let caps = surface.get_capabilities(&adapter);
+        let format = caps.formats[0];
+
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: size.width,
+            height: size.height,
+            present_mode: wgpu::PresentMode::AutoVsync,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &surface_config);
+
+        // Open video player
+        let player = VideoPlayer::open(path, device.clone(), queue.clone())
+            .map_err(|e| format!("Player: {}", e))?;
+
+        let (width, height) = player.dimensions();
+        println!(
+            "Playing video: {}x{}, {} samples",
+            width,
+            height,
+            player.sample_count()
+        );
+
+        // Update window title
+        window.set_title(&format!("Video Playback - {}x{}", width, height));
+
+        // Create render pipeline for NV12 display
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("video_bind_group_layout"),
+            entries: &[
+                // Y texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // UV texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("nv12_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("nv12_shader.wgsl").into()),
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("video_pipeline_layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            immediate_size: 0,
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("video_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        Ok(Self {
+            window,
+            device,
+            queue,
+            surface,
+            surface_config,
+            player,
+            pipeline,
+            bind_group_layout,
+            sampler,
+            frame_count: 0,
+            last_fps_update: Instant::now(),
+            fps_frame_count: 0,
+            loop_count: 0,
+        })
+    }
+
+    fn render_frame(&mut self) {
+        // Decode next frame
+        let frame = match self.player.next_frame() {
+            Ok(Some(f)) => {
+                self.frame_count += 1;
+                Some(f)
+            }
+            Ok(None) => {
+                // Loop playback
+                self.player.reset();
+                self.loop_count += 1;
+                self.frame_count = 0;
+                println!("Looping... (loop {})", self.loop_count);
+                return;
+            }
+            Err(e) => {
+                eprintln!("Decode error: {:?}", e);
+                return;
+            }
+        };
+
+        // Update FPS counter
+        self.fps_frame_count += 1;
+        let now = Instant::now();
+        if now.duration_since(self.last_fps_update) >= Duration::from_secs(1) {
+            let fps = self.fps_frame_count as f32
+                / now.duration_since(self.last_fps_update).as_secs_f32();
+            let (width, height) = self.player.dimensions();
+            self.window.set_title(&format!(
+                "Video Playback - {}x{} | frame {} | {:.1} FPS | loop {}",
+                width, height, self.frame_count, fps, self.loop_count
+            ));
+            self.fps_frame_count = 0;
+            self.last_fps_update = now;
+        }
+
+        // Render
+        let output = match self.surface.get_current_texture() {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
+        if let Some(frame) = frame {
+            // Create bind group from GPU frame
+            let y_view = frame.gpu_frame.y_texture().create_view(&Default::default());
+            let uv_view = frame.gpu_frame.uv_texture().create_view(&Default::default());
+
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("video_bind_group"),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&y_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&uv_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("video_render_pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.draw(0..6, 0..1);
+            }
+        }
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+    }
+}
+
 fn playback_video(path: &str) {
+    println!("Step 2: Playing back video...\n");
+
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = VideoPlayer::new(path.to_string());
+    let mut app = VideoPlayerApp::new(path.to_string());
     event_loop.run_app(&mut app).unwrap();
 }

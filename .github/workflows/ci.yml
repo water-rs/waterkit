@@ -48,11 +48,19 @@ jobs:
             libasound2-dev \
             libudev-dev \
             libdav1d-dev \
-            nasm
+            nasm \
+            libavutil-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavfilter-dev \
+            libavdevice-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libclang-dev
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
-          brew install dav1d nasm
+          brew install dav1d nasm ffmpeg
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: clippy
@@ -84,11 +92,19 @@ jobs:
             libasound2-dev \
             libudev-dev \
             libdav1d-dev \
-            nasm
+            nasm \
+            libavutil-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavfilter-dev \
+            libavdevice-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libclang-dev
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
-          brew install dav1d nasm
+          brew install dav1d nasm ffmpeg
       - uses: dtolnay/rust-toolchain@nightly
         with:
           targets: ${{ matrix.target }}
@@ -112,7 +128,15 @@ jobs:
             libasound2-dev \
             libudev-dev \
             libdav1d-dev \
-            nasm
+            nasm \
+            libavutil-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavfilter-dev \
+            libavdevice-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libclang-dev
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
@@ -173,7 +197,15 @@ jobs:
             libasound2-dev \
             libudev-dev \
             libdav1d-dev \
-            nasm
+            nasm \
+            libavutil-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavfilter-dev \
+            libavdevice-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libclang-dev
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:

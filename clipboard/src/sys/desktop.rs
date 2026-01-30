@@ -207,8 +207,7 @@ impl ClipboardHandler for WatchHandler {
             has_files: self
                 .ctx
                 .available_formats()
-                .map(|f| f.iter().any(|s| s.to_lowercase().contains("file")))
-                .unwrap_or(false),
+                .is_ok_and(|f| f.iter().any(|s| s.to_lowercase().contains("file"))),
             has_image: self.ctx.has(clipboard_rs::ContentFormat::Image),
         };
         // Try to send, ignore if receiver dropped

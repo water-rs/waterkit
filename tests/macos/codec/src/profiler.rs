@@ -23,7 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .find(|d| d.is_primary)
         .unwrap_or(&displays[0]);
-    println!("Screen: {} ({}x{})\n", primary.name, primary.width, primary.height);
+    println!(
+        "Screen: {} ({}x{})\n",
+        primary.name, primary.width, primary.height
+    );
 
     // Test 1: Screenshot capture (PNG encoding)
     println!("=== Test 1: Screenshot Capture (PNG) ===");
@@ -46,8 +49,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         // Create wgpu device
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
         let device: Arc<wgpu::Device> = Arc::new(device);
         let queue: Arc<wgpu::Queue> = Arc::new(queue);
 
@@ -83,8 +88,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Test 3: GPU Streaming + H.265 Encode ===");
     {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
         let device: Arc<wgpu::Device> = Arc::new(device);
         let queue: Arc<wgpu::Queue> = Arc::new(queue);
 

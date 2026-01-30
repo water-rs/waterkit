@@ -43,10 +43,12 @@ fn record_screen(output_path: &str, duration_secs: u64) {
 
     // Create wgpu device for screen capture
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-        .expect("No GPU adapter");
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-        .expect("Failed to create device");
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .expect("No GPU adapter");
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            .expect("Failed to create device");
     let device: Arc<wgpu::Device> = Arc::new(device);
     let queue: Arc<wgpu::Queue> = Arc::new(queue);
 
@@ -62,18 +64,12 @@ fn record_screen(output_path: &str, duration_secs: u64) {
     std::thread::sleep(Duration::from_millis(500));
 
     // Create H.265 encoder
-    let mut encoder = Encoder::new(CodecType::H265, width, height)
-        .expect("Failed to create encoder");
+    let mut encoder =
+        Encoder::new(CodecType::H265, width, height).expect("Failed to create encoder");
 
     // Create video writer
-    let mut writer = VideoWriter::new(
-        output_path,
-        width,
-        height,
-        TARGET_FPS,
-        MuxerCodecType::H265,
-    )
-    .expect("Failed to create video writer");
+    let mut writer = VideoWriter::new(output_path, width, height, TARGET_FPS, MuxerCodecType::H265)
+        .expect("Failed to create video writer");
 
     // Record frames
     let start = Instant::now();
@@ -105,9 +101,7 @@ fn record_screen(output_path: &str, duration_secs: u64) {
                     Ok(encoded) => {
                         if !encoded.is_empty() {
                             // Set codec config on first frame
-                            if !codec_config_set
-                                && let Some(config) = encoder.codec_config()
-                            {
+                            if !codec_config_set && let Some(config) = encoder.codec_config() {
                                 writer.set_codec_config(config.to_vec());
                                 codec_config_set = true;
                             }
@@ -120,10 +114,7 @@ fn record_screen(output_path: &str, duration_secs: u64) {
 
                             if frame_count.is_multiple_of(30) {
                                 let elapsed_secs = start.elapsed().as_secs_f64();
-                                println!(
-                                    "  {} frames ({:.1}s)",
-                                    frame_count, elapsed_secs
-                                );
+                                println!("  {} frames ({:.1}s)", frame_count, elapsed_secs);
                             }
                         }
                     }
@@ -200,7 +191,9 @@ impl ApplicationHandler for VideoPlayerApp {
                 if let Some(state) = &mut self.state {
                     state.surface_config.width = new_size.width.max(1);
                     state.surface_config.height = new_size.height.max(1);
-                    state.surface.configure(&state.device, &state.surface_config);
+                    state
+                        .surface
+                        .configure(&state.device, &state.surface_config);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -426,7 +419,10 @@ impl PlayerState {
         if let Some(frame) = frame {
             // Create bind group from GPU frame
             let y_view = frame.gpu_frame.y_texture().create_view(&Default::default());
-            let uv_view = frame.gpu_frame.uv_texture().create_view(&Default::default());
+            let uv_view = frame
+                .gpu_frame
+                .uv_texture()
+                .create_view(&Default::default());
 
             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("video_bind_group"),

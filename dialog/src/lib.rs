@@ -27,8 +27,8 @@ mod sys;
 #[cfg(target_os = "android")]
 pub mod android {
     pub use crate::sys::android::{
-        init_with_context, load_media_with_context, show_alert_with_context,
-        show_confirm_with_context, show_photo_picker_with_context, Selection,
+        Selection, init_with_context, load_media_with_context, show_alert_with_context,
+        show_confirm_with_context, show_photo_picker_with_context,
     };
 }
 

@@ -17,8 +17,8 @@
 use crate::frame::ScreenFrame;
 use crate::stream::StreamConfig;
 use crate::{Error, ScreenInfo};
-use jni::objects::{GlobalRef, JClass, JObject, JValue};
 use jni::JNIEnv;
+use jni::objects::{GlobalRef, JClass, JObject, JValue};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use wgpu::{Device, Queue};
@@ -80,8 +80,7 @@ fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), Error> {
     );
 
     // Write DEX bytes to file
-    std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| Error::Platform(format!("write DEX: {e}")))?;
+    std::fs::write(&dex_path, DEX_BYTES).map_err(|e| Error::Platform(format!("write DEX: {e}")))?;
 
     // Create DexClassLoader
     let dex_path_jstring = env
@@ -335,7 +334,12 @@ impl ScreenStreamInner {
                         if let Ok(bytes) = env.convert_byte_array(&array) {
                             // Get dimensions
                             let dims_result = env
-                                .call_static_method(&helper_class, "getFrameDimensions", "()[I", &[])
+                                .call_static_method(
+                                    &helper_class,
+                                    "getFrameDimensions",
+                                    "()[I",
+                                    &[],
+                                )
                                 .ok()
                                 .and_then(|r| r.l().ok());
 

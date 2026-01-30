@@ -10,7 +10,7 @@ use ffmpeg_next::format::Pixel;
 use ffmpeg_next::frame::Video as VideoFrame;
 use ffmpeg_next::software::scaling::{Context as ScalerContext, Flags};
 use ffmpeg_next::util::frame::video::Video;
-use ffmpeg_next::{codec, decoder, encoder, Packet};
+use ffmpeg_next::{Packet, codec, decoder, encoder};
 use std::fmt;
 use std::sync::Once;
 
@@ -125,10 +125,7 @@ impl LinuxDecoder {
                 })
             })
             .ok_or_else(|| {
-                CodecError::InitializationFailed(format!(
-                    "No decoder found for {:?}",
-                    codec_type
-                ))
+                CodecError::InitializationFailed(format!("No decoder found for {:?}", codec_type))
             })?;
 
         let mut context = Context::new_with_codec(codec);
@@ -163,9 +160,9 @@ impl LinuxDecoder {
         packet.set_pts(Some(0));
         packet.set_dts(Some(0));
 
-        self.decoder.send_packet(&packet).map_err(|e| {
-            CodecError::DecodingFailed(format!("send_packet failed: {e}"))
-        })?;
+        self.decoder
+            .send_packet(&packet)
+            .map_err(|e| CodecError::DecodingFailed(format!("send_packet failed: {e}")))?;
 
         let mut frames = Vec::new();
         let mut decoded_frame = Video::empty();
@@ -214,9 +211,9 @@ impl LinuxDecoder {
 
                 let scaler = self.scaler.as_mut().unwrap();
                 let mut nv12_frame = Video::empty();
-                scaler.run(&decoded_frame, &mut nv12_frame).map_err(|e| {
-                    CodecError::DecodingFailed(format!("Scaling failed: {e}"))
-                })?;
+                scaler
+                    .run(&decoded_frame, &mut nv12_frame)
+                    .map_err(|e| CodecError::DecodingFailed(format!("Scaling failed: {e}")))?;
 
                 extract_nv12(&nv12_frame, width, height)
             };
@@ -278,10 +275,7 @@ impl LinuxEncoder {
                 })
             })
             .ok_or_else(|| {
-                CodecError::InitializationFailed(format!(
-                    "No encoder found for {:?}",
-                    codec_type
-                ))
+                CodecError::InitializationFailed(format!("No encoder found for {:?}", codec_type))
             })?;
 
         let mut context = Context::new_with_codec(codec);
@@ -300,12 +294,9 @@ impl LinuxEncoder {
             encoder.set_gop(30); // Keyframe every 1 second at 30fps
         }
 
-        let encoder = context
-            .encoder()
-            .video()
-            .map_err(|e| {
-                CodecError::InitializationFailed(format!("Failed to open encoder: {e}"))
-            })?;
+        let encoder = context.encoder().video().map_err(|e| {
+            CodecError::InitializationFailed(format!("Failed to open encoder: {e}"))
+        })?;
 
         Ok(Self {
             encoder,
@@ -362,9 +353,9 @@ impl LinuxEncoder {
         self.frame_count += 1;
 
         // Send frame to encoder
-        self.encoder.send_frame(&frame).map_err(|e| {
-            CodecError::EncodingFailed(format!("send_frame failed: {e}"))
-        })?;
+        self.encoder
+            .send_frame(&frame)
+            .map_err(|e| CodecError::EncodingFailed(format!("send_frame failed: {e}")))?;
 
         // Collect encoded packets
         let mut encoded_data = Vec::new();

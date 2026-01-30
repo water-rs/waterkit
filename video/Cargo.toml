@@ -17,7 +17,6 @@ workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
 futures.workspace = true
-async-channel.workspace = true
 
 # MP4/MOV container support
 byteorder = { workspace = true }

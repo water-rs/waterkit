@@ -34,7 +34,10 @@ enum DecodedFrameInner {
     /// Available on non-Apple platforms, or desktop Apple platforms with software-fallback.
     #[cfg(any(
         not(target_vendor = "apple"),
-        all(target_vendor = "apple", not(any(target_os = "ios", target_os = "tvos", target_os = "watchos")))
+        all(
+            target_vendor = "apple",
+            not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
+        )
     ))]
     Software {
         data: Vec<u8>,
@@ -76,7 +79,10 @@ impl DecodedFrame {
     /// Create a decoded frame from NV12 software decode output.
     #[cfg(any(
         not(target_vendor = "apple"),
-        all(target_vendor = "apple", not(any(target_os = "ios", target_os = "tvos", target_os = "watchos")))
+        all(
+            target_vendor = "apple",
+            not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
+        )
     ))]
     pub(crate) const fn from_nv12_data(
         data: Vec<u8>,
@@ -102,7 +108,10 @@ impl DecodedFrame {
             DecodedFrameInner::Hardware { width, .. } => *width,
             #[cfg(any(
                 not(target_vendor = "apple"),
-                all(target_vendor = "apple", not(any(target_os = "ios", target_os = "tvos", target_os = "watchos")))
+                all(
+                    target_vendor = "apple",
+                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
+                )
             ))]
             DecodedFrameInner::Software { width, .. } => *width,
         }
@@ -116,7 +125,10 @@ impl DecodedFrame {
             DecodedFrameInner::Hardware { height, .. } => *height,
             #[cfg(any(
                 not(target_vendor = "apple"),
-                all(target_vendor = "apple", not(any(target_os = "ios", target_os = "tvos", target_os = "watchos")))
+                all(
+                    target_vendor = "apple",
+                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
+                )
             ))]
             DecodedFrameInner::Software { height, .. } => *height,
         }
@@ -130,7 +142,10 @@ impl DecodedFrame {
             DecodedFrameInner::Hardware { timestamp_ns, .. } => *timestamp_ns,
             #[cfg(any(
                 not(target_vendor = "apple"),
-                all(target_vendor = "apple", not(any(target_os = "ios", target_os = "tvos", target_os = "watchos")))
+                all(
+                    target_vendor = "apple",
+                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
+                )
             ))]
             DecodedFrameInner::Software { timestamp_ns, .. } => *timestamp_ns,
         }
@@ -155,7 +170,10 @@ impl DecodedFrame {
             }
             #[cfg(any(
                 not(target_vendor = "apple"),
-                all(target_vendor = "apple", not(any(target_os = "ios", target_os = "tvos", target_os = "watchos")))
+                all(
+                    target_vendor = "apple",
+                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
+                )
             ))]
             DecodedFrameInner::Software {
                 data,
@@ -191,7 +209,10 @@ impl DecodedFrame {
             }
             #[cfg(any(
                 not(target_vendor = "apple"),
-                all(target_vendor = "apple", not(any(target_os = "ios", target_os = "tvos", target_os = "watchos")))
+                all(
+                    target_vendor = "apple",
+                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
+                )
             ))]
             DecodedFrameInner::Software { data, .. } => {
                 output[..data.len()].copy_from_slice(data);

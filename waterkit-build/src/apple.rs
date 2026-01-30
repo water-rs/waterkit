@@ -196,7 +196,11 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
             "arm64"
         };
         if is_simulator {
-            ("iphonesimulator", format!("{arch}-apple-ios14.0-simulator"), "iphonesimulator")
+            (
+                "iphonesimulator",
+                format!("{arch}-apple-ios14.0-simulator"),
+                "iphonesimulator",
+            )
         } else {
             ("iphoneos", format!("{arch}-apple-ios14.0"), "iphoneos")
         }
@@ -397,7 +401,11 @@ pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = Swif
             "arm64"
         };
         if is_simulator {
-            ("iphonesimulator", format!("{arch}-apple-ios14.0-simulator"), "iphonesimulator")
+            (
+                "iphonesimulator",
+                format!("{arch}-apple-ios14.0-simulator"),
+                "iphonesimulator",
+            )
         } else {
             ("iphoneos", format!("{arch}-apple-ios14.0"), "iphoneos")
         }

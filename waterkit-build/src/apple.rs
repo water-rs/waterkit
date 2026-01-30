@@ -1,6 +1,5 @@
 //! Apple platform build utilities.
 
-use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
 
@@ -494,6 +493,7 @@ pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = Swif
     println!("cargo:rustc-link-search=native={}", toolchain_lib.display());
 
     // Collect and deduplicate frameworks, always include Foundation
+    use std::collections::HashSet;
     let mut frameworks: HashSet<String> = HashSet::new();
     frameworks.insert("Foundation".to_string());
     for krate in &crates {

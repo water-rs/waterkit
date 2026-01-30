@@ -61,6 +61,18 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install dav1d nasm ffmpeg
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        run: |
+          vcpkg install dav1d:x64-windows ffmpeg:x64-windows
+        env:
+          VCPKG_ROOT: C:\vcpkg
+      - name: Set Windows pkg-config paths
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "PKG_CONFIG_PATH=C:/vcpkg/installed/x64-windows/lib/pkgconfig" >> $GITHUB_ENV
+          echo "C:/vcpkg/installed/x64-windows/bin" >> $GITHUB_PATH
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: clippy

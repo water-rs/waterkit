@@ -1,6 +1,7 @@
 use crate::SecretError;
 use keyring::Entry;
 
+#[allow(clippy::unused_async)]
 pub async fn set(service: &str, account: &str, password: &str) -> Result<(), SecretError> {
     let entry = Entry::new(service, account).map_err(|e| SecretError::System(e.to_string()))?;
 
@@ -9,6 +10,7 @@ pub async fn set(service: &str, account: &str, password: &str) -> Result<(), Sec
         .map_err(|e| SecretError::System(e.to_string()))
 }
 
+#[allow(clippy::unused_async)]
 pub async fn get(service: &str, account: &str) -> Result<String, SecretError> {
     let entry = Entry::new(service, account).map_err(|e| SecretError::System(e.to_string()))?;
 
@@ -19,12 +21,12 @@ pub async fn get(service: &str, account: &str) -> Result<String, SecretError> {
     }
 }
 
+#[allow(clippy::unused_async)]
 pub async fn delete(service: &str, account: &str) -> Result<(), SecretError> {
     let entry = Entry::new(service, account).map_err(|e| SecretError::System(e.to_string()))?;
 
     match entry.delete_credential() {
-        Ok(_) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(SecretError::System(e.to_string())),
     }
 }

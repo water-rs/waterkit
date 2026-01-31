@@ -197,11 +197,11 @@ fn dispatch_command(cmd: MediaCommand) {
 }
 
 #[derive(Debug)]
-pub struct MediaCenterInner {
+pub struct MediaSessionInner {
     connection: Arc<RwLock<Option<Connection>>>,
 }
 
-impl MediaCenterInner {
+impl MediaSessionInner {
     pub fn new() -> Result<Self, MediaError> {
         // Start the D-Bus service in a background thread
         let connection = Arc::new(RwLock::new(None));
@@ -308,6 +308,76 @@ impl MediaCenterInner {
             *guard = PlaybackStatus::Stopped;
         }
         Ok(())
+    }
+}
+
+/// Media center integration for Linux platforms.
+/// Uses MPRIS D-Bus interface.
+pub struct MediaCenterInner;
+
+impl MediaCenterInner {
+    pub fn new() -> Result<Self, crate::MediaError> {
+        Ok(Self)
+    }
+
+    #[allow(clippy::unused_self)]
+    pub fn update(&self, metadata: &crate::MediaMetadata, state: &crate::PlaybackState) {
+        if let Ok(mut guard) = CURRENT_METADATA.write() {
+            let mut mpris_metadata = std::collections::HashMap::new();
+            mpris_metadata.insert(
+                "mpris:trackid".to_string(),
+                zbus::zvariant::Value::new(
+                    zbus::zvariant::ObjectPath::try_from("/org/waterkit/media/track").unwrap(),
+                ),
+            );
+            if let Some(ref title) = metadata.title {
+                mpris_metadata.insert(
+                    "xesam:title".to_string(),
+                    zbus::zvariant::Value::new(title.clone()),
+                );
+            }
+            if let Some(ref artist) = metadata.artist {
+                mpris_metadata.insert(
+                    "xesam:artist".to_string(),
+                    zbus::zvariant::Value::new(vec![artist.clone()]),
+                );
+            }
+            if let Some(ref album) = metadata.album {
+                mpris_metadata.insert(
+                    "xesam:album".to_string(),
+                    zbus::zvariant::Value::new(album.clone()),
+                );
+            }
+            *guard = mpris_metadata;
+        }
+        if let Ok(mut guard) = CURRENT_STATUS.write() {
+            *guard = state.status;
+        }
+        if let Some(pos) = state.position {
+            if let Ok(mut guard) = CURRENT_POSITION.write() {
+                *guard = pos.as_micros() as i64;
+            }
+        }
+    }
+
+    #[allow(clippy::unused_self)]
+    pub fn clear(&self) {
+        if let Ok(mut guard) = CURRENT_METADATA.write() {
+            guard.clear();
+        }
+        if let Ok(mut guard) = CURRENT_STATUS.write() {
+            *guard = crate::PlaybackStatus::Stopped;
+        }
+    }
+
+    #[allow(clippy::unused_self)]
+    pub fn run_loop(&self, duration: std::time::Duration) {
+        std::thread::sleep(duration);
+    }
+
+    #[allow(clippy::unused_self)]
+    pub fn poll_command(&self) -> Option<crate::MediaCommand> {
+        None
     }
 }
 

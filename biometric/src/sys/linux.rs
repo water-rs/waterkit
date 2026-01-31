@@ -75,16 +75,12 @@ pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
         .map_err(|e| BiometricError::PlatformError(format!("Failed to claim device: {e}")))?;
 
     // Start verification
-    let verify_result = device_proxy
-        .call_method("VerifyStart", &("any",))
-        .await
-        .map_err(|e| {
-            let _ = device_proxy.call_method::<_, ()>("Release", &());
-            BiometricError::PlatformError(format!("Failed to start verification: {e}"))
-        });
-
-    if let Err(e) = verify_result {
-        return Err(e);
+    if let Err(e) = device_proxy.call_method("VerifyStart", &("any",)).await {
+        // Try to release on error, ignore result
+        let _ = device_proxy.call_method::<_, ()>("Release", &()).await;
+        return Err(BiometricError::PlatformError(format!(
+            "Failed to start verification: {e}"
+        )));
     }
 
     // Wait for verification result

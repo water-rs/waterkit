@@ -6,7 +6,11 @@
 #![allow(
     clippy::unused_self,
     clippy::unnecessary_wraps,
-    clippy::missing_const_for_fn
+    clippy::missing_const_for_fn,
+    clippy::used_underscore_binding, // D-Bus interface parameters may be unused
+    clippy::cast_possible_truncation, // MPRIS uses i64 for microseconds
+    clippy::cast_sign_loss, // MPRIS position/duration are always positive
+    clippy::significant_drop_tightening // Complex lock patterns in D-Bus handlers
 )]
 
 use crate::{
@@ -195,10 +199,10 @@ impl MprisPlayer {
 }
 
 fn dispatch_command(cmd: MediaCommand) {
-    if let Ok(guard) = COMMAND_HANDLER.read() {
-        if let Some(handler) = guard.as_ref() {
-            handler.on_command(cmd);
-        }
+    if let Ok(guard) = COMMAND_HANDLER.read()
+        && let Some(handler) = guard.as_ref()
+    {
+        handler.on_command(cmd);
     }
 }
 
@@ -277,10 +281,10 @@ impl MediaSessionInner {
             *guard = state.status;
         }
 
-        if let Some(pos) = state.position {
-            if let Ok(mut guard) = CURRENT_POSITION.write() {
-                *guard = pos.as_micros() as i64;
-            }
+        if let Some(pos) = state.position
+            && let Ok(mut guard) = CURRENT_POSITION.write()
+        {
+            *guard = pos.as_micros() as i64;
         }
 
         Ok(())
@@ -359,10 +363,10 @@ impl MediaCenterInner {
         if let Ok(mut guard) = CURRENT_STATUS.write() {
             *guard = state.status;
         }
-        if let Some(pos) = state.position {
-            if let Ok(mut guard) = CURRENT_POSITION.write() {
-                *guard = pos.as_micros() as i64;
-            }
+        if let Some(pos) = state.position
+            && let Ok(mut guard) = CURRENT_POSITION.write()
+        {
+            *guard = pos.as_micros() as i64;
         }
     }
 

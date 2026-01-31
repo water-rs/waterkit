@@ -48,10 +48,8 @@ pub fn show_notification(
 
     // Set ID for notification replacement/update (Linux only - D-Bus supports this)
     #[cfg(target_os = "linux")]
-    if let Some(ref id) = notification.id {
-        if let Some(dbus_id) = id_tracker::get(id) {
-            n.id(dbus_id);
-        }
+    if let Some(dbus_id) = notification.id.as_ref().and_then(|id| id_tracker::get(id)) {
+        n.id(dbus_id);
     }
 
     if let Some(ref app) = notification.app_name {
@@ -137,7 +135,7 @@ pub fn show_notification(
             });
         }
 
-        return Ok(NotificationHandleInner);
+        Ok(NotificationHandleInner)
     }
 
     #[cfg(not(target_os = "linux"))]

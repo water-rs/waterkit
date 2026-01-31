@@ -88,7 +88,8 @@ pub async fn get_location() -> Result<Location, LocationError> {
             .await?
             .body()
             .deserialize()?;
-        Ok::<f64, zbus::Error>(reply.downcast_ref::<f64>().ok().copied().unwrap_or_default())
+        let value: f64 = f64::try_from(reply).unwrap_or_default();
+        Ok::<f64, zbus::Error>(value)
     };
 
     let latitude = get_property("Latitude")

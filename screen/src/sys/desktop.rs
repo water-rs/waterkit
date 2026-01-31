@@ -139,6 +139,7 @@ impl ScreenStreamInner {
     }
 
     /// Capture next frame asynchronously.
+    #[allow(clippy::unused_async)]
     pub async fn next_frame(&self) -> Option<ScreenFrame> {
         self.try_next_frame()
     }
@@ -189,8 +190,7 @@ impl ScreenStreamInner {
 
         let timestamp_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
+            .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
 
         Some(ScreenFrame::from_texture(
             Arc::new(texture),

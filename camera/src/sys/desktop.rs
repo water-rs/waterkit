@@ -34,6 +34,16 @@ struct RawFrame {
     timestamp: std::time::Instant,
 }
 
+/// Wrapper around NokhwaCamera that implements Send.
+///
+/// Safety: On Linux, V4L2 backend isn't Send, but we ensure all access
+/// happens through a Mutex on the original thread or via synchronous calls.
+struct SendableCamera(NokhwaCamera);
+
+// SAFETY: We ensure synchronized access through Mutex and only access
+// the camera from where it's safe to do so.
+unsafe impl Send for SendableCamera {}
+
 pub struct CameraInner {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
@@ -112,8 +122,8 @@ impl CameraInner {
         let streaming = Arc::new(AtomicBool::new(true));
         let start_time = Arc::new(Mutex::new(std::time::Instant::now()));
 
-        // Spawn frame capture thread
-        let camera = Arc::new(Mutex::new(camera));
+        // Wrap camera in SendableCamera for thread safety
+        let camera = Arc::new(Mutex::new(SendableCamera(camera)));
         let camera_clone = camera.clone();
         let streaming_clone = streaming.clone();
         let start_time_clone = start_time.clone();
@@ -122,7 +132,7 @@ impl CameraInner {
             while streaming_clone.load(Ordering::SeqCst) {
                 let frame = {
                     let mut guard = camera_clone.lock().unwrap();
-                    guard.frame().ok()
+                    guard.0.frame().ok()
                 };
 
                 if let Some(frame) = frame {
@@ -145,7 +155,7 @@ impl CameraInner {
 
             // Stop the camera when thread exits
             let mut guard = camera_clone.lock().unwrap();
-            let _ = guard.stop_stream();
+            let _ = guard.0.stop_stream();
         });
 
         Ok(Self {

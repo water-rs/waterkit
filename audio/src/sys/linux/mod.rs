@@ -197,11 +197,11 @@ fn dispatch_command(cmd: MediaCommand) {
 }
 
 #[derive(Debug)]
-pub struct MediaSessionInner {
+pub struct MediaCenterInner {
     connection: Arc<RwLock<Option<Connection>>>,
 }
 
-impl MediaSessionInner {
+impl MediaCenterInner {
     pub fn new() -> Result<Self, MediaError> {
         // Start the D-Bus service in a background thread
         let connection = Arc::new(RwLock::new(None));

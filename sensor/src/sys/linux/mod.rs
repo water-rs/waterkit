@@ -159,3 +159,40 @@ pub async fn barometer_read() -> Result<ScalarData, SensorError> {
 pub fn barometer_watch(_interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
     Err(SensorError::NotAvailable)
 }
+
+// Ambient Light (via iio-sensor-proxy)
+pub fn ambient_light_available() -> bool {
+    Connection::system()
+        .and_then(|conn| {
+            get_proxy_property::<bool>(&conn, "HasAmbientLight")
+                .map_err(|_| zbus::Error::Failure("not available".into()))
+        })
+        .unwrap_or(false)
+}
+
+pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
+    let conn = Connection::system().map_err(|e| SensorError::Unknown(e.to_string()))?;
+
+    let has = get_proxy_property::<bool>(&conn, "HasAmbientLight")?;
+    if !has {
+        return Err(SensorError::NotAvailable);
+    }
+
+    let level: f64 = get_proxy_property(&conn, "LightLevel")?;
+
+    Ok(ScalarData {
+        value: level,
+        timestamp: timestamp_now(),
+    })
+}
+
+pub fn ambient_light_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
+    if !ambient_light_available() {
+        return Err(SensorError::NotAvailable);
+    }
+    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
+    Ok(Box::pin(stream::unfold((), move |()| async move {
+        futures_timer::Delay::new(interval).await;
+        ambient_light_read().await.ok().map(|data| (data, ()))
+    })))
+}

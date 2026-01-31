@@ -43,3 +43,4 @@ windows = { workspace = true, features = [
 # Linux
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
+serde.workspace = true

@@ -5,22 +5,25 @@ use crate::{
 };
 use futures::StreamExt;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 use std::time::Duration;
 use zbus::zvariant::{ObjectPath, Value};
-use zbus::{Connection, ConnectionBuilder, interface};
+use zbus::{Connection, connection::Builder as ConnectionBuilder, interface};
 
 /// Global command handler
-static COMMAND_HANDLER: RwLock<Option<Box<dyn MediaCommandHandler>>> = RwLock::new(None);
+static COMMAND_HANDLER: LazyLock<RwLock<Option<Box<dyn MediaCommandHandler>>>> =
+    LazyLock::new(|| RwLock::new(None));
 
 /// Current metadata for MPRIS properties
-static CURRENT_METADATA: RwLock<HashMap<String, Value<'static>>> = RwLock::new(HashMap::new());
+static CURRENT_METADATA: LazyLock<RwLock<HashMap<String, Value<'static>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Current playback status
-static CURRENT_STATUS: RwLock<PlaybackStatus> = RwLock::new(PlaybackStatus::Stopped);
+static CURRENT_STATUS: LazyLock<RwLock<PlaybackStatus>> =
+    LazyLock::new(|| RwLock::new(PlaybackStatus::Stopped));
 
 /// Current position in microseconds
-static CURRENT_POSITION: RwLock<i64> = RwLock::new(0);
+static CURRENT_POSITION: LazyLock<RwLock<i64>> = LazyLock::new(|| RwLock::new(0));
 
 /// MPRIS MediaPlayer2 interface implementation
 struct MediaPlayer2;

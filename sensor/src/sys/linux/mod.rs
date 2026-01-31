@@ -7,12 +7,13 @@
 use crate::{ScalarData, SensorData, SensorError, SensorStream};
 use futures::stream;
 use zbus::blocking::Connection;
+use zbus::names::InterfaceName;
 
 const IIO_PROXY_BUS: &str = "net.hadess.SensorProxy";
 const IIO_PROXY_PATH: &str = "/net/hadess/SensorProxy";
 const IIO_PROXY_IFACE: &str = "net.hadess.SensorProxy";
 
-fn get_proxy_property<T: for<'a> serde::Deserialize<'a>>(
+fn get_proxy_property<T: for<'a> serde::Deserialize<'a> + Clone>(
     conn: &Connection,
     property: &str,
 ) -> Result<T, SensorError> {
@@ -24,14 +25,17 @@ fn get_proxy_property<T: for<'a> serde::Deserialize<'a>>(
         .build()
         .map_err(|e| SensorError::Unknown(e.to_string()))?;
 
+    let iface_name = InterfaceName::try_from(IIO_PROXY_IFACE)
+        .map_err(|e| SensorError::Unknown(e.to_string()))?;
+
     let value = proxy
-        .get(IIO_PROXY_IFACE, property)
+        .get(iface_name, property)
         .map_err(|e| SensorError::Unknown(e.to_string()))?;
 
     value
         .downcast_ref::<T>()
+        .map_err(|e| SensorError::Unknown(e.to_string()))
         .cloned()
-        .ok_or_else(|| SensorError::Unknown("Invalid property type".into()))
 }
 
 fn timestamp_now() -> u64 {

@@ -2,7 +2,7 @@
 
 use crate::{Location, LocationError, Timestamp};
 
-pub(crate) async fn get_location() -> Result<Location, LocationError> {
+pub async fn get_location() -> Result<Location, LocationError> {
     use zbus::Connection;
 
     // Connect to the system bus
@@ -73,7 +73,7 @@ pub(crate) async fn get_location() -> Result<Location, LocationError> {
     let location_path: zbus::zvariant::OwnedObjectPath = location_reply
         .downcast_ref::<zbus::zvariant::ObjectPath>()
         .map(|p| p.to_owned().into())
-        .ok_or_else(|| LocationError::NotAvailable)?;
+        .map_err(|_| LocationError::NotAvailable)?;
 
     // Get latitude and longitude from the location object
     let get_property = |prop: &str| async {
@@ -88,7 +88,7 @@ pub(crate) async fn get_location() -> Result<Location, LocationError> {
             .await?
             .body()
             .deserialize()?;
-        Ok::<f64, zbus::Error>(reply.downcast_ref::<f64>().copied().unwrap_or(0.0))
+        Ok::<f64, zbus::Error>(reply.downcast_ref::<f64>().ok().copied().unwrap_or_default())
     };
 
     let latitude = get_property("Latitude")

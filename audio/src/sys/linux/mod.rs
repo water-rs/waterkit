@@ -1,6 +1,13 @@
 //! Linux media control implementation using MPRIS D-Bus.
 
-#![allow(dead_code)] // Some methods are for MPRIS interface but not called from Rust
+// MPRIS interface methods are required by zbus but may not be called from Rust
+#![allow(dead_code)]
+// These lints apply to D-Bus interface methods and cross-platform API methods
+#![allow(
+    clippy::unused_self,
+    clippy::unnecessary_wraps,
+    clippy::missing_const_for_fn
+)]
 
 use crate::{
     MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus,
@@ -26,7 +33,7 @@ static CURRENT_STATUS: LazyLock<RwLock<PlaybackStatus>> =
 /// Current position in microseconds
 static CURRENT_POSITION: LazyLock<RwLock<i64>> = LazyLock::new(|| RwLock::new(0));
 
-/// MPRIS MediaPlayer2 interface implementation
+/// MPRIS `MediaPlayer2` interface implementation
 struct MediaPlayer2;
 
 #[interface(name = "org.mpris.MediaPlayer2")]

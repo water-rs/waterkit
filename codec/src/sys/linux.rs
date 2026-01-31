@@ -7,7 +7,6 @@ use crate::CodecError;
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::codec::context::Context;
 use ffmpeg_next::format::Pixel;
-use ffmpeg_next::frame::Video as VideoFrame;
 use ffmpeg_next::software::scaling::{Context as ScalerContext, Flags};
 use ffmpeg_next::util::frame::video::Video;
 use ffmpeg_next::{Packet, codec, decoder, encoder};
@@ -128,18 +127,10 @@ impl LinuxDecoder {
                 CodecError::InitializationFailed(format!("No decoder found for {:?}", codec_type))
             })?;
 
-        let mut context = Context::new_with_codec(codec);
+        let context = Context::new_with_codec(codec);
 
-        // Set decoder parameters
-        {
-            let params = context.decoder();
-            // Set extradata (codec config) if provided
-            if let Some(config_data) = config {
-                // For FFmpeg, we need to set the extradata
-                // This is handled through the packet or format context typically
-                let _ = config_data; // Will be passed with first packet
-            }
-        }
+        // Note: codec config (extradata) will be passed with first packet
+        let _ = config;
 
         let decoder = context.decoder().video().map_err(|e| {
             CodecError::InitializationFailed(format!("Failed to create video decoder: {e}"))
@@ -278,25 +269,19 @@ impl LinuxEncoder {
                 CodecError::InitializationFailed(format!("No encoder found for {:?}", codec_type))
             })?;
 
-        let mut context = Context::new_with_codec(codec);
+        let context = Context::new_with_codec(codec);
 
-        // Configure encoder
-        {
-            let encoder = context.encoder().video().map_err(|e| {
-                CodecError::InitializationFailed(format!("Failed to get video encoder: {e}"))
-            })?;
-
-            encoder.set_width(width);
-            encoder.set_height(height);
-            encoder.set_format(Pixel::NV12);
-            encoder.set_time_base((1, 30)); // 30 fps
-            encoder.set_bit_rate(4_000_000); // 4 Mbps
-            encoder.set_gop(30); // Keyframe every 1 second at 30fps
-        }
-
-        let encoder = context.encoder().video().map_err(|e| {
-            CodecError::InitializationFailed(format!("Failed to open encoder: {e}"))
+        // Create and configure encoder
+        let mut encoder = context.encoder().video().map_err(|e| {
+            CodecError::InitializationFailed(format!("Failed to get video encoder: {e}"))
         })?;
+
+        encoder.set_width(width);
+        encoder.set_height(height);
+        encoder.set_format(Pixel::NV12);
+        encoder.set_time_base((1, 30)); // 30 fps
+        encoder.set_bit_rate(4_000_000); // 4 Mbps
+        encoder.set_gop(30); // Keyframe every 1 second at 30fps
 
         Ok(Self {
             encoder,

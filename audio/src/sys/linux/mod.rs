@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
 use std::time::Duration;
 use zbus::zvariant::{ObjectPath, Value};
-use zbus::{connection::Builder as ConnectionBuilder, interface, Connection};
+use zbus::{Connection, connection::Builder as ConnectionBuilder, interface};
 
 /// Global command handler
 static COMMAND_HANDLER: LazyLock<RwLock<Option<Box<dyn MediaCommandHandler>>>> =

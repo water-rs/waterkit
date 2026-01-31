@@ -78,20 +78,17 @@ pub fn get_thermal_state() -> ThermalState {
 
 pub fn get_system_load() -> SystemLoad {
     let mut system = System::new_with_specifics(
-        RefreshKind::new()
+        RefreshKind::nothing()
             .with_cpu(CpuRefreshKind::everything())
             .with_memory(MemoryRefreshKind::everything()),
     );
-    // Refresh twice for CPU usage calculation if needed,
-    // but sysinfo usually needs a delay between refreshes for accurate CPU usage.
-    // For a oneshot call, this might return 0.0 for CPU.
-    // A proper implementation might need a background thread or stateful object.
-    // For simplicity here, we'll just read what we can.
-    std::thread::sleep(System::MINIMUM_CPU_UPDATE_INTERVAL);
-    system.refresh_cpu();
+    // Refresh twice for CPU usage calculation - sysinfo needs a delay between refreshes
+    // for accurate CPU usage measurement
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    system.refresh_cpu_all();
     system.refresh_memory();
 
-    let cpu_usage = system.global_cpu_info().cpu_usage();
+    let cpu_usage = system.global_cpu_usage();
     let memory_used = system.used_memory();
     let memory_total = system.total_memory();
 

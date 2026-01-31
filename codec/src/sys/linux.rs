@@ -1,6 +1,6 @@
-//! Linux FFmpeg hardware encoding and decoding.
+//! Linux `FFmpeg` hardware encoding and decoding.
 //!
-//! Uses FFmpeg's hardware acceleration abstraction (`VA-API`, `VDPAU`, etc.)
+//! Uses `FFmpeg`'s hardware acceleration abstraction (`VA-API`, `VDPAU`, etc.)
 //! for H.264 and H.265 video codec operations.
 
 // FFmpeg types contain raw pointers but are safe to send between threads
@@ -70,7 +70,7 @@ impl CodecType {
     }
 }
 
-/// Decoded frame from Linux FFmpeg (`NV12` format).
+/// Decoded frame from Linux `FFmpeg` (`NV12` format).
 #[derive(Clone)]
 pub struct LinuxFrame {
     /// `NV12` data: Y plane followed by interleaved UV plane.
@@ -93,7 +93,7 @@ impl fmt::Debug for LinuxFrame {
     }
 }
 
-/// Linux FFmpeg hardware decoder.
+/// Linux `FFmpeg` hardware decoder.
 pub struct LinuxDecoder {
     decoder: decoder::Video,
     scaler: Option<ScalerContext>,
@@ -236,7 +236,7 @@ impl LinuxDecoder {
     }
 }
 
-/// Linux FFmpeg hardware encoder.
+/// Linux `FFmpeg` hardware encoder.
 pub struct LinuxEncoder {
     encoder: encoder::video::Video,
     scaler: Option<ScalerContext>,
@@ -377,7 +377,7 @@ impl LinuxEncoder {
     }
 }
 
-/// Extract `NV12` data from an FFmpeg video frame.
+/// Extract `NV12` data from an `FFmpeg` video frame.
 fn extract_nv12(frame: &Video, width: u32, height: u32) -> Vec<u8> {
     let y_size = (width * height) as usize;
     let uv_size = y_size / 2;

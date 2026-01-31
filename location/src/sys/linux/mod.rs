@@ -1,10 +1,28 @@
-//! Linux location implementation using GeoClue2 D-Bus service.
+//! Linux location implementation using `GeoClue2` D-Bus service.
 
 use crate::{Location, LocationError, Timestamp};
+use zbus::Connection;
+
+async fn get_location_property(
+    connection: &Connection,
+    location_path: &str,
+    prop: &str,
+) -> Result<f64, zbus::Error> {
+    let reply: zbus::zvariant::OwnedValue = connection
+        .call_method(
+            Some("org.freedesktop.GeoClue2"),
+            location_path,
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &("org.freedesktop.GeoClue2.Location", prop),
+        )
+        .await?
+        .body()
+        .deserialize()?;
+    Ok(f64::try_from(reply).unwrap_or_default())
+}
 
 pub async fn get_location() -> Result<Location, LocationError> {
-    use zbus::Connection;
-
     // Connect to the system bus
     let connection = Connection::system()
         .await
@@ -76,30 +94,18 @@ pub async fn get_location() -> Result<Location, LocationError> {
         .map_err(|_| LocationError::NotAvailable)?;
 
     // Get latitude and longitude from the location object
-    let get_property = |prop: &str| async {
-        let reply: zbus::zvariant::OwnedValue = connection
-            .call_method(
-                Some("org.freedesktop.GeoClue2"),
-                location_path.as_str(),
-                Some("org.freedesktop.DBus.Properties"),
-                "Get",
-                &("org.freedesktop.GeoClue2.Location", prop),
-            )
-            .await?
-            .body()
-            .deserialize()?;
-        let value: f64 = f64::try_from(reply).unwrap_or_default();
-        Ok::<f64, zbus::Error>(value)
-    };
-
-    let latitude = get_property("Latitude")
+    let latitude = get_location_property(&connection, location_path.as_str(), "Latitude")
         .await
         .map_err(|e| LocationError::Unknown(format!("Failed to get latitude: {e}")))?;
-    let longitude = get_property("Longitude")
+    let longitude = get_location_property(&connection, location_path.as_str(), "Longitude")
         .await
         .map_err(|e| LocationError::Unknown(format!("Failed to get longitude: {e}")))?;
-    let altitude = get_property("Altitude").await.ok();
-    let accuracy = get_property("Accuracy").await.ok();
+    let altitude = get_location_property(&connection, location_path.as_str(), "Altitude")
+        .await
+        .ok();
+    let accuracy = get_location_property(&connection, location_path.as_str(), "Accuracy")
+        .await
+        .ok();
 
     // Stop the client
     let _ = connection

@@ -13,10 +13,11 @@ const IIO_PROXY_BUS: &str = "net.hadess.SensorProxy";
 const IIO_PROXY_PATH: &str = "/net/hadess/SensorProxy";
 const IIO_PROXY_IFACE: &str = "net.hadess.SensorProxy";
 
-fn get_proxy_property<T: for<'a> serde::Deserialize<'a> + Clone>(
-    conn: &Connection,
-    property: &str,
-) -> Result<T, SensorError> {
+fn get_proxy_property<T>(conn: &Connection, property: &str) -> Result<T, SensorError>
+where
+    T: TryFrom<zbus::zvariant::OwnedValue>,
+    <T as TryFrom<zbus::zvariant::OwnedValue>>::Error: std::fmt::Display,
+{
     let proxy = zbus::blocking::fdo::PropertiesProxy::builder(conn)
         .destination(IIO_PROXY_BUS)
         .map_err(|e| SensorError::Unknown(e.to_string()))?
@@ -32,10 +33,7 @@ fn get_proxy_property<T: for<'a> serde::Deserialize<'a> + Clone>(
         .get(iface_name, property)
         .map_err(|e| SensorError::Unknown(e.to_string()))?;
 
-    value
-        .downcast_ref::<T>()
-        .cloned()
-        .map_err(|e| SensorError::Unknown(e.to_string()))
+    T::try_from(value).map_err(|e| SensorError::Unknown(e.to_string()))
 }
 
 fn timestamp_now() -> u64 {

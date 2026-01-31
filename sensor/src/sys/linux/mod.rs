@@ -34,8 +34,8 @@ fn get_proxy_property<T: for<'a> serde::Deserialize<'a> + Clone>(
 
     value
         .downcast_ref::<T>()
-        .map_err(|e| SensorError::Unknown(e.to_string()))
         .cloned()
+        .map_err(|e| SensorError::Unknown(e.to_string()))
 }
 
 fn timestamp_now() -> u64 {

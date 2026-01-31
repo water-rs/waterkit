@@ -108,6 +108,7 @@ pub struct Gyroscope;
 impl Gyroscope {
     /// Check if the gyroscope is available.
     #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn is_available() -> bool {
         sys::gyroscope_available()
     }
@@ -164,6 +165,7 @@ pub struct Barometer;
 impl Barometer {
     /// Check if the barometer is available.
     #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn is_available() -> bool {
         sys::barometer_available()
     }

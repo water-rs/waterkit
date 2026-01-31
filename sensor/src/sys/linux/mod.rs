@@ -1,8 +1,8 @@
 //! Linux sensor implementation using iio-sensor-proxy D-Bus service.
 //!
 //! Most Linux desktops don't have motion sensors, but some laptops
-//! (like ThinkPads, Surface devices) have accelerometers accessible
-//! via the iio-sensor-proxy service.
+//! (like `ThinkPads`, Surface devices) have accelerometers accessible
+//! via the `iio-sensor-proxy` service.
 
 use crate::{ScalarData, SensorData, SensorError, SensorStream};
 use futures::stream;
@@ -39,8 +39,7 @@ where
 fn timestamp_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 // Accelerometer (via iio-sensor-proxy)
@@ -69,10 +68,10 @@ pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
 
     // Map orientation to approximate accelerometer values
     let (x, y, z) = match orientation.as_str() {
-        "normal" => (0.0, 0.0, -1.0),
         "bottom-up" => (0.0, 0.0, 1.0),
         "left-up" => (-1.0, 0.0, 0.0),
         "right-up" => (1.0, 0.0, 0.0),
+        // "normal" and any other orientations default to gravity pointing down
         _ => (0.0, 0.0, -1.0),
     };
 

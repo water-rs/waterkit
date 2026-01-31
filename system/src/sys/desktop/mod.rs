@@ -59,10 +59,8 @@ pub fn get_thermal_state() -> ThermalState {
     // Very simple heuristic: check max component temp
     let mut max_temp = 0.0f32;
     for component in &components {
-        if let Some(temp) = component.temperature() {
-            if temp > max_temp {
-                max_temp = temp;
-            }
+        if let Some(temp) = component.temperature().filter(|&t| t > max_temp) {
+            max_temp = temp;
         }
     }
 

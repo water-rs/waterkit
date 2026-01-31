@@ -37,3 +37,5 @@ windows = { workspace = true, features = ["Security_Credentials_UI", "Foundation
 # Linux
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
+futures.workspace = true
+tokio = { workspace = true, features = ["time"] }

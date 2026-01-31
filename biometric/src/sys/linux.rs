@@ -4,6 +4,7 @@
 //! Requires fprintd to be installed and running.
 
 use crate::{BiometricError, BiometricType};
+use futures::StreamExt;
 use zbus::Connection;
 
 const FPRINTD_BUS_NAME: &str = "net.reactivated.Fprint";
@@ -26,7 +27,7 @@ pub async fn is_available() -> bool {
         return false;
     };
 
-    if !names.iter().any(|n| n == FPRINTD_BUS_NAME) {
+    if !names.iter().any(|n| n.as_str() == FPRINTD_BUS_NAME) {
         return false;
     }
 

@@ -53,6 +53,7 @@ pub fn accelerometer_available() -> bool {
         .unwrap_or(false)
 }
 
+#[allow(clippy::unused_async)]
 pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
     let conn = Connection::system().map_err(|e| SensorError::Unknown(e.to_string()))?;
 
@@ -95,10 +96,11 @@ pub fn accelerometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>,
 }
 
 // Gyroscope (not typically available on Linux laptops)
-pub fn gyroscope_available() -> bool {
+pub const fn gyroscope_available() -> bool {
     false
 }
 
+#[allow(clippy::unused_async)]
 pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
     Err(SensorError::NotAvailable)
 }
@@ -117,6 +119,7 @@ pub fn magnetometer_available() -> bool {
         .unwrap_or(false)
 }
 
+#[allow(clippy::unused_async)]
 pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
     let conn = Connection::system().map_err(|e| SensorError::Unknown(e.to_string()))?;
 
@@ -150,10 +153,11 @@ pub fn magnetometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, 
 }
 
 // Barometer (not typically available on Linux laptops)
-pub fn barometer_available() -> bool {
+pub const fn barometer_available() -> bool {
     false
 }
 
+#[allow(clippy::unused_async)]
 pub async fn barometer_read() -> Result<ScalarData, SensorError> {
     Err(SensorError::NotAvailable)
 }
@@ -172,6 +176,7 @@ pub fn ambient_light_available() -> bool {
         .unwrap_or(false)
 }
 
+#[allow(clippy::unused_async)]
 pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
     let conn = Connection::system().map_err(|e| SensorError::Unknown(e.to_string()))?;
 

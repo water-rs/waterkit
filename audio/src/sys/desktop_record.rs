@@ -53,7 +53,7 @@ impl AudioRecorderInner {
 
             devices
                 .into_iter()
-                .find(|d| d.name().map(|n| n == id).unwrap_or(false))
+                .find(|d| d.name().is_ok_and(|n| n == id))
                 .ok_or(RecordError::DeviceNotFound(id))?
         } else {
             host.default_input_device()

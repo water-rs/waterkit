@@ -72,7 +72,7 @@ impl CameraInner {
             .map(CameraIndex::Index)
             .unwrap_or_else(|_| CameraIndex::String(camera_id.to_string()));
 
-        let requested = RequestedFormat::<RgbAFormat>::new(RequestedFormatType::HighestResolution(
+        let requested = RequestedFormat::new::<RgbAFormat>(RequestedFormatType::HighestResolution(
             nokhwa::utils::Resolution::new(config.resolution.width, config.resolution.height),
         ));
 

@@ -1,14 +1,15 @@
 //! Linux media control implementation using MPRIS D-Bus.
 
+#![allow(dead_code)] // Some methods are for MPRIS interface but not called from Rust
+
 use crate::{
     MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus,
 };
-use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
 use std::time::Duration;
 use zbus::zvariant::{ObjectPath, Value};
-use zbus::{Connection, connection::Builder as ConnectionBuilder, interface};
+use zbus::{connection::Builder as ConnectionBuilder, interface, Connection};
 
 /// Global command handler
 static COMMAND_HANDLER: LazyLock<RwLock<Option<Box<dyn MediaCommandHandler>>>> =
@@ -78,8 +79,7 @@ impl MprisPlayer {
     fn playback_status(&self) -> String {
         let status = CURRENT_STATUS
             .read()
-            .map(|s| *s)
-            .unwrap_or(PlaybackStatus::Stopped);
+            .map_or(PlaybackStatus::Stopped, |s| *s);
         match status {
             PlaybackStatus::Playing => "Playing".to_string(),
             PlaybackStatus::Paused => "Paused".to_string(),
@@ -91,13 +91,12 @@ impl MprisPlayer {
     fn metadata(&self) -> HashMap<String, Value<'static>> {
         CURRENT_METADATA
             .read()
-            .map(|m| m.clone())
-            .unwrap_or_default()
+            .map_or_else(|_| HashMap::new(), |m| m.clone())
     }
 
     #[zbus(property)]
     fn position(&self) -> i64 {
-        CURRENT_POSITION.read().map(|p| *p).unwrap_or(0)
+        CURRENT_POSITION.read().map_or(0, |p| *p)
     }
 
     #[zbus(property)]

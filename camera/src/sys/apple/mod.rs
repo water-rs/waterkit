@@ -573,8 +573,7 @@ impl CameraInner {
         };
         convert_result(ffi::camera_set_focus_mode(mode), "focus_mode")?;
 
-        if focus.mode == FocusMode::Manual && focus.distance.is_some() {
-            let distance = focus.distance.unwrap();
+        if let Some(distance) = focus.distance.filter(|_| focus.mode == FocusMode::Manual) {
             if !self.capabilities.supports_manual_focus {
                 return Err(CameraError::ControlNotSupported("manual_focus".into()));
             }

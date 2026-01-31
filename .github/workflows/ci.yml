@@ -64,6 +64,7 @@ jobs:
       - name: Install Windows dependencies
         if: runner.os == 'Windows'
         run: |
+          choco install pkgconfiglite -y
           vcpkg install dav1d:x64-windows ffmpeg:x64-windows
         env:
           VCPKG_ROOT: C:\vcpkg

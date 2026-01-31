@@ -1,7 +1,18 @@
 //! Linux FFmpeg hardware encoding and decoding.
 //!
-//! Uses FFmpeg's hardware acceleration abstraction (VA-API, VDPAU, etc.)
+//! Uses FFmpeg's hardware acceleration abstraction (`VA-API`, `VDPAU`, etc.)
 //! for H.264 and H.265 video codec operations.
+
+// FFmpeg types contain raw pointers but are safe to send between threads
+#![allow(clippy::non_send_fields_in_send_ty)]
+// These lints are overly strict for codec implementation
+#![allow(
+    dead_code,
+    clippy::missing_const_for_fn,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::uninlined_format_args
+)]
 
 use crate::CodecError;
 use ffmpeg_next as ffmpeg;
@@ -59,10 +70,10 @@ impl CodecType {
     }
 }
 
-/// Decoded frame from Linux FFmpeg (NV12 format).
+/// Decoded frame from Linux FFmpeg (`NV12` format).
 #[derive(Clone)]
 pub struct LinuxFrame {
-    /// NV12 data: Y plane followed by interleaved UV plane.
+    /// `NV12` data: Y plane followed by interleaved UV plane.
     pub data: Vec<u8>,
     /// Frame width in pixels.
     pub width: u32,
@@ -211,8 +222,7 @@ impl LinuxDecoder {
 
             let timestamp_ns = decoded_frame
                 .pts()
-                .map(|pts| (pts as u64) * 1_000_000_000 / 90_000) // Assuming 90kHz timebase
-                .unwrap_or(0);
+                .map_or(0, |pts| (pts as u64) * 1_000_000_000 / 90_000); // Assuming 90kHz timebase
 
             frames.push(LinuxFrame {
                 data: nv12_data,
@@ -294,7 +304,7 @@ impl LinuxEncoder {
         })
     }
 
-    /// Encode NV12 data to compressed video.
+    /// Encode `NV12` data to compressed video.
     pub fn encode_nv12(&mut self, nv12: &[u8]) -> Result<Vec<u8>, CodecError> {
         let y_size = (self.width * self.height) as usize;
         let uv_size = y_size / 2;
@@ -367,7 +377,7 @@ impl LinuxEncoder {
     }
 }
 
-/// Extract NV12 data from an FFmpeg video frame.
+/// Extract `NV12` data from an FFmpeg video frame.
 fn extract_nv12(frame: &Video, width: u32, height: u32) -> Vec<u8> {
     let y_size = (width * height) as usize;
     let uv_size = y_size / 2;

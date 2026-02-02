@@ -8,7 +8,7 @@ pub(crate) async fn get_location() -> Result<Location, LocationError> {
     // Request access (this also serves as permission check on Windows)
     let access = Geolocator::RequestAccessAsync()
         .map_err(|e| LocationError::Unknown(e.message().to_string()))?
-        .get()
+        .await
         .map_err(|e| LocationError::Unknown(e.message().to_string()))?;
 
     match access {
@@ -24,7 +24,7 @@ pub(crate) async fn get_location() -> Result<Location, LocationError> {
     let position = geolocator
         .GetGeopositionAsync()
         .map_err(|e| LocationError::Unknown(e.message().to_string()))?
-        .get()
+        .await
         .map_err(|e| LocationError::Unknown(e.message().to_string()))?;
 
     let coord = position

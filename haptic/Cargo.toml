@@ -31,6 +31,7 @@ waterkit-build.workspace = true
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = ["Devices_Haptics", "Foundation"] }
+futures = { workspace = true }
 
 # Linux
 [target.'cfg(target_os = "linux")'.dependencies]

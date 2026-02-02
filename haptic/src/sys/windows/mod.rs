@@ -1,25 +1,30 @@
 //! Windows haptic implementation.
 
 use crate::{HapticError, HapticPattern, HapticStep, Intensity};
+use futures::executor::block_on;
 use windows::Devices::Haptics::{
     KnownSimpleHapticsControllerWaveforms, SimpleHapticsController,
     SimpleHapticsControllerFeedback, VibrationAccessStatus, VibrationDevice,
 };
 
 fn get_controller() -> Result<SimpleHapticsController, HapticError> {
-    let access = VibrationDevice::RequestAccessAsync()
-        .map_err(|e| HapticError::Unknown(e.to_string()))?
-        .get()
-        .map_err(|e| HapticError::Unknown(e.to_string()))?;
+    let access = block_on(async {
+        VibrationDevice::RequestAccessAsync()
+            .map_err(|e| HapticError::Unknown(e.to_string()))?
+            .await
+            .map_err(|e| HapticError::Unknown(e.to_string()))
+    })?;
 
     if access != VibrationAccessStatus::Allowed {
         return Err(HapticError::NotSupported);
     }
 
-    let device = VibrationDevice::GetDefaultAsync()
-        .map_err(|e| HapticError::Unknown(e.to_string()))?
-        .get()
-        .map_err(|e| HapticError::Unknown(e.to_string()))?;
+    let device = block_on(async {
+        VibrationDevice::GetDefaultAsync()
+            .map_err(|e| HapticError::Unknown(e.to_string()))?
+            .await
+            .map_err(|e| HapticError::Unknown(e.to_string()))
+    })?;
 
     match device {
         Some(d) => d

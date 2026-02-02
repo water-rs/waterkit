@@ -19,15 +19,16 @@ pub async fn request(permission: Permission) -> Result<PermissionStatus, Permiss
 async fn check_location() -> PermissionStatus {
     use windows::Devices::Geolocation::{GeolocationAccessStatus, Geolocator};
 
-    match Geolocator::RequestAccessAsync() {
-        Ok(op) => match op.get() {
-            Ok(status) => match status {
-                GeolocationAccessStatus::Allowed => PermissionStatus::Granted,
-                GeolocationAccessStatus::Denied => PermissionStatus::Denied,
-                GeolocationAccessStatus::Unspecified => PermissionStatus::NotDetermined,
-                _ => PermissionStatus::NotDetermined,
-            },
-            Err(_) => PermissionStatus::NotDetermined,
+    let Ok(op) = Geolocator::RequestAccessAsync() else {
+        return PermissionStatus::NotDetermined;
+    };
+
+    match op.await {
+        Ok(status) => match status {
+            GeolocationAccessStatus::Allowed => PermissionStatus::Granted,
+            GeolocationAccessStatus::Denied => PermissionStatus::Denied,
+            GeolocationAccessStatus::Unspecified => PermissionStatus::NotDetermined,
+            _ => PermissionStatus::NotDetermined,
         },
         Err(_) => PermissionStatus::NotDetermined,
     }

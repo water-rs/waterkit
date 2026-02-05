@@ -23,11 +23,12 @@ async fn check_location() -> PermissionStatus {
         return PermissionStatus::NotDetermined;
     };
 
-    op.await.map_or(PermissionStatus::NotDetermined, |status| match status {
-        GeolocationAccessStatus::Allowed => PermissionStatus::Granted,
-        GeolocationAccessStatus::Denied => PermissionStatus::Denied,
-        _ => PermissionStatus::NotDetermined,
-    })
+    op.await
+        .map_or(PermissionStatus::NotDetermined, |status| match status {
+            GeolocationAccessStatus::Allowed => PermissionStatus::Granted,
+            GeolocationAccessStatus::Denied => PermissionStatus::Denied,
+            _ => PermissionStatus::NotDetermined,
+        })
 }
 
 async fn request_location() -> Result<PermissionStatus, PermissionError> {

@@ -1,4 +1,4 @@
-//! Windows permission implementation using WinRT.
+//! Windows permission implementation using `WinRT`.
 
 use crate::{Permission, PermissionError, PermissionStatus};
 
@@ -23,18 +23,14 @@ async fn check_location() -> PermissionStatus {
         return PermissionStatus::NotDetermined;
     };
 
-    match op.await {
-        Ok(status) => match status {
-            GeolocationAccessStatus::Allowed => PermissionStatus::Granted,
-            GeolocationAccessStatus::Denied => PermissionStatus::Denied,
-            GeolocationAccessStatus::Unspecified => PermissionStatus::NotDetermined,
-            _ => PermissionStatus::NotDetermined,
-        },
-        Err(_) => PermissionStatus::NotDetermined,
-    }
+    op.await.map_or(PermissionStatus::NotDetermined, |status| match status {
+        GeolocationAccessStatus::Allowed => PermissionStatus::Granted,
+        GeolocationAccessStatus::Denied => PermissionStatus::Denied,
+        _ => PermissionStatus::NotDetermined,
+    })
 }
 
 async fn request_location() -> Result<PermissionStatus, PermissionError> {
-    // On Windows, RequestAccessAsync both checks and requests if needed
+    // On Windows, `RequestAccessAsync` both checks and requests if needed
     Ok(check_location().await)
 }

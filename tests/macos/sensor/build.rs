@@ -1,15 +1,23 @@
 //! Build script for waterkit-sensor-test.
 //!
 //! Compiles the Swift code from the sensor crate and links CoreMotion.
-
-use std::path::PathBuf;
-use std::process::Command;
+//! Only compiles on macOS host when targeting Apple platforms.
 
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
     if target_os != "macos" && target_os != "ios" {
         return;
     }
+
+    // swift-bridge-build and swiftc are only available on macOS host
+    #[cfg(target_os = "macos")]
+    apple_build();
+}
+
+#[cfg(target_os = "macos")]
+fn apple_build() {
+    use std::path::PathBuf;
+    use std::process::Command;
 
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let sensor_crate = manifest_dir.join("../../../sensor");

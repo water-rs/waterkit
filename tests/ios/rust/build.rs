@@ -1,7 +1,22 @@
-use std::path::PathBuf;
+//! Build script for waterkit-test-ios.
+//!
+//! Generates Swift bridge code for iOS app integration.
+//! Only runs on macOS host when targeting Apple platforms.
 
 fn main() {
-    // let bridge_module = "src/lib.rs";
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
+    if target_os != "macos" && target_os != "ios" {
+        return;
+    }
+
+    // swift-bridge-build is only available on macOS host
+    #[cfg(target_os = "macos")]
+    apple_build();
+}
+
+#[cfg(target_os = "macos")]
+fn apple_build() {
+    use std::path::PathBuf;
 
     // Use waterkit-build to handle Swift bridge generation and compilation
     // We only need generation here if we want to link it in Xcode.

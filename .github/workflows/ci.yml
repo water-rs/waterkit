@@ -70,7 +70,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           choco install pkgconfiglite -y
-          vcpkg install dav1d:x64-windows ffmpeg:x64-windows
+          vcpkg install dav1d:x64-windows
         env:
           VCPKG_ROOT: C:\vcpkg
       - name: Set Windows pkg-config paths

@@ -134,7 +134,7 @@ fn setup_button_handler(controls: &SystemMediaTransportControls) -> Result<(), M
 
     controls
         .ButtonPressed(&handler)
-        .map_err(|e| MediaError::Unknown(e.message().to_string_lossy()))?;
+        .map_err(|e| MediaError::Unknown(format!("{e}")))?;
 
     Ok(())
 }

@@ -1,5 +1,4 @@
 use crate::{BiometricError, BiometricType};
-use windows::Foundation::IAsyncOperation;
 use windows::Security::Credentials::UI::{
     UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability,
 };

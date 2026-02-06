@@ -17,12 +17,14 @@ static COMMAND_HANDLER: RwLock<Option<Box<dyn MediaCommandHandler>>> = RwLock::n
 /// Pending commands queue
 static PENDING_COMMANDS: RwLock<Vec<MediaCommand>> = RwLock::new(Vec::new());
 
+#[allow(clippy::needless_pass_by_value)]
 fn win_err_update(e: windows::core::Error) -> MediaError {
-    MediaError::UpdateFailed(format!("{e}"))
+    MediaError::UpdateFailed(e.to_string())
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn win_err_init(e: windows::core::Error) -> MediaError {
-    MediaError::InitializationFailed(format!("{e}"))
+    MediaError::InitializationFailed(e.to_string())
 }
 
 fn set_metadata_inner(

@@ -1,7 +1,7 @@
 //! Windows sensor implementation using `WinRT`.
 //!
 //! The `*_read()` functions are async to match the cross-platform interface,
-//! even though WinRT sensor reads are synchronous.
+//! even though `WinRT` sensor reads are synchronous.
 
 use crate::{ScalarData, SensorData, SensorError, SensorStream};
 use futures::stream;

@@ -1,27 +1,26 @@
-//! Windows media control implementation using SystemMediaTransportControls.
+//! Windows media control implementation using `SystemMediaTransportControls`.
 
 use crate::{
     MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus,
 };
 use std::sync::RwLock;
 use windows::Foundation::TypedEventHandler;
-use windows::Media::Playback::{MediaPlaybackType, MediaPlayer};
+use windows::Media::Playback::MediaPlayer;
 use windows::Media::{
-    MediaPlaybackAutoRepeatMode, MediaPlaybackStatus, MediaPlaybackType as MPType,
-    SystemMediaTransportControls, SystemMediaTransportControlsButton,
-    SystemMediaTransportControlsButtonPressedEventArgs,
+    MediaPlaybackStatus, MediaPlaybackType, SystemMediaTransportControls,
+    SystemMediaTransportControlsButton, SystemMediaTransportControlsButtonPressedEventArgs,
 };
 
 /// Global command handler
 static COMMAND_HANDLER: RwLock<Option<Box<dyn MediaCommandHandler>>> = RwLock::new(None);
 
 #[derive(Debug)]
-pub struct MediaSessionInner {
+pub struct MediaCenterInner {
     media_player: MediaPlayer,
     controls: SystemMediaTransportControls,
 }
 
-impl MediaSessionInner {
+impl MediaCenterInner {
     pub fn new() -> Result<Self, MediaError> {
         let media_player = MediaPlayer::new()
             .map_err(|e| MediaError::InitializationFailed(e.message().to_string()))?;
@@ -63,7 +62,7 @@ impl MediaSessionInner {
             .map_err(|e| MediaError::UpdateFailed(e.message().to_string()))?;
 
         updater
-            .SetType(MPType::Music)
+            .SetType(MediaPlaybackType::Music)
             .map_err(|e| MediaError::UpdateFailed(e.message().to_string()))?;
 
         let music_props = updater
@@ -133,10 +132,13 @@ impl MediaSessionInner {
             *guard = Some(handler);
         }
 
-        let handler = TypedEventHandler::new(
-            |_sender: &Option<SystemMediaTransportControls>,
-             args: &Option<SystemMediaTransportControlsButtonPressedEventArgs>| {
-                if let Some(args) = args {
+        let handler =
+            TypedEventHandler::new(
+                |_sender,
+                 args: windows::core::Ref<
+                    '_,
+                    SystemMediaTransportControlsButtonPressedEventArgs,
+                >| {
                     if let Ok(button) = args.Button() {
                         let cmd = match button {
                             SystemMediaTransportControlsButton::Play => Some(MediaCommand::Play),
@@ -157,10 +159,9 @@ impl MediaSessionInner {
                             }
                         }
                     }
-                }
-                Ok(())
-            },
-        );
+                    Ok(())
+                },
+            );
 
         self.controls
             .ButtonPressed(&handler)

@@ -38,10 +38,10 @@ fn find_feedback(
     let supported = controller.SupportedFeedback().ok()?;
 
     for feedback in supported {
-        if let Ok(waveform) = feedback.Waveform() {
-            if waveform == waveform_id {
-                return Some(feedback);
-            }
+        if let Ok(waveform) = feedback.Waveform()
+            && waveform == waveform_id
+        {
+            return Some(feedback);
         }
     }
     None

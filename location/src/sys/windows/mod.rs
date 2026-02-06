@@ -53,7 +53,7 @@ pub async fn get_location() -> Result<Location, LocationError> {
     let timestamp =
         Timestamp::from_second(unix_seconds).map_err(|e| LocationError::Unknown(e.to_string()))?;
 
-    let accuracy = coord.Accuracy().ok().map(|a| a.Value().unwrap_or(0.0));
+    let accuracy = coord.Accuracy().ok();
 
     let mut location =
         Location::new(pos.Latitude, pos.Longitude, timestamp).with_altitude(pos.Altitude);

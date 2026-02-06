@@ -187,7 +187,19 @@ jobs:
         with:
           shared-key: ci-ubuntu
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+      - run: >
+          cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+          --exclude waterkit-audio-test
+          --exclude waterkit-biometric-test
+          --exclude waterkit-camera-test
+          --exclude waterkit-codec-bench
+          --exclude waterkit-dialog-test
+          --exclude waterkit-location-test
+          --exclude waterkit-notification-test
+          --exclude waterkit-sensor-test
+          --exclude waterkit-video-test
+          --exclude waterkit-test-ios
+          --exclude waterkit-test-android
       - uses: codecov/codecov-action@v4
         with:
           use_oidc: true

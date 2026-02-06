@@ -4,14 +4,13 @@ use crate::{ScalarData, SensorData, SensorError, SensorStream};
 use futures::stream;
 use windows::Devices::Sensors::{
     Accelerometer as WinAccelerometer, Barometer as WinBarometer, Gyrometer as WinGyrometer,
-    Magnetometer as WinMagnetometer,
+    LightSensor as WinLightSensor, Magnetometer as WinMagnetometer,
 };
 
 fn timestamp_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 // Accelerometer
@@ -89,9 +88,9 @@ pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
         .map_err(|e| SensorError::Unknown(e.to_string()))?;
 
     Ok(SensorData {
-        x: reading.MagneticFieldX().unwrap_or(0.0),
-        y: reading.MagneticFieldY().unwrap_or(0.0),
-        z: reading.MagneticFieldZ().unwrap_or(0.0),
+        x: f64::from(reading.MagneticFieldX().unwrap_or(0.0)),
+        y: f64::from(reading.MagneticFieldY().unwrap_or(0.0)),
+        z: f64::from(reading.MagneticFieldZ().unwrap_or(0.0)),
         timestamp: timestamp_now(),
     })
 }
@@ -133,5 +132,34 @@ pub fn barometer_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, Sen
     Ok(Box::pin(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         barometer_read().await.ok().map(|data| (data, ()))
+    })))
+}
+
+// Ambient Light
+pub fn ambient_light_available() -> bool {
+    WinLightSensor::GetDefault().is_ok()
+}
+
+pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
+    let sensor = WinLightSensor::GetDefault().map_err(|_| SensorError::NotAvailable)?;
+
+    let reading = sensor
+        .GetCurrentReading()
+        .map_err(|e| SensorError::Unknown(e.to_string()))?;
+
+    Ok(ScalarData {
+        value: f64::from(reading.IlluminanceInLux().unwrap_or(0.0)),
+        timestamp: timestamp_now(),
+    })
+}
+
+pub fn ambient_light_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
+    if !ambient_light_available() {
+        return Err(SensorError::NotAvailable);
+    }
+    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
+    Ok(Box::pin(stream::unfold((), move |()| async move {
+        futures_timer::Delay::new(interval).await;
+        ambient_light_read().await.ok().map(|data| (data, ()))
     })))
 }

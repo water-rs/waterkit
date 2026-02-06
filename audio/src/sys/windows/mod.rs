@@ -18,11 +18,11 @@ static COMMAND_HANDLER: RwLock<Option<Box<dyn MediaCommandHandler>>> = RwLock::n
 static PENDING_COMMANDS: RwLock<Vec<MediaCommand>> = RwLock::new(Vec::new());
 
 fn win_err_update(e: windows::core::Error) -> MediaError {
-    MediaError::UpdateFailed(e.message().to_string_lossy())
+    MediaError::UpdateFailed(format!("{e}"))
 }
 
 fn win_err_init(e: windows::core::Error) -> MediaError {
-    MediaError::InitializationFailed(e.message().to_string_lossy())
+    MediaError::InitializationFailed(format!("{e}"))
 }
 
 fn set_metadata_inner(

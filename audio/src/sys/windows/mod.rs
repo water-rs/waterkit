@@ -122,7 +122,9 @@ fn setup_button_handler(controls: &SystemMediaTransportControls) -> Result<(), M
         SystemMediaTransportControls,
         SystemMediaTransportControlsButtonPressedEventArgs,
     >::new(|_sender, args| {
-        if let Ok(button) = args.Button() {
+        if let Some(args) = args.as_ref()
+            && let Ok(button) = args.Button()
+        {
             let cmd = match button {
                 SystemMediaTransportControlsButton::Play => Some(MediaCommand::Play),
                 SystemMediaTransportControlsButton::Pause => Some(MediaCommand::Pause),

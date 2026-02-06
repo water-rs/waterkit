@@ -159,12 +159,9 @@ impl WindowsDecoder {
                     CodecError::InitializationFailed(format!("GetInputStreamInfo: {e}"))
                 })?;
 
-            let mut output_stream_info = MFT_OUTPUT_STREAM_INFO::default();
-            transform
-                .GetOutputStreamInfo(0, &mut output_stream_info)
-                .map_err(|e| {
-                    CodecError::InitializationFailed(format!("GetOutputStreamInfo: {e}"))
-                })?;
+            let output_stream_info = transform.GetOutputStreamInfo(0).map_err(|e| {
+                CodecError::InitializationFailed(format!("GetOutputStreamInfo: {e}"))
+            })?;
 
             // Notify the decoder to start
             transform
@@ -329,12 +326,9 @@ impl WindowsEncoder {
                     CodecError::InitializationFailed(format!("GetInputStreamInfo: {e}"))
                 })?;
 
-            let mut output_stream_info = MFT_OUTPUT_STREAM_INFO::default();
-            transform
-                .GetOutputStreamInfo(0, &mut output_stream_info)
-                .map_err(|e| {
-                    CodecError::InitializationFailed(format!("GetOutputStreamInfo: {e}"))
-                })?;
+            let output_stream_info = transform.GetOutputStreamInfo(0).map_err(|e| {
+                CodecError::InitializationFailed(format!("GetOutputStreamInfo: {e}"))
+            })?;
 
             // Notify the encoder to start
             transform

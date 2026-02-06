@@ -137,7 +137,7 @@ fn setup_button_handler(controls: &SystemMediaTransportControls) -> Result<(), M
             if let Some(cmd) = cmd {
                 if let Ok(guard) = COMMAND_HANDLER.read() {
                     if let Some(handler) = guard.as_ref() {
-                        handler.on_command(cmd);
+                        handler.on_command(cmd.clone());
                     }
                 }
                 if let Ok(mut guard) = PENDING_COMMANDS.write() {

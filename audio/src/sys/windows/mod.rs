@@ -17,55 +17,54 @@ static COMMAND_HANDLER: RwLock<Option<Box<dyn MediaCommandHandler>>> = RwLock::n
 /// Pending commands queue
 static PENDING_COMMANDS: RwLock<Vec<MediaCommand>> = RwLock::new(Vec::new());
 
+fn win_err_update(e: windows::core::Error) -> MediaError {
+    MediaError::UpdateFailed(e.message().to_string_lossy())
+}
+
+fn win_err_init(e: windows::core::Error) -> MediaError {
+    MediaError::InitializationFailed(e.message().to_string_lossy())
+}
+
 fn set_metadata_inner(
     controls: &SystemMediaTransportControls,
     metadata: &MediaMetadata,
 ) -> Result<(), MediaError> {
-    let updater = controls
-        .DisplayUpdater()
-        .map_err(|e| MediaError::UpdateFailed(e.message().to_string()))?;
+    let updater = controls.DisplayUpdater().map_err(win_err_update)?;
 
     updater
         .SetType(MediaPlaybackType::Music)
-        .map_err(|e| MediaError::UpdateFailed(e.message().to_string()))?;
+        .map_err(win_err_update)?;
 
-    let music_props = updater
-        .MusicProperties()
-        .map_err(|e| MediaError::UpdateFailed(e.message().to_string()))?;
+    let music_props = updater.MusicProperties().map_err(win_err_update)?;
 
     if let Some(ref title) = metadata.title {
         music_props
             .SetTitle(&windows::core::HSTRING::from(title.as_str()))
-            .map_err(|e| MediaError::UpdateFailed(e.message().to_string()))?;
+            .map_err(win_err_update)?;
     }
 
     if let Some(ref artist) = metadata.artist {
         music_props
             .SetArtist(&windows::core::HSTRING::from(artist.as_str()))
-            .map_err(|e| MediaError::UpdateFailed(e.message().to_string()))?;
+            .map_err(win_err_update)?;
     }
 
     if let Some(ref album) = metadata.album {
         music_props
             .SetAlbumTitle(&windows::core::HSTRING::from(album.as_str()))
-            .map_err(|e| MediaError::UpdateFailed(e.message().to_string()))?;
+            .map_err(win_err_update)?;
     }
 
-    if let Some(ref url) = metadata.artwork_url {
-        if let Ok(uri) =
+    if let Some(ref url) = metadata.artwork_url
+        && let Ok(uri) =
             windows::Foundation::Uri::CreateUri(&windows::core::HSTRING::from(url.as_str()))
-        {
-            if let Ok(stream) =
-                windows::Storage::Streams::RandomAccessStreamReference::CreateFromUri(&uri)
-            {
-                let _ = updater.SetThumbnail(&stream);
-            }
-        }
+        && let Ok(stream) =
+            windows::Storage::Streams::RandomAccessStreamReference::CreateFromUri(&uri)
+    {
+        let _ = updater.SetThumbnail(&stream);
     }
 
-    updater
-        .Update()
-        .map_err(|e| MediaError::UpdateFailed(e.message().to_string()))?;
+    updater.Update().map_err(win_err_update)?;
 
     Ok(())
 }
@@ -80,39 +79,24 @@ fn set_playback_status_inner(
         PlaybackStatus::Stopped => MediaPlaybackStatus::Stopped,
     };
 
-    controls
-        .SetPlaybackStatus(status)
-        .map_err(|e| MediaError::UpdateFailed(e.message().to_string()))?;
+    controls.SetPlaybackStatus(status).map_err(win_err_update)?;
 
     Ok(())
 }
 
 fn create_controls() -> Result<(MediaPlayer, SystemMediaTransportControls), MediaError> {
-    let media_player = MediaPlayer::new()
-        .map_err(|e| MediaError::InitializationFailed(e.message().to_string()))?;
+    let media_player = MediaPlayer::new().map_err(win_err_init)?;
 
     let controls = media_player
         .SystemMediaTransportControls()
-        .map_err(|e| MediaError::InitializationFailed(e.message().to_string()))?;
+        .map_err(win_err_init)?;
 
-    controls
-        .SetIsEnabled(true)
-        .map_err(|e| MediaError::InitializationFailed(e.message().to_string()))?;
-    controls
-        .SetIsPlayEnabled(true)
-        .map_err(|e| MediaError::InitializationFailed(e.message().to_string()))?;
-    controls
-        .SetIsPauseEnabled(true)
-        .map_err(|e| MediaError::InitializationFailed(e.message().to_string()))?;
-    controls
-        .SetIsStopEnabled(true)
-        .map_err(|e| MediaError::InitializationFailed(e.message().to_string()))?;
-    controls
-        .SetIsNextEnabled(true)
-        .map_err(|e| MediaError::InitializationFailed(e.message().to_string()))?;
-    controls
-        .SetIsPreviousEnabled(true)
-        .map_err(|e| MediaError::InitializationFailed(e.message().to_string()))?;
+    controls.SetIsEnabled(true).map_err(win_err_init)?;
+    controls.SetIsPlayEnabled(true).map_err(win_err_init)?;
+    controls.SetIsPauseEnabled(true).map_err(win_err_init)?;
+    controls.SetIsStopEnabled(true).map_err(win_err_init)?;
+    controls.SetIsNextEnabled(true).map_err(win_err_init)?;
+    controls.SetIsPreviousEnabled(true).map_err(win_err_init)?;
 
     Ok((media_player, controls))
 }
@@ -135,10 +119,10 @@ fn setup_button_handler(controls: &SystemMediaTransportControls) -> Result<(), M
             };
 
             if let Some(cmd) = cmd {
-                if let Ok(guard) = COMMAND_HANDLER.read() {
-                    if let Some(handler) = guard.as_ref() {
-                        handler.on_command(cmd.clone());
-                    }
+                if let Ok(guard) = COMMAND_HANDLER.read()
+                    && let Some(handler) = guard.as_ref()
+                {
+                    handler.on_command(cmd.clone());
                 }
                 if let Ok(mut guard) = PENDING_COMMANDS.write() {
                     guard.push(cmd);
@@ -150,7 +134,7 @@ fn setup_button_handler(controls: &SystemMediaTransportControls) -> Result<(), M
 
     controls
         .ButtonPressed(&handler)
-        .map_err(|e| MediaError::Unknown(e.message().to_string()))?;
+        .map_err(|e| MediaError::Unknown(e.message().to_string_lossy()))?;
 
     Ok(())
 }
@@ -164,6 +148,7 @@ pub struct MediaSessionInner {
     controls: SystemMediaTransportControls,
 }
 
+#[allow(dead_code)]
 impl MediaSessionInner {
     pub fn new() -> Result<Self, MediaError> {
         let (media_player, controls) = create_controls()?;
@@ -203,19 +188,11 @@ impl MediaSessionInner {
     }
 
     pub fn clear(&self) -> Result<(), MediaError> {
-        let updater = self
-            .controls
-            .DisplayUpdater()
-            .map_err(|e| MediaError::UpdateFailed(e.message().to_string()))?;
-
-        updater
-            .ClearAll()
-            .map_err(|e| MediaError::UpdateFailed(e.message().to_string()))?;
-
+        let updater = self.controls.DisplayUpdater().map_err(win_err_update)?;
+        updater.ClearAll().map_err(win_err_update)?;
         self.controls
             .SetPlaybackStatus(MediaPlaybackStatus::Closed)
-            .map_err(|e| MediaError::UpdateFailed(e.message().to_string()))?;
-
+            .map_err(win_err_update)?;
         Ok(())
     }
 }

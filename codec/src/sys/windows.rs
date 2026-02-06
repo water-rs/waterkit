@@ -12,9 +12,7 @@ use windows::Win32::Media::MediaFoundation::{
     MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
     MFT_OUTPUT_STREAM_INFO, MFTEnumEx, MFVideoInterlace_Progressive,
 };
-use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-};
+use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::core::GUID;
 
 // Media Foundation GUIDs
@@ -136,7 +134,9 @@ impl WindowsDecoder {
             }
 
             // Use the first available decoder
-            let activate = &*activates;
+            let activate = (&*activates)
+                .as_ref()
+                .ok_or_else(|| CodecError::InitializationFailed("No decoder found".into()))?;
             let transform: IMFTransform = activate
                 .ActivateObject()
                 .map_err(|e| CodecError::InitializationFailed(format!("ActivateObject: {e}")))?;
@@ -212,9 +212,9 @@ impl WindowsDecoder {
 
                 let mut output_buffer = MFT_OUTPUT_DATA_BUFFER {
                     dwStreamID: 0,
-                    pSample: output_sample.map(|s| std::mem::ManuallyDrop::new(s)),
+                    pSample: std::mem::ManuallyDrop::new(output_sample),
                     dwStatus: 0,
-                    pEvents: None,
+                    pEvents: std::mem::ManuallyDrop::new(None),
                 };
 
                 let mut status = 0u32;
@@ -226,11 +226,8 @@ impl WindowsDecoder {
 
                 match result {
                     Ok(()) => {
-                        if let Some(sample) = &output_buffer.pSample {
-                            let sample_ref = std::mem::ManuallyDrop::into_inner(sample.clone());
-                            if let Ok(frame) =
-                                extract_nv12_frame(&sample_ref, self.width, self.height)
-                            {
+                        if let Some(sample) = &*output_buffer.pSample {
+                            if let Ok(frame) = extract_nv12_frame(sample, self.width, self.height) {
                                 frames.push(frame);
                             }
                         }
@@ -303,7 +300,9 @@ impl WindowsEncoder {
                 ));
             }
 
-            let activate = &*activates;
+            let activate = (&*activates)
+                .as_ref()
+                .ok_or_else(|| CodecError::InitializationFailed("No encoder found".into()))?;
             let transform: IMFTransform = activate
                 .ActivateObject()
                 .map_err(|e| CodecError::InitializationFailed(format!("ActivateObject: {e}")))?;
@@ -401,9 +400,9 @@ impl WindowsEncoder {
 
                 let mut output_buffer = MFT_OUTPUT_DATA_BUFFER {
                     dwStreamID: 0,
-                    pSample: output_sample.map(|s| std::mem::ManuallyDrop::new(s)),
+                    pSample: std::mem::ManuallyDrop::new(output_sample),
                     dwStatus: 0,
-                    pEvents: None,
+                    pEvents: std::mem::ManuallyDrop::new(None),
                 };
 
                 let mut status = 0u32;
@@ -415,9 +414,8 @@ impl WindowsEncoder {
 
                 match result {
                     Ok(()) => {
-                        if let Some(sample) = &output_buffer.pSample {
-                            let sample_ref = std::mem::ManuallyDrop::into_inner(sample.clone());
-                            if let Ok(data) = extract_sample_data(&sample_ref) {
+                        if let Some(sample) = &*output_buffer.pSample {
+                            if let Ok(data) = extract_sample_data(sample) {
                                 encoded_data.extend_from_slice(&data);
                             }
                         }

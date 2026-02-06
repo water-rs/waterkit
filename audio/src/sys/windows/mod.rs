@@ -148,7 +148,13 @@ pub struct MediaSessionInner {
     controls: SystemMediaTransportControls,
 }
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    clippy::needless_pass_by_value,
+    clippy::unused_self,
+    clippy::missing_const_for_fn,
+    clippy::unnecessary_wraps
+)]
 impl MediaSessionInner {
     pub fn new() -> Result<Self, MediaError> {
         let (media_player, controls) = create_controls()?;

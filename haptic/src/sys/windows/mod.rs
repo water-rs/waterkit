@@ -26,12 +26,9 @@ fn get_controller() -> Result<SimpleHapticsController, HapticError> {
             .map_err(|e| HapticError::Unknown(e.to_string()))
     })?;
 
-    match device {
-        Some(d) => d
-            .SimpleHapticsController()
-            .map_err(|e| HapticError::Unknown(e.to_string())),
-        None => Err(HapticError::NotSupported),
-    }
+    device
+        .SimpleHapticsController()
+        .map_err(|e| HapticError::Unknown(e.to_string()))
 }
 
 fn find_feedback(

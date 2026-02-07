@@ -8,18 +8,26 @@ use windows::Win32::Media::MediaFoundation::{
     MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_VERSION,
     MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFSTARTUP_NOSOCKET, MFStartup,
     MFT_CATEGORY_VIDEO_DECODER, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE,
-    MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT, MFT_INPUT_STREAM_INFO,
-    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
-    MFT_OUTPUT_STREAM_INFO, MFTEnumEx, MFVideoInterlace_Progressive,
+    MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+    MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_INFO, MFTEnumEx,
+    MFVideoInterlace_Progressive,
 };
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::core::GUID;
 
 // Media Foundation GUIDs
 const MF_MT_AVG_BITRATE: GUID = GUID::from_u128(0x20332624_fb0d_4d9e_bd0d_cbf6786c102e);
+
+#[allow(non_upper_case_globals)]
 const MFMediaType_Video: GUID = GUID::from_u128(0x73646976_0000_0010_8000_00aa00389b71);
+
+#[allow(non_upper_case_globals)]
 const MFVideoFormat_H264: GUID = GUID::from_u128(0x34363248_0000_0010_8000_00aa00389b71);
+
+#[allow(non_upper_case_globals)]
 const MFVideoFormat_HEVC: GUID = GUID::from_u128(0x43564548_0000_0010_8000_00aa00389b71);
+
+#[allow(non_upper_case_globals)]
 const MFVideoFormat_NV12: GUID = GUID::from_u128(0x3231564e_0000_0010_8000_00aa00389b71);
 
 /// Internal codec type for Windows implementations.
@@ -30,7 +38,7 @@ pub enum CodecType {
 }
 
 impl CodecType {
-    fn subtype(&self) -> GUID {
+    const fn subtype(self) -> GUID {
         match self {
             Self::H264 => MFVideoFormat_H264,
             Self::H265 => MFVideoFormat_HEVC,
@@ -41,10 +49,7 @@ impl CodecType {
 /// Initialize Media Foundation (call once at startup).
 fn init_mf() -> Result<(), CodecError> {
     unsafe {
-        // Initialize COM
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-
-        // Initialize Media Foundation
         MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)
             .map_err(|e| CodecError::InitializationFailed(format!("MFStartup failed: {e}")))?;
     }
@@ -75,12 +80,12 @@ impl fmt::Debug for WindowsFrame {
 }
 
 /// Windows Media Foundation hardware decoder.
+#[allow(clippy::non_send_fields_in_send_ty)]
 pub struct WindowsDecoder {
     transform: IMFTransform,
     codec_type: CodecType,
     width: u32,
     height: u32,
-    input_stream_info: MFT_INPUT_STREAM_INFO,
     output_stream_info: MFT_OUTPUT_STREAM_INFO,
 }
 
@@ -108,7 +113,6 @@ impl WindowsDecoder {
         init_mf()?;
 
         unsafe {
-            // Find a hardware decoder
             let input_type = create_video_type(codec_type.subtype(), width, height)?;
             let output_type = create_video_type(MFVideoFormat_NV12, width, height)?;
 
@@ -120,8 +124,8 @@ impl WindowsDecoder {
                 MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER | MFT_ENUM_FLAG_SYNCMFT,
                 Some(&create_register_type_info(codec_type.subtype())),
                 Some(&create_register_type_info(MFVideoFormat_NV12)),
-                &mut activates,
-                &mut count,
+                &raw mut activates,
+                &raw mut count,
             )
             .map_err(|e| {
                 CodecError::InitializationFailed(format!("MFTEnumEx decoder failed: {e}"))
@@ -133,7 +137,6 @@ impl WindowsDecoder {
                 ));
             }
 
-            // Use the first available decoder
             let activate = (&*activates)
                 .as_ref()
                 .ok_or_else(|| CodecError::InitializationFailed("No decoder found".into()))?;
@@ -141,29 +144,18 @@ impl WindowsDecoder {
                 .ActivateObject()
                 .map_err(|e| CodecError::InitializationFailed(format!("ActivateObject: {e}")))?;
 
-            // Set input type
             transform.SetInputType(0, &input_type, 0).map_err(|e| {
                 CodecError::InitializationFailed(format!("SetInputType failed: {e}"))
             })?;
 
-            // Set output type
             transform.SetOutputType(0, &output_type, 0).map_err(|e| {
                 CodecError::InitializationFailed(format!("SetOutputType failed: {e}"))
             })?;
-
-            // Get stream info
-            let mut input_stream_info = MFT_INPUT_STREAM_INFO::default();
-            transform
-                .GetInputStreamInfo(0, &mut input_stream_info)
-                .map_err(|e| {
-                    CodecError::InitializationFailed(format!("GetInputStreamInfo: {e}"))
-                })?;
 
             let output_stream_info = transform.GetOutputStreamInfo(0).map_err(|e| {
                 CodecError::InitializationFailed(format!("GetOutputStreamInfo: {e}"))
             })?;
 
-            // Notify the decoder to start
             transform
                 .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
                 .ok();
@@ -176,7 +168,6 @@ impl WindowsDecoder {
                 codec_type,
                 width,
                 height,
-                input_stream_info,
                 output_stream_info,
             })
         }
@@ -185,24 +176,19 @@ impl WindowsDecoder {
     /// Decode compressed video data.
     pub fn decode(&mut self, data: &[u8]) -> Result<Vec<WindowsFrame>, CodecError> {
         unsafe {
-            // Create input sample
             let input_sample = create_sample(data)?;
 
-            // Process input
             self.transform
                 .ProcessInput(0, &input_sample, 0)
                 .map_err(|e| CodecError::DecodingFailed(format!("ProcessInput: {e}")))?;
 
-            // Collect output frames
             let mut frames = Vec::new();
 
             loop {
-                // Allocate output buffer if needed
                 let output_sample = if self.output_stream_info.dwFlags & 0x100 != 0 {
-                    // MFT_OUTPUT_STREAM_PROVIDES_SAMPLES - decoder provides samples
                     None
                 } else {
-                    let y_size = (self.width * self.height) as usize;
+                    let y_size = self.width as usize * self.height as usize;
                     let uv_size = y_size / 2;
                     Some(create_empty_sample(y_size + uv_size)?)
                 };
@@ -218,20 +204,18 @@ impl WindowsDecoder {
                 let result = self.transform.ProcessOutput(
                     0,
                     std::slice::from_mut(&mut output_buffer),
-                    &mut status,
+                    &raw mut status,
                 );
 
                 match result {
                     Ok(()) => {
-                        if let Some(sample) = &*output_buffer.pSample {
-                            if let Ok(frame) = extract_nv12_frame(sample, self.width, self.height) {
-                                frames.push(frame);
-                            }
+                        if let Some(sample) = &*output_buffer.pSample
+                            && let Ok(frame) = extract_nv12_frame(sample, self.width, self.height)
+                        {
+                            frames.push(frame);
                         }
                     }
-                    Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
-                        break; // Need more input data
-                    }
+                    Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => break,
                     Err(e) => {
                         return Err(CodecError::DecodingFailed(format!("ProcessOutput: {e}")));
                     }
@@ -244,13 +228,13 @@ impl WindowsDecoder {
 }
 
 /// Windows Media Foundation hardware encoder.
+#[allow(clippy::non_send_fields_in_send_ty)]
 pub struct WindowsEncoder {
     transform: IMFTransform,
     codec_type: CodecType,
     width: u32,
     height: u32,
     frame_count: i64,
-    input_stream_info: MFT_INPUT_STREAM_INFO,
     output_stream_info: MFT_OUTPUT_STREAM_INFO,
     codec_config: Option<Vec<u8>>,
 }
@@ -275,7 +259,6 @@ impl WindowsEncoder {
         init_mf()?;
 
         unsafe {
-            // Find a hardware encoder
             let mut count = 0u32;
             let mut activates = ptr::null_mut();
 
@@ -284,8 +267,8 @@ impl WindowsEncoder {
                 MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER | MFT_ENUM_FLAG_SYNCMFT,
                 Some(&create_register_type_info(MFVideoFormat_NV12)),
                 Some(&create_register_type_info(codec_type.subtype())),
-                &mut activates,
-                &mut count,
+                &raw mut activates,
+                &raw mut count,
             )
             .map_err(|e| {
                 CodecError::InitializationFailed(format!("MFTEnumEx encoder failed: {e}"))
@@ -304,33 +287,22 @@ impl WindowsEncoder {
                 .ActivateObject()
                 .map_err(|e| CodecError::InitializationFailed(format!("ActivateObject: {e}")))?;
 
-            // Set output type first for encoders
             let output_type = create_video_type(codec_type.subtype(), width, height)?;
-            output_type.SetUINT32(&MF_MT_AVG_BITRATE, 4_000_000).ok(); // 4 Mbps
+            output_type.SetUINT32(&MF_MT_AVG_BITRATE, 4_000_000).ok();
 
             transform.SetOutputType(0, &output_type, 0).map_err(|e| {
                 CodecError::InitializationFailed(format!("SetOutputType failed: {e}"))
             })?;
 
-            // Set input type
             let input_type = create_video_type(MFVideoFormat_NV12, width, height)?;
             transform.SetInputType(0, &input_type, 0).map_err(|e| {
                 CodecError::InitializationFailed(format!("SetInputType failed: {e}"))
             })?;
 
-            // Get stream info
-            let mut input_stream_info = MFT_INPUT_STREAM_INFO::default();
-            transform
-                .GetInputStreamInfo(0, &mut input_stream_info)
-                .map_err(|e| {
-                    CodecError::InitializationFailed(format!("GetInputStreamInfo: {e}"))
-                })?;
-
             let output_stream_info = transform.GetOutputStreamInfo(0).map_err(|e| {
                 CodecError::InitializationFailed(format!("GetOutputStreamInfo: {e}"))
             })?;
 
-            // Notify the encoder to start
             transform
                 .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
                 .ok();
@@ -344,7 +316,6 @@ impl WindowsEncoder {
                 width,
                 height,
                 frame_count: 0,
-                input_stream_info,
                 output_stream_info,
                 codec_config: None,
             })
@@ -353,7 +324,7 @@ impl WindowsEncoder {
 
     /// Encode NV12 data to compressed video.
     pub fn encode_nv12(&mut self, nv12: &[u8]) -> Result<Vec<u8>, CodecError> {
-        let y_size = (self.width * self.height) as usize;
+        let y_size = self.width as usize * self.height as usize;
         let uv_size = y_size / 2;
         let expected_size = y_size + uv_size;
 
@@ -368,19 +339,16 @@ impl WindowsEncoder {
         }
 
         unsafe {
-            // Create input sample with timestamp
             let input_sample = create_sample(nv12)?;
-            let time_100ns = self.frame_count * 333_333; // ~30fps in 100ns units
+            let time_100ns = self.frame_count * 333_333;
             self.frame_count += 1;
             input_sample.SetSampleTime(time_100ns).ok();
             input_sample.SetSampleDuration(333_333).ok();
 
-            // Process input
             self.transform
                 .ProcessInput(0, &input_sample, 0)
                 .map_err(|e| CodecError::EncodingFailed(format!("ProcessInput: {e}")))?;
 
-            // Collect encoded output
             let mut encoded_data = Vec::new();
 
             loop {
@@ -403,20 +371,18 @@ impl WindowsEncoder {
                 let result = self.transform.ProcessOutput(
                     0,
                     std::slice::from_mut(&mut output_buffer),
-                    &mut status,
+                    &raw mut status,
                 );
 
                 match result {
                     Ok(()) => {
-                        if let Some(sample) = &*output_buffer.pSample {
-                            if let Ok(data) = extract_sample_data(sample) {
-                                encoded_data.extend_from_slice(&data);
-                            }
+                        if let Some(sample) = &*output_buffer.pSample
+                            && let Ok(data) = extract_sample_data(sample)
+                        {
+                            encoded_data.extend_from_slice(&data);
                         }
                     }
-                    Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
-                        break;
-                    }
+                    Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => break,
                     Err(e) => {
                         return Err(CodecError::EncodingFailed(format!("ProcessOutput: {e}")));
                     }
@@ -449,19 +415,16 @@ fn create_video_type(subtype: GUID, width: u32, height: u32) -> Result<IMFMediaT
             .SetGUID(&MF_MT_SUBTYPE, &subtype)
             .map_err(|e| CodecError::InitializationFailed(format!("SetGUID subtype: {e}")))?;
 
-        // Frame size: (width << 32) | height
-        let frame_size = ((width as u64) << 32) | (height as u64);
+        let frame_size = (u64::from(width) << 32) | u64::from(height);
         media_type
             .SetUINT64(&MF_MT_FRAME_SIZE, frame_size)
             .map_err(|e| CodecError::InitializationFailed(format!("SetUINT64 frame_size: {e}")))?;
 
-        // Frame rate: 30fps
         let frame_rate = (30u64 << 32) | 1u64;
         media_type
             .SetUINT64(&MF_MT_FRAME_RATE, frame_rate)
             .map_err(|e| CodecError::InitializationFailed(format!("SetUINT64 frame_rate: {e}")))?;
 
-        // Progressive interlace
         media_type
             .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)
             .map_err(|e| CodecError::InitializationFailed(format!("SetUINT32 interlace: {e}")))?;
@@ -484,19 +447,21 @@ fn create_sample(data: &[u8]) -> Result<IMFSample, CodecError> {
         let sample: IMFSample = MFCreateSample()
             .map_err(|e| CodecError::InitializationFailed(format!("MFCreateSample: {e}")))?;
 
-        let buffer = MFCreateMemoryBuffer(data.len() as u32)
+        let len = u32::try_from(data.len())
+            .map_err(|_| CodecError::EncodingFailed("data too large for u32".into()))?;
+
+        let buffer = MFCreateMemoryBuffer(len)
             .map_err(|e| CodecError::InitializationFailed(format!("MFCreateMemoryBuffer: {e}")))?;
 
-        // Lock and copy data
         let mut buffer_ptr = ptr::null_mut();
         buffer
-            .Lock(&mut buffer_ptr, None, None)
+            .Lock(&raw mut buffer_ptr, None, None)
             .map_err(|e| CodecError::InitializationFailed(format!("Buffer Lock: {e}")))?;
 
         ptr::copy_nonoverlapping(data.as_ptr(), buffer_ptr, data.len());
 
         buffer
-            .SetCurrentLength(data.len() as u32)
+            .SetCurrentLength(len)
             .map_err(|e| CodecError::InitializationFailed(format!("SetCurrentLength: {e}")))?;
 
         buffer
@@ -516,7 +481,10 @@ fn create_empty_sample(size: usize) -> Result<IMFSample, CodecError> {
         let sample: IMFSample = MFCreateSample()
             .map_err(|e| CodecError::InitializationFailed(format!("MFCreateSample: {e}")))?;
 
-        let buffer = MFCreateMemoryBuffer(size as u32)
+        let len = u32::try_from(size)
+            .map_err(|_| CodecError::EncodingFailed("size too large for u32".into()))?;
+
+        let buffer = MFCreateMemoryBuffer(len)
             .map_err(|e| CodecError::InitializationFailed(format!("MFCreateMemoryBuffer: {e}")))?;
 
         sample
@@ -527,6 +495,7 @@ fn create_empty_sample(size: usize) -> Result<IMFSample, CodecError> {
     }
 }
 
+#[allow(clippy::cast_sign_loss)]
 fn extract_nv12_frame(
     sample: &IMFSample,
     width: u32,
@@ -541,10 +510,10 @@ fn extract_nv12_frame(
         let mut current_len = 0u32;
 
         buffer
-            .Lock(&mut buffer_ptr, None, Some(&mut current_len))
+            .Lock(&raw mut buffer_ptr, None, Some(&raw mut current_len))
             .map_err(|e| CodecError::DecodingFailed(format!("Lock: {e}")))?;
 
-        let y_size = (width * height) as usize;
+        let y_size = width as usize * height as usize;
         let uv_size = y_size / 2;
         let frame_size = y_size + uv_size;
 
@@ -556,7 +525,7 @@ fn extract_nv12_frame(
             .Unlock()
             .map_err(|e| CodecError::DecodingFailed(format!("Unlock: {e}")))?;
 
-        let timestamp_ns = sample.GetSampleTime().unwrap_or(0) as u64 * 100; // Convert 100ns to ns
+        let timestamp_ns = sample.GetSampleTime().unwrap_or(0) as u64 * 100;
 
         Ok(WindowsFrame {
             data,
@@ -577,7 +546,7 @@ fn extract_sample_data(sample: &IMFSample) -> Result<Vec<u8>, CodecError> {
         let mut current_len = 0u32;
 
         buffer
-            .Lock(&mut buffer_ptr, None, Some(&mut current_len))
+            .Lock(&raw mut buffer_ptr, None, Some(&raw mut current_len))
             .map_err(|e| CodecError::EncodingFailed(format!("Lock: {e}")))?;
 
         let mut data = vec![0u8; current_len as usize];

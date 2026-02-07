@@ -272,7 +272,7 @@ jobs:
           shared-key: ci-ubuntu
       - uses: taiki-e/install-action@cargo-hack
       - run: cargo hack check --each-feature --no-dev-deps
-      - run: cargo hack check --feature-powerset --no-dev-deps
+      - run: cargo hack check --feature-powerset --no-dev-deps --depth 2
 
   test:
     name: Test

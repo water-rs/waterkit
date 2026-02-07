@@ -2,6 +2,9 @@
 
 use crate::{Location, LocationError, Timestamp};
 
+// FILETIME epoch offset: 11644473600 seconds between 1601-01-01 and 1970-01-01
+const FILETIME_UNIX_DIFF: i64 = 11_644_473_600;
+
 pub async fn get_location() -> Result<Location, LocationError> {
     use windows::Devices::Geolocation::{GeolocationAccessStatus, Geolocator};
 
@@ -38,8 +41,6 @@ pub async fn get_location() -> Result<Location, LocationError> {
     // Convert to Unix timestamp (seconds since 1970-01-01)
     let filetime = coord.Timestamp().map_err(map_err)?.UniversalTime;
 
-    // FILETIME epoch offset: 11644473600 seconds between 1601-01-01 and 1970-01-01
-    const FILETIME_UNIX_DIFF: i64 = 11_644_473_600;
     let unix_seconds = (filetime / 10_000_000) - FILETIME_UNIX_DIFF;
 
     let timestamp =

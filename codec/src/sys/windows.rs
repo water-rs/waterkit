@@ -412,7 +412,7 @@ fn create_video_type(subtype: GUID, width: u32, height: u32) -> Result<IMFMediaT
             .map_err(|e| CodecError::InitializationFailed(format!("SetGUID major: {e}")))?;
 
         media_type
-            .SetGUID(&MF_MT_SUBTYPE, &subtype)
+            .SetGUID(&MF_MT_SUBTYPE, &raw const subtype)
             .map_err(|e| CodecError::InitializationFailed(format!("SetGUID subtype: {e}")))?;
 
         let frame_size = (u64::from(width) << 32) | u64::from(height);
@@ -433,7 +433,7 @@ fn create_video_type(subtype: GUID, width: u32, height: u32) -> Result<IMFMediaT
     }
 }
 
-fn create_register_type_info(
+const fn create_register_type_info(
     subtype: GUID,
 ) -> windows::Win32::Media::MediaFoundation::MFT_REGISTER_TYPE_INFO {
     windows::Win32::Media::MediaFoundation::MFT_REGISTER_TYPE_INFO {

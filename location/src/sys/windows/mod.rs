@@ -5,46 +5,38 @@ use crate::{Location, LocationError, Timestamp};
 pub async fn get_location() -> Result<Location, LocationError> {
     use windows::Devices::Geolocation::{GeolocationAccessStatus, Geolocator};
 
+    let map_err = |e: windows::core::Error| LocationError::Unknown(e.to_string());
+
     // Request access (this also serves as permission check on Windows)
     let access = Geolocator::RequestAccessAsync()
-        .map_err(|e| LocationError::Unknown(e.message().to_string()))?
+        .map_err(map_err)?
         .await
-        .map_err(|e| LocationError::Unknown(e.message().to_string()))?;
+        .map_err(map_err)?;
 
-    match access {
-        GeolocationAccessStatus::Denied => return Err(LocationError::PermissionDenied),
-        GeolocationAccessStatus::Unspecified => return Err(LocationError::NotAvailable),
-        GeolocationAccessStatus::Allowed => {}
-        _ => return Err(LocationError::NotAvailable),
+    if access == GeolocationAccessStatus::Denied {
+        return Err(LocationError::PermissionDenied);
+    }
+    if access != GeolocationAccessStatus::Allowed {
+        return Err(LocationError::NotAvailable);
     }
 
-    let geolocator =
-        Geolocator::new().map_err(|e| LocationError::Unknown(e.message().to_string()))?;
+    let geolocator = Geolocator::new().map_err(map_err)?;
 
     let position = geolocator
         .GetGeopositionAsync()
-        .map_err(|e| LocationError::Unknown(e.message().to_string()))?
+        .map_err(map_err)?
         .await
-        .map_err(|e| LocationError::Unknown(e.message().to_string()))?;
+        .map_err(map_err)?;
 
-    let coord = position
-        .Coordinate()
-        .map_err(|e| LocationError::Unknown(e.message().to_string()))?;
+    let coord = position.Coordinate().map_err(map_err)?;
 
-    let point = coord
-        .Point()
-        .map_err(|e| LocationError::Unknown(e.message().to_string()))?;
+    let point = coord.Point().map_err(map_err)?;
 
-    let pos = point
-        .Position()
-        .map_err(|e| LocationError::Unknown(e.message().to_string()))?;
+    let pos = point.Position().map_err(map_err)?;
 
     // Windows DateTime.UniversalTime is 100-nanosecond intervals since 1601-01-01
     // Convert to Unix timestamp (seconds since 1970-01-01)
-    let filetime = coord
-        .Timestamp()
-        .map_err(|e| LocationError::Unknown(e.message().to_string()))?
-        .UniversalTime;
+    let filetime = coord.Timestamp().map_err(map_err)?.UniversalTime;
 
     // FILETIME epoch offset: 11644473600 seconds between 1601-01-01 and 1970-01-01
     const FILETIME_UNIX_DIFF: i64 = 11_644_473_600;

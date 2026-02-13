@@ -1,0 +1,18 @@
+[package]
+name = "waterkit-regional"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Cross-platform system settings context (language list, locale tag, region, timezone)"
+keywords = ["system", "locale", "timezone", "settings"]
+categories = ["os", "localization"]
+
+[lints]
+workspace = true
+
+[dependencies]
+sys-locale.workspace = true
+iana-time-zone.workspace = true

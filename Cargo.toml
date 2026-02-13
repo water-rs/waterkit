@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tests/macos/passkey", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video", "bluetooth", "nfc", "share", "speech", "contacts", "calendar", "health", "deeplink", "background", "passkey"]
+members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tests/macos/passkey", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video", "regional", "bluetooth", "nfc", "share", "speech", "contacts", "calendar", "health", "deeplink", "background", "passkey"]
 
 
 [workspace.package]
@@ -46,6 +46,7 @@ waterkit-codec = { workspace = true, optional = true }
 waterkit-screen = { workspace = true, optional = true }
 waterkit-system = { workspace = true, optional = true }
 waterkit-video = { workspace = true, optional = true }
+waterkit-regional = { workspace = true, optional = true }
 waterkit-bluetooth = { workspace = true, optional = true }
 waterkit-nfc = { workspace = true, optional = true }
 waterkit-share = { workspace = true, optional = true }
@@ -79,6 +80,7 @@ full = [
     "screen",
     "system",
     "video",
+    "regional",
     "bluetooth",
     "nfc",
     "share",
@@ -106,6 +108,7 @@ codec = ["dep:waterkit-codec"]
 screen = ["dep:waterkit-screen"]
 system = ["dep:waterkit-system"]
 video = ["dep:waterkit-video"]
+regional = ["dep:waterkit-regional"]
 bluetooth = ["dep:waterkit-bluetooth"]
 nfc = ["dep:waterkit-nfc"]
 share = ["dep:waterkit-share"]
@@ -136,6 +139,7 @@ waterkit-codec = { path = "codec", version = "0.1.0" }
 waterkit-screen = { path = "screen", version = "0.1.0" }
 waterkit-system = { path = "system", version = "0.1.0" }
 waterkit-video = { path = "video", version = "0.1.0" }
+waterkit-regional = { path = "regional", version = "0.1.0" }
 waterkit-bluetooth = { path = "bluetooth", version = "0.1.0" }
 waterkit-nfc = { path = "nfc", version = "0.1.0" }
 waterkit-share = { path = "share", version = "0.1.0" }
@@ -229,6 +233,8 @@ notify-rust = "4"
 futures-timer = "3"
 netdev = "0.40"
 swift-rs = "1.0.6"
+sys-locale = "0.3"
+iana-time-zone = "0.1"
 
 [workspace.lints]
 rust.missing_docs = "warn"

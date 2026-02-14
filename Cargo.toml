@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video", "bluetooth", "nfc", "share", "speech", "contacts", "calendar", "health", "deeplink"]
+members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video", "bluetooth", "nfc", "share", "speech", "contacts", "calendar", "health", "deeplink"]
 
 
 [workspace.package]
@@ -142,6 +142,7 @@ async-channel = "2.3"
 thiserror = "2"
 blocking = "1"
 async-io = "2"
+async-process = "2"
 wgpu = "28"
 metal = "0.33"
 

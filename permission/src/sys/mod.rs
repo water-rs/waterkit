@@ -27,7 +27,15 @@ pub use windows::{check, request};
 #[cfg(target_os = "linux")]
 pub use linux::{check, request};
 
-// Fallback for unsupported platforms (compile-time stub)
+#[cfg(not(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "android",
+    target_os = "windows",
+    target_os = "linux"
+)))]
+compile_error!("waterkit-permission supports only macOS, iOS, Android, Windows, and Linux.");
+
 #[cfg(not(any(
     target_os = "ios",
     target_os = "macos",
@@ -36,7 +44,7 @@ pub use linux::{check, request};
     target_os = "linux"
 )))]
 pub(crate) async fn check(_permission: crate::Permission) -> crate::PermissionStatus {
-    crate::PermissionStatus::NotDetermined
+    panic!("waterkit-permission supports only macOS, iOS, Android, Windows, and Linux.")
 }
 
 #[cfg(not(any(
@@ -49,5 +57,5 @@ pub(crate) async fn check(_permission: crate::Permission) -> crate::PermissionSt
 pub(crate) async fn request(
     _permission: crate::Permission,
 ) -> Result<crate::PermissionStatus, crate::PermissionError> {
-    Err(crate::PermissionError::NotSupported)
+    panic!("waterkit-permission supports only macOS, iOS, Android, Windows, and Linux.")
 }

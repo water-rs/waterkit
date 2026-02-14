@@ -25,6 +25,15 @@ mod windows;
 #[cfg(target_os = "linux")]
 mod linux;
 
+#[cfg(not(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "android",
+    target_os = "windows",
+    target_os = "linux"
+)))]
+compile_error!("waterkit-audio supports only macOS, iOS, Android, Windows, and Linux.");
+
 // Keep MediaSessionInner for backwards compatibility
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 pub use apple::MediaSessionInner;
@@ -61,7 +70,7 @@ pub struct MediaCenterIntegration {
         target_os = "windows",
         target_os = "linux"
     )))]
-    inner: FallbackMediaCenter,
+    inner: UnsupportedMediaCenter,
 }
 
 impl MediaCenterIntegration {
@@ -86,7 +95,7 @@ impl MediaCenterIntegration {
             target_os = "windows",
             target_os = "linux"
         )))]
-        let inner = FallbackMediaCenter;
+        let inner = UnsupportedMediaCenter;
 
         Ok(Self { inner })
     }
@@ -117,7 +126,6 @@ impl MediaCenterIntegration {
     }
 }
 
-// Fallback for unsupported platforms
 #[cfg(not(any(
     target_os = "ios",
     target_os = "macos",
@@ -125,7 +133,8 @@ impl MediaCenterIntegration {
     target_os = "windows",
     target_os = "linux"
 )))]
-struct FallbackMediaCenter;
+#[derive(Debug)]
+struct UnsupportedMediaCenter;
 
 #[cfg(not(any(
     target_os = "ios",
@@ -134,72 +143,20 @@ struct FallbackMediaCenter;
     target_os = "windows",
     target_os = "linux"
 )))]
-impl FallbackMediaCenter {
-    fn update(&self, _metadata: &MediaMetadata, _state: &PlaybackState) {}
-    fn clear(&self) {}
-    // run_loop used by background thread
-    fn run_loop(&self, duration: Duration) {
-        std::thread::sleep(duration);
+impl UnsupportedMediaCenter {
+    fn update(&self, _metadata: &MediaMetadata, _state: &PlaybackState) {
+        panic!("waterkit-audio supports only macOS, iOS, Android, Windows, and Linux.")
+    }
+
+    fn clear(&self) {
+        panic!("waterkit-audio supports only macOS, iOS, Android, Windows, and Linux.")
+    }
+
+    fn run_loop(&self, _duration: Duration) {
+        panic!("waterkit-audio supports only macOS, iOS, Android, Windows, and Linux.")
     }
 
     fn poll_command(&self) -> Option<MediaCommand> {
-        None
+        panic!("waterkit-audio supports only macOS, iOS, Android, Windows, and Linux.")
     }
 }
-
-// Also keep fallback MediaSessionInner for backwards compatibility
-#[cfg(not(any(
-    target_os = "ios",
-    target_os = "macos",
-    target_os = "android",
-    target_os = "windows",
-    target_os = "linux"
-)))]
-mod fallback {
-    use crate::{MediaCommandHandler, MediaError, MediaMetadata, PlaybackState};
-
-    #[derive(Debug)]
-    pub struct MediaSessionInner;
-
-    impl MediaSessionInner {
-        pub fn new() -> Result<Self, MediaError> {
-            Err(MediaError::NotSupported)
-        }
-
-        pub fn set_metadata(&self, _metadata: &MediaMetadata) -> Result<(), MediaError> {
-            Err(MediaError::NotSupported)
-        }
-
-        pub fn set_playback_state(&self, _state: &PlaybackState) -> Result<(), MediaError> {
-            Err(MediaError::NotSupported)
-        }
-
-        pub fn set_command_handler(
-            &self,
-            _handler: Box<dyn MediaCommandHandler>,
-        ) -> Result<(), MediaError> {
-            Err(MediaError::NotSupported)
-        }
-
-        pub fn request_audio_focus(&self) -> Result<(), MediaError> {
-            Err(MediaError::NotSupported)
-        }
-
-        pub fn abandon_audio_focus(&self) -> Result<(), MediaError> {
-            Err(MediaError::NotSupported)
-        }
-
-        pub fn clear(&self) -> Result<(), MediaError> {
-            Err(MediaError::NotSupported)
-        }
-    }
-}
-
-#[cfg(not(any(
-    target_os = "ios",
-    target_os = "macos",
-    target_os = "android",
-    target_os = "windows",
-    target_os = "linux"
-)))]
-pub(crate) use fallback::MediaSessionInner;

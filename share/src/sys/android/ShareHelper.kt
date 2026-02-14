@@ -3,7 +3,6 @@ package waterkit.share
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import androidx.core.content.FileProvider
 
 object ShareHelper {
     @JvmStatic

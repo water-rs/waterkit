@@ -1,0 +1,20 @@
+[package]
+name = "waterkit-test-linux"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+waterkit-permission.workspace = true
+waterkit-biometric.workspace = true
+waterkit-haptic.workspace = true
+waterkit-bluetooth.workspace = true
+waterkit-nfc.workspace = true
+waterkit-share.workspace = true
+waterkit-speech.workspace = true
+waterkit-deeplink.workspace = true
+waterkit-sensor.workspace = true
+waterkit-system.workspace = true

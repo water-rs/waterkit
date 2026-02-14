@@ -4,6 +4,8 @@ use crate::{
 };
 use std::collections::HashMap;
 use zbus::Connection;
+use zbus::names::InterfaceName;
+use zbus::zvariant::{Array, OwnedValue};
 
 const BLUEZ_SERVICE: &str = "org.bluez";
 const ADAPTER_PATH: &str = "/org/bluez/hci0";
@@ -11,6 +13,48 @@ const ADAPTER_IFACE: &str = "org.bluez.Adapter1";
 const DEVICE_IFACE: &str = "org.bluez.Device1";
 const GATT_SERVICE_IFACE: &str = "org.bluez.GattService1";
 const GATT_CHAR_IFACE: &str = "org.bluez.GattCharacteristic1";
+type OwnedPropertyMap = HashMap<String, OwnedValue>;
+type SignalPropertyMap<'a> = HashMap<&'a str, zbus::zvariant::Value<'a>>;
+
+fn prop_str(props: &OwnedPropertyMap, key: &str) -> Option<String> {
+    props
+        .get(key)
+        .and_then(|v| <&str>::try_from(v).ok())
+        .map(str::to_owned)
+}
+
+fn prop_bool(props: &OwnedPropertyMap, key: &str) -> Option<bool> {
+    props.get(key).and_then(|v| bool::try_from(v).ok())
+}
+
+fn prop_str_array(props: &OwnedPropertyMap, key: &str) -> Vec<String> {
+    props
+        .get(key)
+        .and_then(|v| <&Array<'_>>::try_from(v).ok())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.downcast_ref::<zbus::zvariant::Str<'_>>()
+                        .ok()
+                        .map(|s| s.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn signal_prop_str(props: &SignalPropertyMap<'_>, key: &str) -> Option<String> {
+    props.get(key).and_then(|v| {
+        v.downcast_ref::<zbus::zvariant::Str<'_>>()
+            .ok()
+            .map(|s| s.to_string())
+    })
+}
+
+fn signal_prop_i16(props: &SignalPropertyMap<'_>, key: &str) -> Option<i16> {
+    props.get(key).and_then(|v| v.downcast_ref::<i16>().ok())
+}
 
 async fn get_connection() -> Result<Connection, BluetoothError> {
     Connection::system()
@@ -28,12 +72,14 @@ pub async fn adapter_state() -> Result<AdapterState, BluetoothError> {
         .build()
         .await
         .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
-    let powered: bool = proxy
-        .get(ADAPTER_IFACE, "Powered")
+    let adapter_iface = InterfaceName::try_from(ADAPTER_IFACE)
+        .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+    let powered_value = proxy
+        .get(adapter_iface, "Powered")
         .await
-        .map_err(|e| BluetoothError::PlatformError(e.to_string()))?
-        .try_into()
-        .map_err(|e: zbus::zvariant::Error| BluetoothError::PlatformError(e.to_string()))?;
+        .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+    let powered =
+        bool::try_from(&powered_value).map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
     if powered {
         Ok(AdapterState::PoweredOn)
     } else {
@@ -63,15 +109,7 @@ impl BleScannerInner {
         let (tx, rx) = async_channel::bounded(64);
         let conn = self.connection.clone();
         std::thread::spawn(move || {
-            let rt = futures::executor::block_on(async {
-                let proxy = zbus::fdo::PropertiesProxy::builder(&conn)
-                    .destination(BLUEZ_SERVICE)
-                    .unwrap()
-                    .path(ADAPTER_PATH)
-                    .unwrap()
-                    .build()
-                    .await
-                    .unwrap();
+            futures::executor::block_on(async {
                 // Start discovery via method call
                 let adapter_proxy =
                     zbus::Proxy::new(&conn, BLUEZ_SERVICE, ADAPTER_PATH, ADAPTER_IFACE)
@@ -96,19 +134,9 @@ impl BleScannerInner {
                         if path.starts_with("/org/bluez/hci0/dev_") {
                             let ifaces = args.interfaces_and_properties();
                             if let Some(props) = ifaces.get(DEVICE_IFACE) {
-                                let name = props
-                                    .get("Name")
-                                    .and_then(|v| v.downcast_ref::<str>())
-                                    .map(String::from);
-                                let addr = props
-                                    .get("Address")
-                                    .and_then(|v| v.downcast_ref::<str>())
-                                    .unwrap_or("")
-                                    .to_string();
-                                let rssi: i16 = props
-                                    .get("RSSI")
-                                    .and_then(|v| v.downcast_ref::<i16>().copied())
-                                    .unwrap_or(0);
+                                let name = signal_prop_str(props, "Name");
+                                let addr = signal_prop_str(props, "Address").unwrap_or_default();
+                                let rssi = signal_prop_i16(props, "RSSI").unwrap_or(0);
                                 let result = ScanResult {
                                     device: BluetoothDevice {
                                         id: DeviceId(addr),
@@ -157,7 +185,7 @@ impl BleConnectionInner {
         let conn = get_connection().await?;
         let addr = device_id.0.replace(':', "_");
         let device_path = format!("{ADAPTER_PATH}/dev_{addr}");
-        let proxy = zbus::Proxy::new(&conn, BLUEZ_SERVICE, &device_path, DEVICE_IFACE)
+        let proxy = zbus::Proxy::new(&conn, BLUEZ_SERVICE, device_path.as_str(), DEVICE_IFACE)
             .await
             .map_err(|e| BluetoothError::ConnectionFailed(e.to_string()))?;
         proxy
@@ -190,37 +218,15 @@ impl BleConnectionInner {
                 continue;
             }
             if let Some(props) = ifaces.get(GATT_SERVICE_IFACE) {
-                let uuid = props
-                    .get("UUID")
-                    .and_then(|v| v.downcast_ref::<str>())
-                    .unwrap_or("")
-                    .to_string();
-                let is_primary = props
-                    .get("Primary")
-                    .and_then(|v| v.downcast_ref::<bool>().copied())
-                    .unwrap_or(false);
+                let uuid = prop_str(props, "UUID").unwrap_or_default();
+                let is_primary = prop_bool(props, "Primary").unwrap_or(false);
                 let mut characteristics = Vec::new();
                 for (cpath, cifaces) in &objects {
                     let cpath_str = cpath.to_string();
                     if cpath_str.starts_with(&path_str) && cifaces.contains_key(GATT_CHAR_IFACE) {
                         if let Some(cprops) = cifaces.get(GATT_CHAR_IFACE) {
-                            let cuuid = cprops
-                                .get("UUID")
-                                .and_then(|v| v.downcast_ref::<str>())
-                                .unwrap_or("")
-                                .to_string();
-                            let flags: Vec<String> = cprops
-                                .get("Flags")
-                                .and_then(|v| {
-                                    v.downcast_ref::<zbus::zvariant::Array>().map(|a| {
-                                        a.iter()
-                                            .filter_map(|f| {
-                                                f.downcast_ref::<str>().map(String::from)
-                                            })
-                                            .collect()
-                                    })
-                                })
-                                .unwrap_or_default();
+                            let cuuid = prop_str(cprops, "UUID").unwrap_or_default();
+                            let flags = prop_str_array(cprops, "Flags");
                             characteristics.push(GattCharacteristic {
                                 uuid: Uuid(cuuid),
                                 properties: CharacteristicProperties {
@@ -252,10 +258,15 @@ impl BleConnectionInner {
         characteristic: &Uuid,
     ) -> Result<Vec<u8>, BluetoothError> {
         let char_path = self.find_char_path(characteristic).await?;
-        let proxy = zbus::Proxy::new(&self.connection, BLUEZ_SERVICE, &char_path, GATT_CHAR_IFACE)
-            .await
-            .map_err(|e| BluetoothError::GattError(e.to_string()))?;
-        let opts: HashMap<String, zbus::zvariant::Value> = HashMap::new();
+        let proxy = zbus::Proxy::new(
+            &self.connection,
+            BLUEZ_SERVICE,
+            char_path.as_str(),
+            GATT_CHAR_IFACE,
+        )
+        .await
+        .map_err(|e| BluetoothError::GattError(e.to_string()))?;
+        let opts: HashMap<String, OwnedValue> = HashMap::new();
         let result: Vec<u8> = proxy
             .call_method("ReadValue", &(opts,))
             .await
@@ -273,10 +284,15 @@ impl BleConnectionInner {
         data: &[u8],
     ) -> Result<(), BluetoothError> {
         let char_path = self.find_char_path(characteristic).await?;
-        let proxy = zbus::Proxy::new(&self.connection, BLUEZ_SERVICE, &char_path, GATT_CHAR_IFACE)
-            .await
-            .map_err(|e| BluetoothError::GattError(e.to_string()))?;
-        let opts: HashMap<String, zbus::zvariant::Value> = HashMap::new();
+        let proxy = zbus::Proxy::new(
+            &self.connection,
+            BLUEZ_SERVICE,
+            char_path.as_str(),
+            GATT_CHAR_IFACE,
+        )
+        .await
+        .map_err(|e| BluetoothError::GattError(e.to_string()))?;
+        let opts: HashMap<String, OwnedValue> = HashMap::new();
         proxy
             .call_method("WriteValue", &(data, opts))
             .await
@@ -296,7 +312,7 @@ impl BleConnectionInner {
         let proxy = zbus::Proxy::new(
             &self.connection,
             BLUEZ_SERVICE,
-            &self.device_path,
+            self.device_path.as_str(),
             DEVICE_IFACE,
         )
         .await
@@ -323,10 +339,7 @@ impl BleConnectionInner {
             let path_str = path.to_string();
             if path_str.starts_with(&self.device_path) {
                 if let Some(props) = ifaces.get(GATT_CHAR_IFACE) {
-                    let cuuid = props
-                        .get("UUID")
-                        .and_then(|v| v.downcast_ref::<str>())
-                        .unwrap_or("");
+                    let cuuid = prop_str(props, "UUID").unwrap_or_default();
                     if cuuid == uuid.0 {
                         return Ok(path_str);
                     }

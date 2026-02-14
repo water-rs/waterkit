@@ -10,8 +10,17 @@ use windows::Devices::Bluetooth::GenericAttributeProfile::{
     GattCharacteristicProperties, GattCommunicationStatus, GattDeviceService,
 };
 use windows::Devices::Bluetooth::{BluetoothAdapter, BluetoothLEDevice};
-use windows::Devices::Radios::{Radio, RadioState};
+use windows::Devices::Radios::RadioState;
 use windows::Foundation::TypedEventHandler;
+
+fn guid_to_uuid(guid: windows::core::GUID) -> Uuid {
+    Uuid(format!("{guid:?}"))
+}
+
+fn parse_guid(uuid: &Uuid) -> Result<windows::core::GUID, BluetoothError> {
+    windows::core::GUID::try_from(uuid.0.as_str())
+        .map_err(|_| BluetoothError::GattError("Invalid UUID".into()))
+}
 
 pub async fn adapter_state() -> Result<AdapterState, BluetoothError> {
     let adapter = BluetoothAdapter::GetDefaultAsync()
@@ -60,35 +69,36 @@ impl BleScannerInner {
                 BluetoothLEAdvertisementWatcher,
                 BluetoothLEAdvertisementReceivedEventArgs,
             >::new(move |_, args| {
-                if let Some(args) = args {
-                    let addr = args.BluetoothAddress().unwrap_or(0);
-                    let rssi = args.RawSignalStrengthInDBm().unwrap_or(0);
-                    let device_id = format!("{addr:012X}");
-                    let mut service_uuids = Vec::new();
-                    if let Ok(adv) = args.Advertisement() {
-                        if let Ok(uuids) = adv.ServiceUuids() {
-                            for uuid in &uuids {
-                                service_uuids.push(Uuid(uuid.to_string()));
-                            }
-                        }
+                let Some(args) = args.as_ref() else {
+                    return Ok(());
+                };
+                let addr = args.BluetoothAddress().unwrap_or(0);
+                let rssi = args.RawSignalStrengthInDBm().unwrap_or(0);
+                let device_id = format!("{addr:012X}");
+                let mut service_uuids = Vec::new();
+                if let Ok(adv) = args.Advertisement()
+                    && let Ok(uuids) = adv.ServiceUuids()
+                {
+                    for uuid in &uuids {
+                        service_uuids.push(guid_to_uuid(uuid));
                     }
-                    let result = ScanResult {
-                        device: BluetoothDevice {
-                            id: DeviceId(device_id),
-                            name: args
-                                .Advertisement()
-                                .ok()
-                                .and_then(|a| a.LocalName().ok())
-                                .map(|n| n.to_string())
-                                .filter(|n| !n.is_empty()),
-                            rssi: Some(rssi),
-                            is_connected: false,
-                        },
-                        service_uuids,
-                        manufacturer_data: HashMap::new(),
-                    };
-                    let _ = tx.try_send(result);
                 }
+                let result = ScanResult {
+                    device: BluetoothDevice {
+                        id: DeviceId(device_id),
+                        name: args
+                            .Advertisement()
+                            .ok()
+                            .and_then(|a| a.LocalName().ok())
+                            .map(|n| n.to_string())
+                            .filter(|n| !n.is_empty()),
+                        rssi: Some(rssi),
+                        is_connected: false,
+                    },
+                    service_uuids,
+                    manufacturer_data: HashMap::new(),
+                };
+                let _ = tx.try_send(result);
                 Ok(())
             }))
             .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
@@ -138,7 +148,10 @@ impl BleConnectionInner {
             .map_err(|e| BluetoothError::GattError(e.to_string()))?;
         let mut out = Vec::new();
         for svc in &services {
-            let uuid = Uuid(svc.Uuid().map_or_else(|_| String::new(), |u| u.to_string()));
+            let uuid = Uuid(
+                svc.Uuid()
+                    .map_or_else(|_| String::new(), |u| format!("{u:?}")),
+            );
             let chars_result = svc
                 .GetCharacteristicsAsync()
                 .map_err(|e| BluetoothError::GattError(e.to_string()))?
@@ -147,7 +160,10 @@ impl BleConnectionInner {
             let mut characteristics = Vec::new();
             if let Ok(chars) = chars_result.Characteristics() {
                 for c in &chars {
-                    let cuuid = Uuid(c.Uuid().map_or_else(|_| String::new(), |u| u.to_string()));
+                    let cuuid = Uuid(
+                        c.Uuid()
+                            .map_or_else(|_| String::new(), |u| format!("{u:?}")),
+                    );
                     let props = c
                         .CharacteristicProperties()
                         .unwrap_or(GattCharacteristicProperties::None);
@@ -249,10 +265,7 @@ impl BleConnectionInner {
     }
 
     async fn find_service(&self, uuid: &Uuid) -> Result<GattDeviceService, BluetoothError> {
-        let guid: windows::core::GUID = uuid
-            .0
-            .parse()
-            .map_err(|_| BluetoothError::GattError("Invalid UUID".into()))?;
+        let guid = parse_guid(uuid)?;
         let result = self
             .device
             .GetGattServicesForUuidAsync(guid)
@@ -277,10 +290,7 @@ impl BleConnectionInner {
         windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic,
         BluetoothError,
     > {
-        let guid: windows::core::GUID = uuid
-            .0
-            .parse()
-            .map_err(|_| BluetoothError::GattError("Invalid UUID".into()))?;
+        let guid = parse_guid(uuid)?;
         let result = service
             .GetCharacteristicsForUuidAsync(guid)
             .map_err(|e| BluetoothError::GattError(e.to_string()))?

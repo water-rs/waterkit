@@ -3,7 +3,7 @@ use crate::{NdefMessage, NfcError, NfcTag};
 pub fn nfc_is_available() -> bool {
     // Windows Proximity API (NFC) - check if device supports it
     windows::Networking::Proximity::ProximityDevice::GetDefault()
-        .map(|d| !d.is_null())
+        .map(|_| true)
         .unwrap_or(false)
 }
 

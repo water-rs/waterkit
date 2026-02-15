@@ -8,6 +8,9 @@ fn main() {
     }
 
     if target_os == "android" {
-        waterkit_build::build_kotlin(&["src/sys/android/SpeechHelper.kt"]);
+        waterkit_build::build_kotlin(&[
+            "src/sys/android/SpeechHelper.kt",
+            "src/sys/android/SpeechInitCallback.kt",
+        ]);
     }
 }

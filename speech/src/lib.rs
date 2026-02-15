@@ -8,6 +8,12 @@
 
 mod sys;
 
+/// Android-specific JNI helpers that require `JNIEnv` and `Context`.
+#[cfg(target_os = "android")]
+pub mod android {
+    pub use crate::sys::init_with_context;
+}
+
 /// A voice available for text-to-speech.
 #[derive(Debug, Clone)]
 pub struct Voice {

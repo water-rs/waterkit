@@ -1,17 +1,157 @@
 use crate::{DeepLink, DeepLinkError};
+use jni::objects::{GlobalRef, JObject, JValue};
+use jni::{JNIEnv, JavaVM};
 
-#[allow(clippy::unused_async)]
-pub async fn open_url(_url: &str) -> Result<(), DeepLinkError> {
-    Err(DeepLinkError::PlatformError(
-        "Android: use JNI context directly".into(),
-    ))
+fn get_vm_and_context() -> Result<(JavaVM, JObject<'static>), DeepLinkError> {
+    let android_ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(android_ctx.vm().cast()) }
+        .map_err(|e| DeepLinkError::PlatformError(format!("from_raw vm: {e}")))?;
+    let context = unsafe { JObject::from_raw(android_ctx.context().cast()) };
+    Ok((vm, context))
 }
 
-#[allow(clippy::unused_async)]
-pub async fn can_open_url(_url: &str) -> Result<bool, DeepLinkError> {
-    Err(DeepLinkError::PlatformError(
-        "Android: use JNI context directly".into(),
-    ))
+fn ensure_context_global() -> Result<(JavaVM, GlobalRef), DeepLinkError> {
+    let (vm, context) = get_vm_and_context()?;
+    let global = {
+        let env = vm
+            .attach_current_thread()
+            .map_err(|e| DeepLinkError::PlatformError(format!("attach_current_thread: {e}")))?;
+        env.new_global_ref(&context)
+            .map_err(|e| DeepLinkError::PlatformError(format!("new_global_ref context: {e}")))?
+    };
+    Ok((vm, global))
+}
+
+pub mod jni_api {
+    use super::*;
+
+    pub fn can_open_url_with_context(
+        env: &mut JNIEnv,
+        context: &JObject,
+        url: &str,
+    ) -> Result<bool, DeepLinkError> {
+        let uri_class = env
+            .find_class("android/net/Uri")
+            .map_err(|e| DeepLinkError::PlatformError(format!("find Uri: {e}")))?;
+        let intent_class = env
+            .find_class("android/content/Intent")
+            .map_err(|e| DeepLinkError::PlatformError(format!("find Intent: {e}")))?;
+
+        let action_view = env
+            .new_string("android.intent.action.VIEW")
+            .map_err(|e| DeepLinkError::PlatformError(format!("new action string: {e}")))?;
+        let url_j = env
+            .new_string(url)
+            .map_err(|e| DeepLinkError::PlatformError(format!("new url string: {e}")))?;
+
+        let uri = env
+            .call_static_method(
+                uri_class,
+                "parse",
+                "(Ljava/lang/String;)Landroid/net/Uri;",
+                &[JValue::Object(&url_j)],
+            )
+            .and_then(jni::objects::JValueGen::l)
+            .map_err(|e| DeepLinkError::PlatformError(format!("Uri.parse: {e}")))?;
+
+        let intent = env
+            .new_object(
+                intent_class,
+                "(Ljava/lang/String;Landroid/net/Uri;)V",
+                &[JValue::Object(&action_view), JValue::Object(&uri)],
+            )
+            .map_err(|e| DeepLinkError::PlatformError(format!("new Intent: {e}")))?;
+
+        let package_manager = env
+            .call_method(context, "getPackageManager", "()Landroid/content/pm/PackageManager;", &[])
+            .and_then(jni::objects::JValueGen::l)
+            .map_err(|e| DeepLinkError::PlatformError(format!("getPackageManager: {e}")))?;
+
+        let resolved = env
+            .call_method(
+                &package_manager,
+                "resolveActivity",
+                "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;",
+                &[JValue::Object(&intent), JValue::Int(0)],
+            )
+            .and_then(jni::objects::JValueGen::l)
+            .map_err(|e| DeepLinkError::PlatformError(format!("resolveActivity: {e}")))?;
+
+        Ok(!resolved.is_null())
+    }
+
+    pub fn open_url_with_context(
+        env: &mut JNIEnv,
+        context: &JObject,
+        url: &str,
+    ) -> Result<(), DeepLinkError> {
+        let uri_class = env
+            .find_class("android/net/Uri")
+            .map_err(|e| DeepLinkError::PlatformError(format!("find Uri: {e}")))?;
+        let intent_class = env
+            .find_class("android/content/Intent")
+            .map_err(|e| DeepLinkError::PlatformError(format!("find Intent: {e}")))?;
+
+        let action_view = env
+            .new_string("android.intent.action.VIEW")
+            .map_err(|e| DeepLinkError::PlatformError(format!("new action string: {e}")))?;
+        let url_j = env
+            .new_string(url)
+            .map_err(|e| DeepLinkError::PlatformError(format!("new url string: {e}")))?;
+
+        let uri = env
+            .call_static_method(
+                uri_class,
+                "parse",
+                "(Ljava/lang/String;)Landroid/net/Uri;",
+                &[JValue::Object(&url_j)],
+            )
+            .and_then(jni::objects::JValueGen::l)
+            .map_err(|e| DeepLinkError::PlatformError(format!("Uri.parse: {e}")))?;
+
+        let intent = env
+            .new_object(
+                intent_class,
+                "(Ljava/lang/String;Landroid/net/Uri;)V",
+                &[JValue::Object(&action_view), JValue::Object(&uri)],
+            )
+            .map_err(|e| DeepLinkError::PlatformError(format!("new Intent: {e}")))?;
+
+        let flag = 0x10000000i32;
+        env.call_method(
+            &intent,
+            "addFlags",
+            "(I)Landroid/content/Intent;",
+            &[JValue::Int(flag)],
+        )
+        .map_err(|e| DeepLinkError::PlatformError(format!("addFlags: {e}")))?;
+
+        env.call_method(
+            context,
+            "startActivity",
+            "(Landroid/content/Intent;)V",
+            &[JValue::Object(&intent)],
+        )
+        .map_err(|e| DeepLinkError::PlatformError(format!("startActivity: {e}")))?;
+
+        Ok(())
+    }
+}
+
+pub async fn open_url(url: &str) -> Result<(), DeepLinkError> {
+    let (vm, context) = ensure_context_global()?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| DeepLinkError::PlatformError(format!("attach_current_thread: {e}")))?;
+    jni_api::open_url_with_context(&mut env, context.as_obj(), url)
+}
+
+pub async fn can_open_url(url: &str) -> Result<bool, DeepLinkError> {
+    let (vm, context) = ensure_context_global()?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| DeepLinkError::PlatformError(format!("attach_current_thread: {e}")))?;
+    jni_api::can_open_url_with_context(&mut env, context.as_obj(), url)
 }
 
 #[derive(Debug)]
@@ -20,9 +160,7 @@ pub struct DeepLinkHandlerInner;
 impl DeepLinkHandlerInner {
     #[allow(clippy::unused_async)]
     pub async fn start() -> Result<(Self, async_channel::Receiver<DeepLink>), DeepLinkError> {
-        Err(DeepLinkError::PlatformError(
-            "Android: use JNI context directly".into(),
-        ))
+        Err(DeepLinkError::NotSupported)
     }
 
     pub fn initial_link(&self) -> Result<Option<DeepLink>, DeepLinkError> {

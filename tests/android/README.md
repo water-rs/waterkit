@@ -26,7 +26,7 @@ tests/android/
 
 ```bash
 # From workspace root
-cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o tests/android/app/src/main/jniLibs build --release -p waterkit-android-test
+cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o tests/android/app/src/main/jniLibs build -p waterkit-test-android
 ```
 
 ### 2. Build and run Android app

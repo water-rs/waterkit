@@ -9,9 +9,9 @@ object SpeechHelper {
     private var tts: TextToSpeech? = null
 
     @JvmStatic
-    fun initTts(context: Context, callback: (Boolean) -> Unit) {
+    fun initTts(context: Context, callback: SpeechInitCallback) {
         tts = TextToSpeech(context) { status ->
-            callback(status == TextToSpeech.SUCCESS)
+            callback.onTtsInit(status == TextToSpeech.SUCCESS)
         }
     }
 

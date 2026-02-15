@@ -17,24 +17,29 @@ fn run_tests() {
         #[cfg(feature = "sensor")]
         {
             println!("Testing waterkit-sensor...");
-            // Add sensor test calls here if API is available for iOS
+            if waterkit::sensor::Accelerometer::is_available() {
+                match waterkit::sensor::Accelerometer::read().await {
+                    Ok(data) => println!("Accelerometer: x={} y={} z={}", data.x, data.y, data.z),
+                    Err(e) => println!("Accelerometer read failed: {e:?}"),
+                }
+            }
         }
 
         #[cfg(feature = "biometric")]
         {
             println!("Testing waterkit-biometric...");
-            match waterkit_biometric::authenticate("Test Auth").await {
+            match waterkit::biometric::authenticate("Test Auth").await {
                 Ok(_) => println!("Biometric Auth SUCCESS"),
-                Err(e) => println!("Biometric Auth FAILED: {:?}", e),
+                Err(e) => println!("Biometric Auth FAILED: {e:?}"),
             }
         }
 
         #[cfg(feature = "location")]
         {
             println!("Testing waterkit-location...");
-            match waterkit_location::LocationManager::get_location_unchecked().await {
-                Ok(loc) => println!("Location: lat={}, lon={}", loc.latitude, loc.longitude),
-                Err(e) => println!("Location FAILED: {:?}", e),
+            match waterkit::location::Location::get().await {
+                Ok(loc) => println!("Location: lat={}, lon={}", loc.latitude(), loc.longitude()),
+                Err(e) => println!("Location FAILED: {e:?}"),
             }
         }
 
@@ -47,9 +52,9 @@ fn run_tests() {
         #[cfg(feature = "camera")]
         {
             println!("Testing waterkit-camera...");
-            match waterkit_camera::Camera::list() {
+            match waterkit::camera::Camera::list() {
                 Ok(cams) => println!("Found {} cameras", cams.len()),
-                Err(e) => println!("Camera list failed: {:?}", e),
+                Err(e) => println!("Camera list failed: {e:?}"),
             }
             println!("Camera: API available (display requires View)");
         }
@@ -57,8 +62,13 @@ fn run_tests() {
         #[cfg(feature = "clipboard")]
         {
             println!("Testing waterkit-clipboard...");
-            waterkit_clipboard::set_text("WaterKit Test".to_string());
-            println!("Clipboard: set_text SUCCESS");
+            match waterkit::clipboard::Clipboard::new() {
+                Ok(mut clipboard) => match clipboard.set_text("WaterKit Test") {
+                    Ok(()) => println!("Clipboard: set_text SUCCESS"),
+                    Err(e) => println!("Clipboard: set_text FAILED: {e:?}"),
+                },
+                Err(e) => println!("Clipboard init FAILED: {e:?}"),
+            }
         }
 
         #[cfg(feature = "codec")]
@@ -76,34 +86,35 @@ fn run_tests() {
         #[cfg(feature = "fs")]
         {
             println!("Testing waterkit-fs...");
-            if let Some(path) = waterkit_fs::WaterFs::cache_dir() {
-                println!("FS cache_dir: {:?}", path);
+            if let Some(path) = waterkit::fs::WaterFs::cache_dir() {
+                println!("FS cache_dir: {path:?}");
             }
         }
 
         #[cfg(feature = "haptic")]
         {
             println!("Testing waterkit-haptic...");
-            match waterkit_haptic::feedback(waterkit_haptic::HapticFeedback::Success).await {
+            match waterkit::haptic::Haptic::notification_success() {
                 Ok(_) => println!("Haptic: feedback SUCCESS"),
-                Err(e) => println!("Haptic FAILED: {:?}", e),
+                Err(e) => println!("Haptic FAILED: {e:?}"),
             }
         }
 
         #[cfg(feature = "notification")]
         {
             println!("Testing waterkit-notification...");
-            waterkit_notification::Notification::new()
+            let result = waterkit::notification::Notification::new()
                 .title("WaterKit Test")
                 .body("iOS notification is working!")
                 .show();
-            println!("Notification: Sent test notification");
+            println!("Notification result: {result:?}");
         }
 
         #[cfg(feature = "permission")]
         {
             println!("Testing waterkit-permission...");
-            println!("Permission: API available");
+            let status = waterkit::permission::check(waterkit::permission::Permission::Location).await;
+            println!("Permission status: {status:?}");
         }
 
         #[cfg(feature = "secret")]
@@ -115,14 +126,95 @@ fn run_tests() {
         #[cfg(feature = "system")]
         {
             println!("Testing waterkit-system...");
-            // println!("System OS: {}", waterkit_system::os_name());
-            println!("System OS: Unknown (API not yet exposed)");
+            let conn = waterkit::system::get_connectivity_info();
+            println!("Connectivity: {:?}", conn.connection_type);
         }
 
         #[cfg(feature = "video")]
         {
             println!("Testing waterkit-video...");
             println!("Video: API available (display requires View)");
+        }
+
+        #[cfg(feature = "screen")]
+        {
+            println!("Testing waterkit-screen...");
+            match waterkit::screen::screens() {
+                Ok(screens) => println!("Screen count: {}", screens.len()),
+                Err(e) => println!("Screen failed: {e:?}"),
+            }
+        }
+
+        #[cfg(feature = "bluetooth")]
+        {
+            println!("Testing waterkit-bluetooth...");
+            match waterkit::bluetooth::adapter_state().await {
+                Ok(state) => println!("Bluetooth state: {state:?}"),
+                Err(e) => println!("Bluetooth FAILED: {e:?}"),
+            }
+        }
+
+        #[cfg(feature = "nfc")]
+        {
+            println!("Testing waterkit-nfc...");
+            println!("NFC available: {}", waterkit::nfc::is_available());
+        }
+
+        #[cfg(feature = "share")]
+        {
+            println!("Testing waterkit-share...");
+            match waterkit::share::ShareSheet::text("WaterKit iOS share test").show().await {
+                Ok(result) => println!("Share result: {result:?}"),
+                Err(e) => println!("Share FAILED: {e:?}"),
+            }
+        }
+
+        #[cfg(feature = "speech")]
+        {
+            println!("Testing waterkit-speech...");
+            match waterkit::speech::Tts::new().await {
+                Ok(tts) => {
+                    let config = waterkit::speech::TtsConfig::default();
+                    if let Err(e) = tts.speak("WaterKit iOS speech test", &config).await {
+                        println!("Speech FAILED: {e:?}");
+                    }
+                    tts.stop();
+                }
+                Err(e) => println!("Speech init FAILED: {e:?}"),
+            }
+        }
+
+        #[cfg(feature = "contacts")]
+        {
+            println!("Testing waterkit-contacts...");
+            match waterkit::contacts::fetch_all().await {
+                Ok(contacts) => println!("Contacts fetched: {}", contacts.len()),
+                Err(e) => println!("Contacts FAILED: {e:?}"),
+            }
+        }
+
+        #[cfg(feature = "calendar")]
+        {
+            println!("Testing waterkit-calendar...");
+            match waterkit::calendar::list_calendars().await {
+                Ok(calendars) => println!("Calendars fetched: {}", calendars.len()),
+                Err(e) => println!("Calendar FAILED: {e:?}"),
+            }
+        }
+
+        #[cfg(feature = "health")]
+        {
+            println!("Testing waterkit-health...");
+            println!("Health available: {}", waterkit::health::is_available());
+        }
+
+        #[cfg(feature = "deeplink")]
+        {
+            println!("Testing waterkit-deeplink...");
+            match waterkit::deeplink::can_open_url("https://example.com").await {
+                Ok(can_open) => println!("can_open_url: {can_open}"),
+                Err(e) => println!("can_open_url FAILED: {e:?}"),
+            }
         }
     });
 

@@ -25,8 +25,19 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), NfcError> {
             .to_str()
             .map_err(|e| NfcError::PlatformError(format!("to_str: {e}")))?
     );
+    let _ = std::fs::remove_file(&dex_path);
     std::fs::write(&dex_path, DEX_BYTES)
         .map_err(|e| NfcError::PlatformError(format!("write DEX: {e}")))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&dex_path)
+            .map_err(|e| NfcError::PlatformError(format!("metadata DEX: {e}")))?
+            .permissions();
+        perms.set_mode(0o444);
+        std::fs::set_permissions(&dex_path, perms)
+            .map_err(|e| NfcError::PlatformError(format!("set_permissions DEX: {e}")))?;
+    }
     let dex_path_jstring = env
         .new_string(&dex_path)
         .map_err(|e| NfcError::PlatformError(format!("new_string: {e}")))?;

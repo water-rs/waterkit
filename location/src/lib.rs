@@ -30,6 +30,15 @@ mod sys;
 
 pub use waterkit_permission::{Permission, PermissionStatus};
 
+/// Android-specific JNI helpers that require a `JNIEnv` and `Context`/`Activity`.
+///
+/// These are intentionally separate from the async public API because Android
+/// permission/location flows require an app-owned JNI context.
+#[cfg(target_os = "android")]
+pub mod android {
+    pub use crate::sys::android::{get_location_with_context, init};
+}
+
 /// A geographic location with coordinates and metadata.
 ///
 /// All fields are private to allow future API evolution without breaking changes.

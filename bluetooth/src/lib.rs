@@ -10,6 +10,12 @@ mod sys;
 
 use std::collections::HashMap;
 
+/// Android-specific JNI helpers that require `JNIEnv` and `Context`.
+#[cfg(target_os = "android")]
+pub mod android {
+    pub use crate::sys::jni_api::get_adapter_state;
+}
+
 // ============================================================================
 // Common
 // ============================================================================

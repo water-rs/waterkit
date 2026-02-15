@@ -12,40 +12,36 @@ jni.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 android_logger = "0.15"
 log.workspace = true
-waterkit_content = { path = "../../../dialog", package = "waterkit-dialog" }
+waterkit_content = { path = "../../..", package = "waterkit", default-features = false }
 
 [features]
-sensor = []
-biometric = []
-location = []
-audio = []
-camera = []
-clipboard = []
-codec = []
-dialog = []
-fs = []
-haptic = []
-notification = []
-permission = []
-secret = []
-system = []
-video = []
+sensor = ["waterkit_content/sensor"]
+biometric = ["waterkit_content/biometric"]
+location = ["waterkit_content/location"]
+audio = ["waterkit_content/audio"]
+camera = ["waterkit_content/camera"]
+clipboard = ["waterkit_content/clipboard"]
+codec = ["waterkit_content/codec"]
+dialog = ["waterkit_content/dialog"]
+fs = ["waterkit_content/fs"]
+haptic = ["waterkit_content/haptic"]
+notification = ["waterkit_content/notification"]
+permission = ["waterkit_content/permission"]
+secret = ["waterkit_content/secret"]
+system = ["waterkit_content/system"]
+video = ["waterkit_content/video"]
+bluetooth = ["waterkit_content/bluetooth"]
+nfc = ["waterkit_content/nfc"]
+share = ["waterkit_content/share"]
+speech = ["waterkit_content/speech"]
+deeplink = ["waterkit_content/deeplink"]
+contacts = ["waterkit_content/contacts"]
+calendar = ["waterkit_content/calendar"]
+health = ["waterkit_content/health"]
+screen = ["waterkit_content/screen"]
 
 
-# DYNAMIC DEPENDENCY SLOT
-# This will be overwritten by the CLI tool.
-# waterkit_content = { path = "..." }
-
-# For now, we point to a dummy or default implementation?
-# Or we make it optional?
-# To compile initially, we might need a default content crate.
-# Let's point to dialog helper for now? No, that's not executable.
-# We'll just comment it out and let the CLI insert it.
-# Actually, for `cargo check` to work on the harness, it needs to point somewhere valid.
-# Let's point to `tests/macos/dialog` as a dummy content crate if compatible?
-# macOS/dialog has a main.rs, not lib.rs.
-# We need a dummy lib crate.
-# Or we just don't compile this crate manually, only via CLI.
+# The CLI only enables a single feature for the module under test.
 
 [target.'cfg(target_os = "android")'.dependencies]
 # Android specific deps

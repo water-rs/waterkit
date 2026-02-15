@@ -8,6 +8,12 @@ mod sys;
 
 use std::path::PathBuf;
 
+/// Android-specific JNI helpers that require `JNIEnv` and `Context`.
+#[cfg(target_os = "android")]
+pub mod android {
+    pub use crate::sys::jni_api::share_with_context;
+}
+
 /// Content that can be shared.
 #[derive(Debug, Clone)]
 pub enum ShareItem {

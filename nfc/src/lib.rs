@@ -9,6 +9,12 @@
 
 mod sys;
 
+/// Android-specific JNI helpers that require `JNIEnv` and `Context`.
+#[cfg(target_os = "android")]
+pub mod android {
+    pub use crate::sys::jni_api::is_available;
+}
+
 /// NFC tag type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NfcTagType {

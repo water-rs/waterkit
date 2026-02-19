@@ -113,14 +113,26 @@ fn run_tests() {
         #[cfg(feature = "permission")]
         {
             println!("Testing waterkit-permission...");
-            let status = waterkit::permission::check(waterkit::permission::Permission::Location).await;
+            let status =
+                waterkit::permission::check(waterkit::permission::Permission::Location).await;
             println!("Permission status: {status:?}");
         }
 
         #[cfg(feature = "secret")]
         {
             println!("Testing waterkit-secret...");
-            println!("Secret: API available");
+            match waterkit::secret::SecretManager::set("waterkit", "ios_test", "secret123").await {
+                Ok(_) => println!("Secret set SUCCESS"),
+                Err(e) => println!("Secret set FAILED: {e}"),
+            }
+            match waterkit::secret::SecretManager::get("waterkit", "ios_test").await {
+                Ok(value) => println!("Secret get SUCCESS: {value}"),
+                Err(e) => println!("Secret get FAILED: {e}"),
+            }
+            match waterkit::secret::SecretManager::delete("waterkit", "ios_test").await {
+                Ok(_) => println!("Secret delete SUCCESS"),
+                Err(e) => println!("Secret delete FAILED: {e}"),
+            }
         }
 
         #[cfg(feature = "system")]
@@ -163,7 +175,10 @@ fn run_tests() {
         #[cfg(feature = "share")]
         {
             println!("Testing waterkit-share...");
-            match waterkit::share::ShareSheet::text("WaterKit iOS share test").show().await {
+            match waterkit::share::ShareSheet::text("WaterKit iOS share test")
+                .show()
+                .await
+            {
                 Ok(result) => println!("Share result: {result:?}"),
                 Err(e) => println!("Share FAILED: {e:?}"),
             }

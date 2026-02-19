@@ -56,7 +56,15 @@ async fn main() -> Result<(), CameraError> {
     println!("  Frame rates: {:?}", caps.frame_rates);
     println!("  ISO range: {:?}", caps.iso_range);
     println!("  Manual focus: {}", caps.supports_manual_focus);
-    println!("  HDR: {}", caps.supports_hdr);
+    println!(
+        "  Dynamic Ranges: {}",
+        caps.dynamic_ranges
+            .iter()
+            .map(|range| format!("{range:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!("  Dolby Vision: {}", caps.supports_dolby_vision);
     println!("  Flash: {}", caps.has_flash);
 
     // Stream some frames

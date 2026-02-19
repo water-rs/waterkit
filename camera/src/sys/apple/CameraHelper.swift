@@ -17,6 +17,13 @@ private var recordingStartTime: Date?
 // Photo capture state
 private var lastPhotoData: Data?
 private let photoLock = NSLock()
+private var lastRawPhotoData: Data?
+private let rawPhotoLock = NSLock()
+
+// RAW video frame stream state
+private var rawVideoFileHandle: FileHandle?
+private var rawVideoRecordingStartTime: Date?
+private let rawVideoLock = NSLock()
 
 // Frame callback - set from Rust
 private var frameCallback: ((UInt64, UInt32, UInt32, UInt64) -> Void)?
@@ -34,10 +41,15 @@ private var cachedSupportsManualWhiteBalance: Bool = false
 private var cachedZoomMin: Float = 1.0
 private var cachedZoomMax: Float = 1.0
 private var cachedSupportsHdr: Bool = false
+private var cachedSupportsDolbyVision: Bool = false
 private var cachedSupportsStandardStabilization: Bool = false
 private var cachedSupportsCinematicStabilization: Bool = false
 private var cachedHasFlash: Bool = false
 private var cachedHasTorch: Bool = false
+private var cachedSupportsConcurrentMultiCam: Bool = false
+private var cachedMaxConcurrentCameras: UInt8 = 1
+private var cachedSupportsRawPhoto: Bool = false
+private var cachedSupportsRawVideo: Bool = true
 
 // MARK: - Frame Delegate
 
@@ -61,6 +73,7 @@ class CameraFrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         frameLock.unlock()
 
         callback?(handle, width, height, timestampNs)
+        maybeWriteRawVideoFrame(pixelBuffer: pixelBuffer, timestampNs: timestampNs)
     }
 
     func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
@@ -69,6 +82,64 @@ class CameraFrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
 }
 
 private var frameDelegate = CameraFrameDelegate()
+
+private func appendUInt16LE(_ value: UInt16, to data: inout Data) {
+    var little = value.littleEndian
+    withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+}
+
+private func appendUInt32LE(_ value: UInt32, to data: inout Data) {
+    var little = value.littleEndian
+    withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+}
+
+private func appendUInt64LE(_ value: UInt64, to data: inout Data) {
+    var little = value.littleEndian
+    withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+}
+
+private func writeRawVideoHeader(handle: FileHandle, width: UInt32, height: UInt32) {
+    var header = Data()
+    header.append(contentsOf: [UInt8(ascii: "W"), UInt8(ascii: "K"), UInt8(ascii: "R"), UInt8(ascii: "V")])
+    header.append(contentsOf: [1, 1]) // version=1, pixel_format=1(BGRA8)
+    appendUInt16LE(0, to: &header)
+    appendUInt32LE(width, to: &header)
+    appendUInt32LE(height, to: &header)
+    appendUInt32LE(0, to: &header) // fps unknown from this layer
+    handle.write(header)
+}
+
+private func maybeWriteRawVideoFrame(pixelBuffer: CVPixelBuffer, timestampNs: UInt64) {
+    rawVideoLock.lock()
+    let handle = rawVideoFileHandle
+    rawVideoLock.unlock()
+
+    guard let handle else { return }
+
+    let lockResult = CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+    if lockResult != kCVReturnSuccess {
+        return
+    }
+    defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+
+    guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else { return }
+    let width = CVPixelBufferGetWidth(pixelBuffer)
+    let height = CVPixelBufferGetHeight(pixelBuffer)
+    let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+    let rowBytes = width * 4
+    let payloadSize = rowBytes * height
+
+    var frameHeader = Data()
+    appendUInt64LE(timestampNs, to: &frameHeader)
+    appendUInt32LE(UInt32(payloadSize), to: &frameHeader)
+    handle.write(frameHeader)
+
+    for row in 0..<height {
+        let rowPtr = baseAddress.advanced(by: row * bytesPerRow)
+        let rowData = Data(bytes: rowPtr, count: rowBytes)
+        handle.write(rowData)
+    }
+}
 
 // MARK: - Device Enumeration
 
@@ -188,7 +259,7 @@ func camera_open(device_id: RustString) -> CameraResultFFI {
     currentDevice = device
 
     // Cache capabilities
-    queryCapabilities(device: device)
+    queryCapabilities(device: device, movieOutput: mOutput)
 
     return .Success
 }
@@ -213,6 +284,8 @@ func camera_stop() -> CameraResultFFI {
     if session.isRunning {
         session.stopRunning()
     }
+
+    _ = camera_stop_raw_recording()
 
     return .Success
 }
@@ -306,7 +379,13 @@ func camera_get_resolution_height() -> UInt32 {
 
 // MARK: - Capabilities Query
 
-private func queryCapabilities(device: AVCaptureDevice) {
+private func queryCapabilities(device: AVCaptureDevice, movieOutput: AVCaptureMovieFileOutput?) {
+    #if os(iOS)
+    cachedSupportsRawPhoto = photoOutput?.availableRawPhotoPixelFormatTypes.isEmpty == false
+    #else
+    cachedSupportsRawPhoto = false
+    #endif
+    cachedSupportsRawVideo = true
     #if os(iOS)
     let format = device.activeFormat
 
@@ -322,6 +401,8 @@ private func queryCapabilities(device: AVCaptureDevice) {
 
     // HDR (iOS only)
     cachedSupportsHdr = format.isVideoHDRSupported
+    cachedSupportsDolbyVision =
+        cachedSupportsHdr && (movieOutput?.availableVideoCodecTypes.contains(.hevc) ?? false)
 
     // Stabilization (iOS only)
     cachedSupportsStandardStabilization = format.isVideoStabilizationModeSupported(.standard)
@@ -333,6 +414,12 @@ private func queryCapabilities(device: AVCaptureDevice) {
     // Zoom (iOS only)
     cachedZoomMin = Float(device.minAvailableVideoZoomFactor)
     cachedZoomMax = Float(device.maxAvailableVideoZoomFactor)
+    if #available(iOS 13.0, *) {
+        cachedSupportsConcurrentMultiCam = AVCaptureMultiCamSession.isMultiCamSupported
+    } else {
+        cachedSupportsConcurrentMultiCam = false
+    }
+    cachedMaxConcurrentCameras = cachedSupportsConcurrentMultiCam ? 2 : 1
     #else
     // macOS doesn't support these features
     cachedIsoMin = 0
@@ -340,11 +427,14 @@ private func queryCapabilities(device: AVCaptureDevice) {
     cachedExposureDurationMinNs = 0
     cachedExposureDurationMaxNs = 0
     cachedSupportsHdr = false
+    cachedSupportsDolbyVision = false
     cachedSupportsStandardStabilization = false
     cachedSupportsCinematicStabilization = false
     cachedSupportsExposureCompensation = false
     cachedZoomMin = 1.0
     cachedZoomMax = 1.0
+    cachedSupportsConcurrentMultiCam = false
+    cachedMaxConcurrentCameras = 1
     #endif
 
     // Focus (both platforms)
@@ -399,6 +489,10 @@ func camera_supports_hdr() -> Bool {
     return cachedSupportsHdr
 }
 
+func camera_supports_dolby_vision() -> Bool {
+    return cachedSupportsDolbyVision
+}
+
 func camera_supports_standard_stabilization() -> Bool {
     return cachedSupportsStandardStabilization
 }
@@ -413,6 +507,22 @@ func camera_has_flash() -> Bool {
 
 func camera_has_torch() -> Bool {
     return cachedHasTorch
+}
+
+func camera_supports_concurrent_multicam() -> Bool {
+    return cachedSupportsConcurrentMultiCam
+}
+
+func camera_max_concurrent_cameras() -> UInt8 {
+    return cachedMaxConcurrentCameras
+}
+
+func camera_supports_raw_photo() -> Bool {
+    return cachedSupportsRawPhoto
+}
+
+func camera_supports_raw_video() -> Bool {
+    return cachedSupportsRawVideo
 }
 
 // MARK: - Exposure Control
@@ -684,19 +794,36 @@ func camera_set_torch_mode(enabled: Bool) -> CameraResultFFI {
 // MARK: - HDR Control
 
 func camera_set_hdr(enabled: Bool) -> CameraResultFFI {
+    return camera_set_dynamic_range(profile: enabled ? 1 : 0)
+}
+
+func camera_set_dynamic_range(profile: UInt8) -> CameraResultFFI {
     #if os(iOS)
     guard let device = currentDevice else {
         return .OpenFailed
     }
 
-    if !device.activeFormat.isVideoHDRSupported {
+    if profile == 3 && !cachedSupportsDolbyVision {
+        return .NotSupported
+    }
+
+    let enableHdr: Bool
+    switch profile {
+    case 0:
+        enableHdr = false
+    case 1, 2, 3:
+        if !device.activeFormat.isVideoHDRSupported {
+            return .NotSupported
+        }
+        enableHdr = true
+    default:
         return .NotSupported
     }
 
     do {
         try device.lockForConfiguration()
         device.automaticallyAdjustsVideoHDREnabled = false
-        device.isVideoHDREnabled = enabled
+        device.isVideoHDREnabled = enableHdr
         device.unlockForConfiguration()
         return .Success
     } catch {
@@ -763,7 +890,12 @@ func camera_take_photo() -> CameraResultFFI {
         return .NotSupported
     }
 
-    let settings = AVCapturePhotoSettings()
+    let settings: AVCapturePhotoSettings
+    if output.availablePhotoCodecTypes.contains(.jpeg) {
+        settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+    } else {
+        settings = AVCapturePhotoSettings()
+    }
     #if os(iOS)
     settings.isHighResolutionPhotoEnabled = true
     #endif
@@ -799,12 +931,68 @@ func camera_get_photo_len() -> Int32 {
     return Int32(len)
 }
 
+func camera_take_raw_photo() -> CameraResultFFI {
+    #if os(iOS)
+    guard let output = photoOutput else {
+        return .NotSupported
+    }
+    guard let rawFormat = output.availableRawPhotoPixelFormatTypes.first else {
+        return .NotSupported
+    }
+
+    let settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
+    #if os(iOS)
+    settings.isHighResolutionPhotoEnabled = true
+    #endif
+
+    let delegate = PhotoCaptureDelegate()
+    output.capturePhoto(with: settings, delegate: delegate)
+
+    let result = delegate.semaphore.wait(timeout: .now() + 10.0)
+    if result == .timedOut {
+        return .CaptureFailed
+    }
+    if delegate.error != nil {
+        return .CaptureFailed
+    }
+    guard let data = delegate.photoData else {
+        return .CaptureFailed
+    }
+
+    rawPhotoLock.lock()
+    lastRawPhotoData = data
+    rawPhotoLock.unlock()
+    return .Success
+    #else
+    return .NotSupported
+    #endif
+}
+
+func camera_get_raw_photo_len() -> Int32 {
+    rawPhotoLock.lock()
+    let len = lastRawPhotoData?.count ?? 0
+    rawPhotoLock.unlock()
+    return Int32(len)
+}
+
 @_cdecl("camera_copy_photo_data")
 public func camera_copy_photo_data(_ bufferPtr: UInt64, _ size: UInt64) {
     photoLock.lock()
     defer { photoLock.unlock() }
 
     guard let data = lastPhotoData else { return }
+    guard let buffer = UnsafeMutableRawPointer(bitPattern: UInt(bufferPtr)) else { return }
+
+    let count = min(Int(size), data.count)
+    data.copyBytes(to: buffer.assumingMemoryBound(to: UInt8.self), count: count)
+}
+
+@_cdecl("camera_copy_raw_photo_data")
+public func camera_copy_raw_photo_data(_ bufferPtr: UInt64, _ size: UInt64) {
+    rawPhotoLock.lock()
+    defer { rawPhotoLock.unlock() }
+
+    guard let data = lastRawPhotoData else { return }
     guard let buffer = UnsafeMutableRawPointer(bitPattern: UInt(bufferPtr)) else { return }
 
     let count = min(Int(size), data.count)
@@ -850,5 +1038,57 @@ func camera_stop_recording() -> CameraResultFFI {
 
 func camera_get_recording_duration_ms() -> UInt64 {
     guard let startTime = recordingStartTime else { return 0 }
+    return UInt64(Date().timeIntervalSince(startTime) * 1000)
+}
+
+func camera_start_raw_recording(path: RustString) -> CameraResultFFI {
+    let outputPath = path.toString()
+    if outputPath.isEmpty {
+        return .OpenFailed
+    }
+
+    rawVideoLock.lock()
+    defer { rawVideoLock.unlock() }
+
+    if rawVideoFileHandle != nil {
+        return .AlreadyInUse
+    }
+
+    let url = URL(fileURLWithPath: outputPath)
+    try? FileManager.default.removeItem(at: url)
+    guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+        return .OpenFailed
+    }
+    guard let handle = FileHandle(forWritingAtPath: url.path) else {
+        return .OpenFailed
+    }
+
+    writeRawVideoHeader(
+        handle: handle,
+        width: camera_get_resolution_width(),
+        height: camera_get_resolution_height()
+    )
+    rawVideoFileHandle = handle
+    rawVideoRecordingStartTime = Date()
+    return .Success
+}
+
+func camera_stop_raw_recording() -> CameraResultFFI {
+    rawVideoLock.lock()
+    let handle = rawVideoFileHandle
+    rawVideoFileHandle = nil
+    rawVideoRecordingStartTime = nil
+    rawVideoLock.unlock()
+
+    handle?.closeFile()
+    return .Success
+}
+
+func camera_get_raw_recording_duration_ms() -> UInt64 {
+    rawVideoLock.lock()
+    let startTime = rawVideoRecordingStartTime
+    rawVideoLock.unlock()
+
+    guard let startTime else { return 0 }
     return UInt64(Date().timeIntervalSince(startTime) * 1000)
 }

@@ -21,6 +21,7 @@ thiserror = { workspace = true }
 wgpu.workspace = true
 futures.workspace = true
 async-channel.workspace = true
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 waterkit-codec = { workspace = true, optional = true }
 

@@ -15,12 +15,13 @@
 #![allow(clippy::missing_const_for_fn)]
 
 use crate::{
-    CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, Frame, Photo,
-    PixelFormat, Resolution, StabilizationMode,
+    CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
+    Frame, Photo, PixelFormat, RawPhoto, Resolution, StabilizationMode,
 };
 use nokhwa::Camera as NokhwaCamera;
 use nokhwa::pixel_format::RgbAFormat;
 use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType};
+use std::num::NonZeroU8;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -109,11 +110,21 @@ impl CameraInner {
             supports_manual_focus: false,
             supports_manual_white_balance: false,
             zoom_range: None,
-            supports_hdr: false,
+            dynamic_ranges: vec![DynamicRangeProfile::Sdr],
+            supports_dolby_vision: false,
             stabilization_modes: vec![StabilizationMode::Off],
             has_flash: false,
             has_torch: false,
+            supports_concurrent_multi_camera: false,
+            max_concurrent_cameras: NonZeroU8::MIN,
+            uses_system_photo_pipeline: false,
+            uses_system_video_pipeline: false,
+            supports_raw_photo: false,
+            raw_photo_formats: Vec::new(),
+            supports_raw_video: false,
+            raw_video_formats: Vec::new(),
         };
+        capabilities.validate();
 
         // Start streaming immediately (RAII)
         camera
@@ -191,8 +202,8 @@ impl CameraInner {
         if controls.flash.is_some() {
             return Err(CameraError::ControlNotSupported("flash".into()));
         }
-        if controls.hdr.is_some() {
-            return Err(CameraError::ControlNotSupported("hdr".into()));
+        if controls.dynamic_range.is_some() {
+            return Err(CameraError::ControlNotSupported("dynamic_range".into()));
         }
         if controls.stabilization.is_some() {
             return Err(CameraError::ControlNotSupported("stabilization".into()));
@@ -328,6 +339,12 @@ impl CameraInner {
         })
     }
 
+    pub async fn capture_raw_photo(&mut self) -> Result<RawPhoto, CameraError> {
+        Err(CameraError::ControlNotSupported(
+            "raw photo not supported on desktop".into(),
+        ))
+    }
+
     pub fn start_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
         Err(CameraError::ControlNotSupported(
             "recording not supported on desktop".into(),
@@ -341,6 +358,22 @@ impl CameraInner {
     }
 
     pub fn recording_duration(&self) -> Duration {
+        Duration::ZERO
+    }
+
+    pub fn start_raw_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
+        Err(CameraError::ControlNotSupported(
+            "raw recording not supported on desktop".into(),
+        ))
+    }
+
+    pub fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
+        Err(CameraError::ControlNotSupported(
+            "raw recording not supported on desktop".into(),
+        ))
+    }
+
+    pub fn raw_recording_duration(&self) -> Duration {
         Duration::ZERO
     }
 }

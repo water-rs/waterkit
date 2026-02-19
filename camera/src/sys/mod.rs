@@ -32,8 +32,9 @@ pub use desktop::CameraInner;
 mod fallback {
     use crate::{
         CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, Frame, Photo,
-        Resolution,
+        RawPhoto, Resolution,
     };
+    use std::num::NonZeroU8;
     use std::path::Path;
     use std::sync::Arc;
     use std::time::Duration;
@@ -64,10 +65,19 @@ mod fallback {
                 supports_manual_focus: false,
                 supports_manual_white_balance: false,
                 zoom_range: None,
-                supports_hdr: false,
+                dynamic_ranges: Vec::new(),
+                supports_dolby_vision: false,
                 stabilization_modes: Vec::new(),
                 has_flash: false,
                 has_torch: false,
+                supports_concurrent_multi_camera: false,
+                max_concurrent_cameras: NonZeroU8::MIN,
+                uses_system_photo_pipeline: false,
+                uses_system_video_pipeline: false,
+                supports_raw_photo: false,
+                raw_photo_formats: Vec::new(),
+                supports_raw_video: false,
+                raw_video_formats: Vec::new(),
             };
             &EMPTY
         }
@@ -83,7 +93,7 @@ mod fallback {
                 white_balance: None,
                 zoom: None,
                 flash: None,
-                hdr: None,
+                dynamic_range: None,
                 stabilization: None,
             };
             &EMPTY
@@ -101,6 +111,10 @@ mod fallback {
             Err(CameraError::NotSupported)
         }
 
+        pub async fn capture_raw_photo(&self) -> Result<RawPhoto, CameraError> {
+            Err(CameraError::NotSupported)
+        }
+
         pub fn start_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
             Err(CameraError::NotSupported)
         }
@@ -110,6 +124,18 @@ mod fallback {
         }
 
         pub fn recording_duration(&self) -> Duration {
+            Duration::ZERO
+        }
+
+        pub fn start_raw_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
+            Err(CameraError::NotSupported)
+        }
+
+        pub fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
+            Err(CameraError::NotSupported)
+        }
+
+        pub fn raw_recording_duration(&self) -> Duration {
             Duration::ZERO
         }
     }

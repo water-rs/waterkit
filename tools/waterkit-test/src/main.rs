@@ -371,6 +371,8 @@ fn get_crate_feature(package_name: &str) -> Option<&'static str> {
         Some("deeplink")
     } else if package_name.contains("screen") {
         Some("screen")
+    } else if package_name.contains("background") {
+        Some("background")
     } else {
         None
     }

@@ -40,6 +40,7 @@ contacts = ["waterkit/contacts"]
 calendar = ["waterkit/calendar"]
 health = ["waterkit/health"]
 deeplink = ["waterkit/deeplink"]
+background = ["waterkit/background"]
 
 [build-dependencies]
 swift-bridge-build.workspace = true

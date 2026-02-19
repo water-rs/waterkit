@@ -115,3 +115,7 @@ pub use waterkit_health as health;
 #[cfg(feature = "deeplink")]
 #[doc(inline)]
 pub use waterkit_deeplink as deeplink;
+
+#[cfg(feature = "background")]
+#[doc(inline)]
+pub use waterkit_background as background;

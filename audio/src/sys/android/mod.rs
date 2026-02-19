@@ -241,31 +241,58 @@ pub fn clear_session(env: &mut JNIEnv) -> Result<(), MediaError> {
     Ok(())
 }
 
-// Placeholder for async wrapper (Android requires JNI context)
 #[derive(Debug)]
-pub struct MediaCenterInner;
+pub struct MediaCenterInner {
+    vm: jni::JavaVM,
+    context: GlobalRef,
+}
 
 impl MediaCenterInner {
+    fn with_attached_env<T>(
+        &self,
+        op: impl FnOnce(&mut JNIEnv, &JObject) -> Result<T, MediaError>,
+    ) -> Result<T, MediaError> {
+        let mut env = self
+            .vm
+            .attach_current_thread()
+            .map_err(|e| MediaError::Unknown(format!("attach_current_thread failed: {e}")))?;
+        op(&mut env, self.context.as_obj())
+    }
+
     pub fn new() -> Result<Self, MediaError> {
-        // Actual initialization requires Context, which must be done via
-        // create_session_with_context
-        Err(MediaError::InitializationFailed(
-            "Android: use create_session_with_context() with Context".into(),
-        ))
+        let android_context =
+            std::panic::catch_unwind(ndk_context::android_context).map_err(|_| {
+                MediaError::InitializationFailed("ndk context is not initialized".into())
+            })?;
+
+        let vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) }.map_err(|e| {
+            MediaError::InitializationFailed(format!("JavaVM::from_raw failed: {e}"))
+        })?;
+
+        let context = {
+            let mut env = vm.attach_current_thread().map_err(|e| {
+                MediaError::InitializationFailed(format!("attach_current_thread failed: {e}"))
+            })?;
+
+            let context_local = unsafe { JObject::from_raw(android_context.context().cast()) };
+            let context = env.new_global_ref(&context_local).map_err(|e| {
+                MediaError::InitializationFailed(format!("new_global_ref context failed: {e}"))
+            })?;
+            std::mem::forget(context_local);
+
+            create_session_with_context(&mut env, context.as_obj())?;
+            context
+        };
+
+        Ok(Self { vm, context })
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn set_metadata(&self, _metadata: &MediaMetadata) -> Result<(), MediaError> {
-        Err(MediaError::InitializationFailed(
-            "Android: use set_metadata_with_context()".into(),
-        ))
+    pub fn set_metadata(&self, metadata: &MediaMetadata) -> Result<(), MediaError> {
+        self.with_attached_env(|env, _context| set_metadata_with_context(env, metadata))
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn set_playback_state(&self, _state: &PlaybackState) -> Result<(), MediaError> {
-        Err(MediaError::InitializationFailed(
-            "Android: use set_playback_state_with_context()".into(),
-        ))
+    pub fn set_playback_state(&self, state: &PlaybackState) -> Result<(), MediaError> {
+        self.with_attached_env(|env, _context| set_playback_state_with_context(env, state))
     }
 
     #[allow(clippy::unused_self)]
@@ -273,36 +300,24 @@ impl MediaCenterInner {
         &self,
         _handler: Box<dyn MediaCommandHandler>,
     ) -> Result<(), MediaError> {
-        // Command handling on Android is done via the Kotlin helper's callback mechanism
-        Err(MediaError::InitializationFailed(
-            "Android: command handling is done via Kotlin callback".into(),
-        ))
+        Err(MediaError::NotSupported)
     }
 
-    #[allow(clippy::unused_self)]
     pub fn request_audio_focus(&self) -> Result<(), MediaError> {
-        Err(MediaError::InitializationFailed(
-            "Android: use request_audio_focus_with_context()".into(),
-        ))
+        self.with_attached_env(|env, _context| request_audio_focus_with_context(env))
     }
 
-    #[allow(clippy::unused_self)]
     pub fn abandon_audio_focus(&self) -> Result<(), MediaError> {
-        Err(MediaError::InitializationFailed(
-            "Android: use abandon_audio_focus_with_context()".into(),
-        ))
+        self.with_attached_env(|env, _context| abandon_audio_focus_with_context(env))
     }
 
-    #[allow(clippy::unused_self)]
     pub fn clear(&self) -> Result<(), MediaError> {
-        Err(MediaError::InitializationFailed(
-            "Android: use clear_session()".into(),
-        ))
+        self.with_attached_env(|env, _context| clear_session(env))
     }
 
-    #[allow(clippy::unused_self)]
-    pub const fn update(&self, _metadata: &MediaMetadata, _state: &PlaybackState) {
-        // No-op - Android uses Context-based static methods
+    pub fn update(&self, metadata: &MediaMetadata, state: &PlaybackState) {
+        let _ = self.set_metadata(metadata);
+        let _ = self.set_playback_state(state);
     }
 
     #[allow(clippy::unused_self)]
@@ -311,6 +326,12 @@ impl MediaCenterInner {
     #[allow(clippy::unused_self)]
     pub const fn poll_command(&self) -> Option<MediaCommand> {
         None
+    }
+}
+
+impl Drop for MediaCenterInner {
+    fn drop(&mut self) {
+        let _ = self.clear();
     }
 }
 

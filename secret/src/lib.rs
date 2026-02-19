@@ -8,6 +8,12 @@
 /// Platform-specific implementations.
 mod sys;
 
+/// Android-specific JNI helpers that require an explicit `JNIEnv` and `Context`.
+#[cfg(target_os = "android")]
+pub mod android {
+    pub use crate::sys::android::{delete_with_context, get_with_context, set_with_context};
+}
+
 /// Errors that can occur when accessing secrets.
 #[derive(Debug, thiserror::Error)]
 pub enum SecretError {
@@ -29,17 +35,26 @@ pub enum SecretError {
 #[derive(Debug)]
 pub struct SecretManager;
 
+fn validate_identifiers(service: &str, account: &str) -> Result<(), SecretError> {
+    if service.is_empty() {
+        return Err(SecretError::InvalidInput("service cannot be empty".into()));
+    }
+    if account.is_empty() {
+        return Err(SecretError::InvalidInput("account cannot be empty".into()));
+    }
+    Ok(())
+}
+
 impl SecretManager {
     /// Save a secret.
     ///
     /// # Errors
     /// Returns a `SecretError` if:
     /// - The service name is empty.
+    /// - The account name is empty.
     /// - The underlying system storage fails.
     pub async fn set(service: &str, account: &str, password: &str) -> Result<(), SecretError> {
-        if service.is_empty() {
-            return Err(SecretError::InvalidInput("service cannot be empty".into()));
-        }
+        validate_identifiers(service, account)?;
         sys::set(service, account, password).await
     }
 
@@ -48,12 +63,11 @@ impl SecretManager {
     /// # Errors
     /// Returns a `SecretError` if:
     /// - The service name is empty.
+    /// - The account name is empty.
     /// - The secret is not found.
     /// - The underlying system storage fails.
     pub async fn get(service: &str, account: &str) -> Result<String, SecretError> {
-        if service.is_empty() {
-            return Err(SecretError::InvalidInput("service cannot be empty".into()));
-        }
+        validate_identifiers(service, account)?;
         sys::get(service, account).await
     }
 
@@ -62,11 +76,10 @@ impl SecretManager {
     /// # Errors
     /// Returns a `SecretError` if:
     /// - The service name is empty.
+    /// - The account name is empty.
     /// - The underlying system storage fails.
     pub async fn delete(service: &str, account: &str) -> Result<(), SecretError> {
-        if service.is_empty() {
-            return Err(SecretError::InvalidInput("service cannot be empty".into()));
-        }
+        validate_identifiers(service, account)?;
         sys::delete(service, account).await
     }
 }

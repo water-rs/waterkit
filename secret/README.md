@@ -4,8 +4,9 @@ Secure storage for sensitive data (passwords, tokens).
 
 ## Features
 
-- **Secure Storage**: Saves data to the system's secure element or encrypted store.
-- **Simple Key-Value**: Store strings or binary data by key.
+- **Unified API**: One `SecretManager` API across desktop and mobile.
+- **Hardware-backed security on Android**: Encrypts with Android Keystore AES keys.
+- **Native secure stores on desktop/Apple**: Uses platform keyring backends.
 
 ## Installation
 
@@ -19,26 +20,28 @@ waterkit-secret = "0.1"
 | Platform | Backend |
 | :--- | :--- |
 | **macOS/iOS** | `Keychain` |
-| **Android** | `EncryptedSharedPreferences` / `Keystore` |
+| **Android** | `AndroidKeyStore` (AES-GCM key) + encrypted payload in `SharedPreferences` |
 | **Windows** | `Credential Locker` |
-| **Linux** | `Secret Service` (Gnome/KDE) |
+| **Linux** | `linux-keyutils` (kernel keyring) |
 
 ## Usage
 
 ```rust
-use waterkit_secret::SecretStore;
+use waterkit_secret::SecretManager;
 
 async fn manage_secrets() {
-    let store = SecretStore::new("com.myapp.service").await.unwrap();
-    
-    // Save
-    store.set("api_token", "secret_value_123").await.unwrap();
-    
-    // Retrieve
-    let token = store.get("api_token").await.unwrap();
-    println!("Token: {}", token);
-    
-    // Delete
-    store.delete("api_token").await.unwrap();
+    SecretManager::set("com.myapp.service", "api_token", "secret_value_123")
+        .await
+        .unwrap();
+
+    let token = SecretManager::get("com.myapp.service", "api_token")
+        .await
+        .unwrap();
+
+    SecretManager::delete("com.myapp.service", "api_token")
+        .await
+        .unwrap();
+
+    let _ = token;
 }
 ```

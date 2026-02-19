@@ -97,9 +97,8 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         #[cfg(feature = "location")]
         {
             log::info!("Testing waterkit-location...");
-            match waterkit_content::location::android::get_location_with_context(
-                &mut env, activity,
-            ) {
+            match waterkit_content::location::android::get_location_with_context(&mut env, activity)
+            {
                 Ok(loc) => {
                     log::info!("Location: lat={}, lon={}", loc.latitude(), loc.longitude());
                 }
@@ -203,15 +202,27 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         #[cfg(feature = "secret")]
         {
             log::info!("Testing waterkit-secret...");
-            match waterkit_content::secret::SecretManager::set("waterkit", "test", "secret123")
-                .await
-            {
+            match waterkit_content::secret::android::set_with_context(
+                &mut env,
+                activity,
+                "waterkit",
+                "test",
+                "secret123",
+            ) {
                 Ok(_) => log::info!("Secret set SUCCESS"),
                 Err(e) => log::error!("Secret set FAILED: {e}"),
             }
-            match waterkit_content::secret::SecretManager::get("waterkit", "test").await {
+            match waterkit_content::secret::android::get_with_context(
+                &mut env, activity, "waterkit", "test",
+            ) {
                 Ok(val) => log::info!("Secret get = {val:?}"),
                 Err(e) => log::error!("Secret get FAILED: {e}"),
+            }
+            match waterkit_content::secret::android::delete_with_context(
+                &mut env, activity, "waterkit", "test",
+            ) {
+                Ok(_) => log::info!("Secret delete SUCCESS"),
+                Err(e) => log::error!("Secret delete FAILED: {e}"),
             }
         }
 
@@ -252,8 +263,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         {
             log::info!("Testing waterkit-share...");
             let sheet = waterkit_content::share::ShareSheet::text("WaterKit share test");
-            match waterkit_content::share::android::share_with_context(&mut env, activity, &sheet)
-            {
+            match waterkit_content::share::android::share_with_context(&mut env, activity, &sheet) {
                 Ok(result) => log::info!("Share result: {result:?}"),
                 Err(e) => log::error!("Share FAILED: {e}"),
             }
@@ -363,9 +373,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_testCheckPermission(
         };
 
         return match waterkit_content::permission::android::check_with_activity(
-            &mut env,
-            &activity,
-            permission,
+            &mut env, &activity, permission,
         ) {
             Ok(waterkit_content::permission::PermissionStatus::NotDetermined) => {
                 PERMISSION_NOT_DETERMINED

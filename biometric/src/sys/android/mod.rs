@@ -8,6 +8,7 @@ use crate::{BiometricError, BiometricType};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jlong};
+use std::mem::ManuallyDrop;
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode.
@@ -24,6 +25,26 @@ static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
 /// Type of callback: `tokio::sync::oneshot::Sender<Result<(), BiometricError>>`
 type BiometricSender = tokio::sync::oneshot::Sender<Result<(), BiometricError>>;
 
+fn with_android_context<T, F>(f: F) -> Result<T, BiometricError>
+where
+    F: for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<T, BiometricError>,
+{
+    let android_context = ndk_context::android_context();
+    let vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) }
+        .map_err(|e| BiometricError::PlatformError(format!("from_raw JavaVM: {e}")))?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| BiometricError::PlatformError(format!("attach_current_thread: {e}")))?;
+    let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
+    if context.is_null() {
+        return Err(BiometricError::PlatformError(
+            "Android Context not available from ndk_context".into(),
+        ));
+    }
+    f(&mut env, &context)
+}
+
+/// Initialize Android biometric support by loading helper classes and JNI bindings.
 pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), BiometricError> {
     if CLASS_LOADER.get().is_some() {
         return Ok(());
@@ -175,27 +196,62 @@ pub unsafe extern "system" fn Java_waterkit_biometric_BiometricHelper_onResult(
 
 #[allow(clippy::unused_async)]
 pub async fn is_available() -> bool {
-    // Stub: need context to check availability.
-    // In waterkit, we usually don't have a global context available in pure Rust async functions
-    // unless it was initialized.
-    // For now, return false if we can't get check.
-    // In real app usage, one should use `is_available_with_context`.
-    false
+    with_android_context(|env, context| {
+        init(env, context)?;
+        let class = get_helper_class(env)?;
+        env.call_static_method(
+            class,
+            "isAvailable",
+            "(Landroid/content/Context;)Z",
+            &[JValue::Object(context)],
+        )
+        .map_err(|e| BiometricError::PlatformError(format!("isAvailable call: {e}")))?
+        .z()
+        .map_err(|e| BiometricError::PlatformError(format!("isAvailable result: {e}")))
+    })
+    .unwrap_or(false)
 }
 
 #[allow(clippy::unused_async)]
 pub async fn get_biometric_type() -> Option<BiometricType> {
-    None
+    with_android_context(|env, context| {
+        init(env, context)?;
+        let class = get_helper_class(env)?;
+        let biometric_type = env
+            .call_static_method(
+                class,
+                "getBiometricType",
+                "(Landroid/content/Context;)I",
+                &[JValue::Object(context)],
+            )
+            .map_err(|e| BiometricError::PlatformError(format!("getBiometricType call: {e}")))?
+            .i()
+            .map_err(|e| BiometricError::PlatformError(format!("getBiometricType result: {e}")))?;
+
+        Ok(match biometric_type {
+            1 => Some(BiometricType::Fingerprint),
+            2 => Some(BiometricType::Face),
+            3 => Some(BiometricType::Iris),
+            _ => None,
+        })
+    })
+    .ok()
+    .flatten()
 }
 
 #[allow(clippy::unused_async)]
-pub async fn authenticate(_reason: &str) -> Result<(), BiometricError> {
-    Err(BiometricError::PlatformError(
-        "Android requires authenticate_with_context".into(),
-    ))
+pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
+    let rx = with_android_context(|env, context| authenticate_with_context(env, context, reason))?;
+    rx.await.unwrap_or_else(|_| {
+        Err(BiometricError::PlatformError(
+            "Biometric result channel closed".into(),
+        ))
+    })
 }
 
-// Public API extending the standard one
+/// Authenticate using an explicit Android `Context`.
+///
+/// Returns a oneshot receiver that resolves to the authentication outcome.
 pub fn authenticate_with_context(
     env: &mut JNIEnv,
     context: &JObject,

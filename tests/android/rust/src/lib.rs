@@ -317,6 +317,19 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
             log::info!("Health available: {available}");
         }
 
+        #[cfg(feature = "background")]
+        {
+            log::info!("Testing waterkit-background...");
+            let capabilities = waterkit_content::background::capabilities();
+            log::info!(
+                "Background capabilities: refresh={} processing={} continued={} launch_events={}",
+                capabilities.supports_app_refresh,
+                capabilities.supports_processing,
+                capabilities.supports_continued_processing,
+                capabilities.supports_launch_events
+            );
+        }
+
         #[cfg(feature = "deeplink")]
         {
             log::info!("Testing waterkit-deeplink...");

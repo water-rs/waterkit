@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video", "bluetooth", "nfc", "share", "speech", "contacts", "calendar", "health", "deeplink"]
+members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video", "bluetooth", "nfc", "share", "speech", "contacts", "calendar", "health", "deeplink", "background"]
 
 
 [workspace.package]
@@ -54,6 +54,7 @@ waterkit-contacts = { workspace = true, optional = true }
 waterkit-calendar = { workspace = true, optional = true }
 waterkit-health = { workspace = true, optional = true }
 waterkit-deeplink = { workspace = true, optional = true }
+waterkit-background = { workspace = true, optional = true }
 
 [features]
 default = ["full"]
@@ -82,6 +83,7 @@ full = [
     "calendar",
     "health",
     "deeplink",
+    "background",
 ]
 permission = ["dep:waterkit-permission"]
 location = ["dep:waterkit-location", "permission"]
@@ -107,6 +109,7 @@ contacts = ["dep:waterkit-contacts"]
 calendar = ["dep:waterkit-calendar"]
 health = ["dep:waterkit-health"]
 deeplink = ["dep:waterkit-deeplink"]
+background = ["dep:waterkit-background"]
 
 
 [workspace.dependencies]
@@ -135,6 +138,7 @@ waterkit-contacts = { path = "contacts", version = "0.1.0" }
 waterkit-calendar = { path = "calendar", version = "0.1.0" }
 waterkit-health = { path = "health", version = "0.1.0" }
 waterkit-deeplink = { path = "deeplink", version = "0.1.0" }
+waterkit-background = { path = "background", version = "0.1.0" }
 
 # Cross-platform
 futures = "0.3"

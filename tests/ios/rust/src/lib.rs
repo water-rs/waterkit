@@ -223,6 +223,19 @@ fn run_tests() {
             println!("Health available: {}", waterkit::health::is_available());
         }
 
+        #[cfg(feature = "background")]
+        {
+            println!("Testing waterkit-background...");
+            let capabilities = waterkit::background::capabilities();
+            println!(
+                "Background capabilities: refresh={} processing={} continued={} launch_events={}",
+                capabilities.supports_app_refresh,
+                capabilities.supports_processing,
+                capabilities.supports_continued_processing,
+                capabilities.supports_launch_events
+            );
+        }
+
         #[cfg(feature = "deeplink")]
         {
             println!("Testing waterkit-deeplink...");

@@ -13,7 +13,10 @@ mod recorder;
 mod shutdown;
 mod sys;
 
-pub use player::{AudioDevice, AudioPlayer, PlayerError, rodio};
+pub use player::{
+    AudioDevice, AudioPlayer, ListenerPose, PlaybackMode, PlayerError, SpatialPosition,
+    SpatialScene, rodio,
+};
 pub use recorder::{AudioBuffer, AudioFormat, AudioRecorder, AudioRecorderBuilder, RecordError};
 pub use shutdown::{ShutdownHandle, ShutdownReceiver};
 

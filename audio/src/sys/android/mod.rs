@@ -278,7 +278,6 @@ impl MediaCenterInner {
             let context = env.new_global_ref(&context_local).map_err(|e| {
                 MediaError::InitializationFailed(format!("new_global_ref context failed: {e}"))
             })?;
-            std::mem::forget(context_local);
 
             create_session_with_context(&mut env, context.as_obj())?;
             context

@@ -45,6 +45,11 @@ where
 }
 
 /// Initialize Android biometric support by loading helper classes and JNI bindings.
+///
+/// # Errors
+///
+/// Returns `BiometricError::PlatformError` when JNI calls fail, DEX setup fails,
+/// or native methods cannot be registered.
 pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), BiometricError> {
     if CLASS_LOADER.get().is_some() {
         return Ok(());
@@ -252,6 +257,11 @@ pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
 /// Authenticate using an explicit Android `Context`.
 ///
 /// Returns a oneshot receiver that resolves to the authentication outcome.
+///
+/// # Errors
+///
+/// Returns `BiometricError::PlatformError` if initialization fails or if the
+/// authentication JNI call cannot be started.
 pub fn authenticate_with_context(
     env: &mut JNIEnv,
     context: &JObject,

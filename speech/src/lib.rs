@@ -89,6 +89,7 @@ impl Tts {
 
     /// Check if currently speaking.
     #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn is_speaking(&self) -> bool {
         self.inner.is_speaking()
     }
@@ -132,6 +133,7 @@ pub struct SpeechRecognizer {
 impl SpeechRecognizer {
     /// Check if speech recognition is available.
     #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn is_available() -> bool {
         sys::recognition_is_available()
     }
@@ -148,6 +150,7 @@ impl SpeechRecognizer {
     }
 
     /// Stop speech recognition.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn stop(&self) {
         self.inner.stop();
     }

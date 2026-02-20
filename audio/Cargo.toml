@@ -40,6 +40,7 @@ zenwave = { version = "0.3", default-features = false, features = ["apple-backen
 # Android - use rustls with ring backend (avoids aws-lc-rs CMake issues)
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
+ndk-context.workspace = true
 zenwave = { version = "0.3", default-features = false, features = ["hyper-rustls", "ws"] }
 
 # Windows
@@ -54,4 +55,3 @@ futures.workspace = true
 mpris-server = "0.9"
 zenwave = "0.3"
 smol = "2"
-

@@ -6,7 +6,7 @@ Native biometric authentication (TouchID, FaceID, Fingerprint, Face Unlock) for 
 
 - **Unified API**: Single `authenticate` function for all platforms.
 - **Native UI**: Uses the system's standard authentication prompts.
-- **Fallback Support**: Handles cases where biometrics are unavailable or not enrolled.
+- **Availability checks**: Query whether biometrics are usable before prompting.
 
 ## Installation
 
@@ -23,31 +23,27 @@ waterkit = { version = "0.1", features = ["biometric"] }
 | :--- | :--- |
 | **macOS** | LocalAuthentication (TouchID) |
 | **iOS** | LocalAuthentication (FaceID / TouchID) |
-| **Android** | `androidx.biometric.BiometricPrompt` |
+| **Android** | `android.hardware.biometrics.BiometricPrompt` |
 | **Windows** | Windows Hello |
-| **Linux** | *Not currently supported* |
+| **Linux** | `fprintd` via D-Bus |
 
 ## Usage
 
 ```rust
-use waterkit_biometric::{authenticate, BiometricType};
+use waterkit_biometric::authenticate;
 
 async fn login() {
     // Optional: Check what type is available
-    let bio_type = waterkit_biometric::get_type().await;
-    println!("Available biometric: {:?}", bio_type); // e.g., FaceID
+    let bio_type = waterkit_biometric::get_biometric_type().await;
+    let _ = bio_type;
 
     // Authenticate
     let result = authenticate("Please authenticate to login").await;
-    
-    match result {
-        Ok(_) => println!("Success!"),
-        Err(e) => println!("Authentication failed: {}", e),
-    }
+    let _ = result;
 }
 ```
 
 ## Configuration
 
-**Android**: Ensure your activity inherits `FragmentActivity` to support `BiometricPrompt`.
+**Android**: Call authentication from a foreground `Activity` context.
 **iOS**: Add `NSFaceIDUsageDescription` to your `Info.plist`.

@@ -3,6 +3,8 @@ import ScreenCaptureKit
 import Cocoa
 import IOSurface
 import ImageIO
+import IOKit
+import IOKit.graphics
 
 // MARK: - Screenshot Capture
 
@@ -131,14 +133,76 @@ private class SingleFrameHandler: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 }
 
-// MARK: - Brightness Control (stubs for macOS - brightness crate broken)
+// MARK: - Brightness Control
 
-public func get_screen_brightness() -> Float {
-    return 1.0
+private func mainDisplayService() -> io_service_t? {
+    let displayId = CGMainDisplayID()
+    let vendorId = CGDisplayVendorNumber(displayId)
+    let productId = CGDisplayModelNumber(displayId)
+    let serial = CGDisplaySerialNumber(displayId)
+
+    var iterator: io_iterator_t = 0
+    let matching = IOServiceMatching("IODisplayConnect")
+    let mainPort: mach_port_t
+    if #available(macOS 12.0, *) {
+        mainPort = kIOMainPortDefault
+    } else {
+        mainPort = kIOMasterPortDefault
+    }
+
+    let status = IOServiceGetMatchingServices(mainPort, matching, &iterator)
+    guard status == KERN_SUCCESS else {
+        return nil
+    }
+    defer { IOObjectRelease(iterator) }
+
+    var service = IOIteratorNext(iterator)
+    while service != 0 {
+        let info = IODisplayCreateInfoDictionary(
+            service,
+            IOOptionBits(kIODisplayOnlyPreferredName),
+        ).takeRetainedValue() as NSDictionary
+
+        let serviceVendor = (info[kDisplayVendorID as String] as? NSNumber)?.uint32Value ?? 0
+        let serviceProduct = (info[kDisplayProductID as String] as? NSNumber)?.uint32Value ?? 0
+        let serviceSerial = (info[kDisplaySerialNumber as String] as? NSNumber)?.uint32Value ?? 0
+
+        let serialMatches = serial == 0 || serviceSerial == 0 || serviceSerial == serial
+        if serviceVendor == vendorId && serviceProduct == productId && serialMatches {
+            return service
+        }
+
+        IOObjectRelease(service)
+        service = IOIteratorNext(iterator)
+    }
+
+    return nil
 }
 
-public func set_screen_brightness(value: Float) {
-    // Stub
+public func get_screen_brightness() -> Float {
+    guard let service = mainDisplayService() else {
+        return -1.0
+    }
+    defer { IOObjectRelease(service) }
+
+    var brightness: Float = -1.0
+    let result = IODisplayGetFloatParameter(service, 0, kIODisplayBrightnessKey as CFString, &brightness)
+    if result != KERN_SUCCESS {
+        return -1.0
+    }
+
+    return max(0.0, min(1.0, brightness))
+}
+
+public func set_screen_brightness(value: Float) -> Bool {
+    guard let service = mainDisplayService() else {
+        return false
+    }
+    defer { IOObjectRelease(service) }
+
+    let clamped = max(0.0, min(1.0, value))
+    let result = IODisplaySetFloatParameter(service, 0, kIODisplayBrightnessKey as CFString, clamped)
+    return result == KERN_SUCCESS
 }
 
 // MARK: - High-Performance Stream Capturer

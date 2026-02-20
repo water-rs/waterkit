@@ -32,6 +32,7 @@
 
 mod sys;
 
+use std::num::NonZeroU8;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -342,6 +343,38 @@ pub enum StabilizationMode {
     Cinematic,
 }
 
+/// Dynamic range profile for photo/video capture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum DynamicRangeProfile {
+    /// Standard dynamic range.
+    #[default]
+    Sdr,
+    /// HDR10 dynamic range.
+    Hdr10,
+    /// HLG10 dynamic range.
+    Hlg10,
+    /// Dolby Vision dynamic range.
+    DolbyVision,
+}
+
+/// RAW photo encoding format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum RawPhotoFormat {
+    /// Digital Negative (DNG) container with sensor data.
+    #[default]
+    Dng,
+}
+
+/// RAW video frame stream format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum RawVideoFormat {
+    /// Frame stream where each frame is BGRA8 pixels.
+    #[default]
+    Bgra8Frames,
+    /// Frame stream where each frame is RGBA8 pixels.
+    Rgba8Frames,
+}
+
 /// Aggregated camera controls.
 ///
 /// Only `Some` values will be applied when passed to [`Camera::apply_controls`].
@@ -357,8 +390,8 @@ pub struct CameraControls {
     pub zoom: Option<f32>,
     /// Flash mode.
     pub flash: Option<FlashMode>,
-    /// HDR mode.
-    pub hdr: Option<bool>,
+    /// Dynamic range profile for preview/photo/video capture.
+    pub dynamic_range: Option<DynamicRangeProfile>,
     /// Video stabilization.
     pub stabilization: Option<StabilizationMode>,
 }
@@ -368,7 +401,7 @@ pub struct CameraControls {
 // ============================================================================
 
 /// Camera capabilities - query what controls are supported.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct CameraCapabilities {
     /// Supported resolutions.
@@ -387,14 +420,116 @@ pub struct CameraCapabilities {
     pub supports_manual_white_balance: bool,
     /// Zoom range (min, max).
     pub zoom_range: Option<(f32, f32)>,
-    /// Whether HDR is supported.
-    pub supports_hdr: bool,
+    /// Supported dynamic range profiles.
+    pub dynamic_ranges: Vec<DynamicRangeProfile>,
+    /// Whether Dolby Vision is supported.
+    pub supports_dolby_vision: bool,
     /// Available stabilization modes.
     pub stabilization_modes: Vec<StabilizationMode>,
     /// Whether flash is available.
     pub has_flash: bool,
     /// Whether torch (continuous light) is available.
     pub has_torch: bool,
+    /// Whether concurrent multi-camera streaming is supported.
+    pub supports_concurrent_multi_camera: bool,
+    /// Maximum number of cameras that can stream concurrently.
+    pub max_concurrent_cameras: NonZeroU8,
+    /// Whether still photo capture uses the platform-native photography pipeline.
+    pub uses_system_photo_pipeline: bool,
+    /// Whether video recording uses the platform-native capture pipeline.
+    pub uses_system_video_pipeline: bool,
+    /// Whether RAW photo capture is supported.
+    pub supports_raw_photo: bool,
+    /// Supported RAW photo formats.
+    pub raw_photo_formats: Vec<RawPhotoFormat>,
+    /// Whether RAW video capture is supported.
+    pub supports_raw_video: bool,
+    /// Supported RAW video stream formats.
+    pub raw_video_formats: Vec<RawVideoFormat>,
+}
+
+impl Default for CameraCapabilities {
+    fn default() -> Self {
+        Self {
+            resolutions: Vec::new(),
+            frame_rates: Vec::new(),
+            iso_range: None,
+            exposure_duration_range: None,
+            supports_exposure_compensation: false,
+            supports_manual_focus: false,
+            supports_manual_white_balance: false,
+            zoom_range: None,
+            dynamic_ranges: vec![DynamicRangeProfile::Sdr],
+            supports_dolby_vision: false,
+            stabilization_modes: vec![StabilizationMode::Off],
+            has_flash: false,
+            has_torch: false,
+            supports_concurrent_multi_camera: false,
+            max_concurrent_cameras: NonZeroU8::MIN,
+            uses_system_photo_pipeline: false,
+            uses_system_video_pipeline: false,
+            supports_raw_photo: false,
+            raw_photo_formats: Vec::new(),
+            supports_raw_video: false,
+            raw_video_formats: Vec::new(),
+        }
+    }
+}
+
+impl CameraCapabilities {
+    pub(crate) fn validate(&self) -> Result<(), CameraError> {
+        if self.dynamic_ranges.is_empty() {
+            return Err(CameraError::PlatformError(
+                "camera capabilities must include at least one dynamic range profile".into(),
+            ));
+        }
+        if !self.dynamic_ranges.contains(&DynamicRangeProfile::Sdr) {
+            return Err(CameraError::PlatformError(
+                "camera capabilities must always include SDR dynamic range profile".into(),
+            ));
+        }
+        if self.supports_dolby_vision
+            && !self
+                .dynamic_ranges
+                .contains(&DynamicRangeProfile::DolbyVision)
+        {
+            return Err(CameraError::PlatformError(
+                "supports_dolby_vision=true requires DolbyVision profile in dynamic_ranges".into(),
+            ));
+        }
+        if self.supports_raw_photo && self.raw_photo_formats.is_empty() {
+            return Err(CameraError::PlatformError(
+                "supports_raw_photo=true requires non-empty raw_photo_formats".into(),
+            ));
+        }
+        if !self.supports_raw_photo && !self.raw_photo_formats.is_empty() {
+            return Err(CameraError::PlatformError(
+                "supports_raw_photo=false requires empty raw_photo_formats".into(),
+            ));
+        }
+        if self.supports_raw_video && self.raw_video_formats.is_empty() {
+            return Err(CameraError::PlatformError(
+                "supports_raw_video=true requires non-empty raw_video_formats".into(),
+            ));
+        }
+        if !self.supports_raw_video && !self.raw_video_formats.is_empty() {
+            return Err(CameraError::PlatformError(
+                "supports_raw_video=false requires empty raw_video_formats".into(),
+            ));
+        }
+        if self.supports_concurrent_multi_camera && self.max_concurrent_cameras.get() < 2 {
+            return Err(CameraError::PlatformError(
+                "supports_concurrent_multi_camera=true requires max_concurrent_cameras >= 2".into(),
+            ));
+        }
+        if !self.supports_concurrent_multi_camera && self.max_concurrent_cameras.get() != 1 {
+            return Err(CameraError::PlatformError(
+                "supports_concurrent_multi_camera=false requires max_concurrent_cameras == 1"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -426,6 +561,47 @@ pub struct Photo {
     texture: wgpu::Texture,
     width: u32,
     height: u32,
+}
+
+/// A captured RAW photo payload.
+#[derive(Debug, Clone)]
+pub struct RawPhoto {
+    data: Vec<u8>,
+    width: u32,
+    height: u32,
+    format: RawPhotoFormat,
+}
+
+impl RawPhoto {
+    /// RAW photo bytes.
+    #[must_use]
+    pub fn data(&self) -> &[u8] {
+        self.data.as_slice()
+    }
+
+    /// Consume and return RAW bytes.
+    #[must_use]
+    pub fn into_data(self) -> Vec<u8> {
+        self.data
+    }
+
+    /// Photo width in pixels.
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Photo height in pixels.
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// RAW encoding format.
+    #[must_use]
+    pub const fn format(&self) -> RawPhotoFormat {
+        self.format
+    }
 }
 
 impl Photo {
@@ -499,6 +675,38 @@ impl Drop for Recording<'_> {
     fn drop(&mut self) {
         if !self.stopped {
             let _ = self.camera.inner.stop_recording();
+        }
+    }
+}
+
+/// RAII guard for RAW video recording.
+#[derive(Debug)]
+pub struct RawRecording<'a> {
+    camera: &'a mut Camera,
+    stopped: bool,
+}
+
+impl RawRecording<'_> {
+    /// Stop RAW recording and finalize the file.
+    ///
+    /// # Errors
+    /// Returns an error if RAW recording cannot be stopped.
+    pub fn stop(mut self) -> Result<(), CameraError> {
+        self.stopped = true;
+        self.camera.inner.stop_raw_recording()
+    }
+
+    /// Get the RAW recording duration so far.
+    #[must_use]
+    pub fn duration(&self) -> Duration {
+        self.camera.inner.raw_recording_duration()
+    }
+}
+
+impl Drop for RawRecording<'_> {
+    fn drop(&mut self) {
+        if !self.stopped {
+            let _ = self.camera.inner.stop_raw_recording();
         }
     }
 }
@@ -661,6 +869,17 @@ impl Camera {
         self.inner.capture_photo().await
     }
 
+    /// Capture a RAW photo.
+    ///
+    /// Returns RAW bytes in a platform-supported format (typically DNG).
+    ///
+    /// # Errors
+    /// Returns [`CameraError::CaptureFailed`] if RAW photo capture fails.
+    /// Returns [`CameraError::ControlNotSupported`] if RAW photo is unsupported.
+    pub async fn capture_raw_photo(&mut self) -> Result<RawPhoto, CameraError> {
+        self.inner.capture_raw_photo().await
+    }
+
     /// Start video recording with RAII guard.
     ///
     /// Recording stops automatically when the returned guard is dropped.
@@ -673,5 +892,65 @@ impl Camera {
             camera: self,
             stopped: false,
         })
+    }
+
+    /// Start RAW video recording with RAII guard.
+    ///
+    /// RAW video is written as an uncompressed frame stream file.
+    ///
+    /// # Errors
+    /// Returns [`CameraError::RecordingError`] if RAW recording cannot be started.
+    pub fn raw_recording(
+        &mut self,
+        path: impl AsRef<Path>,
+    ) -> Result<RawRecording<'_>, CameraError> {
+        self.inner.start_raw_recording(path.as_ref())?;
+        Ok(RawRecording {
+            camera: self,
+            stopped: false,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_capabilities_satisfy_invariants() {
+        CameraCapabilities::default()
+            .validate()
+            .expect("default capabilities must be valid");
+    }
+
+    #[test]
+    fn raw_photo_support_requires_formats() {
+        let capabilities = CameraCapabilities {
+            supports_raw_photo: true,
+            ..CameraCapabilities::default()
+        };
+        let error = capabilities
+            .validate()
+            .expect_err("raw photo without formats must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("supports_raw_photo=true requires non-empty raw_photo_formats")
+        );
+    }
+
+    #[test]
+    fn concurrent_multi_camera_requires_capacity() {
+        let capabilities = CameraCapabilities {
+            supports_concurrent_multi_camera: true,
+            max_concurrent_cameras: NonZeroU8::MIN,
+            ..CameraCapabilities::default()
+        };
+        let error = capabilities
+            .validate()
+            .expect_err("invalid concurrent camera limit must fail");
+        assert!(error.to_string().contains(
+            "supports_concurrent_multi_camera=true requires max_concurrent_cameras >= 2"
+        ));
     }
 }

@@ -70,7 +70,10 @@ pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
     let (tx, rx) = oneshot::channel();
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
-    callbacks().lock().unwrap().insert(id, tx);
+    callbacks()
+        .lock()
+        .map_err(|_| DialogError::PlatformError("dialog callback registry poisoned".into()))?
+        .insert(id, tx);
 
     let type_str = match dialog.type_ {
         DialogType::Info => "info",
@@ -88,7 +91,10 @@ pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
     let (tx, rx) = oneshot::channel();
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
-    callbacks().lock().unwrap().insert(id, tx);
+    callbacks()
+        .lock()
+        .map_err(|_| DialogError::PlatformError("dialog callback registry poisoned".into()))?
+        .insert(id, tx);
 
     let type_str = match dialog.type_ {
         DialogType::Info => "info",
@@ -107,7 +113,10 @@ pub async fn show_photo_picker(
     let (tx, rx) = oneshot::channel();
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
-    picker_callbacks().lock().unwrap().insert(id, tx);
+    picker_callbacks()
+        .lock()
+        .map_err(|_| DialogError::PlatformError("dialog callback registry poisoned".into()))?
+        .insert(id, tx);
 
     let media_type = match picker.media_type {
         crate::MediaType::Image => "image",
@@ -124,7 +133,10 @@ pub async fn load_media(handle: Selection) -> Result<std::path::PathBuf, DialogE
     let (tx, rx) = oneshot::channel();
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
-    load_callbacks().lock().unwrap().insert(id, tx);
+    load_callbacks()
+        .lock()
+        .map_err(|_| DialogError::PlatformError("dialog callback registry poisoned".into()))?
+        .insert(id, tx);
 
     ffi::load_media_bridge(handle.0, id);
 

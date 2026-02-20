@@ -20,7 +20,7 @@ mod ffi {
 
         // Brightness
         fn get_screen_brightness() -> f32;
-        fn set_screen_brightness(value: f32);
+        fn set_screen_brightness(value: f32) -> bool;
 
         // Screen stream
         fn init_screen_stream(display_id: u32, target_fps: u32, show_cursor: bool) -> bool;
@@ -84,14 +84,49 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
 #[cfg(target_os = "ios")]
 #[allow(clippy::unused_async)]
 pub async fn get_brightness() -> Result<f32, Error> {
-    Ok(ffi::get_screen_brightness())
+    let value = ffi::get_screen_brightness();
+    if !(0.0..=1.0).contains(&value) {
+        return Err(Error::Platform(format!(
+            "invalid iOS brightness value from platform bridge: {value}"
+        )));
+    }
+
+    Ok(value)
 }
 
 #[cfg(target_os = "ios")]
 #[allow(clippy::unused_async)]
 pub async fn set_brightness(val: f32) -> Result<(), Error> {
-    ffi::set_screen_brightness(val.clamp(0.0, 1.0));
-    Ok(())
+    if ffi::set_screen_brightness(val.clamp(0.0, 1.0)) {
+        Ok(())
+    } else {
+        Err(Error::Platform(
+            "failed to set iOS screen brightness".into(),
+        ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn get_macos_brightness() -> Result<f32, Error> {
+    let value = ffi::get_screen_brightness();
+    if !(0.0..=1.0).contains(&value) {
+        return Err(Error::Platform(format!(
+            "invalid macOS brightness value from platform bridge: {value}"
+        )));
+    }
+
+    Ok(value)
+}
+
+#[cfg(target_os = "macos")]
+pub fn set_macos_brightness(value: f32) -> Result<(), Error> {
+    if ffi::set_screen_brightness(value.clamp(0.0, 1.0)) {
+        Ok(())
+    } else {
+        Err(Error::Platform(
+            "failed to set macOS screen brightness".into(),
+        ))
+    }
 }
 
 // ============================================================================

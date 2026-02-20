@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use owo_colors::OwoColorize;
 use std::path::{Path, PathBuf};
-use toml_edit::{DocumentMut, Item, Value};
+use toml_edit::DocumentMut;
+use tracing::{info, warn};
 
 #[derive(Parser)]
 #[command(name = "waterkit-test")]
@@ -32,6 +33,11 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .without_time()
+        .init();
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -42,10 +48,7 @@ fn main() -> Result<()> {
 }
 
 fn run_android(crate_path: &Path) -> Result<()> {
-    println!(
-        "{}",
-        "🚀 Preparing Android test environment...".green().bold()
-    );
+    info!("{}", "Preparing Android test environment...".green().bold());
 
     // 1. Verify crate path
     let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
@@ -54,9 +57,9 @@ fn run_android(crate_path: &Path) -> Result<()> {
         anyhow::bail!("No Cargo.toml found at {}", crate_path.display());
     }
 
-    println!("Target crate: {}", crate_path.display());
+    info!("Target crate: {}", crate_path.display());
 
-    // 2. Modify tests/android/rust/Cargo.toml
+    // 2. Resolve workspace root
     let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap() // tools
@@ -64,10 +67,7 @@ fn run_android(crate_path: &Path) -> Result<()> {
         .unwrap() // kit (root)
         .to_path_buf();
 
-    let harness_cargo_path = root_dir.join("tests/android/rust/Cargo.toml");
-    update_harness_dependency(&harness_cargo_path, &crate_path)?;
-
-    // 2.5 Get feature
+    // 3. Get feature
     let content_cargo_path = crate_path.join("Cargo.toml");
     let content_toml_str =
         std::fs::read_to_string(&content_cargo_path).context("Read content toml")?;
@@ -75,10 +75,12 @@ fn run_android(crate_path: &Path) -> Result<()> {
         .parse::<DocumentMut>()
         .context("Parse content toml")?;
     let package_name = content_doc["package"]["name"].as_str().unwrap_or("");
-    let feature = get_crate_feature(package_name);
+    let feature = get_crate_feature(package_name).ok_or_else(|| {
+        anyhow::anyhow!("Unsupported crate package name for harness features: {package_name}")
+    })?;
 
-    // 3. Run cargo ndk build
-    println!("{}", "🔨 Building Android app...".yellow().bold());
+    // 4. Run cargo ndk build
+    info!("{}", "Building Android test library...".yellow().bold());
     let mut args = vec![
         "ndk",
         "-t",
@@ -89,10 +91,8 @@ fn run_android(crate_path: &Path) -> Result<()> {
         "-p",
         "waterkit-test-android",
     ];
-    if let Some(f) = feature {
-        args.push("--features");
-        args.push(f);
-    }
+    args.push("--features");
+    args.push(feature);
 
     let status = std::process::Command::new("cargo")
         .current_dir(&root_dir)
@@ -104,44 +104,75 @@ fn run_android(crate_path: &Path) -> Result<()> {
         anyhow::bail!("Android build failed");
     }
 
-    // 4. (Optional) Install/Run via adb/gradle could go here
+    // 5. (Optional) Install/Run via adb/gradle could go here
     // For now we just build.
-    println!(
-        "{}",
-        "✅ Android libraries built successfully.".green().bold()
-    );
-    println!("You can now run the app via Android Studio or ./gradlew installDebug");
+    info!("{}", "Android libraries built successfully.".green().bold());
+    warn!("Install and launch are not automated in this command yet.");
 
     Ok(())
 }
 
 fn run_macos(crate_path: &Path) -> Result<()> {
-    println!(
-        "{}",
-        "🚀 Preparing macOS test environment...".green().bold()
-    );
+    info!("{}", "Preparing macOS test environment...".green().bold());
 
-    // 1. Verify crate path
     let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
-
-    if !crate_path.join("Cargo.toml").exists() {
+    let manifest_path = crate_path.join("Cargo.toml");
+    if !manifest_path.exists() {
         anyhow::bail!("No Cargo.toml found at {}", crate_path.display());
     }
 
-    // 2. Modify tests/macos/runner/Cargo.toml
-    // Implementation needed: Create generic macOS runner crate.
-    // For now, let's just log.
-    println!(
-        "{}",
-        "⚠️ macOS generic runner not fully implemented yet.".yellow()
-    );
-    println!("Target crate: {}", crate_path.display());
+    let root_dir = workspace_root();
+    let metadata = parse_macos_metadata(&manifest_path)?;
+    info!("Target crate: {}", crate_path.display());
+    info!("Package: {}", metadata.package_name);
+    info!("Primary binary: {}", metadata.bin_name);
+
+    info!("{}", "Building macOS test binary...".yellow().bold());
+    let build_status = std::process::Command::new("cargo")
+        .current_dir(&root_dir)
+        .args(["build", "--manifest-path"])
+        .arg(&manifest_path)
+        .status()
+        .context("Failed to run cargo build for macOS test crate")?;
+    if !build_status.success() {
+        anyhow::bail!("macOS build failed for {}", metadata.package_name);
+    }
+
+    let binary_path = root_dir.join("target/debug").join(&metadata.bin_name);
+    if !binary_path.exists() {
+        anyhow::bail!(
+            "Built binary not found at {}. Ensure crate has a runnable binary target.",
+            binary_path.display()
+        );
+    }
+
+    let info_plist_path = crate_path.join("Info.plist");
+    if info_plist_path.exists() {
+        run_macos_app_bundle(
+            &root_dir,
+            &metadata.bin_name,
+            &binary_path,
+            &info_plist_path,
+        )?;
+    } else {
+        run_macos_cli_binary(&root_dir, &manifest_path, &metadata.bin_name)?;
+    }
+
+    let log_path = root_dir
+        .join("target/debug")
+        .join(format!("{}.log", metadata.bin_name));
+    if log_path.exists() {
+        info!("{}", "Captured test log:".green().bold());
+        let log_text = std::fs::read_to_string(&log_path)
+            .with_context(|| format!("Failed to read {}", log_path.display()))?;
+        info!("{log_text}");
+    }
 
     Ok(())
 }
 
 fn run_ios(crate_path: &Path) -> Result<()> {
-    println!("{}", "🚀 Preparing iOS test environment...".green().bold());
+    info!("{}", "Preparing iOS test environment...".green().bold());
 
     // 1. Verify crate path
     let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
@@ -150,18 +181,15 @@ fn run_ios(crate_path: &Path) -> Result<()> {
         anyhow::bail!("No Cargo.toml found at {}", crate_path.display());
     }
 
-    println!("Target crate: {}", crate_path.display());
+    info!("Target crate: {}", crate_path.display());
 
-    // 2. Modify tests/ios/rust/Cargo.toml
+    // 2. Resolve workspace root
     let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap() // tools
         .parent()
         .unwrap() // kit (root)
         .to_path_buf();
-
-    let harness_cargo_path = root_dir.join("tests/ios/rust/Cargo.toml");
-    update_harness_dependency(&harness_cargo_path, &crate_path)?;
 
     // 2.5 Get feature
     let content_cargo_path = crate_path.join("Cargo.toml");
@@ -171,10 +199,12 @@ fn run_ios(crate_path: &Path) -> Result<()> {
         .parse::<DocumentMut>()
         .context("Parse content toml")?;
     let package_name = content_doc["package"]["name"].as_str().unwrap_or("");
-    let feature = get_crate_feature(package_name);
+    let feature = get_crate_feature(package_name).ok_or_else(|| {
+        anyhow::anyhow!("Unsupported crate package name for harness features: {package_name}")
+    })?;
 
     // 3. Build for iOS Simulator
-    println!("{}", "🔨 Building iOS library...".yellow().bold());
+    info!("{}", "Building iOS test library...".yellow().bold());
     let mut args = vec![
         "build",
         "--target",
@@ -182,10 +212,8 @@ fn run_ios(crate_path: &Path) -> Result<()> {
         "-p",
         "waterkit-test-ios",
     ];
-    if let Some(f) = feature {
-        args.push("--features");
-        args.push(f);
-    }
+    args.push("--features");
+    args.push(feature);
 
     let status = std::process::Command::new("cargo")
         .current_dir(&root_dir)
@@ -198,7 +226,7 @@ fn run_ios(crate_path: &Path) -> Result<()> {
     }
 
     // 4. Swift Compile
-    println!("{}", "🍎 Compiling Swift app...".yellow().bold());
+    info!("{}", "Compiling Swift app...".yellow().bold());
 
     // Scan for extra .swift sources in the target crate
     let mut extra_swift_sources = Vec::new();
@@ -209,7 +237,7 @@ fn run_ios(crate_path: &Path) -> Result<()> {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().is_some_and(|ext| ext == "swift") {
-                    println!("Found extra Swift source: {}", path.display());
+                    info!("Found extra Swift source: {}", path.display());
                     extra_swift_sources.push(path);
                 }
             }
@@ -271,7 +299,7 @@ fn run_ios(crate_path: &Path) -> Result<()> {
     }
 
     // 5. Bundle
-    println!("{}", "📦 Bundling app...".yellow().bold());
+    info!("{}", "Bundling app...".yellow().bold());
     let app_dir = root_dir.join("WaterKitTest.app");
     if app_dir.exists() {
         std::fs::remove_dir_all(&app_dir)?;
@@ -289,7 +317,7 @@ fn run_ios(crate_path: &Path) -> Result<()> {
     )?;
 
     // 6. Codesign
-    println!("{}", "🔑 Codesigning...".yellow().bold());
+    info!("{}", "Codesigning...".yellow().bold());
     let status = std::process::Command::new("codesign")
         .args(["-s", "-", "WaterKitTest.app"])
         .current_dir(&root_dir)
@@ -301,10 +329,7 @@ fn run_ios(crate_path: &Path) -> Result<()> {
     }
 
     // 7. Install & Launch
-    println!(
-        "{}",
-        "📱 Installing to Simulator (Booted)...".yellow().bold()
-    );
+    info!("{}", "Installing to Simulator (booted)...".yellow().bold());
     let simulator_id = "booted"; // Use "booted" to target the active simulator automatically!
 
     let status = std::process::Command::new("xcrun")
@@ -317,7 +342,7 @@ fn run_ios(crate_path: &Path) -> Result<()> {
         anyhow::bail!("Installation failed (ensure a simulator is booted)");
     }
 
-    println!("{}", "🚀 Launching app...".green().bold());
+    info!("{}", "Launching app...".green().bold());
     let status = std::process::Command::new("xcrun")
         .args([
             "simctl",
@@ -337,50 +362,200 @@ fn run_ios(crate_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn update_harness_dependency(harness_path: &Path, content_crate_path: &Path) -> Result<()> {
-    // 1. Get crate name from content crate Cargo.toml
-    let content_cargo_path = content_crate_path.join("Cargo.toml");
-    let content_toml_str = std::fs::read_to_string(&content_cargo_path)
-        .context("Failed to read content Cargo.toml")?;
-    let content_doc = content_toml_str
-        .parse::<DocumentMut>()
-        .context("Failed to parse content Cargo.toml")?;
+#[derive(Debug)]
+struct MacosMetadata {
+    package_name: String,
+    bin_name: String,
+}
 
-    let package_name = content_doc["package"]["name"].as_str().ok_or_else(|| {
-        anyhow::anyhow!(
-            "Failed to get package name from {}",
-            content_cargo_path.display()
+fn parse_macos_metadata(manifest_path: &Path) -> Result<MacosMetadata> {
+    let manifest_text = std::fs::read_to_string(manifest_path)
+        .with_context(|| format!("Read {}", manifest_path.display()))?;
+    let manifest = manifest_text
+        .parse::<DocumentMut>()
+        .with_context(|| format!("Parse {}", manifest_path.display()))?;
+
+    let package_name = manifest["package"]["name"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing package.name in {}", manifest_path.display()))?
+        .to_owned();
+
+    let bin_name = select_primary_bin_name(&manifest, &package_name)?;
+
+    Ok(MacosMetadata {
+        package_name,
+        bin_name,
+    })
+}
+
+fn select_primary_bin_name(manifest: &DocumentMut, package_name: &str) -> Result<String> {
+    let Some(bin_tables) = manifest["bin"].as_array_of_tables() else {
+        return Ok(package_name.to_owned());
+    };
+
+    if bin_tables.is_empty() {
+        return Ok(package_name.to_owned());
+    }
+
+    if bin_tables.len() > 1 {
+        warn!(
+            "Multiple [[bin]] targets found; defaulting to the first one for generic macOS runner"
+        );
+    }
+
+    let first = bin_tables
+        .iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("First [[bin]] entry is missing"))?;
+    let name = first["name"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("First [[bin]] entry is missing a name field"))?;
+    Ok(name.to_owned())
+}
+
+fn run_macos_cli_binary(root_dir: &Path, manifest_path: &Path, bin_name: &str) -> Result<()> {
+    info!(
+        "{}",
+        "No Info.plist found; running binary directly via cargo run."
+            .yellow()
+            .bold()
+    );
+
+    let status = std::process::Command::new("cargo")
+        .current_dir(root_dir)
+        .args(["run", "--manifest-path"])
+        .arg(manifest_path)
+        .args(["--bin", bin_name])
+        .status()
+        .context("Failed to run cargo run for macOS test crate")?;
+
+    if !status.success() {
+        anyhow::bail!("macOS CLI run failed for binary {}", bin_name);
+    }
+
+    Ok(())
+}
+
+fn run_macos_app_bundle(
+    root_dir: &Path,
+    bin_name: &str,
+    built_binary: &Path,
+    info_plist_path: &Path,
+) -> Result<()> {
+    info!(
+        "{}",
+        "Info.plist detected; creating, signing, and launching .app bundle."
+            .yellow()
+            .bold()
+    );
+
+    let app_dir = root_dir
+        .join("target/debug")
+        .join(format!("{bin_name}.app"));
+    let contents_dir = app_dir.join("Contents");
+    let macos_dir = contents_dir.join("MacOS");
+    let app_binary = macos_dir.join(bin_name);
+
+    if app_dir.exists() {
+        std::fs::remove_dir_all(&app_dir)
+            .with_context(|| format!("Failed to remove {}", app_dir.display()))?;
+    }
+    std::fs::create_dir_all(&macos_dir)
+        .with_context(|| format!("Failed to create {}", macos_dir.display()))?;
+
+    std::fs::copy(built_binary, &app_binary).with_context(|| {
+        format!(
+            "Failed to copy built binary from {} to {}",
+            built_binary.display(),
+            app_binary.display()
+        )
+    })?;
+    std::fs::copy(info_plist_path, contents_dir.join("Info.plist")).with_context(|| {
+        format!(
+            "Failed to copy Info.plist from {}",
+            info_plist_path.display()
         )
     })?;
 
-    // 2. Update harness Cargo.toml
-    let toml_str =
-        std::fs::read_to_string(harness_path).context("Failed to read harness Cargo.toml")?;
+    add_swift_rpath_if_exists(&app_binary, Path::new("/usr/lib/swift"))?;
 
-    let mut doc = toml_str
-        .parse::<DocumentMut>()
-        .context("Failed to parse harness Cargo.toml")?;
+    let xcode_path_output = std::process::Command::new("xcode-select")
+        .args(["-p"])
+        .output()
+        .context("Failed to query xcode-select -p")?;
+    if xcode_path_output.status.success() {
+        let xcode_path = String::from_utf8(xcode_path_output.stdout)
+            .context("xcode-select output is not valid UTF-8")?
+            .trim()
+            .to_owned();
+        let xcode_swift_lib = PathBuf::from(xcode_path)
+            .join("Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx");
+        add_swift_rpath_if_exists(&app_binary, &xcode_swift_lib)?;
+    }
 
-    // We want to add/update: waterkit_content = { package = "name", path = "..." }
+    let codesign_status = std::process::Command::new("codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(&app_dir)
+        .status()
+        .context("Failed to run codesign for macOS bundle")?;
+    if !codesign_status.success() {
+        anyhow::bail!("codesign failed for {}", app_dir.display());
+    }
 
-    let path_str = content_crate_path.to_str().unwrap();
+    info!("{}", "Launching app bundle...".green().bold());
+    let open_status = std::process::Command::new("open")
+        .arg("-W")
+        .arg(&app_dir)
+        .status()
+        .context("Failed to run open -W for macOS app bundle")?;
+    if !open_status.success() {
+        anyhow::bail!("open -W failed for {}", app_dir.display());
+    }
 
-    let mut table = toml_edit::InlineTable::default();
-    table.insert("path", Value::from(path_str));
-    table.insert("package", Value::from(package_name));
-
-    doc["dependencies"]["waterkit_content"] = Item::Value(Value::InlineTable(table));
-
-    println!("DEBUG: Generated TOML content for [dependencies.waterkit_content]:");
-    println!("{}", doc["dependencies"]["waterkit_content"]);
-
-    std::fs::write(harness_path, doc.to_string()).context("Failed to write harness Cargo.toml")?;
-
-    println!(
-        "Updated harness dependency to: {} (package: {})",
-        path_str, package_name
-    );
     Ok(())
+}
+
+fn add_swift_rpath_if_exists(binary_path: &Path, rpath: &Path) -> Result<()> {
+    if !rpath.exists() {
+        return Ok(());
+    }
+
+    let output = std::process::Command::new("install_name_tool")
+        .args(["-add_rpath"])
+        .arg(rpath)
+        .arg(binary_path)
+        .output()
+        .with_context(|| {
+            format!(
+                "Failed to run install_name_tool for {}",
+                binary_path.display()
+            )
+        })?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("would duplicate path") || stderr.contains("already exists in") {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "install_name_tool failed for {} with rpath {}: {}",
+        binary_path.display(),
+        rpath.display(),
+        stderr.trim()
+    );
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 fn get_crate_feature(package_name: &str) -> Option<&'static str> {
@@ -414,6 +589,28 @@ fn get_crate_feature(package_name: &str) -> Option<&'static str> {
         Some("system")
     } else if package_name.contains("video") {
         Some("video")
+    } else if package_name.contains("bluetooth") {
+        Some("bluetooth")
+    } else if package_name.contains("nfc") {
+        Some("nfc")
+    } else if package_name.contains("share") {
+        Some("share")
+    } else if package_name.contains("speech") {
+        Some("speech")
+    } else if package_name.contains("contacts") {
+        Some("contacts")
+    } else if package_name.contains("calendar") {
+        Some("calendar")
+    } else if package_name.contains("health") {
+        Some("health")
+    } else if package_name.contains("deeplink") {
+        Some("deeplink")
+    } else if package_name.contains("screen") {
+        Some("screen")
+    } else if package_name.contains("background") {
+        Some("background")
+    } else if package_name.contains("passkey") {
+        Some("passkey")
     } else {
         None
     }

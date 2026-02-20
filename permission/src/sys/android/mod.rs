@@ -84,9 +84,24 @@ pub fn init_with_activity(env: &mut JNIEnv, activity: &JObject) -> Result<(), Pe
             .map_err(|e| PermissionError::Unknown(format!("to_str failed: {e}")))?
     );
 
+    // Remove if exists to handle previous read-only setting
+    let _ = std::fs::remove_file(&dex_path);
+
     // Write DEX bytes to file
     std::fs::write(&dex_path, DEX_BYTES)
         .map_err(|e| PermissionError::Unknown(format!("write DEX failed: {e}")))?;
+
+    // Make DEX read-only as required by modern Android security
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&dex_path)
+            .map_err(|e| PermissionError::Unknown(format!("metadata DEX failed: {e}")))?
+            .permissions();
+        perms.set_mode(0o444);
+        std::fs::set_permissions(&dex_path, perms)
+            .map_err(|e| PermissionError::Unknown(format!("set_permissions DEX failed: {e}")))?;
+    }
 
     // Create InMemoryDexClassLoader
     let dex_path_jstring = env

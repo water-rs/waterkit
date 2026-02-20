@@ -179,9 +179,16 @@ impl BleConnection {
     ///
     /// # Errors
     /// Returns error if service discovery fails.
-    #[allow(clippy::future_not_send)]
+    #[allow(clippy::unused_async)]
     pub async fn discover_services(&self) -> Result<Vec<GattService>, BluetoothError> {
-        self.inner.discover_services().await
+        #[cfg(target_os = "windows")]
+        {
+            self.inner.discover_services()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.inner.discover_services().await
+        }
     }
 
     /// Read a characteristic value.
@@ -202,16 +209,24 @@ impl BleConnection {
     ///
     /// # Errors
     /// Returns error if write fails.
-    #[allow(clippy::future_not_send)]
+    #[allow(clippy::unused_async)]
     pub async fn write_characteristic(
         &self,
         service: &Uuid,
         characteristic: &Uuid,
         data: &[u8],
     ) -> Result<(), BluetoothError> {
-        self.inner
-            .write_characteristic(service, characteristic, data)
-            .await
+        #[cfg(target_os = "windows")]
+        {
+            self.inner
+                .write_characteristic(service, characteristic, data)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            self.inner
+                .write_characteristic(service, characteristic, data)
+                .await
+        }
     }
 
     /// Subscribe to characteristic notifications.

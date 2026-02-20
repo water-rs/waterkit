@@ -129,14 +129,14 @@ impl BleConnectionInner {
         Ok(Self { device })
     }
 
-    #[allow(clippy::future_not_send)]
-    pub async fn discover_services(&self) -> Result<Vec<GattService>, BluetoothError> {
-        let result = self
-            .device
-            .GetGattServicesAsync()
-            .map_err(|e| BluetoothError::GattError(e.to_string()))?
-            .await
-            .map_err(|e| BluetoothError::GattError(e.to_string()))?;
+    pub fn discover_services(&self) -> Result<Vec<GattService>, BluetoothError> {
+        let result = futures::executor::block_on(async {
+            self.device
+                .GetGattServicesAsync()
+                .map_err(|e| BluetoothError::GattError(e.to_string()))?
+                .await
+                .map_err(|e| BluetoothError::GattError(e.to_string()))
+        })?;
         if result
             .Status()
             .unwrap_or(GattCommunicationStatus::Unreachable)
@@ -153,11 +153,12 @@ impl BleConnectionInner {
                 svc.Uuid()
                     .map_or_else(|_| String::new(), |u| format!("{u:?}")),
             );
-            let chars_result = svc
-                .GetCharacteristicsAsync()
-                .map_err(|e| BluetoothError::GattError(e.to_string()))?
-                .await
-                .map_err(|e| BluetoothError::GattError(e.to_string()))?;
+            let chars_result = futures::executor::block_on(async {
+                svc.GetCharacteristicsAsync()
+                    .map_err(|e| BluetoothError::GattError(e.to_string()))?
+                    .await
+                    .map_err(|e| BluetoothError::GattError(e.to_string()))
+            })?;
             let mut characteristics = Vec::new();
             if let Ok(chars) = chars_result.Characteristics() {
                 for c in &chars {
@@ -224,28 +225,31 @@ impl BleConnectionInner {
         Ok(data)
     }
 
-    #[allow(clippy::future_not_send)]
-    pub async fn write_characteristic(
+    pub fn write_characteristic(
         &self,
         service: &Uuid,
         characteristic: &Uuid,
         data: &[u8],
     ) -> Result<(), BluetoothError> {
-        let svc = self.find_service(service).await?;
-        let chr = self.find_characteristic(&svc, characteristic).await?;
-        let writer = windows::Storage::Streams::DataWriter::new()
-            .map_err(|e| BluetoothError::GattError(e.to_string()))?;
-        writer
-            .WriteBytes(data)
-            .map_err(|e| BluetoothError::GattError(e.to_string()))?;
-        let buf = writer
-            .DetachBuffer()
-            .map_err(|e| BluetoothError::GattError(e.to_string()))?;
-        let result = chr
-            .WriteValueAsync(&buf)
-            .map_err(|e| BluetoothError::GattError(e.to_string()))?
-            .await
-            .map_err(|e| BluetoothError::GattError(e.to_string()))?;
+        let svc = futures::executor::block_on(self.find_service(service))?;
+        let chr = futures::executor::block_on(self.find_characteristic(&svc, characteristic))?;
+        let write_operation = {
+            let writer = windows::Storage::Streams::DataWriter::new()
+                .map_err(|e| BluetoothError::GattError(e.to_string()))?;
+            writer
+                .WriteBytes(data)
+                .map_err(|e| BluetoothError::GattError(e.to_string()))?;
+            let buffer = writer
+                .DetachBuffer()
+                .map_err(|e| BluetoothError::GattError(e.to_string()))?;
+            chr.WriteValueAsync(&buffer)
+                .map_err(|e| BluetoothError::GattError(e.to_string()))?
+        };
+        let result = futures::executor::block_on(async {
+            write_operation
+                .await
+                .map_err(|e| BluetoothError::GattError(e.to_string()))
+        })?;
         if result != GattCommunicationStatus::Success {
             return Err(BluetoothError::GattError("Write failed".into()));
         }

@@ -67,7 +67,7 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), NfcError> {
     Ok(())
 }
 
-pub fn nfc_is_available() -> bool {
+pub const fn nfc_is_available() -> bool {
     false
 }
 
@@ -89,12 +89,14 @@ impl NfcReaderInner {
         Err(NfcError::NotSupported)
     }
 
-    pub fn stop(&self) {}
+    pub const fn stop(&self) {
+        let _ = self;
+    }
 }
 
 /// Android-specific NFC functions requiring JNI context.
 pub mod jni_api {
-    use super::*;
+    use super::{CLASS_LOADER, JNIEnv, JObject, JValue, NfcError, init_dex};
 
     /// Check if NFC is available with JNI context.
     ///

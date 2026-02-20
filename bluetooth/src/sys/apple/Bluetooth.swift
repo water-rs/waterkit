@@ -101,13 +101,17 @@ func bluetooth_write_characteristic(device_id: RustStr, service_uuid: RustStr, c
     peripheral.writeValue(bytes, for: characteristic, type: .withResponse)
 }
 
-func bluetooth_subscribe(device_id: RustStr, service_uuid: RustStr, char_uuid: RustStr, cb_id: UInt64) {
+func bluetooth_subscribe(device_id: RustStr, service_uuid: RustStr, char_uuid: RustStr, notify_ctx: UInt64) {
     let idStr = device_id.toString()
     let svcUuid = CBUUID(string: service_uuid.toString())
     let chrUuid = CBUUID(string: char_uuid.toString())
     guard let peripheral = peripherals[idStr] else { return }
     guard let service = peripheral.services?.first(where: { $0.uuid == svcUuid }),
           let characteristic = service.characteristics?.first(where: { $0.uuid == chrUuid }) else { return }
+    let delegate = peripheralDelegates[idStr] ?? PeripheralDelegate(deviceId: idStr)
+    peripheralDelegates[idStr] = delegate
+    peripheral.delegate = delegate
+    delegate.notifyCallbacks[chrUuid.uuidString] = notify_ctx
     peripheral.setNotifyValue(true, for: characteristic)
 }
 
@@ -168,6 +172,7 @@ class PeripheralDelegate: NSObject, CBPeripheralDelegate {
     var discoverServicesCallback: UInt64? = nil
     var readCallbacks: [String: UInt64] = [:]
     var writeCallbacks: [String: UInt64] = [:]
+    var notifyCallbacks: [String: UInt64] = [:]
 
     init(deviceId: String) {
         self.deviceId = deviceId
@@ -230,8 +235,13 @@ class PeripheralDelegate: NSObject, CBPeripheralDelegate {
             }
         } else {
             // Notification
-            if let data = characteristic.value {
-                on_notify_value(deviceId, charUuid, Array(data))
+            if let data = characteristic.value,
+               let notifyCtx = notifyCallbacks[charUuid] {
+                let rustData = RustVec<UInt8>()
+                for byte in data {
+                    rustData.push(value: byte)
+                }
+                on_notify_value_raw(notifyCtx, rustData)
             }
         }
     }

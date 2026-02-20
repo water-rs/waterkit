@@ -477,38 +477,59 @@ impl Default for CameraCapabilities {
 }
 
 impl CameraCapabilities {
-    pub(crate) fn validate(&self) {
+    pub(crate) fn validate(&self) -> Result<(), CameraError> {
         if self.dynamic_ranges.is_empty() {
-            panic!("camera capabilities must include at least one dynamic range profile");
+            return Err(CameraError::PlatformError(
+                "camera capabilities must include at least one dynamic range profile".into(),
+            ));
         }
         if !self.dynamic_ranges.contains(&DynamicRangeProfile::Sdr) {
-            panic!("camera capabilities must always include SDR dynamic range profile");
+            return Err(CameraError::PlatformError(
+                "camera capabilities must always include SDR dynamic range profile".into(),
+            ));
         }
         if self.supports_dolby_vision
             && !self
                 .dynamic_ranges
                 .contains(&DynamicRangeProfile::DolbyVision)
         {
-            panic!("supports_dolby_vision=true requires DolbyVision profile in dynamic_ranges");
+            return Err(CameraError::PlatformError(
+                "supports_dolby_vision=true requires DolbyVision profile in dynamic_ranges".into(),
+            ));
         }
         if self.supports_raw_photo && self.raw_photo_formats.is_empty() {
-            panic!("supports_raw_photo=true requires non-empty raw_photo_formats");
+            return Err(CameraError::PlatformError(
+                "supports_raw_photo=true requires non-empty raw_photo_formats".into(),
+            ));
         }
         if !self.supports_raw_photo && !self.raw_photo_formats.is_empty() {
-            panic!("supports_raw_photo=false requires empty raw_photo_formats");
+            return Err(CameraError::PlatformError(
+                "supports_raw_photo=false requires empty raw_photo_formats".into(),
+            ));
         }
         if self.supports_raw_video && self.raw_video_formats.is_empty() {
-            panic!("supports_raw_video=true requires non-empty raw_video_formats");
+            return Err(CameraError::PlatformError(
+                "supports_raw_video=true requires non-empty raw_video_formats".into(),
+            ));
         }
         if !self.supports_raw_video && !self.raw_video_formats.is_empty() {
-            panic!("supports_raw_video=false requires empty raw_video_formats");
+            return Err(CameraError::PlatformError(
+                "supports_raw_video=false requires empty raw_video_formats".into(),
+            ));
         }
         if self.supports_concurrent_multi_camera && self.max_concurrent_cameras.get() < 2 {
-            panic!("supports_concurrent_multi_camera=true requires max_concurrent_cameras >= 2");
+            return Err(CameraError::PlatformError(
+                "supports_concurrent_multi_camera=true requires max_concurrent_cameras >= 2"
+                    .into(),
+            ));
         }
         if !self.supports_concurrent_multi_camera && self.max_concurrent_cameras.get() != 1 {
-            panic!("supports_concurrent_multi_camera=false requires max_concurrent_cameras == 1");
+            return Err(CameraError::PlatformError(
+                "supports_concurrent_multi_camera=false requires max_concurrent_cameras == 1"
+                    .into(),
+            ));
         }
+        Ok(())
     }
 }
 
@@ -898,25 +919,37 @@ mod tests {
 
     #[test]
     fn default_capabilities_satisfy_invariants() {
-        CameraCapabilities::default().validate();
+        CameraCapabilities::default()
+            .validate()
+            .expect("default capabilities must be valid");
     }
 
     #[test]
-    #[should_panic(expected = "supports_raw_photo=true requires non-empty raw_photo_formats")]
     fn raw_photo_support_requires_formats() {
         let mut capabilities = CameraCapabilities::default();
         capabilities.supports_raw_photo = true;
-        capabilities.validate();
+        let error = capabilities
+            .validate()
+            .expect_err("raw photo without formats must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("supports_raw_photo=true requires non-empty raw_photo_formats")
+        );
     }
 
     #[test]
-    #[should_panic(
-        expected = "supports_concurrent_multi_camera=true requires max_concurrent_cameras >= 2"
-    )]
     fn concurrent_multi_camera_requires_capacity() {
         let mut capabilities = CameraCapabilities::default();
         capabilities.supports_concurrent_multi_camera = true;
         capabilities.max_concurrent_cameras = NonZeroU8::MIN;
-        capabilities.validate();
+        let error = capabilities
+            .validate()
+            .expect_err("invalid concurrent camera limit must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("supports_concurrent_multi_camera=true requires max_concurrent_cameras >= 2")
+        );
     }
 }

@@ -3,6 +3,7 @@ use crate::{
     DeviceId, GattCharacteristic, GattService, ScanFilter, ScanResult, Uuid,
 };
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 #[swift_bridge::bridge]
 mod ffi {
@@ -107,6 +108,7 @@ pub struct BleScannerInner {
     /// Boxed sender kept alive for the duration of scanning.
     /// Swift holds a raw pointer to it.
     _scan_tx: Box<async_channel::Sender<ScanResult>>,
+    scan_rx: async_channel::Receiver<ScanResult>,
     scan_ctx: u64,
 }
 
@@ -116,31 +118,29 @@ impl BleScannerInner {
         if state != AdapterState::PoweredOn {
             return Err(BluetoothError::NotAvailable);
         }
-        let (tx, _rx) = async_channel::bounded(64);
+        let (tx, rx) = async_channel::bounded(64);
         let scan_tx = Box::new(tx);
         let scan_ctx = (&raw const *scan_tx) as usize as u64;
         Ok(Self {
             _scan_tx: scan_tx,
+            scan_rx: rx,
             scan_ctx,
         })
     }
 
-    #[allow(clippy::unnecessary_wraps, clippy::unused_self)]
+    #[allow(clippy::unnecessary_wraps)]
     pub fn start_scan(
         &self,
         filter: &ScanFilter,
     ) -> Result<async_channel::Receiver<ScanResult>, BluetoothError> {
-        let (tx, rx) = async_channel::bounded(64);
-        let scan_tx = Box::new(tx);
-        let ctx = Box::into_raw(scan_tx) as usize as u64;
         let uuids = filter
             .service_uuids
             .iter()
             .map(|u| u.0.as_str())
             .collect::<Vec<_>>()
             .join(",");
-        ffi::bluetooth_start_scan(ctx, uuids);
-        Ok(rx)
+        ffi::bluetooth_start_scan(self.scan_ctx, uuids);
+        Ok(self.scan_rx.clone())
     }
 
     pub fn stop_scan(&self) {
@@ -151,6 +151,7 @@ impl BleScannerInner {
 #[derive(Debug)]
 pub struct BleConnectionInner {
     device_id: String,
+    notify_txs: Mutex<HashMap<String, Box<async_channel::Sender<Vec<u8>>>>>,
 }
 
 impl BleConnectionInner {
@@ -170,6 +171,7 @@ impl BleConnectionInner {
             .map_err(|_| BluetoothError::ConnectionFailed("callback dropped".into()))??;
         Ok(Self {
             device_id: device_id.0.clone(),
+            notify_txs: Mutex::new(HashMap::new()),
         })
     }
 
@@ -245,7 +247,12 @@ impl BleConnectionInner {
     ) -> Result<async_channel::Receiver<Vec<u8>>, BluetoothError> {
         let (tx, rx) = async_channel::bounded(64);
         let notify_tx = Box::new(tx);
-        let ctx = Box::into_raw(notify_tx) as usize as u64;
+        let ctx = (&raw const *notify_tx) as usize as u64;
+        let key = format!("{}:{}", service.0, characteristic.0);
+        self.notify_txs
+            .lock()
+            .expect("notify callback registry poisoned")
+            .insert(key, notify_tx);
         ffi::bluetooth_subscribe(&self.device_id, &service.0, &characteristic.0, ctx);
         Ok(rx)
     }

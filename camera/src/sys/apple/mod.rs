@@ -175,10 +175,9 @@ fn frame_sender_slot() -> &'static Mutex<Option<async_channel::Sender<RawFrame>>
 }
 
 fn frame_sender_lock() -> std::sync::MutexGuard<'static, Option<async_channel::Sender<RawFrame>>> {
-    match frame_sender_slot().lock() {
-        Ok(guard) => guard,
-        Err(_) => std::process::abort(),
-    }
+    frame_sender_slot()
+        .lock()
+        .unwrap_or_else(|_| std::process::abort())
 }
 
 /// Callback invoked from Swift for each camera frame.

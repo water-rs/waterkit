@@ -62,6 +62,7 @@ impl TaskKind {
 
 /// Capability flags for the current platform backend.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct BackgroundCapabilities {
     /// Whether app refresh scheduling is supported.
     pub supports_app_refresh: bool,
@@ -116,16 +117,12 @@ impl ContinuedTaskPattern {
     /// Returns an error if the pattern is malformed.
     pub fn new(pattern: impl Into<String>) -> Result<Self, BackgroundError> {
         let pattern = pattern.into();
-        if !pattern.ends_with(".*") {
+        let Some(prefix) = pattern.strip_suffix(".*") else {
             return Err(BackgroundError::InvalidContinuedPattern {
                 pattern,
                 reason: "pattern must end with `.*`".into(),
             });
-        }
-
-        let prefix = pattern
-            .strip_suffix(".*")
-            .expect("suffix already validated");
+        };
         if prefix.is_empty() {
             return Err(BackgroundError::InvalidContinuedPattern {
                 pattern,
@@ -353,7 +350,7 @@ pub struct AppRefreshRequest {
 impl AppRefreshRequest {
     /// Build an app refresh request.
     #[must_use]
-    pub fn new(identifier: TaskIdentifier) -> Self {
+    pub const fn new(identifier: TaskIdentifier) -> Self {
         Self {
             identifier,
             earliest_begin_after: None,
@@ -362,12 +359,12 @@ impl AppRefreshRequest {
 
     /// Delay scheduling until after this duration.
     #[must_use]
-    pub fn earliest_begin_after(mut self, delay: Duration) -> Self {
+    pub const fn earliest_begin_after(mut self, delay: Duration) -> Self {
         self.earliest_begin_after = Some(delay);
         self
     }
 
-    pub(crate) fn identifier(&self) -> &TaskIdentifier {
+    pub(crate) const fn identifier(&self) -> &TaskIdentifier {
         &self.identifier
     }
 
@@ -389,7 +386,7 @@ pub struct ProcessingRequest {
 impl ProcessingRequest {
     /// Build a processing request.
     #[must_use]
-    pub fn new(identifier: TaskIdentifier) -> Self {
+    pub const fn new(identifier: TaskIdentifier) -> Self {
         Self {
             identifier,
             earliest_begin_after: None,
@@ -400,26 +397,26 @@ impl ProcessingRequest {
 
     /// Delay scheduling until after this duration.
     #[must_use]
-    pub fn earliest_begin_after(mut self, delay: Duration) -> Self {
+    pub const fn earliest_begin_after(mut self, delay: Duration) -> Self {
         self.earliest_begin_after = Some(delay);
         self
     }
 
     /// Require network connectivity.
     #[must_use]
-    pub fn requires_network_connectivity(mut self, required: bool) -> Self {
+    pub const fn requires_network_connectivity(mut self, required: bool) -> Self {
         self.requires_network_connectivity = required;
         self
     }
 
     /// Require external power.
     #[must_use]
-    pub fn requires_external_power(mut self, required: bool) -> Self {
+    pub const fn requires_external_power(mut self, required: bool) -> Self {
         self.requires_external_power = required;
         self
     }
 
-    pub(crate) fn identifier(&self) -> &TaskIdentifier {
+    pub(crate) const fn identifier(&self) -> &TaskIdentifier {
         &self.identifier
     }
 
@@ -503,19 +500,19 @@ impl ContinuedProcessingRequest {
 
     /// Set submission strategy.
     #[must_use]
-    pub fn strategy(mut self, strategy: ContinuedProcessingStrategy) -> Self {
+    pub const fn strategy(mut self, strategy: ContinuedProcessingStrategy) -> Self {
         self.strategy = strategy;
         self
     }
 
     /// Require background GPU resources.
     #[must_use]
-    pub fn requires_gpu(mut self, requires_gpu: bool) -> Self {
+    pub const fn requires_gpu(mut self, requires_gpu: bool) -> Self {
         self.requires_gpu = requires_gpu;
         self
     }
 
-    pub(crate) fn identifier(&self) -> &TaskIdentifier {
+    pub(crate) const fn identifier(&self) -> &TaskIdentifier {
         &self.identifier
     }
 
@@ -561,13 +558,13 @@ pub struct BackgroundTask {
 impl BackgroundTask {
     /// Borrow the launched task identifier.
     #[must_use]
-    pub fn identifier(&self) -> &TaskIdentifier {
+    pub const fn identifier(&self) -> &TaskIdentifier {
         &self.identifier
     }
 
     /// Get the launched task kind.
     #[must_use]
-    pub fn kind(&self) -> TaskKind {
+    pub const fn kind(&self) -> TaskKind {
         self.kind
     }
 
@@ -654,13 +651,13 @@ pub struct BackgroundTaskExpiration {
 impl BackgroundTaskExpiration {
     /// Borrow the expired task identifier.
     #[must_use]
-    pub fn identifier(&self) -> &TaskIdentifier {
+    pub const fn identifier(&self) -> &TaskIdentifier {
         &self.identifier
     }
 
     /// Get the expired task kind.
     #[must_use]
-    pub fn kind(&self) -> TaskKind {
+    pub const fn kind(&self) -> TaskKind {
         self.kind
     }
 
@@ -754,6 +751,7 @@ impl BackgroundRuntime {
     ///
     /// # Errors
     /// Returns an error if cancellation fails.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn cancel(&self, identifier: &TaskIdentifier) -> Result<(), BackgroundError> {
         self.inner.cancel(identifier)
     }
@@ -762,6 +760,7 @@ impl BackgroundRuntime {
     ///
     /// # Errors
     /// Returns an error if cancellation fails.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn cancel_all(&self) -> Result<(), BackgroundError> {
         self.inner.cancel_all()
     }

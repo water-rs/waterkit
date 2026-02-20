@@ -5,7 +5,7 @@
 use futures::StreamExt;
 use std::pin::pin;
 use std::sync::Arc;
-use waterkit_camera::{Camera, CameraError};
+use waterkit_camera::Camera;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -26,7 +26,7 @@ struct App {
 }
 
 impl App {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             window: None,
             surface: None,
@@ -42,6 +42,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn create_render_pipeline(
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,
@@ -50,7 +51,7 @@ impl App {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Camera Preview Shader"),
             source: wgpu::ShaderSource::Wgsl(
-                r#"
+                r"
                 struct VertexOutput {
                     @builtin(position) position: vec4<f32>,
                     @location(0) tex_coords: vec2<f32>,
@@ -85,7 +86,7 @@ impl App {
                 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     return textureSample(t_diffuse, s_diffuse, in.tex_coords);
                 }
-            "#
+            "
                 .into(),
             ),
         });
@@ -190,7 +191,7 @@ impl App {
         }
     }
 
-    fn render(&mut self) {
+    fn render(&self) {
         let Some(surface) = &self.surface else { return };
         let Some(device) = &self.device else { return };
         let Some(queue) = &self.queue else { return };
@@ -344,13 +345,11 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 // Try to get next camera frame
-                let new_texture = if let Some(camera) = &self.camera {
+                let new_texture = self.camera.as_ref().and_then(|camera| {
                     let mut frames = pin!(camera.frames());
                     // Get next frame
-                    pollster::block_on(frames.next()).map(|f| f.into_texture())
-                } else {
-                    None
-                };
+                    pollster::block_on(frames.next()).map(waterkit_camera::Frame::into_texture)
+                });
 
                 if let Some(texture) = new_texture {
                     self.current_texture = Some(texture);
@@ -368,12 +367,10 @@ impl ApplicationHandler for App {
     }
 }
 
-fn main() -> Result<(), CameraError> {
+fn main() {
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
 
     let mut app = App::new();
     event_loop.run_app(&mut app).unwrap();
-
-    Ok(())
 }

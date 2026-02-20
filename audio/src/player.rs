@@ -130,7 +130,7 @@ impl SpatialPosition {
     }
 
     #[must_use]
-    fn is_finite(self) -> bool {
+    const fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
     }
 }
@@ -193,7 +193,7 @@ impl ListenerPose {
         let dx = self.left_ear.x() - self.right_ear.x();
         let dy = self.left_ear.y() - self.right_ear.y();
         let dz = self.left_ear.z() - self.right_ear.z();
-        let distance_sq = dx * dx + dy * dy + dz * dz;
+        let distance_sq = dz.mul_add(dz, dx.mul_add(dx, dy * dy));
 
         if distance_sq <= f32::EPSILON {
             return Err(PlayerError::InvalidSpatialConfiguration(
@@ -312,7 +312,7 @@ impl SinkBackend {
         }
     }
 
-    fn mode(&self) -> PlaybackMode {
+    const fn mode(&self) -> PlaybackMode {
         match self {
             Self::Standard(_) => PlaybackMode::PreserveSourceChannels,
             Self::Spatial { .. } => PlaybackMode::SpatialStereo,
@@ -413,6 +413,7 @@ impl SinkBackend {
                     PlayerError::PlaybackFailed("spatial scene lock poisoned".into())
                 })?;
                 *guard = next_scene;
+                drop(guard);
                 Ok(())
             }
         }
@@ -674,7 +675,7 @@ impl AudioPlayer {
 
     /// Get the active playback mode.
     #[must_use]
-    pub fn mode(&self) -> PlaybackMode {
+    pub const fn mode(&self) -> PlaybackMode {
         self.sink.mode()
     }
 

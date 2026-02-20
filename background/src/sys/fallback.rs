@@ -7,8 +7,12 @@ use crate::{
 #[derive(Debug)]
 pub struct BackgroundRuntimeInner;
 
+#[allow(clippy::unused_self)]
 impl BackgroundRuntimeInner {
-    pub fn initialize(_event_ctx: u64, _config: &BootstrapConfig) -> Result<Self, BackgroundError> {
+    pub const fn initialize(
+        _event_ctx: u64,
+        _config: &BootstrapConfig,
+    ) -> Result<Self, BackgroundError> {
         Err(BackgroundError::NotSupported)
     }
 
@@ -27,11 +31,11 @@ impl BackgroundRuntimeInner {
         Err(BackgroundError::NotSupported)
     }
 
-    pub fn cancel(&self, _identifier: &TaskIdentifier) -> Result<(), BackgroundError> {
+    pub const fn cancel(&self, _identifier: &TaskIdentifier) -> Result<(), BackgroundError> {
         Err(BackgroundError::NotSupported)
     }
 
-    pub fn cancel_all(&self) -> Result<(), BackgroundError> {
+    pub const fn cancel_all(&self) -> Result<(), BackgroundError> {
         Err(BackgroundError::NotSupported)
     }
 }
@@ -41,7 +45,7 @@ pub fn capabilities() -> BackgroundCapabilities {
     BackgroundCapabilities::default()
 }
 
-pub fn complete_task(
+pub const fn complete_task(
     _runtime_handle: u64,
     _task_token: u64,
     _success: bool,

@@ -175,7 +175,7 @@ impl RelyingParty {
 
     /// Borrows relying-party ID.
     #[must_use]
-    pub fn id(&self) -> &RpId {
+    pub const fn id(&self) -> &RpId {
         &self.id
     }
 
@@ -218,7 +218,7 @@ impl UserEntity {
 
     /// Borrows user ID.
     #[must_use]
-    pub fn id(&self) -> &UserId {
+    pub const fn id(&self) -> &UserId {
         &self.id
     }
 
@@ -244,25 +244,25 @@ pub struct CredentialDescriptor {
 impl CredentialDescriptor {
     /// Creates a credential descriptor.
     #[must_use]
-    pub fn new(id: CredentialId) -> Self {
+    pub const fn new(id: CredentialId) -> Self {
         Self { id }
     }
 
     /// Borrows credential ID.
     #[must_use]
-    pub fn id(&self) -> &CredentialId {
+    pub const fn id(&self) -> &CredentialId {
         &self.id
     }
 }
 
-/// COSE algorithm identifiers used in WebAuthn registration.
+/// COSE algorithm identifiers used in `WebAuthn` registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublicKeyAlgorithm {
     /// ECDSA with SHA-256 (`-7`).
     Es256,
     /// RSASSA-PKCS1-v1_5 with SHA-256 (`-257`).
     Rs256,
-    /// EdDSA (`-8`).
+    /// `EdDSA` (`-8`).
     EdDsa,
 }
 
@@ -435,15 +435,15 @@ impl RegisterOptions {
         Ok(self)
     }
 
-    pub(crate) fn rp(&self) -> &RelyingParty {
+    pub(crate) const fn rp(&self) -> &RelyingParty {
         &self.rp
     }
 
-    pub(crate) fn user(&self) -> &UserEntity {
+    pub(crate) const fn user(&self) -> &UserEntity {
         &self.user
     }
 
-    pub(crate) fn challenge(&self) -> &Challenge {
+    pub(crate) const fn challenge(&self) -> &Challenge {
         &self.challenge
     }
 
@@ -485,7 +485,7 @@ pub struct AuthenticateOptions {
 impl AuthenticateOptions {
     /// Creates authentication options with secure ergonomic defaults.
     #[must_use]
-    pub fn new(rp_id: RpId, challenge: Challenge) -> Self {
+    pub const fn new(rp_id: RpId, challenge: Challenge) -> Self {
         Self {
             rp_id,
             challenge,
@@ -516,11 +516,11 @@ impl AuthenticateOptions {
         self
     }
 
-    pub(crate) fn rp_id(&self) -> &RpId {
+    pub(crate) const fn rp_id(&self) -> &RpId {
         &self.rp_id
     }
 
-    pub(crate) fn challenge(&self) -> &Challenge {
+    pub(crate) const fn challenge(&self) -> &Challenge {
         &self.challenge
     }
 
@@ -635,7 +635,7 @@ impl PasskeyClient {
 
     /// Borrows configured relying-party defaults.
     #[must_use]
-    pub fn relying_party(&self) -> &RelyingParty {
+    pub const fn relying_party(&self) -> &RelyingParty {
         &self.relying_party
     }
 }
@@ -684,8 +684,12 @@ impl PasskeyClientBuilder {
     /// Sets relying-party values at once.
     #[must_use]
     pub fn relying_party(mut self, relying_party: RelyingParty) -> Self {
-        self.rp_id = Some(relying_party.id.as_str().to_owned());
-        self.rp_name = Some(relying_party.name().to_owned());
+        let RelyingParty {
+            id: RpId(rp_id),
+            name: rp_name,
+        } = relying_party;
+        self.rp_id = Some(rp_id);
+        self.rp_name = Some(rp_name);
         self
     }
 
@@ -765,14 +769,14 @@ impl Default for PasskeyClientBuilder {
 }
 
 impl RegisterOptions {
-    fn with_optional_timeout(mut self, timeout_ms: Option<u32>) -> Self {
+    const fn with_optional_timeout(mut self, timeout_ms: Option<u32>) -> Self {
         self.timeout_ms = timeout_ms;
         self
     }
 }
 
 impl AuthenticateOptions {
-    fn with_optional_timeout(mut self, timeout_ms: Option<u32>) -> Self {
+    const fn with_optional_timeout(mut self, timeout_ms: Option<u32>) -> Self {
         self.timeout_ms = timeout_ms;
         self
     }
@@ -789,7 +793,7 @@ pub struct RegistrationResult {
 }
 
 impl RegistrationResult {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         credential_id: CredentialId,
         attestation_object: Vec<u8>,
         client_data_json: Vec<u8>,
@@ -807,7 +811,7 @@ impl RegistrationResult {
 
     /// Borrows credential ID.
     #[must_use]
-    pub fn credential_id(&self) -> &CredentialId {
+    pub const fn credential_id(&self) -> &CredentialId {
         &self.credential_id
     }
 
@@ -835,7 +839,7 @@ impl RegistrationResult {
         self.public_key_cose.as_deref()
     }
 
-    /// Converts to a WebAuthn JSON-ready payload.
+    /// Converts to a `WebAuthn` JSON-ready payload.
     #[must_use]
     pub fn to_webauthn_json(&self) -> RegistrationWebAuthnJson {
         RegistrationWebAuthnJson {
@@ -869,7 +873,7 @@ pub struct AuthenticationResult {
 }
 
 impl AuthenticationResult {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         credential_id: CredentialId,
         authenticator_data: Vec<u8>,
         client_data_json: Vec<u8>,
@@ -887,7 +891,7 @@ impl AuthenticationResult {
 
     /// Borrows credential ID.
     #[must_use]
-    pub fn credential_id(&self) -> &CredentialId {
+    pub const fn credential_id(&self) -> &CredentialId {
         &self.credential_id
     }
 
@@ -915,7 +919,7 @@ impl AuthenticationResult {
         self.user_handle.as_deref()
     }
 
-    /// Converts to a WebAuthn JSON-ready payload.
+    /// Converts to a `WebAuthn` JSON-ready payload.
     #[must_use]
     pub fn to_webauthn_json(&self) -> AuthenticationWebAuthnJson {
         AuthenticationWebAuthnJson {
@@ -950,7 +954,7 @@ pub struct RegistrationWebAuthnJson {
     pub response: RegistrationWebAuthnResponseJson,
 }
 
-/// Registration response payload in WebAuthn wire shape.
+/// Registration response payload in `WebAuthn` wire shape.
 #[derive(Debug, Clone, Serialize)]
 pub struct RegistrationWebAuthnResponseJson {
     /// Attestation object encoded as base64url.
@@ -982,7 +986,7 @@ pub struct AuthenticationWebAuthnJson {
     pub response: AuthenticationWebAuthnResponseJson,
 }
 
-/// Authentication response payload in WebAuthn wire shape.
+/// Authentication response payload in `WebAuthn` wire shape.
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthenticationWebAuthnResponseJson {
     /// Authenticator data encoded as base64url.
@@ -1103,20 +1107,30 @@ pub(crate) fn authenticate_request_json(
 
 #[derive(Debug, Deserialize)]
 struct RegistrationResponseWire {
-    credential_id_b64u: String,
-    attestation_object_b64u: String,
-    client_data_json_b64u: String,
-    authenticator_data_b64u: Option<String>,
-    public_key_cose_b64u: Option<String>,
+    #[serde(rename = "credential_id_b64u")]
+    credential_id: String,
+    #[serde(rename = "attestation_object_b64u")]
+    attestation_object: String,
+    #[serde(rename = "client_data_json_b64u")]
+    client_data_json: String,
+    #[serde(rename = "authenticator_data_b64u")]
+    authenticator_data: Option<String>,
+    #[serde(rename = "public_key_cose_b64u")]
+    public_key_cose: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct AuthenticationResponseWire {
-    credential_id_b64u: String,
-    authenticator_data_b64u: String,
-    client_data_json_b64u: String,
-    signature_b64u: String,
-    user_handle_b64u: Option<String>,
+    #[serde(rename = "credential_id_b64u")]
+    credential_id: String,
+    #[serde(rename = "authenticator_data_b64u")]
+    authenticator_data: String,
+    #[serde(rename = "client_data_json_b64u")]
+    client_data_json: String,
+    #[serde(rename = "signature_b64u")]
+    signature: String,
+    #[serde(rename = "user_handle_b64u")]
+    user_handle: Option<String>,
 }
 
 pub(crate) fn parse_registration_response_json(
@@ -1128,17 +1142,14 @@ pub(crate) fn parse_registration_response_json(
         ))
     })?;
 
-    let credential_id = CredentialId::new(decode_base64url(
-        &wire.credential_id_b64u,
-        "credential_id_b64u",
-    )?)?;
+    let credential_id =
+        CredentialId::new(decode_base64url(&wire.credential_id, "credential_id_b64u")?)?;
     let attestation_object =
-        decode_base64url(&wire.attestation_object_b64u, "attestation_object_b64u")?;
-    let client_data_json = decode_base64url(&wire.client_data_json_b64u, "client_data_json_b64u")?;
+        decode_base64url(&wire.attestation_object, "attestation_object_b64u")?;
+    let client_data_json = decode_base64url(&wire.client_data_json, "client_data_json_b64u")?;
     let authenticator_data =
-        decode_optional_base64url(wire.authenticator_data_b64u, "authenticator_data_b64u")?;
-    let public_key_cose =
-        decode_optional_base64url(wire.public_key_cose_b64u, "public_key_cose_b64u")?;
+        decode_optional_base64url(wire.authenticator_data, "authenticator_data_b64u")?;
+    let public_key_cose = decode_optional_base64url(wire.public_key_cose, "public_key_cose_b64u")?;
 
     Ok(RegistrationResult::new(
         credential_id,
@@ -1159,15 +1170,13 @@ pub(crate) fn parse_authentication_response_json(
             ))
         })?;
 
-    let credential_id = CredentialId::new(decode_base64url(
-        &wire.credential_id_b64u,
-        "credential_id_b64u",
-    )?)?;
+    let credential_id =
+        CredentialId::new(decode_base64url(&wire.credential_id, "credential_id_b64u")?)?;
     let authenticator_data =
-        decode_base64url(&wire.authenticator_data_b64u, "authenticator_data_b64u")?;
-    let client_data_json = decode_base64url(&wire.client_data_json_b64u, "client_data_json_b64u")?;
-    let signature = decode_base64url(&wire.signature_b64u, "signature_b64u")?;
-    let user_handle = decode_optional_base64url(wire.user_handle_b64u, "user_handle_b64u")?;
+        decode_base64url(&wire.authenticator_data, "authenticator_data_b64u")?;
+    let client_data_json = decode_base64url(&wire.client_data_json, "client_data_json_b64u")?;
+    let signature = decode_base64url(&wire.signature, "signature_b64u")?;
+    let user_handle = decode_optional_base64url(wire.user_handle, "user_handle_b64u")?;
 
     Ok(AuthenticationResult::new(
         credential_id,

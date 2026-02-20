@@ -6,7 +6,7 @@ use crate::{
 };
 
 #[async_trait]
-pub(crate) trait PasskeyBackend {
+pub trait PasskeyBackend {
     async fn is_available(&self) -> Result<Availability, PasskeyError>;
     async fn register(&self, options: &RegisterOptions)
     -> Result<RegistrationResult, PasskeyError>;
@@ -19,7 +19,7 @@ pub(crate) trait PasskeyBackend {
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple;
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-pub(crate) use apple::PlatformBackend;
+pub use apple::PlatformBackend;
 
 #[cfg(target_os = "android")]
 mod android;
@@ -53,6 +53,6 @@ mod unsupported;
 )))]
 pub(crate) use unsupported::PlatformBackend;
 
-pub(crate) fn platform_backend() -> PlatformBackend {
+pub const fn platform_backend() -> PlatformBackend {
     PlatformBackend
 }

@@ -1,4 +1,4 @@
-//! Apple passkey backend via AuthenticationServices.
+//! Apple passkey backend via `AuthenticationServices`.
 
 use async_trait::async_trait;
 use tokio::sync::oneshot;
@@ -32,13 +32,14 @@ mod ffi {
     }
 }
 
-pub(crate) struct PlatformBackend;
+pub struct PlatformBackend;
 
 pub struct RegisterCallback {
     sender: oneshot::Sender<Result<RegistrationResult, PasskeyError>>,
 }
 
 impl RegisterCallback {
+    #[allow(clippy::needless_pass_by_value)]
     fn on_register_success(self, response_json: String) {
         let result = parse_registration_response_json(&response_json);
         let _ = self.sender.send(result);
@@ -56,6 +57,7 @@ pub struct AuthenticateCallback {
 }
 
 impl AuthenticateCallback {
+    #[allow(clippy::needless_pass_by_value)]
     fn on_authenticate_success(self, response_json: String) {
         let result = parse_authentication_response_json(&response_json);
         let _ = self.sender.send(result);

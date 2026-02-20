@@ -17,6 +17,12 @@ pub mod android {
     pub use crate::sys::jni_api::{can_open_url_with_context, open_url_with_context};
 }
 
+/// Windows-specific helpers for deeplink integration.
+#[cfg(target_os = "windows")]
+pub mod windows {
+    pub use crate::sys::notify_incoming_url;
+}
+
 /// A parsed deep link.
 #[derive(Debug, Clone)]
 pub struct DeepLink {

@@ -23,8 +23,12 @@ fn ensure_context_global() -> Result<(JavaVM, GlobalRef), DeepLinkError> {
 }
 
 pub mod jni_api {
-    use super::*;
+    use super::{DeepLinkError, JNIEnv, JObject, JValue};
 
+    /// Check whether a URL can be opened with the given Android context.
+    ///
+    /// # Errors
+    /// Returns an error if JNI calls fail.
     pub fn can_open_url_with_context(
         env: &mut JNIEnv,
         context: &JObject,
@@ -85,6 +89,10 @@ pub mod jni_api {
         Ok(!resolved.is_null())
     }
 
+    /// Open a URL with the given Android context.
+    ///
+    /// # Errors
+    /// Returns an error if JNI calls fail.
     pub fn open_url_with_context(
         env: &mut JNIEnv,
         context: &JObject,
@@ -122,7 +130,7 @@ pub mod jni_api {
             )
             .map_err(|e| DeepLinkError::PlatformError(format!("new Intent: {e}")))?;
 
-        let flag = 0x10000000i32;
+        let flag = 0x1000_0000_i32;
         env.call_method(
             &intent,
             "addFlags",
@@ -143,6 +151,7 @@ pub mod jni_api {
     }
 }
 
+#[allow(clippy::unused_async)]
 pub async fn open_url(url: &str) -> Result<(), DeepLinkError> {
     let (vm, context) = ensure_context_global()?;
     let mut env = vm
@@ -151,6 +160,7 @@ pub async fn open_url(url: &str) -> Result<(), DeepLinkError> {
     jni_api::open_url_with_context(&mut env, context.as_obj(), url)
 }
 
+#[allow(clippy::unused_async)]
 pub async fn can_open_url(url: &str) -> Result<bool, DeepLinkError> {
     let (vm, context) = ensure_context_global()?;
     let mut env = vm
@@ -168,9 +178,12 @@ impl DeepLinkHandlerInner {
         Err(DeepLinkError::NotSupported)
     }
 
-    pub fn initial_link(&self) -> Result<Option<DeepLink>, DeepLinkError> {
+    pub const fn initial_link(&self) -> Result<Option<DeepLink>, DeepLinkError> {
+        let _ = self;
         Err(DeepLinkError::NotSupported)
     }
 
-    pub fn stop(&self) {}
+    pub const fn stop(&self) {
+        let _ = self;
+    }
 }

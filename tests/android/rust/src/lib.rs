@@ -330,6 +330,20 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
             );
         }
 
+        #[cfg(feature = "passkey")]
+        {
+            log::info!("Testing waterkit-passkey...");
+            match waterkit_content::passkey::is_available().await {
+                Ok(availability) => log::info!(
+                    "Passkey availability: supported={} uv={} discoverable={}",
+                    availability.is_platform_supported,
+                    availability.supports_user_verification,
+                    availability.supports_discoverable_credentials
+                ),
+                Err(e) => log::error!("Passkey availability FAILED: {e}"),
+            }
+        }
+
         #[cfg(feature = "deeplink")]
         {
             log::info!("Testing waterkit-deeplink...");

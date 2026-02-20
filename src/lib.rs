@@ -119,3 +119,7 @@ pub use waterkit_deeplink as deeplink;
 #[cfg(feature = "background")]
 #[doc(inline)]
 pub use waterkit_background as background;
+
+#[cfg(feature = "passkey")]
+#[doc(inline)]
+pub use waterkit_passkey as passkey;

@@ -41,6 +41,7 @@ calendar = ["waterkit/calendar"]
 health = ["waterkit/health"]
 deeplink = ["waterkit/deeplink"]
 background = ["waterkit/background"]
+passkey = ["waterkit/passkey"]
 
 [build-dependencies]
 swift-bridge-build.workspace = true

@@ -40,6 +40,7 @@ calendar = ["waterkit_content/calendar"]
 health = ["waterkit_content/health"]
 screen = ["waterkit_content/screen"]
 background = ["waterkit_content/background"]
+passkey = ["waterkit_content/passkey"]
 
 
 # The CLI only enables a single feature for the module under test.

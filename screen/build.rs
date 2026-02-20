@@ -21,7 +21,10 @@ fn main() {
         if target.contains("ios") {
             config = config.framework("UIKit");
         } else {
-            config = config.framework("Cocoa").framework("ScreenCaptureKit");
+            config = config
+                .framework("Cocoa")
+                .framework("ScreenCaptureKit")
+                .framework("IOKit");
         }
 
         waterkit_build::compile_swift("src/sys/apple/mod.rs", &config);

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video"]
+members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tests/macos/passkey", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video", "bluetooth", "nfc", "share", "speech", "contacts", "calendar", "health", "deeplink", "background", "passkey"]
 
 
 [workspace.package]
@@ -46,6 +46,19 @@ waterkit-codec = { workspace = true, optional = true }
 waterkit-screen = { workspace = true, optional = true }
 waterkit-system = { workspace = true, optional = true }
 waterkit-video = { workspace = true, optional = true }
+waterkit-bluetooth = { workspace = true, optional = true }
+waterkit-nfc = { workspace = true, optional = true }
+waterkit-share = { workspace = true, optional = true }
+waterkit-speech = { workspace = true, optional = true }
+waterkit-contacts = { workspace = true, optional = true }
+waterkit-calendar = { workspace = true, optional = true }
+waterkit-health = { workspace = true, optional = true }
+waterkit-deeplink = { workspace = true, optional = true }
+waterkit-background = { workspace = true, optional = true }
+waterkit-passkey = { workspace = true, optional = true }
+
+[dev-dependencies]
+toml = { workspace = true }
 
 [features]
 default = ["full"]
@@ -66,6 +79,16 @@ full = [
     "screen",
     "system",
     "video",
+    "bluetooth",
+    "nfc",
+    "share",
+    "speech",
+    "contacts",
+    "calendar",
+    "health",
+    "deeplink",
+    "background",
+    "passkey",
 ]
 permission = ["dep:waterkit-permission"]
 location = ["dep:waterkit-location", "permission"]
@@ -83,6 +106,16 @@ codec = ["dep:waterkit-codec"]
 screen = ["dep:waterkit-screen"]
 system = ["dep:waterkit-system"]
 video = ["dep:waterkit-video"]
+bluetooth = ["dep:waterkit-bluetooth"]
+nfc = ["dep:waterkit-nfc"]
+share = ["dep:waterkit-share"]
+speech = ["dep:waterkit-speech"]
+contacts = ["dep:waterkit-contacts"]
+calendar = ["dep:waterkit-calendar"]
+health = ["dep:waterkit-health"]
+deeplink = ["dep:waterkit-deeplink"]
+background = ["dep:waterkit-background"]
+passkey = ["dep:waterkit-passkey"]
 
 
 [workspace.dependencies]
@@ -103,6 +136,16 @@ waterkit-codec = { path = "codec", version = "0.1.0" }
 waterkit-screen = { path = "screen", version = "0.1.0" }
 waterkit-system = { path = "system", version = "0.1.0" }
 waterkit-video = { path = "video", version = "0.1.0" }
+waterkit-bluetooth = { path = "bluetooth", version = "0.1.0" }
+waterkit-nfc = { path = "nfc", version = "0.1.0" }
+waterkit-share = { path = "share", version = "0.1.0" }
+waterkit-speech = { path = "speech", version = "0.1.0" }
+waterkit-contacts = { path = "contacts", version = "0.1.0" }
+waterkit-calendar = { path = "calendar", version = "0.1.0" }
+waterkit-health = { path = "health", version = "0.1.0" }
+waterkit-deeplink = { path = "deeplink", version = "0.1.0" }
+waterkit-background = { path = "background", version = "0.1.0" }
+waterkit-passkey = { path = "passkey", version = "0.1.0" }
 
 # Cross-platform
 futures = "0.3"
@@ -110,6 +153,7 @@ async-channel = "2.3"
 thiserror = "2"
 blocking = "1"
 async-io = "2"
+async-process = "2"
 wgpu = "28"
 metal = "0.33"
 
@@ -118,6 +162,7 @@ log = "0.4"
 cfg-if = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "0.8"
 image = "0.25"
 
 # Apple

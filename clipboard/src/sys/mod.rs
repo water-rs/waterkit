@@ -33,7 +33,10 @@ impl WatcherShutdown {
         match &self.inner {
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             ShutdownInner::Desktop(shutdown) => {
-                let shutdown = shutdown.lock().unwrap().take();
+                let shutdown = match shutdown.lock() {
+                    Ok(mut guard) => guard.take(),
+                    Err(poisoned) => poisoned.into_inner().take(),
+                };
                 if let Some(s) = shutdown {
                     s.stop();
                 }

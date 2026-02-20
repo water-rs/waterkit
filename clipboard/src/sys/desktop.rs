@@ -31,6 +31,13 @@ impl std::fmt::Debug for ClipboardInner {
 }
 
 impl ClipboardInner {
+    fn lock_ctx(&self) -> std::sync::MutexGuard<'_, ClipboardContext> {
+        match self.ctx.lock() {
+            Ok(ctx) => ctx,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
     /// Create a new clipboard handle.
     pub fn new() -> Result<Self, ClipboardError> {
         let ctx = ClipboardContext::new().map_err(|e| ClipboardError::Platform(e.to_string()))?;
@@ -43,46 +50,43 @@ impl ClipboardInner {
 
     /// Check if text is available.
     pub fn has_text(&self) -> bool {
-        let ctx = self.ctx.lock().unwrap();
-        ctx.has(clipboard_rs::ContentFormat::Text)
+        self.lock_ctx().has(clipboard_rs::ContentFormat::Text)
     }
 
     /// Check if HTML is available.
     pub fn has_html(&self) -> bool {
-        let ctx = self.ctx.lock().unwrap();
-        ctx.has(clipboard_rs::ContentFormat::Html)
+        self.lock_ctx().has(clipboard_rs::ContentFormat::Html)
     }
 
     /// Check if files are available.
     pub fn has_files(&self) -> bool {
-        let ctx = self.ctx.lock().unwrap();
+        let ctx = self.lock_ctx();
         ctx.available_formats()
             .is_ok_and(|formats| formats.iter().any(|f| f.to_lowercase().contains("file")))
     }
 
     /// Check if image is available.
     pub fn has_image(&self) -> bool {
-        let ctx = self.ctx.lock().unwrap();
-        ctx.has(clipboard_rs::ContentFormat::Image)
+        self.lock_ctx().has(clipboard_rs::ContentFormat::Image)
     }
 
     // ========== Read (sync, called from blocking::unblock) ==========
 
     /// Get text content.
     pub fn get_text(&self) -> Result<Option<String>, ClipboardError> {
-        let ctx = self.ctx.lock().unwrap();
+        let ctx = self.lock_ctx();
         Ok(ctx.get_text().ok())
     }
 
     /// Get HTML content.
     pub fn get_html(&self) -> Result<Option<String>, ClipboardError> {
-        let ctx = self.ctx.lock().unwrap();
+        let ctx = self.lock_ctx();
         Ok(ctx.get_html().ok())
     }
 
     /// Get file paths.
     pub fn get_files(&self) -> Result<Vec<PathBuf>, ClipboardError> {
-        let ctx = self.ctx.lock().unwrap();
+        let ctx = self.lock_ctx();
         Ok(ctx
             .get_files()
             .map(|files| files.into_iter().map(PathBuf::from).collect())
@@ -91,7 +95,7 @@ impl ClipboardInner {
 
     /// Get image as RGBA.
     pub fn get_image(&self) -> Result<Option<Image>, ClipboardError> {
-        let ctx = self.ctx.lock().unwrap();
+        let ctx = self.lock_ctx();
         match ctx.get_image() {
             Ok(img) => {
                 let (width, height) = img.get_size();
@@ -110,7 +114,7 @@ impl ClipboardInner {
 
     /// Get binary data by MIME type.
     pub fn get_binary(&self, mime: &str) -> Result<Option<Vec<u8>>, ClipboardError> {
-        let ctx = self.ctx.lock().unwrap();
+        let ctx = self.lock_ctx();
         Ok(ctx.get_buffer(mime).ok())
     }
 
@@ -118,14 +122,14 @@ impl ClipboardInner {
 
     /// Set text content.
     pub fn set_text(&self, text: &str) -> Result<(), ClipboardError> {
-        let ctx = self.ctx.lock().unwrap();
+        let ctx = self.lock_ctx();
         ctx.set_text(text.to_string())
             .map_err(|e| ClipboardError::Platform(e.to_string()))
     }
 
     /// Set HTML content.
     pub fn set_html(&self, html: &str, alt_text: Option<&str>) -> Result<(), ClipboardError> {
-        let ctx = self.ctx.lock().unwrap();
+        let ctx = self.lock_ctx();
         // Set plain text first if alt_text provided
         if let Some(alt) = alt_text {
             let _ = ctx.set_text(alt.to_string());
@@ -136,7 +140,7 @@ impl ClipboardInner {
 
     /// Set file paths.
     pub fn set_files(&self, files: &[PathBuf]) -> Result<(), ClipboardError> {
-        let ctx = self.ctx.lock().unwrap();
+        let ctx = self.lock_ctx();
         let file_strings: Vec<String> = files
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
@@ -160,14 +164,14 @@ impl ClipboardInner {
         let dynamic_image = DynamicImage::ImageRgba8(rgba);
         let rust_image = clipboard_rs::common::RustImageData::from_dynamic_image(dynamic_image);
 
-        let ctx = self.ctx.lock().unwrap();
+        let ctx = self.lock_ctx();
         ctx.set_image(rust_image)
             .map_err(|e| ClipboardError::Platform(e.to_string()))
     }
 
     /// Set binary data with MIME type.
     pub fn set_binary(&self, data: &[u8], mime: &str) -> Result<(), ClipboardError> {
-        let ctx = self.ctx.lock().unwrap();
+        let ctx = self.lock_ctx();
         ctx.set_buffer(mime, data.to_vec())
             .map_err(|e| ClipboardError::Platform(e.to_string()))
     }
@@ -187,7 +191,7 @@ impl ClipboardInner {
 
     /// Clear clipboard.
     pub fn clear(&self) -> Result<(), ClipboardError> {
-        let ctx = self.ctx.lock().unwrap();
+        let ctx = self.lock_ctx();
         ctx.clear()
             .map_err(|e| ClipboardError::Platform(e.to_string()))
     }

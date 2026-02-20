@@ -83,3 +83,43 @@ pub use waterkit_system as system;
 #[cfg(feature = "video")]
 #[doc(inline)]
 pub use waterkit_video as video;
+
+#[cfg(feature = "bluetooth")]
+#[doc(inline)]
+pub use waterkit_bluetooth as bluetooth;
+
+#[cfg(feature = "nfc")]
+#[doc(inline)]
+pub use waterkit_nfc as nfc;
+
+#[cfg(feature = "share")]
+#[doc(inline)]
+pub use waterkit_share as share;
+
+#[cfg(feature = "speech")]
+#[doc(inline)]
+pub use waterkit_speech as speech;
+
+#[cfg(feature = "contacts")]
+#[doc(inline)]
+pub use waterkit_contacts as contacts;
+
+#[cfg(feature = "calendar")]
+#[doc(inline)]
+pub use waterkit_calendar as calendar;
+
+#[cfg(feature = "health")]
+#[doc(inline)]
+pub use waterkit_health as health;
+
+#[cfg(feature = "deeplink")]
+#[doc(inline)]
+pub use waterkit_deeplink as deeplink;
+
+#[cfg(feature = "background")]
+#[doc(inline)]
+pub use waterkit_background as background;
+
+#[cfg(feature = "passkey")]
+#[doc(inline)]
+pub use waterkit_passkey as passkey;

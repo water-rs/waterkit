@@ -1,0 +1,39 @@
+[package]
+name = "waterkit-nfc"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Cross-platform NFC tag reading and writing"
+keywords = ["nfc", "ndef", "rfid", "wireless"]
+categories = ["os", "hardware-support"]
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+futures = { workspace = true }
+async-channel = { workspace = true }
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true
+ndk-context.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+    "Networking_Proximity",
+    "Foundation",
+    "Storage_Streams",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus.workspace = true
+
+[build-dependencies]
+waterkit-build.workspace = true

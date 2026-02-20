@@ -78,8 +78,9 @@ public func get_screen_brightness() -> Float {
     return Float(UIScreen.main.brightness)
 }
 
-public func set_screen_brightness(value: Float) {
+public func set_screen_brightness(value: Float) -> Bool {
     UIScreen.main.brightness = CGFloat(value)
+    return true
 }
 
 // MARK: - Screen Stream (Not supported on iOS)

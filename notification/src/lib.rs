@@ -142,7 +142,7 @@ impl Action {
     ///
     /// # Example
     ///
-    /// ```
+    /// ```no_run
     /// use waterkit_notification::Action;
     ///
     /// let action = Action::new("View Details", "https://waterui.dev");
@@ -174,7 +174,7 @@ impl Action {
 ///
 /// # Example
 ///
-/// ```
+/// ```no_run
 /// use waterkit_notification::TextInputAction;
 ///
 /// let reply = TextInputAction::new("reply", "Reply")

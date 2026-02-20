@@ -8,6 +8,12 @@ mod sys;
 
 use thiserror::Error;
 
+/// Android-specific JNI helpers that require a `JNIEnv` and `Context`.
+#[cfg(target_os = "android")]
+pub mod android {
+    pub use crate::sys::android::{authenticate_with_context, init};
+}
+
 /// The type of biometric authentication available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BiometricType {

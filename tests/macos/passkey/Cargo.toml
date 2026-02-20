@@ -1,0 +1,9 @@
+[package]
+name = "waterkit-passkey-test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+waterkit-passkey.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

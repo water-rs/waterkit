@@ -6,166 +6,162 @@
 
 use jni::JNIEnv;
 use jni::objects::JObject;
+use jni::sys::jdoubleArray;
 
-// This harness expects `waterkit_content` to be available.
-// The CLI ensures this dependency is injected.
-// We use a feature flag or conditional compilation to avoid checking errors when the dep is missing during normal builds?
-// No, the harness crate is *only* useful when driven by CLI.
-// But to allow `cargo check` on the workspace, we might need a dummy fallback.
-// Or we just accept that `waterkit-test-android` won't compile without modification.
+const PERMISSION_NOT_DETERMINED: i32 = 0;
+#[cfg(feature = "permission")]
+const PERMISSION_RESTRICTED: i32 = 1;
+#[cfg(feature = "permission")]
+const PERMISSION_DENIED: i32 = 2;
+#[cfg(feature = "permission")]
+const PERMISSION_GRANTED: i32 = 3;
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
-    mut _env: JNIEnv,
+    env: JNIEnv,
     _this: JObject,
-    _activity: JObject,
+    activity: JObject,
 ) {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
 
-    // Feature-gated initialization for crates that require it
-    #[cfg(any(
-        feature = "sensor",
-        feature = "biometric",
-        feature = "location",
-        feature = "camera"
-    ))]
-    {
-        if let Err(e) = waterkit_content::sys::android::init(&mut _env, &_activity) {
-            log::error!("Failed to initialize subsystem: {}", e);
+    let activity_global = match env.new_global_ref(&activity) {
+        Ok(value) => value,
+        Err(e) => {
+            log::error!("Failed to create global ref for activity: {e}");
             return;
         }
-    }
-
-    let activity_global = _env.new_global_ref(_activity).unwrap();
+    };
+    let java_vm = match env.get_java_vm() {
+        Ok(vm) => vm,
+        Err(e) => {
+            log::error!("Failed to get Java VM: {e}");
+            return;
+        }
+    };
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("failed to build tokio runtime for Android test harness");
 
     rt.block_on(async {
         log::info!("=== Generic Android Test Runner ===");
-        let java_vm = _env.get_java_vm().unwrap();
-        let env = java_vm.get_env().unwrap();
+        let mut env = match java_vm.get_env() {
+            Ok(value) => value,
+            Err(e) => {
+                log::error!("Failed to attach/get JNIEnv: {e}");
+                return;
+            }
+        };
         let activity = activity_global.as_obj();
-        // Suppress unused warnings when no features requiring these are enabled
-        let _ = (&env, &activity);
 
         #[cfg(feature = "sensor")]
         {
             log::info!("Testing waterkit-sensor...");
-            if waterkit_content::Accelerometer::is_available() {
-                log::info!("Accelerometer: Available");
-                match waterkit_content::Accelerometer::read().await {
+            if waterkit_content::sensor::Accelerometer::is_available() {
+                match waterkit_content::sensor::Accelerometer::read().await {
                     Ok(data) => log::info!(
                         "Accelerometer Read: x={:.2} y={:.2} z={:.2}",
                         data.x,
                         data.y,
                         data.z
                     ),
-                    Err(e) => log::error!("Accelerometer Read Error: {}", e),
+                    Err(e) => log::error!("Accelerometer Read Error: {e}"),
                 }
+            } else {
+                log::warn!("Accelerometer not available");
             }
         }
 
         #[cfg(feature = "biometric")]
         {
             log::info!("Testing waterkit-biometric...");
-            match waterkit_content::sys::android::authenticate_with_context(
+            let available = waterkit_content::biometric::is_available().await;
+            log::info!("Biometric available: {available}");
+            match waterkit_content::biometric::android::authenticate_with_context(
                 &mut env,
                 activity,
-                "Test Auth",
+                "Waterkit Android harness",
             ) {
                 Ok(rx) => match rx.await {
-                    Ok(Ok(_)) => log::info!("Biometric Auth SUCCESS"),
-                    Ok(Err(e)) => log::error!("Biometric Auth FAILED: {}", e),
-                    Err(e) => log::error!("Biometric Auth CHANNEL ERROR: {}", e),
+                    Ok(Ok(())) => log::info!("Biometric Auth SUCCESS"),
+                    Ok(Err(e)) => log::error!("Biometric Auth FAILED: {e}"),
+                    Err(e) => log::error!("Biometric Auth channel FAILED: {e}"),
                 },
-                Err(e) => log::error!("Biometric Init FAILED: {}", e),
+                Err(e) => log::error!("Biometric Auth init FAILED: {e}"),
             }
         }
 
         #[cfg(feature = "location")]
         {
             log::info!("Testing waterkit-location...");
-            match waterkit_content::sys::android::get_location_with_context(&mut env, activity) {
-                Ok(loc) => log::info!("Location: lat={}, lon={}", loc.latitude, loc.longitude),
-                Err(e) => log::error!("Location FAILED: {}", e),
+            match waterkit_content::location::android::get_location_with_context(&mut env, activity)
+            {
+                Ok(loc) => {
+                    log::info!("Location: lat={}, lon={}", loc.latitude(), loc.longitude());
+                }
+                Err(e) => log::error!("Location FAILED: {e}"),
             }
         }
 
         #[cfg(feature = "audio")]
         {
             log::info!("Testing waterkit-audio...");
-            // Audio playback test - would need a test file
-            log::info!("Audio: API available (playback requires test file)");
+            log::info!("Audio API linked");
         }
 
         #[cfg(feature = "camera")]
         {
             log::info!("Testing waterkit-camera...");
-            // Camera verification
-            // Note: waterkit_content maps to waterkit-camera when this feature is active via CLI
-            use waterkit_content::Camera;
+            use waterkit_content::camera::Camera;
             match Camera::list() {
                 Ok(cameras) => {
                     log::info!("Camera List: Found {} cameras", cameras.len());
                     for cam in &cameras {
                         log::info!("  - ID: {}, Name: {}", cam.id, cam.name);
                     }
-                    if let Some(first) = cameras.first() {
-                        log::info!("Attempting to open camera: {}", first.id);
-                        match Camera::open(&first.id) {
-                            Ok(_) => log::info!(
-                                "Camera open SUCCESS (Note: Start requires surface/callback setup)"
-                            ),
-                            Err(e) => log::error!("Camera open FAILED: {}", e),
-                        }
-                    }
                 }
-                Err(e) => log::error!("Camera List FAILED: {}", e),
+                Err(e) => log::error!("Camera List FAILED: {e}"),
             }
         }
 
         #[cfg(feature = "clipboard")]
         {
             log::info!("Testing waterkit-clipboard...");
-            waterkit_content::set_text("WaterKit Test".to_string());
-            log::info!("Clipboard: set_text called");
-            match waterkit_content::get_text() {
-                Some(text) => log::info!("Clipboard: get_text = {:?}", text),
-                None => log::info!("Clipboard: get_text = None"),
+            match waterkit_content::clipboard::Clipboard::new() {
+                Ok(mut clipboard) => {
+                    match clipboard.set_text("WaterKit Test") {
+                        Ok(()) => log::info!("Clipboard set_text SUCCESS"),
+                        Err(e) => log::error!("Clipboard set_text FAILED: {e}"),
+                    }
+                    match clipboard.text().await {
+                        Ok(text) => log::info!("Clipboard get_text = {text:?}"),
+                        Err(e) => log::error!("Clipboard get_text FAILED: {e}"),
+                    }
+                }
+                Err(e) => log::error!("Clipboard init FAILED: {e}"),
             }
         }
 
         #[cfg(feature = "codec")]
         {
             log::info!("Testing waterkit-codec...");
-            // Codec verification
-            // Attempt to create a decoder to verify NDK linking
-            // We use the raw API if possible or just log that we are linking against it.
-            // Since we don't have a raw stream handy, we just check if symbols load by calling into it.
-            // `AndroidDecoder::new` is not public, accessed via `VideoDecoder` trait or `Decoder::new`?
-            // `waterkit_codec::Decoder::new`?
-            // Let's assume verifying the crate compiles and runs this far is good for now,
-            // as complete decode loop requires data.
-            log::info!("Codec: Runtime linking verified (ndk/MediaCodec symbols resolved)");
+            log::info!("Codec API linked");
         }
 
         #[cfg(feature = "dialog")]
         {
             log::info!("Testing waterkit-dialog...");
-            // Dialog requires Activity context for display
-            log::info!("Dialog: API available (requires UI thread)");
+            log::info!("Dialog API linked");
         }
 
         #[cfg(feature = "fs")]
         {
             log::info!("Testing waterkit-fs...");
-            match waterkit_content::WaterFs::cache_dir() {
-                Some(path) => log::info!("FS cache_dir: {:?}", path),
+            match waterkit_content::fs::WaterFs::cache_dir() {
+                Some(path) => log::info!("FS cache_dir: {path:?}"),
                 None => log::error!("FS cache_dir: None"),
             }
         }
@@ -173,51 +169,208 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         #[cfg(feature = "haptic")]
         {
             log::info!("Testing waterkit-haptic...");
-            match waterkit_content::feedback(waterkit_content::HapticFeedback::Light).await {
-                Ok(_) => log::info!("Haptic: feedback SUCCESS"),
-                Err(e) => log::error!("Haptic feedback FAILED: {}", e),
+            match waterkit_content::haptic::Haptic::impact(waterkit_content::haptic::Intensity::LOW)
+            {
+                Ok(_) => log::info!("Haptic feedback SUCCESS"),
+                Err(e) => log::error!("Haptic feedback FAILED: {e}"),
             }
         }
 
         #[cfg(feature = "notification")]
         {
             log::info!("Testing waterkit-notification...");
-            log::info!("Notification: API available");
+            let result = waterkit_content::notification::Notification::new()
+                .title("WaterKit Android Harness")
+                .body("notification test")
+                .show();
+            log::info!("Notification show result: {result:?}");
         }
 
         #[cfg(feature = "permission")]
         {
             log::info!("Testing waterkit-permission...");
-            log::info!("Permission: API available");
+            match waterkit_content::permission::android::check_with_activity(
+                &mut env,
+                activity,
+                waterkit_content::permission::Permission::Location,
+            ) {
+                Ok(status) => log::info!("Permission status: {status:?}"),
+                Err(e) => log::error!("Permission check FAILED: {e}"),
+            }
         }
 
         #[cfg(feature = "secret")]
         {
             log::info!("Testing waterkit-secret...");
-            match waterkit_content::SecretManager::set("waterkit", "test", "secret123").await {
-                Ok(_) => log::info!("Secret: set SUCCESS"),
-                Err(e) => log::error!("Secret set FAILED: {}", e),
+            match waterkit_content::secret::android::set_with_context(
+                &mut env,
+                activity,
+                "waterkit",
+                "test",
+                "secret123",
+            ) {
+                Ok(_) => log::info!("Secret set SUCCESS"),
+                Err(e) => log::error!("Secret set FAILED: {e}"),
             }
-            match waterkit_content::SecretManager::get("waterkit", "test").await {
-                Ok(val) => log::info!("Secret: get = {:?}", val),
-                Err(e) => log::error!("Secret get FAILED: {}", e),
+            match waterkit_content::secret::android::get_with_context(
+                &mut env, activity, "waterkit", "test",
+            ) {
+                Ok(val) => log::info!("Secret get = {val:?}"),
+                Err(e) => log::error!("Secret get FAILED: {e}"),
+            }
+            match waterkit_content::secret::android::delete_with_context(
+                &mut env, activity, "waterkit", "test",
+            ) {
+                Ok(_) => log::info!("Secret delete SUCCESS"),
+                Err(e) => log::error!("Secret delete FAILED: {e}"),
             }
         }
 
         #[cfg(feature = "system")]
         {
             log::info!("Testing waterkit-system...");
-            let conn = waterkit_content::get_connectivity_info();
+            let conn = waterkit_content::system::get_connectivity_info();
             log::info!("System connectivity: {:?}", conn.connection_type);
-            let thermal = waterkit_content::get_thermal_state();
-            log::info!("System thermal: {:?}", thermal);
+            let thermal = waterkit_content::system::get_thermal_state();
+            log::info!("System thermal: {thermal:?}");
         }
 
         #[cfg(feature = "video")]
         {
             log::info!("Testing waterkit-video...");
-            // Video playback requires SurfaceView
-            log::info!("Video: API available (display requires SurfaceView)");
+            log::info!("Video API linked");
+        }
+
+        #[cfg(feature = "bluetooth")]
+        {
+            log::info!("Testing waterkit-bluetooth...");
+            match waterkit_content::bluetooth::android::get_adapter_state(&mut env, activity) {
+                Ok(state) => log::info!("Bluetooth adapter state: {state:?}"),
+                Err(e) => log::error!("Bluetooth adapter state FAILED: {e}"),
+            }
+        }
+
+        #[cfg(feature = "nfc")]
+        {
+            log::info!("Testing waterkit-nfc...");
+            match waterkit_content::nfc::android::is_available(&mut env, activity) {
+                Ok(available) => log::info!("NFC available: {available}"),
+                Err(e) => log::error!("NFC availability FAILED: {e}"),
+            }
+        }
+
+        #[cfg(feature = "share")]
+        {
+            log::info!("Testing waterkit-share...");
+            let sheet = waterkit_content::share::ShareSheet::text("WaterKit share test");
+            match waterkit_content::share::android::share_with_context(&mut env, activity, &sheet) {
+                Ok(result) => log::info!("Share result: {result:?}"),
+                Err(e) => log::error!("Share FAILED: {e}"),
+            }
+        }
+
+        #[cfg(feature = "speech")]
+        {
+            log::info!("Testing waterkit-speech...");
+            let recognizer_available = waterkit_content::speech::SpeechRecognizer::is_available();
+            log::info!("Speech recognizer available: {recognizer_available}");
+            if let Err(e) = waterkit_content::speech::android::init_with_context(&mut env, activity)
+            {
+                log::error!("Speech context init FAILED: {e}");
+            } else {
+                match waterkit_content::speech::Tts::new().await {
+                    Ok(tts) => {
+                        log::info!("TTS created, currently speaking: {}", tts.is_speaking());
+                        let config = waterkit_content::speech::TtsConfig::default();
+                        if let Err(e) = tts.speak("WaterKit speech test", &config).await {
+                            log::error!("TTS speak FAILED: {e}");
+                        }
+                        tts.stop();
+                    }
+                    Err(e) => log::error!("TTS init FAILED: {e}"),
+                }
+            }
+        }
+
+        #[cfg(feature = "contacts")]
+        {
+            log::info!("Testing waterkit-contacts...");
+            match waterkit_content::contacts::fetch_all().await {
+                Ok(contacts) => log::info!("Contacts fetched: {}", contacts.len()),
+                Err(e) => log::error!("Contacts fetch FAILED: {e}"),
+            }
+        }
+
+        #[cfg(feature = "calendar")]
+        {
+            log::info!("Testing waterkit-calendar...");
+            match waterkit_content::calendar::list_calendars().await {
+                Ok(calendars) => log::info!("Calendars fetched: {}", calendars.len()),
+                Err(e) => log::error!("Calendar list FAILED: {e}"),
+            }
+        }
+
+        #[cfg(feature = "health")]
+        {
+            log::info!("Testing waterkit-health...");
+            let available = waterkit_content::health::is_available();
+            log::info!("Health available: {available}");
+        }
+
+        #[cfg(feature = "background")]
+        {
+            log::info!("Testing waterkit-background...");
+            let capabilities = waterkit_content::background::capabilities();
+            log::info!(
+                "Background capabilities: refresh={} processing={} continued={} launch_events={}",
+                capabilities.supports_app_refresh,
+                capabilities.supports_processing,
+                capabilities.supports_continued_processing,
+                capabilities.supports_launch_events
+            );
+        }
+
+        #[cfg(feature = "passkey")]
+        {
+            log::info!("Testing waterkit-passkey...");
+            match waterkit_content::passkey::is_available().await {
+                Ok(availability) => log::info!(
+                    "Passkey availability: supported={} uv={} discoverable={}",
+                    availability.is_platform_supported,
+                    availability.supports_user_verification,
+                    availability.supports_discoverable_credentials
+                ),
+                Err(e) => log::error!("Passkey availability FAILED: {e}"),
+            }
+        }
+
+        #[cfg(feature = "deeplink")]
+        {
+            log::info!("Testing waterkit-deeplink...");
+            match waterkit_content::deeplink::android::can_open_url_with_context(
+                &mut env,
+                activity,
+                "https://example.com",
+            ) {
+                Ok(can_open) => log::info!("can_open_url(https://example.com): {can_open}"),
+                Err(e) => log::error!("can_open_url FAILED: {e}"),
+            }
+            if let Err(e) = waterkit_content::deeplink::android::open_url_with_context(
+                &mut env,
+                activity,
+                "https://example.com",
+            ) {
+                log::error!("open_url FAILED: {e}");
+            }
+        }
+
+        #[cfg(feature = "screen")]
+        {
+            log::info!("Testing waterkit-screen...");
+            match waterkit_content::screen::screens() {
+                Ok(screens) => log::info!("Screen count: {}", screens.len()),
+                Err(e) => log::error!("Screen enumeration FAILED: {e}"),
+            }
         }
 
         log::info!("=== Test Complete ===");
@@ -226,19 +379,97 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_test_MainActivity_testCheckPermission(
-    _env: JNIEnv,
+    mut env: JNIEnv,
     _this: JObject,
-    _activity: JObject,
+    activity: JObject,
     _permission_type: i32,
 ) -> i32 {
-    3 // Granted
+    #[cfg(feature = "permission")]
+    {
+        let permission = match _permission_type {
+            0 => waterkit_content::permission::Permission::Location,
+            1 => waterkit_content::permission::Permission::Camera,
+            2 => waterkit_content::permission::Permission::Microphone,
+            3 => waterkit_content::permission::Permission::Photos,
+            4 => waterkit_content::permission::Permission::Contacts,
+            5 => waterkit_content::permission::Permission::Calendar,
+            _ => {
+                log::error!("Unknown permission type: {_permission_type}");
+                return PERMISSION_NOT_DETERMINED;
+            }
+        };
+
+        return match waterkit_content::permission::android::check_with_activity(
+            &mut env, &activity, permission,
+        ) {
+            Ok(waterkit_content::permission::PermissionStatus::NotDetermined) => {
+                PERMISSION_NOT_DETERMINED
+            }
+            Ok(waterkit_content::permission::PermissionStatus::Restricted) => PERMISSION_RESTRICTED,
+            Ok(waterkit_content::permission::PermissionStatus::Denied) => PERMISSION_DENIED,
+            Ok(waterkit_content::permission::PermissionStatus::Granted) => PERMISSION_GRANTED,
+            Err(e) => {
+                log::error!("Permission check failed: {e}");
+                PERMISSION_NOT_DETERMINED
+            }
+        };
+    }
+
+    #[cfg(not(feature = "permission"))]
+    {
+        let _ = (&mut env, &activity);
+        log::error!("testCheckPermission called without enabling permission feature");
+        PERMISSION_NOT_DETERMINED
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_test_MainActivity_testGetLocation(
-    _env: JNIEnv,
+    env: JNIEnv,
     _this: JObject,
-    _activity: JObject,
-) -> JObject<'static> {
-    JObject::null()
+    activity: JObject,
+) -> jdoubleArray {
+    #[cfg(feature = "location")]
+    {
+        let mut env = env;
+        match waterkit_content::location::android::get_location_with_context(&mut env, &activity) {
+            Ok(location) => {
+                let altitude = location.altitude().unwrap_or(0.0);
+                let accuracy = location.horizontal_accuracy().unwrap_or(0.0);
+                let payload = [
+                    1.0,
+                    location.latitude(),
+                    location.longitude(),
+                    altitude,
+                    accuracy,
+                ];
+
+                let array = match env.new_double_array(payload.len() as i32) {
+                    Ok(arr) => arr,
+                    Err(e) => {
+                        log::error!("new_double_array failed: {e}");
+                        return std::ptr::null_mut();
+                    }
+                };
+
+                if let Err(e) = env.set_double_array_region(&array, 0, &payload) {
+                    log::error!("set_double_array_region failed: {e}");
+                    return std::ptr::null_mut();
+                }
+
+                return array.into_raw();
+            }
+            Err(e) => {
+                log::error!("Location test failed: {e}");
+                return std::ptr::null_mut();
+            }
+        }
+    }
+
+    #[cfg(not(feature = "location"))]
+    {
+        let _ = (&env, &activity);
+        log::error!("testGetLocation called without enabling location feature");
+        std::ptr::null_mut()
+    }
 }

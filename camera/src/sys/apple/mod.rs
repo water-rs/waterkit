@@ -14,14 +14,23 @@
 #![allow(clippy::missing_const_for_fn)]
 
 use crate::{
-    CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, ExposureControl,
-    ExposureMode, FlashMode, FocusControl, FocusMode, Frame, Photo, PixelFormat, Resolution,
-    StabilizationMode, WhiteBalanceControl, WhiteBalanceMode,
+    CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
+    ExposureControl, ExposureMode, FlashMode, FocusControl, FocusMode, Frame, Photo, PixelFormat,
+    RawPhoto, RawPhotoFormat, RawVideoFormat, Resolution, StabilizationMode, WhiteBalanceControl,
+    WhiteBalanceMode,
 };
 use futures::StreamExt;
+use std::num::NonZeroU8;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordingMode {
+    Standard,
+    Raw,
+}
 
 #[swift_bridge::bridge]
 mod ffi {
@@ -67,10 +76,15 @@ mod ffi {
         fn camera_get_zoom_min() -> f32;
         fn camera_get_zoom_max() -> f32;
         fn camera_supports_hdr() -> bool;
+        fn camera_supports_dolby_vision() -> bool;
         fn camera_supports_standard_stabilization() -> bool;
         fn camera_supports_cinematic_stabilization() -> bool;
         fn camera_has_flash() -> bool;
         fn camera_has_torch() -> bool;
+        fn camera_supports_concurrent_multicam() -> bool;
+        fn camera_max_concurrent_cameras() -> u8;
+        fn camera_supports_raw_photo() -> bool;
+        fn camera_supports_raw_video() -> bool;
 
         // Exposure control
         fn camera_set_exposure_mode(mode: u8) -> CameraResultFFI;
@@ -98,6 +112,7 @@ mod ffi {
         // HDR
         fn camera_set_hdr(enabled: bool) -> CameraResultFFI;
         fn camera_get_hdr() -> bool;
+        fn camera_set_dynamic_range(profile: u8) -> CameraResultFFI;
 
         // Stabilization
         fn camera_set_stabilization_mode(mode: u8) -> CameraResultFFI;
@@ -105,11 +120,16 @@ mod ffi {
         // Photo capture
         fn camera_take_photo() -> CameraResultFFI;
         fn camera_get_photo_len() -> i32;
+        fn camera_take_raw_photo() -> CameraResultFFI;
+        fn camera_get_raw_photo_len() -> i32;
 
         // Recording
         fn camera_start_recording(path: String) -> CameraResultFFI;
         fn camera_stop_recording() -> CameraResultFFI;
         fn camera_get_recording_duration_ms() -> u64;
+        fn camera_start_raw_recording(path: String) -> CameraResultFFI;
+        fn camera_stop_raw_recording() -> CameraResultFFI;
+        fn camera_get_raw_recording_duration_ms() -> u64;
     }
 }
 
@@ -119,6 +139,7 @@ unsafe extern "C" {
     fn camera_clear_frame_callback();
     fn camera_release_pixelbuffer(handle: u64);
     fn camera_copy_photo_data(buffer: *mut u8, size: u64);
+    fn camera_copy_raw_photo_data(buffer: *mut u8, size: u64);
 }
 
 fn convert_result(result: ffi::CameraResultFFI, context: &str) -> Result<(), CameraError> {
@@ -145,13 +166,25 @@ struct RawFrame {
     timestamp_ns: u64,
 }
 
-// Global channel for frame delivery (set when camera starts)
-static FRAME_SENDER: std::sync::OnceLock<async_channel::Sender<RawFrame>> =
+// Global channel slot for frame delivery (updated when camera starts/stops)
+static FRAME_SENDER: std::sync::OnceLock<Mutex<Option<async_channel::Sender<RawFrame>>>> =
     std::sync::OnceLock::new();
+
+fn frame_sender_slot() -> &'static Mutex<Option<async_channel::Sender<RawFrame>>> {
+    FRAME_SENDER.get_or_init(|| Mutex::new(None))
+}
+
+fn frame_sender_lock() -> std::sync::MutexGuard<'static, Option<async_channel::Sender<RawFrame>>> {
+    frame_sender_slot()
+        .lock()
+        .unwrap_or_else(|_| std::process::abort())
+}
 
 /// Callback invoked from Swift for each camera frame.
 extern "C" fn frame_callback(pixelbuffer_handle: u64, width: u32, height: u32, timestamp_ns: u64) {
-    if let Some(sender) = FRAME_SENDER.get() {
+    let sender = { frame_sender_lock().clone() };
+
+    if let Some(sender) = sender {
         let frame = RawFrame {
             pixelbuffer_handle,
             width,
@@ -289,6 +322,7 @@ pub struct CameraInner {
     controls: CameraControls,
     resolution: Resolution,
     frame_receiver: async_channel::Receiver<RawFrame>,
+    recording_mode: Option<RecordingMode>,
 }
 
 impl CameraInner {
@@ -339,12 +373,16 @@ impl CameraInner {
 
         // Query capabilities
         let capabilities = Self::query_capabilities();
+        capabilities.validate()?;
 
         // Create frame channel (bounded to prevent unbounded memory growth)
         let (sender, receiver) = async_channel::bounded(2);
 
-        // Store sender globally for callback
-        let _ = FRAME_SENDER.set(sender);
+        // Store sender for callback dispatch.
+        {
+            let mut guard = frame_sender_lock();
+            *guard = Some(sender);
+        }
 
         // Set up frame callback
         unsafe {
@@ -364,6 +402,7 @@ impl CameraInner {
                 height: h,
             },
             frame_receiver: receiver,
+            recording_mode: None,
         })
     }
 
@@ -413,10 +452,37 @@ impl CameraInner {
                 let max = ffi::camera_get_zoom_max();
                 if max > min { Some((min, max)) } else { None }
             },
-            supports_hdr: ffi::camera_supports_hdr(),
+            dynamic_ranges: {
+                let mut ranges = vec![DynamicRangeProfile::Sdr];
+                if ffi::camera_supports_hdr() {
+                    ranges.push(DynamicRangeProfile::Hdr10);
+                    ranges.push(DynamicRangeProfile::Hlg10);
+                }
+                if ffi::camera_supports_dolby_vision() {
+                    ranges.push(DynamicRangeProfile::DolbyVision);
+                }
+                ranges
+            },
+            supports_dolby_vision: ffi::camera_supports_dolby_vision(),
             stabilization_modes,
             has_flash: ffi::camera_has_flash(),
             has_torch: ffi::camera_has_torch(),
+            supports_concurrent_multi_camera: false,
+            max_concurrent_cameras: NonZeroU8::MIN,
+            uses_system_photo_pipeline: true,
+            uses_system_video_pipeline: true,
+            supports_raw_photo: ffi::camera_supports_raw_photo(),
+            raw_photo_formats: if ffi::camera_supports_raw_photo() {
+                vec![RawPhotoFormat::Dng]
+            } else {
+                Vec::new()
+            },
+            supports_raw_video: ffi::camera_supports_raw_video(),
+            raw_video_formats: if ffi::camera_supports_raw_video() {
+                vec![RawVideoFormat::Bgra8Frames]
+            } else {
+                Vec::new()
+            },
         }
     }
 
@@ -475,13 +541,21 @@ impl CameraInner {
             self.controls.flash = Some(flash);
         }
 
-        // HDR
-        if let Some(hdr) = controls.hdr {
-            if !self.capabilities.supports_hdr {
-                return Err(CameraError::ControlNotSupported("hdr".into()));
+        // Dynamic range
+        if let Some(profile) = controls.dynamic_range {
+            if !self.capabilities.dynamic_ranges.contains(&profile) {
+                return Err(CameraError::ControlNotSupported(format!(
+                    "dynamic_range.{profile:?}"
+                )));
             }
-            convert_result(ffi::camera_set_hdr(hdr), "hdr")?;
-            self.controls.hdr = Some(hdr);
+            let mode = match profile {
+                DynamicRangeProfile::Sdr => 0,
+                DynamicRangeProfile::Hdr10 => 1,
+                DynamicRangeProfile::Hlg10 => 2,
+                DynamicRangeProfile::DolbyVision => 3,
+            };
+            convert_result(ffi::camera_set_dynamic_range(mode), "dynamic_range")?;
+            self.controls.dynamic_range = Some(profile);
         }
 
         // Stabilization
@@ -700,14 +774,19 @@ impl CameraInner {
         }
 
         #[allow(clippy::cast_sign_loss)]
-        let mut data = vec![0u8; len as usize];
+        let mut encoded = vec![0u8; len as usize];
         unsafe {
             #[allow(clippy::cast_sign_loss)]
-            camera_copy_photo_data(data.as_mut_ptr(), len as u64);
+            camera_copy_photo_data(encoded.as_mut_ptr(), len as u64);
         }
 
-        let width = self.resolution.width;
-        let height = self.resolution.height;
+        let dynamic = image::load_from_memory(&encoded).map_err(|error| {
+            CameraError::CaptureFailed(format!("failed to decode captured photo: {error}"))
+        })?;
+        let rgba = dynamic.to_rgba8();
+        let width = rgba.width();
+        let height = rgba.height();
+        let data = rgba.into_raw();
 
         // Create GPU texture
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -720,7 +799,7 @@ impl CameraInner {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST,
@@ -735,7 +814,7 @@ impl CameraInner {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &data,
+            data.as_slice(),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(width * 4),
@@ -755,22 +834,120 @@ impl CameraInner {
         })
     }
 
+    pub async fn capture_raw_photo(&mut self) -> Result<RawPhoto, CameraError> {
+        if !self.capabilities.supports_raw_photo {
+            return Err(CameraError::ControlNotSupported("raw_photo".into()));
+        }
+        convert_result(ffi::camera_take_raw_photo(), "take_raw_photo")?;
+
+        let len = ffi::camera_get_raw_photo_len();
+        if len <= 0 {
+            return Err(CameraError::CaptureFailed("empty raw photo data".into()));
+        }
+
+        #[allow(clippy::cast_sign_loss)]
+        let mut data = vec![0u8; len as usize];
+        unsafe {
+            #[allow(clippy::cast_sign_loss)]
+            camera_copy_raw_photo_data(data.as_mut_ptr(), len as u64);
+        }
+
+        Ok(RawPhoto {
+            data,
+            width: self.resolution.width,
+            height: self.resolution.height,
+            format: RawPhotoFormat::Dng,
+        })
+    }
+
     pub fn start_recording(&mut self, path: &Path) -> Result<(), CameraError> {
+        if self.recording_mode.is_some() {
+            return Err(CameraError::AlreadyInUse);
+        }
         let path_str = path.to_string_lossy().to_string();
-        convert_result(ffi::camera_start_recording(path_str), "start_recording")
+        convert_result(ffi::camera_start_recording(path_str), "start_recording")?;
+        self.recording_mode = Some(RecordingMode::Standard);
+        Ok(())
     }
 
     pub fn stop_recording(&mut self) -> Result<(), CameraError> {
-        convert_result(ffi::camera_stop_recording(), "stop_recording")
+        match self.recording_mode {
+            Some(RecordingMode::Standard) => {
+                convert_result(ffi::camera_stop_recording(), "stop_recording")?;
+                self.recording_mode = None;
+                Ok(())
+            }
+            Some(RecordingMode::Raw) => Err(CameraError::RecordingError(
+                "raw recording active; call stop_raw_recording".into(),
+            )),
+            None => Ok(()),
+        }
     }
 
     pub fn recording_duration(&self) -> Duration {
-        Duration::from_millis(ffi::camera_get_recording_duration_ms())
+        match self.recording_mode {
+            Some(RecordingMode::Standard) => {
+                Duration::from_millis(ffi::camera_get_recording_duration_ms())
+            }
+            _ => Duration::ZERO,
+        }
+    }
+
+    pub fn start_raw_recording(&mut self, path: &Path) -> Result<(), CameraError> {
+        if !self.capabilities.supports_raw_video {
+            return Err(CameraError::ControlNotSupported("raw_video".into()));
+        }
+        if self.recording_mode.is_some() {
+            return Err(CameraError::AlreadyInUse);
+        }
+        let path_str = path.to_string_lossy().to_string();
+        convert_result(
+            ffi::camera_start_raw_recording(path_str),
+            "start_raw_recording",
+        )?;
+        self.recording_mode = Some(RecordingMode::Raw);
+        Ok(())
+    }
+
+    pub fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
+        match self.recording_mode {
+            Some(RecordingMode::Raw) => {
+                convert_result(ffi::camera_stop_raw_recording(), "stop_raw_recording")?;
+                self.recording_mode = None;
+                Ok(())
+            }
+            Some(RecordingMode::Standard) => Err(CameraError::RecordingError(
+                "standard recording active; call stop_recording".into(),
+            )),
+            None => Ok(()),
+        }
+    }
+
+    pub fn raw_recording_duration(&self) -> Duration {
+        match self.recording_mode {
+            Some(RecordingMode::Raw) => {
+                Duration::from_millis(ffi::camera_get_raw_recording_duration_ms())
+            }
+            _ => Duration::ZERO,
+        }
     }
 }
 
 impl Drop for CameraInner {
     fn drop(&mut self) {
+        match self.recording_mode {
+            Some(RecordingMode::Standard) => {
+                let _ = ffi::camera_stop_recording();
+            }
+            Some(RecordingMode::Raw) => {
+                let _ = ffi::camera_stop_raw_recording();
+            }
+            None => {}
+        }
+        {
+            let mut guard = frame_sender_lock();
+            *guard = None;
+        }
         // Clear the frame callback
         unsafe {
             camera_clear_frame_callback();

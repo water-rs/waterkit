@@ -51,10 +51,11 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     Ok(infos)
 }
 
+#[allow(clippy::unused_async)]
 pub async fn get_brightness() -> Result<f32, Error> {
     #[cfg(target_os = "macos")]
     {
-        return super::apple::get_macos_brightness();
+        super::apple::get_macos_brightness()
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -68,10 +69,11 @@ pub async fn get_brightness() -> Result<f32, Error> {
     }
 }
 
+#[allow(clippy::unused_async)]
 pub async fn set_brightness(val: f32) -> Result<(), Error> {
     #[cfg(target_os = "macos")]
     {
-        return super::apple::set_macos_brightness(val);
+        super::apple::set_macos_brightness(val)
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]

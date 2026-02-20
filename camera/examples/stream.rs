@@ -91,7 +91,7 @@ async fn main() -> Result<(), CameraError> {
         }
     }
 
-    println!("\nReceived {} frames", frame_count);
+    println!("\nReceived {frame_count} frames");
 
     // Camera stops when dropped
     println!("Camera closed");

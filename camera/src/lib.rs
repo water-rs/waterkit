@@ -519,8 +519,7 @@ impl CameraCapabilities {
         }
         if self.supports_concurrent_multi_camera && self.max_concurrent_cameras.get() < 2 {
             return Err(CameraError::PlatformError(
-                "supports_concurrent_multi_camera=true requires max_concurrent_cameras >= 2"
-                    .into(),
+                "supports_concurrent_multi_camera=true requires max_concurrent_cameras >= 2".into(),
             ));
         }
         if !self.supports_concurrent_multi_camera && self.max_concurrent_cameras.get() != 1 {
@@ -926,8 +925,10 @@ mod tests {
 
     #[test]
     fn raw_photo_support_requires_formats() {
-        let mut capabilities = CameraCapabilities::default();
-        capabilities.supports_raw_photo = true;
+        let capabilities = CameraCapabilities {
+            supports_raw_photo: true,
+            ..CameraCapabilities::default()
+        };
         let error = capabilities
             .validate()
             .expect_err("raw photo without formats must fail");
@@ -940,16 +941,16 @@ mod tests {
 
     #[test]
     fn concurrent_multi_camera_requires_capacity() {
-        let mut capabilities = CameraCapabilities::default();
-        capabilities.supports_concurrent_multi_camera = true;
-        capabilities.max_concurrent_cameras = NonZeroU8::MIN;
+        let capabilities = CameraCapabilities {
+            supports_concurrent_multi_camera: true,
+            max_concurrent_cameras: NonZeroU8::MIN,
+            ..CameraCapabilities::default()
+        };
         let error = capabilities
             .validate()
             .expect_err("invalid concurrent camera limit must fail");
-        assert!(
-            error
-                .to_string()
-                .contains("supports_concurrent_multi_camera=true requires max_concurrent_cameras >= 2")
-        );
+        assert!(error.to_string().contains(
+            "supports_concurrent_multi_camera=true requires max_concurrent_cameras >= 2"
+        ));
     }
 }

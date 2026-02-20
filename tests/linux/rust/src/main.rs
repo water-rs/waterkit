@@ -17,6 +17,7 @@ fn main() {
     let _ = waterkit_system::get_connectivity_info();
     let _ = waterkit_system::get_thermal_state();
     let _ = waterkit_system::get_system_load();
+    std::mem::drop(waterkit_passkey::is_available());
 }
 
 #[cfg(not(target_os = "linux"))]

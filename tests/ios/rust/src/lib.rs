@@ -236,6 +236,20 @@ fn run_tests() {
             );
         }
 
+        #[cfg(feature = "passkey")]
+        {
+            println!("Testing waterkit-passkey...");
+            match waterkit::passkey::is_available().await {
+                Ok(availability) => println!(
+                    "Passkey availability: supported={} uv={} discoverable={}",
+                    availability.is_platform_supported,
+                    availability.supports_user_verification,
+                    availability.supports_discoverable_credentials
+                ),
+                Err(e) => println!("Passkey availability FAILED: {e}"),
+            }
+        }
+
         #[cfg(feature = "deeplink")]
         {
             println!("Testing waterkit-deeplink...");

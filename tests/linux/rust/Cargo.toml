@@ -18,3 +18,4 @@ waterkit-speech.workspace = true
 waterkit-deeplink.workspace = true
 waterkit-sensor.workspace = true
 waterkit-system.workspace = true
+waterkit-passkey.workspace = true

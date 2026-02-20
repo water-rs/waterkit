@@ -89,6 +89,7 @@ private func serializePayload(_ payload: [String: Any]) -> String? {
     return String(data: data, encoding: .utf8)
 }
 
+@available(iOS 15.0, macOS 12.0, *)
 private func userVerificationPreference(
     from value: String
 ) -> ASAuthorizationPublicKeyCredentialUserVerificationPreference {
@@ -118,6 +119,7 @@ private func attestationPreference(
     }
 }
 
+@available(iOS 15.0, macOS 12.0, *)
 private final class RegisterControllerDelegate: NSObject,
     ASAuthorizationControllerDelegate,
     ASAuthorizationControllerPresentationContextProviding {
@@ -165,6 +167,7 @@ private final class RegisterControllerDelegate: NSObject,
     }
 }
 
+@available(iOS 15.0, macOS 12.0, *)
 private final class AuthenticateControllerDelegate: NSObject,
     ASAuthorizationControllerDelegate,
     ASAuthorizationControllerPresentationContextProviding {
@@ -220,6 +223,7 @@ private func runOnMain(_ block: @escaping () -> Void) {
     }
 }
 
+@available(iOS 15.0, macOS 12.0, *)
 private func perform(
     request: ASAuthorizationRequest,
     delegate: NSObject & ASAuthorizationControllerDelegate & ASAuthorizationControllerPresentationContextProviding

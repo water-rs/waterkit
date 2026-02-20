@@ -16,7 +16,7 @@ const CREDENTIALSD_BUS_NAME: &str = "xyz.iinuwa.credentialsd.Credentials";
 const CREDENTIALSD_PATH: &str = "/xyz/iinuwa/credentialsd/Credentials";
 const CREDENTIALSD_INTERFACE: &str = "xyz.iinuwa.credentialsd.Credentials1";
 
-pub(crate) struct PlatformBackend;
+pub struct PlatformBackend;
 
 #[async_trait]
 impl PasskeyBackend for PlatformBackend {
@@ -148,12 +148,12 @@ async fn call_gateway_method(
         CREDENTIALSD_INTERFACE,
     )
     .await
-    .map_err(map_dbus_error)?;
+    .map_err(|error| map_dbus_error(&error))?;
 
     let message = proxy
         .call_method(method, &("", request))
         .await
-        .map_err(map_dbus_error)?;
+        .map_err(|error| map_dbus_error(&error))?;
 
     message.body().deserialize().map_err(|error| {
         PasskeyError::Platform(format!(
@@ -286,8 +286,8 @@ fn unwrap_variant(value: Value<'static>) -> Value<'static> {
     }
 }
 
-fn map_dbus_error(error: zbus::Error) -> PasskeyError {
-    if let zbus::Error::MethodError(name, detail, _) = &error {
+fn map_dbus_error(error: &zbus::Error) -> PasskeyError {
+    if let zbus::Error::MethodError(name, detail, _) = error {
         let error_name = name.as_str();
         if error_name.ends_with(".AbortError") {
             return PasskeyError::Cancelled;
@@ -459,7 +459,7 @@ impl From<&AuthenticateOptions> for PublicKeyCredentialRequestOptionsWire {
     }
 }
 
-fn map_attestation(attestation: AttestationPreference) -> &'static str {
+const fn map_attestation(attestation: AttestationPreference) -> &'static str {
     match attestation {
         AttestationPreference::None => "none",
         AttestationPreference::Indirect => "indirect",
@@ -468,7 +468,7 @@ fn map_attestation(attestation: AttestationPreference) -> &'static str {
     }
 }
 
-fn map_user_verification(user_verification: UserVerificationRequirement) -> &'static str {
+const fn map_user_verification(user_verification: UserVerificationRequirement) -> &'static str {
     match user_verification {
         UserVerificationRequirement::Required => "required",
         UserVerificationRequirement::Preferred => "preferred",

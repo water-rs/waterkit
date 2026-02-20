@@ -7,7 +7,7 @@ use crate::{
 
 use super::PasskeyBackend;
 
-pub(crate) struct PlatformBackend;
+pub struct PlatformBackend;
 
 #[async_trait]
 impl PasskeyBackend for PlatformBackend {

@@ -23,7 +23,7 @@ const DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex")
 type RegisterSender = tokio::sync::oneshot::Sender<Result<RegistrationResult, PasskeyError>>;
 type AuthenticateSender = tokio::sync::oneshot::Sender<Result<AuthenticationResult, PasskeyError>>;
 
-pub(crate) struct PlatformBackend;
+pub struct PlatformBackend;
 
 #[async_trait]
 impl PasskeyBackend for PlatformBackend {
@@ -191,10 +191,10 @@ fn prepare_class_loader(env: &mut JNIEnv, context: &JObject) -> Result<GlobalRef
         .map_err(|error| PasskeyError::Platform(format!("new_global_ref failed: {error}")))
 }
 
-fn get_helper_class<'a>(
-    env: &mut JNIEnv<'a>,
-    class_loader: &'a GlobalRef,
-) -> Result<JClass<'a>, PasskeyError> {
+fn get_helper_class<'local>(
+    env: &mut JNIEnv<'local>,
+    class_loader: &GlobalRef,
+) -> Result<JClass<'local>, PasskeyError> {
     let class_name = env
         .new_string("waterkit.passkey.PasskeyHelper")
         .map_err(|error| {
@@ -215,7 +215,7 @@ fn get_helper_class<'a>(
     Ok(JClass::from(loaded_class))
 }
 
-fn register_natives(env: &mut JNIEnv, helper_class: JClass) -> Result<(), PasskeyError> {
+fn register_natives(env: &mut JNIEnv, helper_class: &JClass) -> Result<(), PasskeyError> {
     let _ = env.unregister_native_methods(helper_class);
 
     let methods = [
@@ -243,7 +243,7 @@ fn register_with_context(
 {
     let class_loader = prepare_class_loader(env, context)?;
     let helper_class = get_helper_class(env, &class_loader)?;
-    register_natives(env, helper_class)?;
+    register_natives(env, &helper_class)?;
 
     let request_json_java = env.new_string(request_json).map_err(|error| {
         PasskeyError::Platform(format!("new registration JSON string failed: {error}"))
@@ -253,7 +253,7 @@ fn register_with_context(
     let sender_ptr = Box::into_raw(Box::new(tx)) as jlong;
 
     if let Err(error) = env.call_static_method(
-        helper_class,
+        &helper_class,
         "register",
         "(Landroid/content/Context;Ljava/lang/String;J)V",
         &[
@@ -279,7 +279,7 @@ fn authenticate_with_context(
 {
     let class_loader = prepare_class_loader(env, context)?;
     let helper_class = get_helper_class(env, &class_loader)?;
-    register_natives(env, helper_class)?;
+    register_natives(env, &helper_class)?;
 
     let request_json_java = env
         .new_string(request_json)
@@ -289,7 +289,7 @@ fn authenticate_with_context(
     let sender_ptr = Box::into_raw(Box::new(tx)) as jlong;
 
     if let Err(error) = env.call_static_method(
-        helper_class,
+        &helper_class,
         "authenticate",
         "(Landroid/content/Context;Ljava/lang/String;J)V",
         &[
@@ -340,11 +340,10 @@ pub unsafe extern "system" fn Java_waterkit_passkey_PasskeyHelper_onRegisterResu
         return;
     }
 
-    let error = jobject_to_option_string(&mut env, error_message)
-        .map(PasskeyError::from_platform_error)
-        .unwrap_or_else(|| {
-            PasskeyError::Platform("android registration failed without error message".into())
-        });
+    let error = jobject_to_option_string(&mut env, error_message).map_or_else(
+        || PasskeyError::Platform("android registration failed without error message".into()),
+        PasskeyError::from_platform_error,
+    );
     let _ = sender.send(Err(error));
 }
 
@@ -375,10 +374,9 @@ pub unsafe extern "system" fn Java_waterkit_passkey_PasskeyHelper_onAuthenticate
         return;
     }
 
-    let error = jobject_to_option_string(&mut env, error_message)
-        .map(PasskeyError::from_platform_error)
-        .unwrap_or_else(|| {
-            PasskeyError::Platform("android authentication failed without error message".into())
-        });
+    let error = jobject_to_option_string(&mut env, error_message).map_or_else(
+        || PasskeyError::Platform("android authentication failed without error message".into()),
+        PasskeyError::from_platform_error,
+    );
     let _ = sender.send(Err(error));
 }

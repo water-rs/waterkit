@@ -166,6 +166,12 @@ fn register_callback_natives(env: &mut JNIEnv) -> Result<(), SpeechError> {
     Ok(())
 }
 
+/// Initialize Android speech runtime with JNI environment and app context.
+///
+/// # Errors
+///
+/// Returns `SpeechError::PlatformError` if JVM/context caching, DEX loading,
+/// or JNI native registration fails.
 pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), SpeechError> {
     if VM.get().is_none() {
         let vm = env
@@ -195,7 +201,7 @@ impl TtsInner {
         let context = ensure_context()?;
         let vm = get_vm()?;
 
-        {
+        let rx = {
             let mut env = vm
                 .attach_current_thread()
                 .map_err(|e| SpeechError::PlatformError(format!("attach_current_thread: {e}")))?;
@@ -220,15 +226,16 @@ impl TtsInner {
                 &[JValue::Object(context.as_obj()), JValue::Object(&callback)],
             )
             .map_err(|e| SpeechError::PlatformError(format!("initTts: {e}")))?;
+            rx
+        };
 
-            let initialized = tokio::select! {
-                result = rx => result.unwrap_or(false),
-                _ = futures_timer::Delay::new(std::time::Duration::from_secs(5)) => false,
-            };
+        let initialized = tokio::select! {
+            result = rx => result.unwrap_or(false),
+            () = futures_timer::Delay::new(std::time::Duration::from_secs(5)) => false,
+        };
 
-            if !initialized {
-                return Err(SpeechError::NotAvailable);
-            }
+        if !initialized {
+            return Err(SpeechError::NotAvailable);
         }
 
         Ok(Self { vm, context })
@@ -247,12 +254,14 @@ impl TtsInner {
             .map_err(|e| SpeechError::PlatformError(format!("getAvailableVoices: {e}")))?;
 
         let array = jni::objects::JObjectArray::from(voices);
-        let len = env
+        let len_i32 = env
             .get_array_length(&array)
             .map_err(|e| SpeechError::PlatformError(format!("voices len: {e}")))?;
+        let len = usize::try_from(len_i32)
+            .map_err(|_| SpeechError::PlatformError(format!("negative voices len: {len_i32}")))?;
 
-        let mut out = Vec::with_capacity(len as usize);
-        for idx in 0..len {
+        let mut out = Vec::with_capacity(len);
+        for idx in 0..len_i32 {
             let item = env
                 .get_object_array_element(&array, idx)
                 .map_err(|e| SpeechError::PlatformError(format!("voice[{idx}]: {e}")))?;
@@ -270,6 +279,7 @@ impl TtsInner {
         Ok(out)
     }
 
+    #[allow(clippy::unused_async)]
     pub async fn speak(&self, text: &str, config: &TtsConfig) -> Result<(), SpeechError> {
         let mut env = self
             .vm
@@ -283,8 +293,7 @@ impl TtsInner {
         let language_tag = config
             .voice
             .as_ref()
-            .map(|voice| voice.language.as_str())
-            .unwrap_or("");
+            .map_or("", |voice| voice.language.as_str());
         let language_j = env
             .new_string(language_tag)
             .map_err(|e| SpeechError::PlatformError(format!("new_string language: {e}")))?;
@@ -332,16 +341,16 @@ impl TtsInner {
 
 impl Drop for TtsInner {
     fn drop(&mut self) {
-        if let Ok(mut env) = self.vm.attach_current_thread() {
-            if let Ok(helper) = helper_class(&mut env) {
-                let _ = env.call_static_method(helper, "shutdown", "()V", &[]);
-            }
+        if let Ok(mut env) = self.vm.attach_current_thread()
+            && let Ok(helper) = helper_class(&mut env)
+        {
+            let _ = env.call_static_method(helper, "shutdown", "()V", &[]);
         }
         let _ = &self.context;
     }
 }
 
-pub fn recognition_is_available() -> bool {
+pub const fn recognition_is_available() -> bool {
     false
 }
 
@@ -356,7 +365,9 @@ impl SpeechRecognizerInner {
         Err(SpeechError::NotSupported)
     }
 
-    pub fn stop(&self) {}
+    pub const fn stop(&self) {
+        let _ = self;
+    }
 }
 
 #[unsafe(no_mangle)]

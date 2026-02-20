@@ -141,6 +141,7 @@ impl NfcReader {
     }
 
     /// Stop the NFC session.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn stop(&self) {
         self.inner.stop();
     }

@@ -36,5 +36,7 @@ impl NfcReaderInner {
         Err(NfcError::NotSupported)
     }
 
-    pub fn stop(&self) {}
+    pub const fn stop(&self) {
+        let _ = self;
+    }
 }

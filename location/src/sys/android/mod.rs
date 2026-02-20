@@ -21,6 +21,10 @@ static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
 /// # Safety
 ///
 /// The `context` must be a valid Android Context `JObject`.
+///
+/// # Errors
+///
+/// Returns `LocationError::Unknown` if JNI calls fail or DEX setup cannot be completed.
 pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), LocationError> {
     if CLASS_LOADER.get().is_some() {
         return Ok(());
@@ -103,6 +107,12 @@ pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), LocationError> {
 }
 
 /// Get location using the Context.
+///
+/// # Errors
+///
+/// Returns:
+/// - `LocationError::NotAvailable` if location services are unavailable.
+/// - `LocationError::Unknown` if JNI calls fail or return invalid data.
 pub fn get_location_with_context(
     env: &mut JNIEnv,
     context: &JObject,

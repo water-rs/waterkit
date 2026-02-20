@@ -1,6 +1,6 @@
 use crate::{HealthDataType, HealthError, HealthSample};
 
-pub fn is_available() -> bool {
+pub const fn is_available() -> bool {
     false
 }
 

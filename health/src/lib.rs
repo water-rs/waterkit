@@ -49,7 +49,7 @@ pub struct HealthSample {
 
 /// Check if health data is available on this device.
 #[must_use]
-pub fn is_available() -> bool {
+pub const fn is_available() -> bool {
     sys::is_available()
 }
 

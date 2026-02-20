@@ -1,10 +1,15 @@
+#![allow(
+    clippy::missing_const_for_fn,
+    clippy::unused_self,
+    clippy::wildcard_imports
+)]
+
 use crate::{
-    AdapterState, BluetoothDevice, BluetoothError, CharacteristicProperties, ClassicDevice,
-    DeviceId, GattCharacteristic, GattService, ScanFilter, ScanResult, Uuid,
+    AdapterState, BluetoothError, ClassicDevice, DeviceId, GattService, ScanFilter, ScanResult,
+    Uuid,
 };
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));

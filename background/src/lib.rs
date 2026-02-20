@@ -299,7 +299,7 @@ impl BootstrapConfig {
     }
 
     #[cfg(target_os = "android")]
-    pub(crate) fn android_config_ref(&self) -> Option<&AndroidConfig> {
+    pub(crate) const fn android_config_ref(&self) -> Option<&AndroidConfig> {
         self.android.as_ref()
     }
 
@@ -369,7 +369,7 @@ impl AppRefreshRequest {
     }
 
     #[cfg(any(target_os = "ios", target_os = "android"))]
-    pub(crate) fn earliest_begin_after_value(&self) -> Option<Duration> {
+    pub(crate) const fn earliest_begin_after_value(&self) -> Option<Duration> {
         self.earliest_begin_after
     }
 }
@@ -421,17 +421,17 @@ impl ProcessingRequest {
     }
 
     #[cfg(any(target_os = "ios", target_os = "android"))]
-    pub(crate) fn earliest_begin_after_value(&self) -> Option<Duration> {
+    pub(crate) const fn earliest_begin_after_value(&self) -> Option<Duration> {
         self.earliest_begin_after
     }
 
     #[cfg(any(target_os = "ios", target_os = "android"))]
-    pub(crate) fn requires_network_connectivity_value(&self) -> bool {
+    pub(crate) const fn requires_network_connectivity_value(&self) -> bool {
         self.requires_network_connectivity
     }
 
     #[cfg(any(target_os = "ios", target_os = "android"))]
-    pub(crate) fn requires_external_power_value(&self) -> bool {
+    pub(crate) const fn requires_external_power_value(&self) -> bool {
         self.requires_external_power
     }
 }
@@ -527,12 +527,12 @@ impl ContinuedProcessingRequest {
     }
 
     #[cfg(target_os = "ios")]
-    pub(crate) fn strategy_value(&self) -> ContinuedProcessingStrategy {
+    pub(crate) const fn strategy_value(&self) -> ContinuedProcessingStrategy {
         self.strategy
     }
 
     #[cfg(target_os = "ios")]
-    pub(crate) fn requires_gpu_value(&self) -> bool {
+    pub(crate) const fn requires_gpu_value(&self) -> bool {
         self.requires_gpu
     }
 }

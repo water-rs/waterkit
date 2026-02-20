@@ -1,4 +1,9 @@
 //! Android background scheduler backend using `JobScheduler`.
+#![allow(
+    clippy::missing_const_for_fn,
+    clippy::needless_pass_by_value,
+    clippy::unused_self
+)]
 
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
@@ -292,7 +297,7 @@ fn duration_ms(duration: Option<std::time::Duration>) -> i64 {
 }
 
 fn bool_to_jni(value: bool) -> u8 {
-    if value { 1 } else { 0 }
+    u8::from(value)
 }
 
 fn jni_error(context: &'static str) -> impl FnOnce(JniError) -> BackgroundError {
@@ -300,14 +305,14 @@ fn jni_error(context: &'static str) -> impl FnOnce(JniError) -> BackgroundError 
 }
 
 fn job_id_for_identifier(identifier: &TaskIdentifier, kind: TaskKind) -> i32 {
-    let mut hash: u32 = 0x811c9dc5;
+    let mut hash: u32 = 0x811c_9dc5;
     for byte in identifier.as_str().bytes() {
         hash ^= u32::from(byte);
         hash = hash.wrapping_mul(0x0100_0193);
     }
     hash ^= u32::from(kind.as_raw());
 
-    let mut job_id = (hash & 0x7fff_ffff) as i32;
+    let mut job_id = i32::try_from(hash & 0x7fff_ffff).unwrap_or(1);
     if job_id == 0 {
         job_id = 1;
     }

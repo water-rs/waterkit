@@ -1,4 +1,4 @@
-//! Android camera implementation using Camera2 + MediaRecorder via JNI/Kotlin bridge.
+//! Android camera implementation using Camera2 + `MediaRecorder` via JNI/Kotlin bridge.
 
 #![allow(clippy::needless_pass_by_ref_mut)] // API consistency across platforms
 #![allow(clippy::unused_async)] // API consistency across platforms
@@ -58,6 +58,7 @@ struct AndroidBridge {
 }
 
 impl AndroidBridge {
+    #[allow(clippy::too_many_lines)]
     fn new() -> Result<Self, CameraError> {
         let android_context = ndk_context::android_context();
         let vm = unsafe {
@@ -379,20 +380,22 @@ impl AndroidBridge {
 
             let mut cameras = Vec::with_capacity(usize::try_from(row_count).unwrap_or(0));
             for index in 0..row_count {
-                let row_obj = env
-                    .get_object_array_element(&rows, index)
-                    .map_err(|error| {
-                        CameraError::EnumerationFailed(format!("listCameras row {index}: {error}"))
-                    })?;
+                let camera_row_obj =
+                    env.get_object_array_element(&rows, index)
+                        .map_err(|error| {
+                            CameraError::EnumerationFailed(format!(
+                                "listCameras row {index}: {error}"
+                            ))
+                        })?;
 
-                if row_obj.is_null() {
+                if camera_row_obj.is_null() {
                     return Err(CameraError::EnumerationFailed(format!(
                         "listCameras row {index} is null"
                     )));
                 }
 
-                let row: JObjectArray = row_obj.into();
-                let column_count = env.get_array_length(&row).map_err(|error| {
+                let camera_row: JObjectArray = camera_row_obj.into();
+                let column_count = env.get_array_length(&camera_row).map_err(|error| {
                     CameraError::EnumerationFailed(format!(
                         "listCameras row {index} length: {error}"
                     ))
@@ -403,15 +406,23 @@ impl AndroidBridge {
                     )));
                 }
 
-                let id_obj = env.get_object_array_element(&row, 0).map_err(|error| {
-                    CameraError::EnumerationFailed(format!("camera id row {index}: {error}"))
-                })?;
-                let name_obj = env.get_object_array_element(&row, 1).map_err(|error| {
-                    CameraError::EnumerationFailed(format!("camera name row {index}: {error}"))
-                })?;
-                let is_front_obj = env.get_object_array_element(&row, 2).map_err(|error| {
-                    CameraError::EnumerationFailed(format!("camera facing row {index}: {error}"))
-                })?;
+                let id_obj = env
+                    .get_object_array_element(&camera_row, 0)
+                    .map_err(|error| {
+                        CameraError::EnumerationFailed(format!("camera id row {index}: {error}"))
+                    })?;
+                let name_obj = env
+                    .get_object_array_element(&camera_row, 1)
+                    .map_err(|error| {
+                        CameraError::EnumerationFailed(format!("camera name row {index}: {error}"))
+                    })?;
+                let is_front_obj =
+                    env.get_object_array_element(&camera_row, 2)
+                        .map_err(|error| {
+                            CameraError::EnumerationFailed(format!(
+                                "camera facing row {index}: {error}"
+                            ))
+                        })?;
 
                 if id_obj.is_null() || name_obj.is_null() || is_front_obj.is_null() {
                     return Err(CameraError::EnumerationFailed(format!(
@@ -1109,6 +1120,7 @@ impl CameraInner {
         &self.capabilities
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn apply_controls(&mut self, controls: &CameraControls) -> Result<(), CameraError> {
         if let Some(ref exposure) = controls.exposure {
             if exposure.mode != ExposureMode::Auto {

@@ -24,17 +24,17 @@ pub use apple::PlatformBackend;
 #[cfg(target_os = "android")]
 mod android;
 #[cfg(target_os = "android")]
-pub(crate) use android::PlatformBackend;
+pub use android::PlatformBackend;
 
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
-pub(crate) use windows::PlatformBackend;
+pub use windows::PlatformBackend;
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub(crate) use linux::PlatformBackend;
+pub use linux::PlatformBackend;
 
 #[cfg(not(any(
     target_os = "ios",
@@ -51,7 +51,7 @@ mod unsupported;
     target_os = "windows",
     target_os = "linux"
 )))]
-pub(crate) use unsupported::PlatformBackend;
+pub use unsupported::PlatformBackend;
 
 pub const fn platform_backend() -> PlatformBackend {
     PlatformBackend

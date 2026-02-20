@@ -3,6 +3,33 @@
 use std::env;
 use std::path::PathBuf;
 
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn has_ios26_background_task_apis(sdk: &str, target: &str) -> bool {
+    if !target.contains("ios") {
+        return false;
+    }
+
+    let output = std::process::Command::new("xcrun")
+        .args(["--sdk", sdk, "--show-sdk-version"])
+        .output();
+    let Ok(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+
+    let Ok(version) = String::from_utf8(output.stdout) else {
+        return false;
+    };
+    let major = version.trim().split('.').next();
+    let Some(major) = major else {
+        return false;
+    };
+
+    major.parse::<u32>().is_ok_and(|value| value >= 26)
+}
+
 /// Configuration for Swift compilation.
 #[derive(Debug, Clone)]
 pub struct AppleSwiftConfig {
@@ -240,6 +267,9 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
 
     // Add target triple for cross-compilation
     swiftc.arg("-target").arg(&swift_target);
+    if has_ios26_background_task_apis(sdk, &target) {
+        swiftc.arg("-D").arg("WATERKIT_HAS_IOS26_BACKGROUND_TASKS");
+    }
 
     let output = swiftc.output().expect("Failed to run swiftc");
     if !output.status.success() {
@@ -447,6 +477,9 @@ pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = Swif
 
     // Add target triple
     swiftc.arg("-target").arg(&swift_target);
+    if has_ios26_background_task_apis(sdk, &target) {
+        swiftc.arg("-D").arg("WATERKIT_HAS_IOS26_BACKGROUND_TASKS");
+    }
 
     let output = swiftc.output().expect("Failed to run swiftc");
     if !output.status.success() {

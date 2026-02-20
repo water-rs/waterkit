@@ -10,7 +10,7 @@ use brightness::blocking::{Brightness, brightness_devices};
 use std::io::Cursor;
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-fn map_brightness_error(error: brightness::Error) -> Error {
+fn map_brightness_error(error: &brightness::Error) -> Error {
     Error::Platform(format!("brightness backend error: {error}"))
 }
 
@@ -25,11 +25,9 @@ fn first_brightness_device() -> Result<brightness::blocking::BrightnessDevice, E
         }
     }
 
-    if let Some(error) = first_error {
-        Err(map_brightness_error(error))
-    } else {
-        Err(Error::MonitorNotFound)
-    }
+    first_error.map_or(Err(Error::MonitorNotFound), |error| {
+        Err(map_brightness_error(&error))
+    })
 }
 
 /// Enumerate all screens.
@@ -52,6 +50,7 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
 }
 
 #[allow(clippy::unused_async)]
+#[allow(clippy::cast_precision_loss)]
 pub async fn get_brightness() -> Result<f32, Error> {
     #[cfg(target_os = "macos")]
     {
@@ -60,16 +59,17 @@ pub async fn get_brightness() -> Result<f32, Error> {
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
-        return blocking::unblock(|| {
+        blocking::unblock(|| {
             let device = first_brightness_device()?;
-            let percentage = device.get().map_err(map_brightness_error)?;
+            let percentage = device.get().map_err(|error| map_brightness_error(&error))?;
             Ok(((percentage as f32) / 100.0).clamp(0.0, 1.0))
         })
-        .await;
+        .await
     }
 }
 
 #[allow(clippy::unused_async)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub async fn set_brightness(val: f32) -> Result<(), Error> {
     #[cfg(target_os = "macos")]
     {
@@ -78,14 +78,14 @@ pub async fn set_brightness(val: f32) -> Result<(), Error> {
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
-        return blocking::unblock(move || {
+        blocking::unblock(move || {
             let device = first_brightness_device()?;
             let percentage = (val.clamp(0.0, 1.0) * 100.0).round() as u32;
             device
                 .set(percentage.min(100))
-                .map_err(map_brightness_error)
+                .map_err(|error| map_brightness_error(&error))
         })
-        .await;
+        .await
     }
 }
 

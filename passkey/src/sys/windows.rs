@@ -12,10 +12,11 @@ use windows::Win32::Networking::WindowsWebServices::{
     WEBAUTHN_CLIENT_DATA_CURRENT_VERSION, WEBAUTHN_COSE_CREDENTIAL_PARAMETER,
     WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION, WEBAUTHN_COSE_CREDENTIAL_PARAMETERS,
     WEBAUTHN_CREDENTIAL_EX, WEBAUTHN_CREDENTIAL_EX_CURRENT_VERSION, WEBAUTHN_CREDENTIAL_LIST,
-    WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY, WEBAUTHN_ENTERPRISE_ATTESTATION_NONE,
-    WEBAUTHN_ENTERPRISE_ATTESTATION_VENDOR_FACILITATED, WEBAUTHN_HASH_ALGORITHM_SHA_256,
-    WEBAUTHN_RP_ENTITY_INFORMATION, WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION,
-    WEBAUTHN_USER_ENTITY_INFORMATION, WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
+    WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY, WEBAUTHN_CREDENTIALS,
+    WEBAUTHN_ENTERPRISE_ATTESTATION_NONE, WEBAUTHN_ENTERPRISE_ATTESTATION_VENDOR_FACILITATED,
+    WEBAUTHN_EXTENSIONS, WEBAUTHN_HASH_ALGORITHM_SHA_256, WEBAUTHN_RP_ENTITY_INFORMATION,
+    WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION, WEBAUTHN_USER_ENTITY_INFORMATION,
+    WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
     WEBAUTHN_USER_VERIFICATION_REQUIREMENT_DISCOURAGED,
     WEBAUTHN_USER_VERIFICATION_REQUIREMENT_PREFERRED,
     WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED, WebAuthNAuthenticatorGetAssertion,
@@ -33,7 +34,7 @@ use crate::{
 
 use super::PasskeyBackend;
 
-pub(crate) struct PlatformBackend;
+pub struct PlatformBackend;
 
 #[async_trait]
 impl PasskeyBackend for PlatformBackend {
@@ -60,6 +61,7 @@ impl PasskeyBackend for PlatformBackend {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn register(
         &self,
         options: &RegisterOptions,
@@ -150,8 +152,8 @@ impl PasskeyBackend for PlatformBackend {
         let make_options = WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS {
             dwVersion: WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_VERSION_7,
             dwTimeoutMilliseconds: options.timeout_ms_value().unwrap_or_default(),
-            CredentialList: Default::default(),
-            Extensions: Default::default(),
+            CredentialList: WEBAUTHN_CREDENTIALS::default(),
+            Extensions: WEBAUTHN_EXTENSIONS::default(),
             dwAuthenticatorAttachment: WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM,
             bRequireResidentKey: bool_to_win(options.discoverable_value()),
             dwUserVerificationRequirement: map_user_verification(options.user_verification_value()),
@@ -178,14 +180,14 @@ impl PasskeyBackend for PlatformBackend {
             // scope and live across the FFI call.
             WebAuthNAuthenticatorMakeCredential(
                 HWND::default(),
-                &rp_information as *const WEBAUTHN_RP_ENTITY_INFORMATION,
-                &user_information as *const WEBAUTHN_USER_ENTITY_INFORMATION,
-                &cose_parameters as *const WEBAUTHN_COSE_CREDENTIAL_PARAMETERS,
-                &client_data as *const WEBAUTHN_CLIENT_DATA,
-                Some(&make_options as *const WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS),
+                &raw const rp_information,
+                &raw const user_information,
+                &raw const cose_parameters,
+                &raw const client_data,
+                Some(&raw const make_options),
             )
         }
-        .map_err(map_windows_error)?;
+        .map_err(|error| map_windows_error(&error))?;
 
         let _attestation_guard = CredentialAttestationGuard(attestation.cast_const());
         let attestation_ref = unsafe {
@@ -221,6 +223,7 @@ impl PasskeyBackend for PlatformBackend {
         ))
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn authenticate(
         &self,
         options: &AuthenticateOptions,
@@ -273,8 +276,8 @@ impl PasskeyBackend for PlatformBackend {
         let assertion_options = WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS {
             dwVersion: WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_7,
             dwTimeoutMilliseconds: options.timeout_ms_value().unwrap_or_default(),
-            CredentialList: Default::default(),
-            Extensions: Default::default(),
+            CredentialList: WEBAUTHN_CREDENTIALS::default(),
+            Extensions: WEBAUTHN_EXTENSIONS::default(),
             dwAuthenticatorAttachment: WEBAUTHN_AUTHENTICATOR_ATTACHMENT_PLATFORM,
             dwUserVerificationRequirement: map_user_verification(options.user_verification_value()),
             dwFlags: 0,
@@ -303,11 +306,11 @@ impl PasskeyBackend for PlatformBackend {
             WebAuthNAuthenticatorGetAssertion(
                 HWND::default(),
                 &rp_id,
-                &client_data as *const WEBAUTHN_CLIENT_DATA,
-                Some(&assertion_options as *const WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS),
+                &raw const client_data,
+                Some(&raw const assertion_options),
             )
         }
-        .map_err(map_windows_error)?;
+        .map_err(|error| map_windows_error(&error))?;
 
         let _assertion_guard = AssertionGuard(assertion.cast_const());
         let assertion_ref = unsafe {
@@ -380,7 +383,7 @@ fn bool_to_win(value: bool) -> BOOL {
     BOOL(i32::from(value))
 }
 
-fn map_attestation(attestation: AttestationPreference) -> u32 {
+const fn map_attestation(attestation: AttestationPreference) -> u32 {
     match attestation {
         AttestationPreference::None => WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
         AttestationPreference::Indirect => WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_INDIRECT,
@@ -390,14 +393,14 @@ fn map_attestation(attestation: AttestationPreference) -> u32 {
     }
 }
 
-fn map_enterprise_attestation(attestation: AttestationPreference) -> u32 {
+const fn map_enterprise_attestation(attestation: AttestationPreference) -> u32 {
     match attestation {
         AttestationPreference::Enterprise => WEBAUTHN_ENTERPRISE_ATTESTATION_VENDOR_FACILITATED,
         _ => WEBAUTHN_ENTERPRISE_ATTESTATION_NONE,
     }
 }
 
-fn map_user_verification(user_verification: UserVerificationRequirement) -> u32 {
+const fn map_user_verification(user_verification: UserVerificationRequirement) -> u32 {
     match user_verification {
         UserVerificationRequirement::Required => WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED,
         UserVerificationRequirement::Preferred => WEBAUTHN_USER_VERIFICATION_REQUIREMENT_PREFERRED,
@@ -443,7 +446,7 @@ fn copy_optional_bytes(
     Ok(Some(bytes.to_vec()))
 }
 
-fn map_windows_error(error: windows::core::Error) -> PasskeyError {
+fn map_windows_error(error: &windows::core::Error) -> PasskeyError {
     let hr = error.code();
     let error_name = unsafe {
         // SAFETY: This converts an HRESULT to a static name string.
@@ -461,7 +464,8 @@ fn map_windows_error(error: windows::core::Error) -> PasskeyError {
         }
     };
 
-    PasskeyError::from_platform_error(format!("{error_name} ({:#010x}): {error}", hr.0 as u32))
+    let hr_u32 = u32::from_ne_bytes(hr.0.to_ne_bytes());
+    PasskeyError::from_platform_error(format!("{error_name} ({hr_u32:#010x}): {error}"))
 }
 
 #[derive(Serialize)]

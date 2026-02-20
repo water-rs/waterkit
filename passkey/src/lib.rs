@@ -5,6 +5,7 @@
 //! - top-level async functions for direct per-call usage
 
 #![warn(missing_docs)]
+#![cfg_attr(target_os = "windows", allow(dead_code))]
 
 mod error;
 mod sys;

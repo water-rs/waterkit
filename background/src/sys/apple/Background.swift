@@ -132,6 +132,7 @@ private final class BackgroundRuntimeBridge {
         strategy: UInt8,
         requiresGPU: Bool
     ) throws {
+#if WATERKIT_HAS_IOS26_BACKGROUND_TASKS
         if #available(iOS 26.0, *) {
             let request = BGContinuedProcessingTaskRequest(
                 identifier: identifier,
@@ -163,6 +164,7 @@ private final class BackgroundRuntimeBridge {
             try submitTaskRequest(request)
             return
         }
+#endif
 
         throw BackgroundBridgeError.notSupported
     }
@@ -185,6 +187,7 @@ private final class BackgroundRuntimeBridge {
     }
 
     func updateContinuedStatus(taskToken: UInt64, title: String, subtitle: String) throws {
+#if WATERKIT_HAS_IOS26_BACKGROUND_TASKS
         if #available(iOS 26.0, *) {
             guard let continuedTask = pendingTasks[taskToken] as? BGContinuedProcessingTask else {
                 throw BackgroundBridgeError.invalidToken(
@@ -194,11 +197,13 @@ private final class BackgroundRuntimeBridge {
             continuedTask.updateTitle(title, subtitle: subtitle)
             return
         }
+#endif
 
         throw BackgroundBridgeError.notSupported
     }
 
     func updateContinuedProgress(taskToken: UInt64, completed: UInt64, total: UInt64) throws {
+#if WATERKIT_HAS_IOS26_BACKGROUND_TASKS
         if #available(iOS 26.0, *) {
             guard let continuedTask = pendingTasks[taskToken] as? BGContinuedProcessingTask else {
                 throw BackgroundBridgeError.invalidToken(
@@ -209,6 +214,7 @@ private final class BackgroundRuntimeBridge {
             continuedTask.progress.completedUnitCount = Int64(completed)
             return
         }
+#endif
 
         throw BackgroundBridgeError.notSupported
     }
@@ -307,12 +313,14 @@ public func ios_background_shutdown(runtime_handle: UInt64) {
 public func ios_background_capabilities() -> UInt8 {
     if #available(iOS 13.0, *) {
         var capabilities = capabilityAppRefresh | capabilityProcessing | capabilityLaunchEvents
+#if WATERKIT_HAS_IOS26_BACKGROUND_TASKS
         if #available(iOS 26.0, *) {
             capabilities |= capabilityContinuedProcessing
             if BGTaskScheduler.supportedResources.contains(.gpu) {
                 capabilities |= capabilityContinuedGPU
             }
         }
+#endif
         return capabilities
     }
 

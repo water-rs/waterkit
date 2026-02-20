@@ -9,21 +9,39 @@ Waterkit is organized into focused, independent crates. You can use the main `wa
 | Feature / Crate | Description |
 | :--- | :--- |
 | **[Audio](audio)** | Cross-platform audio playback and recording. |
+| **[Background](background)** | Background refresh and heavy background task scheduling APIs. |
 | **[Biometric](biometric)** | TouchID, FaceID, Windows Hello, and native biometric authentication. |
+| **[Bluetooth](bluetooth)** | BLE scanning, device discovery, and connection management. |
+| **[Calendar](calendar)** | Native calendar event read/write integrations. |
 | **[Camera](camera)** | Camera streaming and capture (Webcam, AVFoundation, Camera2). |
 | **[Clipboard](clipboard)** | System clipboard access for text and images. |
 | **[Codec](codec)** | Low-level hardware video/audio encoding and decoding. |
+| **[Contacts](contacts)** | Native contacts query and synchronization helpers. |
+| **[Deeplink](deeplink)** | URL scheme and universal-link/deep-link handling. |
 | **[Dialog](dialog)** | Native system alert dialogs, file pickers, and prompts. |
 | **[FS](fs)** | File system helpers, sandboxing, and file picking. |
 | **[Haptic](haptic)** | Haptic feedback and vibration control. |
+| **[Health](health)** | Health data integration (HealthKit / Health Connect). |
 | **[Location](location)** | GPS and location services (CoreLocation, LocationManager, etc.). |
+| **[NFC](nfc)** | NFC read/write and tag interaction workflows. |
 | **[Notification](notification)** | Local system notifications. |
 | **[Permission](permission)** | Unified API for requesting system permissions (Camera, Mic, Location, etc.). |
+| **[Passkey](passkey)** | Native passkey registration/authentication ceremonies with ergonomic WebAuthn helpers. |
 | **[Screen](screen)** | Screen capture and display information. |
 | **[Secret](secret)** | Secure storage (Keychain, Keystore, Credential Locker). |
 | **[Sensor](sensor)** | Access to device sensors (Accelerometer, Gyroscope, Magnetometer, etc.). |
+| **[Share](share)** | Native share sheet and cross-app content sharing. |
+| **[Speech](speech)** | Speech recognition and text-to-speech integrations. |
 | **[System](system)** | System information, connectivity status, and thermal info. |
 | **[Video](video)** | High-level video playback and processing. |
+
+## Advanced Modern Capabilities
+
+- Hardware-accelerated media pipelines (`codec`, `video`) with platform-native backends and GPU-friendly paths.
+- Privacy-first device access flows (`permission`, `biometric`, `secret`) for secure user consent and authentication.
+- Deep OS integrations (`bluetooth`, `nfc`, `health`, `contacts`, `calendar`, `notification`, `deeplink`, `share`, `speech`).
+- Async-first APIs across modules to fit modern concurrent Rust application architecture.
+- `full` feature as a complete capability bundle, continuously validated by automated feature-surface tests.
 
 ## 📦 Installation
 
@@ -83,7 +101,7 @@ async fn example() {
     // 4. Use Location
     let location_manager = LocationManager::new().await.unwrap();
     let loc = location_manager.get_current_location().await.unwrap();
-    println!("Location: {}, {}", loc.latitude, loc.longitude);
+    log::info!("Location: {}, {}", loc.latitude, loc.longitude);
 }
 ```
 

@@ -124,7 +124,7 @@ impl CameraInner {
             supports_raw_video: false,
             raw_video_formats: Vec::new(),
         };
-        capabilities.validate();
+        capabilities.validate()?;
 
         // Start streaming immediately (RAII)
         camera

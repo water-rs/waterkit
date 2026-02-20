@@ -115,18 +115,58 @@ fn run_android(crate_path: &Path) -> Result<()> {
 fn run_macos(crate_path: &Path) -> Result<()> {
     info!("{}", "Preparing macOS test environment...".green().bold());
 
-    // 1. Verify crate path
     let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
-
-    if !crate_path.join("Cargo.toml").exists() {
+    let manifest_path = crate_path.join("Cargo.toml");
+    if !manifest_path.exists() {
         anyhow::bail!("No Cargo.toml found at {}", crate_path.display());
     }
 
-    // 2. Modify tests/macos/runner/Cargo.toml
-    // Implementation needed: Create generic macOS runner crate.
-    // For now, let's just log.
-    warn!("{}", "macOS generic runner not fully implemented yet.".yellow());
+    let root_dir = workspace_root();
+    let metadata = parse_macos_metadata(&manifest_path)?;
     info!("Target crate: {}", crate_path.display());
+    info!("Package: {}", metadata.package_name);
+    info!("Primary binary: {}", metadata.bin_name);
+
+    info!("{}", "Building macOS test binary...".yellow().bold());
+    let build_status = std::process::Command::new("cargo")
+        .current_dir(&root_dir)
+        .args(["build", "--manifest-path"])
+        .arg(&manifest_path)
+        .status()
+        .context("Failed to run cargo build for macOS test crate")?;
+    if !build_status.success() {
+        anyhow::bail!("macOS build failed for {}", metadata.package_name);
+    }
+
+    let binary_path = root_dir.join("target/debug").join(&metadata.bin_name);
+    if !binary_path.exists() {
+        anyhow::bail!(
+            "Built binary not found at {}. Ensure crate has a runnable binary target.",
+            binary_path.display()
+        );
+    }
+
+    let info_plist_path = crate_path.join("Info.plist");
+    if info_plist_path.exists() {
+        run_macos_app_bundle(
+            &root_dir,
+            &metadata.bin_name,
+            &binary_path,
+            &info_plist_path,
+        )?;
+    } else {
+        run_macos_cli_binary(&root_dir, &manifest_path, &metadata.bin_name)?;
+    }
+
+    let log_path = root_dir
+        .join("target/debug")
+        .join(format!("{}.log", metadata.bin_name));
+    if log_path.exists() {
+        info!("{}", "Captured test log:".green().bold());
+        let log_text = std::fs::read_to_string(&log_path)
+            .with_context(|| format!("Failed to read {}", log_path.display()))?;
+        info!("{log_text}");
+    }
 
     Ok(())
 }
@@ -322,6 +362,202 @@ fn run_ios(crate_path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+struct MacosMetadata {
+    package_name: String,
+    bin_name: String,
+}
+
+fn parse_macos_metadata(manifest_path: &Path) -> Result<MacosMetadata> {
+    let manifest_text = std::fs::read_to_string(manifest_path)
+        .with_context(|| format!("Read {}", manifest_path.display()))?;
+    let manifest = manifest_text
+        .parse::<DocumentMut>()
+        .with_context(|| format!("Parse {}", manifest_path.display()))?;
+
+    let package_name = manifest["package"]["name"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing package.name in {}", manifest_path.display()))?
+        .to_owned();
+
+    let bin_name = select_primary_bin_name(&manifest, &package_name)?;
+
+    Ok(MacosMetadata {
+        package_name,
+        bin_name,
+    })
+}
+
+fn select_primary_bin_name(manifest: &DocumentMut, package_name: &str) -> Result<String> {
+    let Some(bin_tables) = manifest["bin"].as_array_of_tables() else {
+        return Ok(package_name.to_owned());
+    };
+
+    if bin_tables.is_empty() {
+        return Ok(package_name.to_owned());
+    }
+
+    if bin_tables.len() > 1 {
+        warn!(
+            "Multiple [[bin]] targets found; defaulting to the first one for generic macOS runner"
+        );
+    }
+
+    let first = bin_tables
+        .iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("First [[bin]] entry is missing"))?;
+    let name = first["name"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("First [[bin]] entry is missing a name field"))?;
+    Ok(name.to_owned())
+}
+
+fn run_macos_cli_binary(root_dir: &Path, manifest_path: &Path, bin_name: &str) -> Result<()> {
+    info!(
+        "{}",
+        "No Info.plist found; running binary directly via cargo run."
+            .yellow()
+            .bold()
+    );
+
+    let status = std::process::Command::new("cargo")
+        .current_dir(root_dir)
+        .args(["run", "--manifest-path"])
+        .arg(manifest_path)
+        .args(["--bin", bin_name])
+        .status()
+        .context("Failed to run cargo run for macOS test crate")?;
+
+    if !status.success() {
+        anyhow::bail!("macOS CLI run failed for binary {}", bin_name);
+    }
+
+    Ok(())
+}
+
+fn run_macos_app_bundle(
+    root_dir: &Path,
+    bin_name: &str,
+    built_binary: &Path,
+    info_plist_path: &Path,
+) -> Result<()> {
+    info!(
+        "{}",
+        "Info.plist detected; creating, signing, and launching .app bundle."
+            .yellow()
+            .bold()
+    );
+
+    let app_dir = root_dir
+        .join("target/debug")
+        .join(format!("{bin_name}.app"));
+    let contents_dir = app_dir.join("Contents");
+    let macos_dir = contents_dir.join("MacOS");
+    let app_binary = macos_dir.join(bin_name);
+
+    if app_dir.exists() {
+        std::fs::remove_dir_all(&app_dir)
+            .with_context(|| format!("Failed to remove {}", app_dir.display()))?;
+    }
+    std::fs::create_dir_all(&macos_dir)
+        .with_context(|| format!("Failed to create {}", macos_dir.display()))?;
+
+    std::fs::copy(built_binary, &app_binary).with_context(|| {
+        format!(
+            "Failed to copy built binary from {} to {}",
+            built_binary.display(),
+            app_binary.display()
+        )
+    })?;
+    std::fs::copy(info_plist_path, contents_dir.join("Info.plist")).with_context(|| {
+        format!(
+            "Failed to copy Info.plist from {}",
+            info_plist_path.display()
+        )
+    })?;
+
+    add_swift_rpath_if_exists(&app_binary, Path::new("/usr/lib/swift"))?;
+
+    let xcode_path_output = std::process::Command::new("xcode-select")
+        .args(["-p"])
+        .output()
+        .context("Failed to query xcode-select -p")?;
+    if xcode_path_output.status.success() {
+        let xcode_path = String::from_utf8(xcode_path_output.stdout)
+            .context("xcode-select output is not valid UTF-8")?
+            .trim()
+            .to_owned();
+        let xcode_swift_lib = PathBuf::from(xcode_path)
+            .join("Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx");
+        add_swift_rpath_if_exists(&app_binary, &xcode_swift_lib)?;
+    }
+
+    let codesign_status = std::process::Command::new("codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(&app_dir)
+        .status()
+        .context("Failed to run codesign for macOS bundle")?;
+    if !codesign_status.success() {
+        anyhow::bail!("codesign failed for {}", app_dir.display());
+    }
+
+    info!("{}", "Launching app bundle...".green().bold());
+    let open_status = std::process::Command::new("open")
+        .arg("-W")
+        .arg(&app_dir)
+        .status()
+        .context("Failed to run open -W for macOS app bundle")?;
+    if !open_status.success() {
+        anyhow::bail!("open -W failed for {}", app_dir.display());
+    }
+
+    Ok(())
+}
+
+fn add_swift_rpath_if_exists(binary_path: &Path, rpath: &Path) -> Result<()> {
+    if !rpath.exists() {
+        return Ok(());
+    }
+
+    let output = std::process::Command::new("install_name_tool")
+        .args(["-add_rpath"])
+        .arg(rpath)
+        .arg(binary_path)
+        .output()
+        .with_context(|| {
+            format!(
+                "Failed to run install_name_tool for {}",
+                binary_path.display()
+            )
+        })?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("would duplicate path") || stderr.contains("already exists in") {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "install_name_tool failed for {} with rpath {}: {}",
+        binary_path.display(),
+        rpath.display(),
+        stderr.trim()
+    );
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
+
 fn get_crate_feature(package_name: &str) -> Option<&'static str> {
     if package_name.contains("sensor") {
         Some("sensor")
@@ -373,6 +609,8 @@ fn get_crate_feature(package_name: &str) -> Option<&'static str> {
         Some("screen")
     } else if package_name.contains("background") {
         Some("background")
+    } else if package_name.contains("passkey") {
+        Some("passkey")
     } else {
         None
     }

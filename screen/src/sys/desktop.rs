@@ -5,7 +5,32 @@
 
 use crate::screenshot::ImageFormat;
 use crate::{Error, ScreenInfo, Screenshot};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use brightness::blocking::{Brightness, brightness_devices};
 use std::io::Cursor;
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn map_brightness_error(error: brightness::Error) -> Error {
+    Error::Platform(format!("brightness backend error: {error}"))
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn first_brightness_device() -> Result<brightness::blocking::BrightnessDevice, Error> {
+    let mut first_error = None;
+    for device in brightness_devices() {
+        match device {
+            Ok(device) => return Ok(device),
+            Err(error) if first_error.is_none() => first_error = Some(error),
+            Err(_) => {}
+        }
+    }
+
+    if let Some(error) = first_error {
+        Err(map_brightness_error(error))
+    } else {
+        Err(Error::MonitorNotFound)
+    }
+}
 
 /// Enumerate all screens.
 pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
@@ -26,18 +51,40 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     Ok(infos)
 }
 
-/// Get screen brightness (stub - brightness crate has build issues).
-#[allow(clippy::unused_async)]
 pub async fn get_brightness() -> Result<f32, Error> {
-    // brightness crate is currently broken on macOS (build failure).
-    Ok(1.0)
+    #[cfg(target_os = "macos")]
+    {
+        return super::apple::get_macos_brightness();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        return blocking::unblock(|| {
+            let device = first_brightness_device()?;
+            let percentage = device.get().map_err(map_brightness_error)?;
+            Ok(((percentage as f32) / 100.0).clamp(0.0, 1.0))
+        })
+        .await;
+    }
 }
 
-/// Set screen brightness (stub - brightness crate has build issues).
-#[allow(clippy::unused_async)]
-pub async fn set_brightness(_val: f32) -> Result<(), Error> {
-    // brightness crate is currently broken.
-    Ok(())
+pub async fn set_brightness(val: f32) -> Result<(), Error> {
+    #[cfg(target_os = "macos")]
+    {
+        return super::apple::set_macos_brightness(val);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        return blocking::unblock(move || {
+            let device = first_brightness_device()?;
+            let percentage = (val.clamp(0.0, 1.0) * 100.0).round() as u32;
+            device
+                .set(percentage.min(100))
+                .map_err(map_brightness_error)
+        })
+        .await;
+    }
 }
 
 /// Capture a screenshot of the specified display.

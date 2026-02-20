@@ -1046,7 +1046,7 @@ impl CameraInner {
 
         let capabilities =
             bridge.query_capabilities(camera_id, config.resolution, config.frame_rate.max(1))?;
-        capabilities.validate();
+        capabilities.validate()?;
 
         bridge.open_camera(camera_id, config.resolution, config.frame_rate)?;
 

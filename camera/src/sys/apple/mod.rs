@@ -174,14 +174,16 @@ fn frame_sender_slot() -> &'static Mutex<Option<async_channel::Sender<RawFrame>>
     FRAME_SENDER.get_or_init(|| Mutex::new(None))
 }
 
+fn frame_sender_lock() -> std::sync::MutexGuard<'static, Option<async_channel::Sender<RawFrame>>> {
+    match frame_sender_slot().lock() {
+        Ok(guard) => guard,
+        Err(_) => std::process::abort(),
+    }
+}
+
 /// Callback invoked from Swift for each camera frame.
 extern "C" fn frame_callback(pixelbuffer_handle: u64, width: u32, height: u32, timestamp_ns: u64) {
-    let sender = {
-        let guard = frame_sender_slot()
-            .lock()
-            .unwrap_or_else(|_| panic!("FRAME_SENDER mutex poisoned"));
-        guard.clone()
-    };
+    let sender = { frame_sender_lock().clone() };
 
     if let Some(sender) = sender {
         let frame = RawFrame {
@@ -372,16 +374,14 @@ impl CameraInner {
 
         // Query capabilities
         let capabilities = Self::query_capabilities();
-        capabilities.validate();
+        capabilities.validate()?;
 
         // Create frame channel (bounded to prevent unbounded memory growth)
         let (sender, receiver) = async_channel::bounded(2);
 
         // Store sender for callback dispatch.
         {
-            let mut guard = frame_sender_slot()
-                .lock()
-                .unwrap_or_else(|_| panic!("FRAME_SENDER mutex poisoned"));
+            let mut guard = frame_sender_lock();
             *guard = Some(sender);
         }
 
@@ -946,9 +946,7 @@ impl Drop for CameraInner {
             None => {}
         }
         {
-            let mut guard = frame_sender_slot()
-                .lock()
-                .unwrap_or_else(|_| panic!("FRAME_SENDER mutex poisoned"));
+            let mut guard = frame_sender_lock();
             *guard = None;
         }
         // Clear the frame callback

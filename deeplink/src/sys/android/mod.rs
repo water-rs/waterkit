@@ -63,7 +63,12 @@ pub mod jni_api {
             .map_err(|e| DeepLinkError::PlatformError(format!("new Intent: {e}")))?;
 
         let package_manager = env
-            .call_method(context, "getPackageManager", "()Landroid/content/pm/PackageManager;", &[])
+            .call_method(
+                context,
+                "getPackageManager",
+                "()Landroid/content/pm/PackageManager;",
+                &[],
+            )
             .and_then(jni::objects::JValueGen::l)
             .map_err(|e| DeepLinkError::PlatformError(format!("getPackageManager: {e}")))?;
 

@@ -21,15 +21,12 @@ fn get_vm() -> Result<Arc<JavaVM>, SpeechError> {
 }
 
 fn ensure_context() -> Result<GlobalRef, SpeechError> {
-    CONTEXT
-        .get()
-        .cloned()
-        .ok_or_else(|| {
-            SpeechError::PlatformError(
-                "Android speech context not initialized; call speech::android::init_with_context first"
-                    .into(),
-            )
-        })
+    CONTEXT.get().cloned().ok_or_else(|| {
+        SpeechError::PlatformError(
+            "Android speech context not initialized; call speech::android::init_with_context first"
+                .into(),
+        )
+    })
 }
 
 fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), SpeechError> {
@@ -106,7 +103,9 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), SpeechError> {
     Ok(())
 }
 
-fn helper_class<'local>(env: &mut JNIEnv<'local>) -> Result<jni::objects::JClass<'local>, SpeechError> {
+fn helper_class<'local>(
+    env: &mut JNIEnv<'local>,
+) -> Result<jni::objects::JClass<'local>, SpeechError> {
     let loader = CLASS_LOADER
         .get()
         .ok_or_else(|| SpeechError::PlatformError("class loader not initialized".into()))?;
@@ -211,9 +210,8 @@ impl TtsInner {
                 .new_object(callback_cls, "()V", &[])
                 .map_err(|e| SpeechError::PlatformError(format!("new SpeechInitCallback: {e}")))?;
 
-            unsafe { env.set_rust_field(&callback, "waterkit_tts_init_tx", Some(tx)) }.map_err(
-                |e| SpeechError::PlatformError(format!("set_rust_field callback: {e}")),
-            )?;
+            unsafe { env.set_rust_field(&callback, "waterkit_tts_init_tx", Some(tx)) }
+                .map_err(|e| SpeechError::PlatformError(format!("set_rust_field callback: {e}")))?;
 
             env.call_static_method(
                 helper,

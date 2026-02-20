@@ -12,7 +12,9 @@ mod sys;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
+use serde::Deserialize;
+use serde::Serialize;
 use sys::{PasskeyBackend, platform_backend};
 
 pub use error::PasskeyError;
@@ -292,6 +294,7 @@ pub enum AttestationPreference {
 }
 
 impl AttestationPreference {
+    #[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
     pub(crate) const fn as_wire(self) -> &'static str {
         match self {
             Self::None => "none",
@@ -315,6 +318,7 @@ pub enum UserVerificationRequirement {
 }
 
 impl UserVerificationRequirement {
+    #[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
     pub(crate) const fn as_wire(self) -> &'static str {
         match self {
             Self::Required => "required",
@@ -1032,6 +1036,7 @@ pub async fn authenticate(
     backend.authenticate(&options).await
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
 #[derive(Debug, Serialize)]
 pub(crate) struct RegisterRequestWire {
     rp_id: String,
@@ -1048,6 +1053,7 @@ pub(crate) struct RegisterRequestWire {
     exclude_credentials: Vec<String>,
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
 #[derive(Debug, Serialize)]
 pub(crate) struct AuthenticateRequestWire {
     rp_id: String,
@@ -1057,6 +1063,7 @@ pub(crate) struct AuthenticateRequestWire {
     allow_credentials: Vec<String>,
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
 pub(crate) fn register_request_json(options: &RegisterOptions) -> Result<String, PasskeyError> {
     let wire = RegisterRequestWire {
         rp_id: options.rp().id().as_str().to_owned(),
@@ -1086,6 +1093,7 @@ pub(crate) fn register_request_json(options: &RegisterOptions) -> Result<String,
     })
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
 pub(crate) fn authenticate_request_json(
     options: &AuthenticateOptions,
 ) -> Result<String, PasskeyError> {
@@ -1106,6 +1114,7 @@ pub(crate) fn authenticate_request_json(
     })
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
 #[derive(Debug, Deserialize)]
 struct RegistrationResponseWire {
     #[serde(rename = "credential_id_b64u")]
@@ -1120,6 +1129,7 @@ struct RegistrationResponseWire {
     public_key_cose: Option<String>,
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
 #[derive(Debug, Deserialize)]
 struct AuthenticationResponseWire {
     #[serde(rename = "credential_id_b64u")]
@@ -1134,6 +1144,7 @@ struct AuthenticationResponseWire {
     user_handle: Option<String>,
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
 pub(crate) fn parse_registration_response_json(
     response_json: &str,
 ) -> Result<RegistrationResult, PasskeyError> {
@@ -1160,6 +1171,7 @@ pub(crate) fn parse_registration_response_json(
     ))
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
 pub(crate) fn parse_authentication_response_json(
     response_json: &str,
 ) -> Result<AuthenticationResult, PasskeyError> {

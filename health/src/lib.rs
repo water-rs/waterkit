@@ -49,7 +49,8 @@ pub struct HealthSample {
 
 /// Check if health data is available on this device.
 #[must_use]
-pub const fn is_available() -> bool {
+#[allow(clippy::missing_const_for_fn)]
+pub fn is_available() -> bool {
     sys::is_available()
 }
 

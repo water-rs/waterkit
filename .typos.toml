@@ -1,3 +1,7 @@
 [default.extend-words]
 trak = "trak"
 thw = "thw"
+cose = "cose"
+COSE = "COSE"
+formatable = "formatable"
+NdefFormatable = "NdefFormatable"

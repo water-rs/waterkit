@@ -117,6 +117,7 @@ impl BackgroundRuntimeInner {
         parse_initialize_response(&response).map(|runtime_handle| Self { runtime_handle })
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn submit_app_refresh(&self, request: AppRefreshRequest) -> Result<(), BackgroundError> {
         map_swift_result(ffi::ios_background_submit_app_refresh(
             self.runtime_handle,
@@ -125,6 +126,7 @@ impl BackgroundRuntimeInner {
         ))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn submit_processing(&self, request: ProcessingRequest) -> Result<(), BackgroundError> {
         map_swift_result(ffi::ios_background_submit_processing(
             self.runtime_handle,
@@ -135,6 +137,7 @@ impl BackgroundRuntimeInner {
         ))
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub fn submit_continued_processing(
         &self,
         request: ContinuedProcessingRequest,

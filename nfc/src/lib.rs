@@ -109,6 +109,7 @@ pub struct NfcTag {
 
 /// Check if NFC is available on this device.
 #[must_use]
+#[allow(clippy::missing_const_for_fn)]
 pub fn is_available() -> bool {
     sys::nfc_is_available()
 }

@@ -75,8 +75,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Linux native dependencies
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          sudo apt-get update
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
             pkg-config \
             libwayland-dev \
             libxkbcommon-dev \
@@ -172,8 +172,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Linux native dependencies
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          sudo apt-get update
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
             pkg-config \
             libwayland-dev \
             libxkbcommon-dev \
@@ -263,8 +263,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Linux native dependencies
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          sudo apt-get update
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
             pkg-config \
             libwayland-dev \
             libxkbcommon-dev \

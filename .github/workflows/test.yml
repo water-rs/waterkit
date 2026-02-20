@@ -5,41 +5,18 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CI_LINUX_IMAGE: ghcr.io/catthehacker/ubuntu:full-latest
 
 jobs:
-  test:
+  test-hosted:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libasound2-dev \
-            libudev-dev \
-            libdav1d-dev \
-            nasm \
-            libavutil-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavfilter-dev \
-            libavdevice-dev \
-            libswscale-dev \
-            libswresample-dev \
-            libclang-dev \
-            libxcb1-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libdbus-1-dev
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
@@ -61,4 +38,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: test-${{ matrix.os }}
+      - run: cargo test --verbose --all-features
+
+  test-linux:
+    name: ubuntu-latest
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_LINUX_IMAGE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-ubuntu-latest
       - run: cargo test --verbose --all-features

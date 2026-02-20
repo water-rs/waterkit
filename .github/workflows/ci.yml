@@ -17,6 +17,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CI_LINUX_IMAGE: ghcr.io/catthehacker/ubuntu:full-latest
 
 jobs:
   fmt:
@@ -35,33 +36,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libasound2-dev \
-            libudev-dev \
-            libdav1d-dev \
-            nasm \
-            libavutil-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavfilter-dev \
-            libavdevice-dev \
-            libswscale-dev \
-            libswresample-dev \
-            libclang-dev \
-            libxcb1-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libdbus-1-dev
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
@@ -87,7 +64,22 @@ jobs:
           shared-key: clippy-${{ matrix.os }}
       - run: cargo clippy --all-targets --all-features -- -D warnings
 
-  cross-clippy:
+  clippy-linux:
+    name: Clippy (ubuntu-latest)
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_LINUX_IMAGE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy-ubuntu-latest
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  cross-clippy-ios:
     name: Clippy (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -96,49 +88,8 @@ jobs:
         include:
           - target: aarch64-apple-ios
             os: macos-latest
-          - target: aarch64-linux-android
-            os: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libasound2-dev \
-            libudev-dev \
-            libdav1d-dev \
-            nasm \
-            libavutil-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavfilter-dev \
-            libavdevice-dev \
-            libswscale-dev \
-            libswresample-dev \
-            libclang-dev \
-            libxcb1-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libdbus-1-dev
-      - name: Setup Android NDK
-        if: contains(matrix.target, 'android')
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r27c
-          add-to-path: true
-      - name: Set Android environment
-        if: contains(matrix.target, 'android')
-        run: |
-          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
-          echo "CC_aarch64-linux-android=${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" >> $GITHUB_ENV
-          echo "CXX_aarch64-linux-android=${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++" >> $GITHUB_ENV
-          echo "AR_aarch64-linux-android=${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" >> $GITHUB_ENV
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
@@ -152,34 +103,42 @@ jobs:
           shared-key: cross-${{ matrix.target }}
       - run: cargo clippy --target ${{ matrix.target }} --all-features -- -D warnings
 
+  cross-clippy-android:
+    name: Clippy (aarch64-linux-android)
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_LINUX_IMAGE }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          add-to-path: true
+      - name: Set Android environment
+        run: |
+          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+          echo "CC_aarch64-linux-android=${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" >> $GITHUB_ENV
+          echo "CXX_aarch64-linux-android=${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++" >> $GITHUB_ENV
+          echo "AR_aarch64-linux-android=${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" >> $GITHUB_ENV
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: aarch64-linux-android
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cross-aarch64-linux-android
+      - run: cargo clippy --target aarch64-linux-android --all-features -- -D warnings
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_LINUX_IMAGE }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libasound2-dev \
-            libudev-dev \
-            libdav1d-dev \
-            nasm \
-            libavutil-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavfilter-dev \
-            libavdevice-dev \
-            libswscale-dev \
-            libswresample-dev \
-            libclang-dev \
-            libxcb1-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libdbus-1-dev
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
@@ -241,31 +200,10 @@ jobs:
   feature-checks:
     name: Features
     runs-on: ubuntu-latest
+    container:
+      image: ${{ env.CI_LINUX_IMAGE }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libasound2-dev \
-            libudev-dev \
-            libdav1d-dev \
-            nasm \
-            libavutil-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavfilter-dev \
-            libavdevice-dev \
-            libswscale-dev \
-            libswresample-dev \
-            libclang-dev \
-            libxcb1-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libdbus-1-dev
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:

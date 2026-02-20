@@ -171,7 +171,7 @@ fn single_string_array<'local>(
     Ok(array)
 }
 
-fn generate_secret_key<'local>(env: &mut JNIEnv<'local>, alias: &str) -> Result<(), SecretError> {
+fn generate_secret_key(env: &mut JNIEnv<'_>, alias: &str) -> Result<(), SecretError> {
     let alias_jstring = env
         .new_string(alias)
         .map_err(|err| system_error("failed to allocate key alias", err))?;
@@ -535,7 +535,10 @@ pub async fn delete(service: &str, account: &str) -> Result<(), SecretError> {
     with_android_context(|env, context| delete_with_context(env, context, service, account))
 }
 
-/// Save a secret using Android KeyStore with AES-GCM encryption.
+/// Save a secret using Android `KeyStore` with AES-GCM encryption.
+///
+/// # Errors
+/// Returns an error if key creation, encryption, or preferences write fails.
 pub fn set_with_context<'local>(
     env: &mut JNIEnv<'local>,
     context: &JObject<'local>,
@@ -570,7 +573,10 @@ pub fn set_with_context<'local>(
     apply_editor(env, &editor)
 }
 
-/// Retrieve a secret using Android KeyStore with AES-GCM decryption.
+/// Retrieve a secret using Android `KeyStore` with AES-GCM decryption.
+///
+/// # Errors
+/// Returns an error if storage lookup, key access, or decryption fails.
 pub fn get_with_context<'local>(
     env: &mut JNIEnv<'local>,
     context: &JObject<'local>,
@@ -608,17 +614,20 @@ pub fn get_with_context<'local>(
         return Err(SecretError::NotFound);
     }
 
-    let stored_payload_jstring: JString = stored_payload.into();
-    let stored_payload_string: String = env
-        .get_string(&stored_payload_jstring)
+    let stored_payload_jni: JString = stored_payload.into();
+    let encrypted_payload: String = env
+        .get_string(&stored_payload_jni)
         .map_err(|err| system_error("failed to read encrypted payload string", err))?
         .into();
 
     let key = ensure_secret_key(env, &alias)?;
-    decrypt_payload(env, &key, &stored_payload_string)
+    decrypt_payload(env, &key, &encrypted_payload)
 }
 
-/// Delete a secret and remove its associated Android KeyStore entry.
+/// Delete a secret and remove its associated Android `KeyStore` entry.
+///
+/// # Errors
+/// Returns an error if preferences deletion or keystore deletion fails.
 pub fn delete_with_context<'local>(
     env: &mut JNIEnv<'local>,
     context: &JObject<'local>,

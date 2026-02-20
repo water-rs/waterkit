@@ -4,6 +4,7 @@
 [workspace]
 # Longer timeout for large workspace with many crates
 publish_timeout = "30m"
+publish_no_verify = true
 
 # Allow dependencies from same workspace
 allow_dirty = false

@@ -1144,8 +1144,7 @@ pub(crate) fn parse_registration_response_json(
 
     let credential_id =
         CredentialId::new(decode_base64url(&wire.credential_id, "credential_id_b64u")?)?;
-    let attestation_object =
-        decode_base64url(&wire.attestation_object, "attestation_object_b64u")?;
+    let attestation_object = decode_base64url(&wire.attestation_object, "attestation_object_b64u")?;
     let client_data_json = decode_base64url(&wire.client_data_json, "client_data_json_b64u")?;
     let authenticator_data =
         decode_optional_base64url(wire.authenticator_data, "authenticator_data_b64u")?;
@@ -1172,8 +1171,7 @@ pub(crate) fn parse_authentication_response_json(
 
     let credential_id =
         CredentialId::new(decode_base64url(&wire.credential_id, "credential_id_b64u")?)?;
-    let authenticator_data =
-        decode_base64url(&wire.authenticator_data, "authenticator_data_b64u")?;
+    let authenticator_data = decode_base64url(&wire.authenticator_data, "authenticator_data_b64u")?;
     let client_data_json = decode_base64url(&wire.client_data_json, "client_data_json_b64u")?;
     let signature = decode_base64url(&wire.signature, "signature_b64u")?;
     let user_handle = decode_optional_base64url(wire.user_handle, "user_handle_b64u")?;

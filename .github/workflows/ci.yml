@@ -17,7 +17,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  CI_LINUX_IMAGE: ghcr.io/catthehacker/ubuntu:full-latest
 
 jobs:
   fmt:
@@ -68,7 +67,7 @@ jobs:
     name: Clippy (ubuntu-latest)
     runs-on: ubuntu-latest
     container:
-      image: ${{ env.CI_LINUX_IMAGE }}
+      image: ghcr.io/catthehacker/ubuntu:full-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -107,7 +106,7 @@ jobs:
     name: Clippy (aarch64-linux-android)
     runs-on: ubuntu-latest
     container:
-      image: ${{ env.CI_LINUX_IMAGE }}
+      image: ghcr.io/catthehacker/ubuntu:full-latest
     steps:
       - uses: actions/checkout@v4
       - name: Setup Android NDK
@@ -136,7 +135,7 @@ jobs:
     name: Coverage
     runs-on: ubuntu-latest
     container:
-      image: ${{ env.CI_LINUX_IMAGE }}
+      image: ghcr.io/catthehacker/ubuntu:full-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -201,7 +200,7 @@ jobs:
     name: Features
     runs-on: ubuntu-latest
     container:
-      image: ${{ env.CI_LINUX_IMAGE }}
+      image: ghcr.io/catthehacker/ubuntu:full-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly

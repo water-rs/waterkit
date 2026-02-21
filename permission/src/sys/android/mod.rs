@@ -1,13 +1,12 @@
 //! Android permission implementation using JNI.
 //!
-//! For Android, the async `check`/`request` functions return defaults since they
-//! lack JNI context. Use `init_with_activity` and `check_with_activity` from
-//! your Android app with a valid Activity reference.
+//! The async APIs use `ndk-context` to obtain the current Activity automatically.
+//! For advanced JNI integration, `*_with_activity` APIs are also available.
 
 use crate::{Permission, PermissionError, PermissionStatus};
-use jni::JNIEnv;
-use jni::objects::{GlobalRef, JObject, JValue};
+use jni::objects::{GlobalRef, JClass, JObject, JValue};
 use jni::sys::jint;
+use jni::{JNIEnv, JavaVM};
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode containing `PermissionHelper` class.
@@ -29,6 +28,7 @@ const PERMISSION_CALENDAR: jint = 5;
 const STATUS_RESTRICTED: jint = 1;
 const STATUS_DENIED: jint = 2;
 const STATUS_GRANTED: jint = 3;
+const REQUEST_CODE_BASE: jint = 0x57A0;
 
 const fn permission_to_jint(permission: Permission) -> jint {
     match permission {
@@ -85,7 +85,15 @@ pub fn init_with_activity(env: &mut JNIEnv, activity: &JObject) -> Result<(), Pe
     );
 
     // Remove if exists to handle previous read-only setting
-    let _ = std::fs::remove_file(&dex_path);
+    match std::fs::remove_file(&dex_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(PermissionError::Unknown(format!(
+                "remove stale DEX failed: {e}"
+            )));
+        }
+    }
 
     // Write DEX bytes to file
     std::fs::write(&dex_path, DEX_BYTES)
@@ -135,21 +143,16 @@ pub fn init_with_activity(env: &mut JNIEnv, activity: &JObject) -> Result<(), Pe
         .new_global_ref(class_loader)
         .map_err(|e| PermissionError::Unknown(format!("new_global_ref: {e}")))?;
 
-    let _ = CLASS_LOADER.set(global_ref);
+    if CLASS_LOADER.set(global_ref).is_err() {
+        debug_assert!(
+            CLASS_LOADER.get().is_some(),
+            "Class loader set failed but loader is still uninitialized"
+        );
+    }
     Ok(())
 }
 
-/// Check permission using the Activity context.
-///
-/// # Errors
-/// Returns a `PermissionError::Unknown` if JNI method calls fail.
-pub fn check_with_activity(
-    env: &mut JNIEnv,
-    activity: &JObject,
-    permission: Permission,
-) -> Result<PermissionStatus, PermissionError> {
-    init_with_activity(env, activity)?;
-
+fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, PermissionError> {
     let class_loader = CLASS_LOADER
         .get()
         .ok_or_else(|| PermissionError::Unknown("Class loader not initialized".into()))?;
@@ -169,7 +172,45 @@ pub fn check_with_activity(
         .l()
         .map_err(|e| PermissionError::Unknown(format!("loadClass result: {e}")))?;
 
-    let helper_class: jni::objects::JClass = loaded_class.into();
+    Ok(loaded_class.into())
+}
+
+fn with_activity<T>(
+    op: impl FnOnce(&mut JNIEnv, &JObject) -> Result<T, PermissionError>,
+) -> Result<T, PermissionError> {
+    let android_ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(android_ctx.vm().cast()) }
+        .map_err(|e| PermissionError::Unknown(format!("from_raw vm: {e}")))?;
+
+    let activity = unsafe { JObject::from_raw(android_ctx.context().cast()) };
+    if activity.is_null() {
+        return Err(PermissionError::Unknown(
+            "Android Activity is null from ndk_context".into(),
+        ));
+    }
+
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| PermissionError::Unknown(format!("attach_current_thread: {e}")))?;
+    let activity_global = env
+        .new_global_ref(&activity)
+        .map_err(|e| PermissionError::Unknown(format!("new_global_ref activity: {e}")))?;
+
+    op(&mut env, activity_global.as_obj())
+}
+
+/// Check permission using the Activity context.
+///
+/// # Errors
+/// Returns a `PermissionError::Unknown` if JNI method calls fail.
+pub fn check_with_activity(
+    env: &mut JNIEnv,
+    activity: &JObject,
+    permission: Permission,
+) -> Result<PermissionStatus, PermissionError> {
+    init_with_activity(env, activity)?;
+    let helper_class = get_helper_class(env)?;
+
     let result = env
         .call_static_method(
             helper_class,
@@ -187,19 +228,52 @@ pub fn check_with_activity(
     Ok(status_from_jint(result))
 }
 
-// Async wrappers for the public API (require runtime context)
+/// Request permission using the Activity context.
+///
+/// This only starts the Android runtime permission flow. The final result is delivered
+/// asynchronously to the host Activity callback.
+///
+/// # Errors
+/// Returns a `PermissionError::Unknown` if JNI method calls fail.
+pub fn request_with_activity(
+    env: &mut JNIEnv,
+    activity: &JObject,
+    permission: Permission,
+) -> Result<(), PermissionError> {
+    init_with_activity(env, activity)?;
+    let helper_class = get_helper_class(env)?;
+    let permission_type = permission_to_jint(permission);
+    let request_code = REQUEST_CODE_BASE + permission_type;
+
+    env.call_static_method(
+        helper_class,
+        "requestPermission",
+        "(Landroid/app/Activity;II)V",
+        &[
+            JValue::Object(activity),
+            JValue::Int(permission_type),
+            JValue::Int(request_code),
+        ],
+    )
+    .map_err(|e| PermissionError::Unknown(format!("requestPermission: {e}")))?;
+
+    Ok(())
+}
+
+// Async wrappers for the public API (use ndk-context).
 pub async fn check(permission: Permission) -> PermissionStatus {
-    // Without JNI context, we can't check permissions
-    // The application must call check_with_activity directly
-    let _ = permission;
-    PermissionStatus::NotDetermined
+    with_activity(|env, activity| check_with_activity(env, activity, permission))
+        .unwrap_or(PermissionStatus::NotDetermined)
 }
 
 pub async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
-    // Without JNI context, we can't request permissions
-    // The application must use the Android Activity API directly
-    let _ = permission;
-    Err(PermissionError::Unknown(
-        "Android: use check_with_activity() with Activity context".into(),
-    ))
+    with_activity(|env, activity| {
+        let current = check_with_activity(env, activity, permission)?;
+        if current == PermissionStatus::Granted {
+            return Ok(PermissionStatus::Granted);
+        }
+
+        request_with_activity(env, activity, permission)?;
+        Ok(PermissionStatus::NotDetermined)
+    })
 }

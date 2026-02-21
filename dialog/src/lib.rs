@@ -13,8 +13,8 @@
 //!
 //! ## Android
 //!
-//! On Android, the async APIs return errors since they lack JNI context.
-//! Use the functions in the [`android`] module with a valid `JNIEnv` and Context.
+//! On Android, the async APIs automatically use `ndk-context` for `Context` lookup.
+//! The [`android`] module still exposes explicit JNI entry points for advanced integration.
 
 #![warn(missing_docs)]
 
@@ -23,7 +23,7 @@ mod sys;
 
 /// Android-specific JNI functions for dialog handling.
 ///
-/// Use these functions when you have access to the Android Context via JNI.
+/// Use these functions when you already have an Android `Context` via JNI.
 #[cfg(target_os = "android")]
 pub mod android {
     pub use crate::sys::android::{

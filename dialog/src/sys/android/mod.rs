@@ -1,10 +1,11 @@
 //! Android dialog implementation using JNI.
 //!
-//! For Android, the async functions return errors since they lack JNI context.
-//! Use the `*_with_context` functions with a valid `JNIEnv` and Context.
+//! The async APIs use `ndk-context` to obtain the Android `Context` automatically.
+//! For advanced JNI integration, `*_with_context` APIs are also available.
 
 use crate::{Dialog, DialogError};
 use jni::JNIEnv;
+use jni::JavaVM;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
 
@@ -78,7 +79,12 @@ pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), Dial
         .new_global_ref(class_loader)
         .map_err(|e| DialogError::PlatformError(format!("new_global_ref: {e}")))?;
 
-    let _ = CLASS_LOADER.set(global_ref);
+    if CLASS_LOADER.set(global_ref).is_err() {
+        debug_assert!(
+            CLASS_LOADER.get().is_some(),
+            "Class loader set failed but loader is still uninitialized"
+        );
+    }
     Ok(())
 }
 
@@ -102,6 +108,31 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<jni::objects::JClass<'a>
         .map_err(|e| DialogError::PlatformError(format!("loadClass: {e}")))?;
 
     Ok(loaded_class.into())
+}
+
+fn get_vm_and_context() -> Result<(JavaVM, JObject<'static>), DialogError> {
+    let android_ctx = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(android_ctx.vm().cast()) }
+        .map_err(|e| DialogError::PlatformError(format!("from_raw vm: {e}")))?;
+    let context = unsafe { JObject::from_raw(android_ctx.context().cast()) };
+    if context.is_null() {
+        return Err(DialogError::PlatformError(
+            "ndk_context returned null Context".into(),
+        ));
+    }
+    Ok((vm, context))
+}
+
+fn ensure_context_global() -> Result<(JavaVM, GlobalRef), DialogError> {
+    let (vm, context) = get_vm_and_context()?;
+    let global = {
+        let env = vm
+            .attach_current_thread()
+            .map_err(|e| DialogError::PlatformError(format!("attach_current_thread: {e}")))?;
+        env.new_global_ref(&context)
+            .map_err(|e| DialogError::PlatformError(format!("new_global_ref context: {e}")))?
+    };
+    Ok((vm, global))
 }
 
 /// Show an alert dialog with JNI context.
@@ -259,50 +290,66 @@ pub fn load_media_with_context(
     }
 }
 
-// Public async API stubs - require JNI context
+// Public async API with implicit Android context.
 
 /// Show an alert dialog.
 ///
 /// # Errors
-/// Always returns an error on Android. Use `show_alert_with_context` instead.
-#[allow(clippy::unused_async)]
-pub async fn show_alert(_dialog: Dialog) -> Result<(), DialogError> {
-    Err(DialogError::PlatformError(
-        "Android: use show_alert_with_context() with JNIEnv and Context".into(),
-    ))
+/// Returns an error if `ndk-context` is unavailable or JNI operations fail.
+pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
+    futures::future::ready({
+        let (vm, context) = ensure_context_global()?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| DialogError::PlatformError(format!("attach_current_thread: {e}")))?;
+        show_alert_with_context(&mut env, context.as_obj(), &dialog)
+    })
+    .await
 }
 
 /// Show a confirmation dialog.
 ///
 /// # Errors
-/// Always returns an error on Android. Use `show_confirm_with_context` instead.
-#[allow(clippy::unused_async)]
-pub async fn show_confirm(_dialog: Dialog) -> Result<bool, DialogError> {
-    Err(DialogError::PlatformError(
-        "Android: use show_confirm_with_context() with JNIEnv and Context".into(),
-    ))
+/// Returns an error if `ndk-context` is unavailable or JNI operations fail.
+pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
+    futures::future::ready({
+        let (vm, context) = ensure_context_global()?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| DialogError::PlatformError(format!("attach_current_thread: {e}")))?;
+        show_confirm_with_context(&mut env, context.as_obj(), &dialog)
+    })
+    .await
 }
 
 /// Show a photo picker.
 ///
 /// # Errors
-/// Always returns an error on Android. Use `show_photo_picker_with_context` instead.
-#[allow(clippy::unused_async)]
+/// Returns an error if `ndk-context` is unavailable or JNI operations fail.
 pub async fn show_photo_picker(
-    _picker: crate::PhotoPicker,
+    picker: crate::PhotoPicker,
 ) -> Result<Option<Selection>, DialogError> {
-    Err(DialogError::PlatformError(
-        "Android: use show_photo_picker_with_context() with JNIEnv and Context".into(),
-    ))
+    futures::future::ready({
+        let (vm, context) = ensure_context_global()?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| DialogError::PlatformError(format!("attach_current_thread: {e}")))?;
+        show_photo_picker_with_context(&mut env, context.as_obj(), &picker)
+    })
+    .await
 }
 
 /// Load media from a selection handle.
 ///
 /// # Errors
-/// Always returns an error on Android. Use `load_media_with_context` instead.
-#[allow(clippy::unused_async)]
-pub async fn load_media(_handle: Selection) -> Result<std::path::PathBuf, DialogError> {
-    Err(DialogError::PlatformError(
-        "Android: use load_media_with_context() with JNIEnv and Context".into(),
-    ))
+/// Returns an error if `ndk-context` is unavailable or JNI operations fail.
+pub async fn load_media(handle: Selection) -> Result<std::path::PathBuf, DialogError> {
+    futures::future::ready({
+        let (vm, context) = ensure_context_global()?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| DialogError::PlatformError(format!("attach_current_thread: {e}")))?;
+        load_media_with_context(&mut env, context.as_obj(), &handle)
+    })
+    .await
 }

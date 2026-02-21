@@ -5,13 +5,14 @@
 //!
 //! ## Android
 //!
-//! On Android, the async [`check`] and [`request`] functions return defaults since
-//! they lack JNI context. For actual permission handling, use the JNI-aware functions:
+//! On Android, the async [`check`] and [`request`] functions automatically use
+//! `ndk-context` to resolve the current `Activity`.
+//!
+//! For advanced JNI integration, you can also use:
 //!
 //! - [`android::init_with_activity`] - Initialize with an Activity
 //! - [`android::check_with_activity`] - Check permission status
-//!
-//! These require a valid Android Activity reference from your app's JNI layer.
+//! - [`android::request_with_activity`] - Start a runtime permission request
 
 #![warn(missing_docs)]
 
@@ -23,7 +24,7 @@ mod sys;
 /// Use these functions when you have access to the Android Activity context via JNI.
 #[cfg(target_os = "android")]
 pub mod android {
-    pub use crate::sys::android::{check_with_activity, init_with_activity};
+    pub use crate::sys::android::{check_with_activity, init_with_activity, request_with_activity};
 }
 
 /// Types of permissions that can be requested.
@@ -77,6 +78,10 @@ pub async fn check(permission: Permission) -> PermissionStatus {
 ///
 /// If the permission has already been granted or denied, this returns
 /// the current status without showing a prompt.
+///
+/// On Android, this starts the runtime permission flow and may return
+/// [`PermissionStatus::NotDetermined`] until the host Activity receives
+/// and applies the permission callback result.
 ///
 /// # Errors
 /// Returns a `PermissionError` if:

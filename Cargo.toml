@@ -4,7 +4,7 @@ members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location
 
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Lexo Liu"]
 license = "MIT OR Apache-2.0"
@@ -120,32 +120,32 @@ passkey = ["dep:waterkit-passkey"]
 
 [workspace.dependencies]
 # Functional Crates
-waterkit-permission = { path = "permission", version = "0.1.0" }
-waterkit-location = { path = "location", version = "0.1.0" }
-waterkit-audio = { path = "audio", version = "0.1.0" }
-waterkit-haptic = { path = "haptic", version = "0.1.0" }
-waterkit-notification = { path = "notification", version = "0.1.0" }
-waterkit-dialog = { path = "dialog", version = "0.1.0" }
-waterkit-biometric = { path = "biometric", version = "0.1.0" }
-waterkit-clipboard = { path = "clipboard", version = "0.1.0" }
-waterkit-fs = { path = "fs", version = "0.1.0" }
-waterkit-secret = { path = "secret", version = "0.1.0" }
-waterkit-camera = { path = "camera", version = "0.1.0" }
-waterkit-sensor = { path = "sensor", version = "0.1.0" }
-waterkit-codec = { path = "codec", version = "0.1.0" }
-waterkit-screen = { path = "screen", version = "0.1.0" }
-waterkit-system = { path = "system", version = "0.1.0" }
-waterkit-video = { path = "video", version = "0.1.0" }
-waterkit-bluetooth = { path = "bluetooth", version = "0.1.0" }
-waterkit-nfc = { path = "nfc", version = "0.1.0" }
-waterkit-share = { path = "share", version = "0.1.0" }
-waterkit-speech = { path = "speech", version = "0.1.0" }
-waterkit-contacts = { path = "contacts", version = "0.1.0" }
-waterkit-calendar = { path = "calendar", version = "0.1.0" }
-waterkit-health = { path = "health", version = "0.1.0" }
-waterkit-deeplink = { path = "deeplink", version = "0.1.0" }
-waterkit-background = { path = "background", version = "0.1.0" }
-waterkit-passkey = { path = "passkey", version = "0.1.0" }
+waterkit-permission = { path = "permission", version = "0.1.1" }
+waterkit-location = { path = "location", version = "0.1.1" }
+waterkit-audio = { path = "audio", version = "0.1.1" }
+waterkit-haptic = { path = "haptic", version = "0.1.1" }
+waterkit-notification = { path = "notification", version = "0.1.1" }
+waterkit-dialog = { path = "dialog", version = "0.1.1" }
+waterkit-biometric = { path = "biometric", version = "0.1.1" }
+waterkit-clipboard = { path = "clipboard", version = "0.1.1" }
+waterkit-fs = { path = "fs", version = "0.1.1" }
+waterkit-secret = { path = "secret", version = "0.1.1" }
+waterkit-camera = { path = "camera", version = "0.1.1" }
+waterkit-sensor = { path = "sensor", version = "0.1.1" }
+waterkit-codec = { path = "codec", version = "0.1.1" }
+waterkit-screen = { path = "screen", version = "0.1.1" }
+waterkit-system = { path = "system", version = "0.1.1" }
+waterkit-video = { path = "video", version = "0.1.1" }
+waterkit-bluetooth = { path = "bluetooth", version = "0.1.1" }
+waterkit-nfc = { path = "nfc", version = "0.1.1" }
+waterkit-share = { path = "share", version = "0.1.1" }
+waterkit-speech = { path = "speech", version = "0.1.1" }
+waterkit-contacts = { path = "contacts", version = "0.1.1" }
+waterkit-calendar = { path = "calendar", version = "0.1.1" }
+waterkit-health = { path = "health", version = "0.1.1" }
+waterkit-deeplink = { path = "deeplink", version = "0.1.1" }
+waterkit-background = { path = "background", version = "0.1.1" }
+waterkit-passkey = { path = "passkey", version = "0.1.1" }
 
 # Cross-platform
 futures = "0.3"
@@ -189,7 +189,7 @@ jni = "0.21"
 ndk-context = "0.1"
 
 # Build utilities
-waterkit-build = { path = "waterkit-build", version = "0.1.0" }
+waterkit-build = { path = "waterkit-build", version = "0.1.1" }
 
 # Windows
 windows = { version = "0.62", features = ["Devices_Geolocation", "Foundation"] }

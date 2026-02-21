@@ -8,7 +8,9 @@ mod sys;
 
 use std::path::PathBuf;
 
-/// Android-specific JNI helpers that require `JNIEnv` and `Context`.
+/// Android-specific JNI helper for cases where you already have `JNIEnv` + `Context`.
+///
+/// The default async API ([`ShareSheet::show`]) already uses `ndk-context` automatically.
 #[cfg(target_os = "android")]
 pub mod android {
     pub use crate::sys::jni_api::share_with_context;

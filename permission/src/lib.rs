@@ -7,25 +7,11 @@
 //!
 //! On Android, the async [`check`] and [`request`] functions automatically use
 //! `ndk-context` to resolve the current `Activity`.
-//!
-//! For advanced JNI integration, you can also use:
-//!
-//! - [`android::init_with_activity`] - Initialize with an Activity
-//! - [`android::check_with_activity`] - Check permission status
-//! - [`android::request_with_activity`] - Start a runtime permission request
 
 #![warn(missing_docs)]
 
 /// Platform-specific implementations.
 mod sys;
-
-/// Android-specific JNI functions for permission handling.
-///
-/// Use these functions when you have access to the Android Activity context via JNI.
-#[cfg(target_os = "android")]
-pub mod android {
-    pub use crate::sys::android::{check_with_activity, init_with_activity, request_with_activity};
-}
 
 /// Types of permissions that can be requested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

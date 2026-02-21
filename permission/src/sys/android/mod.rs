@@ -180,21 +180,20 @@ fn with_activity<T>(
 ) -> Result<T, PermissionError> {
     let android_ctx = ndk_context::android_context();
     let vm = unsafe { JavaVM::from_raw(android_ctx.vm().cast()) }
-        .map_err(|e| PermissionError::Unknown(format!("from_raw vm: {e}")))?;
+        .expect("waterkit-permission: ndk_context did not provide a valid JavaVM");
 
     let activity = unsafe { JObject::from_raw(android_ctx.context().cast()) };
-    if activity.is_null() {
-        return Err(PermissionError::Unknown(
-            "Android Activity is null from ndk_context".into(),
-        ));
-    }
+    assert!(
+        !activity.is_null(),
+        "waterkit-permission: ndk_context returned a null Activity"
+    );
 
     let mut env = vm
         .attach_current_thread()
-        .map_err(|e| PermissionError::Unknown(format!("attach_current_thread: {e}")))?;
+        .expect("waterkit-permission: failed to attach current thread to JVM");
     let activity_global = env
         .new_global_ref(&activity)
-        .map_err(|e| PermissionError::Unknown(format!("new_global_ref activity: {e}")))?;
+        .expect("waterkit-permission: failed to promote Activity to global ref");
 
     op(&mut env, activity_global.as_obj())
 }
@@ -263,7 +262,7 @@ pub fn request_with_activity(
 // Async wrappers for the public API (use ndk-context).
 pub async fn check(permission: Permission) -> PermissionStatus {
     with_activity(|env, activity| check_with_activity(env, activity, permission))
-        .unwrap_or(PermissionStatus::NotDetermined)
+        .expect("waterkit-permission: Android permission check failed")
 }
 
 pub async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {

@@ -28,10 +28,6 @@ impl Default for StreamConfig {
 /// Frames are delivered as [`ScreenFrame`] with zero-copy on supported platforms.
 pub struct ScreenStream {
     inner: sys::ScreenStreamInner,
-    #[allow(dead_code)]
-    device: Arc<Device>,
-    #[allow(dead_code)]
-    queue: Arc<Queue>,
 }
 
 impl std::fmt::Debug for ScreenStream {
@@ -59,12 +55,8 @@ impl ScreenStream {
         queue: Arc<Queue>,
         config: &StreamConfig,
     ) -> Result<Self, Error> {
-        let inner = sys::ScreenStreamInner::new(display, device.clone(), queue.clone(), config)?;
-        Ok(Self {
-            inner,
-            device,
-            queue,
-        })
+        let inner = sys::ScreenStreamInner::new(display, device, queue, config)?;
+        Ok(Self { inner })
     }
 
     /// Receive the next frame asynchronously.

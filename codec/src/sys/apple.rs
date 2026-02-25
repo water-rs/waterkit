@@ -867,7 +867,6 @@ unsafe impl Sync for DecoderContext {}
 
 /// Apple `VideoToolbox` hardware decoder.
 pub struct AppleDecoder {
-    #[allow(dead_code)]
     codec: CodecType,
     session: *mut c_void, // VTDecompressionSessionRef
     context: Arc<DecoderContext>,

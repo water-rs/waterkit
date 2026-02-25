@@ -106,6 +106,16 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     sys::screens()
 }
 
+/// Returns the maximum refresh rate across available displays.
+///
+/// # Errors
+///
+/// Returns [`Error::Unsupported`] when the platform cannot report refresh-rate metadata.
+/// Returns [`Error::MonitorNotFound`] when no displays are available.
+pub fn max_refresh_rate_hz() -> Result<f32, Error> {
+    sys::max_refresh_rate_hz()
+}
+
 /// Get the current screen brightness level.
 ///
 /// Returns a value between 0.0 and 1.0.

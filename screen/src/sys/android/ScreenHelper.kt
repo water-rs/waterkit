@@ -15,6 +15,7 @@ import android.os.HandlerThread
 import android.provider.Settings
 import android.util.DisplayMetrics
 import android.view.WindowManager
+import java.io.ByteArrayOutputStream
 
 /**
  * Screen capture helper for waterkit-screen crate.
@@ -222,6 +223,82 @@ object ScreenHelper {
     @JvmStatic
     fun getFrameDimensions(): IntArray {
         return intArrayOf(frameWidth, frameHeight)
+    }
+
+    /**
+     * Get current display refresh rate in Hz.
+     */
+    @JvmStatic
+    @Suppress("DEPRECATION")
+    fun getRefreshRateHz(): Float {
+        val ctx = context ?: return 0.0f
+        return try {
+            val windowManager = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            val display = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                ctx.display ?: windowManager.defaultDisplay
+            } else {
+                windowManager.defaultDisplay
+            }
+            display.refreshRate
+        } catch (e: Exception) {
+            0.0f
+        }
+    }
+
+    /**
+     * Capture a PNG screenshot from MediaProjection.
+     * Returns null when permission is missing or no frame could be captured.
+     */
+    @JvmStatic
+    fun captureScreenshotPng(): ByteArray? {
+        if (mediaProjection == null) {
+            return null
+        }
+
+        if (!startCapture()) {
+            return null
+        }
+
+        repeat(30) {
+            val frame = getFrame()
+            if (frame != null) {
+                val width = frameWidth
+                val height = frameHeight
+                if (width <= 0 || height <= 0) {
+                    stopCapture()
+                    return null
+                }
+
+                val pixelCount = width * height
+                if (frame.size < pixelCount * 4) {
+                    stopCapture()
+                    return null
+                }
+
+                val pixels = IntArray(pixelCount)
+                var src = 0
+                for (i in 0 until pixelCount) {
+                    val r = frame[src].toInt() and 0xFF
+                    val g = frame[src + 1].toInt() and 0xFF
+                    val b = frame[src + 2].toInt() and 0xFF
+                    val a = frame[src + 3].toInt() and 0xFF
+                    pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
+                    src += 4
+                }
+
+                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+                val output = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+                bitmap.recycle()
+                stopCapture()
+                return output.toByteArray()
+            }
+            Thread.sleep(16)
+        }
+
+        stopCapture()
+        return null
     }
 
     /**

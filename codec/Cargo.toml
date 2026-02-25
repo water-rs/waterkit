@@ -13,6 +13,8 @@ categories = ["multimedia::video", "graphics"]
 [dependencies]
 thiserror.workspace = true
 wgpu.workspace = true
+image.workspace = true
+half = "2"
 
 # Software fallback codecs (private, not exposed in public API)
 # Only enabled on desktop platforms - mobile has hardware codecs

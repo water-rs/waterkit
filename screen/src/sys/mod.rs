@@ -42,6 +42,36 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
 }
 
 // ============================================================================
+// refresh rate
+// ============================================================================
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub fn max_refresh_rate_hz() -> Result<f32, Error> {
+    desktop::max_refresh_rate_hz()
+}
+
+#[cfg(target_os = "ios")]
+pub const fn max_refresh_rate_hz() -> Result<f32, Error> {
+    Err(Error::Unsupported)
+}
+
+#[cfg(target_os = "android")]
+pub fn max_refresh_rate_hz() -> Result<f32, Error> {
+    android::max_refresh_rate_hz()
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "windows",
+    target_os = "linux",
+    target_os = "ios",
+    target_os = "android"
+)))]
+pub const fn max_refresh_rate_hz() -> Result<f32, Error> {
+    Err(Error::Unsupported)
+}
+
+// ============================================================================
 // brightness
 // ============================================================================
 
@@ -114,8 +144,8 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
 }
 
 #[cfg(target_os = "android")]
-pub const fn screenshot(_display: &ScreenInfo, _format: ImageFormat) -> Result<Screenshot, Error> {
-    Err(Error::Unsupported)
+pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
+    android::screenshot(display, format)
 }
 
 #[cfg(not(any(

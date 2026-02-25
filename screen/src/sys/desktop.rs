@@ -49,6 +49,17 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     Ok(infos)
 }
 
+/// Returns the maximum refresh rate across connected desktop displays.
+pub fn max_refresh_rate_hz() -> Result<f32, Error> {
+    let screens = screenshots::Screen::all().map_err(|e| Error::Platform(e.to_string()))?;
+    screens
+        .iter()
+        .map(|screen| screen.display_info.frequency)
+        .filter(|hz| hz.is_finite() && *hz > 0.0)
+        .max_by(f32::total_cmp)
+        .ok_or(Error::MonitorNotFound)
+}
+
 #[allow(clippy::unused_async)]
 #[allow(clippy::cast_precision_loss)]
 pub async fn get_brightness() -> Result<f32, Error> {

@@ -15,6 +15,7 @@
 #![allow(clippy::needless_pass_by_value)] // API design
 
 use crate::frame::ScreenFrame;
+use crate::screenshot::{ImageFormat, Screenshot};
 use crate::stream::StreamConfig;
 use crate::{Error, ScreenInfo};
 use jni::JNIEnv;
@@ -196,6 +197,84 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
         scale_factor: 1.0,
         is_primary: true,
     }])
+}
+
+/// Return the maximum refresh rate reported by Android display metadata.
+pub fn max_refresh_rate_hz() -> Result<f32, Error> {
+    ensure_dex_loaded()?;
+
+    let (vm, _context) = get_vm_and_context();
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| Error::Platform(format!("env attach: {e}")))?;
+
+    let helper_class = get_helper_class(&mut env)?;
+    let refresh_hz = env
+        .call_static_method(&helper_class, "getRefreshRateHz", "()F", &[])
+        .map_err(|e| Error::Platform(format!("getRefreshRateHz: {e}")))?
+        .f()
+        .map_err(|e| Error::Platform(format!("getRefreshRateHz result: {e}")))?;
+
+    if refresh_hz.is_finite() && refresh_hz > 0.0 {
+        Ok(refresh_hz)
+    } else {
+        Err(Error::Platform(format!(
+            "invalid Android refresh rate value: {refresh_hz}"
+        )))
+    }
+}
+
+/// Capture a screenshot on Android using MediaProjection.
+pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
+    if !matches!(format, ImageFormat::Png) {
+        return Err(Error::Unsupported);
+    }
+
+    ensure_dex_loaded()?;
+
+    let (vm, _context) = get_vm_and_context();
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| Error::Platform(format!("env attach: {e}")))?;
+
+    let helper_class = get_helper_class(&mut env)?;
+    let has_permission = env
+        .call_static_method(&helper_class, "hasPermission", "()Z", &[])
+        .map_err(|e| Error::Platform(format!("hasPermission: {e}")))?
+        .z()
+        .map_err(|e| Error::Platform(format!("hasPermission result: {e}")))?;
+
+    if !has_permission {
+        return Err(Error::PermissionDenied);
+    }
+
+    let screenshot_obj = env
+        .call_static_method(&helper_class, "captureScreenshotPng", "()[B", &[])
+        .map_err(|e| Error::Platform(format!("captureScreenshotPng: {e}")))?
+        .l()
+        .map_err(|e| Error::Platform(format!("captureScreenshotPng result: {e}")))?;
+
+    if screenshot_obj.is_null() {
+        return Err(Error::Platform(
+            "captureScreenshotPng returned null frame data".into(),
+        ));
+    }
+
+    let bytes_array: jni::objects::JByteArray = screenshot_obj.into();
+    let data = env
+        .convert_byte_array(&bytes_array)
+        .map_err(|e| Error::Platform(format!("convert_byte_array: {e}")))?;
+
+    if data.is_empty() {
+        return Err(Error::Platform("captureScreenshotPng returned empty data".into()));
+    }
+
+    Ok(Screenshot {
+        data,
+        width: display.width,
+        height: display.height,
+        format,
+    })
 }
 
 /// Get screen brightness.

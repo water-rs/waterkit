@@ -48,10 +48,12 @@
 #![warn(missing_docs)]
 
 mod frame;
+mod image;
 mod software;
 mod sys;
 
 pub use frame::{DecodedFrame, GpuFrame, YuvConverter};
+pub use image::{DecodedImage, DecodedPixelFormat, decode_image};
 
 use std::vec::IntoIter;
 use thiserror::Error;

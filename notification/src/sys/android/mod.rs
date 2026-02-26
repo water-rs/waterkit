@@ -6,6 +6,7 @@
 
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
+use std::mem::ManuallyDrop;
 use std::sync::OnceLock;
 
 use crate::{InterruptionLevel, Notification, NotificationError};
@@ -171,11 +172,25 @@ pub fn show_notification_with_context(
     Ok(NotificationHandleInner)
 }
 
-/// Show a notification (fails on Android without context).
+/// Show a notification by resolving Android context via `ndk_context`.
 pub fn show_notification(
-    _notification: &Notification,
+    notification: &Notification,
 ) -> Result<NotificationHandleInner, NotificationError> {
-    Err(NotificationError::Platform(
-        "Android requires show_with_context() with a valid Context".into(),
-    ))
+    let android_ctx = ndk_context::android_context();
+    let vm = unsafe {
+        jni::JavaVM::from_raw(android_ctx.vm().cast())
+            .expect("waterkit-notification: ndk_context did not provide a valid JavaVM")
+    };
+
+    let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_ctx.context().cast()) });
+    assert!(
+        !context.is_null(),
+        "waterkit-notification: ndk_context returned a null Context"
+    );
+
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| NotificationError::Platform(format!("attach_current_thread failed: {e}")))?;
+
+    show_notification_with_context(&mut env, &context, notification)
 }

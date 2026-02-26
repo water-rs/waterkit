@@ -6,6 +6,7 @@
 use crate::{Location, LocationError, Timestamp};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
+use std::mem::ManuallyDrop;
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode containing `LocationHelper` class.
@@ -187,11 +188,22 @@ pub fn get_location_with_context(
         .with_horizontal_accuracy(buf[4]))
 }
 
-// Async wrapper for the public API (requires runtime context)
+// Async wrapper for the public API.
 pub async fn get_location() -> Result<Location, LocationError> {
-    // Without JNI context, we can't get location
-    // The application must call get_location_with_context directly
-    Err(LocationError::Unknown(
-        "Android: use get_location_with_context() with Context".into(),
-    ))
+    let android_ctx = ndk_context::android_context();
+
+    let vm = unsafe { jni::JavaVM::from_raw(android_ctx.vm().cast()) }
+        .map_err(|e| LocationError::Unknown(format!("JavaVM::from_raw failed: {e}")))?;
+
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| LocationError::Unknown(format!("attach_current_thread failed: {e}")))?;
+
+    let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_ctx.context().cast()) });
+    assert!(
+        !context.is_null(),
+        "waterkit-location: ndk_context returned null Android Context"
+    );
+
+    get_location_with_context(&mut env, &context)
 }

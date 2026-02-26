@@ -30,6 +30,7 @@ swift-bridge.workspace = true
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
+ndk-context.workspace = true
 
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]

@@ -47,6 +47,7 @@ pub enum Permission {
 
 /// The current status of a permission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum PermissionStatus {
     /// Permission has been granted by the user.
     Granted,
@@ -60,6 +61,7 @@ pub enum PermissionStatus {
 
 /// Errors that can occur when requesting permissions.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum PermissionError {
     /// The permission type is not supported on this platform.
     #[error("permission not supported on this platform")]

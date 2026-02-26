@@ -10,43 +10,43 @@ import android.media.session.PlaybackState
 import android.os.Build
 import android.graphics.BitmapFactory
 import java.net.URL
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.concurrent.thread
 
 object MediaSessionHelper {
     private var mediaSession: MediaSession? = null
     private var audioManager: AudioManager? = null
     private var audioFocusRequest: AudioFocusRequest? = null
-    private var context: Context? = null
+    private val commandQueue = ConcurrentLinkedQueue<String>()
     
     @JvmStatic
     fun createSession(ctx: Context) {
-        context = ctx.applicationContext
         audioManager = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         
         mediaSession = MediaSession(ctx, "WaterKitMedia").apply {
             setCallback(object : MediaSession.Callback() {
                 override fun onPlay() {
-                    // Callback to Rust would go here
+                    commandQueue.add("play")
                 }
                 
                 override fun onPause() {
-                    // Callback to Rust would go here
+                    commandQueue.add("pause")
                 }
                 
                 override fun onStop() {
-                    // Callback to Rust would go here
+                    commandQueue.add("stop")
                 }
                 
                 override fun onSkipToNext() {
-                    // Callback to Rust would go here
+                    commandQueue.add("next")
                 }
                 
                 override fun onSkipToPrevious() {
-                    // Callback to Rust would go here
+                    commandQueue.add("previous")
                 }
                 
                 override fun onSeekTo(pos: Long) {
-                    // Callback to Rust would go here
+                    commandQueue.add("seek:$pos")
                 }
             })
             isActive = true
@@ -158,5 +158,11 @@ object MediaSessionHelper {
         mediaSession?.isActive = false
         mediaSession?.release()
         mediaSession = null
+        commandQueue.clear()
+    }
+
+    @JvmStatic
+    fun pollCommand(): String? {
+        return commandQueue.poll()
     }
 }

@@ -8,6 +8,11 @@ fn main() {
     }
 
     if target_os == "android" {
-        waterkit_build::build_kotlin(&["src/sys/android/BluetoothHelper.kt"]);
+        waterkit_build::build_kotlin(&[
+            "src/sys/android/BluetoothHelper.kt",
+            "src/sys/android/BleScanBridgeCallback.kt",
+            "src/sys/android/BleGattBridgeCallback.kt",
+            "src/sys/android/ClassicDiscoveryBridgeCallback.kt",
+        ]);
     }
 }

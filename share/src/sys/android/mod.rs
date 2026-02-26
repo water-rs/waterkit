@@ -1,10 +1,35 @@
 use crate::{ShareError, ShareResult, ShareSheet};
+use futures::future;
+use jni::JNIEnv;
+use jni::JavaVM;
+use jni::objects::JObject;
+use std::mem::ManuallyDrop;
 
-#[allow(clippy::unused_async)]
-pub async fn show_share_sheet(_sheet: ShareSheet) -> Result<ShareResult, ShareError> {
-    Err(ShareError::PlatformError(
-        "Android: use share_with_context() with JNIEnv and Context".into(),
-    ))
+fn with_android_context<T, F>(f: F) -> Result<T, ShareError>
+where
+    F: for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<T, ShareError>,
+{
+    let android_context = ndk_context::android_context();
+    let vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) }
+        .map_err(|e| ShareError::PlatformError(format!("JavaVM::from_raw: {e}")))?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| ShareError::PlatformError(format!("attach_current_thread: {e}")))?;
+
+    let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
+    assert!(
+        !context.is_null(),
+        "ndk_context returned null Android Context"
+    );
+
+    f(&mut env, &context)
+}
+
+pub async fn show_share_sheet(sheet: ShareSheet) -> Result<ShareResult, ShareError> {
+    future::ready(with_android_context(|env, context| {
+        jni_api::share_with_context(env, context, &sheet)
+    }))
+    .await
 }
 
 /// Android-specific share functions requiring JNI context.

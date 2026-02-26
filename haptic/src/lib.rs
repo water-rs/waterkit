@@ -103,6 +103,7 @@ impl Default for Intensity {
 
 /// A single step in a haptic pattern.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum HapticStep {
     /// Vibrate for a duration at a given intensity.
     Vibrate {
@@ -203,6 +204,7 @@ impl HapticPatternBuilder {
 
 /// Errors that can occur when triggering haptic feedback.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum HapticError {
     /// Haptic feedback is not supported on this device.
     #[error("haptic feedback not supported")]

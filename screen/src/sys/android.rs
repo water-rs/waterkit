@@ -189,14 +189,14 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     let width = dims_buf[0].max(1920) as u32;
     let height = dims_buf[1].max(1080) as u32;
 
-    Ok(vec![ScreenInfo {
-        id: 0,
-        name: "Main Screen".into(),
+    Ok(vec![ScreenInfo::new(
+        0,
+        "Main Screen".into(),
         width,
         height,
-        scale_factor: 1.0,
-        is_primary: true,
-    }])
+        1.0,
+        true,
+    )])
 }
 
 /// Return the maximum refresh rate reported by Android display metadata.
@@ -269,12 +269,12 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
         return Err(Error::Platform("captureScreenshotPng returned empty data".into()));
     }
 
-    Ok(Screenshot {
+    Ok(Screenshot::new(
         data,
-        width: display.width,
-        height: display.height,
+        display.width(),
+        display.height(),
         format,
-    })
+    ))
 }
 
 /// Get screen brightness.
@@ -387,8 +387,8 @@ impl ScreenStreamInner {
         let (sender, receiver) = async_channel::bounded(2);
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
-        let width = display.width;
-        let height = display.height;
+        let width = display.width();
+        let height = display.height();
 
         // Spawn frame capture thread
         std::thread::spawn(move || {

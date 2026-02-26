@@ -24,17 +24,13 @@ use std::time::Duration;
 
 /// Metadata about the currently playing media.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MediaMetadata {
-    /// Title of the media (e.g., song name).
-    pub title: Option<String>,
-    /// Artist or creator name.
-    pub artist: Option<String>,
-    /// Album name.
-    pub album: Option<String>,
-    /// URL to artwork image.
-    pub artwork_url: Option<String>,
-    /// Total duration of the media.
-    pub duration: Option<Duration>,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    artwork_url: Option<String>,
+    duration: Option<Duration>,
 }
 
 impl MediaMetadata {
@@ -47,42 +43,73 @@ impl MediaMetadata {
 
     /// Set the title.
     #[must_use]
-    pub fn title(mut self, title: impl Into<String>) -> Self {
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
     }
 
     /// Set the artist.
     #[must_use]
-    pub fn artist(mut self, artist: impl Into<String>) -> Self {
+    pub fn with_artist(mut self, artist: impl Into<String>) -> Self {
         self.artist = Some(artist.into());
         self
     }
 
     /// Set the album.
     #[must_use]
-    pub fn album(mut self, album: impl Into<String>) -> Self {
+    pub fn with_album(mut self, album: impl Into<String>) -> Self {
         self.album = Some(album.into());
         self
     }
 
     /// Set the artwork URL.
     #[must_use]
-    pub fn artwork_url(mut self, url: impl Into<String>) -> Self {
+    pub fn with_artwork_url(mut self, url: impl Into<String>) -> Self {
         self.artwork_url = Some(url.into());
         self
     }
 
     /// Set the duration.
     #[must_use]
-    pub const fn duration(mut self, duration: Duration) -> Self {
+    pub const fn with_duration(mut self, duration: Duration) -> Self {
         self.duration = Some(duration);
         self
+    }
+
+    /// Get the title.
+    #[must_use]
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    /// Get the artist.
+    #[must_use]
+    pub fn artist(&self) -> Option<&str> {
+        self.artist.as_deref()
+    }
+
+    /// Get the album.
+    #[must_use]
+    pub fn album(&self) -> Option<&str> {
+        self.album.as_deref()
+    }
+
+    /// Get the artwork URL.
+    #[must_use]
+    pub fn artwork_url(&self) -> Option<&str> {
+        self.artwork_url.as_deref()
+    }
+
+    /// Get the duration.
+    #[must_use]
+    pub const fn duration(&self) -> Option<Duration> {
+        self.duration
     }
 }
 
 /// Current playback state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum PlaybackStatus {
     /// Media is currently playing.
     Playing,
@@ -95,13 +122,11 @@ pub enum PlaybackStatus {
 
 /// Playback state including position information.
 #[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub struct PlaybackState {
-    /// Current playback status.
-    pub status: PlaybackStatus,
-    /// Current playback position.
-    pub position: Option<Duration>,
-    /// Playback rate (1.0 = normal speed).
-    pub rate: f64,
+    status: PlaybackStatus,
+    position: Option<Duration>,
+    rate: f64,
 }
 
 impl PlaybackState {
@@ -134,6 +159,24 @@ impl PlaybackState {
             rate: 0.0,
         }
     }
+
+    /// Get the playback status.
+    #[must_use]
+    pub const fn status(&self) -> PlaybackStatus {
+        self.status
+    }
+
+    /// Get the current playback position.
+    #[must_use]
+    pub const fn position(&self) -> Option<Duration> {
+        self.position
+    }
+
+    /// Get the playback rate (1.0 = normal speed).
+    #[must_use]
+    pub const fn rate(&self) -> f64 {
+        self.rate
+    }
 }
 
 /// Commands received from system media controls.
@@ -162,6 +205,7 @@ pub enum MediaCommand {
 
 /// Errors that can occur with media control.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum MediaError {
     /// Media control is not supported on this platform.
     #[error("media control not supported on this platform")]

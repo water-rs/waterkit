@@ -4,13 +4,11 @@ use crate::ClipboardError;
 
 /// Image data containing width, height, and raw RGBA bytes.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Image {
-    /// Width of the image in pixels.
-    pub width: u32,
-    /// Height of the image in pixels.
-    pub height: u32,
-    /// Raw RGBA bytes of the image (4 bytes per pixel).
-    pub bytes: Vec<u8>,
+    width: u32,
+    height: u32,
+    bytes: Vec<u8>,
 }
 
 impl Image {
@@ -32,6 +30,30 @@ impl Image {
             height,
             bytes,
         }
+    }
+
+    /// Width of the image in pixels.
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Height of the image in pixels.
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Raw RGBA bytes of the image (4 bytes per pixel).
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Consume the image and return the raw RGBA bytes.
+    #[must_use]
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
     }
 }
 
@@ -98,14 +120,54 @@ pub trait ClipboardData: Sized {
 
 /// Event emitted when the clipboard content changes.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ClipboardEvent {
+    has_text: bool,
+    has_html: bool,
+    has_files: bool,
+    has_image: bool,
+}
+
+impl ClipboardEvent {
+    /// Create a new clipboard event.
+    #[must_use]
+    #[allow(clippy::fn_params_excessive_bools)]
+    pub(crate) const fn new(
+        has_text: bool,
+        has_html: bool,
+        has_files: bool,
+        has_image: bool,
+    ) -> Self {
+        Self {
+            has_text,
+            has_html,
+            has_files,
+            has_image,
+        }
+    }
+
     /// Whether text content is available.
-    pub has_text: bool,
+    #[must_use]
+    pub const fn has_text(&self) -> bool {
+        self.has_text
+    }
+
     /// Whether HTML content is available.
-    pub has_html: bool,
+    #[must_use]
+    pub const fn has_html(&self) -> bool {
+        self.has_html
+    }
+
     /// Whether file paths are available.
-    pub has_files: bool,
+    #[must_use]
+    pub const fn has_files(&self) -> bool {
+        self.has_files
+    }
+
     /// Whether image data is available.
-    pub has_image: bool,
+    #[must_use]
+    pub const fn has_image(&self) -> bool {
+        self.has_image
+    }
 }

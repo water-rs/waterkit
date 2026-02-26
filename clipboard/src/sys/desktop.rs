@@ -102,11 +102,7 @@ impl ClipboardInner {
                 let rgba = img
                     .to_rgba8()
                     .map_err(|e| ClipboardError::InvalidImage(format!("{e}")))?;
-                Ok(Some(Image {
-                    width,
-                    height,
-                    bytes: rgba.into_raw(),
-                }))
+                Ok(Some(Image::new(width, height, rgba.into_raw())))
             }
             Err(_) => Ok(None),
         }
@@ -205,15 +201,14 @@ struct WatchHandler {
 
 impl ClipboardHandler for WatchHandler {
     fn on_clipboard_change(&mut self) {
-        let event = ClipboardEvent {
-            has_text: self.ctx.has(clipboard_rs::ContentFormat::Text),
-            has_html: self.ctx.has(clipboard_rs::ContentFormat::Html),
-            has_files: self
-                .ctx
+        let event = ClipboardEvent::new(
+            self.ctx.has(clipboard_rs::ContentFormat::Text),
+            self.ctx.has(clipboard_rs::ContentFormat::Html),
+            self.ctx
                 .available_formats()
                 .is_ok_and(|f| f.iter().any(|s| s.to_lowercase().contains("file"))),
-            has_image: self.ctx.has(clipboard_rs::ContentFormat::Image),
-        };
+            self.ctx.has(clipboard_rs::ContentFormat::Image),
+        );
         // Try to send, ignore if receiver dropped
         let _ = self.sender.try_send(event);
     }

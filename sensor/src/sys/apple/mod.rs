@@ -52,19 +52,11 @@ mod ffi {
 }
 
 const fn convert_reading(reading: &ffi::SensorReading) -> SensorData {
-    SensorData {
-        x: reading.x,
-        y: reading.y,
-        z: reading.z,
-        timestamp: reading.timestamp_ms,
-    }
+    SensorData::new(reading.x, reading.y, reading.z, reading.timestamp_ms)
 }
 
 const fn convert_scalar(reading: &ffi::ScalarReading) -> ScalarData {
-    ScalarData {
-        value: reading.value,
-        timestamp: reading.timestamp_ms,
-    }
+    ScalarData::new(reading.value, reading.timestamp_ms)
 }
 
 const fn convert_result(result: ffi::SensorResult) -> Result<SensorData, SensorError> {

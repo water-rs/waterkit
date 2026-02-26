@@ -75,12 +75,7 @@ pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
         _ => (0.0, 0.0, -1.0),
     };
 
-    Ok(SensorData {
-        x,
-        y,
-        z,
-        timestamp: timestamp_now(),
-    })
+    Ok(SensorData::new(x, y, z, timestamp_now()))
 }
 
 pub fn accelerometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
@@ -132,12 +127,7 @@ pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
 
     // Convert heading to approximate magnetic field vector
     let rad = heading.to_radians();
-    Ok(SensorData {
-        x: rad.sin(),
-        y: rad.cos(),
-        z: 0.0,
-        timestamp: timestamp_now(),
-    })
+    Ok(SensorData::new(rad.sin(), rad.cos(), 0.0, timestamp_now()))
 }
 
 pub fn magnetometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
@@ -186,10 +176,7 @@ pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
 
     let level: f64 = get_proxy_property(&conn, "LightLevel")?;
 
-    Ok(ScalarData {
-        value: level,
-        timestamp: timestamp_now(),
-    })
+    Ok(ScalarData::new(level, timestamp_now()))
 }
 
 pub fn ambient_light_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {

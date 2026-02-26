@@ -46,10 +46,10 @@ pub fn get_connectivity_info() -> ConnectivityInfo {
         }
     }
 
-    ConnectivityInfo {
+    ConnectivityInfo::new(
         connection_type,
-        is_connected: has_connection && connection_type != ConnectionType::None,
-    }
+        has_connection && connection_type != ConnectionType::None,
+    )
 }
 
 pub fn get_thermal_state() -> ThermalState {
@@ -91,9 +91,5 @@ pub fn get_system_load() -> SystemLoad {
     let memory_used = system.used_memory();
     let memory_total = system.total_memory();
 
-    SystemLoad {
-        cpu_usage,
-        memory_used,
-        memory_total,
-    }
+    SystemLoad::new(cpu_usage, memory_used, memory_total)
 }

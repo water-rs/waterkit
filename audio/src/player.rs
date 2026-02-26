@@ -539,19 +539,27 @@ impl AudioPlayer {
         let mut metadata = MediaMetadata::default();
 
         if let Some(d) = source.total_duration() {
-            metadata.duration = Some(d);
+            metadata = metadata.with_duration(d);
         }
 
         if let Ok(tagged_file) = lofty::read_from_path(path)
             && let Some(tag) = tagged_file.primary_tag()
         {
-            metadata.title = tag.title().map(String::from);
-            metadata.artist = tag.artist().map(String::from);
-            metadata.album = tag.album().map(String::from);
+            if let Some(title) = tag.title() {
+                metadata = metadata.with_title(title.to_string());
+            }
+            if let Some(artist) = tag.artist() {
+                metadata = metadata.with_artist(artist.to_string());
+            }
+            if let Some(album) = tag.album() {
+                metadata = metadata.with_album(album.to_string());
+            }
         }
 
-        if metadata.title.is_none() {
-            metadata.title = path.file_stem().map(|s| s.to_string_lossy().into_owned());
+        if metadata.title().is_none()
+            && let Some(stem) = path.file_stem()
+        {
+            metadata = metadata.with_title(stem.to_string_lossy().into_owned());
         }
 
         sink.append(source);
@@ -592,9 +600,9 @@ impl AudioPlayer {
 
         let mut metadata = MediaMetadata::default();
         if let Some(d) = source.total_duration() {
-            metadata.duration = Some(d);
+            metadata = metadata.with_duration(d);
         }
-        metadata.title = Some(Self::title_from_url(url));
+        metadata = metadata.with_title(Self::title_from_url(url));
 
         sink.append(source);
         sink.pause();
@@ -757,7 +765,7 @@ impl AudioPlayer {
     /// Set the title.
     #[must_use]
     pub fn title(mut self, title: impl Into<String>) -> Self {
-        self.metadata.title = Some(title.into());
+        self.metadata = std::mem::take(&mut self.metadata).with_title(title);
         self.metadata_dirty.store(true, Ordering::Release);
         self
     }
@@ -765,7 +773,7 @@ impl AudioPlayer {
     /// Set the artist.
     #[must_use]
     pub fn artist(mut self, artist: impl Into<String>) -> Self {
-        self.metadata.artist = Some(artist.into());
+        self.metadata = std::mem::take(&mut self.metadata).with_artist(artist);
         self.metadata_dirty.store(true, Ordering::Release);
         self
     }
@@ -773,7 +781,7 @@ impl AudioPlayer {
     /// Set the album.
     #[must_use]
     pub fn album(mut self, album: impl Into<String>) -> Self {
-        self.metadata.album = Some(album.into());
+        self.metadata = std::mem::take(&mut self.metadata).with_album(album);
         self.metadata_dirty.store(true, Ordering::Release);
         self
     }
@@ -781,7 +789,7 @@ impl AudioPlayer {
     /// Set the artwork URL.
     #[must_use]
     pub fn artwork_url(mut self, url: impl Into<String>) -> Self {
-        self.metadata.artwork_url = Some(url.into());
+        self.metadata = std::mem::take(&mut self.metadata).with_artwork_url(url);
         self.metadata_dirty.store(true, Ordering::Release);
         self
     }
@@ -869,7 +877,7 @@ impl AudioPlayer {
     /// Get total duration.
     #[must_use]
     pub const fn duration(&self) -> Option<Duration> {
-        self.metadata.duration
+        self.metadata.duration()
     }
 
     /// Get the current metadata.

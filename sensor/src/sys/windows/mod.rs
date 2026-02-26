@@ -30,12 +30,12 @@ pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
         .GetCurrentReading()
         .map_err(|e| SensorError::Unknown(e.to_string()))?;
 
-    Ok(SensorData {
-        x: reading.AccelerationX().unwrap_or(0.0),
-        y: reading.AccelerationY().unwrap_or(0.0),
-        z: reading.AccelerationZ().unwrap_or(0.0),
-        timestamp: timestamp_now(),
-    })
+    Ok(SensorData::new(
+        reading.AccelerationX().unwrap_or(0.0),
+        reading.AccelerationY().unwrap_or(0.0),
+        reading.AccelerationZ().unwrap_or(0.0),
+        timestamp_now(),
+    ))
 }
 
 pub fn accelerometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
@@ -62,12 +62,12 @@ pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
         .GetCurrentReading()
         .map_err(|e| SensorError::Unknown(e.to_string()))?;
 
-    Ok(SensorData {
-        x: reading.AngularVelocityX().unwrap_or(0.0),
-        y: reading.AngularVelocityY().unwrap_or(0.0),
-        z: reading.AngularVelocityZ().unwrap_or(0.0),
-        timestamp: timestamp_now(),
-    })
+    Ok(SensorData::new(
+        reading.AngularVelocityX().unwrap_or(0.0),
+        reading.AngularVelocityY().unwrap_or(0.0),
+        reading.AngularVelocityZ().unwrap_or(0.0),
+        timestamp_now(),
+    ))
 }
 
 pub fn gyroscope_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
@@ -94,12 +94,12 @@ pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
         .GetCurrentReading()
         .map_err(|e| SensorError::Unknown(e.to_string()))?;
 
-    Ok(SensorData {
-        x: f64::from(reading.MagneticFieldX().unwrap_or(0.0)),
-        y: f64::from(reading.MagneticFieldY().unwrap_or(0.0)),
-        z: f64::from(reading.MagneticFieldZ().unwrap_or(0.0)),
-        timestamp: timestamp_now(),
-    })
+    Ok(SensorData::new(
+        f64::from(reading.MagneticFieldX().unwrap_or(0.0)),
+        f64::from(reading.MagneticFieldY().unwrap_or(0.0)),
+        f64::from(reading.MagneticFieldZ().unwrap_or(0.0)),
+        timestamp_now(),
+    ))
 }
 
 pub fn magnetometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
@@ -126,10 +126,10 @@ pub async fn barometer_read() -> Result<ScalarData, SensorError> {
         .GetCurrentReading()
         .map_err(|e| SensorError::Unknown(e.to_string()))?;
 
-    Ok(ScalarData {
-        value: reading.StationPressureInHectopascals().unwrap_or(0.0),
-        timestamp: timestamp_now(),
-    })
+    Ok(ScalarData::new(
+        reading.StationPressureInHectopascals().unwrap_or(0.0),
+        timestamp_now(),
+    ))
 }
 
 pub fn barometer_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
@@ -156,10 +156,10 @@ pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
         .GetCurrentReading()
         .map_err(|e| SensorError::Unknown(e.to_string()))?;
 
-    Ok(ScalarData {
-        value: f64::from(reading.IlluminanceInLux().unwrap_or(0.0)),
-        timestamp: timestamp_now(),
-    })
+    Ok(ScalarData::new(
+        f64::from(reading.IlluminanceInLux().unwrap_or(0.0)),
+        timestamp_now(),
+    ))
 }
 
 pub fn ambient_light_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {

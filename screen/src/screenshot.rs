@@ -5,6 +5,7 @@ use std::path::Path;
 
 /// Image format for screenshot export.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ImageFormat {
     /// PNG format (lossless, widely supported).
     #[default]
@@ -39,18 +40,55 @@ impl ImageFormat {
 
 /// Captured screenshot with encoded image data.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Screenshot {
-    /// Encoded image data.
-    pub data: Vec<u8>,
-    /// Image width in pixels.
-    pub width: u32,
-    /// Image height in pixels.
-    pub height: u32,
-    /// Image format.
-    pub format: ImageFormat,
+    data: Vec<u8>,
+    width: u32,
+    height: u32,
+    format: ImageFormat,
 }
 
 impl Screenshot {
+    /// Create a new `Screenshot`.
+    pub(crate) const fn new(data: Vec<u8>, width: u32, height: u32, format: ImageFormat) -> Self {
+        Self {
+            data,
+            width,
+            height,
+            format,
+        }
+    }
+
+    /// Encoded image data.
+    #[must_use]
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// Consume the screenshot and return the encoded image data.
+    #[must_use]
+    pub fn into_data(self) -> Vec<u8> {
+        self.data
+    }
+
+    /// Image width in pixels.
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Image height in pixels.
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Image format.
+    #[must_use]
+    pub const fn format(&self) -> ImageFormat {
+        self.format
+    }
+
     /// Save the screenshot to a file.
     ///
     /// # Errors
@@ -91,7 +129,7 @@ pub fn screenshot_primary(format: ImageFormat) -> Result<Screenshot, Error> {
     let displays = crate::screens()?;
     let primary = displays
         .iter()
-        .find(|d| d.is_primary)
+        .find(|d| d.is_primary())
         .or_else(|| displays.first())
         .ok_or(Error::MonitorNotFound)?;
     screenshot(primary, format)

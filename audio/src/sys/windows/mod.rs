@@ -39,27 +39,27 @@ fn set_metadata_inner(
 
     let music_props = updater.MusicProperties().map_err(win_err_update)?;
 
-    if let Some(ref title) = metadata.title {
+    if let Some(title) = metadata.title() {
         music_props
-            .SetTitle(&windows::core::HSTRING::from(title.as_str()))
+            .SetTitle(&windows::core::HSTRING::from(title))
             .map_err(win_err_update)?;
     }
 
-    if let Some(ref artist) = metadata.artist {
+    if let Some(artist) = metadata.artist() {
         music_props
-            .SetArtist(&windows::core::HSTRING::from(artist.as_str()))
+            .SetArtist(&windows::core::HSTRING::from(artist))
             .map_err(win_err_update)?;
     }
 
-    if let Some(ref album) = metadata.album {
+    if let Some(album) = metadata.album() {
         music_props
-            .SetAlbumTitle(&windows::core::HSTRING::from(album.as_str()))
+            .SetAlbumTitle(&windows::core::HSTRING::from(album))
             .map_err(win_err_update)?;
     }
 
-    if let Some(ref url) = metadata.artwork_url
+    if let Some(url) = metadata.artwork_url()
         && let Ok(uri) =
-            windows::Foundation::Uri::CreateUri(&windows::core::HSTRING::from(url.as_str()))
+            windows::Foundation::Uri::CreateUri(&windows::core::HSTRING::from(url))
         && let Ok(stream) =
             windows::Storage::Streams::RandomAccessStreamReference::CreateFromUri(&uri)
     {
@@ -75,7 +75,7 @@ fn set_playback_status_inner(
     controls: &SystemMediaTransportControls,
     state: &PlaybackState,
 ) -> Result<(), MediaError> {
-    let status = match state.status {
+    let status = match state.status() {
         PlaybackStatus::Playing => MediaPlaybackStatus::Playing,
         PlaybackStatus::Paused => MediaPlaybackStatus::Paused,
         PlaybackStatus::Stopped => MediaPlaybackStatus::Stopped,

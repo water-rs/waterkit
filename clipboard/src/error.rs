@@ -2,6 +2,7 @@
 
 /// Errors that can occur during clipboard operations.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum ClipboardError {
     /// The clipboard is not available on this platform or context.
     #[error("clipboard unavailable")]

@@ -78,14 +78,14 @@ pub async fn query_samples(
 }
 
 pub async fn write_sample(sample: HealthSample) -> Result<(), HealthError> {
-    let type_str = type_to_str(sample.data_type);
+    let type_str = type_to_str(sample.data_type());
     let (tx, rx) = futures::channel::oneshot::channel();
     ffi::health_write(
         type_str,
-        sample.value,
-        &sample.unit,
-        &sample.start_date,
-        &sample.end_date,
+        sample.value(),
+        sample.unit(),
+        sample.start_date(),
+        sample.end_date(),
         Box::new(move |error: String| {
             if error.is_empty() {
                 let _ = tx.send(Ok(()));
@@ -126,17 +126,17 @@ fn parse_samples(data_type: HealthDataType, json: &str) -> Vec<HealthSample> {
         .filter_map(|line| {
             let parts: Vec<&str> = line.splitn(5, '\t').collect();
             if parts.len() >= 4 {
-                Some(HealthSample {
+                let mut sample = HealthSample::new(
                     data_type,
-                    value: parts[0].parse().unwrap_or(0.0),
-                    unit: parts[1].to_string(),
-                    start_date: parts[2].to_string(),
-                    end_date: parts[3].to_string(),
-                    source: parts
-                        .get(4)
-                        .filter(|s| !s.is_empty())
-                        .map(ToString::to_string),
-                })
+                    parts[0].parse().unwrap_or(0.0),
+                    parts[1],
+                    parts[2],
+                    parts[3],
+                );
+                if let Some(src) = parts.get(4).filter(|s| !s.is_empty()) {
+                    sample = sample.with_source(*src);
+                }
+                Some(sample)
             } else {
                 None
             }

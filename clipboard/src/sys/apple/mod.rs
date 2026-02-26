@@ -121,11 +121,11 @@ impl ClipboardInner {
         if !image.is_valid {
             return Ok(None);
         }
-        Ok(Some(Image {
-            width: image.width as u32,
-            height: image.height as u32,
-            bytes: image.bytes,
-        }))
+        Ok(Some(Image::new(
+            image.width as u32,
+            image.height as u32,
+            image.bytes,
+        )))
     }
 
     /// Get binary data by MIME type.
@@ -225,12 +225,12 @@ pub fn start_watch()
             if current_count != last_count {
                 last_count = current_count;
 
-                let event = ClipboardEvent {
-                    has_text: ffi::clipboard_has_text(),
-                    has_html: ffi::clipboard_has_html(),
-                    has_files: ffi::clipboard_has_files(),
-                    has_image: ffi::clipboard_has_image(),
-                };
+                let event = ClipboardEvent::new(
+                    ffi::clipboard_has_text(),
+                    ffi::clipboard_has_html(),
+                    ffi::clipboard_has_files(),
+                    ffi::clipboard_has_image(),
+                );
                 if sender.try_send(event).is_err() {
                     break;
                 }

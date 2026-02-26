@@ -8,6 +8,7 @@
 use crate::{HapticError, HapticPattern, HapticStep, Intensity};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
+use std::mem::ManuallyDrop;
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode containing `HapticHelper` class.
@@ -253,44 +254,53 @@ pub fn play_pattern_with_context(
     }
 }
 
-// Public API stubs - Android requires Context for all haptic operations
-pub const fn is_available() -> bool {
-    // Cannot check without context, assume true
-    true
+fn with_android_context<T, F>(f: F) -> Result<T, HapticError>
+where
+    F: for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<T, HapticError>,
+{
+    let android_context = ndk_context::android_context();
+    let vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) }
+        .map_err(|e| HapticError::Unknown(format!("JavaVM::from_raw failed: {e}")))?;
+
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| HapticError::Unknown(format!("attach_current_thread failed: {e}")))?;
+
+    let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
+    assert!(
+        !context.is_null(),
+        "waterkit-haptic: ndk_context returned null Android Context"
+    );
+
+    f(&mut env, &context)
 }
 
-pub fn impact(_intensity: Intensity) -> Result<(), HapticError> {
-    Err(HapticError::Unknown(
-        "Android: use impact_with_context() with Context".into(),
-    ))
+pub fn is_available() -> bool {
+    with_android_context(|env, context| is_available_with_context(env, context)).unwrap_or_else(
+        |error| panic!("waterkit-haptic: failed to query availability with Android context: {error}"),
+    )
+}
+
+pub fn impact(intensity: Intensity) -> Result<(), HapticError> {
+    with_android_context(|env, context| impact_with_context(env, context, intensity))
 }
 
 pub fn selection() -> Result<(), HapticError> {
-    Err(HapticError::Unknown(
-        "Android: use selection_with_context() with Context".into(),
-    ))
+    with_android_context(|env, context| selection_with_context(env, context))
 }
 
 pub fn notification_success() -> Result<(), HapticError> {
-    Err(HapticError::Unknown(
-        "Android: use notification_with_context() with Context".into(),
-    ))
+    with_android_context(|env, context| notification_with_context(env, context, 0))
 }
 
 pub fn notification_warning() -> Result<(), HapticError> {
-    Err(HapticError::Unknown(
-        "Android: use notification_with_context() with Context".into(),
-    ))
+    with_android_context(|env, context| notification_with_context(env, context, 1))
 }
 
 pub fn notification_error() -> Result<(), HapticError> {
-    Err(HapticError::Unknown(
-        "Android: use notification_with_context() with Context".into(),
-    ))
+    with_android_context(|env, context| notification_with_context(env, context, 2))
 }
 
-pub fn play_pattern(_pattern: &HapticPattern) -> Result<(), HapticError> {
-    Err(HapticError::Unknown(
-        "Android: use play_pattern_with_context() with Context".into(),
-    ))
+pub fn play_pattern(pattern: &HapticPattern) -> Result<(), HapticError> {
+    with_android_context(|env, context| play_pattern_with_context(env, context, pattern))
 }

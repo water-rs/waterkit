@@ -7,6 +7,11 @@ import android.nfc.NdefRecord
 import android.nfc.Tag
 import android.nfc.tech.Ndef
 import android.nfc.tech.NdefFormatable
+import android.nfc.tech.IsoDep
+import android.nfc.tech.MifareClassic
+import android.nfc.tech.NfcA
+import android.nfc.tech.NfcF
+import android.nfc.tech.NfcV
 
 object NfcHelper {
     @JvmStatic
@@ -68,6 +73,19 @@ object NfcHelper {
     @JvmStatic
     fun getTagId(tag: Tag): String {
         return tag.id.joinToString("") { String.format("%02x", it) }
+    }
+
+    @JvmStatic
+    fun getTagType(tag: Tag): Int {
+        val techs = tag.techList.toSet()
+        return when {
+            techs.contains(MifareClassic::class.java.name) -> 5
+            techs.contains(IsoDep::class.java.name) -> 3
+            techs.contains(NfcV::class.java.name) -> 4
+            techs.contains(NfcF::class.java.name) -> 2
+            techs.contains(NfcA::class.java.name) -> 1
+            else -> 6
+        }
     }
 
     private fun parseRecords(json: String): List<NdefRecord> {

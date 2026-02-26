@@ -6,8 +6,11 @@ use crate::{
     MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus,
 };
 use jni::JNIEnv;
+use jni::JavaVM;
 use jni::objects::{GlobalRef, JObject, JValue};
-use std::sync::OnceLock;
+use std::mem::ManuallyDrop;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 /// Embedded DEX bytecode containing `MediaSessionHelper` class.
 /// Generated at build time by kotlinc + D8.
@@ -241,10 +244,85 @@ pub fn clear_session(env: &mut JNIEnv) -> Result<(), MediaError> {
     Ok(())
 }
 
-#[derive(Debug)]
+fn parse_media_command(raw: &str) -> Result<MediaCommand, MediaError> {
+    match raw {
+        "play" => Ok(MediaCommand::Play),
+        "pause" => Ok(MediaCommand::Pause),
+        "play_pause" => Ok(MediaCommand::PlayPause),
+        "stop" => Ok(MediaCommand::Stop),
+        "next" => Ok(MediaCommand::Next),
+        "previous" => Ok(MediaCommand::Previous),
+        _ if raw.starts_with("seek:") => {
+            let millis = raw
+                .split_once(':')
+                .expect("seek command must contain ':' separator")
+                .1
+                .parse::<u64>()
+                .map_err(|e| MediaError::Unknown(format!("invalid seek command `{raw}`: {e}")))?;
+            Ok(MediaCommand::Seek(Duration::from_millis(millis)))
+        }
+        _ if raw.starts_with("seek_forward:") => {
+            let millis = raw
+                .split_once(':')
+                .expect("seek_forward command must contain ':' separator")
+                .1
+                .parse::<u64>()
+                .map_err(|e| {
+                    MediaError::Unknown(format!("invalid seek_forward command `{raw}`: {e}"))
+                })?;
+            Ok(MediaCommand::SeekForward(Duration::from_millis(millis)))
+        }
+        _ if raw.starts_with("seek_backward:") => {
+            let millis = raw
+                .split_once(':')
+                .expect("seek_backward command must contain ':' separator")
+                .1
+                .parse::<u64>()
+                .map_err(|e| {
+                    MediaError::Unknown(format!("invalid seek_backward command `{raw}`: {e}"))
+                })?;
+            Ok(MediaCommand::SeekBackward(Duration::from_millis(millis)))
+        }
+        _ => Err(MediaError::Unknown(format!(
+            "unknown media command from Android helper: {raw}"
+        ))),
+    }
+}
+
+fn poll_command_with_context(env: &mut JNIEnv) -> Result<Option<MediaCommand>, MediaError> {
+    let helper_class = get_helper_class(env)?;
+    let command_obj = env
+        .call_static_method::<&JClass, _, _>(
+            &helper_class,
+            "pollCommand",
+            "()Ljava/lang/String;",
+            &[],
+        )
+        .map_err(|e| MediaError::Unknown(format!("pollCommand: {e}")))?
+        .l()
+        .map_err(|e| MediaError::Unknown(format!("pollCommand result: {e}")))?;
+
+    if command_obj.is_null() {
+        return Ok(None);
+    }
+
+    let command: String = env
+        .get_string((&command_obj).into())
+        .map_err(|e| MediaError::Unknown(format!("pollCommand get_string: {e}")))?
+        .into();
+    parse_media_command(&command).map(Some)
+}
+
 pub struct MediaCenterInner {
-    vm: jni::JavaVM,
+    vm: JavaVM,
     context: GlobalRef,
+    handler: Mutex<Option<Box<dyn MediaCommandHandler>>>,
+}
+
+impl core::fmt::Debug for MediaCenterInner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MediaCenterInner").finish_non_exhaustive()
+    }
 }
 
 impl MediaCenterInner {
@@ -260,12 +338,9 @@ impl MediaCenterInner {
     }
 
     pub fn new() -> Result<Self, MediaError> {
-        let android_context =
-            std::panic::catch_unwind(ndk_context::android_context).map_err(|_| {
-                MediaError::InitializationFailed("ndk context is not initialized".into())
-            })?;
+        let android_context = ndk_context::android_context();
 
-        let vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) }.map_err(|e| {
+        let vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) }.map_err(|e| {
             MediaError::InitializationFailed(format!("JavaVM::from_raw failed: {e}"))
         })?;
 
@@ -274,17 +349,25 @@ impl MediaCenterInner {
                 MediaError::InitializationFailed(format!("attach_current_thread failed: {e}"))
             })?;
 
-            let context_local = unsafe { JObject::from_raw(android_context.context().cast()) };
+            let context_local =
+                ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
+            assert!(
+                !context_local.is_null(),
+                "waterkit-audio: ndk_context returned null Android Context"
+            );
             let context = env.new_global_ref(&context_local).map_err(|e| {
                 MediaError::InitializationFailed(format!("new_global_ref context failed: {e}"))
             })?;
-            std::mem::forget(context_local);
 
             create_session_with_context(&mut env, context.as_obj())?;
             context
         };
 
-        Ok(Self { vm, context })
+        Ok(Self {
+            vm,
+            context,
+            handler: Mutex::new(None),
+        })
     }
 
     pub fn set_metadata(&self, metadata: &MediaMetadata) -> Result<(), MediaError> {
@@ -295,12 +378,16 @@ impl MediaCenterInner {
         self.with_attached_env(|env, _context| set_playback_state_with_context(env, state))
     }
 
-    #[allow(clippy::unused_self)]
     pub fn set_command_handler(
         &self,
-        _handler: Box<dyn MediaCommandHandler>,
+        handler: Box<dyn MediaCommandHandler>,
     ) -> Result<(), MediaError> {
-        Err(MediaError::NotSupported)
+        let mut slot = self
+            .handler
+            .lock()
+            .map_err(|e| MediaError::Unknown(format!("command handler lock poisoned: {e}")))?;
+        *slot = Some(handler);
+        Ok(())
     }
 
     pub fn request_audio_focus(&self) -> Result<(), MediaError> {
@@ -316,16 +403,31 @@ impl MediaCenterInner {
     }
 
     pub fn update(&self, metadata: &MediaMetadata, state: &PlaybackState) {
-        let _ = self.set_metadata(metadata);
-        let _ = self.set_playback_state(state);
+        self.set_metadata(metadata).unwrap_or_else(|e| {
+            panic!("waterkit-audio: failed to update metadata on Android media session: {e}")
+        });
+        self.set_playback_state(state).unwrap_or_else(|e| {
+            panic!("waterkit-audio: failed to update playback state on Android media session: {e}")
+        });
     }
 
-    #[allow(clippy::unused_self)]
-    pub const fn run_loop(&self, _duration: std::time::Duration) {}
+    pub fn run_loop(&self, duration: Duration) {
+        std::thread::sleep(duration);
+        if let Some(command) = self.poll_command() {
+            let guard = self.handler.lock().unwrap_or_else(|e| {
+                panic!("waterkit-audio: command handler lock poisoned in run_loop: {e}")
+            });
+            if let Some(handler) = guard.as_ref() {
+                handler.on_command(command);
+            }
+        }
+    }
 
-    #[allow(clippy::unused_self)]
-    pub const fn poll_command(&self) -> Option<MediaCommand> {
-        None
+    pub fn poll_command(&self) -> Option<MediaCommand> {
+        self.with_attached_env(|env, _context| poll_command_with_context(env))
+            .unwrap_or_else(|e| {
+                panic!("waterkit-audio: failed to poll media command from Android helper: {e}")
+            })
     }
 }
 

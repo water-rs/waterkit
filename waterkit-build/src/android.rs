@@ -139,17 +139,18 @@ pub fn build_kotlin_with_config(kotlin_files: &[&str], config: &AndroidConfig) {
     let classes_dir = out_dir.join("classes");
     fs::create_dir_all(&classes_dir).expect("Failed to create classes directory");
 
+    let mut classpath_entries = Vec::with_capacity(1 + config.extra_classpath.len());
+    classpath_entries.push(android_jar.clone());
+    classpath_entries.extend(config.extra_classpath.iter().cloned());
+    let classpath = env::join_paths(&classpath_entries)
+        .expect("Failed to construct Kotlin classpath from AndroidConfig");
+
     let mut kotlinc = Command::new("kotlinc");
     kotlinc
         .arg("-classpath")
-        .arg(&android_jar)
+        .arg(&classpath)
         .arg("-d")
         .arg(&classes_dir);
-
-    // Add extra classpath entries
-    for cp in &config.extra_classpath {
-        kotlinc.arg("-classpath").arg(cp);
-    }
 
     // Add Kotlin source files
     for kotlin_file in kotlin_files {
@@ -190,8 +191,19 @@ pub fn build_kotlin_with_config(kotlin_files: &[&str], config: &AndroidConfig) {
         .arg("--output")
         .arg(&out_dir);
 
+    for cp in &config.extra_classpath {
+        java.arg("--classpath").arg(cp);
+    }
+
     for class_file in &class_files {
         java.arg(class_file);
+    }
+
+    // Package extra classpath JARs into the generated dex so modules can stay self-contained.
+    for cp in &config.extra_classpath {
+        if cp.extension().is_some_and(|ext| ext == "jar") {
+            java.arg(cp);
+        }
     }
 
     let d8_output = java.output().expect("Failed to run D8");

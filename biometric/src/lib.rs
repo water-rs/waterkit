@@ -16,6 +16,7 @@ pub mod android {
 
 /// The type of biometric authentication available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BiometricType {
     /// Fingerprint authentication (`TouchID`, Android fingerprint, etc.)
     Fingerprint,
@@ -29,6 +30,7 @@ pub enum BiometricType {
 
 /// Errors that can occur during biometric authentication.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum BiometricError {
     /// Biometric authentication is not available on this device.
     #[error("Biometric authentication is not available on this device")]

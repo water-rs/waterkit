@@ -1,0 +1,330 @@
+Test / ubuntu-latest	UNKNOWN STEP	﻿2026-02-20T21:03:31.9042919Z Current runner version: '2.331.0'
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9066395Z ##[group]Runner Image Provisioner
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9067258Z Hosted Compute Agent
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9067750Z Version: 20260123.484
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9068327Z Commit: 6bd6555ca37d84114959e1c76d2c01448ff61c5d
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9068959Z Build Date: 2026-01-23T19:41:17Z
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9069554Z Worker ID: {c9151537-0c79-4fe9-a6de-b11f4489dd69}
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9070200Z Azure Region: westus3
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9070695Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9071960Z ##[group]Operating System
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9072534Z Ubuntu
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9072932Z 24.04.3
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9073344Z LTS
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9073767Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9074225Z ##[group]Runner Image
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9074707Z Image: ubuntu-24.04
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9075140Z Version: 20260201.15.1
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9076213Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260201.15/images/ubuntu/Ubuntu2404-Readme.md
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9077653Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260201.15
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9078398Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9079321Z ##[group]GITHUB_TOKEN Permissions
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9081388Z Checks: write
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9081864Z Contents: read
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9082274Z Metadata: read
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9082793Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9084809Z Secret source: Actions
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9085399Z Prepare workflow directory
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9492204Z Prepare all required actions
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:31.9531393Z Getting action download info
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:32.4045244Z Download action repository 'actions/checkout@v4' (SHA:34e114876b0b11c390a56381ad16ebd13914f8d5)
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:32.5092915Z Download action repository 'dtolnay/rust-toolchain@nightly' (SHA:0f1b44df7e9cbb178d781a242338dfa5e243ad7f)
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:33.0582538Z Download action repository 'Swatinem/rust-cache@v2' (SHA:779680da715d629ac1d338a641029a2f4372abb5)
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.1484718Z Uses: water-rs/waterkit/.github/workflows/test.yml@refs/heads/dev (a2edaef130b2bdad2c6a0836bb03f4dbec151bdb)
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.1491044Z Complete job name: Test / ubuntu-latest
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.1960358Z ##[group]Checking docker version
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.1974787Z ##[command]/usr/bin/docker version --format '{{.Server.APIVersion}}'
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.2683164Z '1.48'
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.2691967Z Docker daemon API version: '1.48'
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.2693438Z ##[command]/usr/bin/docker version --format '{{.Client.APIVersion}}'
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.2861144Z '1.48'
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.2870757Z Docker client API version: '1.48'
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.2876954Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.2880435Z ##[group]Clean up resources from previous jobs
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.2886936Z ##[command]/usr/bin/docker ps --all --quiet --no-trunc --filter "label=3877f8"
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.3029330Z ##[command]/usr/bin/docker network prune --force --filter "label=3877f8"
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.3159712Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.3160720Z ##[group]Create local container network
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.3172097Z ##[command]/usr/bin/docker network create --label 3877f8 github_network_58fc5c4d6ef442d1b03077a49503bcc4
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.3605487Z 6e34952680f591482fdcceeec18213d3f2de061408e256e6570f6706b2c809ab
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.3620297Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.3647516Z ##[group]Starting job container
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:34.3674055Z ##[command]/usr/bin/docker --config /home/runner/work/_temp/.docker_1e47f207-3917-4d78-8176-bf74722a83de login ghcr.io -u lexoliu --password-stdin
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:35.0608689Z ##[command]/usr/bin/docker --config /home/runner/work/_temp/.docker_1e47f207-3917-4d78-8176-bf74722a83de pull ghcr.io/catthehacker/ubuntu:full-latest
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.0803218Z full-latest: Pulling from catthehacker/ubuntu
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3058633Z 9b806dfdaed9: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3059104Z 1dde18305acb: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3059498Z 6df4edeb4397: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3060080Z 25f9251537f4: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3060432Z cbdccf58eb85: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3060783Z bde644ad596d: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3061154Z 994221bc8b7c: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3061437Z e904d24dad07: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3061654Z eb1f0bb8861d: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3061860Z 076b7ce4610e: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3062069Z 52aa22a86b4b: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3062270Z ffdee555c486: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3062488Z 79d252bf7787: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3062698Z a2c714f6e069: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3062945Z 9304117cb56e: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3063151Z b9cfa9f6fbbc: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3063361Z 172b577f6339: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3063559Z 64fdaaa7fb94: Pulling fs layer
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3063771Z cbdccf58eb85: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3063965Z bde644ad596d: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3064146Z 25f9251537f4: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3064340Z 79d252bf7787: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3064518Z 994221bc8b7c: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3064703Z a2c714f6e069: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3064885Z b9cfa9f6fbbc: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3065073Z e904d24dad07: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3065242Z 9304117cb56e: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3065444Z ffdee555c486: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3065644Z eb1f0bb8861d: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3065853Z 52aa22a86b4b: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3066026Z 172b577f6339: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3066207Z 076b7ce4610e: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:36.3066386Z 64fdaaa7fb94: Waiting
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:57.1937168Z 6df4edeb4397: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:57.1937718Z 6df4edeb4397: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:58.9471729Z 1dde18305acb: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:03:58.9472146Z 1dde18305acb: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:07.2474984Z 9b806dfdaed9: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:07.2475405Z 9b806dfdaed9: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:09.2953350Z cbdccf58eb85: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:09.2954626Z cbdccf58eb85: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:13.7401406Z 994221bc8b7c: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:14.7543169Z bde644ad596d: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:14.7544645Z bde644ad596d: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:15.0634924Z eb1f0bb8861d: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:16.9340341Z 076b7ce4610e: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:16.9345740Z 076b7ce4610e: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:22.1309491Z e904d24dad07: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:22.1312116Z e904d24dad07: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:24.4765609Z ffdee555c486: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:24.4766027Z ffdee555c486: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:26.0521634Z 79d252bf7787: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:26.0524207Z 79d252bf7787: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:27.2123921Z 52aa22a86b4b: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:27.2127363Z 52aa22a86b4b: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:30.1099804Z 25f9251537f4: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:30.1100365Z 25f9251537f4: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:32.2411400Z b9cfa9f6fbbc: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:32.2414831Z b9cfa9f6fbbc: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:34.6197492Z 9304117cb56e: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:34.6197973Z 9304117cb56e: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:37.0161170Z 64fdaaa7fb94: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:37.0163155Z 64fdaaa7fb94: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:52.6661862Z 172b577f6339: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:04:52.6662476Z 172b577f6339: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:05:06.8690044Z 9b806dfdaed9: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:05:44.0105982Z a2c714f6e069: Verifying Checksum
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:05:44.0106513Z a2c714f6e069: Download complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:05:49.3830221Z 1dde18305acb: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:06:21.5143016Z 6df4edeb4397: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:06:54.2189831Z 25f9251537f4: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:07:12.9784025Z cbdccf58eb85: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:07:23.5177889Z bde644ad596d: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:07:38.8196464Z 994221bc8b7c: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:07:48.4295699Z e904d24dad07: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:07:48.4691206Z eb1f0bb8861d: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:07:49.7792709Z 076b7ce4610e: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:08:01.0267994Z 52aa22a86b4b: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:08:02.7219606Z ffdee555c486: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:08:06.0672711Z 79d252bf7787: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:09:41.3714528Z a2c714f6e069: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:10:02.4289780Z 9304117cb56e: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:10:08.9176932Z b9cfa9f6fbbc: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:16.0634042Z 172b577f6339: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.0829567Z 64fdaaa7fb94: Pull complete
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.0879548Z Digest: sha256:9327301aea27f88258ad7f16ebf83eb772cc97ac831542ce90264b776833474d
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.0892608Z Status: Downloaded newer image for ghcr.io/catthehacker/ubuntu:full-latest
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.0911832Z ghcr.io/catthehacker/ubuntu:full-latest
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.0998994Z ##[command]/usr/bin/docker create --name df354b8abada43fe90f8034d653cb339_ghcriocatthehackerubuntufulllatest_ff055c --label 3877f8 --workdir /__w/waterkit/waterkit --network github_network_58fc5c4d6ef442d1b03077a49503bcc4  -e "HOME=/github/home" -e GITHUB_ACTIONS=true -e CI=true -v "/var/run/docker.sock":"/var/run/docker.sock" -v "/home/runner/work":"/__w" -v "/home/runner/actions-runner/cached/externals":"/__e":ro -v "/home/runner/work/_temp":"/__w/_temp" -v "/home/runner/work/_actions":"/__w/_actions" -v "/opt/hostedtoolcache":"/__t" -v "/home/runner/work/_temp/_github_home":"/github/home" -v "/home/runner/work/_temp/_github_workflow":"/github/workflow" --entrypoint "tail" ghcr.io/catthehacker/ubuntu:full-latest "-f" "/dev/null"
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.1287479Z ad45e5fb5b4ccd00fc639ca4e17e2f7602a9155d693465aa2d31083ea918bdde
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.1307962Z ##[command]/usr/bin/docker start ad45e5fb5b4ccd00fc639ca4e17e2f7602a9155d693465aa2d31083ea918bdde
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.2793072Z ad45e5fb5b4ccd00fc639ca4e17e2f7602a9155d693465aa2d31083ea918bdde
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.2812087Z ##[command]/usr/bin/docker ps --all --filter id=ad45e5fb5b4ccd00fc639ca4e17e2f7602a9155d693465aa2d31083ea918bdde --filter status=running --no-trunc --format "{{.ID}} {{.Status}}"
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.2931930Z ad45e5fb5b4ccd00fc639ca4e17e2f7602a9155d693465aa2d31083ea918bdde Up Less than a second
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.2947744Z ##[command]/usr/bin/docker inspect --format "{{range .Config.Env}}{{println .}}{{end}}" ad45e5fb5b4ccd00fc639ca4e17e2f7602a9155d693465aa2d31083ea918bdde
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3070784Z HOME=/github/home
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3071147Z GITHUB_ACTIONS=true
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3071421Z CI=true
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3072303Z PATH=/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3073235Z ImageVersion=20260119.4.1
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3073442Z ImageOS=ubuntu24
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3073672Z ACCEPT_EULA=Y
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3073861Z XDG_CONFIG_HOME=/home/runner/.config
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3074131Z AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3074400Z RUNNER_TOOL_CACHE=/opt/hostedtoolcache
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3074987Z PSModulePath=/root/.local/share/powershell/Modules:/usr/local/share/powershell/Modules:/opt/microsoft/powershell/7/Modules:/usr/share/az_12.5.0
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3075623Z ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE=/opt/actionarchivecache
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3075938Z AZURE_EXTENSION_DIR=/opt/az/azcliextensions
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3076207Z SWIFT_PATH=/usr/share/swift/usr/bin
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3076441Z DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3076675Z DOTNET_NOLOGO=1
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3076864Z DOTNET_MULTILEVEL_LOOKUP=0
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3077264Z EDGEWEBDRIVER=/usr/local/share/edge_driver
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3077534Z GECKOWEBDRIVER=/usr/local/share/gecko_driver
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3077813Z CHROME_BIN=/usr/bin/google-chrome
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3078478Z CHROMEWEBDRIVER=/usr/local/share/chromedriver-linux64
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3079047Z BOOTSTRAP_HASKELL_NONINTERACTIVE=1
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3079711Z GHCUP_INSTALL_BASE_PREFIX=/usr/local
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3080058Z JAVA_HOME_8_X64=/usr/lib/jvm/temurin-8-jdk-amd64
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3080340Z JAVA_HOME_11_X64=/usr/lib/jvm/temurin-11-jdk-amd64
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3080615Z JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3080873Z JAVA_HOME_17_X64=/usr/lib/jvm/temurin-17-jdk-amd64
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3081160Z JAVA_HOME_21_X64=/usr/lib/jvm/temurin-21-jdk-amd64
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3081427Z JAVA_HOME_25_X64=/usr/lib/jvm/temurin-25-jdk-amd64
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3081673Z ANT_HOME=/usr/share/ant
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3081871Z GRADLE_HOME=/usr/share/gradle-9.3.0
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3082099Z CONDA=/usr/share/miniconda
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3082310Z NVM_DIR=/home/runner/.nvm
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3082554Z SELENIUM_JAR_PATH=/usr/share/java/selenium-server.jar
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3082849Z VCPKG_INSTALLATION_ROOT=/usr/local/share/vcpkg
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3083105Z DEBIAN_FRONTEND=noninteractive
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3083340Z ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3083587Z ANDROID_HOME=/usr/local/lib/android/sdk
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3083925Z ANDROID_NDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3084267Z ANDROID_NDK_HOME=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3084627Z ANDROID_NDK_ROOT=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3084993Z ANDROID_NDK_LATEST_HOME=/usr/local/lib/android/sdk/ndk/29.0.14206865
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3085334Z PIPX_BIN_DIR=/opt/pipx_bin
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3085554Z PIPX_HOME=/opt/pipx
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3085774Z GOROOT_1_22_X64=/opt/hostedtoolcache/go/1.22.12/x64
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3086078Z GOROOT_1_23_X64=/opt/hostedtoolcache/go/1.23.12/x64
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3086360Z GOROOT_1_24_X64=/opt/hostedtoolcache/go/1.24.12/x64
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3086656Z GOROOT_1_25_X64=/opt/hostedtoolcache/go/1.25.6/x64
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3086919Z HOMEBREW_NO_AUTO_UPDATE=1
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3087295Z HOMEBREW_CLEANUP_PERIODIC_FULL_DAYS=3650
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3087686Z XDG_RUNTIME_DIR=/run/user/1001
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3087984Z POWERSHELL_DISTRIBUTION_CHANNEL=GitHub-Actions-ubuntu24
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3096215Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3105598Z ##[group]Waiting for all services to be ready
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3107417Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3356098Z ##[group]Run actions/checkout@v4
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3356570Z with:
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3356785Z   repository: water-rs/waterkit
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3357409Z   token: ***
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3357595Z   ssh-strict: true
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3357797Z   ssh-user: git
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3358031Z   persist-credentials: true
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3358299Z   clean: true
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3358509Z   sparse-checkout-cone-mode: true
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3358741Z   fetch-depth: 1
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3358940Z   fetch-tags: false
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3359127Z   show-progress: true
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3359352Z   lfs: false
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3359524Z   submodules: false
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3359730Z   set-safe-directory: true
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3360261Z env:
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3360452Z   CARGO_TERM_COLOR: always
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3360652Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.3416922Z ##[command]/usr/bin/docker exec  ad45e5fb5b4ccd00fc639ca4e17e2f7602a9155d693465aa2d31083ea918bdde sh -c "cat /etc/*release | grep ^ID"
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6476680Z Syncing repository: water-rs/waterkit
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6479289Z ##[group]Getting Git version info
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6480572Z Working directory is '/__w/waterkit/waterkit'
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6481883Z [command]/usr/bin/git version
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6546668Z git version 2.52.0
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6574311Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6592260Z Temporarily overriding HOME='/__w/_temp/3fd8cce1-0374-4144-b5ed-940a57650cfb' before making global git config changes
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6596398Z Adding repository directory to the temporary git global config as a safe directory
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6599849Z [command]/usr/bin/git config --global --add safe.directory /__w/waterkit/waterkit
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6643212Z Deleting the contents of '/__w/waterkit/waterkit'
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6647459Z ##[group]Initializing the repository
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6657883Z [command]/usr/bin/git init /__w/waterkit/waterkit
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6717892Z hint: Using 'master' as the name for the initial branch. This default branch name
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6719795Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6720287Z hint: to use in all of your new repositories, which will suppress this warning,
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6720653Z hint: call:
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6720834Z hint:
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6721123Z hint: 	git config --global init.defaultBranch <name>
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6721409Z hint:
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6721690Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6722194Z hint: 'development'. The just-created branch can be renamed via this command:
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6722529Z hint:
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6722737Z hint: 	git branch -m <name>
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6722943Z hint:
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6723259Z hint: Disable this message with "git config set advice.defaultBranchName false"
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6723708Z Initialized empty Git repository in /__w/waterkit/waterkit/.git/
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6734854Z [command]/usr/bin/git remote add origin https://github.com/water-rs/waterkit
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6768297Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6768853Z ##[group]Disabling automatic garbage collection
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6773855Z [command]/usr/bin/git config --local gc.auto 0
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6804087Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6804685Z ##[group]Setting up auth
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6813366Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.6851965Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.7228402Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.7259096Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.7447433Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.7476840Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.7664242Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.7703927Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.7704471Z ##[group]Fetching the repository
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:20.7717904Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a2edaef130b2bdad2c6a0836bb03f4dbec151bdb:refs/remotes/origin/dev
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.2623987Z From https://github.com/water-rs/waterkit
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.2624773Z  * [new ref]         a2edaef130b2bdad2c6a0836bb03f4dbec151bdb -> origin/dev
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.2654597Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.2655229Z ##[group]Determining the checkout info
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.2658384Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.2662834Z [command]/usr/bin/git sparse-checkout disable
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.2698891Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.2719457Z ##[group]Checking out the ref
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.2724471Z [command]/usr/bin/git checkout --progress --force -B dev refs/remotes/origin/dev
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.3789891Z Switched to a new branch 'dev'
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.3790372Z branch 'dev' set up to track 'origin/dev'.
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.3803535Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.3839026Z [command]/usr/bin/git log -1 --format=%H
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.3858732Z a2edaef130b2bdad2c6a0836bb03f4dbec151bdb
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4049173Z ##[group]Run apt-get update
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4049566Z [36;1mapt-get update[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4050041Z [36;1mDEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4050541Z [36;1m  pkg-config \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4050781Z [36;1m  libwayland-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4051052Z [36;1m  libxkbcommon-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4051306Z [36;1m  libasound2-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4051556Z [36;1m  libudev-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4051785Z [36;1m  libdav1d-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4052023Z [36;1m  nasm \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4052226Z [36;1m  libavutil-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4052480Z [36;1m  libavcodec-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4052720Z [36;1m  libavformat-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4052979Z [36;1m  libavfilter-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4053244Z [36;1m  libavdevice-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4053485Z [36;1m  libswscale-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4053787Z [36;1m  libswresample-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4054051Z [36;1m  libxcb1-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4054300Z [36;1m  libxcb-render0-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4054565Z [36;1m  libxcb-shape0-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4054827Z [36;1m  libxcb-xfixes0-dev \[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4055076Z [36;1m  libdbus-1-dev[0m
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4059555Z shell: bash --noprofile --norc -e -o pipefail {0}
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4059850Z env:
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4060057Z   CARGO_TERM_COLOR: always
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4060286Z ##[endgroup]
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4956062Z Reading package lists...
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.4974672Z E: List directory /var/lib/apt/lists/partial is missing. - Acquire (13: Permission denied)
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.5022993Z ##[error]Process completed with exit code 100.
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.5129106Z Post job cleanup.
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.5133660Z ##[command]/usr/bin/docker exec  ad45e5fb5b4ccd00fc639ca4e17e2f7602a9155d693465aa2d31083ea918bdde sh -c "cat /etc/*release | grep ^ID"
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7003709Z [command]/usr/bin/git version
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7041731Z git version 2.52.0
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7084115Z Temporarily overriding HOME='/__w/_temp/4b7b5784-9bcd-497c-8503-3d974e3a3c78' before making global git config changes
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7085561Z Adding repository directory to the temporary git global config as a safe directory
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7091746Z [command]/usr/bin/git config --global --add safe.directory /__w/waterkit/waterkit
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7136261Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7168328Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7364536Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7383725Z http.https://github.com/.extraheader
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7394837Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7421635Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7592335Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7621224Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7892373Z Stop and remove container: df354b8abada43fe90f8034d653cb339_ghcriocatthehackerubuntufulllatest_ff055c
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.7897692Z ##[command]/usr/bin/docker rm --force ad45e5fb5b4ccd00fc639ca4e17e2f7602a9155d693465aa2d31083ea918bdde
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.8785295Z ad45e5fb5b4ccd00fc639ca4e17e2f7602a9155d693465aa2d31083ea918bdde
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.8809864Z Remove container network: github_network_58fc5c4d6ef442d1b03077a49503bcc4
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:22.8813905Z ##[command]/usr/bin/docker network rm github_network_58fc5c4d6ef442d1b03077a49503bcc4
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:23.0034949Z github_network_58fc5c4d6ef442d1b03077a49503bcc4
+Test / ubuntu-latest	UNKNOWN STEP	2026-02-20T21:11:23.0198617Z Cleaning up orphan processes

@@ -1,0 +1,330 @@
+Features	Set up job	﻿2026-02-20T21:03:31.3258260Z Current runner version: '2.331.0'
+Features	Set up job	2026-02-20T21:03:31.3281981Z ##[group]Runner Image Provisioner
+Features	Set up job	2026-02-20T21:03:31.3282944Z Hosted Compute Agent
+Features	Set up job	2026-02-20T21:03:31.3283403Z Version: 20260123.484
+Features	Set up job	2026-02-20T21:03:31.3283941Z Commit: 6bd6555ca37d84114959e1c76d2c01448ff61c5d
+Features	Set up job	2026-02-20T21:03:31.3284583Z Build Date: 2026-01-23T19:41:17Z
+Features	Set up job	2026-02-20T21:03:31.3285188Z Worker ID: {91fb5bde-586a-43eb-93aa-97f034719497}
+Features	Set up job	2026-02-20T21:03:31.3285785Z Azure Region: northcentralus
+Features	Set up job	2026-02-20T21:03:31.3286319Z ##[endgroup]
+Features	Set up job	2026-02-20T21:03:31.3287524Z ##[group]Operating System
+Features	Set up job	2026-02-20T21:03:31.3288049Z Ubuntu
+Features	Set up job	2026-02-20T21:03:31.3288415Z 24.04.3
+Features	Set up job	2026-02-20T21:03:31.3288906Z LTS
+Features	Set up job	2026-02-20T21:03:31.3289312Z ##[endgroup]
+Features	Set up job	2026-02-20T21:03:31.3289944Z ##[group]Runner Image
+Features	Set up job	2026-02-20T21:03:31.3290495Z Image: ubuntu-24.04
+Features	Set up job	2026-02-20T21:03:31.3290904Z Version: 20260201.15.1
+Features	Set up job	2026-02-20T21:03:31.3291770Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260201.15/images/ubuntu/Ubuntu2404-Readme.md
+Features	Set up job	2026-02-20T21:03:31.3293221Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260201.15
+Features	Set up job	2026-02-20T21:03:31.3294092Z ##[endgroup]
+Features	Set up job	2026-02-20T21:03:31.3294993Z ##[group]GITHUB_TOKEN Permissions
+Features	Set up job	2026-02-20T21:03:31.3297023Z Checks: write
+Features	Set up job	2026-02-20T21:03:31.3297571Z Contents: read
+Features	Set up job	2026-02-20T21:03:31.3297972Z Metadata: read
+Features	Set up job	2026-02-20T21:03:31.3298412Z ##[endgroup]
+Features	Set up job	2026-02-20T21:03:31.3300489Z Secret source: Actions
+Features	Set up job	2026-02-20T21:03:31.3301125Z Prepare workflow directory
+Features	Set up job	2026-02-20T21:03:31.3701892Z Prepare all required actions
+Features	Set up job	2026-02-20T21:03:31.3738585Z Getting action download info
+Features	Set up job	2026-02-20T21:03:31.7396054Z Download action repository 'actions/checkout@v4' (SHA:34e114876b0b11c390a56381ad16ebd13914f8d5)
+Features	Set up job	2026-02-20T21:03:31.8472582Z Download action repository 'dtolnay/rust-toolchain@nightly' (SHA:0f1b44df7e9cbb178d781a242338dfa5e243ad7f)
+Features	Set up job	2026-02-20T21:03:32.0791948Z Download action repository 'Swatinem/rust-cache@v2' (SHA:779680da715d629ac1d338a641029a2f4372abb5)
+Features	Set up job	2026-02-20T21:03:32.5327563Z Download action repository 'taiki-e/install-action@cargo-hack' (SHA:e37bc0b709b9c58852fd862248c9e9b0c6147ea9)
+Features	Set up job	2026-02-20T21:03:33.1291063Z Complete job name: Features
+Features	Initialize containers	﻿2026-02-20T21:03:33.1744240Z ##[group]Checking docker version
+Features	Initialize containers	2026-02-20T21:03:33.1759258Z ##[command]/usr/bin/docker version --format '{{.Server.APIVersion}}'
+Features	Initialize containers	2026-02-20T21:03:33.2606157Z '1.48'
+Features	Initialize containers	2026-02-20T21:03:33.2615121Z Docker daemon API version: '1.48'
+Features	Initialize containers	2026-02-20T21:03:33.2616482Z ##[command]/usr/bin/docker version --format '{{.Client.APIVersion}}'
+Features	Initialize containers	2026-02-20T21:03:33.2768788Z '1.48'
+Features	Initialize containers	2026-02-20T21:03:33.2778638Z Docker client API version: '1.48'
+Features	Initialize containers	2026-02-20T21:03:33.2784177Z ##[endgroup]
+Features	Initialize containers	2026-02-20T21:03:33.2787018Z ##[group]Clean up resources from previous jobs
+Features	Initialize containers	2026-02-20T21:03:33.2792711Z ##[command]/usr/bin/docker ps --all --quiet --no-trunc --filter "label=24ab3d"
+Features	Initialize containers	2026-02-20T21:03:33.2927117Z ##[command]/usr/bin/docker network prune --force --filter "label=24ab3d"
+Features	Initialize containers	2026-02-20T21:03:33.3048736Z ##[endgroup]
+Features	Initialize containers	2026-02-20T21:03:33.3049853Z ##[group]Create local container network
+Features	Initialize containers	2026-02-20T21:03:33.3060435Z ##[command]/usr/bin/docker network create --label 24ab3d github_network_89774eb431c7472e8a43d188141ddf49
+Features	Initialize containers	2026-02-20T21:03:33.3480125Z 5db9652fada320a83d9986a5fb3f315c75974ff0fc466a69888d84b37561dfc7
+Features	Initialize containers	2026-02-20T21:03:33.3495423Z ##[endgroup]
+Features	Initialize containers	2026-02-20T21:03:33.3521257Z ##[group]Starting job container
+Features	Initialize containers	2026-02-20T21:03:33.3544916Z ##[command]/usr/bin/docker --config /home/runner/work/_temp/.docker_60138c74-aba0-42bf-8a8c-769cd00af635 login ghcr.io -u lexoliu --password-stdin
+Features	Initialize containers	2026-02-20T21:03:33.6766864Z ##[command]/usr/bin/docker --config /home/runner/work/_temp/.docker_60138c74-aba0-42bf-8a8c-769cd00af635 pull ghcr.io/catthehacker/ubuntu:full-latest
+Features	Initialize containers	2026-02-20T21:03:34.1521029Z full-latest: Pulling from catthehacker/ubuntu
+Features	Initialize containers	2026-02-20T21:03:34.2480718Z 9b806dfdaed9: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2481433Z 1dde18305acb: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2482006Z 6df4edeb4397: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2482326Z 25f9251537f4: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2483003Z cbdccf58eb85: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2483308Z bde644ad596d: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2483627Z 994221bc8b7c: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2483958Z e904d24dad07: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2484264Z eb1f0bb8861d: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2484567Z 076b7ce4610e: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2484851Z 52aa22a86b4b: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2485145Z ffdee555c486: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2485434Z 79d252bf7787: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2485716Z a2c714f6e069: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2486094Z 9304117cb56e: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2486378Z b9cfa9f6fbbc: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2486667Z 172b577f6339: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2486947Z 64fdaaa7fb94: Pulling fs layer
+Features	Initialize containers	2026-02-20T21:03:34.2487226Z 25f9251537f4: Waiting
+Features	Initialize containers	2026-02-20T21:03:34.2487475Z ffdee555c486: Waiting
+Features	Initialize containers	2026-02-20T21:03:34.2487731Z cbdccf58eb85: Waiting
+Features	Initialize containers	2026-02-20T21:03:34.2487987Z b9cfa9f6fbbc: Waiting
+Features	Initialize containers	2026-02-20T21:03:34.2488237Z bde644ad596d: Waiting
+Features	Initialize containers	2026-02-20T21:03:34.2488487Z 79d252bf7787: Waiting
+Features	Initialize containers	2026-02-20T21:03:34.2488730Z 172b577f6339: Waiting
+Features	Initialize containers	2026-02-20T21:03:34.2488993Z a2c714f6e069: Waiting
+Features	Initialize containers	2026-02-20T21:03:34.2489231Z 994221bc8b7c: Waiting
+Features	Initialize containers	2026-02-20T21:03:34.2489715Z 64fdaaa7fb94: Waiting
+Features	Initialize containers	2026-02-20T21:03:34.2489995Z 9304117cb56e: Waiting
+Features	Initialize containers	2026-02-20T21:03:34.2490321Z e904d24dad07: Waiting
+Features	Initialize containers	2026-02-20T21:03:34.2490566Z 52aa22a86b4b: Waiting
+Features	Initialize containers	2026-02-20T21:03:34.2490819Z 076b7ce4610e: Waiting
+Features	Initialize containers	2026-02-20T21:03:34.2491290Z eb1f0bb8861d: Waiting
+Features	Initialize containers	2026-02-20T21:03:39.9558031Z 6df4edeb4397: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:03:39.9558582Z 6df4edeb4397: Download complete
+Features	Initialize containers	2026-02-20T21:03:44.1789869Z 1dde18305acb: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:03:44.1790559Z 1dde18305acb: Download complete
+Features	Initialize containers	2026-02-20T21:03:49.2636407Z cbdccf58eb85: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:03:49.2637070Z cbdccf58eb85: Download complete
+Features	Initialize containers	2026-02-20T21:03:50.2625755Z 9b806dfdaed9: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:03:50.2630756Z 9b806dfdaed9: Download complete
+Features	Initialize containers	2026-02-20T21:03:51.1688291Z 25f9251537f4: Download complete
+Features	Initialize containers	2026-02-20T21:03:51.3728963Z 994221bc8b7c: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:03:51.3730190Z 994221bc8b7c: Download complete
+Features	Initialize containers	2026-02-20T21:03:51.5052944Z eb1f0bb8861d: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:03:51.5059265Z eb1f0bb8861d: Download complete
+Features	Initialize containers	2026-02-20T21:03:51.7762357Z bde644ad596d: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:03:51.7765871Z bde644ad596d: Download complete
+Features	Initialize containers	2026-02-20T21:03:52.0363998Z 076b7ce4610e: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:03:52.5272289Z 076b7ce4610e: Download complete
+Features	Initialize containers	2026-02-20T21:03:52.5272824Z ffdee555c486: Download complete
+Features	Initialize containers	2026-02-20T21:03:52.8641190Z 79d252bf7787: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:03:52.8643064Z 79d252bf7787: Download complete
+Features	Initialize containers	2026-02-20T21:03:54.3708181Z 52aa22a86b4b: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:03:54.3709016Z 52aa22a86b4b: Download complete
+Features	Initialize containers	2026-02-20T21:03:56.8952290Z e904d24dad07: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:03:56.8964562Z e904d24dad07: Download complete
+Features	Initialize containers	2026-02-20T21:03:57.7526739Z b9cfa9f6fbbc: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:03:59.9036071Z b9cfa9f6fbbc: Download complete
+Features	Initialize containers	2026-02-20T21:03:59.9036554Z 9304117cb56e: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:03:59.9039542Z 9304117cb56e: Download complete
+Features	Initialize containers	2026-02-20T21:04:01.4540849Z 64fdaaa7fb94: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:04:01.4541472Z 64fdaaa7fb94: Download complete
+Features	Initialize containers	2026-02-20T21:04:10.5499205Z 172b577f6339: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:04:10.5501087Z 172b577f6339: Download complete
+Features	Initialize containers	2026-02-20T21:04:14.2754724Z a2c714f6e069: Verifying Checksum
+Features	Initialize containers	2026-02-20T21:04:14.2755165Z a2c714f6e069: Download complete
+Features	Initialize containers	2026-02-20T21:05:08.0111071Z 9b806dfdaed9: Pull complete
+Features	Initialize containers	2026-02-20T21:05:47.6955545Z 1dde18305acb: Pull complete
+Features	Initialize containers	2026-02-20T21:06:19.4924659Z 6df4edeb4397: Pull complete
+Features	Initialize containers	2026-02-20T21:06:51.6951273Z 25f9251537f4: Pull complete
+Features	Initialize containers	2026-02-20T21:07:10.6372859Z cbdccf58eb85: Pull complete
+Features	Initialize containers	2026-02-20T21:07:21.0935965Z bde644ad596d: Pull complete
+Features	Initialize containers	2026-02-20T21:07:36.4347682Z 994221bc8b7c: Pull complete
+Features	Initialize containers	2026-02-20T21:07:46.0910586Z e904d24dad07: Pull complete
+Features	Initialize containers	2026-02-20T21:07:46.1005656Z eb1f0bb8861d: Pull complete
+Features	Initialize containers	2026-02-20T21:07:47.3870766Z 076b7ce4610e: Pull complete
+Features	Initialize containers	2026-02-20T21:07:58.6910813Z 52aa22a86b4b: Pull complete
+Features	Initialize containers	2026-02-20T21:08:00.3856244Z ffdee555c486: Pull complete
+Features	Initialize containers	2026-02-20T21:08:03.7341142Z 79d252bf7787: Pull complete
+Features	Initialize containers	2026-02-20T21:09:40.4896723Z a2c714f6e069: Pull complete
+Features	Initialize containers	2026-02-20T21:10:01.1452581Z 9304117cb56e: Pull complete
+Features	Initialize containers	2026-02-20T21:10:07.5860732Z b9cfa9f6fbbc: Pull complete
+Features	Initialize containers	2026-02-20T21:11:13.6851219Z 172b577f6339: Pull complete
+Features	Initialize containers	2026-02-20T21:11:17.7347472Z 64fdaaa7fb94: Pull complete
+Features	Initialize containers	2026-02-20T21:11:17.7390911Z Digest: sha256:9327301aea27f88258ad7f16ebf83eb772cc97ac831542ce90264b776833474d
+Features	Initialize containers	2026-02-20T21:11:17.7400892Z Status: Downloaded newer image for ghcr.io/catthehacker/ubuntu:full-latest
+Features	Initialize containers	2026-02-20T21:11:17.7416686Z ghcr.io/catthehacker/ubuntu:full-latest
+Features	Initialize containers	2026-02-20T21:11:17.7499882Z ##[command]/usr/bin/docker create --name 41b7d836fb28478393c614d7f4ea30b1_ghcriocatthehackerubuntufulllatest_21377a --label 24ab3d --workdir /__w/waterkit/waterkit --network github_network_89774eb431c7472e8a43d188141ddf49  -e "HOME=/github/home" -e GITHUB_ACTIONS=true -e CI=true -v "/var/run/docker.sock":"/var/run/docker.sock" -v "/home/runner/work":"/__w" -v "/home/runner/actions-runner/cached/externals":"/__e":ro -v "/home/runner/work/_temp":"/__w/_temp" -v "/home/runner/work/_actions":"/__w/_actions" -v "/opt/hostedtoolcache":"/__t" -v "/home/runner/work/_temp/_github_home":"/github/home" -v "/home/runner/work/_temp/_github_workflow":"/github/workflow" --entrypoint "tail" ghcr.io/catthehacker/ubuntu:full-latest "-f" "/dev/null"
+Features	Initialize containers	2026-02-20T21:11:17.7751179Z b0dc20b93360d3b73f2fa68b789466a000cec2d5a00516b5cdad61907b5cee91
+Features	Initialize containers	2026-02-20T21:11:17.7769317Z ##[command]/usr/bin/docker start b0dc20b93360d3b73f2fa68b789466a000cec2d5a00516b5cdad61907b5cee91
+Features	Initialize containers	2026-02-20T21:11:17.9204056Z b0dc20b93360d3b73f2fa68b789466a000cec2d5a00516b5cdad61907b5cee91
+Features	Initialize containers	2026-02-20T21:11:17.9220905Z ##[command]/usr/bin/docker ps --all --filter id=b0dc20b93360d3b73f2fa68b789466a000cec2d5a00516b5cdad61907b5cee91 --filter status=running --no-trunc --format "{{.ID}} {{.Status}}"
+Features	Initialize containers	2026-02-20T21:11:17.9335467Z b0dc20b93360d3b73f2fa68b789466a000cec2d5a00516b5cdad61907b5cee91 Up Less than a second
+Features	Initialize containers	2026-02-20T21:11:17.9351703Z ##[command]/usr/bin/docker inspect --format "{{range .Config.Env}}{{println .}}{{end}}" b0dc20b93360d3b73f2fa68b789466a000cec2d5a00516b5cdad61907b5cee91
+Features	Initialize containers	2026-02-20T21:11:17.9465152Z CI=true
+Features	Initialize containers	2026-02-20T21:11:17.9465481Z HOME=/github/home
+Features	Initialize containers	2026-02-20T21:11:17.9465800Z GITHUB_ACTIONS=true
+Features	Initialize containers	2026-02-20T21:11:17.9466772Z PATH=/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+Features	Initialize containers	2026-02-20T21:11:17.9468087Z ImageVersion=20260119.4.1
+Features	Initialize containers	2026-02-20T21:11:17.9468410Z ImageOS=ubuntu24
+Features	Initialize containers	2026-02-20T21:11:17.9468701Z ACCEPT_EULA=Y
+Features	Initialize containers	2026-02-20T21:11:17.9469015Z XDG_CONFIG_HOME=/home/runner/.config
+Features	Initialize containers	2026-02-20T21:11:17.9469557Z AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache
+Features	Initialize containers	2026-02-20T21:11:17.9469935Z RUNNER_TOOL_CACHE=/opt/hostedtoolcache
+Features	Initialize containers	2026-02-20T21:11:17.9470746Z PSModulePath=/root/.local/share/powershell/Modules:/usr/local/share/powershell/Modules:/opt/microsoft/powershell/7/Modules:/usr/share/az_12.5.0
+Features	Initialize containers	2026-02-20T21:11:17.9471376Z ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE=/opt/actionarchivecache
+Features	Initialize containers	2026-02-20T21:11:17.9471694Z AZURE_EXTENSION_DIR=/opt/az/azcliextensions
+Features	Initialize containers	2026-02-20T21:11:17.9471941Z SWIFT_PATH=/usr/share/swift/usr/bin
+Features	Initialize containers	2026-02-20T21:11:17.9472184Z DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+Features	Initialize containers	2026-02-20T21:11:17.9472400Z DOTNET_NOLOGO=1
+Features	Initialize containers	2026-02-20T21:11:17.9472600Z DOTNET_MULTILEVEL_LOOKUP=0
+Features	Initialize containers	2026-02-20T21:11:17.9472820Z EDGEWEBDRIVER=/usr/local/share/edge_driver
+Features	Initialize containers	2026-02-20T21:11:17.9473095Z GECKOWEBDRIVER=/usr/local/share/gecko_driver
+Features	Initialize containers	2026-02-20T21:11:17.9473548Z CHROME_BIN=/usr/bin/google-chrome
+Features	Initialize containers	2026-02-20T21:11:17.9474244Z CHROMEWEBDRIVER=/usr/local/share/chromedriver-linux64
+Features	Initialize containers	2026-02-20T21:11:17.9474738Z BOOTSTRAP_HASKELL_NONINTERACTIVE=1
+Features	Initialize containers	2026-02-20T21:11:17.9474972Z GHCUP_INSTALL_BASE_PREFIX=/usr/local
+Features	Initialize containers	2026-02-20T21:11:17.9475251Z JAVA_HOME_8_X64=/usr/lib/jvm/temurin-8-jdk-amd64
+Features	Initialize containers	2026-02-20T21:11:17.9475540Z JAVA_HOME_11_X64=/usr/lib/jvm/temurin-11-jdk-amd64
+Features	Initialize containers	2026-02-20T21:11:17.9475827Z JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64
+Features	Initialize containers	2026-02-20T21:11:17.9476092Z JAVA_HOME_17_X64=/usr/lib/jvm/temurin-17-jdk-amd64
+Features	Initialize containers	2026-02-20T21:11:17.9476403Z JAVA_HOME_21_X64=/usr/lib/jvm/temurin-21-jdk-amd64
+Features	Initialize containers	2026-02-20T21:11:17.9476694Z JAVA_HOME_25_X64=/usr/lib/jvm/temurin-25-jdk-amd64
+Features	Initialize containers	2026-02-20T21:11:17.9476938Z ANT_HOME=/usr/share/ant
+Features	Initialize containers	2026-02-20T21:11:17.9477156Z GRADLE_HOME=/usr/share/gradle-9.3.0
+Features	Initialize containers	2026-02-20T21:11:17.9477380Z CONDA=/usr/share/miniconda
+Features	Initialize containers	2026-02-20T21:11:17.9477600Z NVM_DIR=/home/runner/.nvm
+Features	Initialize containers	2026-02-20T21:11:17.9477856Z SELENIUM_JAR_PATH=/usr/share/java/selenium-server.jar
+Features	Initialize containers	2026-02-20T21:11:17.9478195Z VCPKG_INSTALLATION_ROOT=/usr/local/share/vcpkg
+Features	Initialize containers	2026-02-20T21:11:17.9478466Z DEBIAN_FRONTEND=noninteractive
+Features	Initialize containers	2026-02-20T21:11:17.9478698Z ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+Features	Initialize containers	2026-02-20T21:11:17.9478956Z ANDROID_HOME=/usr/local/lib/android/sdk
+Features	Initialize containers	2026-02-20T21:11:17.9479235Z ANDROID_NDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Features	Initialize containers	2026-02-20T21:11:17.9479807Z ANDROID_NDK_HOME=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Features	Initialize containers	2026-02-20T21:11:17.9480144Z ANDROID_NDK_ROOT=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Features	Initialize containers	2026-02-20T21:11:17.9480514Z ANDROID_NDK_LATEST_HOME=/usr/local/lib/android/sdk/ndk/29.0.14206865
+Features	Initialize containers	2026-02-20T21:11:17.9480826Z PIPX_BIN_DIR=/opt/pipx_bin
+Features	Initialize containers	2026-02-20T21:11:17.9481052Z PIPX_HOME=/opt/pipx
+Features	Initialize containers	2026-02-20T21:11:17.9481279Z GOROOT_1_22_X64=/opt/hostedtoolcache/go/1.22.12/x64
+Features	Initialize containers	2026-02-20T21:11:17.9481561Z GOROOT_1_23_X64=/opt/hostedtoolcache/go/1.23.12/x64
+Features	Initialize containers	2026-02-20T21:11:17.9481854Z GOROOT_1_24_X64=/opt/hostedtoolcache/go/1.24.12/x64
+Features	Initialize containers	2026-02-20T21:11:17.9482134Z GOROOT_1_25_X64=/opt/hostedtoolcache/go/1.25.6/x64
+Features	Initialize containers	2026-02-20T21:11:17.9482403Z HOMEBREW_NO_AUTO_UPDATE=1
+Features	Initialize containers	2026-02-20T21:11:17.9482616Z HOMEBREW_CLEANUP_PERIODIC_FULL_DAYS=3650
+Features	Initialize containers	2026-02-20T21:11:17.9482865Z XDG_RUNTIME_DIR=/run/user/1001
+Features	Initialize containers	2026-02-20T21:11:17.9483259Z POWERSHELL_DISTRIBUTION_CHANNEL=GitHub-Actions-ubuntu24
+Features	Initialize containers	2026-02-20T21:11:17.9490992Z ##[endgroup]
+Features	Initialize containers	2026-02-20T21:11:17.9500140Z ##[group]Waiting for all services to be ready
+Features	Initialize containers	2026-02-20T21:11:17.9501875Z ##[endgroup]
+Features	Run actions/checkout@v4	﻿2026-02-20T21:11:17.9743674Z ##[group]Run actions/checkout@v4
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9744183Z with:
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9744382Z   repository: water-rs/waterkit
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9744827Z   token: ***
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9745032Z   ssh-strict: true
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9745215Z   ssh-user: git
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9745433Z   persist-credentials: true
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9745643Z   clean: true
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9745852Z   sparse-checkout-cone-mode: true
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9746083Z   fetch-depth: 1
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9746285Z   fetch-tags: false
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9746466Z   show-progress: true
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9746673Z   lfs: false
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9746851Z   submodules: false
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9747047Z   set-safe-directory: true
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9747419Z env:
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9747593Z   CARGO_TERM_COLOR: always
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9747797Z ##[endgroup]
+Features	Run actions/checkout@v4	2026-02-20T21:11:17.9803424Z ##[command]/usr/bin/docker exec  b0dc20b93360d3b73f2fa68b789466a000cec2d5a00516b5cdad61907b5cee91 sh -c "cat /etc/*release | grep ^ID"
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3134198Z Syncing repository: water-rs/waterkit
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3135485Z ##[group]Getting Git version info
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3136091Z Working directory is '/__w/waterkit/waterkit'
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3136907Z [command]/usr/bin/git version
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3223110Z git version 2.52.0
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3256581Z ##[endgroup]
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3272683Z Temporarily overriding HOME='/__w/_temp/738b4245-88fe-4f3c-98d6-f52fb52cd0a6' before making global git config changes
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3273889Z Adding repository directory to the temporary git global config as a safe directory
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3287194Z [command]/usr/bin/git config --global --add safe.directory /__w/waterkit/waterkit
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3321718Z Deleting the contents of '/__w/waterkit/waterkit'
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3329096Z ##[group]Initializing the repository
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3331025Z [command]/usr/bin/git init /__w/waterkit/waterkit
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3396050Z hint: Using 'master' as the name for the initial branch. This default branch name
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3397194Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3398070Z hint: to use in all of your new repositories, which will suppress this warning,
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3400387Z hint: call:
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3401193Z hint:
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3401742Z hint: 	git config --global init.defaultBranch <name>
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3402238Z hint:
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3402702Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3403572Z hint: 'development'. The just-created branch can be renamed via this command:
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3404140Z hint:
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3404429Z hint: 	git branch -m <name>
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3404748Z hint:
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3405229Z hint: Disable this message with "git config set advice.defaultBranchName false"
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3406010Z Initialized empty Git repository in /__w/waterkit/waterkit/.git/
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3412769Z [command]/usr/bin/git remote add origin https://github.com/water-rs/waterkit
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3440775Z ##[endgroup]
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3441422Z ##[group]Disabling automatic garbage collection
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3445507Z [command]/usr/bin/git config --local gc.auto 0
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3468448Z ##[endgroup]
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3469069Z ##[group]Setting up auth
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3478074Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3505253Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3803400Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.3832716Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.4004439Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.4038451Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.4208871Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.4237847Z ##[endgroup]
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.4238287Z ##[group]Fetching the repository
+Features	Run actions/checkout@v4	2026-02-20T21:11:18.4246537Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a2edaef130b2bdad2c6a0836bb03f4dbec151bdb:refs/remotes/origin/dev
+Features	Run actions/checkout@v4	2026-02-20T21:11:19.4152876Z From https://github.com/water-rs/waterkit
+Features	Run actions/checkout@v4	2026-02-20T21:11:19.4153580Z  * [new ref]         a2edaef130b2bdad2c6a0836bb03f4dbec151bdb -> origin/dev
+Features	Run actions/checkout@v4	2026-02-20T21:11:19.4178904Z ##[endgroup]
+Features	Run actions/checkout@v4	2026-02-20T21:11:19.4179295Z ##[group]Determining the checkout info
+Features	Run actions/checkout@v4	2026-02-20T21:11:19.4181038Z ##[endgroup]
+Features	Run actions/checkout@v4	2026-02-20T21:11:19.4186008Z [command]/usr/bin/git sparse-checkout disable
+Features	Run actions/checkout@v4	2026-02-20T21:11:19.4224487Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+Features	Run actions/checkout@v4	2026-02-20T21:11:19.4242830Z ##[group]Checking out the ref
+Features	Run actions/checkout@v4	2026-02-20T21:11:19.4247022Z [command]/usr/bin/git checkout --progress --force -B dev refs/remotes/origin/dev
+Features	Run actions/checkout@v4	2026-02-20T21:11:19.5277907Z Switched to a new branch 'dev'
+Features	Run actions/checkout@v4	2026-02-20T21:11:19.5278444Z branch 'dev' set up to track 'origin/dev'.
+Features	Run actions/checkout@v4	2026-02-20T21:11:19.5295822Z ##[endgroup]
+Features	Run actions/checkout@v4	2026-02-20T21:11:19.5329221Z [command]/usr/bin/git log -1 --format=%H
+Features	Run actions/checkout@v4	2026-02-20T21:11:19.5347980Z a2edaef130b2bdad2c6a0836bb03f4dbec151bdb
+Features	Install Linux native dependencies	﻿2026-02-20T21:11:19.5535976Z ##[group]Run apt-get update
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5536319Z [36;1mapt-get update[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5536794Z [36;1mDEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5537295Z [36;1m  pkg-config \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5537526Z [36;1m  libwayland-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5537786Z [36;1m  libxkbcommon-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5538028Z [36;1m  libasound2-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5538244Z [36;1m  libudev-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5538456Z [36;1m  libdav1d-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5538663Z [36;1m  nasm \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5538845Z [36;1m  libavutil-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5539063Z [36;1m  libavcodec-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5539275Z [36;1m  libavformat-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5539690Z [36;1m  libavfilter-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5539932Z [36;1m  libavdevice-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5540134Z [36;1m  libswscale-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5540365Z [36;1m  libswresample-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5540633Z [36;1m  libxcb1-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5540849Z [36;1m  libxcb-render0-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5541076Z [36;1m  libxcb-shape0-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5541368Z [36;1m  libxcb-xfixes0-dev \[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5541649Z [36;1m  libdbus-1-dev[0m
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5546035Z shell: bash --noprofile --norc -e -o pipefail {0}
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5546480Z env:
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5546753Z   CARGO_TERM_COLOR: always
+Features	Install Linux native dependencies	2026-02-20T21:11:19.5547038Z ##[endgroup]
+Features	Install Linux native dependencies	2026-02-20T21:11:19.6505658Z Reading package lists...
+Features	Install Linux native dependencies	2026-02-20T21:11:19.6521054Z E: List directory /var/lib/apt/lists/partial is missing. - Acquire (13: Permission denied)
+Features	Install Linux native dependencies	2026-02-20T21:11:19.6566623Z ##[error]Process completed with exit code 100.
+Features	Post Run actions/checkout@v4	﻿2026-02-20T21:11:19.6685696Z Post job cleanup.
+Features	Post Run actions/checkout@v4	2026-02-20T21:11:19.6691100Z ##[command]/usr/bin/docker exec  b0dc20b93360d3b73f2fa68b789466a000cec2d5a00516b5cdad61907b5cee91 sh -c "cat /etc/*release | grep ^ID"
+Features	Post Run actions/checkout@v4	2026-02-20T21:11:19.8616534Z [command]/usr/bin/git version
+Features	Post Run actions/checkout@v4	2026-02-20T21:11:19.8662261Z git version 2.52.0
+Features	Post Run actions/checkout@v4	2026-02-20T21:11:19.8720274Z Temporarily overriding HOME='/__w/_temp/be8ea848-9db1-4db9-bca4-09449c9e6c4b' before making global git config changes
+Features	Post Run actions/checkout@v4	2026-02-20T21:11:19.8721387Z Adding repository directory to the temporary git global config as a safe directory
+Features	Post Run actions/checkout@v4	2026-02-20T21:11:19.8736603Z [command]/usr/bin/git config --global --add safe.directory /__w/waterkit/waterkit
+Features	Post Run actions/checkout@v4	2026-02-20T21:11:19.8772206Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Features	Post Run actions/checkout@v4	2026-02-20T21:11:19.8805253Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Features	Post Run actions/checkout@v4	2026-02-20T21:11:19.8989203Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Features	Post Run actions/checkout@v4	2026-02-20T21:11:19.9007505Z http.https://github.com/.extraheader
+Features	Post Run actions/checkout@v4	2026-02-20T21:11:19.9019578Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+Features	Post Run actions/checkout@v4	2026-02-20T21:11:19.9048386Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Features	Post Run actions/checkout@v4	2026-02-20T21:11:19.9223209Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Features	Post Run actions/checkout@v4	2026-02-20T21:11:19.9250503Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Features	Stop containers	﻿2026-02-20T21:11:19.9546764Z Stop and remove container: 41b7d836fb28478393c614d7f4ea30b1_ghcriocatthehackerubuntufulllatest_21377a
+Features	Stop containers	2026-02-20T21:11:19.9553337Z ##[command]/usr/bin/docker rm --force b0dc20b93360d3b73f2fa68b789466a000cec2d5a00516b5cdad61907b5cee91
+Features	Stop containers	2026-02-20T21:11:20.0423609Z b0dc20b93360d3b73f2fa68b789466a000cec2d5a00516b5cdad61907b5cee91
+Features	Stop containers	2026-02-20T21:11:20.0447893Z Remove container network: github_network_89774eb431c7472e8a43d188141ddf49
+Features	Stop containers	2026-02-20T21:11:20.0452517Z ##[command]/usr/bin/docker network rm github_network_89774eb431c7472e8a43d188141ddf49
+Features	Stop containers	2026-02-20T21:11:20.1430413Z github_network_89774eb431c7472e8a43d188141ddf49
+Features	Complete job	﻿2026-02-20T21:11:20.1486801Z Cleaning up orphan processes

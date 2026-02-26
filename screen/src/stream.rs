@@ -28,10 +28,8 @@ impl Default for StreamConfig {
 /// Frames are delivered as [`ScreenFrame`] with zero-copy on supported platforms.
 pub struct ScreenStream {
     inner: sys::ScreenStreamInner,
-    #[allow(dead_code)]
-    device: Arc<Device>,
-    #[allow(dead_code)]
-    queue: Arc<Queue>,
+    _device: Arc<Device>,
+    _queue: Arc<Queue>,
 }
 
 impl std::fmt::Debug for ScreenStream {
@@ -62,8 +60,8 @@ impl ScreenStream {
         let inner = sys::ScreenStreamInner::new(display, device.clone(), queue.clone(), config)?;
         Ok(Self {
             inner,
-            device,
-            queue,
+            _device: device,
+            _queue: queue,
         })
     }
 

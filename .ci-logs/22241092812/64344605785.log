@@ -1,0 +1,332 @@
+Coverage	Set up job	﻿2026-02-20T21:03:30.9135201Z Current runner version: '2.331.0'
+Coverage	Set up job	2026-02-20T21:03:30.9170420Z ##[group]Runner Image Provisioner
+Coverage	Set up job	2026-02-20T21:03:30.9171626Z Hosted Compute Agent
+Coverage	Set up job	2026-02-20T21:03:30.9172655Z Version: 20260123.484
+Coverage	Set up job	2026-02-20T21:03:30.9173583Z Commit: 6bd6555ca37d84114959e1c76d2c01448ff61c5d
+Coverage	Set up job	2026-02-20T21:03:30.9174927Z Build Date: 2026-01-23T19:41:17Z
+Coverage	Set up job	2026-02-20T21:03:30.9176060Z Worker ID: {ffb3879b-b284-477b-8dea-1ea567dd7810}
+Coverage	Set up job	2026-02-20T21:03:30.9177573Z Azure Region: eastus
+Coverage	Set up job	2026-02-20T21:03:30.9178419Z ##[endgroup]
+Coverage	Set up job	2026-02-20T21:03:30.9181454Z ##[group]Operating System
+Coverage	Set up job	2026-02-20T21:03:30.9182450Z Ubuntu
+Coverage	Set up job	2026-02-20T21:03:30.9183254Z 24.04.3
+Coverage	Set up job	2026-02-20T21:03:30.9184037Z LTS
+Coverage	Set up job	2026-02-20T21:03:30.9184721Z ##[endgroup]
+Coverage	Set up job	2026-02-20T21:03:30.9185658Z ##[group]Runner Image
+Coverage	Set up job	2026-02-20T21:03:30.9186845Z Image: ubuntu-24.04
+Coverage	Set up job	2026-02-20T21:03:30.9187700Z Version: 20260201.15.1
+Coverage	Set up job	2026-02-20T21:03:30.9189521Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260201.15/images/ubuntu/Ubuntu2404-Readme.md
+Coverage	Set up job	2026-02-20T21:03:30.9192434Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260201.15
+Coverage	Set up job	2026-02-20T21:03:30.9194007Z ##[endgroup]
+Coverage	Set up job	2026-02-20T21:03:30.9195729Z ##[group]GITHUB_TOKEN Permissions
+Coverage	Set up job	2026-02-20T21:03:30.9199089Z Checks: write
+Coverage	Set up job	2026-02-20T21:03:30.9199915Z Contents: read
+Coverage	Set up job	2026-02-20T21:03:30.9200740Z Metadata: read
+Coverage	Set up job	2026-02-20T21:03:30.9201740Z ##[endgroup]
+Coverage	Set up job	2026-02-20T21:03:30.9204639Z Secret source: Actions
+Coverage	Set up job	2026-02-20T21:03:30.9206395Z Prepare workflow directory
+Coverage	Set up job	2026-02-20T21:03:30.9846680Z Prepare all required actions
+Coverage	Set up job	2026-02-20T21:03:30.9903228Z Getting action download info
+Coverage	Set up job	2026-02-20T21:03:31.3105291Z Download action repository 'actions/checkout@v4' (SHA:34e114876b0b11c390a56381ad16ebd13914f8d5)
+Coverage	Set up job	2026-02-20T21:03:31.4235667Z Download action repository 'dtolnay/rust-toolchain@nightly' (SHA:0f1b44df7e9cbb178d781a242338dfa5e243ad7f)
+Coverage	Set up job	2026-02-20T21:03:31.5784421Z Download action repository 'Swatinem/rust-cache@v2' (SHA:779680da715d629ac1d338a641029a2f4372abb5)
+Coverage	Set up job	2026-02-20T21:03:31.8302407Z Download action repository 'taiki-e/install-action@cargo-llvm-cov' (SHA:bfb23b8b9788713603d1b9344203cd17d846a776)
+Coverage	Set up job	2026-02-20T21:03:32.0031878Z Download action repository 'codecov/codecov-action@v4' (SHA:b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238)
+Coverage	Set up job	2026-02-20T21:03:32.3921581Z Complete job name: Coverage
+Coverage	Initialize containers	﻿2026-02-20T21:03:32.4490035Z ##[group]Checking docker version
+Coverage	Initialize containers	2026-02-20T21:03:32.4503414Z ##[command]/usr/bin/docker version --format '{{.Server.APIVersion}}'
+Coverage	Initialize containers	2026-02-20T21:03:32.5504469Z '1.48'
+Coverage	Initialize containers	2026-02-20T21:03:32.5517994Z Docker daemon API version: '1.48'
+Coverage	Initialize containers	2026-02-20T21:03:32.5519359Z ##[command]/usr/bin/docker version --format '{{.Client.APIVersion}}'
+Coverage	Initialize containers	2026-02-20T21:03:32.5675422Z '1.48'
+Coverage	Initialize containers	2026-02-20T21:03:32.5689013Z Docker client API version: '1.48'
+Coverage	Initialize containers	2026-02-20T21:03:32.5695070Z ##[endgroup]
+Coverage	Initialize containers	2026-02-20T21:03:32.5698908Z ##[group]Clean up resources from previous jobs
+Coverage	Initialize containers	2026-02-20T21:03:32.5704862Z ##[command]/usr/bin/docker ps --all --quiet --no-trunc --filter "label=51ba51"
+Coverage	Initialize containers	2026-02-20T21:03:32.5852662Z ##[command]/usr/bin/docker network prune --force --filter "label=51ba51"
+Coverage	Initialize containers	2026-02-20T21:03:32.5976478Z ##[endgroup]
+Coverage	Initialize containers	2026-02-20T21:03:32.5977557Z ##[group]Create local container network
+Coverage	Initialize containers	2026-02-20T21:03:32.5988785Z ##[command]/usr/bin/docker network create --label 51ba51 github_network_da028dd9895243628ead1cac51cb13ba
+Coverage	Initialize containers	2026-02-20T21:03:32.6502961Z abbc4b37dd4ab94ff584d371b38e6391391b4ba141410349d59acae871c1d5aa
+Coverage	Initialize containers	2026-02-20T21:03:32.6521413Z ##[endgroup]
+Coverage	Initialize containers	2026-02-20T21:03:32.6546043Z ##[group]Starting job container
+Coverage	Initialize containers	2026-02-20T21:03:32.6571271Z ##[command]/usr/bin/docker --config /home/runner/work/_temp/.docker_87cebbf7-900b-472a-bb78-b01a279ca120 login ghcr.io -u lexoliu --password-stdin
+Coverage	Initialize containers	2026-02-20T21:03:32.7984673Z ##[command]/usr/bin/docker --config /home/runner/work/_temp/.docker_87cebbf7-900b-472a-bb78-b01a279ca120 pull ghcr.io/catthehacker/ubuntu:full-latest
+Coverage	Initialize containers	2026-02-20T21:03:33.0049586Z full-latest: Pulling from catthehacker/ubuntu
+Coverage	Initialize containers	2026-02-20T21:03:33.0468882Z 9b806dfdaed9: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0471405Z 1dde18305acb: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0473228Z 6df4edeb4397: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0474753Z 25f9251537f4: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0475786Z cbdccf58eb85: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0477188Z bde644ad596d: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0478210Z 994221bc8b7c: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0479195Z e904d24dad07: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0480337Z eb1f0bb8861d: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0481316Z 076b7ce4610e: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0482341Z 52aa22a86b4b: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0483377Z ffdee555c486: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0484380Z 79d252bf7787: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0485345Z a2c714f6e069: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0486694Z 9304117cb56e: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0487825Z b9cfa9f6fbbc: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0489272Z 172b577f6339: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0491114Z 64fdaaa7fb94: Pulling fs layer
+Coverage	Initialize containers	2026-02-20T21:03:33.0492732Z 25f9251537f4: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:33.0493835Z cbdccf58eb85: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:33.0494786Z bde644ad596d: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:33.0495683Z 79d252bf7787: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:33.0496729Z 994221bc8b7c: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:33.0497726Z e904d24dad07: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:33.0498660Z 172b577f6339: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:33.0499511Z a2c714f6e069: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:33.0500474Z eb1f0bb8861d: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:33.0501333Z 076b7ce4610e: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:33.0502363Z 64fdaaa7fb94: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:33.0503211Z 52aa22a86b4b: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:33.0504280Z ffdee555c486: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:33.0505134Z b9cfa9f6fbbc: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:33.0507401Z 9304117cb56e: Waiting
+Coverage	Initialize containers	2026-02-20T21:03:39.9192901Z 6df4edeb4397: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:39.9194812Z 6df4edeb4397: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:40.1953271Z 1dde18305acb: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:40.1954361Z 1dde18305acb: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:46.1661403Z 9b806dfdaed9: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:46.1662333Z 9b806dfdaed9: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:46.9810511Z cbdccf58eb85: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:46.9814571Z cbdccf58eb85: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:48.0985464Z bde644ad596d: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:48.0987706Z bde644ad596d: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:48.4391203Z 994221bc8b7c: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:48.4392233Z 994221bc8b7c: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:48.5040417Z eb1f0bb8861d: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:48.5042211Z eb1f0bb8861d: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:49.0251270Z 076b7ce4610e: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:49.0278100Z 076b7ce4610e: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:49.9421506Z 25f9251537f4: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:50.8279679Z ffdee555c486: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:50.8280499Z ffdee555c486: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:51.6592721Z 79d252bf7787: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:51.6593454Z 79d252bf7787: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:53.2792463Z 52aa22a86b4b: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:53.2793456Z 52aa22a86b4b: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:55.0766787Z e904d24dad07: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:55.0767758Z e904d24dad07: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:57.0624465Z b9cfa9f6fbbc: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:57.0628119Z b9cfa9f6fbbc: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:57.8954314Z 9304117cb56e: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:57.8954983Z 9304117cb56e: Download complete
+Coverage	Initialize containers	2026-02-20T21:03:59.8661185Z 64fdaaa7fb94: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:03:59.8662789Z 64fdaaa7fb94: Download complete
+Coverage	Initialize containers	2026-02-20T21:04:10.8130853Z 172b577f6339: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:04:10.8132516Z 172b577f6339: Download complete
+Coverage	Initialize containers	2026-02-20T21:04:14.1664624Z a2c714f6e069: Verifying Checksum
+Coverage	Initialize containers	2026-02-20T21:04:14.1665090Z a2c714f6e069: Download complete
+Coverage	Initialize containers	2026-02-20T21:05:14.4290415Z 9b806dfdaed9: Pull complete
+Coverage	Initialize containers	2026-02-20T21:06:00.9039431Z 1dde18305acb: Pull complete
+Coverage	Initialize containers	2026-02-20T21:06:38.6681346Z 6df4edeb4397: Pull complete
+Coverage	Initialize containers	2026-02-20T21:07:15.2632819Z 25f9251537f4: Pull complete
+Coverage	Initialize containers	2026-02-20T21:07:34.7110899Z cbdccf58eb85: Pull complete
+Coverage	Initialize containers	2026-02-20T21:07:47.4734366Z bde644ad596d: Pull complete
+Coverage	Initialize containers	2026-02-20T21:08:06.3189827Z 994221bc8b7c: Pull complete
+Coverage	Initialize containers	2026-02-20T21:08:16.2594350Z e904d24dad07: Pull complete
+Coverage	Initialize containers	2026-02-20T21:08:16.2705826Z eb1f0bb8861d: Pull complete
+Coverage	Initialize containers	2026-02-20T21:08:17.6744808Z 076b7ce4610e: Pull complete
+Coverage	Initialize containers	2026-02-20T21:08:29.5700847Z 52aa22a86b4b: Pull complete
+Coverage	Initialize containers	2026-02-20T21:08:31.2559559Z ffdee555c486: Pull complete
+Coverage	Initialize containers	2026-02-20T21:08:35.5204850Z 79d252bf7787: Pull complete
+Coverage	Initialize containers	2026-02-20T21:10:26.3104975Z a2c714f6e069: Pull complete
+Coverage	Initialize containers	2026-02-20T21:10:49.4549636Z 9304117cb56e: Pull complete
+Coverage	Initialize containers	2026-02-20T21:10:56.8028085Z b9cfa9f6fbbc: Pull complete
+Coverage	Initialize containers	2026-02-20T21:12:14.3659208Z 172b577f6339: Pull complete
+Coverage	Initialize containers	2026-02-20T21:12:18.4833076Z 64fdaaa7fb94: Pull complete
+Coverage	Initialize containers	2026-02-20T21:12:18.4887497Z Digest: sha256:9327301aea27f88258ad7f16ebf83eb772cc97ac831542ce90264b776833474d
+Coverage	Initialize containers	2026-02-20T21:12:18.4905816Z Status: Downloaded newer image for ghcr.io/catthehacker/ubuntu:full-latest
+Coverage	Initialize containers	2026-02-20T21:12:18.4923127Z ghcr.io/catthehacker/ubuntu:full-latest
+Coverage	Initialize containers	2026-02-20T21:12:18.5010335Z ##[command]/usr/bin/docker create --name 81b1b1e52d184a3d88337f768a1422ee_ghcriocatthehackerubuntufulllatest_f78d19 --label 51ba51 --workdir /__w/waterkit/waterkit --network github_network_da028dd9895243628ead1cac51cb13ba  -e "HOME=/github/home" -e GITHUB_ACTIONS=true -e CI=true -v "/var/run/docker.sock":"/var/run/docker.sock" -v "/home/runner/work":"/__w" -v "/home/runner/actions-runner/cached/externals":"/__e":ro -v "/home/runner/work/_temp":"/__w/_temp" -v "/home/runner/work/_actions":"/__w/_actions" -v "/opt/hostedtoolcache":"/__t" -v "/home/runner/work/_temp/_github_home":"/github/home" -v "/home/runner/work/_temp/_github_workflow":"/github/workflow" --entrypoint "tail" ghcr.io/catthehacker/ubuntu:full-latest "-f" "/dev/null"
+Coverage	Initialize containers	2026-02-20T21:12:18.5285599Z fab96d78138c07eb2030a6431fa24731f70c0fa97b5616921b9b8f9409a41e26
+Coverage	Initialize containers	2026-02-20T21:12:18.5309483Z ##[command]/usr/bin/docker start fab96d78138c07eb2030a6431fa24731f70c0fa97b5616921b9b8f9409a41e26
+Coverage	Initialize containers	2026-02-20T21:12:18.7098397Z fab96d78138c07eb2030a6431fa24731f70c0fa97b5616921b9b8f9409a41e26
+Coverage	Initialize containers	2026-02-20T21:12:18.7129149Z ##[command]/usr/bin/docker ps --all --filter id=fab96d78138c07eb2030a6431fa24731f70c0fa97b5616921b9b8f9409a41e26 --filter status=running --no-trunc --format "{{.ID}} {{.Status}}"
+Coverage	Initialize containers	2026-02-20T21:12:18.7248577Z fab96d78138c07eb2030a6431fa24731f70c0fa97b5616921b9b8f9409a41e26 Up Less than a second
+Coverage	Initialize containers	2026-02-20T21:12:18.7267273Z ##[command]/usr/bin/docker inspect --format "{{range .Config.Env}}{{println .}}{{end}}" fab96d78138c07eb2030a6431fa24731f70c0fa97b5616921b9b8f9409a41e26
+Coverage	Initialize containers	2026-02-20T21:12:18.7379681Z HOME=/github/home
+Coverage	Initialize containers	2026-02-20T21:12:18.7380072Z GITHUB_ACTIONS=true
+Coverage	Initialize containers	2026-02-20T21:12:18.7380603Z CI=true
+Coverage	Initialize containers	2026-02-20T21:12:18.7382437Z PATH=/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+Coverage	Initialize containers	2026-02-20T21:12:18.7384185Z ImageVersion=20260119.4.1
+Coverage	Initialize containers	2026-02-20T21:12:18.7384548Z ImageOS=ubuntu24
+Coverage	Initialize containers	2026-02-20T21:12:18.7384856Z ACCEPT_EULA=Y
+Coverage	Initialize containers	2026-02-20T21:12:18.7385181Z XDG_CONFIG_HOME=/home/runner/.config
+Coverage	Initialize containers	2026-02-20T21:12:18.7385640Z AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache
+Coverage	Initialize containers	2026-02-20T21:12:18.7386290Z RUNNER_TOOL_CACHE=/opt/hostedtoolcache
+Coverage	Initialize containers	2026-02-20T21:12:18.7387368Z PSModulePath=/root/.local/share/powershell/Modules:/usr/local/share/powershell/Modules:/opt/microsoft/powershell/7/Modules:/usr/share/az_12.5.0
+Coverage	Initialize containers	2026-02-20T21:12:18.7388554Z ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE=/opt/actionarchivecache
+Coverage	Initialize containers	2026-02-20T21:12:18.7389143Z AZURE_EXTENSION_DIR=/opt/az/azcliextensions
+Coverage	Initialize containers	2026-02-20T21:12:18.7389650Z SWIFT_PATH=/usr/share/swift/usr/bin
+Coverage	Initialize containers	2026-02-20T21:12:18.7390080Z DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+Coverage	Initialize containers	2026-02-20T21:12:18.7390477Z DOTNET_NOLOGO=1
+Coverage	Initialize containers	2026-02-20T21:12:18.7390802Z DOTNET_MULTILEVEL_LOOKUP=0
+Coverage	Initialize containers	2026-02-20T21:12:18.7391210Z EDGEWEBDRIVER=/usr/local/share/edge_driver
+Coverage	Initialize containers	2026-02-20T21:12:18.7392029Z GECKOWEBDRIVER=/usr/local/share/gecko_driver
+Coverage	Initialize containers	2026-02-20T21:12:18.7392519Z CHROME_BIN=/usr/bin/google-chrome
+Coverage	Initialize containers	2026-02-20T21:12:18.7393017Z CHROMEWEBDRIVER=/usr/local/share/chromedriver-linux64
+Coverage	Initialize containers	2026-02-20T21:12:18.7393555Z BOOTSTRAP_HASKELL_NONINTERACTIVE=1
+Coverage	Initialize containers	2026-02-20T21:12:18.7394002Z GHCUP_INSTALL_BASE_PREFIX=/usr/local
+Coverage	Initialize containers	2026-02-20T21:12:18.7394471Z JAVA_HOME_8_X64=/usr/lib/jvm/temurin-8-jdk-amd64
+Coverage	Initialize containers	2026-02-20T21:12:18.7394995Z JAVA_HOME_11_X64=/usr/lib/jvm/temurin-11-jdk-amd64
+Coverage	Initialize containers	2026-02-20T21:12:18.7395643Z JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64
+Coverage	Initialize containers	2026-02-20T21:12:18.7396344Z JAVA_HOME_17_X64=/usr/lib/jvm/temurin-17-jdk-amd64
+Coverage	Initialize containers	2026-02-20T21:12:18.7396878Z JAVA_HOME_21_X64=/usr/lib/jvm/temurin-21-jdk-amd64
+Coverage	Initialize containers	2026-02-20T21:12:18.7397398Z JAVA_HOME_25_X64=/usr/lib/jvm/temurin-25-jdk-amd64
+Coverage	Initialize containers	2026-02-20T21:12:18.7397712Z ANT_HOME=/usr/share/ant
+Coverage	Initialize containers	2026-02-20T21:12:18.7397929Z GRADLE_HOME=/usr/share/gradle-9.3.0
+Coverage	Initialize containers	2026-02-20T21:12:18.7398169Z CONDA=/usr/share/miniconda
+Coverage	Initialize containers	2026-02-20T21:12:18.7398386Z NVM_DIR=/home/runner/.nvm
+Coverage	Initialize containers	2026-02-20T21:12:18.7398644Z SELENIUM_JAR_PATH=/usr/share/java/selenium-server.jar
+Coverage	Initialize containers	2026-02-20T21:12:18.7398960Z VCPKG_INSTALLATION_ROOT=/usr/local/share/vcpkg
+Coverage	Initialize containers	2026-02-20T21:12:18.7399245Z DEBIAN_FRONTEND=noninteractive
+Coverage	Initialize containers	2026-02-20T21:12:18.7399489Z ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+Coverage	Initialize containers	2026-02-20T21:12:18.7399768Z ANDROID_HOME=/usr/local/lib/android/sdk
+Coverage	Initialize containers	2026-02-20T21:12:18.7400063Z ANDROID_NDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Coverage	Initialize containers	2026-02-20T21:12:18.7400403Z ANDROID_NDK_HOME=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Coverage	Initialize containers	2026-02-20T21:12:18.7400760Z ANDROID_NDK_ROOT=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Coverage	Initialize containers	2026-02-20T21:12:18.7401135Z ANDROID_NDK_LATEST_HOME=/usr/local/lib/android/sdk/ndk/29.0.14206865
+Coverage	Initialize containers	2026-02-20T21:12:18.7401471Z PIPX_BIN_DIR=/opt/pipx_bin
+Coverage	Initialize containers	2026-02-20T21:12:18.7401686Z PIPX_HOME=/opt/pipx
+Coverage	Initialize containers	2026-02-20T21:12:18.7401908Z GOROOT_1_22_X64=/opt/hostedtoolcache/go/1.22.12/x64
+Coverage	Initialize containers	2026-02-20T21:12:18.7402212Z GOROOT_1_23_X64=/opt/hostedtoolcache/go/1.23.12/x64
+Coverage	Initialize containers	2026-02-20T21:12:18.7402506Z GOROOT_1_24_X64=/opt/hostedtoolcache/go/1.24.12/x64
+Coverage	Initialize containers	2026-02-20T21:12:18.7402804Z GOROOT_1_25_X64=/opt/hostedtoolcache/go/1.25.6/x64
+Coverage	Initialize containers	2026-02-20T21:12:18.7403070Z HOMEBREW_NO_AUTO_UPDATE=1
+Coverage	Initialize containers	2026-02-20T21:12:18.7403299Z HOMEBREW_CLEANUP_PERIODIC_FULL_DAYS=3650
+Coverage	Initialize containers	2026-02-20T21:12:18.7403723Z XDG_RUNTIME_DIR=/run/user/1001
+Coverage	Initialize containers	2026-02-20T21:12:18.7404003Z POWERSHELL_DISTRIBUTION_CHANNEL=GitHub-Actions-ubuntu24
+Coverage	Initialize containers	2026-02-20T21:12:18.7411551Z ##[endgroup]
+Coverage	Initialize containers	2026-02-20T21:12:18.7420135Z ##[group]Waiting for all services to be ready
+Coverage	Initialize containers	2026-02-20T21:12:18.7421822Z ##[endgroup]
+Coverage	Run actions/checkout@v4	﻿2026-02-20T21:12:18.7701905Z ##[group]Run actions/checkout@v4
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7702634Z with:
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7702844Z   repository: water-rs/waterkit
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7703234Z   token: ***
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7703416Z   ssh-strict: true
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7703601Z   ssh-user: git
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7703854Z   persist-credentials: true
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7704088Z   clean: true
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7704295Z   sparse-checkout-cone-mode: true
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7704522Z   fetch-depth: 1
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7704703Z   fetch-tags: false
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7704886Z   show-progress: true
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7705077Z   lfs: false
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7705247Z   submodules: false
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7705434Z   set-safe-directory: true
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7705867Z env:
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7706042Z   CARGO_TERM_COLOR: always
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7706489Z ##[endgroup]
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:18.7762110Z ##[command]/usr/bin/docker exec  fab96d78138c07eb2030a6431fa24731f70c0fa97b5616921b9b8f9409a41e26 sh -c "cat /etc/*release | grep ^ID"
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1461630Z Syncing repository: water-rs/waterkit
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1462969Z ##[group]Getting Git version info
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1463304Z Working directory is '/__w/waterkit/waterkit'
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1463751Z [command]/usr/bin/git version
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1573629Z git version 2.52.0
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1604874Z ##[endgroup]
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1621688Z Temporarily overriding HOME='/__w/_temp/477e75a6-0711-4828-99b5-d4f8e1d8c8b1' before making global git config changes
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1622942Z Adding repository directory to the temporary git global config as a safe directory
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1635657Z [command]/usr/bin/git config --global --add safe.directory /__w/waterkit/waterkit
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1678966Z Deleting the contents of '/__w/waterkit/waterkit'
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1684309Z ##[group]Initializing the repository
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1689403Z [command]/usr/bin/git init /__w/waterkit/waterkit
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1781415Z hint: Using 'master' as the name for the initial branch. This default branch name
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1786983Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1788612Z hint: to use in all of your new repositories, which will suppress this warning,
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1789479Z hint: call:
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1790258Z hint:
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1790858Z hint: 	git config --global init.defaultBranch <name>
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1791587Z hint:
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1792743Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1794426Z hint: 'development'. The just-created branch can be renamed via this command:
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1795205Z hint:
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1796373Z hint: 	git branch -m <name>
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1797311Z hint:
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1798475Z hint: Disable this message with "git config set advice.defaultBranchName false"
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1799541Z Initialized empty Git repository in /__w/waterkit/waterkit/.git/
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1802871Z [command]/usr/bin/git remote add origin https://github.com/water-rs/waterkit
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1839353Z ##[endgroup]
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1840181Z ##[group]Disabling automatic garbage collection
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1843632Z [command]/usr/bin/git config --local gc.auto 0
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1872174Z ##[endgroup]
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1872521Z ##[group]Setting up auth
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1881294Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.1913252Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.2289629Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.2321654Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.2539256Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.2574791Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.2813063Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.2852550Z ##[endgroup]
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.2854576Z ##[group]Fetching the repository
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:19.2864967Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a2edaef130b2bdad2c6a0836bb03f4dbec151bdb:refs/remotes/origin/dev
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:20.2216763Z From https://github.com/water-rs/waterkit
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:20.2217644Z  * [new ref]         a2edaef130b2bdad2c6a0836bb03f4dbec151bdb -> origin/dev
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:20.2250699Z ##[endgroup]
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:20.2251549Z ##[group]Determining the checkout info
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:20.2253566Z ##[endgroup]
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:20.2259099Z [command]/usr/bin/git sparse-checkout disable
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:20.2300585Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:20.2325906Z ##[group]Checking out the ref
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:20.2330851Z [command]/usr/bin/git checkout --progress --force -B dev refs/remotes/origin/dev
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:20.3530196Z Switched to a new branch 'dev'
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:20.3531830Z branch 'dev' set up to track 'origin/dev'.
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:20.3560287Z ##[endgroup]
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:20.3599912Z [command]/usr/bin/git log -1 --format=%H
+Coverage	Run actions/checkout@v4	2026-02-20T21:12:20.3622532Z a2edaef130b2bdad2c6a0836bb03f4dbec151bdb
+Coverage	Install Linux native dependencies	﻿2026-02-20T21:12:20.3836041Z ##[group]Run apt-get update
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3836705Z [36;1mapt-get update[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3837163Z [36;1mDEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3837584Z [36;1m  pkg-config \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3837795Z [36;1m  libwayland-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3838023Z [36;1m  libxkbcommon-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3838244Z [36;1m  libasound2-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3838460Z [36;1m  libudev-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3838662Z [36;1m  libdav1d-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3838864Z [36;1m  nasm \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3839047Z [36;1m  libavutil-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3839278Z [36;1m  libavcodec-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3839485Z [36;1m  libavformat-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3839701Z [36;1m  libavfilter-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3839909Z [36;1m  libavdevice-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3840110Z [36;1m  libswscale-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3840329Z [36;1m  libswresample-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3840582Z [36;1m  libxcb1-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3840791Z [36;1m  libxcb-render0-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3841016Z [36;1m  libxcb-shape0-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3841238Z [36;1m  libxcb-xfixes0-dev \[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3841454Z [36;1m  libdbus-1-dev[0m
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3845500Z shell: bash --noprofile --norc -e -o pipefail {0}
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3845801Z env:
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3845986Z   CARGO_TERM_COLOR: always
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.3846378Z ##[endgroup]
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.4922101Z Reading package lists...
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.4942325Z E: List directory /var/lib/apt/lists/partial is missing. - Acquire (13: Permission denied)
+Coverage	Install Linux native dependencies	2026-02-20T21:12:20.5001141Z ##[error]Process completed with exit code 100.
+Coverage	Post Run actions/checkout@v4	﻿2026-02-20T21:12:20.5117489Z Post job cleanup.
+Coverage	Post Run actions/checkout@v4	2026-02-20T21:12:20.5121859Z ##[command]/usr/bin/docker exec  fab96d78138c07eb2030a6431fa24731f70c0fa97b5616921b9b8f9409a41e26 sh -c "cat /etc/*release | grep ^ID"
+Coverage	Post Run actions/checkout@v4	2026-02-20T21:12:20.7051718Z [command]/usr/bin/git version
+Coverage	Post Run actions/checkout@v4	2026-02-20T21:12:20.7088304Z git version 2.52.0
+Coverage	Post Run actions/checkout@v4	2026-02-20T21:12:20.7133584Z Temporarily overriding HOME='/__w/_temp/d610bd0e-b00c-4899-9816-805b074412ca' before making global git config changes
+Coverage	Post Run actions/checkout@v4	2026-02-20T21:12:20.7134818Z Adding repository directory to the temporary git global config as a safe directory
+Coverage	Post Run actions/checkout@v4	2026-02-20T21:12:20.7140510Z [command]/usr/bin/git config --global --add safe.directory /__w/waterkit/waterkit
+Coverage	Post Run actions/checkout@v4	2026-02-20T21:12:20.7176393Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Coverage	Post Run actions/checkout@v4	2026-02-20T21:12:20.7209529Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Coverage	Post Run actions/checkout@v4	2026-02-20T21:12:20.7424175Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Coverage	Post Run actions/checkout@v4	2026-02-20T21:12:20.7444556Z http.https://github.com/.extraheader
+Coverage	Post Run actions/checkout@v4	2026-02-20T21:12:20.7457887Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+Coverage	Post Run actions/checkout@v4	2026-02-20T21:12:20.7488463Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Coverage	Post Run actions/checkout@v4	2026-02-20T21:12:20.7698091Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Coverage	Post Run actions/checkout@v4	2026-02-20T21:12:20.7730979Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Coverage	Stop containers	﻿2026-02-20T21:12:20.8087956Z Stop and remove container: 81b1b1e52d184a3d88337f768a1422ee_ghcriocatthehackerubuntufulllatest_f78d19
+Coverage	Stop containers	2026-02-20T21:12:20.8092812Z ##[command]/usr/bin/docker rm --force fab96d78138c07eb2030a6431fa24731f70c0fa97b5616921b9b8f9409a41e26
+Coverage	Stop containers	2026-02-20T21:12:20.9135444Z fab96d78138c07eb2030a6431fa24731f70c0fa97b5616921b9b8f9409a41e26
+Coverage	Stop containers	2026-02-20T21:12:20.9164974Z Remove container network: github_network_da028dd9895243628ead1cac51cb13ba
+Coverage	Stop containers	2026-02-20T21:12:20.9169686Z ##[command]/usr/bin/docker network rm github_network_da028dd9895243628ead1cac51cb13ba
+Coverage	Stop containers	2026-02-20T21:12:21.0152003Z github_network_da028dd9895243628ead1cac51cb13ba
+Coverage	Complete job	﻿2026-02-20T21:12:21.0210757Z Cleaning up orphan processes

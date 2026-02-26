@@ -1,0 +1,330 @@
+Clippy (ubuntu-latest)	Set up job	﻿2026-02-20T21:03:30.8655082Z Current runner version: '2.331.0'
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8688082Z ##[group]Runner Image Provisioner
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8689682Z Hosted Compute Agent
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8690690Z Version: 20260123.484
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8691645Z Commit: 6bd6555ca37d84114959e1c76d2c01448ff61c5d
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8692732Z Build Date: 2026-01-23T19:41:17Z
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8694001Z Worker ID: {0d30d98e-0cee-45fa-8f71-2b1cc572612c}
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8695172Z Azure Region: eastus2
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8696132Z ##[endgroup]
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8698784Z ##[group]Operating System
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8699798Z Ubuntu
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8700506Z 24.04.3
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8701391Z LTS
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8702206Z ##[endgroup]
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8703062Z ##[group]Runner Image
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8704154Z Image: ubuntu-24.04
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8704946Z Version: 20260201.15.1
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8706908Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260201.15/images/ubuntu/Ubuntu2404-Readme.md
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8709738Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260201.15
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8711587Z ##[endgroup]
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8713377Z ##[group]GITHUB_TOKEN Permissions
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8716194Z Checks: write
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8717330Z Contents: read
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8718157Z Metadata: read
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8719702Z ##[endgroup]
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8722554Z Secret source: Actions
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.8723981Z Prepare workflow directory
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.9349974Z Prepare all required actions
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:30.9407011Z Getting action download info
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:31.2763803Z Download action repository 'actions/checkout@v4' (SHA:34e114876b0b11c390a56381ad16ebd13914f8d5)
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:31.3762652Z Download action repository 'dtolnay/rust-toolchain@nightly' (SHA:0f1b44df7e9cbb178d781a242338dfa5e243ad7f)
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:31.6119926Z Download action repository 'Swatinem/rust-cache@v2' (SHA:779680da715d629ac1d338a641029a2f4372abb5)
+Clippy (ubuntu-latest)	Set up job	2026-02-20T21:03:32.0207633Z Complete job name: Clippy (ubuntu-latest)
+Clippy (ubuntu-latest)	Initialize containers	﻿2026-02-20T21:03:32.0697418Z ##[group]Checking docker version
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.0710694Z ##[command]/usr/bin/docker version --format '{{.Server.APIVersion}}'
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.1868968Z '1.48'
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.1882412Z Docker daemon API version: '1.48'
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.1883313Z ##[command]/usr/bin/docker version --format '{{.Client.APIVersion}}'
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.2046271Z '1.48'
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.2060698Z Docker client API version: '1.48'
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.2067133Z ##[endgroup]
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.2070582Z ##[group]Clean up resources from previous jobs
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.2075561Z ##[command]/usr/bin/docker ps --all --quiet --no-trunc --filter "label=0baaca"
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.2210501Z ##[command]/usr/bin/docker network prune --force --filter "label=0baaca"
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.2384879Z ##[endgroup]
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.2385443Z ##[group]Create local container network
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.2395578Z ##[command]/usr/bin/docker network create --label 0baaca github_network_2f5ee2c6706b4ffbb7f9032eb57641b3
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.2863903Z 1e20142b3fa7825e64ce46f3461d5a01f1cfb0d24b8056b7bbdf84cad629aa23
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.2882492Z ##[endgroup]
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.2907536Z ##[group]Starting job container
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.2930880Z ##[command]/usr/bin/docker --config /home/runner/work/_temp/.docker_c73d5166-d9e8-4c07-841b-a648ee39d1f5 login ghcr.io -u lexoliu --password-stdin
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.4634866Z ##[command]/usr/bin/docker --config /home/runner/work/_temp/.docker_c73d5166-d9e8-4c07-841b-a648ee39d1f5 pull ghcr.io/catthehacker/ubuntu:full-latest
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.7359269Z full-latest: Pulling from catthehacker/ubuntu
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.7985777Z 9b806dfdaed9: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.7987918Z 1dde18305acb: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.7989481Z 6df4edeb4397: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.7990432Z 25f9251537f4: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.7991475Z cbdccf58eb85: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.7992421Z bde644ad596d: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.7993701Z 994221bc8b7c: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.7994622Z e904d24dad07: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.7995540Z eb1f0bb8861d: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.7996357Z 076b7ce4610e: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.7997683Z 52aa22a86b4b: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.7999054Z ffdee555c486: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8000280Z 79d252bf7787: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8001143Z a2c714f6e069: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8002035Z 9304117cb56e: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8002909Z b9cfa9f6fbbc: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8003786Z 172b577f6339: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8004701Z 64fdaaa7fb94: Pulling fs layer
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8005595Z 25f9251537f4: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8006451Z cbdccf58eb85: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8007518Z bde644ad596d: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8008341Z 994221bc8b7c: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8009134Z e904d24dad07: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8009925Z eb1f0bb8861d: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8010736Z 076b7ce4610e: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8011734Z 52aa22a86b4b: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8012872Z b9cfa9f6fbbc: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8014007Z ffdee555c486: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8015167Z 79d252bf7787: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8016334Z a2c714f6e069: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8017709Z 9304117cb56e: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8018881Z 172b577f6339: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:32.8020241Z 64fdaaa7fb94: Waiting
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:39.9195804Z 6df4edeb4397: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:39.9198708Z 6df4edeb4397: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:40.1963978Z 1dde18305acb: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:46.1715425Z 9b806dfdaed9: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:46.1717355Z 9b806dfdaed9: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:47.0393900Z cbdccf58eb85: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:47.0396119Z cbdccf58eb85: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:48.1005345Z bde644ad596d: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:48.1017674Z bde644ad596d: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:48.4175762Z 994221bc8b7c: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:48.4179111Z 994221bc8b7c: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:48.4966241Z eb1f0bb8861d: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:48.4967953Z eb1f0bb8861d: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:48.9514533Z 076b7ce4610e: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:48.9518925Z 076b7ce4610e: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:50.0829919Z 25f9251537f4: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:50.0834564Z 25f9251537f4: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:51.0618195Z ffdee555c486: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:51.0619006Z ffdee555c486: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:51.4552072Z 79d252bf7787: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:51.4552996Z 79d252bf7787: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:52.4191585Z 52aa22a86b4b: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:52.4192267Z 52aa22a86b4b: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:55.6383939Z e904d24dad07: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:55.6384532Z e904d24dad07: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:56.7079466Z b9cfa9f6fbbc: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:56.7080627Z b9cfa9f6fbbc: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:57.8741023Z 9304117cb56e: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:03:57.8741764Z 9304117cb56e: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:04:00.1526938Z 64fdaaa7fb94: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:04:00.1528829Z 64fdaaa7fb94: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:04:10.3471150Z 172b577f6339: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:04:10.3471686Z 172b577f6339: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:04:15.4225404Z a2c714f6e069: Verifying Checksum
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:04:15.4225880Z a2c714f6e069: Download complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:05:16.0234345Z 9b806dfdaed9: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:06:01.7102243Z 1dde18305acb: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:06:41.9113278Z 6df4edeb4397: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:07:17.7209677Z 25f9251537f4: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:07:37.4211389Z cbdccf58eb85: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:07:50.7104861Z bde644ad596d: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:08:10.4204950Z 994221bc8b7c: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:08:20.5147040Z e904d24dad07: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:08:20.5261592Z eb1f0bb8861d: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:08:21.9638162Z 076b7ce4610e: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:08:34.0869643Z 52aa22a86b4b: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:08:35.8096560Z ffdee555c486: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:08:40.1886380Z 79d252bf7787: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:10:35.5435212Z a2c714f6e069: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:10:59.6278065Z 9304117cb56e: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:11:07.2362498Z b9cfa9f6fbbc: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:28.8287665Z 172b577f6339: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.0473974Z 64fdaaa7fb94: Pull complete
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.0522579Z Digest: sha256:9327301aea27f88258ad7f16ebf83eb772cc97ac831542ce90264b776833474d
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.0536093Z Status: Downloaded newer image for ghcr.io/catthehacker/ubuntu:full-latest
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.0550989Z ghcr.io/catthehacker/ubuntu:full-latest
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.0641077Z ##[command]/usr/bin/docker create --name 3bf05aa08f014d82aa7d1dc9fedf6473_ghcriocatthehackerubuntufulllatest_eefd07 --label 0baaca --workdir /__w/waterkit/waterkit --network github_network_2f5ee2c6706b4ffbb7f9032eb57641b3  -e "HOME=/github/home" -e GITHUB_ACTIONS=true -e CI=true -v "/var/run/docker.sock":"/var/run/docker.sock" -v "/home/runner/work":"/__w" -v "/home/runner/actions-runner/cached/externals":"/__e":ro -v "/home/runner/work/_temp":"/__w/_temp" -v "/home/runner/work/_actions":"/__w/_actions" -v "/opt/hostedtoolcache":"/__t" -v "/home/runner/work/_temp/_github_home":"/github/home" -v "/home/runner/work/_temp/_github_workflow":"/github/workflow" --entrypoint "tail" ghcr.io/catthehacker/ubuntu:full-latest "-f" "/dev/null"
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.0983692Z b53fd9e05a7674bbc029a7bc4c4eb7a7f07d9a8311ba9d70655c9d82a41c9d55
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.1008354Z ##[command]/usr/bin/docker start b53fd9e05a7674bbc029a7bc4c4eb7a7f07d9a8311ba9d70655c9d82a41c9d55
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6618066Z b53fd9e05a7674bbc029a7bc4c4eb7a7f07d9a8311ba9d70655c9d82a41c9d55
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6639772Z ##[command]/usr/bin/docker ps --all --filter id=b53fd9e05a7674bbc029a7bc4c4eb7a7f07d9a8311ba9d70655c9d82a41c9d55 --filter status=running --no-trunc --format "{{.ID}} {{.Status}}"
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6764473Z b53fd9e05a7674bbc029a7bc4c4eb7a7f07d9a8311ba9d70655c9d82a41c9d55 Up Less than a second
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6785958Z ##[command]/usr/bin/docker inspect --format "{{range .Config.Env}}{{println .}}{{end}}" b53fd9e05a7674bbc029a7bc4c4eb7a7f07d9a8311ba9d70655c9d82a41c9d55
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6913330Z CI=true
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6915134Z HOME=/github/home
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6915512Z GITHUB_ACTIONS=true
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6917475Z PATH=/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6919340Z ImageVersion=20260119.4.1
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6919719Z ImageOS=ubuntu24
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6920063Z ACCEPT_EULA=Y
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6920392Z XDG_CONFIG_HOME=/home/runner/.config
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6920900Z AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6921414Z RUNNER_TOOL_CACHE=/opt/hostedtoolcache
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6922569Z PSModulePath=/root/.local/share/powershell/Modules:/usr/local/share/powershell/Modules:/opt/microsoft/powershell/7/Modules:/usr/share/az_12.5.0
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6923984Z ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE=/opt/actionarchivecache
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6924631Z AZURE_EXTENSION_DIR=/opt/az/azcliextensions
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6925086Z SWIFT_PATH=/usr/share/swift/usr/bin
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6991878Z DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6992376Z DOTNET_NOLOGO=1
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6992717Z DOTNET_MULTILEVEL_LOOKUP=0
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6993188Z EDGEWEBDRIVER=/usr/local/share/edge_driver
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6993662Z GECKOWEBDRIVER=/usr/local/share/gecko_driver
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6994124Z CHROME_BIN=/usr/bin/google-chrome
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6994515Z CHROMEWEBDRIVER=/usr/local/share/chromedriver-linux64
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6995139Z BOOTSTRAP_HASKELL_NONINTERACTIVE=1
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6995409Z GHCUP_INSTALL_BASE_PREFIX=/usr/local
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6995710Z JAVA_HOME_8_X64=/usr/lib/jvm/temurin-8-jdk-amd64
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6996033Z JAVA_HOME_11_X64=/usr/lib/jvm/temurin-11-jdk-amd64
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6996389Z JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6996963Z JAVA_HOME_17_X64=/usr/lib/jvm/temurin-17-jdk-amd64
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6997397Z JAVA_HOME_21_X64=/usr/lib/jvm/temurin-21-jdk-amd64
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6997742Z JAVA_HOME_25_X64=/usr/lib/jvm/temurin-25-jdk-amd64
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6998013Z ANT_HOME=/usr/share/ant
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6998233Z GRADLE_HOME=/usr/share/gradle-9.3.0
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6998479Z CONDA=/usr/share/miniconda
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6998700Z NVM_DIR=/home/runner/.nvm
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6998979Z SELENIUM_JAR_PATH=/usr/share/java/selenium-server.jar
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6999333Z VCPKG_INSTALLATION_ROOT=/usr/local/share/vcpkg
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6999618Z DEBIAN_FRONTEND=noninteractive
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.6999871Z ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7000151Z ANDROID_HOME=/usr/local/lib/android/sdk
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7000457Z ANDROID_NDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7000825Z ANDROID_NDK_HOME=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7001197Z ANDROID_NDK_ROOT=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7001610Z ANDROID_NDK_LATEST_HOME=/usr/local/lib/android/sdk/ndk/29.0.14206865
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7001958Z PIPX_BIN_DIR=/opt/pipx_bin
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7002192Z PIPX_HOME=/opt/pipx
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7002426Z GOROOT_1_22_X64=/opt/hostedtoolcache/go/1.22.12/x64
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7002755Z GOROOT_1_23_X64=/opt/hostedtoolcache/go/1.23.12/x64
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7003065Z GOROOT_1_24_X64=/opt/hostedtoolcache/go/1.24.12/x64
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7003376Z GOROOT_1_25_X64=/opt/hostedtoolcache/go/1.25.6/x64
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7003664Z HOMEBREW_NO_AUTO_UPDATE=1
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7003902Z HOMEBREW_CLEANUP_PERIODIC_FULL_DAYS=3650
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7004343Z XDG_RUNTIME_DIR=/run/user/1001
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7004630Z POWERSHELL_DISTRIBUTION_CHANNEL=GitHub-Actions-ubuntu24
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7012456Z ##[endgroup]
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7021161Z ##[group]Waiting for all services to be ready
+Clippy (ubuntu-latest)	Initialize containers	2026-02-20T21:12:33.7022585Z ##[endgroup]
+Clippy (ubuntu-latest)	Run actions/checkout@v4	﻿2026-02-20T21:12:33.7284876Z ##[group]Run actions/checkout@v4
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7285435Z with:
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7285646Z   repository: water-rs/waterkit
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7286096Z   token: ***
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7286288Z   ssh-strict: true
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7286479Z   ssh-user: git
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7286897Z   persist-credentials: true
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7287147Z   clean: true
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7287347Z   sparse-checkout-cone-mode: true
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7287584Z   fetch-depth: 1
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7287771Z   fetch-tags: false
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7287960Z   show-progress: true
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7288154Z   lfs: false
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7288334Z   submodules: false
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7288534Z   set-safe-directory: true
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7288965Z env:
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7289143Z   CARGO_TERM_COLOR: always
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7289358Z ##[endgroup]
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:33.7345591Z ##[command]/usr/bin/docker exec  b53fd9e05a7674bbc029a7bc4c4eb7a7f07d9a8311ba9d70655c9d82a41c9d55 sh -c "cat /etc/*release | grep ^ID"
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.0955315Z Syncing repository: water-rs/waterkit
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.0957985Z ##[group]Getting Git version info
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.0958559Z Working directory is '/__w/waterkit/waterkit'
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.0972699Z [command]/usr/bin/git version
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1117320Z git version 2.52.0
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1150224Z ##[endgroup]
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1164510Z Temporarily overriding HOME='/__w/_temp/e0a8500c-98fe-497a-b4a3-934983297030' before making global git config changes
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1165464Z Adding repository directory to the temporary git global config as a safe directory
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1178865Z [command]/usr/bin/git config --global --add safe.directory /__w/waterkit/waterkit
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1220491Z Deleting the contents of '/__w/waterkit/waterkit'
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1224354Z ##[group]Initializing the repository
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1229403Z [command]/usr/bin/git init /__w/waterkit/waterkit
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1313824Z hint: Using 'master' as the name for the initial branch. This default branch name
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1314958Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1315953Z hint: to use in all of your new repositories, which will suppress this warning,
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1316932Z hint: call:
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1317354Z hint:
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1317765Z hint: 	git config --global init.defaultBranch <name>
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1318264Z hint:
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1318835Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1319700Z hint: 'development'. The just-created branch can be renamed via this command:
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1320363Z hint:
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1320746Z hint: 	git branch -m <name>
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1321118Z hint:
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1321489Z hint: Disable this message with "git config set advice.defaultBranchName false"
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1322252Z Initialized empty Git repository in /__w/waterkit/waterkit/.git/
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1335210Z [command]/usr/bin/git remote add origin https://github.com/water-rs/waterkit
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1373728Z ##[endgroup]
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1374407Z ##[group]Disabling automatic garbage collection
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1381199Z [command]/usr/bin/git config --local gc.auto 0
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1409178Z ##[endgroup]
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1409515Z ##[group]Setting up auth
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1418411Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1451623Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1803127Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.1833313Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.2052777Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.2092854Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.2309485Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.2348455Z ##[endgroup]
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.2349853Z ##[group]Fetching the repository
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:34.2359368Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a2edaef130b2bdad2c6a0836bb03f4dbec151bdb:refs/remotes/origin/dev
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:35.1982099Z From https://github.com/water-rs/waterkit
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:35.1982642Z  * [new ref]         a2edaef130b2bdad2c6a0836bb03f4dbec151bdb -> origin/dev
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:35.2016877Z ##[endgroup]
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:35.2017558Z ##[group]Determining the checkout info
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:35.2018658Z ##[endgroup]
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:35.2024841Z [command]/usr/bin/git sparse-checkout disable
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:35.2066170Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:35.2092050Z ##[group]Checking out the ref
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:35.2096289Z [command]/usr/bin/git checkout --progress --force -B dev refs/remotes/origin/dev
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:35.3282123Z Switched to a new branch 'dev'
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:35.3283596Z branch 'dev' set up to track 'origin/dev'.
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:35.3308576Z ##[endgroup]
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:35.3347936Z [command]/usr/bin/git log -1 --format=%H
+Clippy (ubuntu-latest)	Run actions/checkout@v4	2026-02-20T21:12:35.3370999Z a2edaef130b2bdad2c6a0836bb03f4dbec151bdb
+Clippy (ubuntu-latest)	Install Linux native dependencies	﻿2026-02-20T21:12:35.3582910Z ##[group]Run apt-get update
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3583250Z [36;1mapt-get update[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3583671Z [36;1mDEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3584116Z [36;1m  pkg-config \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3584335Z [36;1m  libwayland-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3584557Z [36;1m  libxkbcommon-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3584781Z [36;1m  libasound2-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3584991Z [36;1m  libudev-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3585197Z [36;1m  libdav1d-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3585395Z [36;1m  nasm \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3585582Z [36;1m  libavutil-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3585804Z [36;1m  libavcodec-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3586019Z [36;1m  libavformat-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3586236Z [36;1m  libavfilter-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3586447Z [36;1m  libavdevice-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3586896Z [36;1m  libswscale-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3587143Z [36;1m  libswresample-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3587400Z [36;1m  libxcb1-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3587614Z [36;1m  libxcb-render0-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3587849Z [36;1m  libxcb-shape0-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3588088Z [36;1m  libxcb-xfixes0-dev \[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3588316Z [36;1m  libdbus-1-dev[0m
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3592280Z shell: bash --noprofile --norc -e -o pipefail {0}
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3592605Z env:
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3592793Z   CARGO_TERM_COLOR: always
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.3593012Z ##[endgroup]
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.4651499Z Reading package lists...
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.4671587Z E: List directory /var/lib/apt/lists/partial is missing. - Acquire (13: Permission denied)
+Clippy (ubuntu-latest)	Install Linux native dependencies	2026-02-20T21:12:35.4736111Z ##[error]Process completed with exit code 100.
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	﻿2026-02-20T21:12:35.4845744Z Post job cleanup.
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	2026-02-20T21:12:35.4850408Z ##[command]/usr/bin/docker exec  b53fd9e05a7674bbc029a7bc4c4eb7a7f07d9a8311ba9d70655c9d82a41c9d55 sh -c "cat /etc/*release | grep ^ID"
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	2026-02-20T21:12:35.6832621Z [command]/usr/bin/git version
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	2026-02-20T21:12:35.6867942Z git version 2.52.0
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	2026-02-20T21:12:35.6913156Z Temporarily overriding HOME='/__w/_temp/0616ba43-0305-4b94-9d73-bfe221151192' before making global git config changes
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	2026-02-20T21:12:35.6915133Z Adding repository directory to the temporary git global config as a safe directory
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	2026-02-20T21:12:35.6920684Z [command]/usr/bin/git config --global --add safe.directory /__w/waterkit/waterkit
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	2026-02-20T21:12:35.6957545Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	2026-02-20T21:12:35.6990907Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	2026-02-20T21:12:35.7205795Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	2026-02-20T21:12:35.7226019Z http.https://github.com/.extraheader
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	2026-02-20T21:12:35.7238645Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	2026-02-20T21:12:35.7269042Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	2026-02-20T21:12:35.7481640Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Clippy (ubuntu-latest)	Post Run actions/checkout@v4	2026-02-20T21:12:35.7514829Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Clippy (ubuntu-latest)	Stop containers	﻿2026-02-20T21:12:35.7874545Z Stop and remove container: 3bf05aa08f014d82aa7d1dc9fedf6473_ghcriocatthehackerubuntufulllatest_eefd07
+Clippy (ubuntu-latest)	Stop containers	2026-02-20T21:12:35.7880967Z ##[command]/usr/bin/docker rm --force b53fd9e05a7674bbc029a7bc4c4eb7a7f07d9a8311ba9d70655c9d82a41c9d55
+Clippy (ubuntu-latest)	Stop containers	2026-02-20T21:12:35.8932805Z b53fd9e05a7674bbc029a7bc4c4eb7a7f07d9a8311ba9d70655c9d82a41c9d55
+Clippy (ubuntu-latest)	Stop containers	2026-02-20T21:12:35.8962286Z Remove container network: github_network_2f5ee2c6706b4ffbb7f9032eb57641b3
+Clippy (ubuntu-latest)	Stop containers	2026-02-20T21:12:35.8967386Z ##[command]/usr/bin/docker network rm github_network_2f5ee2c6706b4ffbb7f9032eb57641b3
+Clippy (ubuntu-latest)	Stop containers	2026-02-20T21:12:36.0129848Z github_network_2f5ee2c6706b4ffbb7f9032eb57641b3
+Clippy (ubuntu-latest)	Complete job	﻿2026-02-20T21:12:36.0189433Z Cleaning up orphan processes

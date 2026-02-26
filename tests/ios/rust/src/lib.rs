@@ -169,7 +169,7 @@ fn run_tests() {
         #[cfg(feature = "nfc")]
         {
             println!("Testing waterkit-nfc...");
-            println!("NFC available: {}", waterkit::nfc::is_available());
+            println!("NFC available: {}", waterkit::nfc::is_available().await);
         }
 
         #[cfg(feature = "share")]

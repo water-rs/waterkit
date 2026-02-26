@@ -1,0 +1,1334 @@
+Release	Set up job	﻿2026-02-20T22:16:38.2372520Z Current runner version: '2.331.0'
+Release	Set up job	2026-02-20T22:16:38.2396654Z ##[group]Runner Image Provisioner
+Release	Set up job	2026-02-20T22:16:38.2397632Z Hosted Compute Agent
+Release	Set up job	2026-02-20T22:16:38.2398172Z Version: 20260123.484
+Release	Set up job	2026-02-20T22:16:38.2398956Z Commit: 6bd6555ca37d84114959e1c76d2c01448ff61c5d
+Release	Set up job	2026-02-20T22:16:38.2399794Z Build Date: 2026-01-23T19:41:17Z
+Release	Set up job	2026-02-20T22:16:38.2400417Z Worker ID: {f56c14a2-7725-4680-b209-6d09dff0fb2f}
+Release	Set up job	2026-02-20T22:16:38.2401083Z Azure Region: eastus2
+Release	Set up job	2026-02-20T22:16:38.2401664Z ##[endgroup]
+Release	Set up job	2026-02-20T22:16:38.2402912Z ##[group]Operating System
+Release	Set up job	2026-02-20T22:16:38.2403475Z Ubuntu
+Release	Set up job	2026-02-20T22:16:38.2404034Z 24.04.3
+Release	Set up job	2026-02-20T22:16:38.2404528Z LTS
+Release	Set up job	2026-02-20T22:16:38.2404991Z ##[endgroup]
+Release	Set up job	2026-02-20T22:16:38.2405524Z ##[group]Runner Image
+Release	Set up job	2026-02-20T22:16:38.2406093Z Image: ubuntu-24.04
+Release	Set up job	2026-02-20T22:16:38.2406578Z Version: 20260201.15.1
+Release	Set up job	2026-02-20T22:16:38.2407684Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260201.15/images/ubuntu/Ubuntu2404-Readme.md
+Release	Set up job	2026-02-20T22:16:38.2409749Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260201.15
+Release	Set up job	2026-02-20T22:16:38.2410757Z ##[endgroup]
+Release	Set up job	2026-02-20T22:16:38.2411863Z ##[group]GITHUB_TOKEN Permissions
+Release	Set up job	2026-02-20T22:16:38.2413764Z Contents: write
+Release	Set up job	2026-02-20T22:16:38.2414309Z Metadata: read
+Release	Set up job	2026-02-20T22:16:38.2414855Z PullRequests: write
+Release	Set up job	2026-02-20T22:16:38.2415478Z ##[endgroup]
+Release	Set up job	2026-02-20T22:16:38.2417401Z Secret source: Actions
+Release	Set up job	2026-02-20T22:16:38.2418098Z Prepare workflow directory
+Release	Set up job	2026-02-20T22:16:38.2856316Z Prepare all required actions
+Release	Set up job	2026-02-20T22:16:38.2910555Z Getting action download info
+Release	Set up job	2026-02-20T22:16:38.6338455Z Download action repository 'actions/checkout@v4' (SHA:34e114876b0b11c390a56381ad16ebd13914f8d5)
+Release	Set up job	2026-02-20T22:16:38.7299421Z Download action repository 'dtolnay/rust-toolchain@stable' (SHA:631a55b12751854ce901bb631d5902ceb48146f7)
+Release	Set up job	2026-02-20T22:16:38.9362498Z Download action repository 'MarcoIeni/release-plz-action@v0.5' (SHA:f708778669256143d984cce4b23592637532e040)
+Release	Set up job	2026-02-20T22:16:39.3867803Z Getting action download info
+Release	Set up job	2026-02-20T22:16:39.5499454Z Download action repository 'taiki-e/install-action@90b40388b8931b1c39e248959515e295e02e9066' (SHA:90b40388b8931b1c39e248959515e295e02e9066)
+Release	Set up job	2026-02-20T22:16:39.9239750Z Download action repository 'cargo-bins/cargo-binstall@e7cc28468cf17df7cb288daea80c0c5437af360b' (SHA:e7cc28468cf17df7cb288daea80c0c5437af360b)
+Release	Set up job	2026-02-20T22:16:40.2736168Z Download action repository 'release-plz/git-config@59144859caf016f8b817a2ac9b051578729173c4' (SHA:59144859caf016f8b817a2ac9b051578729173c4)
+Release	Set up job	2026-02-20T22:16:40.5373122Z Complete job name: Release
+Release	Initialize containers	﻿2026-02-20T22:16:40.5852340Z ##[group]Checking docker version
+Release	Initialize containers	2026-02-20T22:16:40.5866508Z ##[command]/usr/bin/docker version --format '{{.Server.APIVersion}}'
+Release	Initialize containers	2026-02-20T22:16:40.6658810Z '1.48'
+Release	Initialize containers	2026-02-20T22:16:40.6672319Z Docker daemon API version: '1.48'
+Release	Initialize containers	2026-02-20T22:16:40.6673289Z ##[command]/usr/bin/docker version --format '{{.Client.APIVersion}}'
+Release	Initialize containers	2026-02-20T22:16:40.6838952Z '1.48'
+Release	Initialize containers	2026-02-20T22:16:40.6853512Z Docker client API version: '1.48'
+Release	Initialize containers	2026-02-20T22:16:40.6858878Z ##[endgroup]
+Release	Initialize containers	2026-02-20T22:16:40.6861679Z ##[group]Clean up resources from previous jobs
+Release	Initialize containers	2026-02-20T22:16:40.6867379Z ##[command]/usr/bin/docker ps --all --quiet --no-trunc --filter "label=c773bb"
+Release	Initialize containers	2026-02-20T22:16:40.7012517Z ##[command]/usr/bin/docker network prune --force --filter "label=c773bb"
+Release	Initialize containers	2026-02-20T22:16:40.7141880Z ##[endgroup]
+Release	Initialize containers	2026-02-20T22:16:40.7142669Z ##[group]Create local container network
+Release	Initialize containers	2026-02-20T22:16:40.7152674Z ##[command]/usr/bin/docker network create --label c773bb github_network_219fd310a3ad41d38fbefe3690f81414
+Release	Initialize containers	2026-02-20T22:16:40.7665171Z e8df576ee2bb47f7e1a1f178a9b0f153f0a89416e4cde377acebc5d38acb4881
+Release	Initialize containers	2026-02-20T22:16:40.7683789Z ##[endgroup]
+Release	Initialize containers	2026-02-20T22:16:40.7708120Z ##[group]Starting job container
+Release	Initialize containers	2026-02-20T22:16:40.7729737Z ##[command]/usr/bin/docker --config /home/runner/work/_temp/.docker_ba1b7481-ccd2-465c-8818-c3fc039855c9 login ghcr.io -u lexoliu --password-stdin
+Release	Initialize containers	2026-02-20T22:16:41.0513079Z ##[command]/usr/bin/docker --config /home/runner/work/_temp/.docker_ba1b7481-ccd2-465c-8818-c3fc039855c9 pull ghcr.io/catthehacker/ubuntu:full-latest
+Release	Initialize containers	2026-02-20T22:16:41.3022438Z full-latest: Pulling from catthehacker/ubuntu
+Release	Initialize containers	2026-02-20T22:16:41.3560076Z 9b806dfdaed9: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3560825Z 1dde18305acb: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3561393Z 6df4edeb4397: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3561867Z 25f9251537f4: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3562375Z cbdccf58eb85: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3562931Z bde644ad596d: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3563454Z 994221bc8b7c: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3563980Z e904d24dad07: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3564561Z eb1f0bb8861d: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3565093Z 076b7ce4610e: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3565613Z 52aa22a86b4b: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3566132Z ffdee555c486: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3566642Z 79d252bf7787: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3567165Z a2c714f6e069: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3567665Z 9304117cb56e: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3568038Z b9cfa9f6fbbc: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3568822Z 172b577f6339: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3569379Z 64fdaaa7fb94: Pulling fs layer
+Release	Initialize containers	2026-02-20T22:16:41.3569879Z cbdccf58eb85: Waiting
+Release	Initialize containers	2026-02-20T22:16:41.3570335Z bde644ad596d: Waiting
+Release	Initialize containers	2026-02-20T22:16:41.3570741Z 994221bc8b7c: Waiting
+Release	Initialize containers	2026-02-20T22:16:41.3571061Z e904d24dad07: Waiting
+Release	Initialize containers	2026-02-20T22:16:41.3571415Z eb1f0bb8861d: Waiting
+Release	Initialize containers	2026-02-20T22:16:41.3571724Z 076b7ce4610e: Waiting
+Release	Initialize containers	2026-02-20T22:16:41.3572037Z 52aa22a86b4b: Waiting
+Release	Initialize containers	2026-02-20T22:16:41.3572376Z ffdee555c486: Waiting
+Release	Initialize containers	2026-02-20T22:16:41.3572695Z 25f9251537f4: Waiting
+Release	Initialize containers	2026-02-20T22:16:41.3573010Z 79d252bf7787: Waiting
+Release	Initialize containers	2026-02-20T22:16:41.3573336Z a2c714f6e069: Waiting
+Release	Initialize containers	2026-02-20T22:16:41.3573652Z 9304117cb56e: Waiting
+Release	Initialize containers	2026-02-20T22:16:41.3573966Z b9cfa9f6fbbc: Waiting
+Release	Initialize containers	2026-02-20T22:16:41.3574280Z 172b577f6339: Waiting
+Release	Initialize containers	2026-02-20T22:16:41.3574796Z 64fdaaa7fb94: Waiting
+Release	Initialize containers	2026-02-20T22:16:48.1324402Z 6df4edeb4397: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:16:48.1324983Z 6df4edeb4397: Download complete
+Release	Initialize containers	2026-02-20T22:16:49.5545935Z 1dde18305acb: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:16:49.5546571Z 1dde18305acb: Download complete
+Release	Initialize containers	2026-02-20T22:16:54.9968024Z 9b806dfdaed9: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:16:54.9968859Z 9b806dfdaed9: Download complete
+Release	Initialize containers	2026-02-20T22:16:56.8268457Z cbdccf58eb85: Download complete
+Release	Initialize containers	2026-02-20T22:16:57.2899527Z bde644ad596d: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:16:57.2901981Z bde644ad596d: Download complete
+Release	Initialize containers	2026-02-20T22:16:58.0481443Z 25f9251537f4: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:16:58.0482449Z 25f9251537f4: Download complete
+Release	Initialize containers	2026-02-20T22:16:58.1382238Z eb1f0bb8861d: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:16:58.1382657Z eb1f0bb8861d: Download complete
+Release	Initialize containers	2026-02-20T22:16:58.6642332Z 994221bc8b7c: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:16:58.6642846Z 994221bc8b7c: Download complete
+Release	Initialize containers	2026-02-20T22:16:58.7477299Z 076b7ce4610e: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:16:58.7480290Z 076b7ce4610e: Download complete
+Release	Initialize containers	2026-02-20T22:16:59.4206901Z ffdee555c486: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:16:59.4207442Z ffdee555c486: Download complete
+Release	Initialize containers	2026-02-20T22:17:00.0395924Z 79d252bf7787: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:17:00.0396690Z 79d252bf7787: Download complete
+Release	Initialize containers	2026-02-20T22:17:02.2879935Z 52aa22a86b4b: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:17:02.2880484Z 52aa22a86b4b: Download complete
+Release	Initialize containers	2026-02-20T22:17:03.4874277Z e904d24dad07: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:17:03.4874802Z e904d24dad07: Download complete
+Release	Initialize containers	2026-02-20T22:17:05.7690096Z b9cfa9f6fbbc: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:17:05.7691250Z b9cfa9f6fbbc: Download complete
+Release	Initialize containers	2026-02-20T22:17:07.4801942Z 9304117cb56e: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:17:07.4802467Z 9304117cb56e: Download complete
+Release	Initialize containers	2026-02-20T22:17:09.6957568Z 64fdaaa7fb94: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:17:19.7353482Z 64fdaaa7fb94: Download complete
+Release	Initialize containers	2026-02-20T22:17:19.7354027Z 172b577f6339: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:17:19.7355328Z 172b577f6339: Download complete
+Release	Initialize containers	2026-02-20T22:17:24.9750971Z a2c714f6e069: Verifying Checksum
+Release	Initialize containers	2026-02-20T22:17:24.9752161Z a2c714f6e069: Download complete
+Release	Initialize containers	2026-02-20T22:18:24.4013282Z 9b806dfdaed9: Pull complete
+Release	Initialize containers	2026-02-20T22:19:12.5207484Z 1dde18305acb: Pull complete
+Release	Initialize containers	2026-02-20T22:19:51.9774861Z 6df4edeb4397: Pull complete
+Release	Initialize containers	2026-02-20T22:20:28.9827799Z 25f9251537f4: Pull complete
+Release	Initialize containers	2026-02-20T22:20:49.6809695Z cbdccf58eb85: Pull complete
+Release	Initialize containers	2026-02-20T22:21:02.7389076Z bde644ad596d: Pull complete
+Release	Initialize containers	2026-02-20T22:21:22.0412294Z 994221bc8b7c: Pull complete
+Release	Initialize containers	2026-02-20T22:21:32.4786821Z e904d24dad07: Pull complete
+Release	Initialize containers	2026-02-20T22:21:32.4898986Z eb1f0bb8861d: Pull complete
+Release	Initialize containers	2026-02-20T22:21:33.9798979Z 076b7ce4610e: Pull complete
+Release	Initialize containers	2026-02-20T22:21:46.4891871Z 52aa22a86b4b: Pull complete
+Release	Initialize containers	2026-02-20T22:21:48.3326569Z ffdee555c486: Pull complete
+Release	Initialize containers	2026-02-20T22:21:52.6412186Z 79d252bf7787: Pull complete
+Release	Initialize containers	2026-02-20T22:23:47.3395239Z a2c714f6e069: Pull complete
+Release	Initialize containers	2026-02-20T22:24:11.6865440Z 9304117cb56e: Pull complete
+Release	Initialize containers	2026-02-20T22:24:19.3276419Z b9cfa9f6fbbc: Pull complete
+Release	Initialize containers	2026-02-20T22:25:39.4324211Z 172b577f6339: Pull complete
+Release	Initialize containers	2026-02-20T22:25:43.8429665Z 64fdaaa7fb94: Pull complete
+Release	Initialize containers	2026-02-20T22:25:43.8467517Z Digest: sha256:9327301aea27f88258ad7f16ebf83eb772cc97ac831542ce90264b776833474d
+Release	Initialize containers	2026-02-20T22:25:43.8479924Z Status: Downloaded newer image for ghcr.io/catthehacker/ubuntu:full-latest
+Release	Initialize containers	2026-02-20T22:25:43.8491489Z ghcr.io/catthehacker/ubuntu:full-latest
+Release	Initialize containers	2026-02-20T22:25:43.8581559Z ##[command]/usr/bin/docker create --name 8a70e74227fb4ec99c84fdfadbb59948_ghcriocatthehackerubuntufulllatest_8bd8b5 --label c773bb --workdir /__w/waterkit/waterkit --network github_network_219fd310a3ad41d38fbefe3690f81414  -e "HOME=/github/home" -e GITHUB_ACTIONS=true -e CI=true -v "/var/run/docker.sock":"/var/run/docker.sock" -v "/home/runner/work":"/__w" -v "/home/runner/actions-runner/cached/externals":"/__e":ro -v "/home/runner/work/_temp":"/__w/_temp" -v "/home/runner/work/_actions":"/__w/_actions" -v "/opt/hostedtoolcache":"/__t" -v "/home/runner/work/_temp/_github_home":"/github/home" -v "/home/runner/work/_temp/_github_workflow":"/github/workflow" --entrypoint "tail" ghcr.io/catthehacker/ubuntu:full-latest "-f" "/dev/null"
+Release	Initialize containers	2026-02-20T22:25:43.8849359Z cb728b8965e3da05eefc43865d463dec3ac33b84b7a59c77e216a171caee9e41
+Release	Initialize containers	2026-02-20T22:25:43.8873569Z ##[command]/usr/bin/docker start cb728b8965e3da05eefc43865d463dec3ac33b84b7a59c77e216a171caee9e41
+Release	Initialize containers	2026-02-20T22:25:44.0528850Z cb728b8965e3da05eefc43865d463dec3ac33b84b7a59c77e216a171caee9e41
+Release	Initialize containers	2026-02-20T22:25:44.0554986Z ##[command]/usr/bin/docker ps --all --filter id=cb728b8965e3da05eefc43865d463dec3ac33b84b7a59c77e216a171caee9e41 --filter status=running --no-trunc --format "{{.ID}} {{.Status}}"
+Release	Initialize containers	2026-02-20T22:25:44.0675349Z cb728b8965e3da05eefc43865d463dec3ac33b84b7a59c77e216a171caee9e41 Up Less than a second
+Release	Initialize containers	2026-02-20T22:25:44.0695304Z ##[command]/usr/bin/docker inspect --format "{{range .Config.Env}}{{println .}}{{end}}" cb728b8965e3da05eefc43865d463dec3ac33b84b7a59c77e216a171caee9e41
+Release	Initialize containers	2026-02-20T22:25:44.0822649Z HOME=/github/home
+Release	Initialize containers	2026-02-20T22:25:44.0823058Z GITHUB_ACTIONS=true
+Release	Initialize containers	2026-02-20T22:25:44.0823349Z CI=true
+Release	Initialize containers	2026-02-20T22:25:44.0824765Z PATH=/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+Release	Initialize containers	2026-02-20T22:25:44.0826354Z ImageVersion=20260119.4.1
+Release	Initialize containers	2026-02-20T22:25:44.0826682Z ImageOS=ubuntu24
+Release	Initialize containers	2026-02-20T22:25:44.0826958Z ACCEPT_EULA=Y
+Release	Initialize containers	2026-02-20T22:25:44.0827247Z XDG_CONFIG_HOME=/home/runner/.config
+Release	Initialize containers	2026-02-20T22:25:44.0827664Z AGENT_TOOLSDIRECTORY=/opt/hostedtoolcache
+Release	Initialize containers	2026-02-20T22:25:44.0828116Z RUNNER_TOOL_CACHE=/opt/hostedtoolcache
+Release	Initialize containers	2026-02-20T22:25:44.0829386Z PSModulePath=/root/.local/share/powershell/Modules:/usr/local/share/powershell/Modules:/opt/microsoft/powershell/7/Modules:/usr/share/az_12.5.0
+Release	Initialize containers	2026-02-20T22:25:44.0830443Z ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE=/opt/actionarchivecache
+Release	Initialize containers	2026-02-20T22:25:44.0830953Z AZURE_EXTENSION_DIR=/opt/az/azcliextensions
+Release	Initialize containers	2026-02-20T22:25:44.0831790Z SWIFT_PATH=/usr/share/swift/usr/bin
+Release	Initialize containers	2026-02-20T22:25:44.0832161Z DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+Release	Initialize containers	2026-02-20T22:25:44.0832510Z DOTNET_NOLOGO=1
+Release	Initialize containers	2026-02-20T22:25:44.0832804Z DOTNET_MULTILEVEL_LOOKUP=0
+Release	Initialize containers	2026-02-20T22:25:44.0833156Z EDGEWEBDRIVER=/usr/local/share/edge_driver
+Release	Initialize containers	2026-02-20T22:25:44.0833593Z GECKOWEBDRIVER=/usr/local/share/gecko_driver
+Release	Initialize containers	2026-02-20T22:25:44.0834002Z CHROME_BIN=/usr/bin/google-chrome
+Release	Initialize containers	2026-02-20T22:25:44.0834439Z CHROMEWEBDRIVER=/usr/local/share/chromedriver-linux64
+Release	Initialize containers	2026-02-20T22:25:44.0834913Z BOOTSTRAP_HASKELL_NONINTERACTIVE=1
+Release	Initialize containers	2026-02-20T22:25:44.0835312Z GHCUP_INSTALL_BASE_PREFIX=/usr/local
+Release	Initialize containers	2026-02-20T22:25:44.0835947Z JAVA_HOME_8_X64=/usr/lib/jvm/temurin-8-jdk-amd64
+Release	Initialize containers	2026-02-20T22:25:44.0836429Z JAVA_HOME_11_X64=/usr/lib/jvm/temurin-11-jdk-amd64
+Release	Initialize containers	2026-02-20T22:25:44.0836885Z JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-amd64
+Release	Initialize containers	2026-02-20T22:25:44.0837337Z JAVA_HOME_17_X64=/usr/lib/jvm/temurin-17-jdk-amd64
+Release	Initialize containers	2026-02-20T22:25:44.0837822Z JAVA_HOME_21_X64=/usr/lib/jvm/temurin-21-jdk-amd64
+Release	Initialize containers	2026-02-20T22:25:44.0838505Z JAVA_HOME_25_X64=/usr/lib/jvm/temurin-25-jdk-amd64
+Release	Initialize containers	2026-02-20T22:25:44.0838912Z ANT_HOME=/usr/share/ant
+Release	Initialize containers	2026-02-20T22:25:44.0839225Z GRADLE_HOME=/usr/share/gradle-9.3.0
+Release	Initialize containers	2026-02-20T22:25:44.0839780Z CONDA=/usr/share/miniconda
+Release	Initialize containers	2026-02-20T22:25:44.0840116Z NVM_DIR=/home/runner/.nvm
+Release	Initialize containers	2026-02-20T22:25:44.0840503Z SELENIUM_JAR_PATH=/usr/share/java/selenium-server.jar
+Release	Initialize containers	2026-02-20T22:25:44.0840972Z VCPKG_INSTALLATION_ROOT=/usr/local/share/vcpkg
+Release	Initialize containers	2026-02-20T22:25:44.0841393Z DEBIAN_FRONTEND=noninteractive
+Release	Initialize containers	2026-02-20T22:25:44.0841756Z ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+Release	Initialize containers	2026-02-20T22:25:44.0842050Z ANDROID_HOME=/usr/local/lib/android/sdk
+Release	Initialize containers	2026-02-20T22:25:44.0842361Z ANDROID_NDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Release	Initialize containers	2026-02-20T22:25:44.0842724Z ANDROID_NDK_HOME=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Release	Initialize containers	2026-02-20T22:25:44.0843081Z ANDROID_NDK_ROOT=/usr/local/lib/android/sdk/ndk/27.3.13750724
+Release	Initialize containers	2026-02-20T22:25:44.0843450Z ANDROID_NDK_LATEST_HOME=/usr/local/lib/android/sdk/ndk/29.0.14206865
+Release	Initialize containers	2026-02-20T22:25:44.0843801Z PIPX_BIN_DIR=/opt/pipx_bin
+Release	Initialize containers	2026-02-20T22:25:44.0844021Z PIPX_HOME=/opt/pipx
+Release	Initialize containers	2026-02-20T22:25:44.0844262Z GOROOT_1_22_X64=/opt/hostedtoolcache/go/1.22.12/x64
+Release	Initialize containers	2026-02-20T22:25:44.0844573Z GOROOT_1_23_X64=/opt/hostedtoolcache/go/1.23.12/x64
+Release	Initialize containers	2026-02-20T22:25:44.0844855Z GOROOT_1_24_X64=/opt/hostedtoolcache/go/1.24.12/x64
+Release	Initialize containers	2026-02-20T22:25:44.0845154Z GOROOT_1_25_X64=/opt/hostedtoolcache/go/1.25.6/x64
+Release	Initialize containers	2026-02-20T22:25:44.0845434Z HOMEBREW_NO_AUTO_UPDATE=1
+Release	Initialize containers	2026-02-20T22:25:44.0845664Z HOMEBREW_CLEANUP_PERIODIC_FULL_DAYS=3650
+Release	Initialize containers	2026-02-20T22:25:44.0846156Z XDG_RUNTIME_DIR=/run/user/1001
+Release	Initialize containers	2026-02-20T22:25:44.0846442Z POWERSHELL_DISTRIBUTION_CHANNEL=GitHub-Actions-ubuntu24
+Release	Initialize containers	2026-02-20T22:25:44.0855350Z ##[endgroup]
+Release	Initialize containers	2026-02-20T22:25:44.0864663Z ##[group]Waiting for all services to be ready
+Release	Initialize containers	2026-02-20T22:25:44.0866362Z ##[endgroup]
+Release	Run actions/checkout@v4	﻿2026-02-20T22:25:44.1126499Z ##[group]Run actions/checkout@v4
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1127110Z with:
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1127317Z   fetch-depth: 0
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1127538Z   repository: water-rs/waterkit
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1127938Z   token: ***
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1128128Z   ssh-strict: true
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1128592Z   ssh-user: git
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1128819Z   persist-credentials: true
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1129038Z   clean: true
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1129234Z   sparse-checkout-cone-mode: true
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1129496Z   fetch-tags: false
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1129688Z   show-progress: true
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1129891Z   lfs: false
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1130072Z   submodules: false
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1130260Z   set-safe-directory: true
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1130685Z ##[endgroup]
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.1186794Z ##[command]/usr/bin/docker exec  cb728b8965e3da05eefc43865d463dec3ac33b84b7a59c77e216a171caee9e41 sh -c "cat /etc/*release | grep ^ID"
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4301209Z Syncing repository: water-rs/waterkit
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4302735Z ##[group]Getting Git version info
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4303155Z Working directory is '/__w/waterkit/waterkit'
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4303910Z [command]/usr/bin/git version
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4372861Z git version 2.52.0
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4401975Z ##[endgroup]
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4422887Z Temporarily overriding HOME='/__w/_temp/5ccc72f5-ef82-498f-8d37-5e05b1cc0f8c' before making global git config changes
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4424041Z Adding repository directory to the temporary git global config as a safe directory
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4428929Z [command]/usr/bin/git config --global --add safe.directory /__w/waterkit/waterkit
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4466875Z Deleting the contents of '/__w/waterkit/waterkit'
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4470974Z ##[group]Initializing the repository
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4474971Z [command]/usr/bin/git init /__w/waterkit/waterkit
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4539849Z hint: Using 'master' as the name for the initial branch. This default branch name
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4540666Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4541456Z hint: to use in all of your new repositories, which will suppress this warning,
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4542030Z hint: call:
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4542498Z hint:
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4542855Z hint: 	git config --global init.defaultBranch <name>
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4543421Z hint:
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4543851Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4544626Z hint: 'development'. The just-created branch can be renamed via this command:
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4545109Z hint:
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4545356Z hint: 	git branch -m <name>
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4545636Z hint:
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4545937Z hint: Disable this message with "git config set advice.defaultBranchName false"
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4546424Z Initialized empty Git repository in /__w/waterkit/waterkit/.git/
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4555908Z [command]/usr/bin/git remote add origin https://github.com/water-rs/waterkit
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4591071Z ##[endgroup]
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4591686Z ##[group]Disabling automatic garbage collection
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4596137Z [command]/usr/bin/git config --local gc.auto 0
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4625182Z ##[endgroup]
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4625706Z ##[group]Setting up auth
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4633284Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4664878Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.4980334Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.5013684Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.5247375Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.5282248Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.5534091Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.5577710Z ##[endgroup]
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.5578424Z ##[group]Fetching the repository
+Release	Run actions/checkout@v4	2026-02-20T22:25:44.5588227Z [command]/usr/bin/git -c protocol.version=2 fetch --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/*
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.5849016Z From https://github.com/water-rs/waterkit
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.5849663Z  * [new branch]      dev                   -> origin/dev
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.5850248Z  * [new branch]      dev-waterui-sync      -> origin/dev-waterui-sync
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.5850812Z  * [new branch]      main                  -> origin/main
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.5851486Z  * [new branch]      release-plz-2026-02-20T19-58-35Z -> origin/release-plz-2026-02-20T19-58-35Z
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.5852599Z  * [new tag]         waterkit-build-v0.1.0 -> waterkit-build-v0.1.0
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.5896175Z [command]/usr/bin/git branch --list --remote origin/main
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.5922284Z   origin/main
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.5932107Z [command]/usr/bin/git rev-parse refs/remotes/origin/main
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.5953732Z 9dd0c0abaf32908a49608df48ffbd198594f343c
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.5959079Z ##[endgroup]
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.5959615Z ##[group]Determining the checkout info
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.5961049Z ##[endgroup]
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.5965621Z [command]/usr/bin/git sparse-checkout disable
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.6007310Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.6033911Z ##[group]Checking out the ref
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.6038850Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.7303896Z Switched to a new branch 'main'
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.7304493Z branch 'main' set up to track 'origin/main'.
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.7334105Z ##[endgroup]
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.7376689Z [command]/usr/bin/git log -1 --format=%H
+Release	Run actions/checkout@v4	2026-02-20T22:25:45.7402096Z 9dd0c0abaf32908a49608df48ffbd198594f343c
+Release	Install Linux native dependencies	﻿2026-02-20T22:25:45.7622990Z ##[group]Run sudo apt-get update
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7623329Z [36;1msudo apt-get update[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7623754Z [36;1mDEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7624186Z [36;1m  pkg-config \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7624404Z [36;1m  libwayland-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7624625Z [36;1m  libxkbcommon-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7624854Z [36;1m  libasound2-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7625070Z [36;1m  libudev-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7625270Z [36;1m  libdav1d-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7625476Z [36;1m  nasm \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7625662Z [36;1m  libavutil-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7625886Z [36;1m  libavcodec-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7626107Z [36;1m  libavformat-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7626344Z [36;1m  libavfilter-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7626551Z [36;1m  libavdevice-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7626756Z [36;1m  libswscale-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7626964Z [36;1m  libswresample-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7627219Z [36;1m  libxcb1-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7627428Z [36;1m  libxcb-render0-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7627672Z [36;1m  libxcb-shape0-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7627892Z [36;1m  libxcb-xfixes0-dev \[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7628116Z [36;1m  libdbus-1-dev[0m
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7632075Z shell: bash --noprofile --norc -e -o pipefail {0}
+Release	Install Linux native dependencies	2026-02-20T22:25:45.7632394Z ##[endgroup]
+Release	Install Linux native dependencies	2026-02-20T22:25:45.9006158Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:45.9279776Z Get:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease [256 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:45.9375963Z Get:3 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:45.9393312Z Get:4 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:45.9410354Z Get:5 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:45.9772043Z Get:6 https://packages.microsoft.com/repos/azure-cli noble InRelease [3564 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:45.9837900Z Get:7 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease [3600 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.0078572Z Get:8 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 Packages [1401 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.0231138Z Get:9 http://azure.archive.ubuntu.com/ubuntu noble/main Translation-en [513 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.0262354Z Get:10 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 Components [464 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.0302880Z Get:11 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 c-n-f Metadata [30.5 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.0331425Z Get:12 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 Packages [15.0 MB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.1087776Z Get:13 http://azure.archive.ubuntu.com/ubuntu noble/universe Translation-en [5982 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.1421959Z Get:14 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 Components [3871 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.1642950Z Get:15 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 c-n-f Metadata [301 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.1666231Z Get:16 http://azure.archive.ubuntu.com/ubuntu noble/restricted amd64 Packages [93.9 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.1681290Z Get:17 http://azure.archive.ubuntu.com/ubuntu noble/restricted Translation-en [18.7 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.1694296Z Get:18 http://azure.archive.ubuntu.com/ubuntu noble/restricted amd64 c-n-f Metadata [416 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.1701973Z Get:19 http://azure.archive.ubuntu.com/ubuntu noble/multiverse amd64 Packages [269 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2162101Z Get:20 http://azure.archive.ubuntu.com/ubuntu noble/multiverse Translation-en [118 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2175424Z Get:21 http://azure.archive.ubuntu.com/ubuntu noble/multiverse amd64 Components [35.0 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2194841Z Get:22 http://azure.archive.ubuntu.com/ubuntu noble/multiverse amd64 c-n-f Metadata [8328 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2259408Z Get:23 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1771 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2307311Z Get:24 http://azure.archive.ubuntu.com/ubuntu noble-updates/main Translation-en [328 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2338425Z Get:25 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 Components [175 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2397768Z Get:26 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 c-n-f Metadata [16.5 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2423252Z Get:27 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [1557 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2501328Z Get:28 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe Translation-en [316 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2527216Z Get:29 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 Components [386 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2554114Z Get:30 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 c-n-f Metadata [32.6 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2572178Z Get:31 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [2663 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2645138Z Get:67 https://packages.microsoft.com/repos/azure-cli noble/main amd64 Packages [2129 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2705189Z Get:32 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted Translation-en [613 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2744770Z Get:33 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Components [212 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.2758986Z Get:34 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted amd64 c-n-f Metadata [556 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3179470Z Get:68 https://packages.microsoft.com/ubuntu/24.04/prod noble/main amd64 Packages [92.9 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3241077Z Get:35 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [32.1 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3250903Z Get:36 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse Translation-en [7044 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3260091Z Get:37 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Components [940 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3268664Z Get:38 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 c-n-f Metadata [496 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3276201Z Get:39 http://azure.archive.ubuntu.com/ubuntu noble-backports/main amd64 Packages [40.4 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3286872Z Get:40 http://azure.archive.ubuntu.com/ubuntu noble-backports/main Translation-en [9208 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3295762Z Get:41 http://azure.archive.ubuntu.com/ubuntu noble-backports/main amd64 Components [7324 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3304415Z Get:42 http://azure.archive.ubuntu.com/ubuntu noble-backports/main amd64 c-n-f Metadata [368 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3314773Z Get:43 http://azure.archive.ubuntu.com/ubuntu noble-backports/universe amd64 Packages [29.5 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3325426Z Get:44 http://azure.archive.ubuntu.com/ubuntu noble-backports/universe Translation-en [17.9 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3334143Z Get:45 http://azure.archive.ubuntu.com/ubuntu noble-backports/universe amd64 Components [10.5 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3340666Z Get:69 https://packages.microsoft.com/ubuntu/24.04/prod noble/main all Packages [643 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3345012Z Get:46 http://azure.archive.ubuntu.com/ubuntu noble-backports/universe amd64 c-n-f Metadata [1444 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3352613Z Get:47 http://azure.archive.ubuntu.com/ubuntu noble-backports/restricted amd64 Components [216 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3362002Z Get:48 http://azure.archive.ubuntu.com/ubuntu noble-backports/restricted amd64 c-n-f Metadata [116 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3370706Z Get:49 http://azure.archive.ubuntu.com/ubuntu noble-backports/multiverse amd64 Components [212 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3406119Z Get:70 https://packages.microsoft.com/ubuntu/24.04/prod noble/main arm64 Packages [72.3 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3496254Z Get:71 https://packages.microsoft.com/ubuntu/24.04/prod noble/main armhf Packages [11.4 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3840139Z Get:50 http://azure.archive.ubuntu.com/ubuntu noble-backports/multiverse amd64 c-n-f Metadata [116 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3851921Z Get:51 http://azure.archive.ubuntu.com/ubuntu noble-security/main amd64 Packages [1474 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3924596Z Get:52 http://azure.archive.ubuntu.com/ubuntu noble-security/main Translation-en [237 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3944110Z Get:53 http://azure.archive.ubuntu.com/ubuntu noble-security/main amd64 Components [21.6 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3954178Z Get:54 http://azure.archive.ubuntu.com/ubuntu noble-security/main amd64 c-n-f Metadata [9892 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.3965418Z Get:55 http://azure.archive.ubuntu.com/ubuntu noble-security/universe amd64 Packages [935 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.4015549Z Get:56 http://azure.archive.ubuntu.com/ubuntu noble-security/universe Translation-en [214 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.4034358Z Get:57 http://azure.archive.ubuntu.com/ubuntu noble-security/universe amd64 Components [74.2 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.4046211Z Get:58 http://azure.archive.ubuntu.com/ubuntu noble-security/universe amd64 c-n-f Metadata [20.0 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.4055445Z Get:59 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [2516 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.4180445Z Get:60 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted Translation-en [582 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.4214509Z Get:61 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted amd64 Components [208 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.4221656Z Get:62 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted amd64 c-n-f Metadata [536 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.4230763Z Get:63 http://azure.archive.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [28.8 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.4240621Z Get:64 http://azure.archive.ubuntu.com/ubuntu noble-security/multiverse Translation-en [6492 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.4681254Z Get:65 http://azure.archive.ubuntu.com/ubuntu noble-security/multiverse amd64 Components [208 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:46.4688464Z Get:66 http://azure.archive.ubuntu.com/ubuntu noble-security/multiverse amd64 c-n-f Metadata [396 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:56.9257200Z Fetched 43.1 MB in 5s (9167 kB/s)
+Release	Install Linux native dependencies	2026-02-20T22:25:57.7082976Z Reading package lists...
+Release	Install Linux native dependencies	2026-02-20T22:25:57.7475382Z Reading package lists...
+Release	Install Linux native dependencies	2026-02-20T22:25:57.9311362Z Building dependency tree...
+Release	Install Linux native dependencies	2026-02-20T22:25:57.9318788Z Reading state information...
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1054955Z pkg-config is already the newest version (1.8.1-2build1).
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1055601Z The following additional packages will be installed:
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1056253Z   libasound2-data libasound2t64 libass9 libasyncns0 libavc1394-0 libavcodec60
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1057012Z   libavdevice60 libavfilter9 libavformat60 libavutil58 libblas3 libbluray2
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1057738Z   libbs2b0 libcaca0 libcdio-cdda2t64 libcdio-paranoia2t64 libcdio19t64
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1058639Z   libchromaprint1 libcjson1 libcodec2-1.2 libdav1d7 libdc1394-25 libdecor-0-0
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1059337Z   libflac12t64 libflite1 libgme0 libgsm1 libhwy1t64 libiec61883-0
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1060006Z   libjack-jackd2-0 libjxl0.7 liblapack3 liblilv-0-0 libmbedcrypto7t64
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1061190Z   libmp3lame0 libmpg123-0t64 libmysofa1 libopenal-data libopenal1
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1061887Z   libopenmpt0t64 libopus0 libplacebo338 libpocketsphinx3 libpostproc-dev
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1062684Z   libpostproc57 libpthread-stubs0-dev libpulse0 librav1e0 libraw1394-11
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1063311Z   librist4 librsvg2-2 librubberband2 libsamplerate0 libsdl2-2.0-0 libserd-0-0
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1063740Z   libshine3 libsndfile1 libsndio7.0 libsord-0-0 libsoxr0 libspeex1
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1064179Z   libsphinxbase3t64 libsratom-0-0 libsrt1.5-gnutls libssh-4 libssh-gcrypt-4
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1064628Z   libsvtav1enc1d1 libswresample4 libswscale7 libtheora0 libtwolame0
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1065034Z   libudfread0 libunibreak5 libva-drm2 libva-x11-2 libva2 libvdpau1
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1065455Z   libvidstab1.1 libvorbisenc2 libvpl2 libvpx9 libwayland-bin libx264-164
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1065888Z   libx265-199 libxau-dev libxcb-shape0 libxdmcp-dev libxv1 libxvidcore4
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1066325Z   libzimg2 libzix-0-0 libzvbi-common libzvbi0t64 ocl-icd-libopencl1
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1066676Z   x11proto-dev xorg-sgml-doctools
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1069894Z Suggested packages:
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1070668Z   alsa-utils libasound2-doc libasound2-plugins libcuda1 libnvcuvid1
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1071134Z   libnvidia-encode1 libbluray-bdj jackd2 libportaudio2 opus-tools pulseaudio
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1072060Z   libraw1394-doc librsvg2-bin serdi sndiod sordi speex libwayland-doc
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1072570Z   libxcb-doc opencl-icd
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1072789Z Recommended packages:
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1073113Z   alsa-ucm-conf alsa-topology-conf libaacs0 default-libdecor-0-plugin-1
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1074010Z   | libdecor-0-plugin-1 pocketsphinx-en-us librsvg2-common va-driver-all
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1074556Z   | va-driver vdpau-driver-all | vdpau-driver
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1797726Z The following NEW packages will be installed:
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1798611Z   libasound2-dev libass9 libasyncns0 libavc1394-0 libavcodec-dev libavcodec60
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1799447Z   libavdevice-dev libavdevice60 libavfilter-dev libavfilter9 libavformat-dev
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1800085Z   libavformat60 libavutil-dev libavutil58 libblas3 libbluray2 libbs2b0
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1800569Z   libcaca0 libcdio-cdda2t64 libcdio-paranoia2t64 libcdio19t64 libchromaprint1
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1801042Z   libcjson1 libcodec2-1.2 libdav1d-dev libdav1d7 libdbus-1-dev libdc1394-25
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1801520Z   libdecor-0-0 libflac12t64 libflite1 libgme0 libgsm1 libhwy1t64 libiec61883-0
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1801972Z   libjack-jackd2-0 libjxl0.7 liblapack3 liblilv-0-0 libmbedcrypto7t64
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1802382Z   libmp3lame0 libmpg123-0t64 libmysofa1 libopenal-data libopenal1
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1802813Z   libopenmpt0t64 libopus0 libplacebo338 libpocketsphinx3 libpostproc-dev
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1805635Z   libpostproc57 libpthread-stubs0-dev libpulse0 librav1e0 libraw1394-11
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1806685Z   librist4 librsvg2-2 librubberband2 libsamplerate0 libsdl2-2.0-0 libserd-0-0
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1807382Z   libshine3 libsndfile1 libsndio7.0 libsord-0-0 libsoxr0 libspeex1
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1807860Z   libsphinxbase3t64 libsratom-0-0 libsrt1.5-gnutls libssh-gcrypt-4
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1808555Z   libsvtav1enc1d1 libswresample-dev libswresample4 libswscale-dev libswscale7
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1809117Z   libtheora0 libtwolame0 libudev-dev libudfread0 libunibreak5 libva-drm2
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1809892Z   libva-x11-2 libva2 libvdpau1 libvidstab1.1 libvorbisenc2 libvpl2 libvpx9
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1810579Z   libwayland-bin libwayland-dev libx264-164 libx265-199 libxau-dev
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1811143Z   libxcb-render0-dev libxcb-shape0 libxcb-shape0-dev libxcb-xfixes0-dev
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1811606Z   libxcb1-dev libxdmcp-dev libxkbcommon-dev libxv1 libxvidcore4 libzimg2
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1812055Z   libzix-0-0 libzvbi-common libzvbi0t64 nasm ocl-icd-libopencl1 x11proto-dev
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1812410Z   xorg-sgml-doctools
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1813281Z The following packages will be upgraded:
+Release	Install Linux native dependencies	2026-02-20T22:25:58.1816914Z   libasound2-data libasound2t64 libssh-4
+Release	Install Linux native dependencies	2026-02-20T22:25:58.2172097Z 3 upgraded, 111 newly installed, 0 to remove and 174 not upgraded.
+Release	Install Linux native dependencies	2026-02-20T22:25:58.2172742Z Need to get 74.5 MB of archives.
+Release	Install Linux native dependencies	2026-02-20T22:25:58.2173308Z After this operation, 223 MB of additional disk space will be used.
+Release	Install Linux native dependencies	2026-02-20T22:25:58.2173904Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:59.8282634Z Get:2 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libasound2t64 amd64 1.2.11-1ubuntu0.2 [398 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:59.8614196Z Get:3 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libasound2-data all 1.2.11-1ubuntu0.2 [21.3 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:59.8663054Z Get:4 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libasound2-dev amd64 1.2.11-1ubuntu0.2 [115 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:59.8773166Z Get:5 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libunibreak5 amd64 5.1-2build1 [25.0 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:59.8824304Z Get:6 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libass9 amd64 1:0.17.1-2build1 [104 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:59.8902213Z Get:7 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libasyncns0 amd64 0.8-6build4 [11.3 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:59.8938747Z Get:8 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 libva2 amd64 2.20.0-2ubuntu0.1 [66.3 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:59.8996922Z Get:9 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 libva-drm2 amd64 2.20.0-2ubuntu0.1 [7132 B]
+Release	Install Linux native dependencies	2026-02-20T22:25:59.9045947Z Get:10 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 libva-x11-2 amd64 2.20.0-2ubuntu0.1 [12.0 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:59.9084966Z Get:11 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libvdpau1 amd64 1.5-2build1 [27.8 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:59.9131764Z Get:12 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libvpl2 amd64 2023.3.0-1build1 [99.8 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:59.9241098Z Get:13 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 ocl-icd-libopencl1 amd64 2.3.2-1build1 [38.5 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:59.9295211Z Get:14 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libavutil58 amd64 7:6.1.1-3ubuntu5 [401 kB]
+Release	Install Linux native dependencies	2026-02-20T22:25:59.9534884Z Get:15 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libcodec2-1.2 amd64 1.2.0-2build1 [8998 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:00.4200102Z Get:16 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libdav1d7 amd64 1.4.1-1build1 [604 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:00.4773639Z Get:17 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libgsm1 amd64 1.0.22-1build1 [27.8 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:00.4857437Z Get:18 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libhwy1t64 amd64 1.0.7-8.1build1 [584 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:00.5229115Z Get:19 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 libjxl0.7 amd64 0.7.0-10.2ubuntu6.1 [1001 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:00.5649315Z Get:20 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libmp3lame0 amd64 3.100-6build1 [142 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:00.5719485Z Get:21 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libopus0 amd64 1.4-1build1 [208 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:00.6318067Z Get:22 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 librav1e0 amd64 0.7.1-2 [1022 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:00.6805645Z Get:23 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 librsvg2-2 amd64 2.58.0+dfsg-1build1 [2135 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:00.7807823Z Get:24 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libshine3 amd64 3.1.1-2build1 [23.2 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:00.7867762Z Get:25 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libspeex1 amd64 1.2.1-2ubuntu2.24.04.1 [59.6 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:00.7926507Z Get:26 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libsvtav1enc1d1 amd64 1.7.0+dfsg-2build1 [2425 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:00.9808591Z Get:27 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libsoxr0 amd64 0.1.3-4build3 [80.0 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:00.9875874Z Get:28 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libswresample4 amd64 7:6.1.1-3ubuntu5 [63.8 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:00.9941094Z Get:29 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libtheora0 amd64 1.1.1+dfsg.1-16.1build3 [211 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:01.0093927Z Get:30 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libtwolame0 amd64 0.4.0-2build3 [52.3 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:01.0150971Z Get:31 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libvorbisenc2 amd64 1.3.7-1build3 [80.8 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:01.0227538Z Get:32 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libvpx9 amd64 1.14.0-1ubuntu2.3 [1143 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:01.0965488Z Get:33 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libx264-164 amd64 2:0.164.3108+git31e19f9-1 [604 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:01.1339202Z Get:34 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libx265-199 amd64 3.5-2build1 [1226 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:01.2082307Z Get:35 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libxvidcore4 amd64 2:1.3.7-1build1 [219 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:01.2272839Z Get:36 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libzvbi-common all 0.2.42-2 [42.4 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:01.2336786Z Get:37 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libzvbi0t64 amd64 0.2.42-2 [261 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:01.2605289Z Get:38 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libavcodec60 amd64 7:6.1.1-3ubuntu5 [5851 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:01.9354136Z Get:39 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libavutil-dev amd64 7:6.1.1-3ubuntu5 [547 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:01.9671377Z Get:40 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libswresample-dev amd64 7:6.1.1-3ubuntu5 [79.7 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:01.9753047Z Get:41 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libavcodec-dev amd64 7:6.1.1-3ubuntu5 [6504 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.3259614Z Get:42 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libraw1394-11 amd64 2.1.2-2build3 [26.2 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.3281705Z Get:43 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libavc1394-0 amd64 0.5.4-5build3 [15.4 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.3304253Z Get:44 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libudfread0 amd64 1.1.2-1build1 [19.0 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.3338400Z Get:45 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libbluray2 amd64 1:1.3.4-1build1 [159 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.3394238Z Get:46 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libchromaprint1 amd64 1.5.1-5 [30.5 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.3420639Z Get:47 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libgme0 amd64 0.6.3-7build1 [134 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.3483120Z Get:48 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libmpg123-0t64 amd64 1.32.5-1ubuntu1.1 [169 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.3538830Z Get:49 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libopenmpt0t64 amd64 0.7.3-1.1build3 [647 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.3704383Z Get:50 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libcjson1 amd64 1.7.17-1 [24.8 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.3732131Z Get:51 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libmbedcrypto7t64 amd64 2.28.8-1 [209 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.3793684Z Get:52 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 librist4 amd64 0.2.10+dfsg-2 [74.9 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.3828643Z Get:53 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libsrt1.5-gnutls amd64 1.5.3-1build2 [316 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.3913422Z Get:54 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libssh-gcrypt-4 amd64 0.10.6-2ubuntu0.3 [224 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.3962979Z Get:55 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libavformat60 amd64 7:6.1.1-3ubuntu5 [1153 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.4072636Z Get:56 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libbs2b0 amd64 3.1.0+dfsg-7build1 [10.6 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.4105235Z Get:57 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libflite1 amd64 2.2-6build3 [13.6 MB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.5625295Z Get:58 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libserd-0-0 amd64 0.32.2-1 [43.6 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.5652923Z Get:59 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libzix-0-0 amd64 0.4.2-2build1 [23.6 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.5677341Z Get:60 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libsord-0-0 amd64 0.16.16-2build1 [15.8 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.5702404Z Get:61 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libsratom-0-0 amd64 0.6.16-1build1 [17.3 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.5731058Z Get:62 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 liblilv-0-0 amd64 0.24.22-1build1 [41.0 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.6185306Z Get:63 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libmysofa1 amd64 1.3.2+dfsg-2ubuntu2 [1158 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.6303213Z Get:64 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libplacebo338 amd64 6.338.2-2build1 [2654 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.6572720Z Get:65 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libblas3 amd64 3.12.0-3build1.1 [238 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.6620147Z Get:66 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 liblapack3 amd64 3.12.0-3build1.1 [2646 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.6851232Z Get:67 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libflac12t64 amd64 1.4.3+ds-2.1ubuntu2 [197 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.6891997Z Get:68 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libsndfile1 amd64 1.2.2-1ubuntu5.24.04.1 [209 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.6936145Z Get:69 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libpulse0 amd64 1:16.1+dfsg1-2ubuntu10.1 [292 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.6983645Z Get:70 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libsphinxbase3t64 amd64 0.8+5prealpha+1-17build2 [126 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.7017042Z Get:71 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libpocketsphinx3 amd64 0.8.0+real5prealpha+1-15ubuntu5 [133 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.7053538Z Get:72 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libpostproc57 amd64 7:6.1.1-3ubuntu5 [49.9 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.7078560Z Get:73 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libsamplerate0 amd64 0.2.2-4build1 [1344 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.7218381Z Get:74 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 librubberband2 amd64 3.3.0+dfsg-2build1 [130 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.7255955Z Get:75 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libswscale7 amd64 7:6.1.1-3ubuntu5 [193 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.7301902Z Get:76 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libvidstab1.1 amd64 1.1.0-2build1 [38.5 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.7330191Z Get:77 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libzimg2 amd64 3.0.5+ds1-1build1 [254 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.7377382Z Get:78 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libavfilter9 amd64 7:6.1.1-3ubuntu5 [4235 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.7910464Z Get:79 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libcaca0 amd64 0.99.beta20-4ubuntu0.1 [209 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.8007238Z Get:80 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libcdio19t64 amd64 2.1.0-4.1ubuntu1.2 [62.4 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.8035364Z Get:81 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libcdio-cdda2t64 amd64 10.2+2.0.1-1.1build2 [16.5 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.8518005Z Get:82 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libcdio-paranoia2t64 amd64 10.2+2.0.1-1.1build2 [16.6 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.8572892Z Get:83 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libdc1394-25 amd64 2.2.6-4build1 [90.1 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.8606704Z Get:84 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libiec61883-0 amd64 1.2.0-6build1 [24.5 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.8630821Z Get:85 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libjack-jackd2-0 amd64 1.9.21~dfsg-3ubuntu3 [289 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.8702632Z Get:86 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libopenal-data all 1:1.23.1-4build1 [161 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.8760152Z Get:87 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libsndio7.0 amd64 1.9.0-0.3build3 [29.6 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.8787347Z Get:88 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libopenal1 amd64 1:1.23.1-4build1 [540 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.8893139Z Get:89 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libdecor-0-0 amd64 0.2.2-1build2 [16.5 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.8921119Z Get:90 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libsdl2-2.0-0 amd64 2.30.0+dfsg-1ubuntu3.1 [686 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.9047512Z Get:91 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libxcb-shape0 amd64 1.15-1ubuntu2 [6100 B]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.9071000Z Get:92 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libxv1 amd64 2:1.0.11-1.1build1 [10.7 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.9099870Z Get:93 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libavdevice60 amd64 7:6.1.1-3ubuntu5 [82.3 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.9136249Z Get:94 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libavformat-dev amd64 7:6.1.1-3ubuntu5 [1398 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.9350202Z Get:95 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libpostproc-dev amd64 7:6.1.1-3ubuntu5 [50.3 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.9379178Z Get:96 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libswscale-dev amd64 7:6.1.1-3ubuntu5 [224 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.9433277Z Get:97 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libavfilter-dev amd64 7:6.1.1-3ubuntu5 [2265 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.9823448Z Get:98 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libavdevice-dev amd64 7:6.1.1-3ubuntu5 [94.6 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.9849040Z Get:99 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 libdav1d-dev amd64 1.4.1-1build1 [25.3 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.9872261Z Get:100 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libdbus-1-dev amd64 1.14.10-4ubuntu4.1 [190 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:02.9919373Z Get:101 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libpthread-stubs0-dev amd64 0.4-1build3 [4746 B]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.0383471Z Get:102 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libssh-4 amd64 0.10.6-2ubuntu0.3 [190 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.0451813Z Get:103 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 libudev-dev amd64 255.4-1ubuntu8.12 [22.0 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.0467152Z Get:104 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 xorg-sgml-doctools all 1:1.11-1.1 [10.9 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.0480513Z Get:105 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 x11proto-dev all 2023.2-1 [602 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.0542605Z Get:106 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libxau-dev amd64 1:1.0.9-1build6 [9570 B]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.0555720Z Get:107 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libxdmcp-dev amd64 1:1.1.3-0ubuntu6 [26.5 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.0573394Z Get:108 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libxcb1-dev amd64 1.15-1ubuntu2 [85.8 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.0591748Z Get:109 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libxcb-render0-dev amd64 1.15-1ubuntu2 [19.6 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.0606583Z Get:110 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libxcb-shape0-dev amd64 1.15-1ubuntu2 [7310 B]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.0621165Z Get:111 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libxcb-xfixes0-dev amd64 1.15-1ubuntu2 [12.6 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.0638048Z Get:112 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libxkbcommon-dev amd64 1.6.0-1build1 [56.3 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.0660200Z Get:113 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 nasm amd64 2.16.01-1build1 [459 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.0703389Z Get:114 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libwayland-bin amd64 1.22.0-2.1build1 [20.6 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.0719763Z Get:115 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libwayland-dev amd64 1.22.0-2.1build1 [71.3 kB]
+Release	Install Linux native dependencies	2026-02-20T22:26:03.4656312Z Fetched 74.5 MB in 5s (15.3 MB/s)
+Release	Install Linux native dependencies	2026-02-20T22:26:03.5137337Z (Reading database ... 
+Release	Install Linux native dependencies	2026-02-20T22:26:03.5137805Z (Reading database ... 5%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.5138134Z (Reading database ... 10%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.5138495Z (Reading database ... 15%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.5138700Z (Reading database ... 20%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.5138975Z (Reading database ... 25%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.5139283Z (Reading database ... 30%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.5139542Z (Reading database ... 35%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.5139739Z (Reading database ... 40%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.5139934Z (Reading database ... 45%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.5140125Z (Reading database ... 50%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.5187826Z (Reading database ... 55%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.5444747Z (Reading database ... 60%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.5838670Z (Reading database ... 65%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.6059996Z (Reading database ... 70%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.6463606Z (Reading database ... 75%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.6690675Z (Reading database ... 80%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.6902379Z (Reading database ... 85%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.7133621Z (Reading database ... 90%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.7446017Z (Reading database ... 95%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.7446451Z (Reading database ... 100%
+Release	Install Linux native dependencies	2026-02-20T22:26:03.7446942Z (Reading database ... 217173 files and directories currently installed.)
+Release	Install Linux native dependencies	2026-02-20T22:26:03.7492937Z Preparing to unpack .../000-libasound2t64_1.2.11-1ubuntu0.2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:03.7526429Z Unpacking libasound2t64:amd64 (1.2.11-1ubuntu0.2) over (1.2.11-1ubuntu0.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:03.8056231Z Preparing to unpack .../001-libasound2-data_1.2.11-1ubuntu0.2_all.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:03.8074902Z Unpacking libasound2-data (1.2.11-1ubuntu0.2) over (1.2.11-1ubuntu0.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:03.9074068Z Selecting previously unselected package libasound2-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:03.9210345Z Preparing to unpack .../002-libasound2-dev_1.2.11-1ubuntu0.2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:03.9242744Z Unpacking libasound2-dev:amd64 (1.2.11-1ubuntu0.2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:03.9830661Z Selecting previously unselected package libunibreak5:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:03.9966687Z Preparing to unpack .../003-libunibreak5_5.1-2build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:03.9974501Z Unpacking libunibreak5:amd64 (5.1-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.0211453Z Selecting previously unselected package libass9:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.0345977Z Preparing to unpack .../004-libass9_1%3a0.17.1-2build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.0356571Z Unpacking libass9:amd64 (1:0.17.1-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.0598385Z Selecting previously unselected package libasyncns0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.0730354Z Preparing to unpack .../005-libasyncns0_0.8-6build4_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.0737881Z Unpacking libasyncns0:amd64 (0.8-6build4) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.0967596Z Selecting previously unselected package libva2:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.1099104Z Preparing to unpack .../006-libva2_2.20.0-2ubuntu0.1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.1106624Z Unpacking libva2:amd64 (2.20.0-2ubuntu0.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.1346509Z Selecting previously unselected package libva-drm2:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.1479560Z Preparing to unpack .../007-libva-drm2_2.20.0-2ubuntu0.1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.1486372Z Unpacking libva-drm2:amd64 (2.20.0-2ubuntu0.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.1719357Z Selecting previously unselected package libva-x11-2:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.1851461Z Preparing to unpack .../008-libva-x11-2_2.20.0-2ubuntu0.1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.1859901Z Unpacking libva-x11-2:amd64 (2.20.0-2ubuntu0.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.2098563Z Selecting previously unselected package libvdpau1:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.2230923Z Preparing to unpack .../009-libvdpau1_1.5-2build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.2241571Z Unpacking libvdpau1:amd64 (1.5-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.2509895Z Selecting previously unselected package libvpl2.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.2643591Z Preparing to unpack .../010-libvpl2_2023.3.0-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.2651561Z Unpacking libvpl2 (2023.3.0-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.2903450Z Selecting previously unselected package ocl-icd-libopencl1:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.3036704Z Preparing to unpack .../011-ocl-icd-libopencl1_2.3.2-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.3044634Z Unpacking ocl-icd-libopencl1:amd64 (2.3.2-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.3330781Z Selecting previously unselected package libavutil58:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.3463660Z Preparing to unpack .../012-libavutil58_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.3472012Z Unpacking libavutil58:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.3766487Z Selecting previously unselected package libcodec2-1.2:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.3900455Z Preparing to unpack .../013-libcodec2-1.2_1.2.0-2build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.3908991Z Unpacking libcodec2-1.2:amd64 (1.2.0-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.4782524Z Selecting previously unselected package libdav1d7:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.4922043Z Preparing to unpack .../014-libdav1d7_1.4.1-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.4930789Z Unpacking libdav1d7:amd64 (1.4.1-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.5256562Z Selecting previously unselected package libgsm1:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.5392150Z Preparing to unpack .../015-libgsm1_1.0.22-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.5400148Z Unpacking libgsm1:amd64 (1.0.22-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.5652977Z Selecting previously unselected package libhwy1t64:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.5786608Z Preparing to unpack .../016-libhwy1t64_1.0.7-8.1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.5795659Z Unpacking libhwy1t64:amd64 (1.0.7-8.1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.6193037Z Selecting previously unselected package libjxl0.7:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.6328810Z Preparing to unpack .../017-libjxl0.7_0.7.0-10.2ubuntu6.1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.6336501Z Unpacking libjxl0.7:amd64 (0.7.0-10.2ubuntu6.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.6743375Z Selecting previously unselected package libmp3lame0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.6880395Z Preparing to unpack .../018-libmp3lame0_3.100-6build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.6888135Z Unpacking libmp3lame0:amd64 (3.100-6build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.7139497Z Selecting previously unselected package libopus0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.7275912Z Preparing to unpack .../019-libopus0_1.4-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.7284597Z Unpacking libopus0:amd64 (1.4-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.7544454Z Selecting previously unselected package librav1e0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.7680796Z Preparing to unpack .../020-librav1e0_0.7.1-2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.7689778Z Unpacking librav1e0:amd64 (0.7.1-2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.8071197Z Selecting previously unselected package librsvg2-2:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.8207556Z Preparing to unpack .../021-librsvg2-2_2.58.0+dfsg-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.8216188Z Unpacking librsvg2-2:amd64 (2.58.0+dfsg-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.8795903Z Selecting previously unselected package libshine3:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.8933069Z Preparing to unpack .../022-libshine3_3.1.1-2build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.8940856Z Unpacking libshine3:amd64 (3.1.1-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.9175942Z Selecting previously unselected package libspeex1:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.9309531Z Preparing to unpack .../023-libspeex1_1.2.1-2ubuntu2.24.04.1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.9318859Z Unpacking libspeex1:amd64 (1.2.1-2ubuntu2.24.04.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.9559682Z Selecting previously unselected package libsvtav1enc1d1:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:04.9694119Z Preparing to unpack .../024-libsvtav1enc1d1_1.7.0+dfsg-2build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:04.9702432Z Unpacking libsvtav1enc1d1:amd64 (1.7.0+dfsg-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.0279171Z Selecting previously unselected package libsoxr0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.0417486Z Preparing to unpack .../025-libsoxr0_0.1.3-4build3_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.0426028Z Unpacking libsoxr0:amd64 (0.1.3-4build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.0676737Z Selecting previously unselected package libswresample4:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.0810487Z Preparing to unpack .../026-libswresample4_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.0819108Z Unpacking libswresample4:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.1067690Z Selecting previously unselected package libtheora0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.1200299Z Preparing to unpack .../027-libtheora0_1.1.1+dfsg.1-16.1build3_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.1208666Z Unpacking libtheora0:amd64 (1.1.1+dfsg.1-16.1build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.1485803Z Selecting previously unselected package libtwolame0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.1619691Z Preparing to unpack .../028-libtwolame0_0.4.0-2build3_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.1628196Z Unpacking libtwolame0:amd64 (0.4.0-2build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.1871288Z Selecting previously unselected package libvorbisenc2:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.2005399Z Preparing to unpack .../029-libvorbisenc2_1.3.7-1build3_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.2013891Z Unpacking libvorbisenc2:amd64 (1.3.7-1build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.2278735Z Selecting previously unselected package libvpx9:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.2412888Z Preparing to unpack .../030-libvpx9_1.14.0-1ubuntu2.3_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.2421421Z Unpacking libvpx9:amd64 (1.14.0-1ubuntu2.3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.2813775Z Selecting previously unselected package libx264-164:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.2950020Z Preparing to unpack .../031-libx264-164_2%3a0.164.3108+git31e19f9-1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.2957552Z Unpacking libx264-164:amd64 (2:0.164.3108+git31e19f9-1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.3281733Z Selecting previously unselected package libx265-199:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.3417091Z Preparing to unpack .../032-libx265-199_3.5-2build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.3425063Z Unpacking libx265-199:amd64 (3.5-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.4202241Z Selecting previously unselected package libxvidcore4:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.4341245Z Preparing to unpack .../033-libxvidcore4_2%3a1.3.7-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.4348919Z Unpacking libxvidcore4:amd64 (2:1.3.7-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.4608140Z Selecting previously unselected package libzvbi-common.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.4742779Z Preparing to unpack .../034-libzvbi-common_0.2.42-2_all.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.4750175Z Unpacking libzvbi-common (0.2.42-2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.5105297Z Selecting previously unselected package libzvbi0t64:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.5239933Z Preparing to unpack .../035-libzvbi0t64_0.2.42-2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.5247749Z Unpacking libzvbi0t64:amd64 (0.2.42-2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.5549226Z Selecting previously unselected package libavcodec60:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.5682109Z Preparing to unpack .../036-libavcodec60_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.5690925Z Unpacking libavcodec60:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.6625949Z Selecting previously unselected package libavutil-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.6765237Z Preparing to unpack .../037-libavutil-dev_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.6773842Z Unpacking libavutil-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.7673725Z Selecting previously unselected package libswresample-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.7812334Z Preparing to unpack .../038-libswresample-dev_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.7821631Z Unpacking libswresample-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.8090100Z Selecting previously unselected package libavcodec-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.8223266Z Preparing to unpack .../039-libavcodec-dev_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.8231734Z Unpacking libavcodec-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.9488842Z Selecting previously unselected package libraw1394-11:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:05.9629047Z Preparing to unpack .../040-libraw1394-11_2.1.2-2build3_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.9637121Z Unpacking libraw1394-11:amd64 (2.1.2-2build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:05.9879405Z Selecting previously unselected package libavc1394-0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.0013763Z Preparing to unpack .../041-libavc1394-0_0.5.4-5build3_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.0022212Z Unpacking libavc1394-0:amd64 (0.5.4-5build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.0261372Z Selecting previously unselected package libudfread0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.0391799Z Preparing to unpack .../042-libudfread0_1.1.2-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.0399973Z Unpacking libudfread0:amd64 (1.1.2-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.0643410Z Selecting previously unselected package libbluray2:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.0774787Z Preparing to unpack .../043-libbluray2_1%3a1.3.4-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.0783550Z Unpacking libbluray2:amd64 (1:1.3.4-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.1041710Z Selecting previously unselected package libchromaprint1:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.1174521Z Preparing to unpack .../044-libchromaprint1_1.5.1-5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.1183779Z Unpacking libchromaprint1:amd64 (1.5.1-5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.1427397Z Selecting previously unselected package libgme0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.1559303Z Preparing to unpack .../045-libgme0_0.6.3-7build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.1567698Z Unpacking libgme0:amd64 (0.6.3-7build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.1843889Z Selecting previously unselected package libmpg123-0t64:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.1977771Z Preparing to unpack .../046-libmpg123-0t64_1.32.5-1ubuntu1.1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.1986356Z Unpacking libmpg123-0t64:amd64 (1.32.5-1ubuntu1.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.2281422Z Selecting previously unselected package libopenmpt0t64:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.2414255Z Preparing to unpack .../047-libopenmpt0t64_0.7.3-1.1build3_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.2430674Z Unpacking libopenmpt0t64:amd64 (0.7.3-1.1build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.2768878Z Selecting previously unselected package libcjson1:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.2902604Z Preparing to unpack .../048-libcjson1_1.7.17-1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.2910989Z Unpacking libcjson1:amd64 (1.7.17-1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.3160536Z Selecting previously unselected package libmbedcrypto7t64:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.3293710Z Preparing to unpack .../049-libmbedcrypto7t64_2.28.8-1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.3302500Z Unpacking libmbedcrypto7t64:amd64 (2.28.8-1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.3581655Z Selecting previously unselected package librist4:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.3715243Z Preparing to unpack .../050-librist4_0.2.10+dfsg-2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.3723545Z Unpacking librist4:amd64 (0.2.10+dfsg-2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.3980490Z Selecting previously unselected package libsrt1.5-gnutls:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.4112776Z Preparing to unpack .../051-libsrt1.5-gnutls_1.5.3-1build2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.4123375Z Unpacking libsrt1.5-gnutls:amd64 (1.5.3-1build2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.4420543Z Selecting previously unselected package libssh-gcrypt-4:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.4554900Z Preparing to unpack .../052-libssh-gcrypt-4_0.10.6-2ubuntu0.3_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.4563249Z Unpacking libssh-gcrypt-4:amd64 (0.10.6-2ubuntu0.3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.4852871Z Selecting previously unselected package libavformat60:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.4985810Z Preparing to unpack .../053-libavformat60_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.4993946Z Unpacking libavformat60:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.5375711Z Selecting previously unselected package libbs2b0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.5514159Z Preparing to unpack .../054-libbs2b0_3.1.0+dfsg-7build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.5523340Z Unpacking libbs2b0:amd64 (3.1.0+dfsg-7build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.5792178Z Selecting previously unselected package libflite1:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.5925396Z Preparing to unpack .../055-libflite1_2.2-6build3_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.5934591Z Unpacking libflite1:amd64 (2.2-6build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.7304117Z Selecting previously unselected package libserd-0-0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.7444800Z Preparing to unpack .../056-libserd-0-0_0.32.2-1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.7452776Z Unpacking libserd-0-0:amd64 (0.32.2-1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.7698120Z Selecting previously unselected package libzix-0-0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.7831333Z Preparing to unpack .../057-libzix-0-0_0.4.2-2build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.7840133Z Unpacking libzix-0-0:amd64 (0.4.2-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.8081270Z Selecting previously unselected package libsord-0-0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.8214633Z Preparing to unpack .../058-libsord-0-0_0.16.16-2build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.8222281Z Unpacking libsord-0-0:amd64 (0.16.16-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.8462433Z Selecting previously unselected package libsratom-0-0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.8594664Z Preparing to unpack .../059-libsratom-0-0_0.6.16-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.8602740Z Unpacking libsratom-0-0:amd64 (0.6.16-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.8842449Z Selecting previously unselected package liblilv-0-0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.8975084Z Preparing to unpack .../060-liblilv-0-0_0.24.22-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.8983542Z Unpacking liblilv-0-0:amd64 (0.24.22-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.9231767Z Selecting previously unselected package libmysofa1:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.9365265Z Preparing to unpack .../061-libmysofa1_1.3.2+dfsg-2ubuntu2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.9373702Z Unpacking libmysofa1:amd64 (1.3.2+dfsg-2ubuntu2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.9683454Z Selecting previously unselected package libplacebo338:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:06.9817610Z Preparing to unpack .../062-libplacebo338_6.338.2-2build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:06.9826201Z Unpacking libplacebo338:amd64 (6.338.2-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.0497824Z Selecting previously unselected package libblas3:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.0635497Z Preparing to unpack .../063-libblas3_3.12.0-3build1.1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.0667948Z Unpacking libblas3:amd64 (3.12.0-3build1.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.0953220Z Selecting previously unselected package liblapack3:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.1088098Z Preparing to unpack .../064-liblapack3_3.12.0-3build1.1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.1119899Z Unpacking liblapack3:amd64 (3.12.0-3build1.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.1691407Z Selecting previously unselected package libflac12t64:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.1830651Z Preparing to unpack .../065-libflac12t64_1.4.3+ds-2.1ubuntu2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.1839533Z Unpacking libflac12t64:amd64 (1.4.3+ds-2.1ubuntu2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.2111312Z Selecting previously unselected package libsndfile1:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.2247280Z Preparing to unpack .../066-libsndfile1_1.2.2-1ubuntu5.24.04.1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.2255758Z Unpacking libsndfile1:amd64 (1.2.2-1ubuntu5.24.04.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.2550565Z Selecting previously unselected package libpulse0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.2685280Z Preparing to unpack .../067-libpulse0_1%3a16.1+dfsg1-2ubuntu10.1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.2761956Z Unpacking libpulse0:amd64 (1:16.1+dfsg1-2ubuntu10.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.3085994Z Selecting previously unselected package libsphinxbase3t64:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.3221524Z Preparing to unpack .../068-libsphinxbase3t64_0.8+5prealpha+1-17build2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.3230360Z Unpacking libsphinxbase3t64:amd64 (0.8+5prealpha+1-17build2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.3521841Z Selecting previously unselected package libpocketsphinx3:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.3655347Z Preparing to unpack .../069-libpocketsphinx3_0.8.0+real5prealpha+1-15ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.3665866Z Unpacking libpocketsphinx3:amd64 (0.8.0+real5prealpha+1-15ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.3935575Z Selecting previously unselected package libpostproc57:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.4068822Z Preparing to unpack .../070-libpostproc57_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.4078622Z Unpacking libpostproc57:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.4339470Z Selecting previously unselected package libsamplerate0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.4473539Z Preparing to unpack .../071-libsamplerate0_0.2.2-4build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.4483690Z Unpacking libsamplerate0:amd64 (0.2.2-4build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.4808775Z Selecting previously unselected package librubberband2:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.4943162Z Preparing to unpack .../072-librubberband2_3.3.0+dfsg-2build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.4952042Z Unpacking librubberband2:amd64 (3.3.0+dfsg-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.5218653Z Selecting previously unselected package libswscale7:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.5352704Z Preparing to unpack .../073-libswscale7_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.5362799Z Unpacking libswscale7:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.5639823Z Selecting previously unselected package libvidstab1.1:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.5773662Z Preparing to unpack .../074-libvidstab1.1_1.1.0-2build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.5784713Z Unpacking libvidstab1.1:amd64 (1.1.0-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.6030455Z Selecting previously unselected package libzimg2:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.6164147Z Preparing to unpack .../075-libzimg2_3.0.5+ds1-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.6175653Z Unpacking libzimg2:amd64 (3.0.5+ds1-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.6459596Z Selecting previously unselected package libavfilter9:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.6593816Z Preparing to unpack .../076-libavfilter9_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.6605010Z Unpacking libavfilter9:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.7409000Z Selecting previously unselected package libcaca0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.7548028Z Preparing to unpack .../077-libcaca0_0.99.beta20-4ubuntu0.1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.7558210Z Unpacking libcaca0:amd64 (0.99.beta20-4ubuntu0.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.7871196Z Selecting previously unselected package libcdio19t64:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.8006740Z Preparing to unpack .../078-libcdio19t64_2.1.0-4.1ubuntu1.2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.8014969Z Unpacking libcdio19t64:amd64 (2.1.0-4.1ubuntu1.2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.8268522Z Selecting previously unselected package libcdio-cdda2t64:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.8401527Z Preparing to unpack .../079-libcdio-cdda2t64_10.2+2.0.1-1.1build2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.8409943Z Unpacking libcdio-cdda2t64:amd64 (10.2+2.0.1-1.1build2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.8653836Z Selecting previously unselected package libcdio-paranoia2t64:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.8786842Z Preparing to unpack .../080-libcdio-paranoia2t64_10.2+2.0.1-1.1build2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.8794601Z Unpacking libcdio-paranoia2t64:amd64 (10.2+2.0.1-1.1build2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.9198492Z Selecting previously unselected package libdc1394-25:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.9333639Z Preparing to unpack .../081-libdc1394-25_2.2.6-4build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.9341594Z Unpacking libdc1394-25:amd64 (2.2.6-4build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.9599672Z Selecting previously unselected package libiec61883-0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:07.9732383Z Preparing to unpack .../082-libiec61883-0_1.2.0-6build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.9740096Z Unpacking libiec61883-0:amd64 (1.2.0-6build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:07.9993119Z Selecting previously unselected package libjack-jackd2-0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.0126780Z Preparing to unpack .../083-libjack-jackd2-0_1.9.21~dfsg-3ubuntu3_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.0134960Z Unpacking libjack-jackd2-0:amd64 (1.9.21~dfsg-3ubuntu3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.0443155Z Selecting previously unselected package libopenal-data.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.0586957Z Preparing to unpack .../084-libopenal-data_1%3a1.23.1-4build1_all.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.0593859Z Unpacking libopenal-data (1:1.23.1-4build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.0890383Z Selecting previously unselected package libsndio7.0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.1024713Z Preparing to unpack .../085-libsndio7.0_1.9.0-0.3build3_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.1033281Z Unpacking libsndio7.0:amd64 (1.9.0-0.3build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.1284575Z Selecting previously unselected package libopenal1:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.1417744Z Preparing to unpack .../086-libopenal1_1%3a1.23.1-4build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.1424893Z Unpacking libopenal1:amd64 (1:1.23.1-4build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.1733344Z Selecting previously unselected package libdecor-0-0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.1868544Z Preparing to unpack .../087-libdecor-0-0_0.2.2-1build2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.1876355Z Unpacking libdecor-0-0:amd64 (0.2.2-1build2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.2122767Z Selecting previously unselected package libsdl2-2.0-0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.2257791Z Preparing to unpack .../088-libsdl2-2.0-0_2.30.0+dfsg-1ubuntu3.1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.2265798Z Unpacking libsdl2-2.0-0:amd64 (2.30.0+dfsg-1ubuntu3.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.2626667Z Selecting previously unselected package libxcb-shape0:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.2762342Z Preparing to unpack .../089-libxcb-shape0_1.15-1ubuntu2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.2770115Z Unpacking libxcb-shape0:amd64 (1.15-1ubuntu2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.3004660Z Selecting previously unselected package libxv1:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.3138742Z Preparing to unpack .../090-libxv1_2%3a1.0.11-1.1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.3146393Z Unpacking libxv1:amd64 (2:1.0.11-1.1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.3385968Z Selecting previously unselected package libavdevice60:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.3519233Z Preparing to unpack .../091-libavdevice60_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.3527935Z Unpacking libavdevice60:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.3771725Z Selecting previously unselected package libavformat-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.3904237Z Preparing to unpack .../092-libavformat-dev_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.3911735Z Unpacking libavformat-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.4428685Z Selecting previously unselected package libpostproc-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.4565191Z Preparing to unpack .../093-libpostproc-dev_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.4572250Z Unpacking libpostproc-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.4830799Z Selecting previously unselected package libswscale-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.4964730Z Preparing to unpack .../094-libswscale-dev_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.4972083Z Unpacking libswscale-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.5278441Z Selecting previously unselected package libavfilter-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.5413189Z Preparing to unpack .../095-libavfilter-dev_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.5421197Z Unpacking libavfilter-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.6073100Z Selecting previously unselected package libavdevice-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.6213528Z Preparing to unpack .../096-libavdevice-dev_7%3a6.1.1-3ubuntu5_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.6220805Z Unpacking libavdevice-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.6491436Z Selecting previously unselected package libdav1d-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.6627373Z Preparing to unpack .../097-libdav1d-dev_1.4.1-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.6636579Z Unpacking libdav1d-dev:amd64 (1.4.1-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.6935724Z Selecting previously unselected package libdbus-1-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.7073402Z Preparing to unpack .../098-libdbus-1-dev_1.14.10-4ubuntu4.1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.7081071Z Unpacking libdbus-1-dev:amd64 (1.14.10-4ubuntu4.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.7494040Z Selecting previously unselected package libpthread-stubs0-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.7642242Z Preparing to unpack .../099-libpthread-stubs0-dev_0.4-1build3_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.7649627Z Unpacking libpthread-stubs0-dev:amd64 (0.4-1build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.8023240Z Preparing to unpack .../100-libssh-4_0.10.6-2ubuntu0.3_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.8044289Z Unpacking libssh-4:amd64 (0.10.6-2ubuntu0.3) over (0.10.6-2ubuntu0.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.8362364Z Selecting previously unselected package libudev-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.8498517Z Preparing to unpack .../101-libudev-dev_255.4-1ubuntu8.12_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.8505501Z Unpacking libudev-dev:amd64 (255.4-1ubuntu8.12) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.8881515Z Selecting previously unselected package xorg-sgml-doctools.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.9016317Z Preparing to unpack .../102-xorg-sgml-doctools_1%3a1.11-1.1_all.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.9024190Z Unpacking xorg-sgml-doctools (1:1.11-1.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.9319411Z Selecting previously unselected package x11proto-dev.
+Release	Install Linux native dependencies	2026-02-20T22:26:08.9453166Z Preparing to unpack .../103-x11proto-dev_2023.2-1_all.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:08.9460465Z Unpacking x11proto-dev (2023.2-1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.0569765Z Selecting previously unselected package libxau-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:09.0707862Z Preparing to unpack .../104-libxau-dev_1%3a1.0.9-1build6_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.0716114Z Unpacking libxau-dev:amd64 (1:1.0.9-1build6) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.0970945Z Selecting previously unselected package libxdmcp-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:09.1104636Z Preparing to unpack .../105-libxdmcp-dev_1%3a1.1.3-0ubuntu6_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.1112558Z Unpacking libxdmcp-dev:amd64 (1:1.1.3-0ubuntu6) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.1353185Z Selecting previously unselected package libxcb1-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:09.1485816Z Preparing to unpack .../106-libxcb1-dev_1.15-1ubuntu2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.1494186Z Unpacking libxcb1-dev:amd64 (1.15-1ubuntu2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.1782370Z Selecting previously unselected package libxcb-render0-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:09.1918695Z Preparing to unpack .../107-libxcb-render0-dev_1.15-1ubuntu2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.1926181Z Unpacking libxcb-render0-dev:amd64 (1.15-1ubuntu2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.2183302Z Selecting previously unselected package libxcb-shape0-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:09.2317658Z Preparing to unpack .../108-libxcb-shape0-dev_1.15-1ubuntu2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.2325663Z Unpacking libxcb-shape0-dev:amd64 (1.15-1ubuntu2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.2567360Z Selecting previously unselected package libxcb-xfixes0-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:09.2701271Z Preparing to unpack .../109-libxcb-xfixes0-dev_1.15-1ubuntu2_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.2710033Z Unpacking libxcb-xfixes0-dev:amd64 (1.15-1ubuntu2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.2951992Z Selecting previously unselected package libxkbcommon-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:09.3085397Z Preparing to unpack .../110-libxkbcommon-dev_1.6.0-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.3094284Z Unpacking libxkbcommon-dev:amd64 (1.6.0-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.3358516Z Selecting previously unselected package nasm.
+Release	Install Linux native dependencies	2026-02-20T22:26:09.3491953Z Preparing to unpack .../111-nasm_2.16.01-1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.3501481Z Unpacking nasm (2.16.01-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.3898866Z Selecting previously unselected package libwayland-bin.
+Release	Install Linux native dependencies	2026-02-20T22:26:09.4034923Z Preparing to unpack .../112-libwayland-bin_1.22.0-2.1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.4042756Z Unpacking libwayland-bin (1.22.0-2.1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.4292253Z Selecting previously unselected package libwayland-dev:amd64.
+Release	Install Linux native dependencies	2026-02-20T22:26:09.4426655Z Preparing to unpack .../113-libwayland-dev_1.22.0-2.1build1_amd64.deb ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.4434099Z Unpacking libwayland-dev:amd64 (1.22.0-2.1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5022823Z Setting up libgme0:amd64 (0.6.3-7build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5050172Z Setting up libchromaprint1:amd64 (1.5.1-5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5071890Z Setting up libssh-gcrypt-4:amd64 (0.10.6-2ubuntu0.3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5095535Z Setting up libhwy1t64:amd64 (1.0.7-8.1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5113895Z Setting up libudfread0:amd64 (1.1.2-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5134161Z Setting up libraw1394-11:amd64 (2.1.2-2build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5152988Z Setting up libspeex1:amd64 (1.2.1-2ubuntu2.24.04.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5172728Z Setting up libshine3:amd64 (3.1.1-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5191791Z Setting up libcaca0:amd64 (0.99.beta20-4ubuntu0.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5211752Z Setting up libvpl2 (2023.3.0-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5233332Z Setting up libx264-164:amd64 (2:0.164.3108+git31e19f9-1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5252160Z Setting up libtwolame0:amd64 (0.4.0-2build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5271017Z Setting up libmbedcrypto7t64:amd64 (2.28.8-1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5290527Z Setting up libgsm1:amd64 (1.0.22-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5308175Z Setting up libsoxr0:amd64 (0.1.3-4build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5335682Z Setting up libzix-0-0:amd64 (0.4.2-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5354852Z Setting up libcodec2-1.2:amd64 (1.2.0-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5374878Z Setting up libxkbcommon-dev:amd64 (1.6.0-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5394229Z Setting up libmysofa1:amd64 (1.3.2+dfsg-2ubuntu2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5413226Z Setting up libxcb-shape0:amd64 (1.15-1ubuntu2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5432907Z Setting up libcdio19t64:amd64 (2.1.0-4.1ubuntu1.2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5452996Z Setting up libsvtav1enc1d1:amd64 (1.7.0+dfsg-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5473625Z Setting up libmpg123-0t64:amd64 (1.32.5-1ubuntu1.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5499938Z Setting up libcjson1:amd64 (1.7.17-1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5523387Z Setting up libxvidcore4:amd64 (2:1.3.7-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5543435Z Setting up libpthread-stubs0-dev:amd64 (0.4-1build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5561362Z Setting up librav1e0:amd64 (0.7.1-2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5582165Z Setting up libcdio-cdda2t64:amd64 (10.2+2.0.1-1.1build2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5601565Z Setting up librist4:amd64 (0.2.10+dfsg-2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5621806Z Setting up librsvg2-2:amd64 (2.58.0+dfsg-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5643620Z Setting up libasound2-data (1.2.11-1ubuntu0.2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5663133Z Setting up libwayland-bin (1.22.0-2.1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5683822Z Setting up libblas3:amd64 (3.12.0-3build1.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5954028Z update-alternatives: using /usr/lib/x86_64-linux-gnu/blas/libblas.so.3 to provide /usr/lib/x86_64-linux-gnu/libblas.so.3 (libblas.so.3-x86_64-linux-gnu) in auto mode
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5975706Z Setting up libplacebo338:amd64 (6.338.2-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.5996061Z Setting up libasound2t64:amd64 (1.2.11-1ubuntu0.2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.6016056Z Setting up libva2:amd64 (2.20.0-2ubuntu0.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.6034974Z Setting up libdbus-1-dev:amd64 (1.14.10-4ubuntu4.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7455861Z Setting up libopus0:amd64 (1.4-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7473852Z Setting up libcdio-paranoia2t64:amd64 (10.2+2.0.1-1.1build2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7491936Z Setting up libdc1394-25:amd64 (2.2.6-4build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7511227Z Setting up libxv1:amd64 (2:1.0.11-1.1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7536659Z Setting up libunibreak5:amd64 (5.1-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7557578Z Setting up libudev-dev:amd64 (255.4-1ubuntu8.12) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7578666Z Setting up libjxl0.7:amd64 (0.7.0-10.2ubuntu6.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7598877Z Setting up nasm (2.16.01-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7618515Z Setting up libssh-4:amd64 (0.10.6-2ubuntu0.3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7638470Z Setting up libx265-199:amd64 (3.5-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7657166Z Setting up libsndio7.0:amd64 (1.9.0-0.3build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7676636Z Setting up libvidstab1.1:amd64 (1.1.0-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7696645Z Setting up libvpx9:amd64 (1.14.0-1ubuntu2.3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7717301Z Setting up libsrt1.5-gnutls:amd64 (1.5.3-1build2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7739397Z Setting up libflite1:amd64 (2.2-6build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7758795Z Setting up libdav1d7:amd64 (1.4.1-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7777887Z Setting up libva-drm2:amd64 (2.20.0-2ubuntu0.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7798587Z Setting up ocl-icd-libopencl1:amd64 (2.3.2-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7817079Z Setting up libasyncns0:amd64 (0.8-6build4) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7834612Z Setting up libvdpau1:amd64 (1.5-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7866011Z Setting up libbs2b0:amd64 (3.1.0+dfsg-7build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7886067Z Setting up libtheora0:amd64 (1.1.1+dfsg.1-16.1build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7908725Z Setting up libdecor-0-0:amd64 (0.2.2-1build2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7929096Z Setting up libzimg2:amd64 (3.0.5+ds1-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7949981Z Setting up libopenal-data (1:1.23.1-4build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7977499Z Setting up xorg-sgml-doctools (1:1.11-1.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.7995161Z Setting up libflac12t64:amd64 (1.4.3+ds-2.1ubuntu2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8015819Z Setting up libasound2-dev:amd64 (1.2.11-1ubuntu0.2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8037337Z Setting up libbluray2:amd64 (1:1.3.4-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8058640Z Setting up libsamplerate0:amd64 (0.2.2-4build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8078723Z Setting up libva-x11-2:amd64 (2.20.0-2ubuntu0.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8098360Z Setting up libopenmpt0t64:amd64 (0.7.3-1.1build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8116891Z Setting up libzvbi-common (0.2.42-2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8136821Z Setting up libmp3lame0:amd64 (3.100-6build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8157739Z Setting up libvorbisenc2:amd64 (1.3.7-1build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8179420Z Setting up libiec61883-0:amd64 (1.2.0-6build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8200339Z Setting up libserd-0-0:amd64 (0.32.2-1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8221786Z Setting up libavc1394-0:amd64 (0.5.4-5build3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8241450Z Setting up liblapack3:amd64 (3.12.0-3build1.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8324128Z update-alternatives: using /usr/lib/x86_64-linux-gnu/lapack/liblapack.so.3 to provide /usr/lib/x86_64-linux-gnu/liblapack.so.3 (liblapack.so.3-x86_64-linux-gnu) in auto mode
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8342036Z Setting up libzvbi0t64:amd64 (0.2.42-2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8362478Z Setting up libavutil58:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8381877Z Setting up libopenal1:amd64 (1:1.23.1-4build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8402927Z Setting up libwayland-dev:amd64 (1.22.0-2.1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8422572Z Setting up libass9:amd64 (1:0.17.1-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8442049Z Setting up libswresample4:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8463038Z Setting up libdav1d-dev:amd64 (1.4.1-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8615385Z Setting up libavcodec60:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8641095Z Setting up librubberband2:amd64 (3.3.0+dfsg-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8661306Z Setting up libjack-jackd2-0:amd64 (1.9.21~dfsg-3ubuntu3) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8682990Z Setting up libsord-0-0:amd64 (0.16.16-2build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8702743Z Setting up libpostproc57:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8720684Z Setting up libsratom-0-0:amd64 (0.6.16-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8741765Z Setting up libsndfile1:amd64 (1.2.2-1ubuntu5.24.04.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8760374Z Setting up liblilv-0-0:amd64 (0.24.22-1build1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8777548Z Setting up libswscale7:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8797696Z Setting up libavutil-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8816046Z Setting up libpulse0:amd64 (1:16.1+dfsg1-2ubuntu10.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8890056Z Setting up libswresample-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8911838Z Setting up libavcodec-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8930006Z Setting up libpostproc-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8950343Z Setting up libavformat60:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8972624Z Setting up libsphinxbase3t64:amd64 (0.8+5prealpha+1-17build2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.8991436Z Setting up libswscale-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.9010674Z Setting up libsdl2-2.0-0:amd64 (2.30.0+dfsg-1ubuntu3.1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.9031088Z Setting up libavformat-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.9049828Z Setting up libpocketsphinx3:amd64 (0.8.0+real5prealpha+1-15ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.9070611Z Setting up libavfilter9:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.9088922Z Setting up libavfilter-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.9107041Z Setting up libavdevice60:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.9126772Z Setting up libavdevice-dev:amd64 (7:6.1.1-3ubuntu5) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:09.9170065Z Processing triggers for libc-bin (2.39-0ubuntu8.6) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:10.1651501Z Processing triggers for man-db (2.12.0-4build2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:10.1691485Z Not building database; man-db/auto-update is not 'true'.
+Release	Install Linux native dependencies	2026-02-20T22:26:10.1708748Z Processing triggers for sgml-base (1.31) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:10.1824458Z Setting up x11proto-dev (2023.2-1) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:10.1845393Z Setting up libxau-dev:amd64 (1:1.0.9-1build6) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:10.1864557Z Setting up libxdmcp-dev:amd64 (1:1.1.3-0ubuntu6) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:10.1894368Z Setting up libxcb1-dev:amd64 (1.15-1ubuntu2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:10.1914675Z Setting up libxcb-render0-dev:amd64 (1.15-1ubuntu2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:10.1943715Z Setting up libxcb-shape0-dev:amd64 (1.15-1ubuntu2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:10.1964918Z Setting up libxcb-xfixes0-dev:amd64 (1.15-1ubuntu2) ...
+Release	Install Linux native dependencies	2026-02-20T22:26:10.3766760Z readline() on closed filehandle HENV at /usr/sbin/needrestart line 79.
+Release	Install Linux native dependencies	2026-02-20T22:26:10.3767495Z Use of uninitialized value in unpack at /usr/sbin/needrestart line 79.
+Release	Install Linux native dependencies	2026-02-20T22:26:10.4840244Z readline() on closed filehandle HENV at /usr/sbin/needrestart line 79.
+Release	Install Linux native dependencies	2026-02-20T22:26:10.4841536Z Use of uninitialized value in unpack at /usr/sbin/needrestart line 79.
+Release	Install Linux native dependencies	2026-02-20T22:26:10.5201269Z 
+Release	Install Linux native dependencies	2026-02-20T22:26:10.5201756Z Failed to retrieve available kernel versions.
+Release	Install Linux native dependencies	2026-02-20T22:26:10.5202110Z 
+Release	Install Linux native dependencies	2026-02-20T22:26:10.5202289Z The processor microcode seems to be up-to-date.
+Release	Install Linux native dependencies	2026-02-20T22:26:10.5202601Z 
+Release	Install Linux native dependencies	2026-02-20T22:26:10.5202733Z No services need to be restarted.
+Release	Install Linux native dependencies	2026-02-20T22:26:10.5202967Z 
+Release	Install Linux native dependencies	2026-02-20T22:26:10.5203091Z No containers need to be restarted.
+Release	Install Linux native dependencies	2026-02-20T22:26:10.5203334Z 
+Release	Install Linux native dependencies	2026-02-20T22:26:10.5203498Z No user sessions are running outdated binaries.
+Release	Install Linux native dependencies	2026-02-20T22:26:10.5203789Z 
+Release	Install Linux native dependencies	2026-02-20T22:26:10.5204069Z No VM guests are running outdated hypervisor (qemu) binaries on this host.
+Release	Run dtolnay/rust-toolchain@stable	﻿2026-02-20T22:26:11.4933592Z ##[group]Run dtolnay/rust-toolchain@stable
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.4933886Z with:
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.4934057Z   toolchain: stable
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.4934236Z ##[endgroup]
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5030085Z ##[group]Run : parse toolchain version
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5030420Z [36;1m: parse toolchain version[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5030671Z [36;1mif [[ -z $toolchain ]]; then[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5031159Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5031678Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5031955Z [36;1m  exit 1[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5032270Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5032655Z [36;1m  if [[ Linux == macOS ]]; then[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5033147Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5033653Z [36;1m  else[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5034038Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5034454Z [36;1m  fi[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5034728Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5035216Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5035730Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5036226Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5036678Z [36;1melse[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5036915Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5037181Z [36;1mfi[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5037629Z shell: bash --noprofile --norc -e -o pipefail {0}
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5037902Z env:
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5038081Z   toolchain: stable
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5038592Z ##[endgroup]
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5661952Z ##[group]Run : construct rustup command line
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5662299Z [36;1m: construct rustup command line[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5662729Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5663367Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5663830Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5664232Z shell: bash --noprofile --norc -e -o pipefail {0}
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5664507Z env:
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5664679Z   targets: 
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5664851Z   components: 
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.5665039Z ##[endgroup]
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6246622Z ##[group]Run : set $CARGO_HOME
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6246910Z [36;1m: set $CARGO_HOME[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6247222Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6247730Z shell: bash --noprofile --norc -e -o pipefail {0}
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6248015Z ##[endgroup]
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6862211Z ##[group]Run : install rustup if needed
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6862537Z [36;1m: install rustup if needed[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6862819Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6863547Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6864250Z [36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6864509Z [36;1mfi[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6864836Z shell: bash --noprofile --norc -e -o pipefail {0}
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6865102Z env:
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6865290Z   CARGO_HOME: /github/home/.cargo
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.6865521Z ##[endgroup]
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.7494332Z ##[group]Run rustup toolchain install stable --profile minimal --no-self-update
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.7495107Z [36;1mrustup toolchain install stable --profile minimal --no-self-update[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.7495610Z shell: bash --noprofile --norc -e -o pipefail {0}
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.7495883Z env:
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.7496065Z   CARGO_HOME: /github/home/.cargo
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.7496318Z   RUSTUP_PERMIT_COPY_RENAME: 1
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.7496538Z ##[endgroup]
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:11.8143293Z info: syncing channel updates for 'stable-x86_64-unknown-linux-gnu'
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:12.1017743Z info: latest update on 2026-02-12, rust version 1.93.1 (01f6ddf75 2026-02-11)
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:12.1018650Z info: downloading component 'cargo'
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:12.1935199Z info: downloading component 'rust-std'
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:12.3550187Z info: downloading component 'rustc'
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:12.7476198Z info: installing component 'cargo'
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:13.4910204Z info: installing component 'rust-std'
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:15.5802391Z info: installing component 'rustc'
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.5745818Z 
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.5857388Z   stable-x86_64-unknown-linux-gnu installed - rustc 1.93.1 (01f6ddf75 2026-02-11)
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.5858202Z 
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.5861123Z info: default toolchain set to 'stable-x86_64-unknown-linux-gnu'
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.5972670Z ##[group]Run rustup default stable
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.5972965Z [36;1mrustup default stable[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.5973334Z shell: bash --noprofile --norc -e -o pipefail {0}
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.5973607Z env:
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.5973788Z   CARGO_HOME: /github/home/.cargo
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.5974018Z ##[endgroup]
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.6601349Z info: using existing install for 'stable-x86_64-unknown-linux-gnu'
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.6915272Z info: default toolchain set to 'stable-x86_64-unknown-linux-gnu'
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.6915771Z 
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.7019491Z   stable-x86_64-unknown-linux-gnu unchanged - rustc 1.93.1 (01f6ddf75 2026-02-11)
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.7020079Z 
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.7093267Z ##[group]Run : create cachekey
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.7093561Z [36;1m: create cachekey[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.7094246Z [36;1mDATE=$(rustc +stable --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.7094867Z [36;1mHASH=$(rustc +stable --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.7095363Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.7095847Z shell: bash --noprofile --norc -e -o pipefail {0}
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.7096119Z env:
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.7096309Z   CARGO_HOME: /github/home/.cargo
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.7096533Z ##[endgroup]
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8054360Z ##[group]Run : disable incremental compilation
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8054718Z [36;1m: disable incremental compilation[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8055046Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8055361Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8055626Z [36;1mfi[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8055946Z shell: bash --noprofile --norc -e -o pipefail {0}
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8056244Z env:
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8056427Z   CARGO_HOME: /github/home/.cargo
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8056663Z ##[endgroup]
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8640285Z ##[group]Run : enable colors in Cargo output
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8640634Z [36;1m: enable colors in Cargo output[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8640940Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8641264Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8641529Z [36;1mfi[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8641858Z shell: bash --noprofile --norc -e -o pipefail {0}
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8642127Z env:
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8642312Z   CARGO_HOME: /github/home/.cargo
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8642552Z   CARGO_INCREMENTAL: 0
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.8642751Z ##[endgroup]
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9252122Z ##[group]Run : enable Cargo sparse registry
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9252469Z [36;1m: enable Cargo sparse registry[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9252818Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9253761Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9254474Z [36;1m  if rustc +stable --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9255024Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9255528Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9256011Z [36;1m  elif rustc +stable --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9256540Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9257021Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9257332Z [36;1m  fi[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9257511Z [36;1mfi[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9257860Z shell: bash --noprofile --norc -e -o pipefail {0}
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9258145Z env:
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9258541Z   CARGO_HOME: /github/home/.cargo
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9258779Z   CARGO_INCREMENTAL: 0
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9258991Z   CARGO_TERM_COLOR: always
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:20.9259206Z ##[endgroup]
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0187260Z ##[group]Run : work around spurious network errors in curl 8.0
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0187698Z [36;1m: work around spurious network errors in curl 8.0[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0188230Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0189152Z [36;1mif rustc +stable --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0189586Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0189873Z [36;1mfi[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0190212Z shell: bash --noprofile --norc -e -o pipefail {0}
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0190481Z env:
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0190669Z   CARGO_HOME: /github/home/.cargo
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0191123Z   CARGO_INCREMENTAL: 0
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0191326Z   CARGO_TERM_COLOR: always
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0191545Z ##[endgroup]
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0939980Z ##[group]Run rustc +stable --version --verbose
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0940322Z [36;1mrustc +stable --version --verbose[0m
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0940728Z shell: bash --noprofile --norc -e -o pipefail {0}
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0940999Z env:
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0941180Z   CARGO_HOME: /github/home/.cargo
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0941424Z   CARGO_INCREMENTAL: 0
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0941634Z   CARGO_TERM_COLOR: always
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.0941840Z ##[endgroup]
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.1642566Z rustc 1.93.1 (01f6ddf75 2026-02-11)
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.1643055Z binary: rustc
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.1643464Z commit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.1643947Z commit-date: 2026-02-11
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.1644276Z host: x86_64-unknown-linux-gnu
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.1644626Z release: 1.93.1
+Release	Run dtolnay/rust-toolchain@stable	2026-02-20T22:26:21.1644962Z LLVM version: 21.1.8
+Release	Run MarcoIeni/release-plz-action@v0.5	﻿2026-02-20T22:26:21.1830015Z ##[group]Run MarcoIeni/release-plz-action@v0.5
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1830310Z with:
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1830481Z   forge: github
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1830667Z   backend: github
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1830845Z   version: 0.3.156
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1831031Z env:
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1831207Z   CARGO_HOME: /github/home/.cargo
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1831439Z   CARGO_INCREMENTAL: 0
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1831643Z   CARGO_TERM_COLOR: always
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1832276Z   GITHUB_TOKEN: ***
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1832597Z   CARGO_REGISTRY_TOKEN: ***
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1832809Z ##[endgroup]
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1874874Z ##[group]Run taiki-e/install-action@90b40388b8931b1c39e248959515e295e02e9066
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1875231Z with:
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1875415Z   tool: cargo-semver-checks@0.46
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1875646Z   checksum: true
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1875837Z   fallback: cargo-binstall
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1876035Z env:
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1876211Z   CARGO_HOME: /github/home/.cargo
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1876437Z   CARGO_INCREMENTAL: 0
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1876691Z   CARGO_TERM_COLOR: always
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1877042Z   GITHUB_TOKEN: ***
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1877329Z   CARGO_REGISTRY_TOKEN: ***
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1877543Z ##[endgroup]
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1892921Z ##[group]Run set -eu
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1893169Z [36;1mset -eu[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1893395Z [36;1mif ! command -v bash >/dev/null; then[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1893716Z [36;1m  if grep -Eq '^ID=alpine' /etc/os-release; then[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1894129Z [36;1m    printf '::group::Install packages required for install-action (bash)\n'[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1894532Z [36;1m    # NB: sync with apk_install in main.sh[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1894821Z [36;1m    if command -v sudo >/dev/null; then[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1926977Z [36;1m      sudo apk --no-cache add bash[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1927373Z [36;1m    elif command -v doas >/dev/null; then[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1927680Z [36;1m      doas apk --no-cache add bash[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1927944Z [36;1m    else[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1928173Z [36;1m      apk --no-cache add bash[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1928565Z [36;1m    fi[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1928750Z [36;1m    printf '::endgroup::\n'[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1928977Z [36;1m  else[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1929209Z [36;1m    printf '::error::install-action requires bash\n'[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1929497Z [36;1m    exit 1[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1929673Z [36;1m  fi[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1929826Z [36;1mfi[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1930071Z shell: sh -e {0}
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1930247Z env:
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1930418Z   CARGO_HOME: /github/home/.cargo
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1930653Z   CARGO_INCREMENTAL: 0
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1930850Z   CARGO_TERM_COLOR: always
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1931245Z   GITHUB_TOKEN: ***
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1931538Z   CARGO_REGISTRY_TOKEN: ***
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.1931744Z ##[endgroup]
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2700195Z ##[group]Run bash --noprofile --norc "${GITHUB_ACTION_PATH:?}/main.sh"
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2700671Z [36;1mbash --noprofile --norc "${GITHUB_ACTION_PATH:?}/main.sh"[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2701342Z shell: bash --noprofile --norc -e -o pipefail {0}
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2701609Z env:
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2701787Z   CARGO_HOME: /github/home/.cargo
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2702024Z   CARGO_INCREMENTAL: 0
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2702231Z   CARGO_TERM_COLOR: always
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2702687Z   GITHUB_TOKEN: ***
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2702982Z   CARGO_REGISTRY_TOKEN: ***
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2703229Z   INPUT_TOOL: cargo-semver-checks@0.46
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2703476Z   INPUT_CHECKSUM: true
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2703695Z   INPUT_FALLBACK: cargo-binstall
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2704051Z   DEFAULT_GITHUB_TOKEN: ***
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2704321Z   ACTION_USER_AGENT: MarcoIeni/release-plz-action (v0.5)
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.2704619Z ##[endgroup]
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.3388884Z info: host platform: x86_64_linux
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.3396053Z info: cargo is located at /home/runner/.cargo/bin/cargo
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.3565011Z info: installing cargo-semver-checks@0.46
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.3742482Z info: adding '/github/home/.install-action/bin' to PATH
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.3774742Z info: downloading https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.46.0/cargo-semver-checks-x86_64-unknown-linux-musl.tar.gz
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.5893333Z info: verifying sha256 checksum for cargo-semver-checks-x86_64-unknown-linux-musl.tar.gz
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.7909162Z info: cargo-semver-checks installed at /github/home/.install-action/bin/cargo-semver-checks
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.7911774Z + cargo-semver-checks semver-checks --version
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.7924492Z cargo-semver-checks 0.46.0
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.7927239Z 
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8002432Z ##[group]Run cargo-bins/cargo-binstall@e7cc28468cf17df7cb288daea80c0c5437af360b
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8002816Z env:
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8002995Z   CARGO_HOME: /github/home/.cargo
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8003235Z   CARGO_INCREMENTAL: 0
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8003441Z   CARGO_TERM_COLOR: always
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8003903Z   GITHUB_TOKEN: ***
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8004221Z   CARGO_REGISTRY_TOKEN: ***
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8004441Z   BINSTALL_VERSION: 1.16.7
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8004644Z ##[endgroup]
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8021120Z ##[group]Run set -eu
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8021351Z [36;1mset -eu[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8021906Z [36;1mbash "/home/runner/work/_actions/cargo-bins/cargo-binstall/e7cc28468cf17df7cb288daea80c0c5437af360b/install-from-binstall-release.sh"[0m
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8022772Z shell: sh -e {0}
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8022951Z env:
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8023132Z   CARGO_HOME: /github/home/.cargo
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8023363Z   CARGO_INCREMENTAL: 0
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8023569Z   CARGO_TERM_COLOR: always
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8023911Z   GITHUB_TOKEN: ***
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8024194Z   CARGO_REGISTRY_TOKEN: ***
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8024408Z   BINSTALL_VERSION: 1.16.7
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8024611Z ##[endgroup]
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8603377Z bash: /home/runner/work/_actions/cargo-bins/cargo-binstall/e7cc28468cf17df7cb288daea80c0c5437af360b/install-from-binstall-release.sh: No such file or directory
+Release	Run MarcoIeni/release-plz-action@v0.5	2026-02-20T22:26:21.8641524Z ##[error]Process completed with exit code 127.
+Release	Post Run actions/checkout@v4	﻿2026-02-20T22:26:21.8736347Z Post job cleanup.
+Release	Post Run actions/checkout@v4	2026-02-20T22:26:21.8740973Z ##[command]/usr/bin/docker exec  cb728b8965e3da05eefc43865d463dec3ac33b84b7a59c77e216a171caee9e41 sh -c "cat /etc/*release | grep ^ID"
+Release	Post Run actions/checkout@v4	2026-02-20T22:26:22.0745994Z [command]/usr/bin/git version
+Release	Post Run actions/checkout@v4	2026-02-20T22:26:22.0782844Z git version 2.52.0
+Release	Post Run actions/checkout@v4	2026-02-20T22:26:22.0833262Z Temporarily overriding HOME='/__w/_temp/aca1cb8c-d4c4-4c7b-8849-99ca3a30583f' before making global git config changes
+Release	Post Run actions/checkout@v4	2026-02-20T22:26:22.0834400Z Adding repository directory to the temporary git global config as a safe directory
+Release	Post Run actions/checkout@v4	2026-02-20T22:26:22.0839658Z [command]/usr/bin/git config --global --add safe.directory /__w/waterkit/waterkit
+Release	Post Run actions/checkout@v4	2026-02-20T22:26:22.0874867Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+Release	Post Run actions/checkout@v4	2026-02-20T22:26:22.0908825Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Release	Post Run actions/checkout@v4	2026-02-20T22:26:22.1158177Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Release	Post Run actions/checkout@v4	2026-02-20T22:26:22.1182611Z http.https://github.com/.extraheader
+Release	Post Run actions/checkout@v4	2026-02-20T22:26:22.1198548Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+Release	Post Run actions/checkout@v4	2026-02-20T22:26:22.1235442Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Release	Post Run actions/checkout@v4	2026-02-20T22:26:22.1476150Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Release	Post Run actions/checkout@v4	2026-02-20T22:26:22.1513305Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Release	Stop containers	﻿2026-02-20T22:26:22.1897712Z Stop and remove container: 8a70e74227fb4ec99c84fdfadbb59948_ghcriocatthehackerubuntufulllatest_8bd8b5
+Release	Stop containers	2026-02-20T22:26:22.1902634Z ##[command]/usr/bin/docker rm --force cb728b8965e3da05eefc43865d463dec3ac33b84b7a59c77e216a171caee9e41
+Release	Stop containers	2026-02-20T22:26:24.0171708Z cb728b8965e3da05eefc43865d463dec3ac33b84b7a59c77e216a171caee9e41
+Release	Stop containers	2026-02-20T22:26:24.0202198Z Remove container network: github_network_219fd310a3ad41d38fbefe3690f81414
+Release	Stop containers	2026-02-20T22:26:24.0206209Z ##[command]/usr/bin/docker network rm github_network_219fd310a3ad41d38fbefe3690f81414
+Release	Stop containers	2026-02-20T22:26:24.1426292Z github_network_219fd310a3ad41d38fbefe3690f81414
+Release	Complete job	﻿2026-02-20T22:26:24.1485325Z Cleaning up orphan processes

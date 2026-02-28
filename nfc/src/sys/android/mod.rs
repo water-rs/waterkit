@@ -131,7 +131,7 @@ fn is_nfc_intent_action(action: &str) -> bool {
     )
 }
 
-fn decode_tag_type(code: i32) -> NfcTagType {
+const fn decode_tag_type(code: i32) -> NfcTagType {
     match code {
         0 => NfcTagType::Type1,
         1 => NfcTagType::Type2,
@@ -244,6 +244,7 @@ impl NfcReaderInner {
     pub async fn start_session(
         _message: &str,
     ) -> Result<(Self, async_channel::Receiver<NfcTag>), NfcError> {
+        std::future::ready(()).await;
         if !nfc_is_available() {
             return Err(NfcError::NotAvailable);
         }
@@ -360,7 +361,10 @@ impl Drop for NfcReaderInner {
 
 /// Android-specific NFC functions requiring JNI context.
 pub mod jni_api {
-    use super::*;
+    use super::{
+        EXTRA_TAG_KEY, JNIEnv, JObject, JString, JValue, NfcError, TagSnapshot, decode_tag_type,
+        helper_class, init_dex, is_nfc_intent_action,
+    };
 
     /// Check if NFC is available with JNI context.
     ///

@@ -467,6 +467,7 @@ pub struct SpeechRecognizerInner {
 }
 
 impl SpeechRecognizerInner {
+    #[allow(clippy::unused_async)]
     pub async fn start(
         config: RecognitionConfig,
     ) -> Result<(Self, async_channel::Receiver<RecognitionResult>), SpeechError> {
@@ -515,10 +516,14 @@ impl SpeechRecognizerInner {
             .map_err(|e| SpeechError::PlatformError(format!("startRecognition result: {e}")))?;
 
         if !started {
-            let mut sessions = recognition_sessions().lock().map_err(|e| {
-                SpeechError::PlatformError(format!("recognition session map lock poisoned: {e}"))
-            })?;
-            sessions.remove(&session_id);
+            recognition_sessions()
+                .lock()
+                .map_err(|e| {
+                    SpeechError::PlatformError(format!(
+                        "recognition session map lock poisoned: {e}"
+                    ))
+                })?
+                .remove(&session_id);
             return Err(SpeechError::NotAvailable);
         }
 
@@ -651,10 +656,14 @@ pub extern "system" fn Java_waterkit_speech_SpeechHelper_onRecognitionError(
         "waterkit-speech: invalid recognition session id in onRecognitionError: {session_id}"
     );
 
-    let mut sessions = recognition_sessions().lock().unwrap_or_else(|error| {
-        panic!("waterkit-speech: recognition session map lock poisoned on error callback: {error}")
-    });
-    let removed = sessions.remove(&session_id);
+    let removed = recognition_sessions()
+        .lock()
+        .unwrap_or_else(|error| {
+            panic!(
+                "waterkit-speech: recognition session map lock poisoned on error callback: {error}"
+            )
+        })
+        .remove(&session_id);
     if removed.is_none() {
         debug_assert!(
             false,

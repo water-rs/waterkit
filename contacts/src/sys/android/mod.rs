@@ -392,13 +392,13 @@ fn take_java_exception_message(env: &mut JNIEnv<'_>) -> Option<String> {
     }
     let throwable = env.exception_occurred().ok()?;
     let _ = env.exception_clear();
-    let rendered = match env.call_method(&throwable, "toString", "()Ljava/lang/String;", &[]) {
-        Ok(value) => value.l().ok()?,
-        Err(_) => {
+    let rendered =
+        if let Ok(value) = env.call_method(&throwable, "toString", "()Ljava/lang/String;", &[]) {
+            value.l().ok()?
+        } else {
             let _ = env.exception_clear();
             return Some("Java exception".into());
-        }
-    };
+        };
     if rendered.is_null() {
         return Some("Java exception".into());
     }

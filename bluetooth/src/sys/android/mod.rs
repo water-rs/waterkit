@@ -1,5 +1,12 @@
 #![allow(
+    clippy::cast_sign_loss,
+    clippy::manual_assert,
     clippy::missing_const_for_fn,
+    clippy::missing_fields_in_debug,
+    clippy::significant_drop_tightening,
+    clippy::too_many_lines,
+    clippy::type_complexity,
+    clippy::unused_async,
     clippy::unused_self,
     clippy::wildcard_imports
 )]

@@ -224,7 +224,7 @@ pub fn max_refresh_rate_hz() -> Result<f32, Error> {
     }
 }
 
-/// Capture a screenshot on Android using MediaProjection.
+/// Capture a screenshot on Android using `MediaProjection`.
 pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
     if !matches!(format, ImageFormat::Png) {
         return Err(Error::Unsupported);

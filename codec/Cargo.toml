@@ -7,7 +7,7 @@ license.workspace = true
 readme = "README.md"
 repository.workspace = true
 description = "GPU-first zero-copy video codec with wgpu texture output"
-keywords = ["codec", "video", "wgpu", "gpu", "h264", "h265", "av1"]
+keywords = ["codec", "video", "wgpu", "h264", "av1"]
 categories = ["multimedia::video", "graphics"]
 
 [dependencies]

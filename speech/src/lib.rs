@@ -83,6 +83,7 @@ impl Tts {
     }
 
     /// Stop any ongoing speech.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn stop(&self) {
         self.inner.stop();
     }

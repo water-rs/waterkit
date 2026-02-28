@@ -27,7 +27,7 @@ fn ensure_context_global() -> Result<(JavaVM, GlobalRef), DeepLinkError> {
 }
 
 pub mod jni_api {
-    use super::*;
+    use super::{DeepLinkError, JNIEnv, JObject, JString, JValue};
 
     /// Check whether a URL can be opened with the given Android context.
     ///
@@ -136,7 +136,7 @@ pub mod jni_api {
             )
             .map_err(|e| DeepLinkError::PlatformError(format!("new Intent: {e}")))?;
 
-        let flag = 0x10000000i32;
+        let flag = 0x1000_0000_i32;
         env.call_method(
             &intent,
             "addFlags",
@@ -189,6 +189,7 @@ pub mod jni_api {
     }
 }
 
+#[allow(clippy::unused_async)]
 pub async fn open_url(url: &str) -> Result<(), DeepLinkError> {
     let (vm, context) = ensure_context_global()?;
     let mut env = vm
@@ -197,6 +198,7 @@ pub async fn open_url(url: &str) -> Result<(), DeepLinkError> {
     jni_api::open_url_with_context(&mut env, context.as_obj(), url)
 }
 
+#[allow(clippy::unused_async)]
 pub async fn can_open_url(url: &str) -> Result<bool, DeepLinkError> {
     let (vm, context) = ensure_context_global()?;
     let mut env = vm
@@ -217,6 +219,7 @@ impl std::fmt::Debug for DeepLinkHandlerInner {
 }
 
 impl DeepLinkHandlerInner {
+    #[allow(clippy::unused_async)]
     pub async fn start() -> Result<(Self, async_channel::Receiver<DeepLink>), DeepLinkError> {
         let (vm, context) = ensure_context_global()?;
         let (link_tx, link_rx) = async_channel::unbounded();

@@ -179,6 +179,7 @@ impl BleConnection {
     ///
     /// # Errors
     /// Returns error if service discovery fails.
+    #[allow(clippy::future_not_send)]
     pub async fn discover_services(&self) -> Result<Vec<GattService>, BluetoothError> {
         self.inner.discover_services().await
     }
@@ -201,6 +202,7 @@ impl BleConnection {
     ///
     /// # Errors
     /// Returns error if write fails.
+    #[allow(clippy::future_not_send)]
     pub async fn write_characteristic(
         &self,
         service: &Uuid,

@@ -129,6 +129,7 @@ impl BleConnectionInner {
         Ok(Self { device })
     }
 
+    #[allow(clippy::future_not_send)]
     pub async fn discover_services(&self) -> Result<Vec<GattService>, BluetoothError> {
         let result = self
             .device
@@ -223,6 +224,7 @@ impl BleConnectionInner {
         Ok(data)
     }
 
+    #[allow(clippy::future_not_send)]
     pub async fn write_characteristic(
         &self,
         service: &Uuid,
@@ -250,16 +252,18 @@ impl BleConnectionInner {
         Ok(())
     }
 
-    pub fn subscribe(
+    pub const fn subscribe(
         &self,
         _service: &Uuid,
         _characteristic: &Uuid,
     ) -> Result<async_channel::Receiver<Vec<u8>>, BluetoothError> {
+        let _ = self;
         // Notifications require GattCharacteristic.ValueChanged event handler
         // For now return not supported until full implementation
         Err(BluetoothError::NotSupported)
     }
 
+    #[allow(clippy::unused_async)]
     pub async fn disconnect(self) {
         drop(self.device);
     }
@@ -319,13 +323,16 @@ impl ClassicBluetoothInner {
         Ok(Self)
     }
 
-    pub fn start_discovery(
+    pub const fn start_discovery(
         &self,
     ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
+        let _ = self;
         Err(BluetoothError::NotSupported)
     }
 
-    pub fn stop_discovery(&self) {}
+    pub const fn stop_discovery(&self) {
+        let _ = self;
+    }
 
     #[allow(clippy::unused_async)]
     pub async fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {

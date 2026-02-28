@@ -124,11 +124,13 @@ impl DeepLinkHandler {
     ///
     /// # Errors
     /// Returns error if the initial link cannot be retrieved.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn initial_link(&self) -> Result<Option<DeepLink>, DeepLinkError> {
         self.inner.initial_link()
     }
 
     /// Stop listening for deep links.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn stop(&self) {
         self.inner.stop();
     }

@@ -387,6 +387,7 @@ impl MediaCenterInner {
             .lock()
             .map_err(|e| MediaError::Unknown(format!("command handler lock poisoned: {e}")))?;
         *slot = Some(handler);
+        drop(slot);
         Ok(())
     }
 

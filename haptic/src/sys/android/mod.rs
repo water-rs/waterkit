@@ -276,11 +276,9 @@ where
 }
 
 pub fn is_available() -> bool {
-    with_android_context(|env, context| is_available_with_context(env, context)).unwrap_or_else(
-        |error| {
-            panic!("waterkit-haptic: failed to query availability with Android context: {error}")
-        },
-    )
+    with_android_context(is_available_with_context).unwrap_or_else(|error| {
+        panic!("waterkit-haptic: failed to query availability with Android context: {error}")
+    })
 }
 
 pub fn impact(intensity: Intensity) -> Result<(), HapticError> {
@@ -288,7 +286,7 @@ pub fn impact(intensity: Intensity) -> Result<(), HapticError> {
 }
 
 pub fn selection() -> Result<(), HapticError> {
-    with_android_context(|env, context| selection_with_context(env, context))
+    with_android_context(selection_with_context)
 }
 
 pub fn notification_success() -> Result<(), HapticError> {

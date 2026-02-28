@@ -7,6 +7,7 @@ mod sys;
 
 /// Type of network connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ConnectionType {
     /// WiFi connection.
     Wifi,
@@ -26,15 +27,38 @@ pub enum ConnectionType {
 
 /// Information about network connectivity.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ConnectivityInfo {
+    connection_type: ConnectionType,
+    is_connected: bool,
+}
+
+impl ConnectivityInfo {
+    /// Create a new `ConnectivityInfo`.
+    #[must_use]
+    pub(crate) const fn new(connection_type: ConnectionType, is_connected: bool) -> Self {
+        Self {
+            connection_type,
+            is_connected,
+        }
+    }
+
     /// The type of the current connection.
-    pub connection_type: ConnectionType,
+    #[must_use]
+    pub const fn connection_type(&self) -> ConnectionType {
+        self.connection_type
+    }
+
     /// Whether the device is connected to the internet.
-    pub is_connected: bool,
+    #[must_use]
+    pub const fn is_connected(&self) -> bool {
+        self.is_connected
+    }
 }
 
 /// Thermal state of the device.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ThermalState {
     /// Normal operating temperature.
     Nominal,
@@ -50,13 +74,41 @@ pub enum ThermalState {
 
 /// Information about system load.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SystemLoad {
+    cpu_usage: f32,
+    memory_used: u64,
+    memory_total: u64,
+}
+
+impl SystemLoad {
+    /// Create a new `SystemLoad`.
+    #[must_use]
+    pub(crate) const fn new(cpu_usage: f32, memory_used: u64, memory_total: u64) -> Self {
+        Self {
+            cpu_usage,
+            memory_used,
+            memory_total,
+        }
+    }
+
     /// CPU usage percentage (0.0 - 100.0).
-    pub cpu_usage: f32,
+    #[must_use]
+    pub const fn cpu_usage(&self) -> f32 {
+        self.cpu_usage
+    }
+
     /// Amount of used memory in bytes.
-    pub memory_used: u64,
+    #[must_use]
+    pub const fn memory_used(&self) -> u64 {
+        self.memory_used
+    }
+
     /// Total amount of memory in bytes.
-    pub memory_total: u64,
+    #[must_use]
+    pub const fn memory_total(&self) -> u64 {
+        self.memory_total
+    }
 }
 
 /// Get the current network connectivity information.

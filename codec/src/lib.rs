@@ -53,7 +53,11 @@ mod software;
 mod sys;
 
 pub use frame::{DecodedFrame, GpuFrame, YuvConverter};
+<<<<<<< HEAD
 pub use image::{DecodedImage, DecodedPixelFormat, decode_image};
+=======
+pub use image::{DecodedImage, DecodedPixelFormat, decode_image, decode_image_rgba8};
+>>>>>>> main
 
 use std::vec::IntoIter;
 use thiserror::Error;
@@ -82,8 +86,81 @@ pub enum CodecType {
     H264,
     /// H.265 (HEVC) - hardware only
     H265,
-    /// AV1 - software fallback available
+    /// AV1 - hardware first, optional software fallback via `software-fallback` feature
     Av1,
+}
+
+/// Capability support level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SupportLevel {
+    /// Capability is supported.
+    Supported,
+    /// Capability is not supported.
+    Unsupported,
+}
+
+/// HDR support report for the current runtime platform/device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HdrSupport {
+    /// 10-bit HDR decode capability.
+    pub decode_10bit: SupportLevel,
+    /// 10-bit HDR encode capability.
+    pub encode_10bit: SupportLevel,
+}
+
+/// VA-API encoder support report (Linux only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VaapiEncodeSupport {
+    /// H.264 VA-API encoder availability.
+    pub h264: bool,
+    /// H.265 VA-API encoder availability.
+    pub h265: bool,
+    /// AV1 VA-API encoder availability.
+    pub av1: bool,
+}
+
+/// Query 10-bit HDR codec capability for current platform/device.
+#[must_use]
+pub fn check_hdr_support() -> HdrSupport {
+    #[cfg(target_vendor = "apple")]
+    {
+        return sys::apple::check_hdr_support();
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        return sys::android::check_hdr_support();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return sys::windows::check_hdr_support();
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return sys::linux::check_hdr_support();
+    }
+
+    #[allow(unreachable_code)]
+    HdrSupport {
+        decode_10bit: SupportLevel::Unsupported,
+        encode_10bit: SupportLevel::Unsupported,
+    }
+}
+
+/// Query VA-API encoder availability for current runtime.
+///
+/// Returns `None` on non-Linux platforms.
+#[must_use]
+pub fn check_vaapi_encode_support() -> Option<VaapiEncodeSupport> {
+    #[cfg(target_os = "linux")]
+    {
+        return Some(sys::linux::check_vaapi_encode_support());
+    }
+
+    #[allow(unreachable_code)]
+    None
 }
 
 /// Frame info returned when decoding into a mapped buffer.
@@ -225,6 +302,11 @@ impl std::fmt::Debug for EncodeStream {
 /// Unified video decoder with automatic hardware/software selection.
 ///
 /// Tries hardware acceleration first, falls back to software if unavailable.
+///
+/// For AV1 decode, fallback is automatic and silent:
+/// - If stream config indicates HDR (10/12-bit) but hardware HDR decode is unsupported,
+///   decoder prefers software AV1.
+/// - If software AV1 is unavailable, decoder falls back to hardware decode as SDR.
 /// No GPU device is required until you convert frames with [`DecodedFrame::to_gpu_frame`].
 pub struct Decoder {
     inner: DecoderInner,
@@ -239,11 +321,8 @@ enum DecoderInner {
     Windows(sys::windows::WindowsDecoder),
     #[cfg(target_os = "linux")]
     Linux(sys::linux::LinuxDecoder),
-    #[cfg(all(
-        feature = "software-fallback",
-        not(any(target_os = "ios", target_os = "android"))
-    ))]
-    Av1(software::av1::Av1Decoder),
+    #[cfg(feature = "software-fallback")]
+    Av1Software(software::av1::Av1Decoder),
 }
 
 impl std::fmt::Debug for Decoder {
@@ -343,24 +422,122 @@ impl Decoder {
                 )));
             }
 
-            #[cfg(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
-            ))]
-            CodecType::Av1 => DecoderInner::Av1(software::av1::Av1Decoder::new()?),
-
-            #[cfg(not(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
-            )))]
-            CodecType::Av1 => {
-                return Err(CodecError::Unsupported(
-                    "AV1 software decoding not available on this platform".into(),
-                ));
-            }
+            CodecType::Av1 => Self::new_av1_decoder(config, width, height)?,
         };
 
         Ok(Self { inner })
+    }
+
+    fn new_av1_decoder(
+        config: Option<&[u8]>,
+        width: u32,
+        height: u32,
+    ) -> Result<DecoderInner, CodecError> {
+        // Silent policy:
+        // 1) If AV1 stream indicates HDR and hardware HDR decode is unsupported, prefer software.
+        // 2) If software is unavailable, fall back to hardware decode as SDR.
+        if Self::av1_config_requests_hdr(config)
+            && check_hdr_support().decode_10bit == SupportLevel::Unsupported
+        {
+            if let Ok(software) = Self::new_av1_software_decoder(CodecError::Unsupported(
+                "AV1 HDR decode not supported by hardware".into(),
+            )) {
+                return Ok(software);
+            }
+            return Self::new_av1_hardware_decoder(config, width, height);
+        }
+
+        match Self::new_av1_hardware_decoder(config, width, height) {
+            Ok(inner) => Ok(inner),
+            Err(hw_error) => Self::new_av1_software_decoder(hw_error),
+        }
+    }
+
+    fn av1_config_requests_hdr(config: Option<&[u8]>) -> bool {
+        let Some(config) = config else {
+            return false;
+        };
+
+        let payload = if config.len() > 8 && &config[4..8] == b"av1C" {
+            &config[8..]
+        } else {
+            config
+        };
+
+        if payload.len() < 3 {
+            return false;
+        }
+
+        // AV1CodecConfigurationRecord byte[2]:
+        // bit6 = high_bitdepth, bit5 = twelve_bit
+        let high_bitdepth = (payload[2] & 0x40) != 0;
+        let twelve_bit = (payload[2] & 0x20) != 0;
+        high_bitdepth || twelve_bit
+    }
+
+    fn new_av1_hardware_decoder(
+        config: Option<&[u8]>,
+        width: u32,
+        height: u32,
+    ) -> Result<DecoderInner, CodecError> {
+        #[cfg(target_vendor = "apple")]
+        {
+            return sys::apple::AppleDecoder::new(
+                sys::apple::CodecType::Av1,
+                config,
+                width,
+                height,
+            )
+            .map(DecoderInner::Apple);
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            return sys::android::AndroidDecoder::new(
+                sys::android::CodecType::Av1,
+                config,
+                width,
+                height,
+            )
+            .map(DecoderInner::Android);
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            return sys::windows::WindowsDecoder::new(
+                sys::windows::CodecType::Av1,
+                config,
+                width,
+                height,
+            )
+            .map(DecoderInner::Windows);
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            return sys::linux::LinuxDecoder::new(
+                sys::linux::CodecType::Av1,
+                config,
+                width,
+                height,
+            )
+            .map(DecoderInner::Linux);
+        }
+
+        #[allow(unreachable_code)]
+        Err(CodecError::Unsupported(
+            "AV1 hardware decoding not available on this platform".into(),
+        ))
+    }
+
+    #[cfg(feature = "software-fallback")]
+    fn new_av1_software_decoder(_hw_error: CodecError) -> Result<DecoderInner, CodecError> {
+        Ok(DecoderInner::Av1Software(software::av1::Av1Decoder::new()?))
+    }
+
+    #[cfg(not(feature = "software-fallback"))]
+    fn new_av1_software_decoder(hw_error: CodecError) -> Result<DecoderInner, CodecError> {
+        Err(hw_error)
     }
 
     /// Decode compressed video data.
@@ -445,11 +622,8 @@ impl Decoder {
                 Ok(frames)
             }
 
-            #[cfg(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
-            ))]
-            DecoderInner::Av1(dec) => {
+            #[cfg(feature = "software-fallback")]
+            DecoderInner::Av1Software(dec) => {
                 let cpu_frames = dec.decode(data)?;
                 let mut frames = Vec::with_capacity(cpu_frames.len());
                 for cpu_frame in cpu_frames {
@@ -564,11 +738,8 @@ impl Decoder {
                 )
             }
 
-            #[cfg(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
-            ))]
-            DecoderInner::Av1(dec) => {
+            #[cfg(feature = "software-fallback")]
+            DecoderInner::Av1Software(dec) => {
                 let cpu_frames = dec.decode(data)?;
                 copy_frames_to_buffer(
                     cpu_frames
@@ -582,13 +753,7 @@ impl Decoder {
 }
 
 /// Helper to copy decoded frames to an output buffer.
-#[cfg(any(
-    not(target_vendor = "apple"),
-    all(
-        target_vendor = "apple",
-        not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-    )
-))]
+#[cfg(any(not(target_vendor = "apple"), feature = "software-fallback"))]
 fn copy_frames_to_buffer(
     frames: impl Iterator<Item = (Vec<u8>, u32, u32, u64)>,
     output: &mut [u8],
@@ -637,11 +802,8 @@ enum EncoderInner {
     Windows(sys::windows::WindowsEncoder),
     #[cfg(target_os = "linux")]
     Linux(sys::linux::LinuxEncoder),
-    #[cfg(all(
-        feature = "software-fallback",
-        not(any(target_os = "ios", target_os = "android"))
-    ))]
-    Av1(Box<software::av1::Av1Encoder>),
+    #[cfg(feature = "software-fallback")]
+    Av1Software(Box<software::av1::Av1Encoder>),
 }
 
 impl std::fmt::Debug for Encoder {
@@ -722,27 +884,68 @@ impl Encoder {
                 )));
             }
 
-            #[cfg(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
-            ))]
-            CodecType::Av1 => EncoderInner::Av1(Box::new(software::av1::Av1Encoder::new(
-                width as usize,
-                height as usize,
-            )?)),
-
-            #[cfg(not(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
-            )))]
-            CodecType::Av1 => {
-                return Err(CodecError::Unsupported(
-                    "AV1 software encoding not available on this platform".into(),
-                ));
-            }
+            CodecType::Av1 => Self::new_av1_encoder(width, height)?,
         };
 
         Ok(Self { inner })
+    }
+
+    fn new_av1_encoder(width: u32, height: u32) -> Result<EncoderInner, CodecError> {
+        match Self::new_av1_hardware_encoder(width, height) {
+            Ok(inner) => Ok(inner),
+            Err(hw_error) => Self::new_av1_software_encoder(width, height, hw_error),
+        }
+    }
+
+    fn new_av1_hardware_encoder(width: u32, height: u32) -> Result<EncoderInner, CodecError> {
+        #[cfg(target_vendor = "apple")]
+        {
+            return sys::apple::AppleEncoder::with_size(sys::apple::CodecType::Av1, width, height)
+                .map(EncoderInner::Apple);
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            return sys::android::AndroidEncoder::new(sys::android::CodecType::Av1, width, height)
+                .map(EncoderInner::Android);
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            return sys::windows::WindowsEncoder::new(sys::windows::CodecType::Av1, width, height)
+                .map(EncoderInner::Windows);
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            return sys::linux::LinuxEncoder::new(sys::linux::CodecType::Av1, width, height)
+                .map(EncoderInner::Linux);
+        }
+
+        #[allow(unreachable_code)]
+        Err(CodecError::Unsupported(
+            "AV1 hardware encoding not available on this platform".into(),
+        ))
+    }
+
+    #[cfg(feature = "software-fallback")]
+    fn new_av1_software_encoder(
+        width: u32,
+        height: u32,
+        _hw_error: CodecError,
+    ) -> Result<EncoderInner, CodecError> {
+        Ok(EncoderInner::Av1Software(Box::new(
+            software::av1::Av1Encoder::new(width as usize, height as usize)?,
+        )))
+    }
+
+    #[cfg(not(feature = "software-fallback"))]
+    fn new_av1_software_encoder(
+        _width: u32,
+        _height: u32,
+        hw_error: CodecError,
+    ) -> Result<EncoderInner, CodecError> {
+        Err(hw_error)
     }
 
     /// Encode a frame from NV12 data.
@@ -774,11 +977,8 @@ impl Encoder {
             #[cfg(target_os = "linux")]
             EncoderInner::Linux(enc) => enc.encode_nv12(data),
 
-            #[cfg(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
-            ))]
-            EncoderInner::Av1(enc) => enc.encode_nv12(data),
+            #[cfg(feature = "software-fallback")]
+            EncoderInner::Av1Software(enc) => enc.encode_nv12(data),
         }
     }
 
@@ -802,17 +1002,14 @@ impl Encoder {
     fn encode_iosurface_inner(&mut self, iosurface_ptr: u64) -> Result<Vec<u8>, CodecError> {
         match &mut self.inner {
             EncoderInner::Apple(enc) => enc.encode_iosurface(iosurface_ptr),
-            #[cfg(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
-            ))]
-            EncoderInner::Av1(_) => Err(CodecError::Unsupported(
+            #[cfg(feature = "software-fallback")]
+            EncoderInner::Av1Software(_) => Err(CodecError::Unsupported(
                 "IOSurface encoding not supported for AV1".into(),
             )),
         }
     }
 
-    /// Get codec configuration data (avcC/hvcC atom) if available.
+    /// Get codec configuration data (avcC/hvcC/av1C atom) if available.
     #[must_use]
     pub fn codec_config(&self) -> Option<Vec<u8>> {
         match &self.inner {
@@ -828,11 +1025,8 @@ impl Encoder {
             #[cfg(target_os = "linux")]
             EncoderInner::Linux(enc) => enc.get_codec_config(),
 
-            #[cfg(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
-            ))]
-            EncoderInner::Av1(_) => None, // AV1 doesn't use codec config atoms
+            #[cfg(feature = "software-fallback")]
+            EncoderInner::Av1Software(_) => None, // AV1 doesn't use codec config atoms
         }
     }
 }

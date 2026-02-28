@@ -168,12 +168,7 @@ fn parse_sensor_result(env: &mut JNIEnv, result: JObject) -> Result<SensorData, 
         return Err(SensorError::Unknown("Invalid result array".into()));
     }
 
-    Ok(SensorData {
-        x: buf[1],
-        y: buf[2],
-        z: buf[3],
-        timestamp: buf[4] as u64,
-    })
+    Ok(SensorData::new(buf[1], buf[2], buf[3], buf[4] as u64))
 }
 
 fn parse_scalar_result(env: &mut JNIEnv, result: JObject) -> Result<ScalarData, SensorError> {
@@ -198,10 +193,7 @@ fn parse_scalar_result(env: &mut JNIEnv, result: JObject) -> Result<ScalarData, 
         return Err(SensorError::Unknown("Invalid result array".into()));
     }
 
-    Ok(ScalarData {
-        value: buf[1],
-        timestamp: buf[2] as u64,
-    })
+    Ok(ScalarData::new(buf[1], buf[2] as u64))
 }
 
 // Check sensor availability with manual context (helper)

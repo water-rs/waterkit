@@ -215,7 +215,18 @@ fn detect_codec_type(config: Option<&[u8]>) -> Result<CodecType, VideoError> {
         }
     }
 
+    // Check for av1C (AV1) with box header
+    if config.len() >= 8 && &config[4..8] == b"av1C" {
+        return Ok(CodecType::Av1);
+    }
+
+    // Check for raw av1C without box header
+    // av1C starts with marker/version in top bit pattern: 1xxxxxxx
+    if !config.is_empty() && (config[0] & 0x80) != 0 {
+        return Ok(CodecType::Av1);
+    }
+
     Err(VideoError::NotSupported(
-        "Unknown codec (only H.264 and H.265 are supported)".into(),
+        "Unknown codec (supported: H.264, H.265, AV1)".into(),
     ))
 }

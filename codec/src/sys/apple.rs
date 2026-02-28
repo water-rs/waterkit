@@ -6,7 +6,7 @@ use objc2_core_media::{
     CMSampleBuffer, CMSampleTimingInfo, CMTime, kCMVideoCodecType_H264, kCMVideoCodecType_HEVC,
 };
 
-use crate::CodecError;
+use crate::{CodecError, HdrSupport, SupportLevel};
 use objc2_core_foundation::CFRetained;
 use objc2_core_video::{
     CVPixelBuffer, CVPixelBufferCreate, CVPixelBufferLockBaseAddress,
@@ -26,6 +26,19 @@ use std::sync::{Arc, Mutex};
 pub enum CodecType {
     H264,
     H265,
+    Av1,
+}
+
+// `kCMVideoCodecType_AV1` is not exposed by all SDK bindings yet.
+const K_CM_VIDEO_CODEC_TYPE_AV1: u32 = u32::from_be_bytes(*b"av01");
+
+/// Query 10-bit HDR support hints for Apple runtime.
+#[must_use]
+pub const fn check_hdr_support() -> HdrSupport {
+    HdrSupport {
+        decode_10bit: SupportLevel::Unsupported,
+        encode_10bit: SupportLevel::Unsupported,
+    }
 }
 
 #[link(name = "CoreMedia", kind = "framework")]
@@ -180,6 +193,7 @@ impl fmt::Debug for AppleEncoder {
 }
 
 struct EncoderContext {
+    codec: CodecType,
     encoded_data: Mutex<Vec<u8>>,
     codec_config: Mutex<Option<Vec<u8>>>,
 }
@@ -463,66 +477,53 @@ unsafe extern "C-unwind" fn encode_callback(
 
             let format_desc = CMSampleBufferGetFormatDescription(sample_buffer);
             if !format_desc.is_null() {
-                // First try standard extension lookup (cheap)
+                let atom_key = match context.codec {
+                    CodecType::H264 => b"avcC\0".as_slice(),
+                    CodecType::H265 => b"hvcC\0".as_slice(),
+                    CodecType::Av1 => b"av1C\0".as_slice(),
+                };
+
+                // First try standard extension lookup from sample description atoms.
                 let atoms_key = kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms;
                 let atoms = CMFormatDescriptionGetExtension(format_desc, atoms_key);
                 let mut found_config = false;
 
                 if !atoms.is_null() {
-                    // ... existing atomic extraction code ...
-                    // create "hvcC" string
-                    let hvc_c_str = b"hvcC\0";
-                    // We should know codec type from somewhere, but here we can try both or check specific
-                    // Ideally we check codec info.
-                    // For now, let's focus on hvcC replacement logic.
-
                     let key_str = CFStringCreateWithCString(
                         kCFAllocatorDefault,
-                        hvc_c_str.as_ptr().cast::<i8>(),
+                        atom_key.as_ptr().cast::<i8>(),
                         0x0800_0100,
                     );
 
                     if !key_str.is_null() {
-                        let hvc_data = CFDictionaryGetValue(atoms, key_str);
-                        if !hvc_data.is_null() {
-                            let len = CFDataGetLength(hvc_data);
-                            let ptr = CFDataGetBytePtr(hvc_data);
-                            if len > 20 && !ptr.is_null() {
-                                // Basic check: > 20 bytes for HEVC
+                        let atom_data = CFDictionaryGetValue(atoms, key_str);
+                        if !atom_data.is_null() {
+                            let len = CFDataGetLength(atom_data);
+                            let ptr = CFDataGetBytePtr(atom_data);
+                            if len > 0 && !ptr.is_null() {
                                 let config_bytes =
                                     std::slice::from_raw_parts(ptr, len.cast_unsigned()).to_vec();
                                 if let Ok(mut lock) = context.codec_config.lock() {
-                                    eprintln!(
-                                        "Found atomic hvcC extension with size {len}: {config_bytes:02X?}"
-                                    );
                                     *lock = Some(config_bytes);
                                     found_config = true;
                                 }
-                            } else {
-                                eprintln!("Ignored atomic hvcC extension with size {len}");
                             }
                         }
                         CFRelease(key_str);
                     }
                 }
 
+                // Fallback for platforms where atom extraction is not populated.
                 if !found_config {
-                    eprintln!("Attempting manual properties extraction...");
-                    // Try manual construction
-                    let manual_config = construct_hevc_config(format_desc);
-                    if let Some(config) = manual_config {
-                        if let Ok(mut lock) = context.codec_config.lock() {
-                            *lock = Some(config);
-                            // println!("Constructed Manual HEVC Config: {} bytes", lock.as_ref().unwrap().len());
-                        }
-                    } else {
-                        // Try AVC
-                        let manual_avc = construct_avc_config(format_desc);
-                        if let Some(config) = manual_avc
-                            && let Ok(mut lock) = context.codec_config.lock()
-                        {
-                            *lock = Some(config);
-                        }
+                    let manual = match context.codec {
+                        CodecType::H265 => construct_hevc_config(format_desc),
+                        CodecType::H264 => construct_avc_config(format_desc),
+                        CodecType::Av1 => None,
+                    };
+                    if let Some(config) = manual
+                        && let Ok(mut lock) = context.codec_config.lock()
+                    {
+                        *lock = Some(config);
                     }
                 }
             }
@@ -550,9 +551,11 @@ impl AppleEncoder {
         let codec_type = match codec {
             CodecType::H264 => kCMVideoCodecType_H264,
             CodecType::H265 => kCMVideoCodecType_HEVC,
+            CodecType::Av1 => K_CM_VIDEO_CODEC_TYPE_AV1,
         };
 
         let context = Arc::new(EncoderContext {
+            codec,
             encoded_data: Mutex::new(Vec::new()),
             codec_config: Mutex::new(None),
         });
@@ -692,7 +695,7 @@ impl AppleEncoder {
         Ok(result)
     }
 
-    /// Get the codec configuration data (e.g. hvcC or avcC atom) if available.
+    /// Get the codec configuration data (e.g. hvcC/avcC/av1C atom) if available.
     #[must_use]
     pub fn get_codec_config(&self) -> Option<Vec<u8>> {
         self.context
@@ -958,27 +961,30 @@ impl AppleDecoder {
         width: u32,
         height: u32,
     ) -> Result<Self, CodecError> {
-        let Some(config_bytes) = config else {
-            return Err(CodecError::InitializationFailed(
-                "Codec config (hvcC/avcC) required".into(),
-            ));
-        };
-
         let codec_type = match codec {
             CodecType::H264 => kCMVideoCodecType_H264,
             CodecType::H265 => kCMVideoCodecType_HEVC,
+            CodecType::Av1 => K_CM_VIDEO_CODEC_TYPE_AV1,
         };
 
-        let mut final_config = config_bytes;
-        // Strip Box Header if present
-        if final_config.len() > 8 {
-            let atom_key = match codec {
-                CodecType::H264 => b"avcC",
-                CodecType::H265 => b"hvcC",
-            };
-            if &final_config[4..8] == atom_key {
-                final_config = &final_config[8..];
-            }
+        let atom_key = match codec {
+            CodecType::H264 => b"avcC".as_slice(),
+            CodecType::H265 => b"hvcC".as_slice(),
+            CodecType::Av1 => b"av1C".as_slice(),
+        };
+
+        let atom_key_cstr = match codec {
+            CodecType::H264 => b"avcC\0".as_slice(),
+            CodecType::H265 => b"hvcC\0".as_slice(),
+            CodecType::Av1 => b"av1C\0".as_slice(),
+        };
+
+        let mut final_config = config;
+        if let Some(config_bytes) = final_config
+            && config_bytes.len() > 8
+            && &config_bytes[4..8] == atom_key
+        {
+            final_config = Some(&config_bytes[8..]);
         }
 
         let context = Arc::new(DecoderContext {
@@ -986,51 +992,54 @@ impl AppleDecoder {
         });
 
         unsafe {
-            let atom_key_str = if codec == CodecType::H265 {
-                b"hvcC\0"
-            } else {
-                b"avcC\0"
-            };
-            let key_cf = CFStringCreateWithCString(
-                kCFAllocatorDefault,
-                atom_key_str.as_ptr().cast(),
-                0x0800_0100,
-            );
+            let mut key_cf: *const c_void = ptr::null();
+            let mut data_cf: *const c_void = ptr::null();
+            let mut atoms_dict: *const c_void = ptr::null();
+            let mut ext_key_cf: *const c_void = ptr::null();
+            let mut extensions: *const c_void = ptr::null();
 
-            let data_cf = CFDataCreate(
-                kCFAllocatorDefault,
-                final_config.as_ptr(),
-                final_config.len().cast_signed(),
-            );
+            if let Some(config_bytes) = final_config {
+                key_cf = CFStringCreateWithCString(
+                    kCFAllocatorDefault,
+                    atom_key_cstr.as_ptr().cast(),
+                    0x0800_0100,
+                );
 
-            let keys = [key_cf];
-            let values = [data_cf];
-            let atoms_dict = CFDictionaryCreate(
-                kCFAllocatorDefault,
-                keys.as_ptr(),
-                values.as_ptr(),
-                1,
-                &raw const kCFTypeDictionaryKeyCallBacks,
-                &raw const kCFTypeDictionaryValueCallBacks,
-            );
+                data_cf = CFDataCreate(
+                    kCFAllocatorDefault,
+                    config_bytes.as_ptr(),
+                    config_bytes.len().cast_signed(),
+                );
 
-            let ext_key_str = b"SampleDescriptionExtensionAtoms\0";
-            let ext_key_cf = CFStringCreateWithCString(
-                kCFAllocatorDefault,
-                ext_key_str.as_ptr().cast(),
-                0x0800_0100,
-            );
+                let keys = [key_cf];
+                let values = [data_cf];
+                atoms_dict = CFDictionaryCreate(
+                    kCFAllocatorDefault,
+                    keys.as_ptr(),
+                    values.as_ptr(),
+                    1,
+                    &raw const kCFTypeDictionaryKeyCallBacks,
+                    &raw const kCFTypeDictionaryValueCallBacks,
+                );
 
-            let ext_keys = [ext_key_cf];
-            let ext_values = [atoms_dict];
-            let extensions = CFDictionaryCreate(
-                kCFAllocatorDefault,
-                ext_keys.as_ptr(),
-                ext_values.as_ptr(),
-                1,
-                &raw const kCFTypeDictionaryKeyCallBacks,
-                &raw const kCFTypeDictionaryValueCallBacks,
-            );
+                let ext_key_str = b"SampleDescriptionExtensionAtoms\0";
+                ext_key_cf = CFStringCreateWithCString(
+                    kCFAllocatorDefault,
+                    ext_key_str.as_ptr().cast(),
+                    0x0800_0100,
+                );
+
+                let ext_keys = [ext_key_cf];
+                let ext_values = [atoms_dict];
+                extensions = CFDictionaryCreate(
+                    kCFAllocatorDefault,
+                    ext_keys.as_ptr(),
+                    ext_values.as_ptr(),
+                    1,
+                    &raw const kCFTypeDictionaryKeyCallBacks,
+                    &raw const kCFTypeDictionaryValueCallBacks,
+                );
+            }
 
             let mut format_desc: *const c_void = ptr::null();
             let status = CMVideoFormatDescriptionCreate(
@@ -1042,11 +1051,21 @@ impl AppleDecoder {
                 &raw mut format_desc,
             );
 
-            CFRelease(key_cf);
-            CFRelease(data_cf);
-            CFRelease(atoms_dict);
-            CFRelease(ext_key_cf);
-            CFRelease(extensions);
+            if !key_cf.is_null() {
+                CFRelease(key_cf);
+            }
+            if !data_cf.is_null() {
+                CFRelease(data_cf);
+            }
+            if !atoms_dict.is_null() {
+                CFRelease(atoms_dict);
+            }
+            if !ext_key_cf.is_null() {
+                CFRelease(ext_key_cf);
+            }
+            if !extensions.is_null() {
+                CFRelease(extensions);
+            }
 
             if status != 0 {
                 return Err(CodecError::InitializationFailed(format!(

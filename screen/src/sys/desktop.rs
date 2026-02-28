@@ -36,14 +36,14 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
 
     let mut infos = Vec::with_capacity(screens.len());
     for screen in &screens {
-        infos.push(ScreenInfo {
-            id: screen.display_info.id,
-            name: format!("Screen {}", screen.display_info.id),
-            width: screen.display_info.width,
-            height: screen.display_info.height,
-            scale_factor: screen.display_info.scale_factor,
-            is_primary: screen.display_info.is_primary,
-        });
+        infos.push(ScreenInfo::new(
+            screen.display_info.id,
+            format!("Screen {}", screen.display_info.id),
+            screen.display_info.width,
+            screen.display_info.height,
+            screen.display_info.scale_factor,
+            screen.display_info.is_primary,
+        ));
     }
 
     Ok(infos)
@@ -119,7 +119,7 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
     let screens = screenshots::Screen::all().map_err(|e| Error::Platform(e.to_string()))?;
     let screen = screens
         .iter()
-        .find(|s| s.display_info.id == display.id)
+        .find(|s| s.display_info.id == display.id())
         .ok_or(Error::MonitorNotFound)?;
 
     // Capture
@@ -137,12 +137,12 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
         .write_to(&mut cursor, screenshots::image::ImageFormat::Png)
         .map_err(|e| Error::Encoding(e.to_string()))?;
 
-    Ok(Screenshot {
-        data: buffer,
+    Ok(Screenshot::new(
+        buffer,
         width,
         height,
-        format: ImageFormat::Png,
-    })
+        ImageFormat::Png,
+    ))
 }
 
 // ============================================================================
@@ -183,11 +183,11 @@ impl ScreenStreamInner {
         let screens = screenshots::Screen::all().map_err(|e| Error::Platform(e.to_string()))?;
         let screen = screens
             .into_iter()
-            .find(|s| s.display_info.id == display.id)
+            .find(|s| s.display_info.id == display.id())
             .ok_or(Error::MonitorNotFound)?;
 
-        let width = display.width;
-        let height = display.height;
+        let width = display.width();
+        let height = display.height();
 
         Ok(Self {
             screen,

@@ -154,26 +154,26 @@ impl MediaSessionInner {
     #[allow(clippy::unused_self)]
     pub fn set_metadata(&self, metadata: &MediaMetadata) -> Result<(), MediaError> {
         let ffi_metadata = ffi::MediaMetadataFFI {
-            title: metadata.title.clone().unwrap_or_default(),
-            artist: metadata.artist.clone().unwrap_or_default(),
-            album: metadata.album.clone().unwrap_or_default(),
-            artwork_url: metadata.artwork_url.clone().unwrap_or_default(),
-            duration_secs: metadata.duration.map_or(-1.0, |d| d.as_secs_f64()),
+            title: metadata.title().unwrap_or_default().to_owned(),
+            artist: metadata.artist().unwrap_or_default().to_owned(),
+            album: metadata.album().unwrap_or_default().to_owned(),
+            artwork_url: metadata.artwork_url().unwrap_or_default().to_owned(),
+            duration_secs: metadata.duration().map_or(-1.0, |d| d.as_secs_f64()),
         };
         convert_result(ffi::media_session_set_metadata(ffi_metadata))
     }
 
     #[allow(clippy::unused_self)]
     pub fn set_playback_state(&self, state: &PlaybackState) -> Result<(), MediaError> {
-        let status = match state.status {
+        let status = match state.status() {
             PlaybackStatus::Stopped => 0,
             PlaybackStatus::Paused => 1,
             PlaybackStatus::Playing => 2,
         };
         let ffi_state = ffi::PlaybackStateFFI {
             status,
-            position_secs: state.position.map_or(-1.0, |d| d.as_secs_f64()),
-            rate: state.rate,
+            position_secs: state.position().map_or(-1.0, |d| d.as_secs_f64()),
+            rate: state.rate(),
         };
         convert_result(ffi::media_session_set_playback_state(ffi_state))
     }
@@ -207,22 +207,22 @@ impl MediaCenterInner {
     #[allow(clippy::unused_self)]
     pub fn update(&self, metadata: &MediaMetadata, state: &PlaybackState) {
         let ffi_metadata = ffi::MediaMetadataFFI {
-            title: metadata.title.clone().unwrap_or_default(),
-            artist: metadata.artist.clone().unwrap_or_default(),
-            album: metadata.album.clone().unwrap_or_default(),
-            artwork_url: metadata.artwork_url.clone().unwrap_or_default(),
-            duration_secs: metadata.duration.map_or(-1.0, |d| d.as_secs_f64()),
+            title: metadata.title().unwrap_or_default().to_owned(),
+            artist: metadata.artist().unwrap_or_default().to_owned(),
+            album: metadata.album().unwrap_or_default().to_owned(),
+            artwork_url: metadata.artwork_url().unwrap_or_default().to_owned(),
+            duration_secs: metadata.duration().map_or(-1.0, |d| d.as_secs_f64()),
         };
         let _ = ffi::media_session_set_metadata(ffi_metadata);
 
         let ffi_state = ffi::PlaybackStateFFI {
-            status: match state.status {
+            status: match state.status() {
                 PlaybackStatus::Stopped => 0,
                 PlaybackStatus::Paused => 1,
                 PlaybackStatus::Playing => 2,
             },
-            position_secs: state.position.map_or(-1.0, |d| d.as_secs_f64()),
-            rate: state.rate,
+            position_secs: state.position().map_or(-1.0, |d| d.as_secs_f64()),
+            rate: state.rate(),
         };
         let _ = ffi::media_session_set_playback_state(ffi_state);
     }

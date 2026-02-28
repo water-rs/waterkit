@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
+<<<<<<< HEAD
 members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tests/macos/passkey", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video", "bluetooth", "nfc", "share", "speech", "contacts", "calendar", "health", "deeplink", "background", "passkey"]
+=======
+members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video", "regional"]
+>>>>>>> main
 
 
 [workspace.package]
@@ -46,6 +50,7 @@ waterkit-codec = { workspace = true, optional = true }
 waterkit-screen = { workspace = true, optional = true }
 waterkit-system = { workspace = true, optional = true }
 waterkit-video = { workspace = true, optional = true }
+<<<<<<< HEAD
 waterkit-bluetooth = { workspace = true, optional = true }
 waterkit-nfc = { workspace = true, optional = true }
 waterkit-share = { workspace = true, optional = true }
@@ -59,6 +64,9 @@ waterkit-passkey = { workspace = true, optional = true }
 
 [dev-dependencies]
 toml = { workspace = true }
+=======
+waterkit-regional = { workspace = true, optional = true }
+>>>>>>> main
 
 [features]
 default = ["full"]
@@ -79,6 +87,7 @@ full = [
     "screen",
     "system",
     "video",
+<<<<<<< HEAD
     "bluetooth",
     "nfc",
     "share",
@@ -89,6 +98,9 @@ full = [
     "deeplink",
     "background",
     "passkey",
+=======
+    "regional",
+>>>>>>> main
 ]
 permission = ["dep:waterkit-permission"]
 location = ["dep:waterkit-location", "permission"]
@@ -106,6 +118,7 @@ codec = ["dep:waterkit-codec"]
 screen = ["dep:waterkit-screen"]
 system = ["dep:waterkit-system"]
 video = ["dep:waterkit-video"]
+<<<<<<< HEAD
 bluetooth = ["dep:waterkit-bluetooth"]
 nfc = ["dep:waterkit-nfc"]
 share = ["dep:waterkit-share"]
@@ -116,6 +129,9 @@ health = ["dep:waterkit-health"]
 deeplink = ["dep:waterkit-deeplink"]
 background = ["dep:waterkit-background"]
 passkey = ["dep:waterkit-passkey"]
+=======
+regional = ["dep:waterkit-regional"]
+>>>>>>> main
 
 
 [workspace.dependencies]
@@ -132,10 +148,11 @@ waterkit-fs = { path = "fs", version = "0.1.0" }
 waterkit-secret = { path = "secret", version = "0.1.0" }
 waterkit-camera = { path = "camera", version = "0.1.0" }
 waterkit-sensor = { path = "sensor", version = "0.1.0" }
-waterkit-codec = { path = "codec", version = "0.1.0" }
+waterkit-codec = { path = "codec", version = "0.1.0", default-features = false }
 waterkit-screen = { path = "screen", version = "0.1.0" }
 waterkit-system = { path = "system", version = "0.1.0" }
 waterkit-video = { path = "video", version = "0.1.0" }
+<<<<<<< HEAD
 waterkit-bluetooth = { path = "bluetooth", version = "0.1.0" }
 waterkit-nfc = { path = "nfc", version = "0.1.0" }
 waterkit-share = { path = "share", version = "0.1.0" }
@@ -146,6 +163,9 @@ waterkit-health = { path = "health", version = "0.1.0" }
 waterkit-deeplink = { path = "deeplink", version = "0.1.0" }
 waterkit-background = { path = "background", version = "0.1.0" }
 waterkit-passkey = { path = "passkey", version = "0.1.0" }
+=======
+waterkit-regional = { path = "regional", version = "0.1.0" }
+>>>>>>> main
 
 # Cross-platform
 futures = "0.3"
@@ -229,6 +249,8 @@ notify-rust = "4"
 futures-timer = "3"
 netdev = "0.40"
 swift-rs = "1.0.6"
+sys-locale = "0.3"
+iana-time-zone = "0.1"
 
 [workspace.lints]
 rust.missing_docs = "warn"

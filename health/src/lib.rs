@@ -11,6 +11,7 @@ mod sys;
 
 /// Type of health data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum HealthDataType {
     /// Step count.
     Steps,
@@ -32,19 +33,78 @@ pub enum HealthDataType {
 
 /// A health data sample.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct HealthSample {
+    data_type: HealthDataType,
+    value: f64,
+    unit: String,
+    start_date: String,
+    end_date: String,
+    source: Option<String>,
+}
+
+impl HealthSample {
+    /// Creates a new health sample.
+    #[must_use]
+    pub fn new(
+        data_type: HealthDataType,
+        value: f64,
+        unit: impl Into<String>,
+        start_date: impl Into<String>,
+        end_date: impl Into<String>,
+    ) -> Self {
+        Self {
+            data_type,
+            value,
+            unit: unit.into(),
+            start_date: start_date.into(),
+            end_date: end_date.into(),
+            source: None,
+        }
+    }
+
+    /// Sets the source app/device name.
+    #[must_use]
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
     /// The data type.
-    pub data_type: HealthDataType,
+    #[must_use]
+    pub const fn data_type(&self) -> HealthDataType {
+        self.data_type
+    }
+
     /// Numeric value (interpretation depends on data type).
-    pub value: f64,
+    #[must_use]
+    pub const fn value(&self) -> f64 {
+        self.value
+    }
+
     /// Unit string (e.g., "count", "bpm", "kcal", "m", "kg").
-    pub unit: String,
+    #[must_use]
+    pub fn unit(&self) -> &str {
+        &self.unit
+    }
+
     /// Start date (ISO 8601).
-    pub start_date: String,
+    #[must_use]
+    pub fn start_date(&self) -> &str {
+        &self.start_date
+    }
+
     /// End date (ISO 8601).
-    pub end_date: String,
+    #[must_use]
+    pub fn end_date(&self) -> &str {
+        &self.end_date
+    }
+
     /// Source app/device name.
-    pub source: Option<String>,
+    #[must_use]
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
 }
 
 /// Check if health data is available on this device.
@@ -87,6 +147,7 @@ pub async fn write_sample(sample: HealthSample) -> Result<(), HealthError> {
 
 /// Errors in health operations.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum HealthError {
     /// Health data not available.
     #[error("health data not available")]

@@ -31,14 +31,8 @@ enum DecodedFrameInner {
         timestamp_ns: u64,
     },
     /// Software-decoded frame with NV12 data.
-    /// Available on non-Apple platforms, or desktop Apple platforms with software-fallback.
-    #[cfg(any(
-        not(target_vendor = "apple"),
-        all(
-            target_vendor = "apple",
-            not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-        )
-    ))]
+    /// Available on non-Apple platforms, or on any platform when `software-fallback` is enabled.
+    #[cfg(any(not(target_vendor = "apple"), feature = "software-fallback"))]
     Software {
         data: Vec<u8>,
         width: u32,
@@ -77,13 +71,7 @@ impl DecodedFrame {
     }
 
     /// Create a decoded frame from NV12 software decode output.
-    #[cfg(any(
-        not(target_vendor = "apple"),
-        all(
-            target_vendor = "apple",
-            not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-        )
-    ))]
+    #[cfg(any(not(target_vendor = "apple"), feature = "software-fallback"))]
     pub(crate) const fn from_nv12_data(
         data: Vec<u8>,
         width: u32,
@@ -106,13 +94,7 @@ impl DecodedFrame {
         match &self.inner {
             #[cfg(target_vendor = "apple")]
             DecodedFrameInner::Hardware { width, .. } => *width,
-            #[cfg(any(
-                not(target_vendor = "apple"),
-                all(
-                    target_vendor = "apple",
-                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-                )
-            ))]
+            #[cfg(any(not(target_vendor = "apple"), feature = "software-fallback"))]
             DecodedFrameInner::Software { width, .. } => *width,
         }
     }
@@ -123,13 +105,7 @@ impl DecodedFrame {
         match &self.inner {
             #[cfg(target_vendor = "apple")]
             DecodedFrameInner::Hardware { height, .. } => *height,
-            #[cfg(any(
-                not(target_vendor = "apple"),
-                all(
-                    target_vendor = "apple",
-                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-                )
-            ))]
+            #[cfg(any(not(target_vendor = "apple"), feature = "software-fallback"))]
             DecodedFrameInner::Software { height, .. } => *height,
         }
     }
@@ -140,13 +116,7 @@ impl DecodedFrame {
         match &self.inner {
             #[cfg(target_vendor = "apple")]
             DecodedFrameInner::Hardware { timestamp_ns, .. } => *timestamp_ns,
-            #[cfg(any(
-                not(target_vendor = "apple"),
-                all(
-                    target_vendor = "apple",
-                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-                )
-            ))]
+            #[cfg(any(not(target_vendor = "apple"), feature = "software-fallback"))]
             DecodedFrameInner::Software { timestamp_ns, .. } => *timestamp_ns,
         }
     }
@@ -168,13 +138,7 @@ impl DecodedFrame {
                 let nv12_data = Self::iosurface_to_nv12(&surface, width, height);
                 GpuFrame::from_nv12(device, queue, &nv12_data, width, height, timestamp_ns)
             }
-            #[cfg(any(
-                not(target_vendor = "apple"),
-                all(
-                    target_vendor = "apple",
-                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-                )
-            ))]
+            #[cfg(any(not(target_vendor = "apple"), feature = "software-fallback"))]
             DecodedFrameInner::Software {
                 data,
                 width,
@@ -207,13 +171,7 @@ impl DecodedFrame {
             DecodedFrameInner::Hardware { surface, .. } => {
                 Self::copy_iosurface_to_buffer(surface, width, height, output);
             }
-            #[cfg(any(
-                not(target_vendor = "apple"),
-                all(
-                    target_vendor = "apple",
-                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-                )
-            ))]
+            #[cfg(any(not(target_vendor = "apple"), feature = "software-fallback"))]
             DecodedFrameInner::Software { data, .. } => {
                 output[..data.len()].copy_from_slice(data);
             }

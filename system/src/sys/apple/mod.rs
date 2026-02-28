@@ -55,10 +55,7 @@ pub fn get_connectivity_info() -> ConnectivityInfo {
         ffi::ConnectionType::Other => ConnectionType::Other,
         ffi::ConnectionType::None => ConnectionType::None,
     };
-    ConnectivityInfo {
-        connection_type: ct,
-        is_connected: info.is_connected,
-    }
+    ConnectivityInfo::new(ct, info.is_connected)
 }
 
 pub fn get_thermal_state() -> ThermalState {
@@ -73,9 +70,5 @@ pub fn get_thermal_state() -> ThermalState {
 
 pub fn get_system_load() -> SystemLoad {
     let load = ffi::get_apple_system_load();
-    SystemLoad {
-        cpu_usage: load.cpu_usage,
-        memory_used: load.memory_used,
-        memory_total: load.memory_total,
-    }
+    SystemLoad::new(load.cpu_usage, load.memory_used, load.memory_total)
 }

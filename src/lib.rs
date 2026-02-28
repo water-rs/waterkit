@@ -80,6 +80,10 @@ pub use waterkit_sensor as sensor;
 #[doc(inline)]
 pub use waterkit_system as system;
 
+#[cfg(feature = "regional")]
+#[doc(inline)]
+pub use waterkit_regional as regional;
+
 #[cfg(feature = "video")]
 #[doc(inline)]
 pub use waterkit_video as video;

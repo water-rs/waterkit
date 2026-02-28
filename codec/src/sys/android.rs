@@ -1,6 +1,6 @@
 //! Android `MediaCodec` hardware encoding and decoding.
 
-use crate::CodecError;
+use crate::{CodecError, HdrSupport, SupportLevel};
 use ndk::media::media_codec::{MediaCodec, MediaCodecDirection};
 use ndk::media::media_format::MediaFormat;
 use std::fmt;
@@ -12,6 +12,7 @@ use std::time::Duration;
 pub enum CodecType {
     H264,
     H265,
+    Av1,
 }
 
 impl CodecType {
@@ -19,7 +20,17 @@ impl CodecType {
         match self {
             Self::H264 => "video/avc",
             Self::H265 => "video/hevc",
+            Self::Av1 => "video/av01",
         }
+    }
+}
+
+/// Query 10-bit HDR support hints for Android runtime.
+#[must_use]
+pub const fn check_hdr_support() -> HdrSupport {
+    HdrSupport {
+        decode_10bit: SupportLevel::Unsupported,
+        encode_10bit: SupportLevel::Unsupported,
     }
 }
 
@@ -74,8 +85,8 @@ impl AndroidDecoder {
     /// Create a new Android hardware decoder.
     ///
     /// # Arguments
-    /// * `codec` - The codec type (H264 or H265)
-    /// * `config` - Codec configuration data (avcC for H264, hvcC for H265). Can be None.
+    /// * `codec` - The codec type (H264/H265/AV1)
+    /// * `config` - Codec configuration data (avcC/hvcC/av1C). Can be None.
     /// * `width` - Video width in pixels
     /// * `height` - Video height in pixels
     #[allow(clippy::cast_possible_wrap)] // Video dimensions won't exceed i32::MAX
@@ -112,6 +123,11 @@ impl AndroidDecoder {
                 CodecType::H265 => {
                     // hvcC format - extract VPS/SPS/PPS
                     if let Some(csd) = parse_hvcc(config_data) {
+                        format.set_buffer("csd-0", &csd);
+                    }
+                }
+                CodecType::Av1 => {
+                    if let Some(csd) = parse_av1c(config_data) {
                         format.set_buffer("csd-0", &csd);
                     }
                 }
@@ -394,7 +410,7 @@ impl AndroidEncoder {
         Ok(encoded_data)
     }
 
-    /// Get the codec configuration data (avcC/hvcC) if available.
+    /// Get the codec configuration data (avcC/hvcC/av1C) if available.
     #[must_use]
     pub fn get_codec_config(&self) -> Option<Vec<u8>> {
         self.codec_config.clone()
@@ -537,4 +553,25 @@ fn parse_hvcc(data: &[u8]) -> Option<Vec<u8>> {
     }
 
     if csd.is_empty() { None } else { Some(csd) }
+}
+
+/// Parse av1C (AV1 codec configuration) and return payload for MediaCodec `csd-0`.
+fn parse_av1c(data: &[u8]) -> Option<Vec<u8>> {
+    if data.is_empty() {
+        return None;
+    }
+
+    // Check if it starts with a box header containing "av1C"
+    let offset = if data.len() > 8 && &data[4..8] == b"av1C" {
+        8
+    } else {
+        0
+    };
+
+    let payload = &data[offset..];
+    if payload.is_empty() {
+        return None;
+    }
+
+    Some(payload.to_vec())
 }

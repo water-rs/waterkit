@@ -8,9 +8,11 @@ This crate provides a unified interface for accessing system media codecs. It is
 
 ## Features
 
-- **Hardware Acceleration**: Uses specific hardware APIs where available.
-- **Formats**: H.264, H.265 (HEVC), AAC.
+- **Hardware Acceleration**: Uses platform hardware APIs where available.
+- **Formats**: H.264, H.265 (HEVC), AV1.
 - **Zero-Copy**: Optimized for efficient frame passing to `wgpu` textures.
+- **Software Fallback (optional)**: AV1 software fallback is controlled by `software-fallback` feature (enabled by default).
+- **Silent AV1 HDR Fallback**: When AV1 input is HDR but hardware HDR decode is unsupported, codec silently prefers software AV1; if software AV1 is unavailable, it silently falls back to SDR hardware decode.
 
 ## Installation
 
@@ -25,7 +27,8 @@ waterkit-codec = "0.1"
 | :--- | :--- |
 | **macOS/iOS** | VideoToolbox |
 | **Android** | MediaCodec (NDK/JNI) |
-| **Windows/Linux** | FFmpeg / Dav1d (Software fallback currently) |
+| **Windows** | Media Foundation (hardware MFT) |
+| **Linux** | VA-API (`libva`, DRM render node) |
 
 ## Usage
 

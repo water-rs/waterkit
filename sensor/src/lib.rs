@@ -12,13 +12,13 @@
 //! if Accelerometer::is_available() {
 //!     // One-shot reading
 //!     let data = Accelerometer::read().await?;
-//!     println!("x={}, y={}, z={}", data.x, data.y, data.z);
+//!     println!("x={}, y={}, z={}", data.x(), data.y(), data.z());
 //!
 //!     // Or stream updates
 //!     use futures::StreamExt;
 //!     let mut stream = Accelerometer::watch(100)?; // 100ms interval
 //!     while let Some(data) = stream.next().await {
-//!         println!("x={}, y={}, z={}", data.x, data.y, data.z);
+//!         println!("x={}, y={}, z={}", data.x(), data.y(), data.z());
 //!     }
 //! }
 //! ```
@@ -33,28 +33,77 @@ use std::pin::Pin;
 
 /// 3-axis sensor data (accelerometer, gyroscope, magnetometer).
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct SensorData {
+    x: f64,
+    y: f64,
+    z: f64,
+    timestamp: u64,
+}
+
+impl SensorData {
+    /// Creates a new `SensorData` instance.
+    #[must_use]
+    pub(crate) const fn new(x: f64, y: f64, z: f64, timestamp: u64) -> Self {
+        Self { x, y, z, timestamp }
+    }
+
     /// X-axis value.
-    pub x: f64,
+    #[must_use]
+    pub const fn x(&self) -> f64 {
+        self.x
+    }
+
     /// Y-axis value.
-    pub y: f64,
+    #[must_use]
+    pub const fn y(&self) -> f64 {
+        self.y
+    }
+
     /// Z-axis value.
-    pub z: f64,
+    #[must_use]
+    pub const fn z(&self) -> f64 {
+        self.z
+    }
+
     /// Timestamp as Unix epoch milliseconds.
-    pub timestamp: u64,
+    #[must_use]
+    pub const fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
 }
 
 /// Single-value sensor data (barometer).
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ScalarData {
+    value: f64,
+    timestamp: u64,
+}
+
+impl ScalarData {
+    /// Creates a new `ScalarData` instance.
+    #[must_use]
+    pub(crate) const fn new(value: f64, timestamp: u64) -> Self {
+        Self { value, timestamp }
+    }
+
     /// Sensor value.
-    pub value: f64,
+    #[must_use]
+    pub const fn value(&self) -> f64 {
+        self.value
+    }
+
     /// Timestamp as Unix epoch milliseconds.
-    pub timestamp: u64,
+    #[must_use]
+    pub const fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
 }
 
 /// Errors that can occur when accessing sensors.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum SensorError {
     /// Sensor is not available on this device.
     #[error("sensor not available")]

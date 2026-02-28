@@ -195,17 +195,17 @@ fn parse_samples(data_type: HealthDataType, payload: &str) -> Vec<HealthSample> 
             if parts.len() < 4 {
                 return None;
             }
-            Some(HealthSample {
+            let mut sample = HealthSample::new(
                 data_type,
-                value: parts[0].parse().unwrap_or(0.0),
-                unit: parts[1].to_string(),
-                start_date: parts[2].to_string(),
-                end_date: parts[3].to_string(),
-                source: parts
-                    .get(4)
-                    .filter(|value| !value.is_empty())
-                    .map(ToString::to_string),
-            })
+                parts[0].parse().unwrap_or(0.0),
+                parts[1],
+                parts[2],
+                parts[3],
+            );
+            if let Some(src) = parts.get(4).filter(|value| !value.is_empty()) {
+                sample = sample.with_source(*src);
+            }
+            Some(sample)
         })
         .collect()
 }
@@ -330,7 +330,7 @@ pub async fn query_samples(
 }
 
 pub async fn write_sample(sample: HealthSample) -> Result<(), HealthError> {
-    let data_type_name = type_to_str(sample.data_type);
+    let data_type_name = type_to_str(sample.data_type());
     future::ready(with_android_context(|env, context| {
         init_dex(env, context)?;
         let helper_class = get_helper_class(env)?;
@@ -338,13 +338,13 @@ pub async fn write_sample(sample: HealthSample) -> Result<(), HealthError> {
         let data_type = env.new_string(data_type_name).map_err(|error| {
             HealthError::PlatformError(format!("new_string data_type failed: {error}"))
         })?;
-        let unit = env.new_string(sample.unit).map_err(|error| {
+        let unit = env.new_string(sample.unit()).map_err(|error| {
             HealthError::PlatformError(format!("new_string unit failed: {error}"))
         })?;
-        let start = env.new_string(sample.start_date).map_err(|error| {
+        let start = env.new_string(sample.start_date()).map_err(|error| {
             HealthError::PlatformError(format!("new_string start_date failed: {error}"))
         })?;
-        let end = env.new_string(sample.end_date).map_err(|error| {
+        let end = env.new_string(sample.end_date()).map_err(|error| {
             HealthError::PlatformError(format!("new_string end_date failed: {error}"))
         })?;
 
@@ -356,7 +356,7 @@ pub async fn write_sample(sample: HealthSample) -> Result<(), HealthError> {
                 &[
                     JValue::Object(context),
                     JValue::Object(&data_type),
-                    JValue::Double(sample.value),
+                    JValue::Double(sample.value()),
                     JValue::Object(&unit),
                     JValue::Object(&start),
                     JValue::Object(&end),

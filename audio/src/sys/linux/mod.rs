@@ -246,23 +246,23 @@ impl MediaSessionInner {
             Value::new(ObjectPath::try_from("/org/waterkit/media/track").unwrap()),
         );
 
-        if let Some(ref title) = metadata.title {
-            mpris_metadata.insert("xesam:title".to_string(), Value::new(title.clone()));
+        if let Some(title) = metadata.title() {
+            mpris_metadata.insert("xesam:title".to_string(), Value::new(title.to_owned()));
         }
 
-        if let Some(ref artist) = metadata.artist {
-            mpris_metadata.insert("xesam:artist".to_string(), Value::new(vec![artist.clone()]));
+        if let Some(artist) = metadata.artist() {
+            mpris_metadata.insert("xesam:artist".to_string(), Value::new(vec![artist.to_owned()]));
         }
 
-        if let Some(ref album) = metadata.album {
-            mpris_metadata.insert("xesam:album".to_string(), Value::new(album.clone()));
+        if let Some(album) = metadata.album() {
+            mpris_metadata.insert("xesam:album".to_string(), Value::new(album.to_owned()));
         }
 
-        if let Some(ref url) = metadata.artwork_url {
-            mpris_metadata.insert("mpris:artUrl".to_string(), Value::new(url.clone()));
+        if let Some(url) = metadata.artwork_url() {
+            mpris_metadata.insert("mpris:artUrl".to_string(), Value::new(url.to_owned()));
         }
 
-        if let Some(duration) = metadata.duration {
+        if let Some(duration) = metadata.duration() {
             mpris_metadata.insert(
                 "mpris:length".to_string(),
                 Value::new(duration.as_micros() as i64),
@@ -278,10 +278,10 @@ impl MediaSessionInner {
 
     pub fn set_playback_state(&self, state: &PlaybackState) -> Result<(), MediaError> {
         if let Ok(mut guard) = CURRENT_STATUS.write() {
-            *guard = state.status;
+            *guard = state.status();
         }
 
-        if let Some(pos) = state.position
+        if let Some(pos) = state.position()
             && let Ok(mut guard) = CURRENT_POSITION.write()
         {
             *guard = pos.as_micros() as i64;
@@ -340,30 +340,30 @@ impl MediaCenterInner {
                     zbus::zvariant::ObjectPath::try_from("/org/waterkit/media/track").unwrap(),
                 ),
             );
-            if let Some(ref title) = metadata.title {
+            if let Some(title) = metadata.title() {
                 mpris_metadata.insert(
                     "xesam:title".to_string(),
-                    zbus::zvariant::Value::new(title.clone()),
+                    zbus::zvariant::Value::new(title.to_owned()),
                 );
             }
-            if let Some(ref artist) = metadata.artist {
+            if let Some(artist) = metadata.artist() {
                 mpris_metadata.insert(
                     "xesam:artist".to_string(),
-                    zbus::zvariant::Value::new(vec![artist.clone()]),
+                    zbus::zvariant::Value::new(vec![artist.to_owned()]),
                 );
             }
-            if let Some(ref album) = metadata.album {
+            if let Some(album) = metadata.album() {
                 mpris_metadata.insert(
                     "xesam:album".to_string(),
-                    zbus::zvariant::Value::new(album.clone()),
+                    zbus::zvariant::Value::new(album.to_owned()),
                 );
             }
             *guard = mpris_metadata;
         }
         if let Ok(mut guard) = CURRENT_STATUS.write() {
-            *guard = state.status;
+            *guard = state.status();
         }
-        if let Some(pos) = state.position
+        if let Some(pos) = state.position()
             && let Ok(mut guard) = CURRENT_POSITION.write()
         {
             *guard = pos.as_micros() as i64;

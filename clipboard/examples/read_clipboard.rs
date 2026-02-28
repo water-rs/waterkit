@@ -50,17 +50,17 @@ async fn main() -> Result<(), waterkit_clipboard::ClipboardError> {
             Some(image) => {
                 println!(
                     "Image: {}x{} ({} bytes)",
-                    image.width,
-                    image.height,
-                    image.bytes.len()
+                    image.width(),
+                    image.height(),
+                    image.bytes().len()
                 );
 
                 // Save to file for preview
                 match image::save_buffer(
                     "clipboard_preview.png",
-                    &image.bytes,
-                    image.width,
-                    image.height,
+                    image.bytes(),
+                    image.width(),
+                    image.height(),
                     image::ColorType::Rgba8,
                 ) {
                     Ok(()) => println!("Saved to clipboard_preview.png"),

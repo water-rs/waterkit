@@ -39,10 +39,10 @@ pub fn get_connectivity_info() -> ConnectivityInfo {
         _ => ConnectionType::None,
     };
 
-    ConnectivityInfo {
+    ConnectivityInfo::new(
         connection_type,
-        is_connected: !matches!(result.unwrap_or(0), 0),
-    }
+        !matches!(result.unwrap_or(0), 0),
+    )
 }
 
 pub fn get_thermal_state() -> ThermalState {
@@ -93,15 +93,7 @@ pub fn get_system_load() -> SystemLoad {
     });
 
     match result {
-        Some((cpu, mem_used, mem_total)) => SystemLoad {
-            cpu_usage: cpu,
-            memory_used: mem_used,
-            memory_total: mem_total,
-        },
-        None => SystemLoad {
-            cpu_usage: 0.0,
-            memory_used: 0,
-            memory_total: 0,
-        },
+        Some((cpu, mem_used, mem_total)) => SystemLoad::new(cpu, mem_used, mem_total),
+        None => SystemLoad::new(0.0, 0, 0),
     }
 }

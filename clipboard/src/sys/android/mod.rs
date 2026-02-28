@@ -386,11 +386,7 @@ impl ClipboardInner {
                 ClipboardError::Platform(format!("JNI error convert_byte_array: {e}"))
             })?;
 
-            Ok(Some(Image {
-                width: width as u32,
-                height: height as u32,
-                bytes,
-            }))
+            Ok(Some(Image::new(width as u32, height as u32, bytes)))
         })
     }
 
@@ -690,12 +686,12 @@ pub fn start_watch()
                 last_has_files = has_files;
                 last_has_image = has_image;
 
-                let event = ClipboardEvent {
+                let event = ClipboardEvent::new(
                     has_text,
                     has_html,
                     has_files,
                     has_image,
-                };
+                );
                 if sender.try_send(event).is_err() {
                     break;
                 }

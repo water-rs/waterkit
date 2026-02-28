@@ -51,12 +51,12 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
         return Err(Error::Platform("Screenshot capture failed".into()));
     }
 
-    Ok(Screenshot {
+    Ok(Screenshot::new(
         data,
-        width: display.width,
-        height: display.height,
+        display.width(),
+        display.height(),
         format,
-    })
+    ))
 }
 
 // ============================================================================
@@ -67,14 +67,14 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
 #[allow(clippy::unnecessary_wraps)]
 pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     // iOS has a single main screen conceptually
-    Ok(vec![ScreenInfo {
-        id: 0,
-        name: "Main Screen".into(),
-        width: 0, // Would need UIScreen.main.bounds
-        height: 0,
-        scale_factor: 1.0,
-        is_primary: true,
-    }])
+    Ok(vec![ScreenInfo::new(
+        0,
+        "Main Screen".into(),
+        0, // Would need UIScreen.main.bounds
+        0,
+        1.0,
+        true,
+    )])
 }
 
 // ============================================================================
@@ -154,15 +154,15 @@ impl ScreenStreamInner {
         queue: Arc<Queue>,
         config: &StreamConfig,
     ) -> Result<Self, Error> {
-        let success = ffi::init_screen_stream(display.id, config.target_fps, config.show_cursor);
+        let success = ffi::init_screen_stream(display.id(), config.target_fps, config.show_cursor);
 
         if !success {
             return Err(Error::Platform("Failed to initialize screen stream".into()));
         }
 
         Ok(Self {
-            width: display.width,
-            height: display.height,
+            width: display.width(),
+            height: display.height(),
             last_sequence: std::sync::atomic::AtomicU32::new(0),
             device,
             queue,
@@ -179,8 +179,8 @@ impl ScreenStreamInner {
         _config: &StreamConfig,
     ) -> Result<Self, Error> {
         Ok(Self {
-            width: display.width,
-            height: display.height,
+            width: display.width(),
+            height: display.height(),
         })
     }
 

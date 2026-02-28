@@ -23,7 +23,7 @@ use std::task::{Context, Poll};
 /// let mut stream = clipboard.watch()?;
 ///
 /// while let Some(event) = stream.next().await {
-///     println!("Clipboard changed! has_text={}", event.has_text);
+///     println!("Clipboard changed! has_text={}", event.has_text());
 /// }
 /// # Ok(())
 /// # }

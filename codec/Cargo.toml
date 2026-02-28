@@ -13,12 +13,15 @@ categories = ["multimedia::video", "graphics"]
 [dependencies]
 thiserror.workspace = true
 wgpu.workspace = true
+<<<<<<< HEAD
 image.workspace = true
 half = "2"
 
 # Software fallback codecs (private, not exposed in public API)
 # Only enabled on desktop platforms - mobile has hardware codecs
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+=======
+>>>>>>> main
 rav1e = { workspace = true, optional = true }
 dav1d = { workspace = true, optional = true }
 
@@ -31,17 +34,19 @@ objc2-core-foundation.workspace = true
 objc2-foundation.workspace = true
 objc2-io-surface.workspace = true
 metal.workspace = true
+libc = "0.2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 ndk = { version = "0.9", features = ["media", "api-level-29"] }
 ndk-sys = "0.6"
 jni.workspace = true
+ndk-context = "0.1.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = ["Win32_Media_MediaFoundation", "Win32_System_Com"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ffmpeg-next = "7"
+cros-codecs = { version = "0.0.6", features = ["vaapi"] }
 
 [features]
 default = ["software-fallback"]

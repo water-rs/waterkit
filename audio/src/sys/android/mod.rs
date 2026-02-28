@@ -143,20 +143,20 @@ pub fn set_metadata_with_context(
     let helper_class = get_helper_class(env)?;
 
     let title = env
-        .new_string(metadata.title.as_deref().unwrap_or(""))
+        .new_string(metadata.title().unwrap_or(""))
         .map_err(|e| MediaError::UpdateFailed(format!("new_string title: {e}")))?;
     let artist = env
-        .new_string(metadata.artist.as_deref().unwrap_or(""))
+        .new_string(metadata.artist().unwrap_or(""))
         .map_err(|e| MediaError::UpdateFailed(format!("new_string artist: {e}")))?;
     let album = env
-        .new_string(metadata.album.as_deref().unwrap_or(""))
+        .new_string(metadata.album().unwrap_or(""))
         .map_err(|e| MediaError::UpdateFailed(format!("new_string album: {e}")))?;
     let artwork_url = env
-        .new_string(metadata.artwork_url.as_deref().unwrap_or(""))
+        .new_string(metadata.artwork_url().unwrap_or(""))
         .map_err(|e| MediaError::UpdateFailed(format!("new_string artwork_url: {e}")))?;
 
     #[allow(clippy::cast_possible_truncation)]
-    let duration_ms = metadata.duration.map_or(-1, |d| d.as_millis() as i64);
+    let duration_ms = metadata.duration().map_or(-1, |d| d.as_millis() as i64);
 
     env.call_static_method::<&JClass, _, _>(
         &helper_class,
@@ -182,14 +182,14 @@ pub fn set_playback_state_with_context(
 ) -> Result<(), MediaError> {
     let helper_class = get_helper_class(env)?;
 
-    let status = match state.status {
+    let status = match state.status() {
         PlaybackStatus::Stopped => 0,
         PlaybackStatus::Paused => 1,
         PlaybackStatus::Playing => 2,
     };
 
     #[allow(clippy::cast_possible_truncation)]
-    let position_ms = state.position.map_or(-1, |d| d.as_millis() as i64);
+    let position_ms = state.position().map_or(-1, |d| d.as_millis() as i64);
 
     env.call_static_method::<&JClass, _, _>(
         &helper_class,
@@ -199,7 +199,7 @@ pub fn set_playback_state_with_context(
             JValue::Int(status),
             JValue::Long(position_ms),
             #[allow(clippy::cast_possible_truncation)]
-            JValue::Float(state.rate as f32),
+            JValue::Float(state.rate() as f32),
         ],
     )
     .map_err(|e| MediaError::UpdateFailed(format!("setPlaybackState: {e}")))?;

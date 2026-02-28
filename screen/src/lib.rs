@@ -46,6 +46,7 @@ pub use stream::{ScreenStream, StreamConfig};
 
 /// Errors returned by screen operations.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// An error occurred in the underlying platform implementation.
     #[error("Platform error: {0}")]
@@ -82,19 +83,71 @@ pub enum Error {
 
 /// Information about a display/screen.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ScreenInfo {
+    id: u32,
+    name: String,
+    width: u32,
+    height: u32,
+    scale_factor: f32,
+    is_primary: bool,
+}
+
+impl ScreenInfo {
+    /// Create a new `ScreenInfo`.
+    pub(crate) const fn new(
+        id: u32,
+        name: String,
+        width: u32,
+        height: u32,
+        scale_factor: f32,
+        is_primary: bool,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            width,
+            height,
+            scale_factor,
+            is_primary,
+        }
+    }
+
     /// A platform-specific unique identifier for the screen.
-    pub id: u32,
+    #[must_use]
+    pub const fn id(&self) -> u32 {
+        self.id
+    }
+
     /// A human-readable name for the display.
-    pub name: String,
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Width in pixels.
-    pub width: u32,
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
     /// Height in pixels.
-    pub height: u32,
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
     /// The scale factor (e.g., 2.0 for Retina/HiDPI displays).
-    pub scale_factor: f32,
+    #[must_use]
+    pub const fn scale_factor(&self) -> f32 {
+        self.scale_factor
+    }
+
     /// Whether this is the primary system display.
-    pub is_primary: bool,
+    #[must_use]
+    pub const fn is_primary(&self) -> bool {
+        self.is_primary
+    }
 }
 
 /// List all available screens detected by the system.

@@ -1,76 +1,398 @@
-//! Linux `FFmpeg` hardware encoding and decoding.
+//! Linux VA-API codec backend (non-FFmpeg path).
 //!
-//! Uses `FFmpeg`'s hardware acceleration abstraction (`VA-API`, `VDPAU`, etc.)
-//! for H.264 and H.265 video codec operations.
+//! Uses `libva` directly for capability probing and `cros-codecs` VA-API worker
+//! wrappers for decode/encode pipelines.
 
-// FFmpeg types contain raw pointers but are safe to send between threads
-#![allow(clippy::non_send_fields_in_send_ty)]
-// These lints are overly strict for codec implementation
-#![allow(
-    dead_code,
-    clippy::missing_const_for_fn,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::uninlined_format_args
-)]
-
-use crate::CodecError;
-use ffmpeg_next as ffmpeg;
-use ffmpeg_next::codec::context::Context;
-use ffmpeg_next::format::Pixel;
-use ffmpeg_next::software::scaling::{Context as ScalerContext, Flags};
-use ffmpeg_next::util::frame::video::Video;
-use ffmpeg_next::{Packet, codec, decoder, encoder};
+use crate::{CodecError, HdrSupport, SupportLevel, VaapiEncodeSupport};
+use cros_codecs::c2_wrapper::c2_decoder::C2DecoderWorker;
+use cros_codecs::c2_wrapper::c2_encoder::C2EncoderWorker;
+use cros_codecs::c2_wrapper::c2_vaapi_decoder::{C2VaapiDecoder, C2VaapiDecoderOptions};
+use cros_codecs::c2_wrapper::c2_vaapi_encoder::{C2VaapiEncoder, C2VaapiEncoderOptions};
+use cros_codecs::c2_wrapper::{C2DecodeJob, C2EncodeJob, C2Status, C2Wrapper, DrainMode};
+use cros_codecs::libva::{Display, VAEntrypoint, VAProfile};
+use cros_codecs::video_frame::VideoFrame;
+use cros_codecs::video_frame::gbm_video_frame::{GbmDevice, GbmUsage, GbmVideoFrame};
+use cros_codecs::{Fourcc, Resolution};
+use std::collections::VecDeque;
 use std::fmt;
-use std::sync::Once;
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::atomic::AtomicU32;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
-static FFMPEG_INIT: Once = Once::new();
+const DEFAULT_BITRATE: u64 = 4_000_000;
+const DEFAULT_FRAMERATE: u32 = 30;
 
-fn init_ffmpeg() {
-    FFMPEG_INIT.call_once(|| {
-        ffmpeg::init().expect("Failed to initialize FFmpeg");
-    });
-}
+const FRAME_WAIT_TIMEOUT: Duration = Duration::from_millis(50);
+const ENCODE_WAIT_TIMEOUT: Duration = Duration::from_millis(120);
+
+const RENDER_NODE_DIR: &str = "/dev/dri";
+const RENDER_NODE_PREFIX: &str = "renderD";
+
+type VaProfileType = VAProfile::Type;
+type VaEntrypointType = VAEntrypoint::Type;
+
+type DecodeWrapper =
+    C2Wrapper<C2DecodeJob<GbmVideoFrame>, C2DecoderWorker<GbmVideoFrame, C2VaapiDecoder>>;
+type EncodeWrapper =
+    C2Wrapper<C2EncodeJob<GbmVideoFrame>, C2EncoderWorker<GbmVideoFrame, C2VaapiEncoder>>;
+
+const H264_DECODE_PROFILES: &[VaProfileType] = &[
+    VAProfile::VAProfileH264ConstrainedBaseline,
+    VAProfile::VAProfileH264Baseline,
+    VAProfile::VAProfileH264Main,
+    VAProfile::VAProfileH264High,
+];
+const H265_DECODE_PROFILES: &[VaProfileType] =
+    &[VAProfile::VAProfileHEVCMain, VAProfile::VAProfileHEVCMain10];
+const AV1_DECODE_PROFILES: &[VaProfileType] = &[
+    VAProfile::VAProfileAV1Profile0,
+    VAProfile::VAProfileAV1Profile1,
+];
+
+const H264_ENCODE_PROFILES: &[VaProfileType] = &[
+    VAProfile::VAProfileH264ConstrainedBaseline,
+    VAProfile::VAProfileH264Main,
+    VAProfile::VAProfileH264High,
+];
+// cros-codecs VA-API encoder currently does not expose H.265.
+const H265_ENCODE_PROFILES: &[VaProfileType] = &[];
+const AV1_ENCODE_PROFILES: &[VaProfileType] = &[
+    VAProfile::VAProfileAV1Profile0,
+    VAProfile::VAProfileAV1Profile1,
+];
+
+const H265_HDR_PROFILES: &[VaProfileType] = &[VAProfile::VAProfileHEVCMain10];
+const AV1_HDR_PROFILES: &[VaProfileType] = &[VAProfile::VAProfileAV1Profile1];
+
+const DECODE_ENTRYPOINTS: &[VaEntrypointType] = &[VAEntrypoint::VAEntrypointVLD];
+const ENCODE_ENTRYPOINTS: &[VaEntrypointType] = &[
+    VAEntrypoint::VAEntrypointEncSliceLP,
+    VAEntrypoint::VAEntrypointEncSlice,
+];
 
 /// Internal codec type for Linux implementations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodecType {
     H264,
     H265,
+    Av1,
 }
 
-impl CodecType {
-    fn decoder_name(self) -> &'static str {
-        match self {
-            Self::H264 => "h264",
-            Self::H265 => "hevc",
+#[derive(Debug, Clone, Copy, Default)]
+struct VaapiCapabilities {
+    h264_decode: bool,
+    h265_decode: bool,
+    av1_decode: bool,
+    h264_encode: bool,
+    h265_encode: bool,
+    av1_encode: bool,
+    hdr10_decode: bool,
+    hdr10_encode: bool,
+}
+
+fn find_render_nodes() -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(RENDER_NODE_DIR) else {
+        return Vec::new();
+    };
+
+    let mut nodes = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(RENDER_NODE_PREFIX))
+        })
+        .collect::<Vec<_>>();
+
+    nodes.sort();
+    nodes
+}
+
+fn open_gbm_device() -> Result<Arc<GbmDevice>, CodecError> {
+    for node in find_render_nodes() {
+        if let Ok(device) = GbmDevice::open(&node) {
+            return Ok(device);
         }
     }
 
-    fn encoder_name(self) -> &'static str {
-        match self {
-            Self::H264 => "libx264",
-            Self::H265 => "libx265",
-        }
-    }
+    Err(CodecError::InitializationFailed(
+        "failed to open GBM device (expected /dev/dri/renderD*)".into(),
+    ))
+}
 
-    fn hw_decoder_name(self) -> &'static str {
-        // Try hardware decoders first
-        match self {
-            Self::H264 => "h264_vaapi",
-            Self::H265 => "hevc_vaapi",
-        }
-    }
+fn open_display() -> Result<Rc<Display>, CodecError> {
+    Display::open().ok_or_else(|| {
+        CodecError::InitializationFailed(
+            "failed to open VA-API DRM display (expected /dev/dri/renderD*)".into(),
+        )
+    })
+}
 
-    fn hw_encoder_name(self) -> &'static str {
-        match self {
-            Self::H264 => "h264_vaapi",
-            Self::H265 => "hevc_vaapi",
+fn supports_profiles(
+    display: &Display,
+    available_profiles: &[VaProfileType],
+    profile_candidates: &[VaProfileType],
+    entrypoint_candidates: &[VaEntrypointType],
+) -> bool {
+    profile_candidates.iter().copied().any(|profile| {
+        if !available_profiles.contains(&profile) {
+            return false;
+        }
+
+        let Ok(entrypoints) = display.query_config_entrypoints(profile) else {
+            return false;
+        };
+
+        entrypoint_candidates
+            .iter()
+            .any(|entrypoint| entrypoints.contains(entrypoint))
+    })
+}
+
+fn query_vaapi_capabilities() -> Result<VaapiCapabilities, CodecError> {
+    let display = open_display()?;
+    let available_profiles = display.query_config_profiles().map_err(|e| {
+        CodecError::InitializationFailed(format!(
+            "vaQueryConfigProfiles failed while probing capabilities: {e}"
+        ))
+    })?;
+
+    Ok(VaapiCapabilities {
+        h264_decode: supports_profiles(
+            display.as_ref(),
+            &available_profiles,
+            H264_DECODE_PROFILES,
+            DECODE_ENTRYPOINTS,
+        ),
+        h265_decode: supports_profiles(
+            display.as_ref(),
+            &available_profiles,
+            H265_DECODE_PROFILES,
+            DECODE_ENTRYPOINTS,
+        ),
+        av1_decode: supports_profiles(
+            display.as_ref(),
+            &available_profiles,
+            AV1_DECODE_PROFILES,
+            DECODE_ENTRYPOINTS,
+        ),
+        h264_encode: supports_profiles(
+            display.as_ref(),
+            &available_profiles,
+            H264_ENCODE_PROFILES,
+            ENCODE_ENTRYPOINTS,
+        ),
+        h265_encode: supports_profiles(
+            display.as_ref(),
+            &available_profiles,
+            H265_ENCODE_PROFILES,
+            ENCODE_ENTRYPOINTS,
+        ),
+        av1_encode: supports_profiles(
+            display.as_ref(),
+            &available_profiles,
+            AV1_ENCODE_PROFILES,
+            ENCODE_ENTRYPOINTS,
+        ),
+        hdr10_decode: supports_profiles(
+            display.as_ref(),
+            &available_profiles,
+            H265_HDR_PROFILES,
+            DECODE_ENTRYPOINTS,
+        ) || supports_profiles(
+            display.as_ref(),
+            &available_profiles,
+            AV1_HDR_PROFILES,
+            DECODE_ENTRYPOINTS,
+        ),
+        hdr10_encode: supports_profiles(
+            display.as_ref(),
+            &available_profiles,
+            H265_HDR_PROFILES,
+            ENCODE_ENTRYPOINTS,
+        ) || supports_profiles(
+            display.as_ref(),
+            &available_profiles,
+            AV1_HDR_PROFILES,
+            ENCODE_ENTRYPOINTS,
+        ),
+    })
+}
+
+fn decode_supported(caps: &VaapiCapabilities, codec: CodecType) -> bool {
+    match codec {
+        CodecType::H264 => caps.h264_decode,
+        CodecType::H265 => caps.h265_decode,
+        CodecType::Av1 => caps.av1_decode,
+    }
+}
+
+fn encode_supported(caps: &VaapiCapabilities, codec: CodecType) -> bool {
+    match codec {
+        CodecType::H264 => caps.h264_encode,
+        CodecType::H265 => caps.h265_encode,
+        CodecType::Av1 => caps.av1_encode,
+    }
+}
+
+fn encoded_fourcc(codec: CodecType) -> Fourcc {
+    match codec {
+        CodecType::H264 => Fourcc::from(b"H264"),
+        CodecType::H265 => Fourcc::from(b"HEVC"),
+        CodecType::Av1 => Fourcc::from(b"AV1F"),
+    }
+}
+
+fn check_c2_status(status: C2Status, context: &str) -> Result<(), CodecError> {
+    if status == C2Status::C2Ok {
+        Ok(())
+    } else {
+        Err(CodecError::InitializationFailed(format!(
+            "{context} failed with status {status:?}"
+        )))
+    }
+}
+
+fn copy_plane_tight(
+    dst: &mut Vec<u8>,
+    src_plane: &[u8],
+    src_stride: usize,
+    row_bytes: usize,
+    rows: usize,
+) {
+    for row in 0..rows {
+        let start = row * src_stride;
+        let end = start.saturating_add(row_bytes).min(src_plane.len());
+        if end > start {
+            dst.extend_from_slice(&src_plane[start..end]);
+            if end - start < row_bytes {
+                dst.resize(dst.len() + (row_bytes - (end - start)), 0);
+            }
+        } else {
+            dst.resize(dst.len() + row_bytes, 0);
         }
     }
 }
 
-/// Decoded frame from Linux `FFmpeg` (`NV12` format).
+fn map_frame_to_nv12(frame: &GbmVideoFrame) -> Result<Vec<u8>, CodecError> {
+    let resolution = frame.resolution();
+    let width = resolution.width as usize;
+    let height = resolution.height as usize;
+    let y_size = width * height;
+    let uv_size = y_size / 2;
+
+    let mapping = frame
+        .map()
+        .map_err(|e| CodecError::DecodingFailed(format!("failed to map decoded frame: {e}")))?;
+    let planes = mapping.get();
+    let strides = frame.get_plane_pitch();
+
+    if planes.len() < 2 || strides.len() < 2 {
+        return Err(CodecError::DecodingFailed(
+            "decoded frame missing NV12 planes".into(),
+        ));
+    }
+
+    let mut out = Vec::with_capacity(y_size + uv_size);
+    copy_plane_tight(&mut out, planes[0], strides[0], width, height);
+    copy_plane_tight(&mut out, planes[1], strides[1], width, height / 2);
+    Ok(out)
+}
+
+fn write_nv12_to_gbm(frame: &mut GbmVideoFrame, nv12: &[u8]) -> Result<(), CodecError> {
+    let resolution = frame.resolution();
+    let width = resolution.width as usize;
+    let height = resolution.height as usize;
+
+    let y_size = width * height;
+    let uv_size = y_size / 2;
+    let expected = y_size + uv_size;
+    if nv12.len() != expected {
+        return Err(CodecError::EncodingFailed(format!(
+            "NV12 data size {} doesn't match expected {} for {}x{}",
+            nv12.len(),
+            expected,
+            resolution.width,
+            resolution.height
+        )));
+    }
+
+    let strides = frame.get_plane_pitch().to_vec();
+    let mapping = frame
+        .map_mut()
+        .map_err(|e| CodecError::EncodingFailed(format!("failed to map encoder input: {e}")))?;
+    let planes = mapping.get();
+
+    if planes.len() < 2 || strides.len() < 2 {
+        return Err(CodecError::EncodingFailed(
+            "encoder frame missing NV12 planes".into(),
+        ));
+    }
+
+    {
+        let mut y_plane = planes[0].borrow_mut();
+        for row in 0..height {
+            let src_start = row * width;
+            let src_end = src_start + width;
+            let dst_start = row * strides[0];
+            let dst_end = dst_start + width;
+            if dst_end <= y_plane.len() {
+                y_plane[dst_start..dst_end].copy_from_slice(&nv12[src_start..src_end]);
+            }
+        }
+    }
+
+    {
+        let mut uv_plane = planes[1].borrow_mut();
+        for row in 0..(height / 2) {
+            let src_start = y_size + row * width;
+            let src_end = src_start + width;
+            let dst_start = row * strides[1];
+            let dst_end = dst_start + width;
+            if dst_end <= uv_plane.len() {
+                uv_plane[dst_start..dst_end].copy_from_slice(&nv12[src_start..src_end]);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Query VA-API encoder availability for Linux runtime.
+#[must_use]
+pub fn check_vaapi_encode_support() -> VaapiEncodeSupport {
+    let caps = query_vaapi_capabilities().unwrap_or_default();
+    VaapiEncodeSupport {
+        h264: caps.h264_encode,
+        h265: caps.h265_encode,
+        av1: caps.av1_encode,
+    }
+}
+
+/// Query 10-bit HDR support hints for Linux runtime.
+#[must_use]
+pub fn check_hdr_support() -> HdrSupport {
+    let caps = query_vaapi_capabilities().unwrap_or_default();
+
+    HdrSupport {
+        decode_10bit: if caps.hdr10_decode {
+            SupportLevel::Supported
+        } else {
+            SupportLevel::Unsupported
+        },
+        encode_10bit: if caps.hdr10_encode {
+            SupportLevel::Supported
+        } else {
+            SupportLevel::Unsupported
+        },
+    }
+}
+
+/// Decoded frame from Linux VA-API backend (`NV12` format).
 #[derive(Clone)]
 pub struct LinuxFrame {
     /// `NV12` data: Y plane followed by interleaved UV plane.
@@ -93,13 +415,14 @@ impl fmt::Debug for LinuxFrame {
     }
 }
 
-/// Linux `FFmpeg` hardware decoder.
+/// Linux VA-API decoder.
 pub struct LinuxDecoder {
-    decoder: decoder::Video,
-    scaler: Option<ScalerContext>,
     codec_type: CodecType,
     width: u32,
     height: u32,
+    decoder: DecodeWrapper,
+    output_frames: Arc<Mutex<VecDeque<LinuxFrame>>>,
+    worker_error: Arc<Mutex<Option<CodecError>>>,
 }
 
 impl fmt::Debug for LinuxDecoder {
@@ -112,138 +435,174 @@ impl fmt::Debug for LinuxDecoder {
     }
 }
 
-unsafe impl Send for LinuxDecoder {}
-unsafe impl Sync for LinuxDecoder {}
-
 impl LinuxDecoder {
-    /// Create a new Linux hardware decoder.
+    /// Create a new Linux VA-API decoder.
     pub fn new(
         codec_type: CodecType,
         config: Option<&[u8]>,
         width: u32,
         height: u32,
     ) -> Result<Self, CodecError> {
-        init_ffmpeg();
-
-        // Try hardware decoder first, fall back to software
-        let codec = ffmpeg::decoder::find_by_name(codec_type.hw_decoder_name())
-            .or_else(|| ffmpeg::decoder::find_by_name(codec_type.decoder_name()))
-            .or_else(|| {
-                ffmpeg::decoder::find(match codec_type {
-                    CodecType::H264 => codec::Id::H264,
-                    CodecType::H265 => codec::Id::HEVC,
-                })
-            })
-            .ok_or_else(|| {
-                CodecError::InitializationFailed(format!("No decoder found for {:?}", codec_type))
-            })?;
-
-        let context = Context::new_with_codec(codec);
-
-        // Note: codec config (extradata) will be passed with first packet
         let _ = config;
 
-        let decoder = context.decoder().video().map_err(|e| {
-            CodecError::InitializationFailed(format!("Failed to create video decoder: {e}"))
-        })?;
+        let caps = query_vaapi_capabilities()?;
+        if !decode_supported(&caps, codec_type) {
+            return Err(CodecError::Unsupported(format!(
+                "VA-API decoder unavailable for {codec_type:?}"
+            )));
+        }
+
+        let gbm_device = open_gbm_device()?;
+        let stream_info = Arc::new(Mutex::new(cros_codecs::decoder::StreamInfo {
+            format: cros_codecs::DecodedFormat::NV12,
+            coded_resolution: Resolution { width, height },
+            display_resolution: Resolution { width, height },
+            min_num_frames: 6,
+        }));
+        let output_frames = Arc::new(Mutex::new(VecDeque::new()));
+        let worker_error = Arc::new(Mutex::new(None));
+
+        let output_frames_cb = Arc::clone(&output_frames);
+        let worker_error_cb = Arc::clone(&worker_error);
+        let work_done_cb = move |job: C2DecodeJob<GbmVideoFrame>| {
+            if let Some(frame) = job.output {
+                let resolution = frame.resolution();
+                match map_frame_to_nv12(frame.as_ref()) {
+                    Ok(data) => {
+                        output_frames_cb.lock().unwrap().push_back(LinuxFrame {
+                            data,
+                            width: resolution.width,
+                            height: resolution.height,
+                            timestamp_ns: 0,
+                        });
+                    }
+                    Err(e) => {
+                        *worker_error_cb.lock().unwrap() = Some(e);
+                    }
+                }
+            }
+        };
+
+        let worker_error_err = Arc::clone(&worker_error);
+        let error_cb = move |status: C2Status| {
+            *worker_error_err.lock().unwrap() = Some(CodecError::DecodingFailed(format!(
+                "VA-API decoder worker error: {status:?}"
+            )));
+        };
+
+        let stream_info_hint = Arc::clone(&stream_info);
+        let framepool_hint_cb = move |info: cros_codecs::decoder::StreamInfo| {
+            *stream_info_hint.lock().unwrap() = info;
+        };
+
+        let stream_info_alloc = Arc::clone(&stream_info);
+        let gbm_device_alloc = Arc::clone(&gbm_device);
+        let alloc_cb = move || {
+            let info = stream_info_alloc.lock().unwrap().clone();
+            gbm_device_alloc
+                .clone()
+                .new_frame(
+                    Fourcc::from(cros_codecs::DecodedFormat::NV12),
+                    info.display_resolution,
+                    info.coded_resolution,
+                    GbmUsage::Decode,
+                )
+                .ok()
+        };
+
+        let mut decoder: DecodeWrapper = C2Wrapper::new(
+            encoded_fourcc(codec_type),
+            Fourcc::from(cros_codecs::DecodedFormat::NV12),
+            error_cb,
+            work_done_cb,
+            framepool_hint_cb,
+            alloc_cb,
+            C2VaapiDecoderOptions {
+                libva_device_path: find_render_nodes().into_iter().next(),
+            },
+        );
+        check_c2_status(decoder.start(), "starting VA-API decoder")?;
 
         Ok(Self {
-            decoder,
-            scaler: None,
             codec_type,
             width,
             height,
+            decoder,
+            output_frames,
+            worker_error,
         })
     }
 
     /// Decode compressed video data.
     pub fn decode(&mut self, data: &[u8]) -> Result<Vec<LinuxFrame>, CodecError> {
-        let mut packet = Packet::copy(data);
-        packet.set_pts(Some(0));
-        packet.set_dts(Some(0));
-
-        self.decoder
-            .send_packet(&packet)
-            .map_err(|e| CodecError::DecodingFailed(format!("send_packet failed: {e}")))?;
-
-        let mut frames = Vec::new();
-        let mut decoded_frame = Video::empty();
-
-        while self.decoder.receive_frame(&mut decoded_frame).is_ok() {
-            let frame_width = decoded_frame.width();
-            let frame_height = decoded_frame.height();
-            let format = decoded_frame.format();
-
-            // Update dimensions if the decoder reports different dimensions
-            let width = if frame_width > 0 {
-                frame_width
-            } else {
-                self.width
-            };
-            let height = if frame_height > 0 {
-                frame_height
-            } else {
-                self.height
-            };
-
-            // Convert to NV12 if needed
-            let nv12_data = if format == Pixel::NV12 {
-                // Already NV12, extract directly
-                extract_nv12(&decoded_frame, width, height)
-            } else {
-                // Need to convert - create or update scaler
-                if self.scaler.is_none()
-                    || self.scaler.as_ref().map(|s| s.input().width) != Some(width)
-                {
-                    self.scaler = Some(
-                        ScalerContext::get(
-                            format,
-                            width,
-                            height,
-                            Pixel::NV12,
-                            width,
-                            height,
-                            Flags::BILINEAR,
-                        )
-                        .map_err(|e| {
-                            CodecError::DecodingFailed(format!("Scaler creation failed: {e}"))
-                        })?,
-                    );
-                }
-
-                let scaler = self.scaler.as_mut().unwrap();
-                let mut nv12_frame = Video::empty();
-                scaler
-                    .run(&decoded_frame, &mut nv12_frame)
-                    .map_err(|e| CodecError::DecodingFailed(format!("Scaling failed: {e}")))?;
-
-                extract_nv12(&nv12_frame, width, height)
-            };
-
-            let timestamp_ns = decoded_frame
-                .pts()
-                .map_or(0, |pts| (pts as u64) * 1_000_000_000 / 90_000); // Assuming 90kHz timebase
-
-            frames.push(LinuxFrame {
-                data: nv12_data,
-                width,
-                height,
-                timestamp_ns,
-            });
+        if let Some(err) = self.worker_error.lock().unwrap().take() {
+            return Err(err);
         }
 
-        Ok(frames)
+        let mut result = Vec::new();
+        {
+            let mut queue = self.output_frames.lock().unwrap();
+            while let Some(frame) = queue.pop_front() {
+                result.push(frame);
+            }
+        }
+
+        if data.is_empty() {
+            return Ok(result);
+        }
+
+        let status = self.decoder.queue(vec![C2DecodeJob {
+            input: data.to_vec(),
+            output: None,
+            drain: DrainMode::NoDrain,
+        }]);
+        check_c2_status(status, "queueing decode job")?;
+
+        let start = Instant::now();
+        while start.elapsed() < FRAME_WAIT_TIMEOUT {
+            if self.worker_error.lock().unwrap().is_some() {
+                break;
+            }
+            if !self.output_frames.lock().unwrap().is_empty() {
+                break;
+            }
+            if !self.decoder.is_alive() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        if let Some(err) = self.worker_error.lock().unwrap().take() {
+            return Err(err);
+        }
+
+        let mut queue = self.output_frames.lock().unwrap();
+        while let Some(frame) = queue.pop_front() {
+            result.push(frame);
+        }
+
+        Ok(result)
     }
 }
 
-/// Linux `FFmpeg` hardware encoder.
+impl Drop for LinuxDecoder {
+    fn drop(&mut self) {
+        if self.decoder.is_alive() {
+            let _ = self.decoder.drain(DrainMode::EOSDrain);
+        }
+    }
+}
+
+/// Linux VA-API encoder.
 pub struct LinuxEncoder {
-    encoder: encoder::video::Video,
-    scaler: Option<ScalerContext>,
     codec_type: CodecType,
     width: u32,
     height: u32,
-    frame_count: i64,
+    encoder: EncodeWrapper,
+    output_packets: Arc<Mutex<VecDeque<Vec<u8>>>>,
+    worker_error: Arc<Mutex<Option<CodecError>>>,
+    gbm_device: Arc<GbmDevice>,
+    frame_index: u64,
     codec_config: Option<Vec<u8>>,
 }
 
@@ -253,121 +612,167 @@ impl fmt::Debug for LinuxEncoder {
             .field("codec_type", &self.codec_type)
             .field("width", &self.width)
             .field("height", &self.height)
-            .field("frame_count", &self.frame_count)
+            .field("frame_index", &self.frame_index)
             .finish_non_exhaustive()
     }
 }
 
-unsafe impl Send for LinuxEncoder {}
-unsafe impl Sync for LinuxEncoder {}
-
 impl LinuxEncoder {
-    /// Create a new Linux hardware encoder.
+    /// Create a new Linux VA-API encoder.
     pub fn new(codec_type: CodecType, width: u32, height: u32) -> Result<Self, CodecError> {
-        init_ffmpeg();
+        let caps = query_vaapi_capabilities()?;
+        if !encode_supported(&caps, codec_type) {
+            return Err(CodecError::Unsupported(format!(
+                "VA-API encoder unavailable for {codec_type:?}"
+            )));
+        }
 
-        // Try hardware encoder first, fall back to software
-        let codec = ffmpeg::encoder::find_by_name(codec_type.hw_encoder_name())
-            .or_else(|| ffmpeg::encoder::find_by_name(codec_type.encoder_name()))
-            .or_else(|| {
-                ffmpeg::encoder::find(match codec_type {
-                    CodecType::H264 => codec::Id::H264,
-                    CodecType::H265 => codec::Id::HEVC,
-                })
-            })
-            .ok_or_else(|| {
-                CodecError::InitializationFailed(format!("No encoder found for {:?}", codec_type))
-            })?;
+        // cros-codecs VA-API encoder currently supports H264/AV1 (and VP9), not H265.
+        if matches!(codec_type, CodecType::H265) {
+            return Err(CodecError::Unsupported(
+                "H265 VA-API encode is not available in current Linux backend".into(),
+            ));
+        }
 
-        let context = Context::new_with_codec(codec);
+        let gbm_device = open_gbm_device()?;
+        let stream_info = Arc::new(Mutex::new(cros_codecs::decoder::StreamInfo {
+            format: cros_codecs::DecodedFormat::NV12,
+            coded_resolution: Resolution { width, height },
+            display_resolution: Resolution { width, height },
+            min_num_frames: 0,
+        }));
 
-        // Create and configure encoder
-        let mut encoder = context.encoder().video().map_err(|e| {
-            CodecError::InitializationFailed(format!("Failed to get video encoder: {e}"))
-        })?;
+        let output_packets = Arc::new(Mutex::new(VecDeque::new()));
+        let worker_error = Arc::new(Mutex::new(None));
 
-        encoder.set_width(width);
-        encoder.set_height(height);
-        encoder.set_format(Pixel::NV12);
-        encoder.set_time_base((1, 30)); // 30 fps
-        encoder.set_bit_rate(4_000_000); // 4 Mbps
-        encoder.set_gop(30); // Keyframe every 1 second at 30fps
+        let output_packets_cb = Arc::clone(&output_packets);
+        let work_done_cb = move |job: C2EncodeJob<GbmVideoFrame>| {
+            if !job.output.is_empty() {
+                output_packets_cb.lock().unwrap().push_back(job.output);
+            }
+        };
+
+        let worker_error_err = Arc::clone(&worker_error);
+        let error_cb = move |status: C2Status| {
+            *worker_error_err.lock().unwrap() = Some(CodecError::EncodingFailed(format!(
+                "VA-API encoder worker error: {status:?}"
+            )));
+        };
+
+        let stream_info_hint = Arc::clone(&stream_info);
+        let framepool_hint_cb = move |info: cros_codecs::decoder::StreamInfo| {
+            *stream_info_hint.lock().unwrap() = info;
+        };
+
+        let stream_info_alloc = Arc::clone(&stream_info);
+        let gbm_device_alloc = Arc::clone(&gbm_device);
+        let alloc_cb = move || {
+            let info = stream_info_alloc.lock().unwrap().clone();
+            gbm_device_alloc
+                .clone()
+                .new_frame(
+                    Fourcc::from(cros_codecs::DecodedFormat::NV12),
+                    info.display_resolution,
+                    info.coded_resolution,
+                    GbmUsage::Encode,
+                )
+                .ok()
+        };
+
+        let mut encoder: EncodeWrapper = C2Wrapper::new(
+            Fourcc::from(cros_codecs::DecodedFormat::NV12),
+            encoded_fourcc(codec_type),
+            error_cb,
+            work_done_cb,
+            framepool_hint_cb,
+            alloc_cb,
+            C2VaapiEncoderOptions {
+                low_power: false,
+                visible_resolution: Resolution { width, height },
+            },
+        );
+        check_c2_status(encoder.start(), "starting VA-API encoder")?;
 
         Ok(Self {
-            encoder,
-            scaler: None,
             codec_type,
             width,
             height,
-            frame_count: 0,
+            encoder,
+            output_packets,
+            worker_error,
+            gbm_device,
+            frame_index: 0,
             codec_config: None,
         })
     }
 
     /// Encode `NV12` data to compressed video.
     pub fn encode_nv12(&mut self, nv12: &[u8]) -> Result<Vec<u8>, CodecError> {
-        let y_size = (self.width * self.height) as usize;
-        let uv_size = y_size / 2;
-        let expected_size = y_size + uv_size;
-
-        if nv12.len() != expected_size {
-            return Err(CodecError::EncodingFailed(format!(
-                "NV12 data size {} doesn't match expected {} for {}x{}",
-                nv12.len(),
-                expected_size,
-                self.width,
-                self.height
-            )));
+        if let Some(err) = self.worker_error.lock().unwrap().take() {
+            return Err(err);
         }
 
-        // Create video frame from NV12 data
-        let mut frame = Video::new(Pixel::NV12, self.width, self.height);
+        let resolution = Resolution {
+            width: self.width,
+            height: self.height,
+        };
 
-        // Copy Y plane
-        let y_stride = frame.stride(0);
-        let y_plane = frame.data_mut(0);
-        for row in 0..self.height as usize {
-            let src_start = row * self.width as usize;
-            let dst_start = row * y_stride;
-            y_plane[dst_start..dst_start + self.width as usize]
-                .copy_from_slice(&nv12[src_start..src_start + self.width as usize]);
+        let mut input_frame = self
+            .gbm_device
+            .clone()
+            .new_frame(
+                Fourcc::from(cros_codecs::DecodedFormat::NV12),
+                resolution,
+                resolution,
+                GbmUsage::Encode,
+            )
+            .map_err(|e| {
+                CodecError::EncodingFailed(format!("failed to allocate encode frame: {e}"))
+            })?;
+
+        write_nv12_to_gbm(&mut input_frame, nv12)?;
+
+        let timestamp_us = (self.frame_index * 1_000_000) / (DEFAULT_FRAMERATE as u64);
+        self.frame_index += 1;
+
+        let status = self.encoder.queue(vec![C2EncodeJob {
+            input: Some(input_frame),
+            output: Vec::new(),
+            timestamp: timestamp_us,
+            bitrate: DEFAULT_BITRATE,
+            framerate: Arc::new(AtomicU32::new(DEFAULT_FRAMERATE)),
+            drain: DrainMode::NoDrain,
+        }]);
+        check_c2_status(status, "queueing encode job")?;
+
+        let start = Instant::now();
+        while start.elapsed() < ENCODE_WAIT_TIMEOUT {
+            if self.worker_error.lock().unwrap().is_some() {
+                break;
+            }
+            if !self.output_packets.lock().unwrap().is_empty() {
+                break;
+            }
+            if !self.encoder.is_alive() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
         }
 
-        // Copy UV plane
-        let uv_stride = frame.stride(1);
-        let uv_plane = frame.data_mut(1);
-        let uv_height = self.height as usize / 2;
-        for row in 0..uv_height {
-            let src_start = y_size + row * self.width as usize;
-            let dst_start = row * uv_stride;
-            uv_plane[dst_start..dst_start + self.width as usize]
-                .copy_from_slice(&nv12[src_start..src_start + self.width as usize]);
+        if let Some(err) = self.worker_error.lock().unwrap().take() {
+            return Err(err);
         }
 
-        frame.set_pts(Some(self.frame_count));
-        self.frame_count += 1;
-
-        // Send frame to encoder
-        self.encoder
-            .send_frame(&frame)
-            .map_err(|e| CodecError::EncodingFailed(format!("send_frame failed: {e}")))?;
-
-        // Collect encoded packets
-        let mut encoded_data = Vec::new();
-        let mut packet = Packet::empty();
-
-        while self.encoder.receive_packet(&mut packet).is_ok() {
-            encoded_data.extend_from_slice(packet.data().unwrap_or(&[]));
+        let mut output = Vec::new();
+        let mut packets = self.output_packets.lock().unwrap();
+        while let Some(packet) = packets.pop_front() {
+            if self.codec_config.is_none() && !packet.is_empty() {
+                self.codec_config = Some(packet.clone());
+            }
+            output.extend_from_slice(&packet);
         }
 
-        // Extract codec config from first packet if not yet captured
-        if self.codec_config.is_none() && !encoded_data.is_empty() {
-            // For H.264/H.265, the first few packets often contain SPS/PPS
-            // This is a simplified extraction - proper implementation would parse NAL units
-            self.codec_config = Some(encoded_data.clone());
-        }
-
-        Ok(encoded_data)
+        Ok(output)
     }
 
     /// Get the codec configuration data if available.
@@ -377,40 +782,10 @@ impl LinuxEncoder {
     }
 }
 
-/// Extract `NV12` data from an `FFmpeg` video frame.
-fn extract_nv12(frame: &Video, width: u32, height: u32) -> Vec<u8> {
-    let y_size = (width * height) as usize;
-    let uv_size = y_size / 2;
-    let mut nv12_data = Vec::with_capacity(y_size + uv_size);
-
-    // Copy Y plane (removing stride padding)
-    let y_stride = frame.stride(0);
-    let y_data = frame.data(0);
-    for row in 0..height as usize {
-        let start = row * y_stride;
-        let end = start + width as usize;
-        if end <= y_data.len() {
-            nv12_data.extend_from_slice(&y_data[start..end]);
-        } else {
-            nv12_data.extend_from_slice(&y_data[start..]);
-            nv12_data.resize(nv12_data.len() + (end - y_data.len()), 0);
+impl Drop for LinuxEncoder {
+    fn drop(&mut self) {
+        if self.encoder.is_alive() {
+            let _ = self.encoder.drain(DrainMode::EOSDrain);
         }
     }
-
-    // Copy UV plane (already interleaved in NV12)
-    let uv_stride = frame.stride(1);
-    let uv_data = frame.data(1);
-    let uv_height = height as usize / 2;
-    for row in 0..uv_height {
-        let start = row * uv_stride;
-        let end = start + width as usize;
-        if end <= uv_data.len() {
-            nv12_data.extend_from_slice(&uv_data[start..end]);
-        } else if start < uv_data.len() {
-            nv12_data.extend_from_slice(&uv_data[start..]);
-            nv12_data.resize(nv12_data.len() + (end - uv_data.len()), 0);
-        }
-    }
-
-    nv12_data
 }

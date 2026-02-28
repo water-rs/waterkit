@@ -4,6 +4,7 @@ use crate::VideoError;
 use mp4::WriteBox;
 use std::io::{Cursor, Read};
 use std::path::Path;
+use std::time::Duration;
 
 /// A decoded video frame.
 #[derive(Clone)]
@@ -224,5 +225,54 @@ impl VideoReader {
     /// Reset to beginning.
     pub const fn reset(&mut self) {
         self.current_index = 0;
+    }
+
+    /// Current sample cursor (0-based).
+    #[must_use]
+    pub const fn current_index(&self) -> usize {
+        self.current_index
+    }
+
+    /// Seek to a sample index.
+    ///
+    /// If `index` exceeds the sample count, the cursor is placed at EOF.
+    pub fn seek_to_sample(&mut self, index: usize) {
+        self.current_index = index.min(self.samples.len());
+    }
+
+    /// Return `(pts, is_keyframe)` for a sample index.
+    #[must_use]
+    pub fn sample_info(&self, index: usize) -> Option<(u64, bool)> {
+        self.samples
+            .get(index)
+            .map(|(_, pts, is_keyframe)| (*pts, *is_keyframe))
+    }
+
+    /// Finds the nearest keyframe at or before `index`.
+    #[must_use]
+    pub fn nearest_keyframe_at_or_before(&self, index: usize) -> usize {
+        if self.samples.is_empty() {
+            return 0;
+        }
+
+        let capped = index.min(self.samples.len().saturating_sub(1));
+        for i in (0..=capped).rev() {
+            if self.samples[i].2 {
+                return i;
+            }
+        }
+        0
+    }
+
+    /// Estimated track duration from the last video sample PTS.
+    #[must_use]
+    pub fn duration(&self) -> Option<Duration> {
+        let (last_pts, _) = self.sample_info(self.samples.len().checked_sub(1)?)?;
+
+        (self.timescale > 0).then(|| {
+            Duration::from_nanos(
+                (last_pts.saturating_mul(1_000_000_000)) / u64::from(self.timescale),
+            )
+        })
     }
 }

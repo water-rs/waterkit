@@ -19,17 +19,13 @@ pub mod android {
 
 /// A parsed deep link.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct DeepLink {
-    /// The full URL string.
-    pub url: String,
-    /// The URL scheme (e.g., "myapp", "https").
-    pub scheme: String,
-    /// The host component.
-    pub host: Option<String>,
-    /// The path component.
-    pub path: String,
-    /// Query parameters.
-    pub query_params: HashMap<String, String>,
+    url: String,
+    scheme: String,
+    host: Option<String>,
+    path: String,
+    query_params: HashMap<String, String>,
 }
 
 impl DeepLink {
@@ -75,6 +71,36 @@ impl DeepLink {
             path,
             query_params,
         })
+    }
+
+    /// The full URL string.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// The URL scheme (e.g., "myapp", "https").
+    #[must_use]
+    pub fn scheme(&self) -> &str {
+        &self.scheme
+    }
+
+    /// The host component.
+    #[must_use]
+    pub fn host(&self) -> Option<&str> {
+        self.host.as_deref()
+    }
+
+    /// The path component.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Query parameters.
+    #[must_use]
+    pub const fn query_params(&self) -> &HashMap<String, String> {
+        &self.query_params
     }
 }
 
@@ -126,6 +152,7 @@ pub async fn can_open_url(url: &str) -> Result<bool, DeepLinkError> {
 
 /// Errors in deep linking operations.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum DeepLinkError {
     /// Invalid URL.
     #[error("invalid URL: {0}")]

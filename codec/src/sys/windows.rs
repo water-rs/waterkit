@@ -1,6 +1,6 @@
 //! Windows Media Foundation hardware encoding and decoding.
 
-use crate::CodecError;
+use crate::{CodecError, HdrSupport, SupportLevel};
 use std::fmt;
 use std::ptr;
 use windows::Win32::Media::MediaFoundation::{
@@ -26,8 +26,12 @@ const MFVideoFormat_H264: GUID = GUID::from_u128(0x34363248_0000_0010_8000_00aa0
 
 #[allow(non_upper_case_globals)]
 const MFVideoFormat_HEVC: GUID = GUID::from_u128(0x43564548_0000_0010_8000_00aa00389b71);
+<<<<<<< HEAD
 
 #[allow(non_upper_case_globals)]
+=======
+const MFVideoFormat_AV1: GUID = GUID::from_u128(0x31305641_0000_0010_8000_00aa00389b71);
+>>>>>>> main
 const MFVideoFormat_NV12: GUID = GUID::from_u128(0x3231564e_0000_0010_8000_00aa00389b71);
 
 /// Internal codec type for Windows implementations.
@@ -35,6 +39,7 @@ const MFVideoFormat_NV12: GUID = GUID::from_u128(0x3231564e_0000_0010_8000_00aa0
 pub enum CodecType {
     H264,
     H265,
+    Av1,
 }
 
 impl CodecType {
@@ -42,7 +47,17 @@ impl CodecType {
         match self {
             Self::H264 => MFVideoFormat_H264,
             Self::H265 => MFVideoFormat_HEVC,
+            Self::Av1 => MFVideoFormat_AV1,
         }
+    }
+}
+
+/// Query 10-bit HDR support hints for Windows runtime.
+#[must_use]
+pub const fn check_hdr_support() -> HdrSupport {
+    HdrSupport {
+        decode_10bit: SupportLevel::Unsupported,
+        encode_10bit: SupportLevel::Unsupported,
     }
 }
 

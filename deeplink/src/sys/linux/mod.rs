@@ -24,9 +24,12 @@ impl DeepLinkHandlerInner {
         Err(DeepLinkError::NotSupported)
     }
 
-    pub fn initial_link(&self) -> Result<Option<DeepLink>, DeepLinkError> {
+    pub const fn initial_link(&self) -> Result<Option<DeepLink>, DeepLinkError> {
+        let _ = self;
         Err(DeepLinkError::NotSupported)
     }
 
-    pub fn stop(&self) {}
+    pub const fn stop(&self) {
+        let _ = self;
+    }
 }

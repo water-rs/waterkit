@@ -686,12 +686,7 @@ pub fn start_watch()
                 last_has_files = has_files;
                 last_has_image = has_image;
 
-                let event = ClipboardEvent::new(
-                    has_text,
-                    has_html,
-                    has_files,
-                    has_image,
-                );
+                let event = ClipboardEvent::new(has_text, has_html, has_files, has_image);
                 if sender.try_send(event).is_err() {
                     break;
                 }

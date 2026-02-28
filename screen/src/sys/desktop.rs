@@ -137,12 +137,7 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
         .write_to(&mut cursor, screenshots::image::ImageFormat::Png)
         .map_err(|e| Error::Encoding(e.to_string()))?;
 
-    Ok(Screenshot::new(
-        buffer,
-        width,
-        height,
-        ImageFormat::Png,
-    ))
+    Ok(Screenshot::new(buffer, width, height, ImageFormat::Png))
 }
 
 // ============================================================================

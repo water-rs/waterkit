@@ -2,6 +2,7 @@ use crate::{
     AdapterState, BluetoothDevice, BluetoothError, CharacteristicProperties, ClassicDevice,
     DeviceId, GattCharacteristic, GattService, ScanFilter, ScanResult, Uuid,
 };
+use futures::StreamExt;
 use std::collections::HashMap;
 use zbus::Connection;
 use zbus::names::InterfaceName;
@@ -106,6 +107,10 @@ impl BleScannerInner {
         &self,
         _filter: &ScanFilter,
     ) -> Result<async_channel::Receiver<ScanResult>, BluetoothError> {
+        let _bus_name = self.connection.unique_name().ok_or_else(|| {
+            BluetoothError::PlatformError("D-Bus connection is missing unique bus name".into())
+        })?;
+
         let (tx, rx) = async_channel::bounded(64);
         let conn = self.connection.clone();
         std::thread::spawn(move || {
@@ -127,7 +132,6 @@ impl BleScannerInner {
                     .await
                     .unwrap();
                 let mut stream = object_manager.receive_interfaces_added().await.unwrap();
-                use futures::StreamExt;
                 while let Some(signal) = stream.next().await {
                     if let Ok(args) = signal.args() {
                         let path = args.object_path().to_string();
@@ -223,23 +227,23 @@ impl BleConnectionInner {
                 let mut characteristics = Vec::new();
                 for (cpath, cifaces) in &objects {
                     let cpath_str = cpath.to_string();
-                    if cpath_str.starts_with(&path_str) && cifaces.contains_key(GATT_CHAR_IFACE) {
-                        if let Some(cprops) = cifaces.get(GATT_CHAR_IFACE) {
-                            let cuuid = prop_str(cprops, "UUID").unwrap_or_default();
-                            let flags = prop_str_array(cprops, "Flags");
-                            characteristics.push(GattCharacteristic {
-                                uuid: Uuid(cuuid),
-                                properties: CharacteristicProperties {
-                                    read: flags.iter().any(|f| f == "read"),
-                                    write: flags.iter().any(|f| f == "write"),
-                                    write_without_response: flags
-                                        .iter()
-                                        .any(|f| f == "write-without-response"),
-                                    notify: flags.iter().any(|f| f == "notify"),
-                                    indicate: flags.iter().any(|f| f == "indicate"),
-                                },
-                            });
-                        }
+                    if cpath_str.starts_with(&path_str)
+                        && let Some(cprops) = cifaces.get(GATT_CHAR_IFACE)
+                    {
+                        let cuuid = prop_str(cprops, "UUID").unwrap_or_default();
+                        let flags = prop_str_array(cprops, "Flags");
+                        characteristics.push(GattCharacteristic {
+                            uuid: Uuid(cuuid),
+                            properties: CharacteristicProperties {
+                                read: flags.iter().any(|f| f == "read"),
+                                write: flags.iter().any(|f| f == "write"),
+                                write_without_response: flags
+                                    .iter()
+                                    .any(|f| f == "write-without-response"),
+                                notify: flags.iter().any(|f| f == "notify"),
+                                indicate: flags.iter().any(|f| f == "indicate"),
+                            },
+                        });
                     }
                 }
                 services.push(GattService {
@@ -300,11 +304,12 @@ impl BleConnectionInner {
         Ok(())
     }
 
-    pub fn subscribe(
+    pub const fn subscribe(
         &self,
         _service: &Uuid,
         _characteristic: &Uuid,
     ) -> Result<async_channel::Receiver<Vec<u8>>, BluetoothError> {
+        let _ = self;
         Err(BluetoothError::NotSupported)
     }
 
@@ -337,12 +342,12 @@ impl BleConnectionInner {
             .map_err(|e| BluetoothError::GattError(e.to_string()))?;
         for (path, ifaces) in &objects {
             let path_str = path.to_string();
-            if path_str.starts_with(&self.device_path) {
-                if let Some(props) = ifaces.get(GATT_CHAR_IFACE) {
-                    let cuuid = prop_str(props, "UUID").unwrap_or_default();
-                    if cuuid == uuid.0 {
-                        return Ok(path_str);
-                    }
+            if path_str.starts_with(&self.device_path)
+                && let Some(props) = ifaces.get(GATT_CHAR_IFACE)
+            {
+                let cuuid = prop_str(props, "UUID").unwrap_or_default();
+                if cuuid == uuid.0 {
+                    return Ok(path_str);
                 }
             }
         }
@@ -359,13 +364,16 @@ impl ClassicBluetoothInner {
         Ok(Self)
     }
 
-    pub fn start_discovery(
+    pub const fn start_discovery(
         &self,
     ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
+        let _ = self;
         Err(BluetoothError::NotSupported)
     }
 
-    pub fn stop_discovery(&self) {}
+    pub const fn stop_discovery(&self) {
+        let _ = self;
+    }
 
     #[allow(clippy::unused_async)]
     pub async fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {

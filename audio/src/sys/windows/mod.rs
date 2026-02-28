@@ -58,8 +58,7 @@ fn set_metadata_inner(
     }
 
     if let Some(url) = metadata.artwork_url()
-        && let Ok(uri) =
-            windows::Foundation::Uri::CreateUri(&windows::core::HSTRING::from(url))
+        && let Ok(uri) = windows::Foundation::Uri::CreateUri(&windows::core::HSTRING::from(url))
         && let Ok(stream) =
             windows::Storage::Streams::RandomAccessStreamReference::CreateFromUri(&uri)
     {

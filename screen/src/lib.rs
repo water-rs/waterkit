@@ -165,6 +165,18 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
 ///
 /// Returns [`Error::Unsupported`] when the platform cannot report refresh-rate metadata.
 /// Returns [`Error::MonitorNotFound`] when no displays are available.
+#[cfg(target_os = "ios")]
+pub const fn max_refresh_rate_hz() -> Result<f32, Error> {
+    sys::max_refresh_rate_hz()
+}
+
+/// Returns the maximum refresh rate across available displays.
+///
+/// # Errors
+///
+/// Returns [`Error::Unsupported`] when the platform cannot report refresh-rate metadata.
+/// Returns [`Error::MonitorNotFound`] when no displays are available.
+#[cfg(not(target_os = "ios"))]
 pub fn max_refresh_rate_hz() -> Result<f32, Error> {
     sys::max_refresh_rate_hz()
 }

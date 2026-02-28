@@ -277,7 +277,9 @@ where
 
 pub fn is_available() -> bool {
     with_android_context(|env, context| is_available_with_context(env, context)).unwrap_or_else(
-        |error| panic!("waterkit-haptic: failed to query availability with Android context: {error}"),
+        |error| {
+            panic!("waterkit-haptic: failed to query availability with Android context: {error}")
+        },
     )
 }
 

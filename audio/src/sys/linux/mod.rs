@@ -251,7 +251,10 @@ impl MediaSessionInner {
         }
 
         if let Some(artist) = metadata.artist() {
-            mpris_metadata.insert("xesam:artist".to_string(), Value::new(vec![artist.to_owned()]));
+            mpris_metadata.insert(
+                "xesam:artist".to_string(),
+                Value::new(vec![artist.to_owned()]),
+            );
         }
 
         if let Some(album) = metadata.album() {

@@ -39,10 +39,7 @@ pub fn get_connectivity_info() -> ConnectivityInfo {
         _ => ConnectionType::None,
     };
 
-    ConnectivityInfo::new(
-        connection_type,
-        !matches!(result.unwrap_or(0), 0),
-    )
+    ConnectivityInfo::new(connection_type, !matches!(result.unwrap_or(0), 0))
 }
 
 pub fn get_thermal_state() -> ThermalState {

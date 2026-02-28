@@ -158,11 +158,9 @@ fn is_available_with_context(env: &mut JNIEnv, context: &JObject) -> Result<bool
 }
 
 pub fn is_available() -> bool {
-    with_android_context(|env, context| is_available_with_context(env, context)).unwrap_or_else(
-        |error| {
-            panic!("waterkit-health: failed to query availability with Android context: {error}")
-        },
-    )
+    with_android_context(is_available_with_context).unwrap_or_else(|error| {
+        panic!("waterkit-health: failed to query availability with Android context: {error}")
+    })
 }
 
 const fn type_to_str(data_type: HealthDataType) -> &'static str {

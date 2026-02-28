@@ -266,7 +266,9 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
         .map_err(|e| Error::Platform(format!("convert_byte_array: {e}")))?;
 
     if data.is_empty() {
-        return Err(Error::Platform("captureScreenshotPng returned empty data".into()));
+        return Err(Error::Platform(
+            "captureScreenshotPng returned empty data".into(),
+        ));
     }
 
     Ok(Screenshot::new(

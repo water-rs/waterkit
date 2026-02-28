@@ -355,7 +355,7 @@ impl MediaCenterInner {
                 !context_local.is_null(),
                 "waterkit-audio: ndk_context returned null Android Context"
             );
-            let context = env.new_global_ref(&context_local).map_err(|e| {
+            let context = env.new_global_ref(&*context_local).map_err(|e| {
                 MediaError::InitializationFailed(format!("new_global_ref context failed: {e}"))
             })?;
 

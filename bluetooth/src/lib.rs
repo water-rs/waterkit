@@ -218,6 +218,7 @@ impl BleConnection {
     ///
     /// # Errors
     /// Returns error if subscription fails.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn subscribe(
         &self,
         service: &Uuid,
@@ -268,6 +269,7 @@ impl ClassicBluetooth {
     ///
     /// # Errors
     /// Returns error if discovery cannot be started.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn start_discovery(
         &self,
     ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
@@ -275,6 +277,7 @@ impl ClassicBluetooth {
     }
 
     /// Stop device discovery.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn stop_discovery(&self) {
         self.inner.stop_discovery();
     }

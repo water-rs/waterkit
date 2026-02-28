@@ -1,7 +1,7 @@
 use crate::{RecognitionConfig, RecognitionResult, SpeechError, TtsConfig, Voice};
 use windows::Media::SpeechSynthesis::SpeechSynthesizer;
 
-pub fn recognition_is_available() -> bool {
+pub const fn recognition_is_available() -> bool {
     false
 }
 
@@ -19,6 +19,7 @@ impl TtsInner {
     }
 
     pub fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
+        let _ = self;
         let voices = SpeechSynthesizer::AllVoices()
             .map_err(|e| SpeechError::PlatformError(e.to_string()))?;
         let mut result = Vec::new();
@@ -47,9 +48,12 @@ impl TtsInner {
         Ok(())
     }
 
-    pub fn stop(&self) {}
+    pub const fn stop(&self) {
+        let _ = self;
+    }
 
-    pub fn is_speaking(&self) -> bool {
+    pub const fn is_speaking(&self) -> bool {
+        let _ = self;
         false
     }
 }
@@ -65,5 +69,7 @@ impl SpeechRecognizerInner {
         Err(SpeechError::NotSupported)
     }
 
-    pub fn stop(&self) {}
+    pub const fn stop(&self) {
+        let _ = self;
+    }
 }

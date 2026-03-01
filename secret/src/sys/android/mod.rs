@@ -539,7 +539,7 @@ pub async fn delete(service: &str, account: &str) -> Result<(), SecretError> {
 ///
 /// # Errors
 ///
-/// Returns [`SecretError`] when key generation, encryption, or SharedPreferences writes fail.
+/// Returns [`SecretError`] when key generation, encryption, or `SharedPreferences` writes fail.
 pub fn set_with_context<'local>(
     env: &mut JNIEnv<'local>,
     context: &JObject<'local>,
@@ -578,7 +578,7 @@ pub fn set_with_context<'local>(
 ///
 /// # Errors
 ///
-/// Returns [`SecretError`] when key retrieval, SharedPreferences reads, or decryption fails.
+/// Returns [`SecretError`] when key retrieval, `SharedPreferences` reads, or decryption fails.
 pub fn get_with_context<'local>(
     env: &mut JNIEnv<'local>,
     context: &JObject<'local>,
@@ -630,7 +630,7 @@ pub fn get_with_context<'local>(
 ///
 /// # Errors
 ///
-/// Returns [`SecretError`] when SharedPreferences updates or key deletion operations fail.
+/// Returns [`SecretError`] when `SharedPreferences` updates or key deletion operations fail.
 pub fn delete_with_context<'local>(
     env: &mut JNIEnv<'local>,
     context: &JObject<'local>,

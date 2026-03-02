@@ -59,5 +59,5 @@ pub enum VideoError {
 
     /// Format not supported.
     #[error("Format not supported: {0}")]
-    NotSupported(String),
+    Unsupported(String),
 }

@@ -144,7 +144,7 @@ pub enum ShareResult {
 pub enum ShareError {
     /// Sharing is not supported on this platform.
     #[error("sharing not supported")]
-    NotSupported,
+    Unsupported,
     /// No content to share.
     #[error("no content to share")]
     EmptyContent,

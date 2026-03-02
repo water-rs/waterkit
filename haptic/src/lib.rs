@@ -208,7 +208,7 @@ impl HapticPatternBuilder {
 pub enum HapticError {
     /// Haptic feedback is not supported on this device.
     #[error("haptic feedback not supported")]
-    NotSupported,
+    Unsupported,
 
     /// The haptic pattern is invalid (e.g., empty).
     #[error("invalid haptic pattern: {0}")]

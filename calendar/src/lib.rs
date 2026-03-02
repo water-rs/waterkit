@@ -134,7 +134,7 @@ pub enum CalendarError {
     ReadOnly,
     /// Not supported on this platform.
     #[error("not supported")]
-    NotSupported,
+    Unsupported,
     /// Platform error.
     #[error("platform error: {0}")]
     PlatformError(String),

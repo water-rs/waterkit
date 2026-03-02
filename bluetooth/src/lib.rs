@@ -361,7 +361,7 @@ pub enum BluetoothError {
     GattError(String),
     /// Not supported on this platform.
     #[error("not supported on this platform")]
-    NotSupported,
+    Unsupported,
     /// Platform-specific error.
     #[error("platform error: {0}")]
     PlatformError(String),

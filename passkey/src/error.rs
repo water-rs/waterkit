@@ -5,7 +5,7 @@
 pub enum PasskeyError {
     /// Passkeys are unsupported on this platform.
     #[error("passkeys are not supported on this platform")]
-    NotSupported,
+    Unsupported,
     /// Passkeys are supported but unavailable (for example not configured by the user).
     #[error("passkeys are not available on this device")]
     NotAvailable,
@@ -34,7 +34,7 @@ impl PasskeyError {
         }
 
         if lowered.contains("not supported") {
-            return Self::NotSupported;
+            return Self::Unsupported;
         }
 
         if lowered.contains("not available")

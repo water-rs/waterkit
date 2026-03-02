@@ -161,7 +161,7 @@ pub enum DeepLinkError {
     InvalidUrl(String),
     /// Not supported.
     #[error("not supported")]
-    NotSupported,
+    Unsupported,
     /// Permission denied.
     #[error("permission denied")]
     PermissionDenied,

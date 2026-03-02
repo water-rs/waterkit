@@ -720,7 +720,7 @@ impl Drop for RawRecording<'_> {
 pub enum CameraError {
     /// Camera is not supported on this platform.
     #[error("camera not supported on this platform")]
-    NotSupported,
+    Unsupported,
     /// Failed to enumerate cameras.
     #[error("failed to enumerate cameras: {0}")]
     EnumerationFailed(String),
@@ -744,7 +744,7 @@ pub enum CameraError {
     AlreadyInUse,
     /// The requested control is not supported.
     #[error("control not supported: {0}")]
-    ControlNotSupported(String),
+    ControlUnsupported(String),
     /// The requested value is out of range.
     #[error("value out of range: {0}")]
     ValueOutOfRange(String),
@@ -831,7 +831,7 @@ impl Camera {
     /// any control is not supported on this camera/platform.
     ///
     /// # Errors
-    /// Returns [`CameraError::ControlNotSupported`] if a control is not available.
+    /// Returns [`CameraError::ControlUnsupported`] if a control is not available.
     /// Returns [`CameraError::ValueOutOfRange`] if a value is outside the supported range.
     pub fn apply_controls(&mut self, controls: &CameraControls) -> Result<(), CameraError> {
         self.inner.apply_controls(controls)
@@ -875,7 +875,7 @@ impl Camera {
     ///
     /// # Errors
     /// Returns [`CameraError::CaptureFailed`] if RAW photo capture fails.
-    /// Returns [`CameraError::ControlNotSupported`] if RAW photo is unsupported.
+    /// Returns [`CameraError::ControlUnsupported`] if RAW photo is unsupported.
     pub async fn capture_raw_photo(&mut self) -> Result<RawPhoto, CameraError> {
         self.inner.capture_raw_photo().await
     }

@@ -19,13 +19,13 @@ impl PasskeyBackend for PlatformBackend {
         &self,
         _options: &RegisterOptions,
     ) -> Result<RegistrationResult, PasskeyError> {
-        Err(PasskeyError::NotSupported)
+        Err(PasskeyError::Unsupported)
     }
 
     async fn authenticate(
         &self,
         _options: &AuthenticateOptions,
     ) -> Result<AuthenticationResult, PasskeyError> {
-        Err(PasskeyError::NotSupported)
+        Err(PasskeyError::Unsupported)
     }
 }

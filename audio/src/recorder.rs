@@ -99,7 +99,7 @@ impl AudioBuffer {
 #[derive(Debug, Clone)]
 pub enum RecordError {
     /// Recording is not supported on this platform.
-    NotSupported,
+    Unsupported,
     /// Failed to enumerate input devices.
     EnumerationFailed(String),
     /// Device not found.
@@ -121,7 +121,7 @@ pub enum RecordError {
 impl fmt::Display for RecordError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotSupported => write!(f, "recording not supported on this platform"),
+            Self::Unsupported => write!(f, "recording not supported on this platform"),
             Self::EnumerationFailed(msg) => write!(f, "failed to enumerate devices: {msg}"),
             Self::DeviceNotFound(id) => write!(f, "device not found: {id}"),
             Self::OpenFailed(msg) => write!(f, "failed to open device: {msg}"),

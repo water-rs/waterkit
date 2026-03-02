@@ -43,7 +43,7 @@ mod fallback {
 
     impl CameraInner {
         pub fn list() -> Result<Vec<CameraInfo>, CameraError> {
-            Err(CameraError::NotSupported)
+            Err(CameraError::Unsupported)
         }
 
         pub async fn open(
@@ -52,7 +52,7 @@ mod fallback {
             _device: Arc<wgpu::Device>,
             _queue: Arc<wgpu::Queue>,
         ) -> Result<Self, CameraError> {
-            Err(CameraError::NotSupported)
+            Err(CameraError::Unsupported)
         }
 
         pub fn capabilities(&self) -> &CameraCapabilities {
@@ -83,7 +83,7 @@ mod fallback {
         }
 
         pub fn apply_controls(&mut self, _controls: &CameraControls) -> Result<(), CameraError> {
-            Err(CameraError::NotSupported)
+            Err(CameraError::Unsupported)
         }
 
         pub fn controls(&self) -> &CameraControls {
@@ -108,19 +108,19 @@ mod fallback {
         }
 
         pub async fn capture_photo(&self) -> Result<Photo, CameraError> {
-            Err(CameraError::NotSupported)
+            Err(CameraError::Unsupported)
         }
 
         pub async fn capture_raw_photo(&self) -> Result<RawPhoto, CameraError> {
-            Err(CameraError::NotSupported)
+            Err(CameraError::Unsupported)
         }
 
         pub fn start_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
-            Err(CameraError::NotSupported)
+            Err(CameraError::Unsupported)
         }
 
         pub fn stop_recording(&mut self) -> Result<(), CameraError> {
-            Err(CameraError::NotSupported)
+            Err(CameraError::Unsupported)
         }
 
         pub fn recording_duration(&self) -> Duration {
@@ -128,11 +128,11 @@ mod fallback {
         }
 
         pub fn start_raw_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
-            Err(CameraError::NotSupported)
+            Err(CameraError::Unsupported)
         }
 
         pub fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
-            Err(CameraError::NotSupported)
+            Err(CameraError::Unsupported)
         }
 
         pub fn raw_recording_duration(&self) -> Duration {

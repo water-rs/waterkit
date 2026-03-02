@@ -209,7 +209,7 @@ pub enum MediaCommand {
 pub enum MediaError {
     /// Media control is not supported on this platform.
     #[error("media control not supported on this platform")]
-    NotSupported,
+    Unsupported,
     /// Failed to initialize media session.
     #[error("failed to initialize media session: {0}")]
     InitializationFailed(String),

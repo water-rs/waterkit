@@ -36,7 +36,7 @@ enum RecordingMode {
 mod ffi {
     enum CameraResultFFI {
         Success,
-        NotSupported,
+        Unsupported,
         EnumerationFailed,
         NotFound,
         OpenFailed,
@@ -145,7 +145,7 @@ unsafe extern "C" {
 fn convert_result(result: ffi::CameraResultFFI, context: &str) -> Result<(), CameraError> {
     match result {
         ffi::CameraResultFFI::Success => Ok(()),
-        ffi::CameraResultFFI::NotSupported => Err(CameraError::ControlNotSupported(context.into())),
+        ffi::CameraResultFFI::Unsupported => Err(CameraError::ControlUnsupported(context.into())),
         ffi::CameraResultFFI::EnumerationFailed => {
             Err(CameraError::EnumerationFailed(context.into()))
         }
@@ -191,12 +191,15 @@ extern "C" fn frame_callback(pixelbuffer_handle: u64, width: u32, height: u32, t
             height,
             timestamp_ns,
         };
-        // Non-blocking send - drop frame if consumer is slow
-        if sender.try_send(frame).is_err() {
-            // Release the CVPixelBuffer since we're dropping this frame
-            unsafe {
-                camera_release_pixelbuffer(pixelbuffer_handle);
-            }
+        // Non-blocking send. force_send keeps latency low by replacing stale queued frames.
+        match sender.force_send(frame) {
+            Ok(Some(evicted)) => unsafe {
+                camera_release_pixelbuffer(evicted.pixelbuffer_handle);
+            },
+            Ok(None) => {}
+            Err(error) => unsafe {
+                camera_release_pixelbuffer(error.0.pixelbuffer_handle);
+            },
         }
     } else {
         // No receiver, release immediately
@@ -234,6 +237,16 @@ fn create_texture_from_pixelbuffer(
     width: u32,
     height: u32,
 ) -> Result<wgpu::Texture, CameraError> {
+    struct PixelBufferReadLockGuard(CVPixelBufferRef);
+
+    impl Drop for PixelBufferReadLockGuard {
+        fn drop(&mut self) {
+            unsafe {
+                CVPixelBufferUnlockBaseAddress(self.0, K_CV_PIXEL_BUFFER_LOCK_READ_ONLY);
+            }
+        }
+    }
+
     // Get the CVPixelBuffer pointer
     if pixelbuffer_handle == 0 {
         return Err(CameraError::GpuError("null CVPixelBuffer handle".into()));
@@ -250,21 +263,51 @@ fn create_texture_from_pixelbuffer(
             "failed to lock CVPixelBuffer: {lock_result}"
         )));
     }
+    let _lock_guard = PixelBufferReadLockGuard(pixelbuffer);
 
     // Get CVPixelBuffer properties
     let base_address = unsafe { CVPixelBufferGetBaseAddress(pixelbuffer) };
+    if base_address.is_null() {
+        return Err(CameraError::GpuError(
+            "CVPixelBuffer base address is null".into(),
+        ));
+    }
+
     let bytes_per_row = unsafe { CVPixelBufferGetBytesPerRow(pixelbuffer) };
     #[allow(clippy::cast_possible_truncation)]
     let actual_width = unsafe { CVPixelBufferGetWidth(pixelbuffer) as u32 };
     #[allow(clippy::cast_possible_truncation)]
     let actual_height = unsafe { CVPixelBufferGetHeight(pixelbuffer) as u32 };
 
-    // Use actual dimensions from CVPixelBuffer
-    let width = actual_width.max(width);
-    let height = actual_height.max(height);
+    let width = if actual_width > 0 { actual_width } else { width };
+    let height = if actual_height > 0 {
+        actual_height
+    } else {
+        height
+    };
+    if width == 0 || height == 0 {
+        return Err(CameraError::GpuError(
+            "CVPixelBuffer reported zero dimensions".into(),
+        ));
+    }
+
+    let min_bytes_per_row = usize::try_from(width)
+        .ok()
+        .and_then(|w| w.checked_mul(4))
+        .ok_or_else(|| CameraError::GpuError("frame width overflows row stride".into()))?;
+    if bytes_per_row < min_bytes_per_row {
+        return Err(CameraError::GpuError(format!(
+            "CVPixelBuffer bytes_per_row {bytes_per_row} is smaller than minimum {min_bytes_per_row}"
+        )));
+    }
 
     // Copy pixel data
-    let data_size = bytes_per_row * height as usize;
+    let data_size = bytes_per_row
+        .checked_mul(
+            usize::try_from(height)
+                .map_err(|_| CameraError::GpuError("frame height overflows usize".into()))?,
+        )
+        .ok_or_else(|| CameraError::GpuError("pixel buffer size overflows usize".into()))?;
     let pixel_data = unsafe { std::slice::from_raw_parts(base_address as *const u8, data_size) };
 
     // Create texture
@@ -307,9 +350,6 @@ fn create_texture_from_pixelbuffer(
             depth_or_array_layers: 1,
         },
     );
-
-    // Unlock CVPixelBuffer
-    unsafe { CVPixelBufferUnlockBaseAddress(pixelbuffer, K_CV_PIXEL_BUFFER_LOCK_READ_ONLY) };
 
     Ok(texture)
 }
@@ -376,11 +416,14 @@ impl CameraInner {
         capabilities.validate()?;
 
         // Create frame channel (bounded to prevent unbounded memory growth)
-        let (sender, receiver) = async_channel::bounded(2);
+        let (sender, receiver) = async_channel::bounded(1);
 
         // Store sender for callback dispatch.
         {
             let mut guard = frame_sender_lock();
+            if guard.is_some() {
+                return Err(CameraError::AlreadyInUse);
+            }
             *guard = Some(sender);
         }
 
@@ -390,7 +433,17 @@ impl CameraInner {
         }
 
         // Start streaming immediately (RAII)
-        convert_result(ffi::camera_start(), "start")?;
+        if let Err(error) = convert_result(ffi::camera_start(), "start") {
+            {
+                let mut guard = frame_sender_lock();
+                *guard = None;
+            }
+            unsafe {
+                camera_clear_frame_callback();
+            }
+            let _ = ffi::camera_stop();
+            return Err(error);
+        }
 
         Ok(Self {
             device,
@@ -509,7 +562,7 @@ impl CameraInner {
         // Zoom
         if let Some(zoom) = controls.zoom {
             if self.capabilities.zoom_range.is_none() {
-                return Err(CameraError::ControlNotSupported("zoom".into()));
+                return Err(CameraError::ControlUnsupported("zoom".into()));
             }
             convert_result(ffi::camera_set_zoom(zoom), "zoom")?;
             self.controls.zoom = Some(zoom);
@@ -518,7 +571,7 @@ impl CameraInner {
         // Flash
         if let Some(flash) = controls.flash {
             if !self.capabilities.has_flash && !self.capabilities.has_torch {
-                return Err(CameraError::ControlNotSupported("flash".into()));
+                return Err(CameraError::ControlUnsupported("flash".into()));
             }
             let mode = match flash {
                 FlashMode::Off => 0,
@@ -526,7 +579,7 @@ impl CameraInner {
                 FlashMode::Auto => 2,
                 FlashMode::Torch => {
                     if !self.capabilities.has_torch {
-                        return Err(CameraError::ControlNotSupported("torch".into()));
+                        return Err(CameraError::ControlUnsupported("torch".into()));
                     }
                     convert_result(ffi::camera_set_torch_mode(true), "torch")?;
                     self.controls.flash = Some(flash);
@@ -544,7 +597,7 @@ impl CameraInner {
         // Dynamic range
         if let Some(profile) = controls.dynamic_range {
             if !self.capabilities.dynamic_ranges.contains(&profile) {
-                return Err(CameraError::ControlNotSupported(format!(
+                return Err(CameraError::ControlUnsupported(format!(
                     "dynamic_range.{profile:?}"
                 )));
             }
@@ -565,7 +618,7 @@ impl CameraInner {
                 .stabilization_modes
                 .contains(&stabilization)
             {
-                return Err(CameraError::ControlNotSupported(format!(
+                return Err(CameraError::ControlUnsupported(format!(
                     "stabilization {stabilization:?}"
                 )));
             }
@@ -598,7 +651,7 @@ impl CameraInner {
                         )));
                     }
                 } else {
-                    return Err(CameraError::ControlNotSupported("iso".into()));
+                    return Err(CameraError::ControlUnsupported("iso".into()));
                 }
                 convert_result(ffi::camera_set_iso(iso), "iso")?;
             }
@@ -611,7 +664,7 @@ impl CameraInner {
                         )));
                     }
                 } else {
-                    return Err(CameraError::ControlNotSupported("exposure_duration".into()));
+                    return Err(CameraError::ControlUnsupported("exposure_duration".into()));
                 }
                 #[allow(clippy::cast_possible_truncation)]
                 let duration_ns = duration.as_nanos() as u64;
@@ -624,7 +677,7 @@ impl CameraInner {
 
         if let Some(ev) = exposure.compensation {
             if !self.capabilities.supports_exposure_compensation {
-                return Err(CameraError::ControlNotSupported(
+                return Err(CameraError::ControlUnsupported(
                     "exposure_compensation".into(),
                 ));
             }
@@ -649,7 +702,7 @@ impl CameraInner {
 
         if let Some(distance) = focus.distance.filter(|_| focus.mode == FocusMode::Manual) {
             if !self.capabilities.supports_manual_focus {
-                return Err(CameraError::ControlNotSupported("manual_focus".into()));
+                return Err(CameraError::ControlUnsupported("manual_focus".into()));
             }
             if !(0.0..=1.0).contains(&distance) {
                 return Err(CameraError::ValueOutOfRange(format!(
@@ -698,7 +751,7 @@ impl CameraInner {
 
         if let Some(kelvin) = temperature {
             if !self.capabilities.supports_manual_white_balance {
-                return Err(CameraError::ControlNotSupported(
+                return Err(CameraError::ControlUnsupported(
                     "manual_white_balance".into(),
                 ));
             }
@@ -836,7 +889,7 @@ impl CameraInner {
 
     pub async fn capture_raw_photo(&mut self) -> Result<RawPhoto, CameraError> {
         if !self.capabilities.supports_raw_photo {
-            return Err(CameraError::ControlNotSupported("raw_photo".into()));
+            return Err(CameraError::ControlUnsupported("raw_photo".into()));
         }
         convert_result(ffi::camera_take_raw_photo(), "take_raw_photo")?;
 
@@ -895,7 +948,7 @@ impl CameraInner {
 
     pub fn start_raw_recording(&mut self, path: &Path) -> Result<(), CameraError> {
         if !self.capabilities.supports_raw_video {
-            return Err(CameraError::ControlNotSupported("raw_video".into()));
+            return Err(CameraError::ControlUnsupported("raw_video".into()));
         }
         if self.recording_mode.is_some() {
             return Err(CameraError::AlreadyInUse);

@@ -536,10 +536,10 @@ func camera_set_exposure_mode(mode: UInt8) -> CameraResultFFI {
     case 0: avMode = .continuousAutoExposure
     case 1: avMode = .custom
     case 2: avMode = .locked
-    default: return .NotSupported
+    default: return .Unsupported
     }
 
-    guard device.isExposureModeSupported(avMode) else { return .NotSupported }
+    guard device.isExposureModeSupported(avMode) else { return .Unsupported }
 
     do {
         try device.lockForConfiguration()
@@ -550,7 +550,7 @@ func camera_set_exposure_mode(mode: UInt8) -> CameraResultFFI {
         return .OpenFailed
     }
     #else
-    return .NotSupported
+    return .Unsupported
     #endif
 }
 
@@ -570,7 +570,7 @@ func camera_set_iso(iso: Float) -> CameraResultFFI {
         return .OpenFailed
     }
     #else
-    return .NotSupported
+    return .Unsupported
     #endif
 }
 
@@ -598,7 +598,7 @@ func camera_set_exposure_duration_ns(duration_ns: UInt64) -> CameraResultFFI {
         return .OpenFailed
     }
     #else
-    return .NotSupported
+    return .Unsupported
     #endif
 }
 
@@ -617,7 +617,7 @@ func camera_set_exposure_compensation(ev: Float) -> CameraResultFFI {
         return .OpenFailed
     }
     #else
-    return .NotSupported
+    return .Unsupported
     #endif
 }
 
@@ -632,10 +632,10 @@ func camera_set_focus_mode(mode: UInt8) -> CameraResultFFI {
     case 1: avMode = .autoFocus
     case 2: avMode = .locked
     case 3: avMode = .locked
-    default: return .NotSupported
+    default: return .Unsupported
     }
 
-    guard device.isFocusModeSupported(avMode) else { return .NotSupported }
+    guard device.isFocusModeSupported(avMode) else { return .Unsupported }
 
     do {
         try device.lockForConfiguration()
@@ -650,7 +650,7 @@ func camera_set_focus_mode(mode: UInt8) -> CameraResultFFI {
 func camera_set_focus_distance(distance: Float) -> CameraResultFFI {
     #if os(iOS)
     guard let device = currentDevice else { return .OpenFailed }
-    guard device.isLockingFocusWithCustomLensPositionSupported else { return .NotSupported }
+    guard device.isLockingFocusWithCustomLensPositionSupported else { return .Unsupported }
 
     let clampedDistance = max(0.0, min(1.0, distance))
 
@@ -663,13 +663,13 @@ func camera_set_focus_distance(distance: Float) -> CameraResultFFI {
         return .OpenFailed
     }
     #else
-    return .NotSupported
+    return .Unsupported
     #endif
 }
 
 func camera_set_focus_point(x: Float, y: Float) -> CameraResultFFI {
     guard let device = currentDevice else { return .OpenFailed }
-    guard device.isFocusPointOfInterestSupported else { return .NotSupported }
+    guard device.isFocusPointOfInterestSupported else { return .Unsupported }
 
     let point = CGPoint(x: CGFloat(x), y: CGFloat(y))
 
@@ -696,7 +696,7 @@ func camera_set_white_balance_mode(mode: UInt8) -> CameraResultFFI {
     default: avMode = .continuousAutoWhiteBalance
     }
 
-    guard device.isWhiteBalanceModeSupported(avMode) else { return .NotSupported }
+    guard device.isWhiteBalanceModeSupported(avMode) else { return .Unsupported }
 
     do {
         try device.lockForConfiguration()
@@ -734,7 +734,7 @@ func camera_set_white_balance_temperature(kelvin: UInt32) -> CameraResultFFI {
         return .OpenFailed
     }
     #else
-    return .NotSupported
+    return .Unsupported
     #endif
 }
 
@@ -757,7 +757,7 @@ func camera_set_zoom(factor: Float) -> CameraResultFFI {
     }
     #else
     // macOS doesn't support videoZoomFactor
-    return .NotSupported
+    return .Unsupported
     #endif
 }
 
@@ -779,7 +779,7 @@ func camera_set_flash_mode(mode: UInt8) -> CameraResultFFI {
 
 func camera_set_torch_mode(enabled: Bool) -> CameraResultFFI {
     guard let device = currentDevice else { return .OpenFailed }
-    guard device.hasTorch else { return .NotSupported }
+    guard device.hasTorch else { return .Unsupported }
 
     do {
         try device.lockForConfiguration()
@@ -804,7 +804,7 @@ func camera_set_dynamic_range(profile: UInt8) -> CameraResultFFI {
     }
 
     if profile == 3 && !cachedSupportsDolbyVision {
-        return .NotSupported
+        return .Unsupported
     }
 
     let enableHdr: Bool
@@ -813,11 +813,11 @@ func camera_set_dynamic_range(profile: UInt8) -> CameraResultFFI {
         enableHdr = false
     case 1, 2, 3:
         if !device.activeFormat.isVideoHDRSupported {
-            return .NotSupported
+            return .Unsupported
         }
         enableHdr = true
     default:
-        return .NotSupported
+        return .Unsupported
     }
 
     do {
@@ -830,7 +830,7 @@ func camera_set_dynamic_range(profile: UInt8) -> CameraResultFFI {
         return .OpenFailed
     }
     #else
-    return .NotSupported
+    return .Unsupported
     #endif
 }
 
@@ -856,15 +856,15 @@ func camera_set_stabilization_mode(mode: UInt8) -> CameraResultFFI {
     case 0: avMode = .off
     case 1: avMode = .standard
     case 2: avMode = .cinematic
-    default: return .NotSupported
+    default: return .Unsupported
     }
 
-    guard connection.isVideoStabilizationSupported else { return .NotSupported }
+    guard connection.isVideoStabilizationSupported else { return .Unsupported }
     connection.preferredVideoStabilizationMode = avMode
 
     return .Success
     #else
-    return .NotSupported
+    return .Unsupported
     #endif
 }
 
@@ -887,7 +887,7 @@ class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
 
 func camera_take_photo() -> CameraResultFFI {
     guard let output = photoOutput else {
-        return .NotSupported
+        return .Unsupported
     }
 
     let settings: AVCapturePhotoSettings
@@ -934,10 +934,10 @@ func camera_get_photo_len() -> Int32 {
 func camera_take_raw_photo() -> CameraResultFFI {
     #if os(iOS)
     guard let output = photoOutput else {
-        return .NotSupported
+        return .Unsupported
     }
     guard let rawFormat = output.availableRawPhotoPixelFormatTypes.first else {
-        return .NotSupported
+        return .Unsupported
     }
 
     let settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
@@ -964,7 +964,7 @@ func camera_take_raw_photo() -> CameraResultFFI {
     rawPhotoLock.unlock()
     return .Success
     #else
-    return .NotSupported
+    return .Unsupported
     #endif
 }
 
@@ -1011,7 +1011,7 @@ private let recordingDelegate = MovieRecordingDelegate()
 
 func camera_start_recording(path: RustString) -> CameraResultFFI {
     guard let output = movieOutput else {
-        return .NotSupported
+        return .Unsupported
     }
 
     let url = URL(fileURLWithPath: path.toString())
@@ -1026,7 +1026,7 @@ func camera_start_recording(path: RustString) -> CameraResultFFI {
 
 func camera_stop_recording() -> CameraResultFFI {
     guard let output = movieOutput else {
-        return .NotSupported
+        return .Unsupported
     }
 
     if output.isRecording {

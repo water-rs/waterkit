@@ -1,8 +1,17 @@
-//! AV1 software encoding (rav1e) and decoding (dav1d).
+//! AV1 software encoding (rav1e) and decoding (rav1d).
 
 use crate::CodecError;
+use rav1d::include::dav1d::data::Dav1dData;
+use rav1d::include::dav1d::dav1d::{Dav1dContext, Dav1dSettings};
+use rav1d::include::dav1d::headers::DAV1D_PIXEL_LAYOUT_I420;
+use rav1d::include::dav1d::picture::Dav1dPicture;
+use rav1d::src::lib as rav1d_lib;
 use rav1e::prelude::*;
 use std::fmt;
+use std::io::ErrorKind;
+use std::mem::MaybeUninit;
+use std::ptr::NonNull;
+use std::{ptr, slice};
 
 /// CPU-side frame data for software codec output (NV12 format).
 pub struct CpuFrame {
@@ -121,9 +130,9 @@ impl Av1Encoder {
     }
 }
 
-/// AV1 software decoder using dav1d.
+/// AV1 software decoder using rav1d.
 pub struct Av1Decoder {
-    dec: dav1d::Decoder,
+    ctx: Option<Dav1dContext>,
 }
 
 unsafe impl Send for Av1Decoder {}
@@ -137,61 +146,110 @@ impl fmt::Debug for Av1Decoder {
 
 impl Av1Decoder {
     pub fn new() -> Result<Self, CodecError> {
-        let settings = dav1d::Settings::new();
-        let dec = dav1d::Decoder::with_settings(&settings)
-            .map_err(|e| CodecError::InitializationFailed(format!("dav1d init failed: {e:?}")))?;
-
-        Ok(Self { dec })
+        let mut settings = MaybeUninit::<Dav1dSettings>::uninit();
+        unsafe {
+            rav1d_lib::dav1d_default_settings(NonNull::from(&mut settings).cast());
+        }
+        let mut settings = unsafe { settings.assume_init() };
+        let mut ctx = None;
+        let status = unsafe {
+            rav1d_lib::dav1d_open(
+                Some(NonNull::from(&mut ctx)),
+                Some(NonNull::from(&mut settings)),
+            )
+        };
+        if status.0 != 0 {
+            return Err(CodecError::InitializationFailed(format!(
+                "rav1d open failed with code {}",
+                status.0
+            )));
+        }
+        Ok(Self { ctx })
     }
 
     /// Decode AV1 data to NV12 frames.
     pub fn decode(&mut self, data: &[u8]) -> Result<Vec<CpuFrame>, CodecError> {
-        self.dec
-            .send_data(data.to_vec(), None, None, None)
-            .map_err(|e| CodecError::DecodingFailed(format!("dav1d send_data failed: {e:?}")))?;
+        let mut input = Dav1dData::default();
+        let input_ptr =
+            unsafe { rav1d_lib::dav1d_data_create(Some(NonNull::from(&mut input)), data.len()) };
+        if input_ptr.is_null() {
+            return Err(CodecError::DecodingFailed(
+                "rav1d data_create returned null".to_string(),
+            ));
+        }
+        unsafe {
+            ptr::copy_nonoverlapping(data.as_ptr(), input_ptr, data.len());
+        }
+        let send_status =
+            unsafe { rav1d_lib::dav1d_send_data(self.ctx, Some(NonNull::from(&mut input))) };
+        if send_status.0 != 0 {
+            unsafe { rav1d_lib::dav1d_data_unref(Some(NonNull::from(&mut input))) };
+            return Err(CodecError::DecodingFailed(format!(
+                "rav1d send_data failed with code {}",
+                send_status.0
+            )));
+        }
 
         let mut frames = Vec::new();
-
         loop {
-            match self.dec.get_picture() {
-                Ok(pic) => {
-                    let width = pic.width();
-                    let height = pic.height();
-
-                    // Convert I420 to NV12 (just interleave UV)
-                    let nv12 = Self::i420_to_nv12(&pic);
-
-                    frames.push(CpuFrame {
-                        data: nv12,
-                        width,
-                        height,
-                        timestamp_ns: 0,
-                    });
-                }
-                Err(dav1d::Error::Again) => break,
-                Err(e) => {
-                    return Err(CodecError::DecodingFailed(format!(
-                        "dav1d get_picture failed: {e:?}"
-                    )));
-                }
+            let mut picture = Dav1dPicture::default();
+            let status = unsafe {
+                rav1d_lib::dav1d_get_picture(self.ctx, Some(NonNull::from(&mut picture)))
+            };
+            if status.0 == 0 {
+                let frame = Self::picture_to_cpu_frame(&picture);
+                unsafe { rav1d_lib::dav1d_picture_unref(Some(NonNull::from(&mut picture))) };
+                frames.push(frame?);
+                continue;
             }
+            if status.0 < 0
+                && std::io::Error::from_raw_os_error(-status.0).kind() == ErrorKind::WouldBlock
+            {
+                break;
+            }
+            return Err(CodecError::DecodingFailed(format!(
+                "rav1d get_picture failed with code {}",
+                status.0
+            )));
         }
 
         Ok(frames)
     }
 
-    /// Convert I420 to NV12 (interleave UV planes).
-    fn i420_to_nv12(pic: &dav1d::Picture) -> Vec<u8> {
-        let width = pic.width() as usize;
-        let height = pic.height() as usize;
-
-        let y_stride = pic.stride(dav1d::PlanarImageComponent::Y) as usize;
-        let u_stride = pic.stride(dav1d::PlanarImageComponent::U) as usize;
-        let v_stride = pic.stride(dav1d::PlanarImageComponent::V) as usize;
-
-        let y_plane = pic.plane(dav1d::PlanarImageComponent::Y);
-        let u_plane = pic.plane(dav1d::PlanarImageComponent::U);
-        let v_plane = pic.plane(dav1d::PlanarImageComponent::V);
+    fn picture_to_cpu_frame(picture: &Dav1dPicture) -> Result<CpuFrame, CodecError> {
+        let width = usize::try_from(picture.p.w).map_err(|_| {
+            CodecError::DecodingFailed(format!("rav1d returned invalid width {}", picture.p.w))
+        })?;
+        let height = usize::try_from(picture.p.h).map_err(|_| {
+            CodecError::DecodingFailed(format!("rav1d returned invalid height {}", picture.p.h))
+        })?;
+        if picture.p.layout != DAV1D_PIXEL_LAYOUT_I420 {
+            return Err(CodecError::DecodingFailed(format!(
+                "rav1d returned unsupported pixel layout {}",
+                picture.p.layout
+            )));
+        }
+        if picture.p.bpc != 8 {
+            return Err(CodecError::DecodingFailed(format!(
+                "rav1d returned unsupported bit depth {}",
+                picture.p.bpc
+            )));
+        }
+        let y_stride = usize::try_from(picture.stride[0]).map_err(|_| {
+            CodecError::DecodingFailed(format!(
+                "rav1d returned invalid Y stride {}",
+                picture.stride[0]
+            ))
+        })?;
+        let uv_stride = usize::try_from(picture.stride[1]).map_err(|_| {
+            CodecError::DecodingFailed(format!(
+                "rav1d returned invalid UV stride {}",
+                picture.stride[1]
+            ))
+        })?;
+        let y_ptr = Self::plane_ptr(picture, 0, "Y")?;
+        let u_ptr = Self::plane_ptr(picture, 1, "U")?;
+        let v_ptr = Self::plane_ptr(picture, 2, "V")?;
 
         let y_size = width * height;
         let uv_size = width * (height / 2); // Interleaved UV
@@ -199,19 +257,45 @@ impl Av1Decoder {
 
         // Copy Y plane (remove stride padding)
         for row in 0..height {
-            nv12.extend_from_slice(&y_plane[row * y_stride..row * y_stride + width]);
+            let src = unsafe { y_ptr.add(row * y_stride) };
+            let row_bytes = unsafe { slice::from_raw_parts(src, width) };
+            nv12.extend_from_slice(row_bytes);
         }
 
         // Interleave U and V planes
         let uv_width = width / 2;
         let uv_height = height / 2;
         for row in 0..uv_height {
+            let u_row = unsafe { slice::from_raw_parts(u_ptr.add(row * uv_stride), uv_width) };
+            let v_row = unsafe { slice::from_raw_parts(v_ptr.add(row * uv_stride), uv_width) };
             for col in 0..uv_width {
-                nv12.push(u_plane[row * u_stride + col]);
-                nv12.push(v_plane[row * v_stride + col]);
+                nv12.push(u_row[col]);
+                nv12.push(v_row[col]);
             }
         }
 
-        nv12
+        Ok(CpuFrame {
+            data: nv12,
+            width: width as u32,
+            height: height as u32,
+            timestamp_ns: 0,
+        })
+    }
+
+    fn plane_ptr(
+        picture: &Dav1dPicture,
+        index: usize,
+        name: &'static str,
+    ) -> Result<*const u8, CodecError> {
+        let plane = picture.data[index].ok_or_else(|| {
+            CodecError::DecodingFailed(format!("rav1d returned missing {name} plane"))
+        })?;
+        Ok(plane.cast::<u8>().as_ptr().cast_const())
+    }
+}
+
+impl Drop for Av1Decoder {
+    fn drop(&mut self) {
+        unsafe { rav1d_lib::dav1d_close(Some(NonNull::from(&mut self.ctx))) };
     }
 }

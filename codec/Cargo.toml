@@ -20,7 +20,7 @@ half = "2"
 # Only enabled on desktop platforms - mobile has hardware codecs
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 rav1e = { workspace = true, optional = true }
-dav1d = { workspace = true, optional = true }
+rav1d = { workspace = true, optional = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2.workspace = true
@@ -45,7 +45,7 @@ ffmpeg-next = "7"
 
 [features]
 default = ["software-fallback"]
-software-fallback = ["dep:rav1e", "dep:dav1d"]
+software-fallback = ["dep:rav1e", "dep:rav1d"]
 
 [lints]
 workspace = true

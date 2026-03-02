@@ -26,18 +26,25 @@ fn load_callbacks() -> &'static Mutex<HashMap<u64, oneshot::Sender<Option<String
     LOCK.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn open_file_callbacks() -> &'static Mutex<HashMap<u64, oneshot::Sender<Option<String>>>> {
+    static LOCK: OnceLock<Mutex<HashMap<u64, oneshot::Sender<Option<String>>>>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 #[swift_bridge::bridge]
 mod ffi {
     extern "Swift" {
         fn show_alert_bridge(title: &str, message: &str, type_str: &str, cb_id: u64);
         fn show_confirm_bridge(title: &str, message: &str, type_str: &str, cb_id: u64);
         fn show_photo_picker_bridge(media_type: &str, cb_id: u64);
+        fn show_open_file_bridge(extensions_csv: &str, cb_id: u64);
         fn load_media_bridge(handle_id: u64, cb_id: u64);
     }
 
     extern "Rust" {
         fn on_dialog_result(cb_id: u64, result: bool);
         fn on_photo_picker_result(cb_id: u64, handle_id: Option<u64>);
+        fn on_open_file_result(cb_id: u64, path: Option<String>);
         fn on_load_media_result(cb_id: u64, path: Option<String>);
     }
 }
@@ -60,6 +67,14 @@ fn on_photo_picker_result(cb_id: u64, handle_id: Option<u64>) {
 
 fn on_load_media_result(cb_id: u64, path: Option<String>) {
     if let Ok(mut map) = load_callbacks().lock()
+        && let Some(tx) = map.remove(&cb_id)
+    {
+        let _ = tx.send(path);
+    }
+}
+
+fn on_open_file_result(cb_id: u64, path: Option<String>) {
+    if let Ok(mut map) = open_file_callbacks().lock()
         && let Some(tx) = map.remove(&cb_id)
     {
         let _ = tx.send(path);
@@ -127,6 +142,38 @@ pub async fn show_photo_picker(
     ffi::show_photo_picker_bridge(media_type, id);
 
     rx.await.map_err(|_| DialogError::Cancelled)
+}
+
+pub async fn show_open_single_file(
+    dialog: crate::FileDialog,
+) -> Result<Option<std::path::PathBuf>, DialogError> {
+    let (tx, rx) = oneshot::channel();
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+
+    open_file_callbacks()
+        .lock()
+        .map_err(|_| DialogError::PlatformError("dialog callback registry poisoned".into()))?
+        .insert(id, tx);
+
+    let mut extensions = Vec::new();
+    for (_, filter_extensions) in dialog.filters {
+        for ext in filter_extensions {
+            let normalized = ext.trim().trim_start_matches('.').to_ascii_lowercase();
+            if normalized.is_empty() {
+                continue;
+            }
+            if !extensions
+                .iter()
+                .any(|existing: &String| existing == &normalized)
+            {
+                extensions.push(normalized);
+            }
+        }
+    }
+
+    ffi::show_open_file_bridge(&extensions.join(","), id);
+    let path = rx.await.map_err(|_| DialogError::Cancelled)?;
+    Ok(path.map(std::path::PathBuf::from))
 }
 
 pub async fn load_media(handle: Selection) -> Result<std::path::PathBuf, DialogError> {

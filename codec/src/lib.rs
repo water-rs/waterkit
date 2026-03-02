@@ -53,7 +53,7 @@ mod software;
 mod sys;
 
 pub use frame::{DecodedFrame, GpuFrame, YuvConverter};
-pub use image::{DecodedImage, DecodedPixelFormat, decode_image};
+pub use image::{DecodedImage, DecodedPixelFormat, decode_image, decode_image_platform};
 
 use std::vec::IntoIter;
 use thiserror::Error;

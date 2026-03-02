@@ -22,7 +22,14 @@ pub async fn show_share_sheet(sheet: ShareSheet) -> Result<ShareResult, ShareErr
                     .map_err(|e| ShareError::PlatformError(e.to_string()))?;
                 return Ok(ShareResult::Shared);
             }
-            ShareItem::Text(_) => {}
+            ShareItem::Text(text) => {
+                let mailto = crate::mailto_url(sheet.subject.as_deref(), text);
+                std::process::Command::new("xdg-open")
+                    .arg(mailto)
+                    .spawn()
+                    .map_err(|e| ShareError::PlatformError(e.to_string()))?;
+                return Ok(ShareResult::Shared);
+            }
         }
     }
     Err(ShareError::NotSupported)

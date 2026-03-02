@@ -191,6 +191,7 @@ impl Av1Decoder {
         }
 
         let mut frames = Vec::new();
+        let mut saw_would_block_once = false;
         loop {
             let mut picture = Dav1dPicture::default();
             let status = unsafe {
@@ -200,12 +201,19 @@ impl Av1Decoder {
                 let frame = Self::picture_to_cpu_frame(&picture);
                 unsafe { rav1d_lib::dav1d_picture_unref(Some(NonNull::from(&mut picture))) };
                 frames.push(frame?);
+                saw_would_block_once = false;
                 continue;
             }
             if status.0 < 0
                 && std::io::Error::from_raw_os_error(-status.0).kind() == ErrorKind::WouldBlock
             {
-                break;
+                if saw_would_block_once {
+                    break;
+                }
+                // `dav1d` may require one extra poll after the first EAGAIN to drain
+                // frames that became available during internal scheduling.
+                saw_would_block_once = true;
+                continue;
             }
             return Err(CodecError::DecodingFailed(format!(
                 "rav1d get_picture failed with code {}",
@@ -229,7 +237,13 @@ impl Av1Decoder {
                 picture.p.layout
             )));
         }
-        if picture.p.bpc != 8 {
+        let bit_depth = usize::try_from(picture.p.bpc).map_err(|_| {
+            CodecError::DecodingFailed(format!(
+                "rav1d returned invalid bit depth {}",
+                picture.p.bpc
+            ))
+        })?;
+        if !(8..=16).contains(&bit_depth) {
             return Err(CodecError::DecodingFailed(format!(
                 "rav1d returned unsupported bit depth {}",
                 picture.p.bpc
@@ -251,26 +265,69 @@ impl Av1Decoder {
         let u_ptr = Self::plane_ptr(picture, 1, "U")?;
         let v_ptr = Self::plane_ptr(picture, 2, "V")?;
 
+        let sample_bytes = if bit_depth <= 8 { 1 } else { 2 };
+        let uv_width = width.div_ceil(2);
+        let uv_height = height.div_ceil(2);
         let y_size = width * height;
-        let uv_size = width * (height / 2); // Interleaved UV
+        let uv_size = uv_width * uv_height * 2; // Interleaved UV
         let mut nv12 = Vec::with_capacity(y_size + uv_size);
 
-        // Copy Y plane (remove stride padding)
-        for row in 0..height {
-            let src = unsafe { y_ptr.add(row * y_stride) };
-            let row_bytes = unsafe { slice::from_raw_parts(src, width) };
-            nv12.extend_from_slice(row_bytes);
+        let y_min_stride = width
+            .checked_mul(sample_bytes)
+            .ok_or_else(|| CodecError::DecodingFailed("rav1d Y stride overflow".to_string()))?;
+        if y_stride < y_min_stride {
+            return Err(CodecError::DecodingFailed(format!(
+                "rav1d Y stride {} is smaller than required {}",
+                y_stride, y_min_stride
+            )));
+        }
+        let uv_min_stride = uv_width
+            .checked_mul(sample_bytes)
+            .ok_or_else(|| CodecError::DecodingFailed("rav1d UV stride overflow".to_string()))?;
+        if uv_stride < uv_min_stride {
+            return Err(CodecError::DecodingFailed(format!(
+                "rav1d UV stride {} is smaller than required {}",
+                uv_stride, uv_min_stride
+            )));
         }
 
-        // Interleave U and V planes
-        let uv_width = width / 2;
-        let uv_height = height / 2;
-        for row in 0..uv_height {
-            let u_row = unsafe { slice::from_raw_parts(u_ptr.add(row * uv_stride), uv_width) };
-            let v_row = unsafe { slice::from_raw_parts(v_ptr.add(row * uv_stride), uv_width) };
-            for col in 0..uv_width {
-                nv12.push(u_row[col]);
-                nv12.push(v_row[col]);
+        if bit_depth == 8 {
+            for row in 0..height {
+                let src = unsafe { y_ptr.add(row * y_stride) };
+                let row_bytes = unsafe { slice::from_raw_parts(src, width) };
+                nv12.extend_from_slice(row_bytes);
+            }
+            for row in 0..uv_height {
+                let u_row = unsafe { slice::from_raw_parts(u_ptr.add(row * uv_stride), uv_width) };
+                let v_row = unsafe { slice::from_raw_parts(v_ptr.add(row * uv_stride), uv_width) };
+                for col in 0..uv_width {
+                    nv12.push(u_row[col]);
+                    nv12.push(v_row[col]);
+                }
+            }
+        } else {
+            let shift = bit_depth - 8;
+            for row in 0..height {
+                let src = unsafe { y_ptr.add(row * y_stride) };
+                let row_bytes = unsafe { slice::from_raw_parts(src, y_min_stride) };
+                for col in 0..width {
+                    let i = col * 2;
+                    let value = u16::from_ne_bytes([row_bytes[i], row_bytes[i + 1]]);
+                    nv12.push((value >> shift) as u8);
+                }
+            }
+            for row in 0..uv_height {
+                let u_row =
+                    unsafe { slice::from_raw_parts(u_ptr.add(row * uv_stride), uv_min_stride) };
+                let v_row =
+                    unsafe { slice::from_raw_parts(v_ptr.add(row * uv_stride), uv_min_stride) };
+                for col in 0..uv_width {
+                    let i = col * 2;
+                    let u = u16::from_ne_bytes([u_row[i], u_row[i + 1]]);
+                    let v = u16::from_ne_bytes([v_row[i], v_row[i + 1]]);
+                    nv12.push((u >> shift) as u8);
+                    nv12.push((v >> shift) as u8);
+                }
             }
         }
 

@@ -2,6 +2,7 @@ import Foundation
 #if os(iOS)
 import UIKit
 import PhotosUI
+import UniformTypeIdentifiers
 #elseif os(macOS)
 import AppKit
 #endif
@@ -87,6 +88,7 @@ private func getTopViewController() -> UIViewController? {
 private var activeDelegates: [UInt64: Any] = [:]
 // Keep providers alive for handles
 private var activeProviders: [UInt64: NSItemProvider] = [:]
+private var activeFilePickerDelegates: [UInt64: Any] = [:]
 private var nextHandleId: UInt64 = 1
 
 func show_photo_picker_bridge(media_type: RustStr, cb_id: UInt64) {
@@ -120,6 +122,39 @@ func show_photo_picker_bridge(media_type: RustStr, cb_id: UInt64) {
     }
 }
 
+func show_open_file_bridge(extensions_csv: RustStr, cb_id: UInt64) {
+    let extensions = extensions_csv
+        .toString()
+        .split(separator: ",")
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        .filter { !$0.isEmpty }
+
+    DispatchQueue.main.async {
+        guard let topVC = getTopViewController() else {
+            on_open_file_result(cb_id, nil)
+            return
+        }
+
+        let documentTypes: [String]
+        if #available(iOS 14.0, *) {
+            let mapped = extensions.compactMap { ext in
+                UTType(filenameExtension: ext)?.identifier
+            }
+            documentTypes = mapped.isEmpty ? [UTType.item.identifier] : mapped
+        } else {
+            documentTypes = ["public.data"]
+        }
+
+        let delegate = FilePickerDelegate(cbId: cb_id)
+        activeFilePickerDelegates[cb_id] = delegate
+
+        let picker = UIDocumentPickerViewController(documentTypes: documentTypes, in: .import)
+        picker.delegate = delegate
+        picker.allowsMultipleSelection = false
+        topVC.present(picker, animated: true)
+    }
+}
+
 func load_media_bridge(handle_id: UInt64, cb_id: UInt64) {
     DispatchQueue.main.async {
         guard let provider = activeProviders[handle_id] else {
@@ -147,22 +182,31 @@ private func loadFile(_ provider: NSItemProvider, type: String, cb_id: UInt64) {
             on_load_media_result(cb_id, nil)
             return
         }
-        
-        // Copy to tmp
-        let tmpDir = FileManager.default.temporaryDirectory
-        let fileName = UUID().uuidString + "." + url.pathExtension
-        let dstUrl = tmpDir.appendingPathComponent(fileName)
-        
-        do {
-            if FileManager.default.fileExists(atPath: dstUrl.path) {
-                try FileManager.default.removeItem(at: dstUrl)
-            }
-            try FileManager.default.copyItem(at: url, to: dstUrl)
-            on_load_media_result(cb_id, dstUrl.path)
-        } catch {
-            print("Error copying file: \(error)")
-            on_load_media_result(cb_id, nil)
+
+        on_load_media_result(cb_id, copyToTemporaryLocation(url))
+    }
+}
+
+private func copyToTemporaryLocation(_ sourceUrl: URL) -> String? {
+    let hasScopedAccess = sourceUrl.startAccessingSecurityScopedResource()
+    defer {
+        if hasScopedAccess {
+            sourceUrl.stopAccessingSecurityScopedResource()
         }
+    }
+
+    let tmpDir = FileManager.default.temporaryDirectory
+    let extensionSuffix = sourceUrl.pathExtension.isEmpty ? "" : ".\(sourceUrl.pathExtension)"
+    let dstUrl = tmpDir.appendingPathComponent(UUID().uuidString + extensionSuffix)
+
+    do {
+        if FileManager.default.fileExists(atPath: dstUrl.path) {
+            try FileManager.default.removeItem(at: dstUrl)
+        }
+        try FileManager.default.copyItem(at: sourceUrl, to: dstUrl)
+        return dstUrl.path
+    } catch {
+        return nil
     }
 }
 
@@ -191,6 +235,34 @@ class PhotoPickerDelegate: NSObject, PHPickerViewControllerDelegate {
         activeProviders[handleId] = result.itemProvider
         
         on_photo_picker_result(cb_id, handleId)
+    }
+}
+
+final class FilePickerDelegate: NSObject, UIDocumentPickerDelegate {
+    let cbId: UInt64
+
+    init(cbId: UInt64) {
+        self.cbId = cbId
+    }
+
+    private func finish(_ path: String?) {
+        on_open_file_result(cbId, path)
+        activeFilePickerDelegates.removeValue(forKey: cbId)
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        finish(nil)
+    }
+
+    func documentPicker(
+        _ controller: UIDocumentPickerViewController,
+        didPickDocumentsAt urls: [URL]
+    ) {
+        guard let first = urls.first else {
+            finish(nil)
+            return
+        }
+        finish(copyToTemporaryLocation(first))
     }
 }
 #endif

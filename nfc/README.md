@@ -18,8 +18,8 @@ Part of the [Waterkit](https://github.com/water-rs/waterkit) ecosystem.
 | iOS      | Native (CoreNFC via Swift bridge) |
 | macOS    | Not available (no NFC hardware) |
 | Android  | Native (NfcAdapter via JNI/Kotlin) |
-| Windows  | Not supported (backend pending) |
-| Linux    | Not supported (backend pending) |
+| Windows  | Native (Windows Proximity API) |
+| Linux    | Native (neard via D-Bus) |
 
 ## Usage
 

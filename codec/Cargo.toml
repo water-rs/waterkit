@@ -16,11 +16,16 @@ wgpu.workspace = true
 image.workspace = true
 half = "2"
 
+[build-dependencies]
+waterkit-build.workspace = true
+
 # Software fallback codecs (private, not exposed in public API)
 # Only enabled on desktop platforms - mobile has hardware codecs
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 rav1e = { workspace = true, optional = true }
 rav1d = { workspace = true, optional = true }
+avif-parse = { version = "1.4", optional = true }
+yuv = { version = "0.8.11", optional = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2.workspace = true
@@ -31,6 +36,7 @@ objc2-core-foundation.workspace = true
 objc2-foundation.workspace = true
 objc2-io-surface.workspace = true
 metal.workspace = true
+swift-bridge.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 ndk = { version = "0.9", features = ["media", "api-level-29"] }
@@ -45,7 +51,7 @@ cros-codecs = { version = "0.0.6", default-features = false, features = ["vaapi"
 
 [features]
 default = ["software-fallback"]
-software-fallback = ["dep:rav1e", "dep:rav1d"]
+software-fallback = ["dep:rav1e", "dep:rav1d", "dep:avif-parse", "dep:yuv"]
 
 [lints]
 workspace = true

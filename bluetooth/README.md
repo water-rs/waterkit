@@ -20,6 +20,8 @@ Part of the [Waterkit](https://github.com/water-rs/waterkit) ecosystem.
 | Windows  | Native (Windows.Devices.Bluetooth) |
 | Linux    | D-Bus (BlueZ) |
 
+Linux SPP note: RFCOMM channel discovery uses `sdptool` from BlueZ userspace tools.
+
 ## Usage
 
 ```rust

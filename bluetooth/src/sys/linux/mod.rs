@@ -3,7 +3,11 @@ use crate::{
     DeviceId, GattCharacteristic, GattService, ScanFilter, ScanResult, Uuid,
 };
 use futures::StreamExt;
+use futures::channel::oneshot;
 use std::collections::HashMap;
+use std::sync::Mutex;
+use std::thread::JoinHandle;
+use std::time::Duration;
 use zbus::Connection;
 use zbus::names::InterfaceName;
 use zbus::zvariant::{Array, OwnedValue};
@@ -14,8 +18,111 @@ const ADAPTER_IFACE: &str = "org.bluez.Adapter1";
 const DEVICE_IFACE: &str = "org.bluez.Device1";
 const GATT_SERVICE_IFACE: &str = "org.bluez.GattService1";
 const GATT_CHAR_IFACE: &str = "org.bluez.GattCharacteristic1";
+const BTPROTO_RFCOMM: i32 = 3;
 type OwnedPropertyMap = HashMap<String, OwnedValue>;
 type SignalPropertyMap<'a> = HashMap<&'a str, zbus::zvariant::Value<'a>>;
+
+#[repr(C)]
+struct SockAddrRc {
+    rc_family: libc::sa_family_t,
+    rc_bdaddr: [u8; 6],
+    rc_channel: u8,
+}
+
+fn parse_device_address(addr: &str) -> Result<[u8; 6], BluetoothError> {
+    let parts: Vec<&str> = addr.split(':').collect();
+    if parts.len() != 6 {
+        return Err(BluetoothError::ConnectionFailed(format!(
+            "invalid Bluetooth address format: {addr}"
+        )));
+    }
+    let mut parsed = [0u8; 6];
+    for (index, part) in parts.iter().rev().enumerate() {
+        parsed[index] = u8::from_str_radix(part, 16).map_err(|error| {
+            BluetoothError::ConnectionFailed(format!(
+                "invalid Bluetooth address byte '{part}' in {addr}: {error}"
+            ))
+        })?;
+    }
+    Ok(parsed)
+}
+
+fn resolve_rfcomm_channel(device_id: &str, uuid: &str) -> Result<u8, BluetoothError> {
+    let output = std::process::Command::new("sdptool")
+        .args(["search", "--bdaddr", device_id, uuid])
+        .output()
+        .map_err(|error| {
+            BluetoothError::ConnectionFailed(format!(
+                "failed to execute sdptool for RFCOMM discovery: {error}"
+            ))
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(BluetoothError::ConnectionFailed(format!(
+            "sdptool failed during RFCOMM discovery: {stderr}"
+        )));
+    }
+    let stdout = String::from_utf8(output.stdout).map_err(|error| {
+        BluetoothError::ConnectionFailed(format!("sdptool output is not valid UTF-8: {error}"))
+    })?;
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("Channel:") {
+            continue;
+        }
+        let channel = trimmed
+            .split(':')
+            .nth(1)
+            .map(str::trim)
+            .ok_or_else(|| {
+                BluetoothError::ConnectionFailed(format!("invalid sdptool channel line: {trimmed}"))
+            })?
+            .parse::<u8>()
+            .map_err(|error| {
+                BluetoothError::ConnectionFailed(format!(
+                    "invalid RFCOMM channel value in sdptool output '{trimmed}': {error}"
+                ))
+            })?;
+        return Ok(channel);
+    }
+    Err(BluetoothError::ConnectionFailed(format!(
+        "sdptool output did not contain RFCOMM channel for UUID {uuid}"
+    )))
+}
+
+fn open_rfcomm_socket(device_id: &str, uuid: &str) -> Result<i32, BluetoothError> {
+    let channel = resolve_rfcomm_channel(device_id, uuid)?;
+    let bdaddr = parse_device_address(device_id)?;
+
+    let fd = unsafe { libc::socket(libc::AF_BLUETOOTH, libc::SOCK_STREAM, BTPROTO_RFCOMM) };
+    if fd < 0 {
+        return Err(BluetoothError::ConnectionFailed(format!(
+            "create RFCOMM socket failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    let sockaddr = SockAddrRc {
+        rc_family: libc::AF_BLUETOOTH as libc::sa_family_t,
+        rc_bdaddr: bdaddr,
+        rc_channel: channel,
+    };
+    let connect_result = unsafe {
+        libc::connect(
+            fd,
+            (&sockaddr as *const SockAddrRc).cast::<libc::sockaddr>(),
+            std::mem::size_of::<SockAddrRc>() as libc::socklen_t,
+        )
+    };
+    if connect_result < 0 {
+        let error = std::io::Error::last_os_error();
+        let _ = unsafe { libc::close(fd) };
+        return Err(BluetoothError::ConnectionFailed(format!(
+            "connect RFCOMM socket failed: {error}"
+        )));
+    }
+    Ok(fd)
+}
 
 fn prop_str(props: &OwnedPropertyMap, key: &str) -> Option<String> {
     props
@@ -26,6 +133,14 @@ fn prop_str(props: &OwnedPropertyMap, key: &str) -> Option<String> {
 
 fn prop_bool(props: &OwnedPropertyMap, key: &str) -> Option<bool> {
     props.get(key).and_then(|v| bool::try_from(v).ok())
+}
+
+fn prop_i16(props: &OwnedPropertyMap, key: &str) -> Option<i16> {
+    props.get(key).and_then(|v| i16::try_from(v).ok())
+}
+
+fn prop_u32(props: &OwnedPropertyMap, key: &str) -> Option<u32> {
+    props.get(key).and_then(|v| u32::try_from(v).ok())
 }
 
 fn prop_str_array(props: &OwnedPropertyMap, key: &str) -> Vec<String> {
@@ -55,6 +170,14 @@ fn signal_prop_str(props: &SignalPropertyMap<'_>, key: &str) -> Option<String> {
 
 fn signal_prop_i16(props: &SignalPropertyMap<'_>, key: &str) -> Option<i16> {
     props.get(key).and_then(|v| v.downcast_ref::<i16>().ok())
+}
+
+fn signal_prop_u32(props: &SignalPropertyMap<'_>, key: &str) -> Option<u32> {
+    props.get(key).and_then(|v| v.downcast_ref::<u32>().ok())
+}
+
+fn signal_prop_bool(props: &SignalPropertyMap<'_>, key: &str) -> Option<bool> {
+    props.get(key).and_then(|v| v.downcast_ref::<bool>().ok())
 }
 
 async fn get_connection() -> Result<Connection, BluetoothError> {
@@ -304,13 +427,94 @@ impl BleConnectionInner {
         Ok(())
     }
 
-    pub const fn subscribe(
+    pub fn subscribe(
         &self,
         _service: &Uuid,
-        _characteristic: &Uuid,
+        characteristic: &Uuid,
     ) -> Result<async_channel::Receiver<Vec<u8>>, BluetoothError> {
-        let _ = self;
-        Err(BluetoothError::NotSupported)
+        if characteristic.0.is_empty() {
+            return Err(BluetoothError::GattError(
+                "characteristic UUID is empty".into(),
+            ));
+        }
+
+        let (tx, rx) = async_channel::bounded(64);
+        let conn = self.connection.clone();
+        let characteristic_uuid = characteristic.0.clone();
+        let device_path = self.device_path.clone();
+
+        std::thread::spawn(move || {
+            futures::executor::block_on(async move {
+                let object_manager = match zbus::fdo::ObjectManagerProxy::builder(&conn)
+                    .destination(BLUEZ_SERVICE)
+                    .and_then(|builder| builder.path("/"))
+                {
+                    Ok(builder) => match builder.build().await {
+                        Ok(proxy) => proxy,
+                        Err(_) => return,
+                    },
+                    Err(_) => return,
+                };
+
+                let objects = match object_manager.get_managed_objects().await {
+                    Ok(objects) => objects,
+                    Err(_) => return,
+                };
+                let Some(char_path) = objects.iter().find_map(|(path, ifaces)| {
+                    if !path.to_string().starts_with(&device_path) {
+                        return None;
+                    }
+                    let props = ifaces.get(GATT_CHAR_IFACE)?;
+                    let uuid = prop_str(props, "UUID")?;
+                    if uuid == characteristic_uuid {
+                        Some(path.to_string())
+                    } else {
+                        None
+                    }
+                }) else {
+                    return;
+                };
+
+                let char_proxy = match zbus::Proxy::new(
+                    &conn,
+                    BLUEZ_SERVICE,
+                    char_path.as_str(),
+                    GATT_CHAR_IFACE,
+                )
+                .await
+                {
+                    Ok(proxy) => proxy,
+                    Err(_) => return,
+                };
+
+                if char_proxy.call_method("StartNotify", &()).await.is_err() {
+                    return;
+                }
+
+                let mut last_value: Option<Vec<u8>> = None;
+                while !tx.is_closed() {
+                    let opts: HashMap<String, OwnedValue> = HashMap::new();
+                    let read_result = char_proxy.call_method("ReadValue", &(opts,)).await;
+                    let Ok(reply) = read_result else {
+                        break;
+                    };
+                    let Ok(value) = reply.body().deserialize::<Vec<u8>>() else {
+                        break;
+                    };
+                    if last_value.as_deref() != Some(value.as_slice()) {
+                        if tx.try_send(value.clone()).is_err() {
+                            break;
+                        }
+                        last_value = Some(value);
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+
+                let _ = char_proxy.call_method("StopNotify", &()).await;
+            });
+        });
+
+        Ok(rx)
     }
 
     pub async fn disconnect(self) {
@@ -356,54 +560,352 @@ impl BleConnectionInner {
 }
 
 #[derive(Debug)]
-pub struct ClassicBluetoothInner;
+pub struct ClassicBluetoothInner {
+    connection: Connection,
+}
 
 impl ClassicBluetoothInner {
-    #[allow(clippy::unused_async)]
     pub async fn new() -> Result<Self, BluetoothError> {
-        Ok(Self)
+        let state = adapter_state().await?;
+        if state != AdapterState::PoweredOn {
+            return Err(BluetoothError::NotAvailable);
+        }
+        Ok(Self {
+            connection: get_connection().await?,
+        })
     }
 
-    pub const fn start_discovery(
+    pub fn start_discovery(
         &self,
     ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
-        let _ = self;
-        Err(BluetoothError::NotSupported)
+        let _bus_name = self.connection.unique_name().ok_or_else(|| {
+            BluetoothError::PlatformError("D-Bus connection is missing unique bus name".into())
+        })?;
+
+        let (tx, rx) = async_channel::bounded(64);
+        let conn = self.connection.clone();
+
+        std::thread::spawn(move || {
+            futures::executor::block_on(async move {
+                let adapter_proxy =
+                    match zbus::Proxy::new(&conn, BLUEZ_SERVICE, ADAPTER_PATH, ADAPTER_IFACE).await
+                    {
+                        Ok(proxy) => proxy,
+                        Err(_) => return,
+                    };
+                let _ = adapter_proxy.call_method("StartDiscovery", &()).await;
+
+                let object_manager = match zbus::fdo::ObjectManagerProxy::builder(&conn)
+                    .destination(BLUEZ_SERVICE)
+                    .and_then(|builder| builder.path("/"))
+                {
+                    Ok(builder) => match builder.build().await {
+                        Ok(proxy) => proxy,
+                        Err(_) => return,
+                    },
+                    Err(_) => return,
+                };
+                let mut stream = match object_manager.receive_interfaces_added().await {
+                    Ok(stream) => stream,
+                    Err(_) => return,
+                };
+
+                while let Some(signal) = stream.next().await {
+                    let Ok(args) = signal.args() else {
+                        continue;
+                    };
+                    let path = args.object_path().to_string();
+                    if !path.starts_with("/org/bluez/hci0/dev_") {
+                        continue;
+                    }
+                    let ifaces = args.interfaces_and_properties();
+                    let Some(props) = ifaces.get(DEVICE_IFACE) else {
+                        continue;
+                    };
+                    let addr = signal_prop_str(props, "Address").unwrap_or_default();
+                    if addr.is_empty() {
+                        continue;
+                    }
+                    let device = ClassicDevice {
+                        device: BluetoothDevice {
+                            id: DeviceId(addr),
+                            name: signal_prop_str(props, "Name"),
+                            rssi: signal_prop_i16(props, "RSSI"),
+                            is_connected: signal_prop_bool(props, "Connected").unwrap_or(false),
+                        },
+                        device_class: signal_prop_u32(props, "Class").unwrap_or(0),
+                        is_paired: signal_prop_bool(props, "Paired").unwrap_or(false),
+                    };
+                    if tx.try_send(device).is_err() {
+                        break;
+                    }
+                }
+            });
+        });
+
+        Ok(rx)
     }
 
-    pub const fn stop_discovery(&self) {
-        let _ = self;
+    pub fn stop_discovery(&self) {
+        let conn = self.connection.clone();
+        std::thread::spawn(move || {
+            futures::executor::block_on(async move {
+                let proxy = zbus::Proxy::new(&conn, BLUEZ_SERVICE, ADAPTER_PATH, ADAPTER_IFACE)
+                    .await
+                    .ok();
+                if let Some(proxy) = proxy {
+                    let _ = proxy.call_method("StopDiscovery", &()).await;
+                }
+            });
+        });
     }
 
-    #[allow(clippy::unused_async)]
     pub async fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {
-        Err(BluetoothError::NotSupported)
+        let object_manager = zbus::fdo::ObjectManagerProxy::builder(&self.connection)
+            .destination(BLUEZ_SERVICE)
+            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?
+            .path("/")
+            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?
+            .build()
+            .await
+            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+        let objects = object_manager
+            .get_managed_objects()
+            .await
+            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+        let mut paired = Vec::new();
+        for (_, ifaces) in &objects {
+            let Some(props) = ifaces.get(DEVICE_IFACE) else {
+                continue;
+            };
+            if !prop_bool(props, "Paired").unwrap_or(false) {
+                continue;
+            }
+            let addr = prop_str(props, "Address").unwrap_or_default();
+            if addr.is_empty() {
+                continue;
+            }
+            paired.push(ClassicDevice {
+                device: BluetoothDevice {
+                    id: DeviceId(addr),
+                    name: prop_str(props, "Name"),
+                    rssi: prop_i16(props, "RSSI"),
+                    is_connected: prop_bool(props, "Connected").unwrap_or(false),
+                },
+                device_class: prop_u32(props, "Class").unwrap_or(0),
+                is_paired: true,
+            });
+        }
+        Ok(paired)
     }
 
-    #[allow(clippy::unused_async)]
     pub async fn connect_spp(
         &self,
-        _device_id: &DeviceId,
-        _uuid: &Uuid,
+        device_id: &DeviceId,
+        uuid: &Uuid,
     ) -> Result<SppStreamInner, BluetoothError> {
-        Err(BluetoothError::NotSupported)
+        let device_id = device_id.0.clone();
+        let service_uuid = uuid.0.clone();
+        let (command_tx, command_rx) = async_channel::unbounded();
+        let (connect_tx, connect_rx) = oneshot::channel::<Result<(), BluetoothError>>();
+
+        let worker = std::thread::Builder::new()
+            .name("waterkit-spp-linux".to_owned())
+            .spawn(move || {
+                let fd = match open_rfcomm_socket(&device_id, &service_uuid) {
+                    Ok(fd) => {
+                        let _ = connect_tx.send(Ok(()));
+                        fd
+                    }
+                    Err(error) => {
+                        let _ = connect_tx.send(Err(error));
+                        return;
+                    }
+                };
+
+                while let Ok(command) = command_rx.recv_blocking() {
+                    match command {
+                        SppCommand::Read { max_bytes, tx } => {
+                            let result = (|| {
+                                let mut buffer = vec![0u8; max_bytes];
+                                let read = unsafe {
+                                    libc::read(
+                                        fd,
+                                        buffer.as_mut_ptr().cast::<libc::c_void>(),
+                                        max_bytes,
+                                    )
+                                };
+                                if read < 0 {
+                                    return Err(BluetoothError::ConnectionFailed(format!(
+                                        "RFCOMM read failed: {}",
+                                        std::io::Error::last_os_error()
+                                    )));
+                                }
+                                if read == 0 {
+                                    return Err(BluetoothError::ConnectionFailed(
+                                        "RFCOMM stream closed".into(),
+                                    ));
+                                }
+                                let read_len = usize::try_from(read).map_err(|_| {
+                                    BluetoothError::ConnectionFailed(format!(
+                                        "RFCOMM read size is negative: {read}"
+                                    ))
+                                })?;
+                                buffer.truncate(read_len);
+                                Ok(buffer)
+                            })();
+                            let _ = tx.send(result);
+                        }
+                        SppCommand::Write { data, tx } => {
+                            let result = (|| {
+                                let mut written_total = 0usize;
+                                while written_total < data.len() {
+                                    let remaining = &data[written_total..];
+                                    let written = unsafe {
+                                        libc::write(
+                                            fd,
+                                            remaining.as_ptr().cast::<libc::c_void>(),
+                                            remaining.len(),
+                                        )
+                                    };
+                                    if written < 0 {
+                                        return Err(BluetoothError::ConnectionFailed(format!(
+                                            "RFCOMM write failed: {}",
+                                            std::io::Error::last_os_error()
+                                        )));
+                                    }
+                                    let written_len = usize::try_from(written).map_err(|_| {
+                                        BluetoothError::ConnectionFailed(format!(
+                                            "RFCOMM write returned negative size: {written}"
+                                        ))
+                                    })?;
+                                    if written_len == 0 {
+                                        return Err(BluetoothError::ConnectionFailed(
+                                            "RFCOMM write returned 0 bytes".into(),
+                                        ));
+                                    }
+                                    written_total += written_len;
+                                }
+                                Ok(written_total)
+                            })();
+                            let _ = tx.send(result);
+                        }
+                        SppCommand::Close { tx } => {
+                            let _ = tx.send(());
+                            break;
+                        }
+                    }
+                }
+
+                let _ = unsafe { libc::close(fd) };
+            })
+            .map_err(|error| {
+                BluetoothError::PlatformError(format!("spawn SPP worker failed: {error}"))
+            })?;
+
+        match connect_rx.await.map_err(|error| {
+            BluetoothError::ConnectionFailed(format!("SPP connect callback dropped: {error}"))
+        })? {
+            Ok(()) => Ok(SppStreamInner {
+                command_tx,
+                worker: Mutex::new(Some(worker)),
+            }),
+            Err(error) => {
+                std::thread::spawn(move || {
+                    let _ = worker.join();
+                });
+                Err(error)
+            }
+        }
     }
 }
 
 #[derive(Debug)]
-pub struct SppStreamInner;
+enum SppCommand {
+    Read {
+        max_bytes: usize,
+        tx: oneshot::Sender<Result<Vec<u8>, BluetoothError>>,
+    },
+    Write {
+        data: Vec<u8>,
+        tx: oneshot::Sender<Result<usize, BluetoothError>>,
+    },
+    Close {
+        tx: oneshot::Sender<()>,
+    },
+}
+
+pub struct SppStreamInner {
+    command_tx: async_channel::Sender<SppCommand>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl std::fmt::Debug for SppStreamInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SppStreamInner").finish()
+    }
+}
 
 impl SppStreamInner {
-    #[allow(clippy::unused_async)]
-    pub async fn read(&self, _buf: &mut [u8]) -> Result<usize, BluetoothError> {
-        Err(BluetoothError::NotSupported)
+    pub async fn read(&self, buf: &mut [u8]) -> Result<usize, BluetoothError> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(SppCommand::Read {
+                max_bytes: buf.len(),
+                tx,
+            })
+            .await
+            .map_err(|error| {
+                BluetoothError::ConnectionFailed(format!("SPP read command send failed: {error}"))
+            })?;
+        let data = rx.await.map_err(|error| {
+            BluetoothError::ConnectionFailed(format!("SPP read response dropped: {error}"))
+        })??;
+        let read = data.len().min(buf.len());
+        buf[..read].copy_from_slice(&data[..read]);
+        Ok(read)
     }
 
-    #[allow(clippy::unused_async)]
-    pub async fn write(&self, _data: &[u8]) -> Result<usize, BluetoothError> {
-        Err(BluetoothError::NotSupported)
+    pub async fn write(&self, data: &[u8]) -> Result<usize, BluetoothError> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(SppCommand::Write {
+                data: data.to_vec(),
+                tx,
+            })
+            .await
+            .map_err(|error| {
+                BluetoothError::ConnectionFailed(format!("SPP write command send failed: {error}"))
+            })?;
+        rx.await.map_err(|error| {
+            BluetoothError::ConnectionFailed(format!("SPP write response dropped: {error}"))
+        })?
     }
 
-    #[allow(clippy::unused_async)]
-    pub async fn close(self) {}
+    pub async fn close(self) {
+        let (tx, rx) = oneshot::channel();
+        let _ = self.command_tx.send(SppCommand::Close { tx }).await;
+        let _ = rx.await;
+        if let Ok(mut worker) = self.worker.lock()
+            && let Some(worker) = worker.take()
+        {
+            std::thread::spawn(move || {
+                let _ = worker.join();
+            });
+        }
+    }
+}
+
+impl Drop for SppStreamInner {
+    fn drop(&mut self) {
+        let (tx, _rx) = oneshot::channel();
+        let _ = self.command_tx.try_send(SppCommand::Close { tx });
+        if let Ok(mut worker) = self.worker.lock()
+            && let Some(worker) = worker.take()
+        {
+            std::thread::spawn(move || {
+                let _ = worker.join();
+            });
+        }
+    }
 }

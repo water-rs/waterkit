@@ -17,8 +17,8 @@ Part of the [Waterkit](https://github.com/water-rs/waterkit) ecosystem.
 | iOS      | Native (HealthKit via Swift bridge) |
 | macOS    | Native (HealthKit via Swift bridge) |
 | Android  | Availability check only (Health Connect ops pending) |
-| Windows  | Not supported |
-| Linux    | Not supported |
+| Windows  | Desktop store (persistent local data) |
+| Linux    | Desktop store (persistent local data) |
 
 ## Usage
 

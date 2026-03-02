@@ -526,12 +526,12 @@ impl ContinuedProcessingRequest {
         &self.subtitle
     }
 
-    #[cfg(target_os = "ios")]
+    #[cfg(any(target_os = "ios", target_os = "android"))]
     pub(crate) const fn strategy_value(&self) -> ContinuedProcessingStrategy {
         self.strategy
     }
 
-    #[cfg(target_os = "ios")]
+    #[cfg(any(target_os = "ios", target_os = "android"))]
     pub(crate) const fn requires_gpu_value(&self) -> bool {
         self.requires_gpu
     }

@@ -18,8 +18,8 @@ Part of the [Waterkit](https://github.com/water-rs/waterkit) ecosystem.
 | iOS      | Native (EventKit via Swift bridge) |
 | macOS    | Native (EventKit via Swift bridge) |
 | Android  | Native (CalendarProvider via JNI/Kotlin) |
-| Windows  | Not supported |
-| Linux    | Not supported |
+| Windows  | Desktop store (persistent local data) |
+| Linux    | Desktop store (persistent local data) |
 
 ## Usage
 

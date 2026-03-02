@@ -265,7 +265,9 @@ fn map_swift_error(error: String) -> BackgroundError {
     }
 
     if error == "not_supported" {
-        return BackgroundError::NotSupported;
+        return BackgroundError::Platform(
+            "requested background operation is unavailable on this iOS runtime".into(),
+        );
     }
 
     BackgroundError::Platform(error)

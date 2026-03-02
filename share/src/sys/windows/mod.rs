@@ -33,5 +33,5 @@ pub async fn show_share_sheet(sheet: ShareSheet) -> Result<ShareResult, ShareErr
             }
         }
     }
-    Err(ShareError::NotSupported)
+    unreachable!("waterkit-share: non-empty share request had no supported item variant")
 }

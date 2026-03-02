@@ -293,7 +293,7 @@ fn map_dbus_error(error: &zbus::Error) -> PasskeyError {
             return PasskeyError::Cancelled;
         }
         if error_name.ends_with(".NotSupportedError") {
-            return PasskeyError::NotSupported;
+            return PasskeyError::NotAvailable;
         }
         if error_name.ends_with(".TypeError") {
             return PasskeyError::InvalidInput(detail.clone().unwrap_or_else(|| {

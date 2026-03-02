@@ -1,15 +1,15 @@
 //! Cross-platform contacts access.
 //!
 //! Provides read/write access to the device's contacts store.
-//! Full implementation on iOS, macOS, and Android. Desktop platforms
-//! (Windows, Linux) return [`ContactsError::NotSupported`].
+//! iOS/macOS and Android use native system stores. Windows/Linux use a
+//! persistent desktop store under the user's local data directory.
 
 #![warn(missing_docs)]
 
 mod sys;
 
 /// A phone number with label.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PhoneNumber {
     /// The phone number string.
     pub number: String,
@@ -18,7 +18,7 @@ pub struct PhoneNumber {
 }
 
 /// An email address with label.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EmailAddress {
     /// The email address string.
     pub address: String,
@@ -27,7 +27,7 @@ pub struct EmailAddress {
 }
 
 /// A postal address.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PostalAddress {
     /// Street address.
     pub street: Option<String>,
@@ -44,7 +44,7 @@ pub struct PostalAddress {
 }
 
 /// A contact entry.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Contact {
     /// Platform-specific contact identifier.
     pub id: String,
@@ -69,7 +69,7 @@ pub struct Contact {
 }
 
 /// A request to create or update a contact.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ContactData {
     /// Given (first) name.
     pub given_name: Option<String>,

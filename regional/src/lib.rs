@@ -266,7 +266,11 @@ pub fn set_locale_tag(locale_tag: impl Into<String>) -> SystemSettingsContext {
         preferred.insert(0, locale_tag.clone());
     }
 
-    set_settings(SystemSettingsContext::new(locale_tag, preferred, current.timezone().to_string()))
+    set_settings(SystemSettingsContext::new(
+        locale_tag,
+        preferred,
+        current.timezone().to_string(),
+    ))
 }
 
 /// Starts a background polling loop to refresh system settings periodically.

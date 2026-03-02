@@ -25,7 +25,8 @@ waterkit-codec = "0.1"
 | :--- | :--- |
 | **macOS/iOS** | VideoToolbox |
 | **Android** | MediaCodec (NDK/JNI) |
-| **Windows/Linux** | FFmpeg / rav1d (Software fallback currently) |
+| **Windows** | Media Foundation |
+| **Linux** | VA-API / rav1d |
 
 ## Usage
 

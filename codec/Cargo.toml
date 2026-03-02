@@ -41,7 +41,7 @@ jni.workspace = true
 windows = { workspace = true, features = ["Win32_Media_MediaFoundation", "Win32_System_Com"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ffmpeg-next = "7"
+cros-codecs = { version = "0.0.6", default-features = false, features = ["vaapi"] }
 
 [features]
 default = ["software-fallback"]

@@ -7,7 +7,9 @@ fn main() {
             .swift_source("src/sys/apple/ImageDecoder.swift")
             .framework("Foundation")
             .framework("CoreGraphics")
-            .framework("ImageIO");
+            .framework("ImageIO")
+            .framework("CoreImage")
+            .framework("VideoToolbox");
 
         waterkit_build::compile_swift("src/image_apple.rs", &config);
     }

@@ -49,6 +49,8 @@
 
 mod frame;
 mod image;
+#[cfg(target_vendor = "apple")]
+mod image_apple;
 mod software;
 mod sys;
 

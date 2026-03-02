@@ -1,14 +1,10 @@
 use half::f16;
 use image::{ColorType, DynamicImage, GenericImageView};
-#[cfg(target_vendor = "apple")]
-use std::ffi::c_void;
 #[cfg(all(
     feature = "software-fallback",
     not(any(target_os = "ios", target_os = "android"))
 ))]
 use std::io::Cursor;
-#[cfg(target_vendor = "apple")]
-use std::ptr;
 #[cfg(all(
     feature = "software-fallback",
     not(any(target_os = "ios", target_os = "android"))
@@ -16,68 +12,13 @@ use std::ptr;
 use yuv::{YuvBiPlanarImage, YuvConversionMode, YuvRange, YuvStandardMatrix, yuv_nv12_to_rgba};
 
 use crate::CodecError;
+#[cfg(target_vendor = "apple")]
+use crate::image_apple;
 #[cfg(all(
     feature = "software-fallback",
     not(any(target_os = "ios", target_os = "android"))
 ))]
 use crate::software::av1::Av1Decoder;
-
-#[cfg(target_vendor = "apple")]
-#[repr(C)]
-struct CGPoint {
-    x: f64,
-    y: f64,
-}
-
-#[cfg(target_vendor = "apple")]
-#[repr(C)]
-struct CGSize {
-    width: f64,
-    height: f64,
-}
-
-#[cfg(target_vendor = "apple")]
-#[repr(C)]
-struct CGRect {
-    origin: CGPoint,
-    size: CGSize,
-}
-
-#[cfg(target_vendor = "apple")]
-const K_CG_IMAGE_ALPHA_PREMULTIPLIED_LAST: u32 = 1;
-#[cfg(target_vendor = "apple")]
-const K_CG_BITMAP_BYTE_ORDER_32_BIG: u32 = 4 << 12;
-
-#[cfg(target_vendor = "apple")]
-#[link(name = "CoreFoundation", kind = "framework")]
-#[link(name = "CoreGraphics", kind = "framework")]
-#[link(name = "ImageIO", kind = "framework")]
-unsafe extern "C" {
-    fn CFDataCreate(allocator: *const c_void, bytes: *const u8, length: isize) -> *const c_void;
-    fn CFRelease(cf: *const c_void);
-
-    fn CGImageSourceCreateWithData(data: *const c_void, options: *const c_void) -> *mut c_void;
-    fn CGImageSourceCreateImageAtIndex(
-        source: *mut c_void,
-        index: usize,
-        options: *const c_void,
-    ) -> *mut c_void;
-
-    fn CGImageGetWidth(image: *const c_void) -> usize;
-    fn CGImageGetHeight(image: *const c_void) -> usize;
-
-    fn CGColorSpaceCreateDeviceRGB() -> *const c_void;
-    fn CGBitmapContextCreate(
-        data: *mut c_void,
-        width: usize,
-        height: usize,
-        bits_per_component: usize,
-        bytes_per_row: usize,
-        color_space: *const c_void,
-        bitmap_info: u32,
-    ) -> *mut c_void;
-    fn CGContextDrawImage(context: *mut c_void, rect: CGRect, image: *const c_void);
-}
 
 /// Pixel formats currently emitted by `decode_image`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,8 +139,13 @@ pub fn decode_image(data: &[u8]) -> Result<DecodedImage, CodecError> {
 /// Returns [`CodecError::DecodingFailed`] when decoding fails.
 pub fn decode_image_platform(data: &[u8]) -> Result<DecodedImage, CodecError> {
     #[cfg(target_vendor = "apple")]
+    if is_avif_family(data) {
+        return decode_avif_apple(data);
+    }
+
+    #[cfg(target_vendor = "apple")]
     if is_heif_family(data) {
-        return decode_heif_apple(data);
+        return decode_isobmff_apple(data);
     }
 
     let decoded = image::load_from_memory(data)
@@ -232,124 +178,83 @@ pub fn decode_image_platform(data: &[u8]) -> Result<DecodedImage, CodecError> {
 }
 
 #[cfg(target_vendor = "apple")]
-fn decode_heif_apple(data: &[u8]) -> Result<DecodedImage, CodecError> {
-    let data_len = isize::try_from(data.len())
-        .map_err(|_| CodecError::DecodingFailed("HEIF data length is too large".into()))?;
-    unsafe {
-        let cf_data = CFDataCreate(ptr::null(), data.as_ptr(), data_len);
-        if cf_data.is_null() {
-            return Err(CodecError::DecodingFailed(
-                "CFDataCreate returned null for HEIF source".into(),
-            ));
-        }
-
-        let source = CGImageSourceCreateWithData(cf_data, ptr::null());
-        CFRelease(cf_data);
-        if source.is_null() {
-            return Err(CodecError::DecodingFailed(
-                "CGImageSourceCreateWithData failed for HEIF source".into(),
-            ));
-        }
-
-        let image = CGImageSourceCreateImageAtIndex(source, 0, ptr::null());
-        CFRelease(source as *const c_void);
-        if image.is_null() {
-            return Err(CodecError::DecodingFailed(
-                "CGImageSourceCreateImageAtIndex failed for HEIF source".into(),
-            ));
-        }
-
-        let width = CGImageGetWidth(image as *const c_void);
-        let height = CGImageGetHeight(image as *const c_void);
-        if width == 0 || height == 0 {
-            CFRelease(image as *const c_void);
-            return Err(CodecError::DecodingFailed(
-                "Decoded HEIF image has zero width or height".into(),
-            ));
-        }
-
-        let bytes_per_row = width
-            .checked_mul(4)
-            .ok_or_else(|| CodecError::DecodingFailed("HEIF bytes_per_row overflow".into()))?;
-        let pixel_len = bytes_per_row
-            .checked_mul(height)
-            .ok_or_else(|| CodecError::DecodingFailed("HEIF pixel buffer overflow".into()))?;
-        let mut pixels = vec![0u8; pixel_len];
-
-        let color_space = CGColorSpaceCreateDeviceRGB();
-        if color_space.is_null() {
-            CFRelease(image as *const c_void);
-            return Err(CodecError::DecodingFailed(
-                "CGColorSpaceCreateDeviceRGB failed".into(),
-            ));
-        }
-
-        let bitmap_info = K_CG_IMAGE_ALPHA_PREMULTIPLIED_LAST | K_CG_BITMAP_BYTE_ORDER_32_BIG;
-        let context = CGBitmapContextCreate(
-            pixels.as_mut_ptr().cast::<c_void>(),
-            width,
-            height,
-            8,
-            bytes_per_row,
-            color_space,
-            bitmap_info,
-        );
-        CFRelease(color_space);
-        if context.is_null() {
-            CFRelease(image as *const c_void);
-            return Err(CodecError::DecodingFailed(
-                "CGBitmapContextCreate failed for HEIF decode".into(),
-            ));
-        }
-
-        let rect = CGRect {
-            origin: CGPoint { x: 0.0, y: 0.0 },
-            size: CGSize {
-                width: width as f64,
-                height: height as f64,
-            },
-        };
-        CGContextDrawImage(context, rect, image as *const c_void);
-
-        CFRelease(context as *const c_void);
-        CFRelease(image as *const c_void);
-
-        let width = u32::try_from(width)
-            .map_err(|_| CodecError::DecodingFailed("HEIF width does not fit u32".into()))?;
-        let height = u32::try_from(height)
-            .map_err(|_| CodecError::DecodingFailed("HEIF height does not fit u32".into()))?;
-
-        Ok(DecodedImage::new(
-            pixels,
-            width,
-            height,
-            DecodedPixelFormat::Rgba8UnormSrgb,
-            false,
-            false,
-        ))
+fn decode_avif_apple(data: &[u8]) -> Result<DecodedImage, CodecError> {
+    if !image_apple::is_av1_hardware_decode_supported() {
+        return Err(CodecError::Unsupported(
+            "AV1 hardware decode is unavailable on this Apple device".into(),
+        ));
     }
+    decode_isobmff_apple(data)
+}
+
+#[cfg(target_vendor = "apple")]
+fn decode_isobmff_apple(data: &[u8]) -> Result<DecodedImage, CodecError> {
+    let decoded = image_apple::decode_isobmff_image(data)?;
+    let pixel_format = match decoded.pixel_format {
+        image_apple::AppleDecodedPixelFormat::Rgba8UnormSrgb => DecodedPixelFormat::Rgba8UnormSrgb,
+        image_apple::AppleDecodedPixelFormat::Rgba16Float => DecodedPixelFormat::Rgba16Float,
+    };
+    Ok(DecodedImage::new(
+        decoded.pixels,
+        decoded.width,
+        decoded.height,
+        pixel_format,
+        decoded.hdr,
+        false,
+    ))
 }
 
 #[cfg(target_vendor = "apple")]
 fn is_heif_family(data: &[u8]) -> bool {
-    if data.len() < 16 {
+    let Some((major, compat)) = parse_isobmff_ftyp(data) else {
+        return false;
+    };
+
+    if is_avif_brand(&major) {
         return false;
     }
-    let box_size = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
-    if box_size < 16 || box_size > data.len() || &data[4..8] != b"ftyp" {
+
+    if compat
+        .chunks_exact(4)
+        .any(|brand| is_avif_brand(&[brand[0], brand[1], brand[2], brand[3]]))
+    {
         return false;
     }
-    let major = [data[8], data[9], data[10], data[11]];
     if is_heif_brand(&major) {
         return true;
-    }
-    let compat = &data[16..box_size];
-    if compat.len() % 4 != 0 {
-        return false;
     }
     compat
         .chunks_exact(4)
         .any(|brand| is_heif_brand(&[brand[0], brand[1], brand[2], brand[3]]))
+}
+
+#[cfg(target_vendor = "apple")]
+fn is_avif_family(data: &[u8]) -> bool {
+    let Some((major, compat)) = parse_isobmff_ftyp(data) else {
+        return false;
+    };
+    if is_avif_brand(&major) {
+        return true;
+    }
+    compat
+        .chunks_exact(4)
+        .any(|brand| is_avif_brand(&[brand[0], brand[1], brand[2], brand[3]]))
+}
+
+#[cfg(target_vendor = "apple")]
+fn parse_isobmff_ftyp(data: &[u8]) -> Option<([u8; 4], &[u8])> {
+    if data.len() < 16 {
+        return None;
+    }
+    let box_size = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    if box_size < 16 || box_size > data.len() || &data[4..8] != b"ftyp" {
+        return None;
+    }
+    let compat = &data[16..box_size];
+    if compat.len() % 4 != 0 {
+        return None;
+    }
+    Some(([data[8], data[9], data[10], data[11]], compat))
 }
 
 #[cfg(target_vendor = "apple")]
@@ -358,6 +263,11 @@ const fn is_heif_brand(brand: &[u8; 4]) -> bool {
         brand,
         b"mif1" | b"msf1" | b"heif" | b"heic" | b"heix" | b"hevc" | b"hevx"
     )
+}
+
+#[cfg(target_vendor = "apple")]
+const fn is_avif_brand(brand: &[u8; 4]) -> bool {
+    matches!(brand, b"avif" | b"avis")
 }
 
 #[cfg(all(

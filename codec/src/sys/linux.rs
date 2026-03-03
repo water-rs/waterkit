@@ -12,9 +12,12 @@
 use crate::CodecError;
 use cros_codecs::decoder::stateless::h264::H264;
 use cros_codecs::decoder::stateless::h265::H265;
-use cros_codecs::decoder::stateless::{DecodeError, DynStatelessVideoDecoder, StatelessDecoder};
+use cros_codecs::decoder::stateless::{
+    DecodeError, DynStatelessVideoDecoder, StatelessDecoder, StatelessVideoDecoder,
+};
 use cros_codecs::decoder::{DecodedHandle, DecoderEvent};
-use cros_codecs::encoder::h264::{self, EncoderConfig as H264EncoderConfig};
+use cros_codecs::encoder::h264::EncoderConfig as H264EncoderConfig;
+use cros_codecs::encoder::stateless::h264;
 use cros_codecs::encoder::{FrameMetadata, VideoEncoder};
 use cros_codecs::video_frame::VideoFrame;
 use cros_codecs::video_frame::gbm_video_frame::{GbmDevice, GbmUsage};
@@ -165,11 +168,20 @@ impl LinuxDecoder {
         let mut offset = 0;
 
         while offset < packet.len() {
+            let gbm_device = Arc::clone(&self.gbm_device);
+            let display_resolution = self.display_resolution;
+            let coded_resolution = self.coded_resolution;
+            let mut allocate_frame = || {
+                Some(Self::allocate_decode_frame(
+                    &gbm_device,
+                    display_resolution,
+                    coded_resolution,
+                ))
+            };
             match self
                 .decoder
-                .decode(self.next_timestamp, &packet[offset..], &mut || {
-                    Some(self.allocate_decode_frame())
-                }) {
+                .decode(self.next_timestamp, &packet[offset..], &mut allocate_frame)
+            {
                 Ok(consumed) => {
                     if consumed == 0 {
                         return Err(CodecError::DecodingFailed(
@@ -203,12 +215,16 @@ impl LinuxDecoder {
         }
     }
 
-    fn allocate_decode_frame(&self) -> GenericDmaVideoFrame {
-        Arc::clone(&self.gbm_device)
+    fn allocate_decode_frame(
+        gbm_device: &Arc<GbmDevice>,
+        display_resolution: Resolution,
+        coded_resolution: Resolution,
+    ) -> GenericDmaVideoFrame {
+        Arc::clone(gbm_device)
             .new_frame(
                 Fourcc::from(b"NV12"),
-                self.display_resolution,
-                self.coded_resolution,
+                display_resolution,
+                coded_resolution,
                 GbmUsage::Decode,
             )
             .and_then(|frame| frame.to_generic_dma_video_frame())

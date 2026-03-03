@@ -158,7 +158,7 @@ thiserror = "2"
 blocking = "1"
 async-io = "2"
 async-process = "2"
-wgpu = "28"
+wgpu = "27"
 metal = "0.33"
 
 # Common

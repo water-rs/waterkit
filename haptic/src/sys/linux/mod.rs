@@ -72,7 +72,9 @@ async fn trigger_feedback_event_async(event: &str) -> Result<(), HapticError> {
         FEEDBACK_INTERFACE,
     )
     .await
-    .map_err(|error| HapticError::InitFailed(format!("failed to create feedback proxy: {error}")))?;
+    .map_err(|error| {
+        HapticError::InitFailed(format!("failed to create feedback proxy: {error}"))
+    })?;
 
     let hints: HashMap<&str, OwnedValue> = HashMap::new();
     if feedback_proxy
@@ -87,7 +89,9 @@ async fn trigger_feedback_event_async(event: &str) -> Result<(), HapticError> {
         .call_method("TriggerFeedback", &(APP_ID, event))
         .await
         .map(|_| ())
-        .map_err(|error| HapticError::Unknown(format!("failed to trigger feedback `{event}`: {error}")))
+        .map_err(|error| {
+            HapticError::Unknown(format!("failed to trigger feedback `{event}`: {error}"))
+        })
 }
 
 fn trigger_feedback_event_candidates(candidates: &[&str]) -> Result<(), HapticError> {

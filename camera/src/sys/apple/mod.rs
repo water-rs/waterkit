@@ -279,7 +279,11 @@ fn create_texture_from_pixelbuffer(
     #[allow(clippy::cast_possible_truncation)]
     let actual_height = unsafe { CVPixelBufferGetHeight(pixelbuffer) as u32 };
 
-    let width = if actual_width > 0 { actual_width } else { width };
+    let width = if actual_width > 0 {
+        actual_width
+    } else {
+        width
+    };
     let height = if actual_height > 0 {
         actual_height
     } else {

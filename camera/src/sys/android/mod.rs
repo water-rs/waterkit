@@ -1134,7 +1134,6 @@ impl CameraInner {
                         break;
                     }
                 }
-
             }
 
             let _ = bridge_for_thread.stop_capture();

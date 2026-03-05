@@ -74,6 +74,14 @@ pub struct SpeechRecognizerInner {
     completed_cookie: i64,
 }
 
+const fn recognition_mode(partial_results: bool) -> SpeechContinuousRecognitionMode {
+    if partial_results {
+        SpeechContinuousRecognitionMode::Default
+    } else {
+        SpeechContinuousRecognitionMode::PauseOnRecognition
+    }
+}
+
 impl SpeechRecognizerInner {
     pub async fn start(
         config: RecognitionConfig,
@@ -109,11 +117,7 @@ impl SpeechRecognizerInner {
 
         let (tx, rx) = async_channel::bounded(32);
         let tx_for_results = tx.clone();
-        let mode = if config.partial_results {
-            SpeechContinuousRecognitionMode::Default
-        } else {
-            SpeechContinuousRecognitionMode::PauseOnRecognition
-        };
+        let mode = recognition_mode(config.partial_results);
         let result_cookie = session
             .ResultGenerated(&TypedEventHandler::new(
                 move |_sender: windows::core::Ref<SpeechContinuousRecognitionSession>,

@@ -110,14 +110,14 @@ impl DecodedImage {
 /// # Errors
 ///
 /// Returns [`CodecError::DecodingFailed`] when decoding fails.
+#[cfg(all(
+    feature = "software-fallback",
+    not(any(target_os = "ios", target_os = "android"))
+))]
 pub fn decode_image(data: &[u8]) -> Result<DecodedImage, CodecError> {
     match decode_image_platform(data) {
         Ok(decoded) => Ok(decoded),
         Err(primary_err) => {
-            #[cfg(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
-            ))]
             if is_avif(data) {
                 return decode_avif_software(data).map_err(|fallback_err| {
                     CodecError::DecodingFailed(format!(
@@ -128,6 +128,19 @@ pub fn decode_image(data: &[u8]) -> Result<DecodedImage, CodecError> {
             Err(primary_err)
         }
     }
+}
+
+/// Decodes image bytes into RGBA pixels.
+///
+/// # Errors
+///
+/// Returns [`CodecError::DecodingFailed`] when decoding fails.
+#[cfg(not(all(
+    feature = "software-fallback",
+    not(any(target_os = "ios", target_os = "android"))
+)))]
+pub fn decode_image(data: &[u8]) -> Result<DecodedImage, CodecError> {
+    decode_image_platform(data)
 }
 
 /// Decodes image bytes through the primary image decode path.
@@ -210,22 +223,22 @@ fn is_heif_family(data: &[u8]) -> bool {
         return false;
     };
 
-    if is_avif_brand(&major) {
+    if is_avif_brand(major) {
         return false;
     }
 
     if compat
         .chunks_exact(4)
-        .any(|brand| is_avif_brand(&[brand[0], brand[1], brand[2], brand[3]]))
+        .any(|brand| is_avif_brand([brand[0], brand[1], brand[2], brand[3]]))
     {
         return false;
     }
-    if is_heif_brand(&major) {
+    if is_heif_brand(major) {
         return true;
     }
     compat
         .chunks_exact(4)
-        .any(|brand| is_heif_brand(&[brand[0], brand[1], brand[2], brand[3]]))
+        .any(|brand| is_heif_brand([brand[0], brand[1], brand[2], brand[3]]))
 }
 
 #[cfg(target_vendor = "apple")]
@@ -233,12 +246,12 @@ fn is_avif_family(data: &[u8]) -> bool {
     let Some((major, compat)) = parse_isobmff_ftyp(data) else {
         return false;
     };
-    if is_avif_brand(&major) {
+    if is_avif_brand(major) {
         return true;
     }
     compat
         .chunks_exact(4)
-        .any(|brand| is_avif_brand(&[brand[0], brand[1], brand[2], brand[3]]))
+        .any(|brand| is_avif_brand([brand[0], brand[1], brand[2], brand[3]]))
 }
 
 #[cfg(target_vendor = "apple")]
@@ -246,28 +259,32 @@ fn parse_isobmff_ftyp(data: &[u8]) -> Option<([u8; 4], &[u8])> {
     if data.len() < 16 {
         return None;
     }
-    let box_size = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    let box_size =
+        usize::try_from(u32::from_be_bytes([data[0], data[1], data[2], data[3]])).ok()?;
     if box_size < 16 || box_size > data.len() || &data[4..8] != b"ftyp" {
         return None;
     }
     let compat = &data[16..box_size];
-    if compat.len() % 4 != 0 {
+    if !compat.len().is_multiple_of(4) {
         return None;
     }
     Some(([data[8], data[9], data[10], data[11]], compat))
 }
 
 #[cfg(target_vendor = "apple")]
-const fn is_heif_brand(brand: &[u8; 4]) -> bool {
-    matches!(
-        brand,
-        b"mif1" | b"msf1" | b"heif" | b"heic" | b"heix" | b"hevc" | b"hevx"
-    )
+fn is_heif_brand(brand: [u8; 4]) -> bool {
+    brand == *b"mif1"
+        || brand == *b"msf1"
+        || brand == *b"heif"
+        || brand == *b"heic"
+        || brand == *b"heix"
+        || brand == *b"hevc"
+        || brand == *b"hevx"
 }
 
 #[cfg(target_vendor = "apple")]
-const fn is_avif_brand(brand: &[u8; 4]) -> bool {
-    matches!(brand, b"avif" | b"avis")
+fn is_avif_brand(brand: [u8; 4]) -> bool {
+    brand == *b"avif" || brand == *b"avis"
 }
 
 #[cfg(all(
@@ -318,11 +335,17 @@ fn decode_avif_software(data: &[u8]) -> Result<DecodedImage, CodecError> {
     }
 
     let mut rgba = vec![0u8; y_size * 4];
+    let uv_stride = u32::try_from(
+        uv_width
+            .checked_mul(2)
+            .ok_or_else(|| CodecError::DecodingFailed("AVIF UV stride overflow".to_string()))?,
+    )
+    .map_err(|_| CodecError::DecodingFailed("AVIF UV stride exceeds u32 range".to_string()))?;
     let bi_planar = YuvBiPlanarImage {
         y_plane: &primary_frame.data[..y_size],
         y_stride: width,
         uv_plane: &primary_frame.data[y_size..],
-        uv_stride: (uv_width * 2) as u32,
+        uv_stride,
         width,
         height,
     };
@@ -390,7 +413,7 @@ fn decode_avif_software(data: &[u8]) -> Result<DecodedImage, CodecError> {
     not(any(target_os = "ios", target_os = "android"))
 ))]
 fn encode_rgba8_to_hdr_rgba16f(rgba8: &[u8], bit_depth: u8) -> Vec<u8> {
-    let max_code = ((1u32 << u32::from(bit_depth)) - 1) as f32;
+    let max_code = 2f32.powi(i32::from(bit_depth)) - 1.0;
     let headroom_scale = max_code / 255.0;
     let mut out = Vec::with_capacity(rgba8.len() * core::mem::size_of::<u16>());
     for px in rgba8.chunks_exact(4) {

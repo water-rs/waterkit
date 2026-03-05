@@ -47,6 +47,7 @@ jobs:
             libxkbcommon-dev \
             libasound2-dev \
             libudev-dev \
+            libva-dev \
             libdav1d-dev \
             nasm \
             libavutil-dev \
@@ -109,6 +110,7 @@ jobs:
             libxkbcommon-dev \
             libasound2-dev \
             libudev-dev \
+            libva-dev \
             libdav1d-dev \
             nasm \
             libavutil-dev \
@@ -165,6 +167,7 @@ jobs:
             libxkbcommon-dev \
             libasound2-dev \
             libudev-dev \
+            libva-dev \
             libdav1d-dev \
             nasm \
             libavutil-dev \
@@ -251,6 +254,7 @@ jobs:
             libxkbcommon-dev \
             libasound2-dev \
             libudev-dev \
+            libva-dev \
             libdav1d-dev \
             nasm \
             libavutil-dev \

@@ -22,25 +22,25 @@ const PIXEL_FORMAT_RGBA8_UNORM_SRGB: u8 = 1;
 const PIXEL_FORMAT_RGBA16_FLOAT: u8 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AppleDecodedPixelFormat {
+pub enum AppleDecodedPixelFormat {
     Rgba8UnormSrgb,
     Rgba16Float,
 }
 
 #[derive(Debug)]
-pub(crate) struct AppleDecodedImage {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) pixels: Vec<u8>,
-    pub(crate) pixel_format: AppleDecodedPixelFormat,
-    pub(crate) hdr: bool,
+pub struct AppleDecodedImage {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+    pub pixel_format: AppleDecodedPixelFormat,
+    pub hdr: bool,
 }
 
-pub(crate) fn is_av1_hardware_decode_supported() -> bool {
+pub fn is_av1_hardware_decode_supported() -> bool {
     ffi::av1_hardware_decode_supported()
 }
 
-pub(crate) fn decode_isobmff_image(data: &[u8]) -> Result<AppleDecodedImage, CodecError> {
+pub fn decode_isobmff_image(data: &[u8]) -> Result<AppleDecodedImage, CodecError> {
     let decoded = ffi::decode_isobmff_image(data.to_vec());
     if !decoded.is_valid {
         return Err(CodecError::DecodingFailed(
@@ -63,8 +63,14 @@ pub(crate) fn decode_isobmff_image(data: &[u8]) -> Result<AppleDecodedImage, Cod
         }
     };
 
-    let expected_len = (decoded.width as usize)
-        .checked_mul(decoded.height as usize)
+    let expected_len = usize::try_from(decoded.width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(decoded.height)
+                .ok()
+                .map(|height| (width, height))
+        })
+        .and_then(|(width, height)| width.checked_mul(height))
         .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
         .ok_or_else(|| CodecError::DecodingFailed("ISOBMFF decoded buffer size overflow".into()))?;
     if decoded.pixels.len() != expected_len {

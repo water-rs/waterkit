@@ -18,9 +18,9 @@ use cros_codecs::decoder::stateless::{
 use cros_codecs::decoder::{DecodedHandle, DecoderEvent};
 use cros_codecs::encoder::h264::EncoderConfig as H264EncoderConfig;
 use cros_codecs::encoder::stateless::h264;
-use cros_codecs::encoder::{FrameMetadata, VideoEncoder};
+use cros_codecs::encoder::{FrameLayout, FrameMetadata, VideoEncoder};
 use cros_codecs::video_frame::VideoFrame;
-use cros_codecs::video_frame::gbm_video_frame::{GbmDevice, GbmUsage};
+use cros_codecs::video_frame::gbm_video_frame::{GbmDevice, GbmUsage, GbmVideoFrame};
 use cros_codecs::video_frame::generic_dma_video_frame::GenericDmaVideoFrame;
 use cros_codecs::{BlockingMode, Fourcc, Resolution};
 use std::fmt;
@@ -192,7 +192,7 @@ impl LinuxDecoder {
                     self.next_timestamp += 1;
                     self.collect_decoder_events(&mut frames)?;
                 }
-                Err(DecodeError::NotEnoughOutputBuffers(_)) | Err(DecodeError::CheckEvents) => {
+                Err(DecodeError::NotEnoughOutputBuffers(_) | DecodeError::CheckEvents) => {
                     self.collect_decoder_events(&mut frames)?;
                 }
                 Err(e) => {
@@ -227,7 +227,7 @@ impl LinuxDecoder {
                 coded_resolution,
                 GbmUsage::Decode,
             )
-            .and_then(|frame| frame.to_generic_dma_video_frame())
+            .and_then(GbmVideoFrame::to_generic_dma_video_frame)
             .expect("failed to allocate VA-API decode output frame")
     }
 
@@ -391,7 +391,7 @@ impl LinuxEncoder {
 
         let metadata = FrameMetadata {
             timestamp: self.frame_count,
-            layout: Default::default(),
+            layout: FrameLayout::default(),
             force_keyframe: false,
         };
 
@@ -507,9 +507,9 @@ fn parse_h264_avcc(payload: &[u8]) -> Result<(usize, Vec<u8>), CodecError> {
         ));
     }
 
-    let num_pps = payload[cursor] as usize;
+    let pps_count = payload[cursor] as usize;
     cursor += 1;
-    for _ in 0..num_pps {
+    for _ in 0..pps_count {
         let nal = read_u16_len_nal(payload, &mut cursor, "PPS")?;
         prefix_nalus.extend_from_slice(&START_CODE);
         prefix_nalus.extend_from_slice(nal);
@@ -703,7 +703,7 @@ fn allocate_encode_frame(
             coded_resolution,
             usage,
         )
-        .and_then(|frame| frame.to_generic_dma_video_frame())
+        .and_then(GbmVideoFrame::to_generic_dma_video_frame)
         .map_err(|e| CodecError::EncodingFailed(format!("failed to allocate encode frame: {e}")))
 }
 
@@ -814,9 +814,7 @@ fn annex_b_nalus(data: &[u8]) -> Vec<&[u8]> {
 
     while let Some((start_idx, start_len)) = find_start_code(data, cursor) {
         let nalu_start = start_idx + start_len;
-        let end_idx = find_start_code(data, nalu_start)
-            .map(|(idx, _)| idx)
-            .unwrap_or(data.len());
+        let end_idx = find_start_code(data, nalu_start).map_or(data.len(), |(idx, _)| idx);
         if nalu_start < end_idx {
             nalus.push(&data[nalu_start..end_idx]);
         }

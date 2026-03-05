@@ -60,6 +60,98 @@ pub struct CameraInner {
     start_instant: Instant,
 }
 
+fn parse_camera_index(camera_id: &str) -> CameraIndex {
+    camera_id.parse::<u32>().map_or_else(
+        |_| CameraIndex::String(camera_id.to_string()),
+        CameraIndex::Index,
+    )
+}
+
+fn build_desktop_capabilities(
+    detected_resolution: Resolution,
+    config: &CameraConfig,
+) -> Result<CameraCapabilities, CameraError> {
+    let mut resolutions = Vec::with_capacity(4);
+    resolutions.push(detected_resolution);
+    if !resolutions.contains(&config.resolution) {
+        resolutions.push(config.resolution);
+    }
+    if !resolutions.contains(&Resolution::HD) {
+        resolutions.push(Resolution::HD);
+    }
+    if !resolutions.contains(&Resolution::FULL_HD) {
+        resolutions.push(Resolution::FULL_HD);
+    }
+
+    let mut frame_rates = vec![config.frame_rate.max(1)];
+    if !frame_rates.contains(&30) {
+        frame_rates.push(30);
+    }
+
+    let capabilities = CameraCapabilities {
+        resolutions,
+        frame_rates,
+        iso_range: None,
+        exposure_duration_range: None,
+        supports_exposure_compensation: false,
+        supports_manual_focus: false,
+        supports_manual_white_balance: false,
+        zoom_range: None,
+        dynamic_ranges: vec![DynamicRangeProfile::Sdr],
+        supports_dolby_vision: false,
+        stabilization_modes: vec![StabilizationMode::Off],
+        has_flash: false,
+        has_torch: false,
+        supports_concurrent_multi_camera: false,
+        max_concurrent_cameras: NonZeroU8::MIN,
+        uses_system_photo_pipeline: false,
+        uses_system_video_pipeline: false,
+        supports_raw_photo: false,
+        raw_photo_formats: Vec::new(),
+        supports_raw_video: false,
+        raw_video_formats: Vec::new(),
+    };
+    capabilities.validate()?;
+    Ok(capabilities)
+}
+
+fn spawn_capture_thread(
+    camera: Arc<Mutex<SendableCamera>>,
+    sender: async_channel::Sender<RawFrame>,
+    streaming: Arc<AtomicBool>,
+) {
+    std::thread::spawn(move || {
+        while streaming.load(Ordering::SeqCst) {
+            if sender.is_closed() {
+                break;
+            }
+
+            let frame = {
+                let mut guard = camera.lock().unwrap();
+                guard.0.frame().ok()
+            };
+
+            if let Some(frame) = frame {
+                let decoded = frame.decode_image::<RgbAFormat>();
+                if let Ok(img) = decoded {
+                    let raw = RawFrame {
+                        data: img.into_raw(),
+                        width: frame.resolution().width(),
+                        height: frame.resolution().height(),
+                        timestamp: Instant::now(),
+                    };
+                    let _ = sender.force_send(raw);
+                }
+            } else {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+
+        let mut guard = camera.lock().unwrap();
+        let _ = guard.0.stop_stream();
+    });
+}
+
 impl CameraInner {
     pub fn list() -> Result<Vec<CameraInfo>, CameraError> {
         let devices = nokhwa::query(nokhwa::utils::ApiBackend::Auto)
@@ -82,10 +174,7 @@ impl CameraInner {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
     ) -> Result<Self, CameraError> {
-        let index = camera_id.parse::<u32>().map_or_else(
-            |_| CameraIndex::String(camera_id.to_string()),
-            CameraIndex::Index,
-        );
+        let index = parse_camera_index(camera_id);
 
         let requested_format = NokhwaCameraFormat::new(
             NokhwaResolution::new(config.resolution.width, config.resolution.height),
@@ -107,48 +196,7 @@ impl CameraInner {
         // Create frame channel
         let (sender, receiver) = async_channel::bounded(1);
 
-        let mut resolutions = Vec::with_capacity(4);
-        resolutions.push(res);
-        if !resolutions.contains(&config.resolution) {
-            resolutions.push(config.resolution);
-        }
-        if !resolutions.contains(&Resolution::HD) {
-            resolutions.push(Resolution::HD);
-        }
-        if !resolutions.contains(&Resolution::FULL_HD) {
-            resolutions.push(Resolution::FULL_HD);
-        }
-
-        let mut frame_rates = vec![config.frame_rate.max(1)];
-        if !frame_rates.contains(&30) {
-            frame_rates.push(30);
-        }
-
-        // Desktop cameras have no professional controls
-        let capabilities = CameraCapabilities {
-            resolutions,
-            frame_rates,
-            iso_range: None,
-            exposure_duration_range: None,
-            supports_exposure_compensation: false,
-            supports_manual_focus: false,
-            supports_manual_white_balance: false,
-            zoom_range: None,
-            dynamic_ranges: vec![DynamicRangeProfile::Sdr],
-            supports_dolby_vision: false,
-            stabilization_modes: vec![StabilizationMode::Off],
-            has_flash: false,
-            has_torch: false,
-            supports_concurrent_multi_camera: false,
-            max_concurrent_cameras: NonZeroU8::MIN,
-            uses_system_photo_pipeline: false,
-            uses_system_video_pipeline: false,
-            supports_raw_photo: false,
-            raw_photo_formats: Vec::new(),
-            supports_raw_video: false,
-            raw_video_formats: Vec::new(),
-        };
-        capabilities.validate()?;
+        let capabilities = build_desktop_capabilities(res, &config)?;
 
         // Start streaming immediately (RAII)
         camera
@@ -160,39 +208,7 @@ impl CameraInner {
 
         // Wrap camera in SendableCamera for thread safety
         let camera = Arc::new(Mutex::new(SendableCamera(camera)));
-        let streaming_clone = streaming.clone();
-
-        std::thread::spawn(move || {
-            while streaming_clone.load(Ordering::SeqCst) {
-                if sender.is_closed() {
-                    break;
-                }
-
-                let frame = {
-                    let mut guard = camera.lock().unwrap();
-                    guard.0.frame().ok()
-                };
-
-                if let Some(frame) = frame {
-                    let decoded = frame.decode_image::<RgbAFormat>();
-                    if let Ok(img) = decoded {
-                        let raw = RawFrame {
-                            data: img.into_raw(),
-                            width: frame.resolution().width(),
-                            height: frame.resolution().height(),
-                            timestamp: Instant::now(),
-                        };
-                        let _ = sender.force_send(raw);
-                    }
-                } else {
-                    std::thread::sleep(Duration::from_millis(2));
-                }
-            }
-
-            // Stop the camera when thread exits
-            let mut guard = camera.lock().unwrap();
-            let _ = guard.0.stop_stream();
-        });
+        spawn_capture_thread(camera, sender, Arc::clone(&streaming));
 
         Ok(Self {
             device,

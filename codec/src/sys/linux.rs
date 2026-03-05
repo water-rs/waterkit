@@ -18,11 +18,11 @@ use cros_codecs::decoder::stateless::{
 use cros_codecs::decoder::{DecodedHandle, DecoderEvent};
 use cros_codecs::encoder::h264::EncoderConfig as H264EncoderConfig;
 use cros_codecs::encoder::stateless::h264;
-use cros_codecs::encoder::{FrameLayout, FrameMetadata, VideoEncoder};
+use cros_codecs::encoder::{FrameMetadata, VideoEncoder};
 use cros_codecs::video_frame::VideoFrame;
 use cros_codecs::video_frame::gbm_video_frame::{GbmDevice, GbmUsage, GbmVideoFrame};
 use cros_codecs::video_frame::generic_dma_video_frame::GenericDmaVideoFrame;
-use cros_codecs::{BlockingMode, Fourcc, Resolution};
+use cros_codecs::{BlockingMode, Fourcc, FrameLayout, Resolution};
 use std::fmt;
 use std::sync::Arc;
 

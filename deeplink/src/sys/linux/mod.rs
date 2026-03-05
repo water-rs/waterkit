@@ -29,7 +29,7 @@ impl DeepLinkHandlerInner {
     }
 
     pub fn initial_link(&self) -> Result<Option<DeepLink>, DeepLinkError> {
-        Ok(self.inner.initial_link())
+        self.inner.initial_link()
     }
 
     pub fn stop(&self) {

@@ -128,7 +128,7 @@ impl VideoReader {
                 } else {
                     // For HEVC (hvc1/hev1), mp4 crate cannot reliably expose raw hvcC bytes.
                     // Extract hvcC atom directly from file for decoder initialization.
-                    codec_config = extract_box_from_file(path_ref, b"hvcC")?;
+                    codec_config = extract_box_from_file(path_ref, *b"hvcC")?;
                 }
                 break;
             }
@@ -205,28 +205,30 @@ impl VideoReader {
     }
 }
 
-fn extract_box_from_file(path: &Path, box_type: &[u8; 4]) -> Result<Option<Vec<u8>>, VideoError> {
+fn extract_box_from_file(path: &Path, box_type: [u8; 4]) -> Result<Option<Vec<u8>>, VideoError> {
     let mut file = std::fs::File::open(path)?;
-    let mut bytes = vec![0_u8; file.metadata()?.len() as usize];
+    let file_len = usize::try_from(file.metadata()?.len()).map_err(|_| {
+        VideoError::Container("video file length exceeds current architecture limits".to_string())
+    })?;
+    let mut bytes = vec![0_u8; file_len];
     file.read_exact(&mut bytes)?;
     Ok(extract_box_from_bytes(&bytes, box_type))
 }
 
-fn extract_box_from_bytes(bytes: &[u8], box_type: &[u8; 4]) -> Option<Vec<u8>> {
-    let pos = bytes
-        .windows(4)
-        .position(|window| window == box_type.as_slice())?;
+fn extract_box_from_bytes(bytes: &[u8], box_type: [u8; 4]) -> Option<Vec<u8>> {
+    let pos = bytes.windows(4).position(|window| window == box_type)?;
     if pos < 4 {
         return None;
     }
 
     let size_pos = pos - 4;
-    let box_size = u32::from_be_bytes([
+    let box_size = usize::try_from(u32::from_be_bytes([
         bytes[size_pos],
         bytes[size_pos + 1],
         bytes[size_pos + 2],
         bytes[size_pos + 3],
-    ]) as usize;
+    ]))
+    .ok()?;
     if box_size <= 8 || size_pos.saturating_add(box_size) > bytes.len() {
         return None;
     }
@@ -244,13 +246,13 @@ mod tests {
         bytes.extend_from_slice(&[0, 0, 0, 4, b'f', b't', b'y', b'p']);
         bytes.extend_from_slice(&[0, 0, 0, 12, b'h', b'v', b'c', b'C', 1, 2, 3, 4]);
 
-        let hvcc = extract_box_from_bytes(&bytes, b"hvcC").expect("expected hvcC");
+        let hvcc = extract_box_from_bytes(&bytes, *b"hvcC").expect("expected hvcC");
         assert_eq!(hvcc, vec![0, 0, 0, 12, b'h', b'v', b'c', b'C', 1, 2, 3, 4]);
     }
 
     #[test]
     fn ignores_invalid_box_size() {
         let bytes = [0, 0, 0, 2, b'h', b'v', b'c', b'C'];
-        assert!(extract_box_from_bytes(&bytes, b"hvcC").is_none());
+        assert!(extract_box_from_bytes(&bytes, *b"hvcC").is_none());
     }
 }

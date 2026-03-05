@@ -44,14 +44,15 @@ fn remove_action_waiter(notification_id: &str) {
         .remove(notification_id);
 }
 
-fn register_action_waiter(notification_id: &str, sender: async_channel::Sender<String>) {
+fn register_action_waiter(notification_id: &str, sender: &async_channel::Sender<String>) {
     let previous = action_waiters()
         .lock()
         .expect("waterkit-notification: action waiters mutex poisoned")
         .insert(notification_id.to_owned(), sender.clone());
-    if previous.is_some() {
-        panic!("waterkit-notification: duplicate action waiter for notification {notification_id}");
-    }
+    assert!(
+        previous.is_none(),
+        "waterkit-notification: duplicate action waiter for notification {notification_id}"
+    );
 
     let pending = action_backlog()
         .lock()
@@ -274,7 +275,7 @@ pub fn show_notification_with_context(
         None
     } else {
         let (action_tx, action_rx) = async_channel::bounded(1);
-        register_action_waiter(notification_id, action_tx);
+        register_action_waiter(notification_id, &action_tx);
         Some(action_rx)
     };
 

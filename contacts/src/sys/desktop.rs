@@ -52,7 +52,7 @@ pub async fn get(id: &str) -> Result<Contact, ContactsError> {
             .contacts
             .into_iter()
             .find(|contact| contact.id == id.as_str())
-            .ok_or_else(|| ContactsError::NotFound(id))
+            .ok_or(ContactsError::NotFound(id))
     })
     .await
 }
@@ -118,9 +118,7 @@ fn contact_matches_query(contact: &Contact, query: &str) -> bool {
 }
 
 fn field_contains(value: Option<&str>, query: &str) -> bool {
-    value
-        .map(|field| field.to_ascii_lowercase().contains(query))
-        .unwrap_or(false)
+    value.is_some_and(|field| field.to_ascii_lowercase().contains(query))
 }
 
 fn store_path() -> Result<PathBuf, ContactsError> {

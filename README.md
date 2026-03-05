@@ -26,6 +26,7 @@ Waterkit is organized into focused, independent crates. You can use the main `wa
 | **[NFC](nfc)** | NFC read/write and tag interaction workflows. |
 | **[Notification](notification)** | Local system notifications. |
 | **[Permission](permission)** | Unified API for requesting system permissions (Camera, Mic, Location, etc.). |
+| **[Regional](regional)** | Locale, preferred languages, region, and timezone context helpers. |
 | **[Passkey](passkey)** | Native passkey registration/authentication ceremonies with ergonomic WebAuthn helpers. |
 | **[Screen](screen)** | Screen capture and display information. |
 | **[Secret](secret)** | Secure storage (Keychain, Keystore, Credential Locker). |

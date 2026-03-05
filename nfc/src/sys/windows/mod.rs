@@ -17,7 +17,6 @@ pub struct NfcReaderInner {
 fn decode_uri_payload(payload: &[u8]) -> Option<String> {
     let (&prefix, rest) = payload.split_first()?;
     let prefix_str = match prefix {
-        0x00 => "",
         0x01 => "http://www.",
         0x02 => "https://www.",
         0x03 => "http://",
@@ -40,6 +39,7 @@ fn decode_text_payload(payload: &[u8]) -> Option<String> {
 }
 
 impl NfcReaderInner {
+    #[allow(clippy::unused_async)]
     pub async fn start_session(
         _message: &str,
     ) -> Result<(Self, async_channel::Receiver<NfcTag>), NfcError> {
@@ -83,6 +83,7 @@ impl NfcReaderInner {
         ))
     }
 
+    #[allow(clippy::unused_async)]
     pub async fn write(&self, message: NdefMessage) -> Result<(), NfcError> {
         let record = message
             .records
@@ -119,6 +120,7 @@ impl NfcReaderInner {
         if let Some(old_id) = publish_id.replace(next_publish_id) {
             let _ = self.device.StopPublishingMessage(old_id);
         }
+        drop(publish_id);
         Ok(())
     }
 

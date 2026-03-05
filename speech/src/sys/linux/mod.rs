@@ -5,11 +5,10 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const LINUX_RECOGNIZER_ENV: &str = "WATERKIT_SPEECH_LINUX_RECOGNIZER";
+const LANGUAGE_PLACEHOLDER: &str = "{language}";
 
 pub fn recognition_is_available() -> bool {
-    std::env::var(LINUX_RECOGNIZER_ENV)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
+    std::env::var(LINUX_RECOGNIZER_ENV).is_ok_and(|value| !value.trim().is_empty())
 }
 
 #[derive(Debug)]
@@ -90,6 +89,7 @@ pub struct SpeechRecognizerInner {
 }
 
 impl SpeechRecognizerInner {
+    #[allow(clippy::unused_async)]
     pub async fn start(
         config: RecognitionConfig,
     ) -> Result<(Self, async_channel::Receiver<RecognitionResult>), SpeechError> {
@@ -176,5 +176,5 @@ fn build_linux_command(command: &str, language: Option<&str>) -> String {
     let Some(language) = language else {
         return command.to_string();
     };
-    command.replace("{language}", language)
+    command.replace(LANGUAGE_PLACEHOLDER, language)
 }

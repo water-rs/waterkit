@@ -13,6 +13,11 @@ fn ios_classic_unavailable_error() -> BluetoothError {
     )
 }
 
+#[cfg(target_os = "ios")]
+async fn ios_classic_unavailable<T>() -> Result<T, BluetoothError> {
+    core::future::ready(Err(ios_classic_unavailable_error())).await
+}
+
 #[swift_bridge::bridge]
 mod ffi {
     extern "Swift" {
@@ -401,7 +406,7 @@ impl ClassicBluetoothInner {
     pub async fn new() -> Result<Self, BluetoothError> {
         #[cfg(target_os = "ios")]
         {
-            return Err(ios_classic_unavailable_error());
+            ios_classic_unavailable().await
         }
 
         #[cfg(target_os = "macos")]
@@ -426,17 +431,17 @@ impl ClassicBluetoothInner {
         #[cfg(target_os = "ios")]
         {
             let _ = self;
-            return Err(ios_classic_unavailable_error());
+            Err(ios_classic_unavailable_error())
         }
 
         #[cfg(target_os = "macos")]
         {
-            if let Some(ctx) = self
+            let scan_ctx = self
                 .scan_ctx
                 .lock()
                 .expect("classic scan context mutex poisoned")
-                .take()
-            {
+                .take();
+            if let Some(ctx) = scan_ctx {
                 ffi::bluetooth_classic_stop_discovery(ctx);
             }
             let _ = self
@@ -465,35 +470,33 @@ impl ClassicBluetoothInner {
         }
     }
 
-    pub fn stop_discovery(&self) {
-        #[cfg(target_os = "ios")]
-        {
-            let _ = self;
-        }
+    #[cfg(target_os = "ios")]
+    pub const fn stop_discovery(&self) {
+        let _ = self;
+    }
 
-        #[cfg(target_os = "macos")]
-        {
-            if let Some(ctx) = self
-                .scan_ctx
-                .lock()
-                .expect("classic scan context mutex poisoned")
-                .take()
-            {
-                ffi::bluetooth_classic_stop_discovery(ctx);
-            }
-            let _ = self
-                .scan_tx
-                .lock()
-                .expect("classic scan sender mutex poisoned")
-                .take();
+    #[cfg(target_os = "macos")]
+    pub fn stop_discovery(&self) {
+        let scan_ctx = self
+            .scan_ctx
+            .lock()
+            .expect("classic scan context mutex poisoned")
+            .take();
+        if let Some(ctx) = scan_ctx {
+            ffi::bluetooth_classic_stop_discovery(ctx);
         }
+        let _ = self
+            .scan_tx
+            .lock()
+            .expect("classic scan sender mutex poisoned")
+            .take();
     }
 
     pub async fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {
         #[cfg(target_os = "ios")]
         {
             let _ = self;
-            return Err(ios_classic_unavailable_error());
+            ios_classic_unavailable().await
         }
 
         #[cfg(target_os = "macos")]
@@ -518,7 +521,7 @@ impl ClassicBluetoothInner {
             let _ = self;
             let _ = device_id;
             let _ = uuid;
-            return Err(ios_classic_unavailable_error());
+            ios_classic_unavailable().await
         }
 
         #[cfg(target_os = "macos")]
@@ -553,8 +556,8 @@ impl SppStreamInner {
         #[cfg(target_os = "ios")]
         {
             let _ = self;
-            let _ = buf;
-            return Err(ios_classic_unavailable_error());
+            let _ = buf.get_mut(..0);
+            ios_classic_unavailable().await
         }
 
         #[cfg(target_os = "macos")]
@@ -578,7 +581,7 @@ impl SppStreamInner {
         {
             let _ = self;
             let _ = data;
-            return Err(ios_classic_unavailable_error());
+            ios_classic_unavailable().await
         }
 
         #[cfg(target_os = "macos")]
@@ -601,6 +604,7 @@ impl SppStreamInner {
         #[cfg(target_os = "ios")]
         {
             let _ = self;
+            core::future::ready(()).await;
         }
 
         #[cfg(target_os = "macos")]

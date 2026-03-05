@@ -51,6 +51,20 @@ fn decode_optional_string(env: &mut JNIEnv, uri: JObject) -> Option<String> {
     )
 }
 
+fn request_id_from_jlong(request_id: jlong) -> u64 {
+    u64::try_from(request_id).unwrap_or_else(|_| {
+        panic!("waterkit-dialog: request id conversion from jlong failed: {request_id}")
+    })
+}
+
+fn jlong_from_request_id(request_id: u64) -> Result<jlong, DialogError> {
+    jlong::try_from(request_id).map_err(|_| {
+        DialogError::PlatformError(format!(
+            "picker request id exceeds jlong range: {request_id}"
+        ))
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_waterkit_dialog_DialogHelper_onPhotoPickerResult(
     mut env: JNIEnv,
@@ -68,7 +82,7 @@ pub extern "system" fn Java_waterkit_dialog_DialogHelper_onPhotoPickerResult(
         .unwrap_or_else(|error| {
             panic!("waterkit-dialog: photo picker callback map lock poisoned: {error}")
         })
-        .remove(&(request_id as u64))
+        .remove(&request_id_from_jlong(request_id))
         .unwrap_or_else(|| {
             panic!("waterkit-dialog: unknown photo picker request id in callback: {request_id}")
         });
@@ -92,7 +106,7 @@ pub extern "system" fn Java_waterkit_dialog_DialogHelper_onFilePickerResult(
         .unwrap_or_else(|error| {
             panic!("waterkit-dialog: file picker callback map lock poisoned: {error}")
         })
-        .remove(&(request_id as u64))
+        .remove(&request_id_from_jlong(request_id))
         .unwrap_or_else(|| {
             panic!("waterkit-dialog: unknown file picker request id in callback: {request_id}")
         });
@@ -247,6 +261,7 @@ fn launch_photo_picker_with_context(
         crate::MediaType::Video => 1,
     };
     let request_id = NEXT_PICKER_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    let request_id_jlong = jlong_from_request_id(request_id)?;
     let (tx, rx) = oneshot::channel();
     photo_picker_callbacks()
         .lock()
@@ -260,7 +275,7 @@ fn launch_photo_picker_with_context(
         &[
             JValue::Object(context),
             JValue::Int(type_int),
-            JValue::Long(request_id as jlong),
+            JValue::Long(request_id_jlong),
         ],
     );
     if let Err(error) = launch_result {
@@ -284,6 +299,7 @@ fn launch_file_picker_with_context(
     let helper_class = get_helper_class(env)?;
 
     let request_id = NEXT_PICKER_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    let request_id_jlong = jlong_from_request_id(request_id)?;
     let (tx, rx) = oneshot::channel();
     file_picker_callbacks()
         .lock()
@@ -301,7 +317,7 @@ fn launch_file_picker_with_context(
         &[
             JValue::Object(context),
             JValue::Object(&filters_jstr),
-            JValue::Long(request_id as jlong),
+            JValue::Long(request_id_jlong),
         ],
     );
     if let Err(error) = launch_result {
@@ -486,11 +502,12 @@ pub async fn show_photo_picker(
     picker: crate::PhotoPicker,
 ) -> Result<Option<Selection>, DialogError> {
     let (vm, context) = ensure_context_global()?;
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|e| DialogError::PlatformError(format!("attach_current_thread: {e}")))?;
-    let rx = launch_photo_picker_with_context(&mut env, context.as_obj(), &picker)?;
-    drop(env);
+    let rx = {
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| DialogError::PlatformError(format!("attach_current_thread: {e}")))?;
+        launch_photo_picker_with_context(&mut env, context.as_obj(), &picker)?
+    };
     let picked_uri = rx.await.map_err(|_| DialogError::Cancelled)?;
     Ok(picked_uri.map(Selection))
 }
@@ -503,11 +520,12 @@ pub async fn show_open_single_file(
     dialog: FileDialog,
 ) -> Result<Option<std::path::PathBuf>, DialogError> {
     let (vm, context) = ensure_context_global()?;
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|e| DialogError::PlatformError(format!("attach_current_thread: {e}")))?;
-    let rx = launch_file_picker_with_context(&mut env, context.as_obj(), &dialog)?;
-    drop(env);
+    let rx = {
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| DialogError::PlatformError(format!("attach_current_thread: {e}")))?;
+        launch_file_picker_with_context(&mut env, context.as_obj(), &dialog)?
+    };
     let picked_uri = rx.await.map_err(|_| DialogError::Cancelled)?;
     match picked_uri {
         Some(uri) => load_media(Selection(uri)).await.map(Some),

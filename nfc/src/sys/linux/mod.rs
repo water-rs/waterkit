@@ -84,7 +84,6 @@ fn decode_tag_type(tag_type: &str) -> NfcTagType {
 fn decode_uri_payload(payload: &[u8]) -> Option<String> {
     let (&prefix, rest) = payload.split_first()?;
     let prefix_str = match prefix {
-        0x00 => "",
         0x01 => "http://www.",
         0x02 => "https://www.",
         0x03 => "http://",
@@ -131,9 +130,8 @@ fn parse_tag(path: &str, objects: &ManagedObjects) -> Option<NfcTag> {
     let id = prop_string(tag_props, "UID")
         .and_then(|raw| parse_hex_id(&raw))
         .unwrap_or_default();
-    let tag_type = prop_string(tag_props, "Type")
-        .map(|raw| decode_tag_type(&raw))
-        .unwrap_or(NfcTagType::Unknown);
+    let tag_type =
+        prop_string(tag_props, "Type").map_or(NfcTagType::Unknown, |raw| decode_tag_type(&raw));
 
     let mut records = Vec::new();
     for record_path in prop_object_paths(tag_props, "Records") {
@@ -274,9 +272,8 @@ fn run_tag_listener(
     stopped: Arc<AtomicBool>,
 ) {
     futures::executor::block_on(async move {
-        let conn = match get_system_connection().await {
-            Ok(connection) => connection,
-            Err(_) => return,
+        let Ok(conn) = get_system_connection().await else {
+            return;
         };
         if !has_neard_owner(&conn).await.unwrap_or(false) {
             return;
@@ -310,16 +307,14 @@ fn run_tag_listener(
             }
         }
 
-        let mut added_stream = match object_manager.receive_interfaces_added().await {
-            Ok(stream) => stream,
-            Err(_) => return,
+        let Ok(mut added_stream) = object_manager.receive_interfaces_added().await else {
+            return;
         };
         loop {
             let signal_next = added_stream.next();
             let stop_next = stop_rx.recv();
             futures::pin_mut!(signal_next, stop_next);
             match futures::future::select(stop_next, signal_next).await {
-                futures::future::Either::Left(_) => break,
                 futures::future::Either::Right((Some(signal), _)) => {
                     if stopped.load(Ordering::Relaxed) {
                         break;
@@ -347,7 +342,9 @@ fn run_tag_listener(
                         }
                     }
                 }
-                futures::future::Either::Right((None, _)) => break,
+                futures::future::Either::Left(_) | futures::future::Either::Right((None, _)) => {
+                    break;
+                }
             }
         }
     });

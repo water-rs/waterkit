@@ -2,11 +2,9 @@ use crate::{
     AdapterState, BluetoothDevice, BluetoothError, CharacteristicProperties, ClassicDevice,
     DeviceId, GattCharacteristic, GattService, ScanFilter, ScanResult, Uuid,
 };
-use futures::channel::oneshot;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::thread::JoinHandle;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Devices::Bluetooth::Advertisement::{
     BluetoothLEAdvertisementReceivedEventArgs, BluetoothLEAdvertisementWatcher,
 };
@@ -34,11 +32,18 @@ fn parse_guid(uuid: &Uuid) -> Result<windows::core::GUID, BluetoothError> {
         .map_err(|_| BluetoothError::GattError("Invalid UUID".into()))
 }
 
+fn connection_failed(message: impl Into<String>) -> BluetoothError {
+    BluetoothError::ConnectionFailed(message.into())
+}
+
+fn connection_failed_with_context(context: &str, error: impl std::fmt::Display) -> BluetoothError {
+    connection_failed(format!("{context}: {error}"))
+}
+
 fn device_from_info(info: &DeviceInformation, paired: bool) -> ClassicDevice {
     let device_id = info
         .Id()
-        .map(|value| value.to_string())
-        .unwrap_or_else(|_| String::new());
+        .map_or_else(|_| String::new(), |value| value.to_string());
     let name = info
         .Name()
         .map(|value| value.to_string())
@@ -150,6 +155,13 @@ impl BleScannerInner {
 #[derive(Debug)]
 pub struct BleConnectionInner {
     device: BluetoothLEDevice,
+    subscriptions: Mutex<Vec<SubscriptionState>>,
+}
+
+#[derive(Debug)]
+struct SubscriptionState {
+    characteristic: WinGattCharacteristic,
+    token: i64,
 }
 
 impl BleConnectionInner {
@@ -160,7 +172,10 @@ impl BleConnectionInner {
             .map_err(|e| BluetoothError::ConnectionFailed(e.to_string()))?
             .await
             .map_err(|e| BluetoothError::ConnectionFailed(e.to_string()))?;
-        Ok(Self { device })
+        Ok(Self {
+            device,
+            subscriptions: Mutex::new(Vec::new()),
+        })
     }
 
     #[allow(clippy::future_not_send)]
@@ -286,139 +301,184 @@ impl BleConnectionInner {
         Ok(())
     }
 
-    pub fn subscribe(
+    #[allow(clippy::future_not_send)]
+    async fn find_subscription_characteristic(
+        device: &BluetoothLEDevice,
+        service_guid: windows::core::GUID,
+        characteristic_guid: windows::core::GUID,
+    ) -> Result<WinGattCharacteristic, BluetoothError> {
+        let service_operation =
+            device
+                .GetGattServicesForUuidAsync(service_guid)
+                .map_err(|error| {
+                    connection_failed_with_context("start GATT service query failed", error)
+                })?;
+        let service_result = service_operation
+            .await
+            .map_err(|error| connection_failed_with_context("GATT service query failed", error))?;
+        if service_result
+            .Status()
+            .unwrap_or(GattCommunicationStatus::Unreachable)
+            != GattCommunicationStatus::Success
+        {
+            return Err(connection_failed(
+                "GATT service query returned unsuccessful status",
+            ));
+        }
+
+        let services = service_result
+            .Services()
+            .map_err(|error| connection_failed_with_context("load GATT services failed", error))?;
+        let service = services
+            .First()
+            .and_then(|iter| iter.Current())
+            .map_err(|_| connection_failed("GATT service not found"))?;
+
+        let characteristic_operation = service
+            .GetCharacteristicsForUuidAsync(characteristic_guid)
+            .map_err(|error| {
+                connection_failed_with_context("start GATT characteristic query failed", error)
+            })?;
+        let chars_result = characteristic_operation.await.map_err(|error| {
+            connection_failed_with_context("GATT characteristic query failed", error)
+        })?;
+        if chars_result
+            .Status()
+            .unwrap_or(GattCommunicationStatus::Unreachable)
+            != GattCommunicationStatus::Success
+        {
+            return Err(connection_failed(
+                "GATT characteristic query returned unsuccessful status",
+            ));
+        }
+
+        let characteristics = chars_result.Characteristics().map_err(|error| {
+            connection_failed_with_context("load GATT characteristics failed", error)
+        })?;
+        characteristics
+            .First()
+            .and_then(|iter| iter.Current())
+            .map_err(|_| connection_failed("GATT characteristic not found"))
+    }
+
+    fn register_value_changed_handler(
+        characteristic: &WinGattCharacteristic,
+        tx: async_channel::Sender<Vec<u8>>,
+    ) -> Result<i64, BluetoothError> {
+        characteristic
+            .ValueChanged(&TypedEventHandler::<
+                WinGattCharacteristic,
+                GattValueChangedEventArgs,
+            >::new(move |_, args| {
+                let Some(args) = args.as_ref() else {
+                    return Ok(());
+                };
+                let Ok(buffer) = args.CharacteristicValue() else {
+                    return Ok(());
+                };
+                let Ok(reader) = DataReader::FromBuffer(&buffer) else {
+                    return Ok(());
+                };
+                let Ok(len) = reader.UnconsumedBufferLength() else {
+                    return Ok(());
+                };
+                let mut bytes = vec![0u8; len as usize];
+                if reader.ReadBytes(&mut bytes).is_ok() {
+                    let _ = tx.try_send(bytes);
+                }
+                Ok(())
+            }))
+            .map_err(|error| {
+                connection_failed_with_context("register notification handler failed", error)
+            })
+    }
+
+    async fn set_notification_state(
+        characteristic: &WinGattCharacteristic,
+        mode: GattClientCharacteristicConfigurationDescriptorValue,
+    ) -> Result<GattCommunicationStatus, BluetoothError> {
+        let operation = characteristic
+            .WriteClientCharacteristicConfigurationDescriptorAsync(mode)
+            .map_err(|error| {
+                connection_failed_with_context("start notification state write failed", error)
+            })?;
+        operation.await.map_err(|error| {
+            connection_failed_with_context("notification state write failed", error)
+        })
+    }
+
+    async fn enable_notifications(
+        characteristic: &WinGattCharacteristic,
+    ) -> Result<bool, BluetoothError> {
+        let notify_status = Self::set_notification_state(
+            characteristic,
+            GattClientCharacteristicConfigurationDescriptorValue::Notify,
+        )
+        .await;
+        if notify_status? == GattCommunicationStatus::Success {
+            return Ok(true);
+        }
+
+        Ok(Self::set_notification_state(
+            characteristic,
+            GattClientCharacteristicConfigurationDescriptorValue::Indicate,
+        )
+        .await?
+            == GattCommunicationStatus::Success)
+    }
+
+    #[allow(clippy::future_not_send)]
+    pub async fn subscribe(
         &self,
         service: &Uuid,
         characteristic: &Uuid,
     ) -> Result<async_channel::Receiver<Vec<u8>>, BluetoothError> {
         let service_guid = parse_guid(service)?;
         let characteristic_guid = parse_guid(characteristic)?;
-        let device = self.device.clone();
+        let target =
+            Self::find_subscription_characteristic(&self.device, service_guid, characteristic_guid)
+                .await?;
         let (tx, rx) = async_channel::bounded(64);
-
-        std::thread::spawn(move || {
-            futures::executor::block_on(async move {
-                let service_result = match device.GetGattServicesForUuidAsync(service_guid) {
-                    Ok(op) => op.await,
-                    Err(_) => return,
-                };
-                let Ok(service_result) = service_result else {
-                    return;
-                };
-                if service_result
-                    .Status()
-                    .unwrap_or(GattCommunicationStatus::Unreachable)
-                    != GattCommunicationStatus::Success
-                {
-                    return;
-                }
-                let services = match service_result.Services() {
-                    Ok(services) => services,
-                    Err(_) => return,
-                };
-                let service = match services.First().and_then(|iter| iter.Current()) {
-                    Ok(service) => service,
-                    Err(_) => return,
-                };
-
-                let chars_result = match service.GetCharacteristicsForUuidAsync(characteristic_guid)
-                {
-                    Ok(op) => op.await,
-                    Err(_) => return,
-                };
-                let Ok(chars_result) = chars_result else {
-                    return;
-                };
-                if chars_result
-                    .Status()
-                    .unwrap_or(GattCommunicationStatus::Unreachable)
-                    != GattCommunicationStatus::Success
-                {
-                    return;
-                }
-                let characteristics = match chars_result.Characteristics() {
-                    Ok(characteristics) => characteristics,
-                    Err(_) => return,
-                };
-                let characteristic = match characteristics.First().and_then(|iter| iter.Current()) {
-                    Ok(characteristic) => characteristic,
-                    Err(_) => return,
-                };
-
-                let event_tx = tx.clone();
-                let token = match characteristic.ValueChanged(&TypedEventHandler::<
-                    WinGattCharacteristic,
-                    GattValueChangedEventArgs,
-                >::new(
-                    move |_, args| {
-                        let Some(args) = args.as_ref() else {
-                            return Ok(());
-                        };
-                        let Ok(buffer) = args.CharacteristicValue() else {
-                            return Ok(());
-                        };
-                        let Ok(reader) = windows::Storage::Streams::DataReader::FromBuffer(&buffer)
-                        else {
-                            return Ok(());
-                        };
-                        let Ok(len) = reader.UnconsumedBufferLength() else {
-                            return Ok(());
-                        };
-                        let mut bytes = vec![0u8; len as usize];
-                        if reader.ReadBytes(&mut bytes).is_ok() {
-                            let _ = event_tx.try_send(bytes);
-                        }
-                        Ok(())
-                    },
-                )) {
-                    Ok(token) => token,
-                    Err(_) => return,
-                };
-
-                let notify_status = match characteristic
-                    .WriteClientCharacteristicConfigurationDescriptorAsync(
-                        GattClientCharacteristicConfigurationDescriptorValue::Notify,
-                    ) {
-                    Ok(op) => op.await.unwrap_or(GattCommunicationStatus::Unreachable),
-                    Err(_) => GattCommunicationStatus::Unreachable,
-                };
-
-                let final_status = if notify_status == GattCommunicationStatus::Success {
-                    notify_status
-                } else {
-                    match characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
-                        GattClientCharacteristicConfigurationDescriptorValue::Indicate,
-                    ) {
-                        Ok(op) => op.await.unwrap_or(GattCommunicationStatus::Unreachable),
-                        Err(_) => GattCommunicationStatus::Unreachable,
-                    }
-                };
-
-                if final_status != GattCommunicationStatus::Success {
-                    let _ = characteristic.RemoveValueChanged(token);
-                    return;
-                }
-
-                while !tx.is_closed() {
-                    std::thread::sleep(Duration::from_millis(200));
-                }
-
-                if let Ok(op) = characteristic
-                    .WriteClientCharacteristicConfigurationDescriptorAsync(
-                        GattClientCharacteristicConfigurationDescriptorValue::None,
-                    )
-                {
-                    let _ = op.await;
-                }
-                let _ = characteristic.RemoveValueChanged(token);
+        let token = Self::register_value_changed_handler(&target, tx)?;
+        if !Self::enable_notifications(&target).await? {
+            let _ = target.RemoveValueChanged(token);
+            return Err(connection_failed(
+                "BLE characteristic does not support notifications",
+            ));
+        }
+        self.subscriptions
+            .lock()
+            .map_err(|error| {
+                BluetoothError::PlatformError(format!(
+                    "BLE subscription registry mutex poisoned: {error}"
+                ))
+            })?
+            .push(SubscriptionState {
+                characteristic: target,
+                token,
             });
-        });
 
         Ok(rx)
     }
 
-    #[allow(clippy::unused_async)]
+    async fn teardown_subscriptions(&self) {
+        let states = if let Ok(mut guard) = self.subscriptions.lock() {
+            std::mem::take(&mut *guard)
+        } else {
+            return;
+        };
+        for state in states {
+            let _ = Self::set_notification_state(
+                &state.characteristic,
+                GattClientCharacteristicConfigurationDescriptorValue::None,
+            )
+            .await;
+            let _ = state.characteristic.RemoveValueChanged(state.token);
+        }
+    }
+
     pub async fn disconnect(self) {
+        self.teardown_subscriptions().await;
         drop(self.device);
     }
 
@@ -466,7 +526,9 @@ impl BleConnectionInner {
 }
 
 #[derive(Debug)]
-pub struct ClassicBluetoothInner;
+pub struct ClassicBluetoothInner {
+    discovering: AtomicBool,
+}
 
 impl ClassicBluetoothInner {
     pub async fn new() -> Result<Self, BluetoothError> {
@@ -474,42 +536,41 @@ impl ClassicBluetoothInner {
         if state != AdapterState::PoweredOn {
             return Err(BluetoothError::NotAvailable);
         }
-        Ok(Self)
+        Ok(Self {
+            discovering: AtomicBool::new(false),
+        })
     }
 
-    pub fn start_discovery(
+    pub async fn start_discovery(
         &self,
     ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
+        self.discovering.store(true, Ordering::Relaxed);
+        let selector = WinBluetoothDevice::GetDeviceSelector().map_err(|error| {
+            connection_failed_with_context("get classic selector failed", error)
+        })?;
+        let devices = DeviceInformation::FindAllAsyncAqsFilter(&selector)
+            .map_err(|error| {
+                connection_failed_with_context("start classic discovery failed", error)
+            })?
+            .await
+            .map_err(|error| connection_failed_with_context("classic discovery failed", error))?;
+
         let (tx, rx) = async_channel::bounded(64);
-        std::thread::spawn(move || {
-            futures::executor::block_on(async move {
-                let selector = match WinBluetoothDevice::GetDeviceSelector() {
-                    Ok(selector) => selector,
-                    Err(_) => return,
-                };
-                let devices = match DeviceInformation::FindAllAsyncAqsFilter(&selector) {
-                    Ok(op) => op.await,
-                    Err(_) => return,
-                };
-                let Ok(devices) = devices else {
-                    return;
-                };
-                for info in &devices {
-                    let paired = info
-                        .Pairing()
-                        .and_then(|pairing| pairing.IsPaired())
-                        .unwrap_or(false);
-                    if tx.try_send(device_from_info(&info, paired)).is_err() {
-                        break;
-                    }
-                }
-            });
-        });
+        for info in &devices {
+            let paired = info
+                .Pairing()
+                .and_then(|pairing| pairing.IsPaired())
+                .unwrap_or(false);
+            if tx.try_send(device_from_info(&info, paired)).is_err() {
+                break;
+            }
+        }
         Ok(rx)
     }
 
-    pub fn stop_discovery(&self) {
-        let _ = self;
+    #[allow(clippy::unused_async)]
+    pub async fn stop_discovery(&self) {
+        self.discovering.store(false, Ordering::Relaxed);
     }
 
     pub async fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {
@@ -531,279 +592,120 @@ impl ClassicBluetoothInner {
         device_id: &DeviceId,
         uuid: &Uuid,
     ) -> Result<SppStreamInner, BluetoothError> {
-        let device_id = device_id.0.clone();
-        let service_uuid = uuid.0.clone();
-        let (command_tx, command_rx) = async_channel::unbounded();
-        let (connect_tx, connect_rx) = oneshot::channel::<Result<(), BluetoothError>>();
+        let _ = self.discovering.load(Ordering::Relaxed);
+        let service = resolve_rfcomm_service(&device_id.0, &uuid.0).await?;
+        let host = service
+            .ConnectionHostName()
+            .map_err(|error| connection_failed_with_context("get RFCOMM host failed", error))?;
+        let service_name = service.ConnectionServiceName().map_err(|error| {
+            connection_failed_with_context("get RFCOMM service name failed", error)
+        })?;
 
-        let worker = std::thread::Builder::new()
-            .name("waterkit-spp-windows".to_owned())
-            .spawn(move || {
-                futures::executor::block_on(async move {
-                    let guid = match windows::core::GUID::try_from(service_uuid.as_str()) {
-                        Ok(guid) => guid,
-                        Err(_) => {
-                            let _ = connect_tx.send(Err(BluetoothError::ConnectionFailed(
-                                "invalid SPP UUID".into(),
-                            )));
-                            return;
-                        }
-                    };
-                    let service_id = match RfcommServiceId::FromUuid(guid) {
-                        Ok(service_id) => service_id,
-                        Err(error) => {
-                            let _ = connect_tx.send(Err(BluetoothError::ConnectionFailed(
-                                format!("create RFCOMM service id failed: {error}"),
-                            )));
-                            return;
-                        }
-                    };
-
-                    let device = match WinBluetoothDevice::FromIdAsync(
-                        &windows::core::HSTRING::from(device_id),
-                    ) {
-                        Ok(op) => match op.await {
-                            Ok(device) => device,
-                            Err(error) => {
-                                let _ = connect_tx.send(Err(BluetoothError::ConnectionFailed(
-                                    format!("resolve Bluetooth device failed: {error}"),
-                                )));
-                                return;
-                            }
-                        },
-                        Err(error) => {
-                            let _ = connect_tx.send(Err(BluetoothError::ConnectionFailed(
-                                format!("start Bluetooth device resolve failed: {error}"),
-                            )));
-                            return;
-                        }
-                    };
-
-                    let services_result = match device.GetRfcommServicesForIdAsync(&service_id) {
-                        Ok(op) => match op.await {
-                            Ok(result) => result,
-                            Err(error) => {
-                                let _ = connect_tx.send(Err(BluetoothError::ConnectionFailed(
-                                    format!("query RFCOMM services failed: {error}"),
-                                )));
-                                return;
-                            }
-                        },
-                        Err(error) => {
-                            let _ = connect_tx.send(Err(BluetoothError::ConnectionFailed(
-                                format!("start RFCOMM query failed: {error}"),
-                            )));
-                            return;
-                        }
-                    };
-
-                    let services = match services_result.Services() {
-                        Ok(services) => services,
-                        Err(error) => {
-                            let _ = connect_tx.send(Err(BluetoothError::ConnectionFailed(
-                                format!("load RFCOMM services failed: {error}"),
-                            )));
-                            return;
-                        }
-                    };
-                    let service = match services.First().and_then(|iter| iter.Current()) {
-                        Ok(service) => service,
-                        Err(_) => {
-                            let _ = connect_tx.send(Err(BluetoothError::ConnectionFailed(
-                                "RFCOMM service not found".into(),
-                            )));
-                            return;
-                        }
-                    };
-
-                    let host = match service.ConnectionHostName() {
-                        Ok(host) => host,
-                        Err(error) => {
-                            let _ = connect_tx.send(Err(BluetoothError::ConnectionFailed(
-                                format!("get RFCOMM host failed: {error}"),
-                            )));
-                            return;
-                        }
-                    };
-                    let service_name = match service.ConnectionServiceName() {
-                        Ok(name) => name,
-                        Err(error) => {
-                            let _ = connect_tx.send(Err(BluetoothError::ConnectionFailed(
-                                format!("get RFCOMM service name failed: {error}"),
-                            )));
-                            return;
-                        }
-                    };
-
-                    let socket = match StreamSocket::new() {
-                        Ok(socket) => socket,
-                        Err(error) => {
-                            let _ = connect_tx.send(Err(BluetoothError::ConnectionFailed(
-                                format!("create stream socket failed: {error}"),
-                            )));
-                            return;
-                        }
-                    };
-                    let connect_result = match socket.ConnectAsync(&host, &service_name) {
-                        Ok(op) => op.await,
-                        Err(error) => {
-                            let _ = connect_tx.send(Err(BluetoothError::ConnectionFailed(
-                                format!("start RFCOMM socket connect failed: {error}"),
-                            )));
-                            return;
-                        }
-                    };
-                    if let Err(error) = connect_result {
-                        let _ = connect_tx.send(Err(BluetoothError::ConnectionFailed(format!(
-                            "connect RFCOMM socket failed: {error}"
-                        ))));
-                        return;
-                    }
-                    let _ = connect_tx.send(Ok(()));
-
-                    while let Ok(command) = command_rx.recv_blocking() {
-                        match command {
-                            SppCommand::Read { max_bytes, tx } => {
-                                let result = async {
-                                    let input_stream = socket.InputStream().map_err(|error| {
-                                        BluetoothError::ConnectionFailed(format!(
-                                            "get RFCOMM input stream failed: {error}"
-                                        ))
-                                    })?;
-                                    let reader = DataReader::CreateDataReader(&input_stream)
-                                        .map_err(|error| {
-                                            BluetoothError::ConnectionFailed(format!(
-                                                "create RFCOMM reader failed: {error}"
-                                            ))
-                                        })?;
-                                    let request_len = u32::try_from(max_bytes).map_err(|_| {
-                                        BluetoothError::ConnectionFailed(format!(
-                                            "read size exceeds u32: {max_bytes}"
-                                        ))
-                                    })?;
-                                    let loaded =
-                                        reader.LoadAsync(request_len).map_err(|error| {
-                                            BluetoothError::ConnectionFailed(format!(
-                                                "start RFCOMM read failed: {error}"
-                                            ))
-                                        })?;
-                                    let loaded = loaded.await.map_err(|error| {
-                                        BluetoothError::ConnectionFailed(format!(
-                                            "RFCOMM read failed: {error}"
-                                        ))
-                                    })?;
-                                    if loaded == 0 {
-                                        return Err(BluetoothError::ConnectionFailed(
-                                            "RFCOMM stream closed".into(),
-                                        ));
-                                    }
-                                    let mut data = vec![0u8; loaded as usize];
-                                    reader.ReadBytes(&mut data).map_err(|error| {
-                                        BluetoothError::ConnectionFailed(format!(
-                                            "decode RFCOMM read bytes failed: {error}"
-                                        ))
-                                    })?;
-                                    Ok::<Vec<u8>, BluetoothError>(data)
-                                }
-                                .await;
-                                let _ = tx.send(result);
-                            }
-                            SppCommand::Write { data, tx } => {
-                                let result = async {
-                                    let output_stream = socket.OutputStream().map_err(|error| {
-                                        BluetoothError::ConnectionFailed(format!(
-                                            "get RFCOMM output stream failed: {error}"
-                                        ))
-                                    })?;
-                                    let writer = DataWriter::CreateDataWriter(&output_stream)
-                                        .map_err(|error| {
-                                            BluetoothError::ConnectionFailed(format!(
-                                                "create RFCOMM writer failed: {error}"
-                                            ))
-                                        })?;
-                                    writer.WriteBytes(&data).map_err(|error| {
-                                        BluetoothError::ConnectionFailed(format!(
-                                            "encode RFCOMM write bytes failed: {error}"
-                                        ))
-                                    })?;
-                                    let stored = writer.StoreAsync().map_err(|error| {
-                                        BluetoothError::ConnectionFailed(format!(
-                                            "start RFCOMM write failed: {error}"
-                                        ))
-                                    })?;
-                                    let stored = stored.await.map_err(|error| {
-                                        BluetoothError::ConnectionFailed(format!(
-                                            "RFCOMM write failed: {error}"
-                                        ))
-                                    })?;
-                                    let flush = writer.FlushAsync().map_err(|error| {
-                                        BluetoothError::ConnectionFailed(format!(
-                                            "start RFCOMM flush failed: {error}"
-                                        ))
-                                    })?;
-                                    let _ = flush.await.map_err(|error| {
-                                        BluetoothError::ConnectionFailed(format!(
-                                            "RFCOMM flush failed: {error}"
-                                        ))
-                                    })?;
-                                    usize::try_from(stored).map_err(|_| {
-                                        BluetoothError::ConnectionFailed(format!(
-                                            "RFCOMM write size exceeds usize: {stored}"
-                                        ))
-                                    })
-                                }
-                                .await;
-                                let _ = tx.send(result);
-                            }
-                            SppCommand::Close { tx } => {
-                                let _ = tx.send(());
-                                break;
-                            }
-                        }
-                    }
-
-                    drop(socket);
-                });
-            })
+        let socket = StreamSocket::new().map_err(|error| {
+            connection_failed_with_context("create stream socket failed", error)
+        })?;
+        socket
+            .ConnectAsync(&host, &service_name)
             .map_err(|error| {
-                BluetoothError::PlatformError(format!("spawn SPP worker failed: {error}"))
+                connection_failed_with_context("start RFCOMM socket connect failed", error)
+            })?
+            .await
+            .map_err(|error| {
+                connection_failed_with_context("connect RFCOMM socket failed", error)
             })?;
 
-        match connect_rx.await.map_err(|error| {
-            BluetoothError::ConnectionFailed(format!("SPP connect callback dropped: {error}"))
-        })? {
-            Ok(()) => Ok(SppStreamInner {
-                command_tx,
-                worker: Mutex::new(Some(worker)),
-            }),
-            Err(error) => {
-                std::thread::spawn(move || {
-                    let _ = worker.join();
-                });
-                Err(error)
-            }
-        }
+        Ok(SppStreamInner { socket })
     }
 }
 
-#[derive(Debug)]
-enum SppCommand {
-    Read {
-        max_bytes: usize,
-        tx: oneshot::Sender<Result<Vec<u8>, BluetoothError>>,
-    },
-    Write {
-        data: Vec<u8>,
-        tx: oneshot::Sender<Result<usize, BluetoothError>>,
-    },
-    Close {
-        tx: oneshot::Sender<()>,
-    },
+async fn resolve_rfcomm_service(
+    device_id: &str,
+    service_uuid: &str,
+) -> Result<windows::Devices::Bluetooth::Rfcomm::RfcommDeviceService, BluetoothError> {
+    let guid = windows::core::GUID::try_from(service_uuid)
+        .map_err(|_| connection_failed("invalid SPP UUID"))?;
+    let service_id = RfcommServiceId::FromUuid(guid).map_err(|error| {
+        connection_failed_with_context("create RFCOMM service id failed", error)
+    })?;
+
+    let device = WinBluetoothDevice::FromIdAsync(&windows::core::HSTRING::from(device_id))
+        .map_err(|error| {
+            connection_failed_with_context("start Bluetooth device resolve failed", error)
+        })?
+        .await
+        .map_err(|error| {
+            connection_failed_with_context("resolve Bluetooth device failed", error)
+        })?;
+
+    let services_result = device
+        .GetRfcommServicesForIdAsync(&service_id)
+        .map_err(|error| connection_failed_with_context("start RFCOMM query failed", error))?
+        .await
+        .map_err(|error| connection_failed_with_context("query RFCOMM services failed", error))?;
+
+    let services = services_result
+        .Services()
+        .map_err(|error| connection_failed_with_context("load RFCOMM services failed", error))?;
+    services
+        .First()
+        .and_then(|iter| iter.Current())
+        .map_err(|_| connection_failed("RFCOMM service not found"))
+}
+
+#[allow(clippy::future_not_send)]
+async fn read_spp_bytes(
+    socket: &StreamSocket,
+    max_bytes: usize,
+) -> Result<Vec<u8>, BluetoothError> {
+    let input_stream = socket
+        .InputStream()
+        .map_err(|error| connection_failed_with_context("get RFCOMM input stream failed", error))?;
+    let reader = DataReader::CreateDataReader(&input_stream)
+        .map_err(|error| connection_failed_with_context("create RFCOMM reader failed", error))?;
+    let request_len = u32::try_from(max_bytes)
+        .map_err(|_| connection_failed(format!("read size exceeds u32: {max_bytes}")))?;
+    let loaded = reader
+        .LoadAsync(request_len)
+        .map_err(|error| connection_failed_with_context("start RFCOMM read failed", error))?
+        .await
+        .map_err(|error| connection_failed_with_context("RFCOMM read failed", error))?;
+    if loaded == 0 {
+        return Err(connection_failed("RFCOMM stream closed"));
+    }
+
+    let mut data = vec![0u8; loaded as usize];
+    reader.ReadBytes(&mut data).map_err(|error| {
+        connection_failed_with_context("decode RFCOMM read bytes failed", error)
+    })?;
+    Ok(data)
+}
+
+#[allow(clippy::future_not_send)]
+async fn write_spp_bytes(socket: &StreamSocket, data: &[u8]) -> Result<usize, BluetoothError> {
+    let output_stream = socket.OutputStream().map_err(|error| {
+        connection_failed_with_context("get RFCOMM output stream failed", error)
+    })?;
+    let writer = DataWriter::CreateDataWriter(&output_stream)
+        .map_err(|error| connection_failed_with_context("create RFCOMM writer failed", error))?;
+    writer.WriteBytes(data).map_err(|error| {
+        connection_failed_with_context("encode RFCOMM write bytes failed", error)
+    })?;
+    let stored = writer
+        .StoreAsync()
+        .map_err(|error| connection_failed_with_context("start RFCOMM write failed", error))?
+        .await
+        .map_err(|error| connection_failed_with_context("RFCOMM write failed", error))?;
+    let _ = writer
+        .FlushAsync()
+        .map_err(|error| connection_failed_with_context("start RFCOMM flush failed", error))?
+        .await
+        .map_err(|error| connection_failed_with_context("RFCOMM flush failed", error))?;
+    usize::try_from(stored)
+        .map_err(|_| connection_failed(format!("RFCOMM write size exceeds usize: {stored}")))
 }
 
 pub struct SppStreamInner {
-    command_tx: async_channel::Sender<SppCommand>,
-    worker: Mutex<Option<JoinHandle<()>>>,
+    socket: StreamSocket,
 }
 
 impl std::fmt::Debug for SppStreamInner {
@@ -813,65 +715,21 @@ impl std::fmt::Debug for SppStreamInner {
 }
 
 impl SppStreamInner {
+    #[allow(clippy::future_not_send)]
     pub async fn read(&self, buf: &mut [u8]) -> Result<usize, BluetoothError> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(SppCommand::Read {
-                max_bytes: buf.len(),
-                tx,
-            })
-            .await
-            .map_err(|error| {
-                BluetoothError::ConnectionFailed(format!("SPP read command send failed: {error}"))
-            })?;
-        let data = rx.await.map_err(|error| {
-            BluetoothError::ConnectionFailed(format!("SPP read response dropped: {error}"))
-        })??;
+        let data = read_spp_bytes(&self.socket, buf.len()).await?;
         let read = data.len().min(buf.len());
         buf[..read].copy_from_slice(&data[..read]);
         Ok(read)
     }
 
+    #[allow(clippy::future_not_send)]
     pub async fn write(&self, data: &[u8]) -> Result<usize, BluetoothError> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(SppCommand::Write {
-                data: data.to_vec(),
-                tx,
-            })
-            .await
-            .map_err(|error| {
-                BluetoothError::ConnectionFailed(format!("SPP write command send failed: {error}"))
-            })?;
-        rx.await.map_err(|error| {
-            BluetoothError::ConnectionFailed(format!("SPP write response dropped: {error}"))
-        })?
+        write_spp_bytes(&self.socket, data).await
     }
 
+    #[allow(clippy::unused_async)]
     pub async fn close(self) {
-        let (tx, rx) = oneshot::channel();
-        let _ = self.command_tx.send(SppCommand::Close { tx }).await;
-        let _ = rx.await;
-        if let Ok(mut worker) = self.worker.lock()
-            && let Some(worker) = worker.take()
-        {
-            std::thread::spawn(move || {
-                let _ = worker.join();
-            });
-        }
-    }
-}
-
-impl Drop for SppStreamInner {
-    fn drop(&mut self) {
-        let (tx, _rx) = oneshot::channel();
-        let _ = self.command_tx.try_send(SppCommand::Close { tx });
-        if let Ok(mut worker) = self.worker.lock()
-            && let Some(worker) = worker.take()
-        {
-            std::thread::spawn(move || {
-                let _ = worker.join();
-            });
-        }
+        drop(self.socket);
     }
 }

@@ -370,8 +370,8 @@ impl BleConnectionInner {
             .map_err(|_| BluetoothError::GattError("callback dropped".into()))?
     }
 
-    #[allow(clippy::unnecessary_wraps)]
-    pub fn subscribe(
+    #[allow(clippy::unnecessary_wraps, clippy::unused_async)]
+    pub async fn subscribe(
         &self,
         service: &Uuid,
         characteristic: &Uuid,
@@ -425,7 +425,8 @@ impl ClassicBluetoothInner {
         }
     }
 
-    pub fn start_discovery(
+    #[allow(clippy::unused_async)]
+    pub async fn start_discovery(
         &self,
     ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
         #[cfg(target_os = "ios")]
@@ -471,12 +472,14 @@ impl ClassicBluetoothInner {
     }
 
     #[cfg(target_os = "ios")]
-    pub const fn stop_discovery(&self) {
+    #[allow(clippy::unused_async)]
+    pub async fn stop_discovery(&self) {
         let _ = self;
     }
 
     #[cfg(target_os = "macos")]
-    pub fn stop_discovery(&self) {
+    #[allow(clippy::unused_async)]
+    pub async fn stop_discovery(&self) {
         let scan_ctx = self
             .scan_ctx
             .lock()

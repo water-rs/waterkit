@@ -686,11 +686,10 @@ pub extern "system" fn Java_waterkit_bluetooth_BleScanBridgeCallback_onScanResul
             )
         });
 
-    if callback_state_id <= 0 {
-        panic!(
-            "waterkit-bluetooth: invalid waterkit_scan_state in scan callback: {callback_state_id}"
-        );
-    }
+    assert!(
+        callback_state_id > 0,
+        "waterkit-bluetooth: invalid waterkit_scan_state in scan callback: {callback_state_id}"
+    );
 
     let state = {
         let callbacks = scan_callbacks().lock().unwrap_or_else(|error| {
@@ -1554,7 +1553,8 @@ impl BleConnectionInner {
         })?
     }
 
-    pub fn subscribe(
+    #[allow(clippy::unused_async)]
+    pub async fn subscribe(
         &self,
         service: &Uuid,
         characteristic: &Uuid,
@@ -1699,8 +1699,7 @@ impl BleConnectionInner {
     }
 
     pub async fn disconnect(self) {
-        self.close_gatt()
-            .unwrap_or_else(|error| panic!("waterkit-bluetooth: disconnect failed: {error}"));
+        let _ = self.close_gatt();
         if let Ok(mut states) = gatt_callbacks().lock() {
             states.remove(&self.callback_state_id);
         }
@@ -1820,7 +1819,8 @@ impl ClassicBluetoothInner {
         }
     }
 
-    pub fn start_discovery(
+    #[allow(clippy::unused_async)]
+    pub async fn start_discovery(
         &self,
     ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
         {
@@ -1914,21 +1914,21 @@ impl ClassicBluetoothInner {
         Ok(rx)
     }
 
-    pub fn stop_discovery(&self) {
+    fn stop_discovery_impl(&self) -> Result<(), BluetoothError> {
         let session = self
             .discovery_session
             .lock()
             .ok()
             .and_then(|mut session| session.take());
         let Some(session) = session else {
-            return;
+            return Ok(());
         };
 
         if let Ok(mut callbacks) = classic_discovery_callbacks().lock() {
             callbacks.remove(&session.callback_state_id);
         }
 
-        with_android_context(|env, context| {
+        let result = with_android_context(|env, context| {
             init_dex(env, context)?;
             let helper_class = get_helper_class(env)?;
             env.call_static_method(
@@ -1943,9 +1943,15 @@ impl ClassicBluetoothInner {
                 ))
             })?;
             Ok(())
-        })
-        .unwrap_or_else(|error| panic!("waterkit-bluetooth: stop_discovery failed: {error}"));
+        });
+
         let _ = &session.callback;
+        result
+    }
+
+    #[allow(clippy::unused_async)]
+    pub async fn stop_discovery(&self) {
+        let _ = self.stop_discovery_impl();
     }
 
     pub async fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {
@@ -2165,7 +2171,7 @@ impl ClassicBluetoothInner {
 
 impl Drop for ClassicBluetoothInner {
     fn drop(&mut self) {
-        self.stop_discovery();
+        let _ = self.stop_discovery_impl();
     }
 }
 

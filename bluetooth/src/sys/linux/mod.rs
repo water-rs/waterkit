@@ -24,9 +24,9 @@ type SignalPropertyMap<'a> = HashMap<&'a str, zbus::zvariant::Value<'a>>;
 
 #[repr(C)]
 struct SockAddrRc {
-    rc_family: libc::sa_family_t,
-    rc_bdaddr: [u8; 6],
-    rc_channel: u8,
+    family: libc::sa_family_t,
+    bdaddr: [u8; 6],
+    channel: u8,
 }
 
 fn parse_device_address(addr: &str) -> Result<[u8; 6], BluetoothError> {
@@ -93,6 +93,19 @@ fn resolve_rfcomm_channel(device_id: &str, uuid: &str) -> Result<u8, BluetoothEr
 fn open_rfcomm_socket(device_id: &str, uuid: &str) -> Result<i32, BluetoothError> {
     let channel = resolve_rfcomm_channel(device_id, uuid)?;
     let bdaddr = parse_device_address(device_id)?;
+    let family = libc::sa_family_t::try_from(libc::AF_BLUETOOTH).map_err(|_| {
+        BluetoothError::ConnectionFailed(format!(
+            "AF_BLUETOOTH value {} does not fit sa_family_t",
+            libc::AF_BLUETOOTH
+        ))
+    })?;
+    let sockaddr_len =
+        libc::socklen_t::try_from(std::mem::size_of::<SockAddrRc>()).map_err(|_| {
+            BluetoothError::ConnectionFailed(format!(
+                "SockAddrRc size {} does not fit socklen_t",
+                std::mem::size_of::<SockAddrRc>()
+            ))
+        })?;
 
     let fd = unsafe { libc::socket(libc::AF_BLUETOOTH, libc::SOCK_STREAM, BTPROTO_RFCOMM) };
     if fd < 0 {
@@ -103,15 +116,15 @@ fn open_rfcomm_socket(device_id: &str, uuid: &str) -> Result<i32, BluetoothError
     }
 
     let sockaddr = SockAddrRc {
-        rc_family: libc::AF_BLUETOOTH as libc::sa_family_t,
-        rc_bdaddr: bdaddr,
-        rc_channel: channel,
+        family,
+        bdaddr,
+        channel,
     };
     let connect_result = unsafe {
         libc::connect(
             fd,
-            (&sockaddr as *const SockAddrRc).cast::<libc::sockaddr>(),
-            std::mem::size_of::<SockAddrRc>() as libc::socklen_t,
+            (&raw const sockaddr).cast::<libc::sockaddr>(),
+            sockaddr_len,
         )
     };
     if connect_result < 0 {
@@ -427,7 +440,8 @@ impl BleConnectionInner {
         Ok(())
     }
 
-    pub fn subscribe(
+    #[allow(clippy::unused_async)]
+    pub async fn subscribe(
         &self,
         _service: &Uuid,
         characteristic: &Uuid,
@@ -456,9 +470,8 @@ impl BleConnectionInner {
                     Err(_) => return,
                 };
 
-                let objects = match object_manager.get_managed_objects().await {
-                    Ok(objects) => objects,
-                    Err(_) => return,
+                let Ok(objects) = object_manager.get_managed_objects().await else {
+                    return;
                 };
                 let Some(char_path) = objects.iter().find_map(|(path, ifaces)| {
                     if !path.to_string().starts_with(&device_path) {
@@ -475,16 +488,11 @@ impl BleConnectionInner {
                     return;
                 };
 
-                let char_proxy = match zbus::Proxy::new(
-                    &conn,
-                    BLUEZ_SERVICE,
-                    char_path.as_str(),
-                    GATT_CHAR_IFACE,
-                )
-                .await
-                {
-                    Ok(proxy) => proxy,
-                    Err(_) => return,
+                let Ok(char_proxy) =
+                    zbus::Proxy::new(&conn, BLUEZ_SERVICE, char_path.as_str(), GATT_CHAR_IFACE)
+                        .await
+                else {
+                    return;
                 };
 
                 if char_proxy.call_method("StartNotify", &()).await.is_err() {
@@ -575,7 +583,8 @@ impl ClassicBluetoothInner {
         })
     }
 
-    pub fn start_discovery(
+    #[allow(clippy::unused_async)]
+    pub async fn start_discovery(
         &self,
     ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
         let _bus_name = self.connection.unique_name().ok_or_else(|| {
@@ -587,12 +596,11 @@ impl ClassicBluetoothInner {
 
         std::thread::spawn(move || {
             futures::executor::block_on(async move {
-                let adapter_proxy =
-                    match zbus::Proxy::new(&conn, BLUEZ_SERVICE, ADAPTER_PATH, ADAPTER_IFACE).await
-                    {
-                        Ok(proxy) => proxy,
-                        Err(_) => return,
-                    };
+                let Ok(adapter_proxy) =
+                    zbus::Proxy::new(&conn, BLUEZ_SERVICE, ADAPTER_PATH, ADAPTER_IFACE).await
+                else {
+                    return;
+                };
                 let _ = adapter_proxy.call_method("StartDiscovery", &()).await;
 
                 let object_manager = match zbus::fdo::ObjectManagerProxy::builder(&conn)
@@ -605,9 +613,8 @@ impl ClassicBluetoothInner {
                     },
                     Err(_) => return,
                 };
-                let mut stream = match object_manager.receive_interfaces_added().await {
-                    Ok(stream) => stream,
-                    Err(_) => return,
+                let Ok(mut stream) = object_manager.receive_interfaces_added().await else {
+                    return;
                 };
 
                 while let Some(signal) = stream.next().await {
@@ -646,7 +653,8 @@ impl ClassicBluetoothInner {
         Ok(rx)
     }
 
-    pub fn stop_discovery(&self) {
+    #[allow(clippy::unused_async)]
+    pub async fn stop_discovery(&self) {
         let conn = self.connection.clone();
         std::thread::spawn(move || {
             futures::executor::block_on(async move {
@@ -674,7 +682,7 @@ impl ClassicBluetoothInner {
             .await
             .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
         let mut paired = Vec::new();
-        for (_, ifaces) in &objects {
+        for ifaces in objects.values() {
             let Some(props) = ifaces.get(DEVICE_IFACE) else {
                 continue;
             };
@@ -704,104 +712,9 @@ impl ClassicBluetoothInner {
         device_id: &DeviceId,
         uuid: &Uuid,
     ) -> Result<SppStreamInner, BluetoothError> {
-        let device_id = device_id.0.clone();
-        let service_uuid = uuid.0.clone();
         let (command_tx, command_rx) = async_channel::unbounded();
         let (connect_tx, connect_rx) = oneshot::channel::<Result<(), BluetoothError>>();
-
-        let worker = std::thread::Builder::new()
-            .name("waterkit-spp-linux".to_owned())
-            .spawn(move || {
-                let fd = match open_rfcomm_socket(&device_id, &service_uuid) {
-                    Ok(fd) => {
-                        let _ = connect_tx.send(Ok(()));
-                        fd
-                    }
-                    Err(error) => {
-                        let _ = connect_tx.send(Err(error));
-                        return;
-                    }
-                };
-
-                while let Ok(command) = command_rx.recv_blocking() {
-                    match command {
-                        SppCommand::Read { max_bytes, tx } => {
-                            let result = (|| {
-                                let mut buffer = vec![0u8; max_bytes];
-                                let read = unsafe {
-                                    libc::read(
-                                        fd,
-                                        buffer.as_mut_ptr().cast::<libc::c_void>(),
-                                        max_bytes,
-                                    )
-                                };
-                                if read < 0 {
-                                    return Err(BluetoothError::ConnectionFailed(format!(
-                                        "RFCOMM read failed: {}",
-                                        std::io::Error::last_os_error()
-                                    )));
-                                }
-                                if read == 0 {
-                                    return Err(BluetoothError::ConnectionFailed(
-                                        "RFCOMM stream closed".into(),
-                                    ));
-                                }
-                                let read_len = usize::try_from(read).map_err(|_| {
-                                    BluetoothError::ConnectionFailed(format!(
-                                        "RFCOMM read size is negative: {read}"
-                                    ))
-                                })?;
-                                buffer.truncate(read_len);
-                                Ok(buffer)
-                            })();
-                            let _ = tx.send(result);
-                        }
-                        SppCommand::Write { data, tx } => {
-                            let result = (|| {
-                                let mut written_total = 0usize;
-                                while written_total < data.len() {
-                                    let remaining = &data[written_total..];
-                                    let written = unsafe {
-                                        libc::write(
-                                            fd,
-                                            remaining.as_ptr().cast::<libc::c_void>(),
-                                            remaining.len(),
-                                        )
-                                    };
-                                    if written < 0 {
-                                        return Err(BluetoothError::ConnectionFailed(format!(
-                                            "RFCOMM write failed: {}",
-                                            std::io::Error::last_os_error()
-                                        )));
-                                    }
-                                    let written_len = usize::try_from(written).map_err(|_| {
-                                        BluetoothError::ConnectionFailed(format!(
-                                            "RFCOMM write returned negative size: {written}"
-                                        ))
-                                    })?;
-                                    if written_len == 0 {
-                                        return Err(BluetoothError::ConnectionFailed(
-                                            "RFCOMM write returned 0 bytes".into(),
-                                        ));
-                                    }
-                                    written_total += written_len;
-                                }
-                                Ok(written_total)
-                            })();
-                            let _ = tx.send(result);
-                        }
-                        SppCommand::Close { tx } => {
-                            let _ = tx.send(());
-                            break;
-                        }
-                    }
-                }
-
-                let _ = unsafe { libc::close(fd) };
-            })
-            .map_err(|error| {
-                BluetoothError::PlatformError(format!("spawn SPP worker failed: {error}"))
-            })?;
+        let worker = spawn_spp_worker(device_id.0.clone(), uuid.0.clone(), command_rx, connect_tx)?;
 
         match connect_rx.await.map_err(|error| {
             BluetoothError::ConnectionFailed(format!("SPP connect callback dropped: {error}"))
@@ -818,6 +731,107 @@ impl ClassicBluetoothInner {
             }
         }
     }
+}
+
+fn spawn_spp_worker(
+    device_id: String,
+    service_uuid: String,
+    command_rx: async_channel::Receiver<SppCommand>,
+    connect_tx: oneshot::Sender<Result<(), BluetoothError>>,
+) -> Result<JoinHandle<()>, BluetoothError> {
+    std::thread::Builder::new()
+        .name("waterkit-spp-linux".to_owned())
+        .spawn(move || run_spp_worker(device_id, service_uuid, command_rx, connect_tx))
+        .map_err(|error| BluetoothError::PlatformError(format!("spawn SPP worker failed: {error}")))
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_spp_worker(
+    device_id: String,
+    service_uuid: String,
+    command_rx: async_channel::Receiver<SppCommand>,
+    connect_tx: oneshot::Sender<Result<(), BluetoothError>>,
+) {
+    let fd = match open_rfcomm_socket(&device_id, &service_uuid) {
+        Ok(fd) => {
+            let _ = connect_tx.send(Ok(()));
+            fd
+        }
+        Err(error) => {
+            let _ = connect_tx.send(Err(error));
+            return;
+        }
+    };
+
+    while let Ok(command) = command_rx.recv_blocking() {
+        match command {
+            SppCommand::Read { max_bytes, tx } => {
+                let _ = tx.send(read_from_rfcomm(fd, max_bytes));
+            }
+            SppCommand::Write { data, tx } => {
+                let _ = tx.send(write_to_rfcomm(fd, &data));
+            }
+            SppCommand::Close { tx } => {
+                let _ = tx.send(());
+                break;
+            }
+        }
+    }
+
+    let _ = unsafe { libc::close(fd) };
+}
+
+fn read_from_rfcomm(fd: i32, max_bytes: usize) -> Result<Vec<u8>, BluetoothError> {
+    let mut buffer = vec![0u8; max_bytes];
+    let read = unsafe { libc::read(fd, buffer.as_mut_ptr().cast::<libc::c_void>(), max_bytes) };
+    if read < 0 {
+        return Err(BluetoothError::ConnectionFailed(format!(
+            "RFCOMM read failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    if read == 0 {
+        return Err(BluetoothError::ConnectionFailed(
+            "RFCOMM stream closed".into(),
+        ));
+    }
+    let read_len = usize::try_from(read).map_err(|_| {
+        BluetoothError::ConnectionFailed(format!("RFCOMM read size is negative: {read}"))
+    })?;
+    buffer.truncate(read_len);
+    Ok(buffer)
+}
+
+fn write_to_rfcomm(fd: i32, data: &[u8]) -> Result<usize, BluetoothError> {
+    let mut written_total = 0usize;
+    while written_total < data.len() {
+        let remaining = &data[written_total..];
+        let written = unsafe {
+            libc::write(
+                fd,
+                remaining.as_ptr().cast::<libc::c_void>(),
+                remaining.len(),
+            )
+        };
+        if written < 0 {
+            return Err(BluetoothError::ConnectionFailed(format!(
+                "RFCOMM write failed: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        let written_len = usize::try_from(written).map_err(|_| {
+            BluetoothError::ConnectionFailed(format!(
+                "RFCOMM write returned negative size: {written}"
+            ))
+        })?;
+        if written_len == 0 {
+            return Err(BluetoothError::ConnectionFailed(
+                "RFCOMM write returned 0 bytes".into(),
+            ));
+        }
+        written_total += written_len;
+    }
+    Ok(written_total)
 }
 
 #[derive(Debug)]

@@ -37,21 +37,14 @@ fn spawn_haptic_task(
 }
 
 async fn feedback_service_available_async() -> bool {
-    let connection = match Connection::session().await {
-        Ok(connection) => connection,
-        Err(_) => return false,
+    let Ok(connection) = Connection::session().await else {
+        return false;
     };
 
-    let dbus_proxy = match zbus::Proxy::new(
-        &connection,
-        DBUS_BUS_NAME,
-        DBUS_OBJECT_PATH,
-        DBUS_INTERFACE,
-    )
-    .await
-    {
-        Ok(proxy) => proxy,
-        Err(_) => return false,
+    let Ok(dbus_proxy) =
+        zbus::Proxy::new(&connection, DBUS_BUS_NAME, DBUS_OBJECT_PATH, DBUS_INTERFACE).await
+    else {
+        return false;
     };
 
     dbus_proxy

@@ -60,7 +60,8 @@ impl BleConnectionInner {
         Err(BluetoothError::Unsupported)
     }
 
-    pub fn subscribe(
+    #[allow(clippy::unused_async)]
+    pub async fn subscribe(
         &self,
         _service: &Uuid,
         _characteristic: &Uuid,
@@ -81,13 +82,15 @@ impl ClassicBluetoothInner {
         Err(BluetoothError::Unsupported)
     }
 
-    pub fn start_discovery(
+    #[allow(clippy::unused_async)]
+    pub async fn start_discovery(
         &self,
     ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
         Err(BluetoothError::Unsupported)
     }
 
-    pub fn stop_discovery(&self) {}
+    #[allow(clippy::unused_async)]
+    pub async fn stop_discovery(&self) {}
 
     #[allow(clippy::unused_async)]
     pub async fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {

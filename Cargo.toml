@@ -216,6 +216,7 @@ nokhwa = { version = "0.10", features = ["input-native", "output-wgpu"] }
 rav1e = "0.8"
 rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
 media-codec = "0.8"
+timestretch = "0.2"
 
 # Time
 jiff = "0.2"

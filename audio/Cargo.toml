@@ -24,6 +24,7 @@ lofty = "0.21"
 # Async primitives (runtime-agnostic)
 async-channel = { workspace = true }
 futures = { workspace = true }
+timestretch = { workspace = true }
 # HTTP client
 # zenwave = "0.3"  # Moved to platform-specific sections below
 

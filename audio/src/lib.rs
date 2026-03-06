@@ -14,8 +14,8 @@ mod shutdown;
 mod sys;
 
 pub use player::{
-    AudioDevice, AudioPlayer, ListenerPose, PlaybackMode, PlayerError, SpatialPosition,
-    SpatialScene, rodio,
+    AudioDevice, AudioPlayer, AudioStreamFormat, ListenerPose, PlaybackMode, PlayerError,
+    SpatialPosition, SpatialScene, rodio,
 };
 pub use recorder::{AudioBuffer, AudioFormat, AudioRecorder, AudioRecorderBuilder, RecordError};
 pub use shutdown::{ShutdownHandle, ShutdownReceiver};
@@ -176,6 +176,13 @@ impl PlaybackState {
     #[must_use]
     pub const fn rate(&self) -> f64 {
         self.rate
+    }
+
+    /// Set playback rate (1.0 = normal speed).
+    #[must_use]
+    pub const fn with_rate(mut self, rate: f64) -> Self {
+        self.rate = rate;
+        self
     }
 }
 

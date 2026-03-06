@@ -85,6 +85,15 @@ pub struct VideoReader {
 }
 
 impl VideoReader {
+    /// Probe a media file and return `Ok(())` when it can be opened as video.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same error as [`VideoReader::open`] when probing fails.
+    pub fn probe<P: AsRef<Path>>(path: P) -> Result<(), VideoError> {
+        Self::open(path).map(|_| ())
+    }
+
     /// Open a video file for reading.
     ///
     /// # Errors
@@ -176,6 +185,57 @@ impl VideoReader {
         self.samples.len() as u32
     }
 
+    /// Get the current sample cursor index.
+    #[must_use]
+    pub const fn current_index(&self) -> usize {
+        self.current_index
+    }
+
+    /// Return sample timing metadata at `index`.
+    ///
+    /// Returns `(pts, is_keyframe)` when the sample exists.
+    #[must_use]
+    pub fn sample_info(&self, index: usize) -> Option<(u64, bool)> {
+        self.samples
+            .get(index)
+            .map(|(_, pts, is_keyframe)| (*pts, *is_keyframe))
+    }
+
+    /// Return estimated stream duration from the last sample PTS.
+    #[must_use]
+    pub fn duration(&self) -> Option<std::time::Duration> {
+        let (last_pts, _) = self
+            .samples
+            .last()
+            .map(|(_, pts, is_keyframe)| (*pts, *is_keyframe))?;
+        if self.timescale == 0 {
+            return Some(std::time::Duration::ZERO);
+        }
+        Some(std::time::Duration::from_nanos(
+            last_pts.saturating_mul(1_000_000_000) / u64::from(self.timescale),
+        ))
+    }
+
+    /// Find nearest keyframe index at or before `index`.
+    #[must_use]
+    pub fn nearest_keyframe_at_or_before(&self, index: usize) -> usize {
+        if self.samples.is_empty() {
+            return 0;
+        }
+        let clamped = index.min(self.samples.len().saturating_sub(1));
+        for candidate in (0..=clamped).rev() {
+            if self.samples[candidate].2 {
+                return candidate;
+            }
+        }
+        0
+    }
+
+    /// Seek the internal cursor to a sample index.
+    pub fn seek_to_sample(&mut self, index: usize) {
+        self.current_index = index.min(self.samples.len());
+    }
+
     /// Read the next video sample (encoded data).
     /// Returns (data, `pts_ms`, `is_keyframe`) or None if at end.
     pub fn read_sample(&mut self) -> Option<(Vec<u8>, u64, bool)> {
@@ -186,6 +246,16 @@ impl VideoReader {
         let sample = self.samples[self.current_index].clone();
         self.current_index += 1;
         Some(sample)
+    }
+
+    /// Read the next sample by reference without cloning sample bytes.
+    ///
+    /// Returns `(sample_data, pts, is_keyframe)` or `None` when at EOF.
+    pub fn read_sample_ref(&mut self) -> Option<(&[u8], u64, bool)> {
+        let index = self.current_index;
+        let (sample_data, pts, is_keyframe) = self.samples.get(index)?;
+        self.current_index += 1;
+        Some((sample_data.as_slice(), *pts, *is_keyframe))
     }
 
     /// Iterate over samples from the current position.

@@ -11,6 +11,116 @@ pub struct AndroidConfig {
     pub extra_classpath: Vec<PathBuf>,
 }
 
+fn executable_candidates(bin_dir: &Path, executable: &str) -> Vec<PathBuf> {
+    if cfg!(target_os = "windows") {
+        vec![
+            bin_dir.join(format!("{executable}.exe")),
+            bin_dir.join(format!("{executable}.bat")),
+            bin_dir.join(format!("{executable}.cmd")),
+            bin_dir.join(executable),
+        ]
+    } else {
+        vec![bin_dir.join(executable)]
+    }
+}
+
+fn executable_from_home(home: &Path, executable: &str) -> Option<PathBuf> {
+    let bin_dir = home.join("bin");
+    executable_candidates(&bin_dir, executable)
+        .into_iter()
+        .find(|candidate| candidate.exists())
+}
+
+fn resolve_kotlinc_path() -> PathBuf {
+    if let Some(kotlinc) = env::var_os("KOTLINC") {
+        let kotlinc_path = PathBuf::from(kotlinc);
+        assert!(
+            kotlinc_path.exists(),
+            "KOTLINC is set to '{}' but that path does not exist",
+            kotlinc_path.display()
+        );
+        return kotlinc_path;
+    }
+
+    if let Some(kotlin_home) = env::var_os("KOTLIN_HOME") {
+        let kotlin_home = PathBuf::from(kotlin_home);
+        if let Some(path) = executable_from_home(&kotlin_home, "kotlinc") {
+            return path;
+        }
+        panic!(
+            "KOTLIN_HOME is set to '{}' but no Kotlin compiler was found under '{}/bin'",
+            kotlin_home.display(),
+            kotlin_home.display()
+        );
+    }
+
+    if cfg!(target_os = "windows")
+        && let Some(program_files) = env::var_os("ProgramFiles")
+    {
+        let android_studio_kotlin_home =
+            PathBuf::from(program_files).join("Android/Android Studio/plugins/Kotlin/kotlinc");
+        if let Some(path) = executable_from_home(&android_studio_kotlin_home, "kotlinc") {
+            return path;
+        }
+    }
+
+    PathBuf::from("kotlinc")
+}
+
+fn resolve_java_path() -> PathBuf {
+    if let Some(java_home) = env::var_os("JAVA_HOME") {
+        let java_home = PathBuf::from(java_home);
+        if let Some(path) = executable_from_home(&java_home, "java") {
+            return path;
+        }
+        panic!(
+            "JAVA_HOME is set to '{}' but no Java executable was found under '{}/bin'",
+            java_home.display(),
+            java_home.display()
+        );
+    }
+
+    PathBuf::from("java")
+}
+
+fn kotlin_home_from_compiler(kotlinc_path: &Path) -> Option<PathBuf> {
+    if let Some(kotlin_home) = env::var_os("KOTLIN_HOME") {
+        return Some(PathBuf::from(kotlin_home));
+    }
+    kotlinc_path.parent()?.parent().map(PathBuf::from)
+}
+
+fn detect_kotlin_stdlib_jars(kotlinc_path: &Path) -> Vec<PathBuf> {
+    let Some(kotlin_home) = kotlin_home_from_compiler(kotlinc_path) else {
+        return Vec::new();
+    };
+    let lib_dir = kotlin_home.join("lib");
+    let Ok(entries) = fs::read_dir(&lib_dir) else {
+        return Vec::new();
+    };
+
+    let mut jars = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("jar"))
+        })
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("kotlin-stdlib"))
+        })
+        .collect::<Vec<_>>();
+    jars.sort();
+    jars
+}
+
+fn command_for_executable(executable: &Path) -> Command {
+    Command::new(executable)
+}
+
 /// Find the android.jar path from ANDROID_HOME.
 ///
 /// # Returns
@@ -139,13 +249,23 @@ pub fn build_kotlin_with_config(kotlin_files: &[&str], config: &AndroidConfig) {
     let classes_dir = out_dir.join("classes");
     fs::create_dir_all(&classes_dir).expect("Failed to create classes directory");
 
-    let mut classpath_entries = Vec::with_capacity(1 + config.extra_classpath.len());
+    let kotlinc_executable = resolve_kotlinc_path();
+    let kotlin_stdlib_jars = detect_kotlin_stdlib_jars(&kotlinc_executable);
+    assert!(
+        !kotlin_stdlib_jars.is_empty(),
+        "Failed to locate Kotlin standard library jars from KOTLIN_HOME or kotlinc path. \
+Set KOTLIN_HOME to your Kotlin compiler directory and ensure '<KOTLIN_HOME>/lib/kotlin-stdlib*.jar' exists."
+    );
+
+    let mut classpath_entries =
+        Vec::with_capacity(1 + kotlin_stdlib_jars.len() + config.extra_classpath.len());
     classpath_entries.push(android_jar.clone());
+    classpath_entries.extend(kotlin_stdlib_jars.iter().cloned());
     classpath_entries.extend(config.extra_classpath.iter().cloned());
     let classpath = env::join_paths(&classpath_entries)
         .expect("Failed to construct Kotlin classpath from AndroidConfig");
 
-    let mut kotlinc = Command::new("kotlinc");
+    let mut kotlinc = command_for_executable(&kotlinc_executable);
     kotlinc
         .arg("-classpath")
         .arg(&classpath)
@@ -157,9 +277,12 @@ pub fn build_kotlin_with_config(kotlin_files: &[&str], config: &AndroidConfig) {
         kotlinc.arg(manifest_dir.join(kotlin_file));
     }
 
-    let kotlinc_output = kotlinc
-        .output()
-        .expect("Failed to run kotlinc - is Kotlin compiler installed?");
+    let kotlinc_output = kotlinc.output().unwrap_or_else(|error| {
+        panic!(
+            "Failed to run Kotlin compiler `{}`: {error}",
+            kotlinc_executable.display()
+        )
+    });
 
     if !kotlinc_output.status.success() {
         eprintln!(
@@ -182,7 +305,8 @@ pub fn build_kotlin_with_config(kotlin_files: &[&str], config: &AndroidConfig) {
     let d8_jar = find_d8_jar().expect("Failed to find d8.jar. Is Android build-tools installed?");
 
     // Convert .class -> .dex using D8
-    let mut java = Command::new("java");
+    let java_executable = resolve_java_path();
+    let mut java = command_for_executable(&java_executable);
     java.arg("-cp")
         .arg(&d8_jar)
         .arg("com.android.tools.r8.D8")
@@ -190,6 +314,10 @@ pub fn build_kotlin_with_config(kotlin_files: &[&str], config: &AndroidConfig) {
         .arg(&android_jar)
         .arg("--output")
         .arg(&out_dir);
+
+    for stdlib in &kotlin_stdlib_jars {
+        java.arg("--classpath").arg(stdlib);
+    }
 
     for cp in &config.extra_classpath {
         java.arg("--classpath").arg(cp);
@@ -206,7 +334,12 @@ pub fn build_kotlin_with_config(kotlin_files: &[&str], config: &AndroidConfig) {
         }
     }
 
-    let d8_output = java.output().expect("Failed to run D8");
+    let d8_output = java.output().unwrap_or_else(|error| {
+        panic!(
+            "Failed to run Java executable `{}` for D8: {error}",
+            java_executable.display()
+        )
+    });
     if !d8_output.status.success() {
         eprintln!("D8 stderr: {}", String::from_utf8_lossy(&d8_output.stderr));
         panic!("D8 dexing failed");

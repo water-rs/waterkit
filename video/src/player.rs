@@ -119,7 +119,7 @@ impl VideoPlayer {
     /// # Errors
     /// Returns error if decoding fails.
     pub fn next_frame(&mut self) -> Result<Option<PlayerFrame>, VideoError> {
-        let Some((sample_data, pts, _is_keyframe)) = self.reader.read_sample() else {
+        let Some((sample_data, pts, _is_keyframe)) = self.reader.read_sample()? else {
             return Ok(None);
         };
 

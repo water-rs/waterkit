@@ -2,8 +2,16 @@
 
 use crate::VideoError;
 use mp4::WriteBox;
-use std::io::{Cursor, Read};
-use std::path::Path;
+use std::{
+    io::{BufReader, Cursor, Read},
+    path::Path,
+};
+
+#[derive(Debug, Clone, Copy)]
+struct SampleMeta {
+    start_time: u64,
+    is_keyframe: bool,
+}
 
 /// A decoded video frame.
 #[derive(Clone)]
@@ -76,9 +84,11 @@ impl std::fmt::Debug for VideoFrame {
 /// Video reader for MP4/MOV files.
 #[derive(Debug)]
 pub struct VideoReader {
+    reader: mp4::Mp4Reader<BufReader<std::fs::File>>,
+    video_track_id: u32,
     width: u32,
     height: u32,
-    samples: Vec<(Vec<u8>, u64, bool)>, // (data, pts, is_keyframe)
+    sample_metas: Vec<SampleMeta>,
     codec_config: Option<Vec<u8>>,
     current_index: usize,
     timescale: u32,
@@ -103,7 +113,7 @@ impl VideoReader {
         let path_ref = path.as_ref();
         let file = std::fs::File::open(path_ref)?;
         let size = file.metadata()?.len();
-        let reader = mp4::Mp4Reader::read_header(std::io::BufReader::new(file), size)
+        let reader = mp4::Mp4Reader::read_header(BufReader::new(file), size)
             .map_err(|e| VideoError::Container(e.to_string()))?;
 
         // Find video track
@@ -147,19 +157,19 @@ impl VideoReader {
             return Err(VideoError::Container("No video track found".into()));
         }
 
-        // Read all samples
-        let mut samples = Vec::new();
-        let mut reader = reader;
-        for i in 1..=sample_count {
-            if let Ok(Some(sample)) = reader.read_sample(video_track_id, i) {
-                samples.push((sample.bytes.to_vec(), sample.start_time, sample.is_sync));
-            }
-        }
+        let track = reader.tracks().get(&video_track_id).ok_or_else(|| {
+            VideoError::Container(format!(
+                "missing video track metadata for track {video_track_id}"
+            ))
+        })?;
+        let sample_metas = build_sample_metas(track, sample_count)?;
 
         Ok(Self {
+            reader,
+            video_track_id,
             width,
             height,
-            samples,
+            sample_metas,
             codec_config,
             current_index: 0,
             timescale,
@@ -182,7 +192,7 @@ impl VideoReader {
     #[must_use]
     #[allow(clippy::cast_possible_truncation)]
     pub const fn sample_count(&self) -> u32 {
-        self.samples.len() as u32
+        self.sample_metas.len() as u32
     }
 
     /// Get the current sample cursor index.
@@ -196,18 +206,18 @@ impl VideoReader {
     /// Returns `(pts, is_keyframe)` when the sample exists.
     #[must_use]
     pub fn sample_info(&self, index: usize) -> Option<(u64, bool)> {
-        self.samples
+        self.sample_metas
             .get(index)
-            .map(|(_, pts, is_keyframe)| (*pts, *is_keyframe))
+            .map(|meta| (meta.start_time, meta.is_keyframe))
     }
 
     /// Return estimated stream duration from the last sample PTS.
     #[must_use]
     pub fn duration(&self) -> Option<std::time::Duration> {
         let (last_pts, _) = self
-            .samples
+            .sample_metas
             .last()
-            .map(|(_, pts, is_keyframe)| (*pts, *is_keyframe))?;
+            .map(|meta| (meta.start_time, meta.is_keyframe))?;
         if self.timescale == 0 {
             return Some(std::time::Duration::ZERO);
         }
@@ -219,12 +229,12 @@ impl VideoReader {
     /// Find nearest keyframe index at or before `index`.
     #[must_use]
     pub fn nearest_keyframe_at_or_before(&self, index: usize) -> usize {
-        if self.samples.is_empty() {
+        if self.sample_metas.is_empty() {
             return 0;
         }
-        let clamped = index.min(self.samples.len().saturating_sub(1));
+        let clamped = index.min(self.sample_metas.len().saturating_sub(1));
         for candidate in (0..=clamped).rev() {
-            if self.samples[candidate].2 {
+            if self.sample_metas[candidate].is_keyframe {
                 return candidate;
             }
         }
@@ -233,34 +243,38 @@ impl VideoReader {
 
     /// Seek the internal cursor to a sample index.
     pub fn seek_to_sample(&mut self, index: usize) {
-        self.current_index = index.min(self.samples.len());
+        self.current_index = index.min(self.sample_metas.len());
     }
 
     /// Read the next video sample (encoded data).
     /// Returns (data, `pts_ms`, `is_keyframe`) or None if at end.
-    pub fn read_sample(&mut self) -> Option<(Vec<u8>, u64, bool)> {
-        if self.current_index >= self.samples.len() {
-            return None;
+    pub fn read_sample(&mut self) -> Result<Option<(Vec<u8>, u64, bool)>, VideoError> {
+        if self.current_index >= self.sample_metas.len() {
+            return Ok(None);
         }
 
-        let sample = self.samples[self.current_index].clone();
+        let sample_index = self.current_index;
         self.current_index += 1;
-        Some(sample)
-    }
-
-    /// Read the next sample by reference without cloning sample bytes.
-    ///
-    /// Returns `(sample_data, pts, is_keyframe)` or `None` when at EOF.
-    pub fn read_sample_ref(&mut self) -> Option<(&[u8], u64, bool)> {
-        let index = self.current_index;
-        let (sample_data, pts, is_keyframe) = self.samples.get(index)?;
-        self.current_index += 1;
-        Some((sample_data.as_slice(), *pts, *is_keyframe))
+        let sample_id = u32::try_from(sample_index + 1).map_err(|_| {
+            VideoError::Container("sample index exceeds mp4 reader range".to_string())
+        })?;
+        let sample = self
+            .reader
+            .read_sample(self.video_track_id, sample_id)
+            .map_err(|error| VideoError::Container(error.to_string()))?;
+        let meta = self.sample_metas[sample_index];
+        Ok(sample.map(|sample| (sample.bytes.to_vec(), meta.start_time, meta.is_keyframe)))
     }
 
     /// Iterate over samples from the current position.
-    pub fn samples(&mut self) -> impl Iterator<Item = (Vec<u8>, u64, bool)> + '_ {
-        std::iter::from_fn(move || self.read_sample())
+    pub fn samples(
+        &mut self,
+    ) -> impl Iterator<Item = Result<(Vec<u8>, u64, bool), VideoError>> + '_ {
+        std::iter::from_fn(move || match self.read_sample() {
+            Ok(Some(sample)) => Some(Ok(sample)),
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
+        })
     }
 
     /// Get codec configuration (avcC or hvcC raw data).
@@ -272,6 +286,72 @@ impl VideoReader {
     /// Reset to beginning.
     pub const fn reset(&mut self) {
         self.current_index = 0;
+    }
+}
+
+fn build_sample_metas(
+    track: &mp4::Mp4Track,
+    sample_count: u32,
+) -> Result<Vec<SampleMeta>, VideoError> {
+    let mut metas = Vec::with_capacity(sample_count as usize);
+    for sample_id in 1..=sample_count {
+        metas.push(SampleMeta {
+            start_time: sample_start_time(track, sample_id)?,
+            is_keyframe: is_sync_sample(track, sample_id),
+        });
+    }
+    Ok(metas)
+}
+
+fn sample_start_time(track: &mp4::Mp4Track, sample_id: u32) -> Result<u64, VideoError> {
+    if !track.trafs.is_empty() {
+        let offset = u64::from(sample_id.saturating_sub(1));
+        return Ok(offset.saturating_mul(u64::from(track.default_sample_duration)));
+    }
+
+    let stts = &track.trak.mdia.minf.stbl.stts;
+    let mut first_sample = 1_u32;
+    let mut elapsed = 0_u64;
+    for entry in &stts.entries {
+        let next_first = first_sample
+            .checked_add(entry.sample_count)
+            .ok_or_else(|| {
+                VideoError::Container(
+                    "stts sample_count overflow while building video timeline".into(),
+                )
+            })?;
+        if sample_id < next_first {
+            let sample_offset = u64::from(sample_id.saturating_sub(first_sample));
+            let delta = u64::from(entry.sample_delta);
+            return Ok(elapsed.saturating_add(sample_offset.saturating_mul(delta)));
+        }
+        first_sample = next_first;
+        elapsed =
+            elapsed.saturating_add(u64::from(entry.sample_count) * u64::from(entry.sample_delta));
+    }
+
+    Err(VideoError::Container(format!(
+        "stts entry missing for video sample {sample_id}"
+    )))
+}
+
+fn is_sync_sample(track: &mp4::Mp4Track, sample_id: u32) -> bool {
+    if !track.trafs.is_empty() {
+        let traf_count = u32::try_from(track.trafs.len()).unwrap_or(0);
+        if traf_count == 0 {
+            return true;
+        }
+        let sample_sizes_count = track.sample_count() / traf_count;
+        if sample_sizes_count == 0 {
+            return sample_id == 1;
+        }
+        return sample_id == 1 || sample_id % sample_sizes_count == 0;
+    }
+
+    if let Some(stss) = &track.trak.mdia.minf.stbl.stss {
+        stss.entries.binary_search(&sample_id).is_ok()
+    } else {
+        true
     }
 }
 

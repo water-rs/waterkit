@@ -25,10 +25,19 @@
 
 mod demuxer;
 mod muxer;
+mod picture_in_picture;
 mod player;
 
-pub use demuxer::{VideoFrame, VideoReader};
+pub use demuxer::{
+    EmbeddedSubtitleCodec, EmbeddedSubtitleCue, EmbeddedSubtitleTrack, VideoFrame, VideoReader,
+    embedded_subtitle_tracks, read_embedded_subtitle_cues,
+};
 pub use muxer::{CodecType as MuxerCodecType, VideoFormat, VideoWriter};
+pub use picture_in_picture::{
+    PictureInPictureCommand, PictureInPictureControllerState, PictureInPictureHostId,
+    enter_picture_in_picture, is_picture_in_picture_active, poll_picture_in_picture_command,
+    sync_picture_in_picture_controller,
+};
 pub use player::{PlayerFrame, VideoPlayer};
 
 /// Re-export wgpu for texture integration.

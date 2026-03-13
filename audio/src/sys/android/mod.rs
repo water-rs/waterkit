@@ -194,12 +194,16 @@ pub fn set_playback_state_with_context(
     env.call_static_method::<&JClass, _, _>(
         &helper_class,
         "setPlaybackState",
-        "(IJF)V",
+        "(IJFZZ)V",
         &[
             JValue::Int(status),
             JValue::Long(position_ms),
             #[allow(clippy::cast_possible_truncation)]
             JValue::Float(state.rate() as f32),
+            JValue::Bool(u8::from(state.queue_navigation_controls().next_enabled())),
+            JValue::Bool(u8::from(
+                state.queue_navigation_controls().previous_enabled(),
+            )),
         ],
     )
     .map_err(|e| MediaError::UpdateFailed(format!("setPlaybackState: {e}")))?;
@@ -252,6 +256,11 @@ fn parse_media_command(raw: &str) -> Result<MediaCommand, MediaError> {
         "stop" => Ok(MediaCommand::Stop),
         "next" => Ok(MediaCommand::Next),
         "previous" => Ok(MediaCommand::Previous),
+        "audio_focus_gained" => Ok(MediaCommand::AudioFocusGained),
+        "audio_focus_lost" => Ok(MediaCommand::AudioFocusLost),
+        "audio_focus_lost_transient" => Ok(MediaCommand::AudioFocusLostTransient),
+        "audio_focus_lost_duck" => Ok(MediaCommand::AudioFocusLostDuck),
+        "audio_becoming_noisy" => Ok(MediaCommand::AudioBecomingNoisy),
         _ if raw.starts_with("seek:") => {
             let millis = raw
                 .split_once(':')

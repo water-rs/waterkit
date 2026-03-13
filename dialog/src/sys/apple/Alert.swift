@@ -14,13 +14,13 @@ func show_alert_bridge(title: RustStr, message: RustStr, type_str: RustStr, cb_i
     DispatchQueue.main.async {
         #if os(iOS)
         guard let topVC = getTopViewController() else {
-            on_alert_result(cb_id, false)
+            on_dialog_result(cb_id, false)
             return
         }
         
         let alert = UIAlertController(title: titleStr, message: messageStr, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
-            on_alert_result(cb_id, true)
+            on_dialog_result(cb_id, true)
         })
         topVC.present(alert, animated: true)
         #elseif os(macOS)
@@ -30,7 +30,7 @@ func show_alert_bridge(title: RustStr, message: RustStr, type_str: RustStr, cb_i
         alert.alertStyle = .informational // simplified mapping
         alert.addButton(withTitle: "OK")
         let _ = alert.runModal()
-        on_alert_result(cb_id, true)
+        on_dialog_result(cb_id, true)
         #endif
     }
 }
@@ -42,16 +42,16 @@ func show_confirm_bridge(title: RustStr, message: RustStr, type_str: RustStr, cb
     DispatchQueue.main.async {
         #if os(iOS)
         guard let topVC = getTopViewController() else {
-            on_alert_result(cb_id, false)
+            on_dialog_result(cb_id, false)
             return
         }
         
         let alert = UIAlertController(title: titleStr, message: messageStr, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
-            on_alert_result(cb_id, true)
+            on_dialog_result(cb_id, true)
         })
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
-            on_alert_result(cb_id, false)
+            on_dialog_result(cb_id, false)
         })
         topVC.present(alert, animated: true)
         #elseif os(macOS)
@@ -62,7 +62,7 @@ func show_confirm_bridge(title: RustStr, message: RustStr, type_str: RustStr, cb
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
         let response = alert.runModal()
-        on_alert_result(cb_id, response == .alertFirstButtonReturn)
+        on_dialog_result(cb_id, response == .alertFirstButtonReturn)
         #endif
     }
 }
@@ -131,7 +131,7 @@ func show_open_file_bridge(extensions_csv: RustStr, cb_id: UInt64) {
 
     DispatchQueue.main.async {
         guard let topVC = getTopViewController() else {
-            on_open_file_result(cb_id, nil)
+            on_open_file_result(cb_id, nil as String?)
             return
         }
 
@@ -158,7 +158,7 @@ func show_open_file_bridge(extensions_csv: RustStr, cb_id: UInt64) {
 func load_media_bridge(handle_id: UInt64, cb_id: UInt64) {
     DispatchQueue.main.async {
         guard let provider = activeProviders[handle_id] else {
-            on_load_media_result(cb_id, nil)
+            on_load_media_result(cb_id, nil as String?)
             return
         }
         
@@ -171,7 +171,7 @@ func load_media_bridge(handle_id: UInt64, cb_id: UInt64) {
         } else if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
              loadFile(provider, type: UTType.image.identifier, cb_id: cb_id)
         } else {
-             on_load_media_result(cb_id, nil)
+             on_load_media_result(cb_id, nil as String?)
         }
     }
 }
@@ -179,7 +179,7 @@ func load_media_bridge(handle_id: UInt64, cb_id: UInt64) {
 private func loadFile(_ provider: NSItemProvider, type: String, cb_id: UInt64) {
     provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
         guard let url = url else {
-            on_load_media_result(cb_id, nil)
+            on_load_media_result(cb_id, nil as String?)
             return
         }
 

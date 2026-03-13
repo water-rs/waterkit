@@ -5,12 +5,42 @@ use mp4::WriteBox;
 use std::{
     io::{BufReader, Cursor, Read},
     path::Path,
+    time::Duration,
 };
 
 #[derive(Debug, Clone, Copy)]
 struct SampleMeta {
     start_time: u64,
     is_keyframe: bool,
+}
+
+/// Embedded subtitle codec carried inside the MP4 container.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddedSubtitleCodec {
+    /// MPEG-4 Timed Text (`tx3g`).
+    Tx3g,
+}
+
+/// Metadata describing one embedded subtitle track.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedSubtitleTrack {
+    /// MP4 track id.
+    pub track_id: u32,
+    /// Track language from `mdhd`.
+    pub language: String,
+    /// Subtitle sample entry codec.
+    pub codec: EmbeddedSubtitleCodec,
+}
+
+/// One decoded embedded subtitle cue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedSubtitleCue {
+    /// Cue start presentation time.
+    pub start: Duration,
+    /// Cue end presentation time.
+    pub end: Duration,
+    /// Decoded cue text payload.
+    pub text: String,
 }
 
 /// A decoded video frame.
@@ -289,6 +319,102 @@ impl VideoReader {
     }
 }
 
+/// Read embedded subtitle track metadata from an MP4/MOV file.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be opened or the MP4 header cannot be parsed.
+pub fn embedded_subtitle_tracks<P: AsRef<Path>>(
+    path: P,
+) -> Result<Vec<EmbeddedSubtitleTrack>, VideoError> {
+    let reader = open_mp4_reader(path)?;
+    let mut tracks = Vec::new();
+
+    for track in reader.tracks().values() {
+        let track_type = track
+            .track_type()
+            .map_err(|error| VideoError::Container(error.to_string()))?;
+        if track_type != mp4::TrackType::Subtitle {
+            continue;
+        }
+
+        let codec = match track
+            .media_type()
+            .map_err(|error| VideoError::Container(error.to_string()))?
+        {
+            mp4::MediaType::TTXT => EmbeddedSubtitleCodec::Tx3g,
+            _ => continue,
+        };
+
+        tracks.push(EmbeddedSubtitleTrack {
+            track_id: track.track_id(),
+            language: track.language().to_owned(),
+            codec,
+        });
+    }
+
+    Ok(tracks)
+}
+
+/// Decode all cues from one embedded subtitle track.
+///
+/// # Errors
+///
+/// Returns an error when the track does not exist, is not a supported subtitle codec,
+/// or one of its samples cannot be decoded.
+pub fn read_embedded_subtitle_cues<P: AsRef<Path>>(
+    path: P,
+    track_id: u32,
+) -> Result<Vec<EmbeddedSubtitleCue>, VideoError> {
+    let mut reader = open_mp4_reader(path)?;
+    let track = reader.tracks().get(&track_id).ok_or_else(|| {
+        VideoError::Container(format!("embedded subtitle track {track_id} not found"))
+    })?;
+    let track_type = track
+        .track_type()
+        .map_err(|error| VideoError::Container(error.to_string()))?;
+    if track_type != mp4::TrackType::Subtitle {
+        return Err(VideoError::Container(format!(
+            "track {track_id} is not a subtitle track"
+        )));
+    }
+
+    match track
+        .media_type()
+        .map_err(|error| VideoError::Container(error.to_string()))?
+    {
+        mp4::MediaType::TTXT => {}
+        media_type => {
+            return Err(VideoError::Unsupported(format!(
+                "embedded subtitle codec {media_type:?} is not supported"
+            )));
+        }
+    }
+
+    let timescale = track.timescale();
+    let sample_count = track.sample_count();
+    let mut cues = Vec::with_capacity(sample_count as usize);
+
+    for sample_id in 1..=sample_count {
+        let Some(sample) = reader
+            .read_sample(track_id, sample_id)
+            .map_err(|error| VideoError::Container(error.to_string()))?
+        else {
+            continue;
+        };
+
+        let text = parse_tx3g_sample_text(sample.bytes.as_ref())?;
+        let start = timescaled_value_to_duration(sample.start_time, timescale);
+        let end = timescaled_value_to_duration(
+            sample.start_time.saturating_add(u64::from(sample.duration)),
+            timescale,
+        );
+        cues.push(EmbeddedSubtitleCue { start, end, text });
+    }
+
+    Ok(cues)
+}
+
 fn build_sample_metas(
     track: &mp4::Mp4Track,
     sample_count: u32,
@@ -386,9 +512,86 @@ fn extract_box_from_bytes(bytes: &[u8], box_type: [u8; 4]) -> Option<Vec<u8>> {
     Some(bytes[size_pos..size_pos + box_size].to_vec())
 }
 
+fn open_mp4_reader<P: AsRef<Path>>(
+    path: P,
+) -> Result<mp4::Mp4Reader<BufReader<std::fs::File>>, VideoError> {
+    let file = std::fs::File::open(path.as_ref())?;
+    let size = file.metadata()?.len();
+    mp4::Mp4Reader::read_header(BufReader::new(file), size)
+        .map_err(|error| VideoError::Container(error.to_string()))
+}
+
+fn parse_tx3g_sample_text(bytes: &[u8]) -> Result<String, VideoError> {
+    if bytes.len() < 2 {
+        return Err(VideoError::Container(
+            "tx3g subtitle sample is missing the length prefix".to_string(),
+        ));
+    }
+
+    let text_len = usize::from(u16::from_be_bytes([bytes[0], bytes[1]]));
+    let text_end = 2usize
+        .checked_add(text_len)
+        .ok_or_else(|| VideoError::Container("tx3g subtitle sample length overflow".to_string()))?;
+    if bytes.len() < text_end {
+        return Err(VideoError::Container(format!(
+            "tx3g subtitle sample truncated: expected {text_end} bytes, got {}",
+            bytes.len()
+        )));
+    }
+
+    let payload = &bytes[2..text_end];
+    if payload.is_empty() {
+        return Ok(String::new());
+    }
+
+    if payload.starts_with(&[0xfe, 0xff]) {
+        return decode_utf16(&payload[2..], false);
+    }
+    if payload.starts_with(&[0xff, 0xfe]) {
+        return decode_utf16(&payload[2..], true);
+    }
+
+    String::from_utf8(payload.to_vec()).map_err(|error| {
+        VideoError::Container(format!("tx3g subtitle sample is not valid UTF-8: {error}"))
+    })
+}
+
+fn decode_utf16(bytes: &[u8], little_endian: bool) -> Result<String, VideoError> {
+    if bytes.len() % 2 != 0 {
+        return Err(VideoError::Container(
+            "tx3g UTF-16 subtitle payload must have an even byte length".to_string(),
+        ));
+    }
+
+    let units = bytes
+        .chunks_exact(2)
+        .map(|chunk| {
+            if little_endian {
+                u16::from_le_bytes([chunk[0], chunk[1]])
+            } else {
+                u16::from_be_bytes([chunk[0], chunk[1]])
+            }
+        })
+        .collect::<Vec<_>>();
+
+    String::from_utf16(&units).map_err(|error| {
+        VideoError::Container(format!(
+            "tx3g subtitle payload is not valid UTF-16: {error}"
+        ))
+    })
+}
+
+fn timescaled_value_to_duration(value: u64, timescale: u32) -> Duration {
+    if timescale == 0 {
+        return Duration::ZERO;
+    }
+
+    Duration::from_nanos(value.saturating_mul(1_000_000_000) / u64::from(timescale))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::extract_box_from_bytes;
+    use super::{decode_utf16, extract_box_from_bytes, parse_tx3g_sample_text};
 
     #[test]
     fn extracts_hvcc_box_from_payload() {
@@ -404,5 +607,22 @@ mod tests {
     fn ignores_invalid_box_size() {
         let bytes = [0, 0, 0, 2, b'h', b'v', b'c', b'C'];
         assert!(extract_box_from_bytes(&bytes, *b"hvcC").is_none());
+    }
+
+    #[test]
+    fn parses_utf8_tx3g_sample_payload() {
+        let bytes = [0, 5, b'H', b'e', b'l', b'l', b'o'];
+        let text = parse_tx3g_sample_text(&bytes).expect("tx3g parse must succeed");
+        assert_eq!(text, "Hello");
+    }
+
+    #[test]
+    fn parses_utf16be_tx3g_sample_payload_with_bom() {
+        let text = decode_utf16(&[0, b'H', 0, b'i'], false).expect("utf16 decode must succeed");
+        assert_eq!(text, "Hi");
+
+        let bytes = [0, 6, 0xfe, 0xff, 0, b'H', 0, b'i'];
+        let parsed = parse_tx3g_sample_text(&bytes).expect("tx3g parse must succeed");
+        assert_eq!(parsed, "Hi");
     }
 }

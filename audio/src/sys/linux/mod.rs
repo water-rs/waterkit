@@ -15,6 +15,7 @@
 
 use crate::{
     MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus,
+    QueueNavigationControls,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
@@ -26,6 +27,10 @@ use zbus::{Connection, connection::Builder as ConnectionBuilder, interface};
 static COMMAND_HANDLER: LazyLock<RwLock<Option<Box<dyn MediaCommandHandler>>>> =
     LazyLock::new(|| RwLock::new(None));
 
+/// Pending commands for polling-based media session integration.
+static PENDING_COMMANDS: LazyLock<RwLock<Vec<MediaCommand>>> =
+    LazyLock::new(|| RwLock::new(Vec::new()));
+
 /// Current metadata for MPRIS properties
 static CURRENT_METADATA: LazyLock<RwLock<HashMap<String, Value<'static>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
@@ -36,6 +41,10 @@ static CURRENT_STATUS: LazyLock<RwLock<PlaybackStatus>> =
 
 /// Current position in microseconds
 static CURRENT_POSITION: LazyLock<RwLock<i64>> = LazyLock::new(|| RwLock::new(0));
+
+/// Current queue navigation capabilities.
+static CURRENT_QUEUE_NAVIGATION: LazyLock<RwLock<QueueNavigationControls>> =
+    LazyLock::new(|| RwLock::new(QueueNavigationControls::default()));
 
 /// MPRIS `MediaPlayer2` interface implementation
 struct MediaPlayer2;
@@ -127,12 +136,16 @@ impl MprisPlayer {
 
     #[zbus(property)]
     fn can_go_next(&self) -> bool {
-        true
+        CURRENT_QUEUE_NAVIGATION
+            .read()
+            .is_ok_and(|controls| controls.next_enabled())
     }
 
     #[zbus(property)]
     fn can_go_previous(&self) -> bool {
-        true
+        CURRENT_QUEUE_NAVIGATION
+            .read()
+            .is_ok_and(|controls| controls.previous_enabled())
     }
 
     #[zbus(property)]
@@ -199,6 +212,9 @@ impl MprisPlayer {
 }
 
 fn dispatch_command(cmd: MediaCommand) {
+    if let Ok(mut queue) = PENDING_COMMANDS.write() {
+        queue.push(cmd.clone());
+    }
     if let Ok(guard) = COMMAND_HANDLER.read()
         && let Some(handler) = guard.as_ref()
     {
@@ -290,6 +306,10 @@ impl MediaSessionInner {
             *guard = pos.as_micros() as i64;
         }
 
+        if let Ok(mut guard) = CURRENT_QUEUE_NAVIGATION.write() {
+            *guard = state.queue_navigation_controls();
+        }
+
         Ok(())
     }
 
@@ -320,7 +340,15 @@ impl MediaSessionInner {
         if let Ok(mut guard) = CURRENT_STATUS.write() {
             *guard = PlaybackStatus::Stopped;
         }
+        if let Ok(mut guard) = CURRENT_QUEUE_NAVIGATION.write() {
+            *guard = QueueNavigationControls::default();
+        }
         Ok(())
+    }
+
+    #[allow(clippy::unused_self)]
+    pub fn poll_command(&self) -> Option<crate::MediaCommand> {
+        PENDING_COMMANDS.write().ok()?.pop()
     }
 }
 
@@ -370,6 +398,9 @@ impl MediaCenterInner {
             && let Ok(mut guard) = CURRENT_POSITION.write()
         {
             *guard = pos.as_micros() as i64;
+        }
+        if let Ok(mut guard) = CURRENT_QUEUE_NAVIGATION.write() {
+            *guard = state.queue_navigation_controls();
         }
     }
 

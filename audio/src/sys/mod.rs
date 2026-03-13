@@ -9,9 +9,16 @@
 use crate::{MediaCommand, MediaMetadata, PlaybackState};
 use std::time::Duration;
 
-// Recording - use cpal on all desktop platforms
+// Recording - use cpal on desktop platforms, explicit mobile inner elsewhere
+#[cfg(not(target_os = "ios"))]
 mod desktop_record;
+#[cfg(not(target_os = "ios"))]
 pub use desktop_record::AudioRecorderInner;
+
+#[cfg(target_os = "ios")]
+mod mobile_record;
+#[cfg(target_os = "ios")]
+pub use mobile_record::AudioRecorderInner;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple;
@@ -37,6 +44,9 @@ compile_error!("waterkit-audio supports only macOS, iOS, Android, Windows, and L
 // Keep MediaSessionInner for backwards compatibility
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 pub use apple::MediaSessionInner;
+
+#[cfg(target_os = "ios")]
+pub(crate) use apple::{NativeAudioPlayerInner, NativeAudioPlayerState};
 
 #[cfg(target_os = "android")]
 pub(crate) use android::MediaSessionInner;

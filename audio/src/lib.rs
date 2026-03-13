@@ -8,6 +8,10 @@
 
 #![warn(missing_docs)]
 
+#[cfg(target_os = "ios")]
+#[path = "player_ios.rs"]
+mod player;
+#[cfg(not(target_os = "ios"))]
 mod player;
 mod recorder;
 mod shutdown;
@@ -15,8 +19,10 @@ mod sys;
 
 pub use player::{
     AudioDevice, AudioPlayer, AudioStreamFormat, ListenerPose, PlaybackMode, PlayerError,
-    SpatialPosition, SpatialScene, rodio,
+    SpatialPosition, SpatialScene,
 };
+#[cfg(not(target_os = "ios"))]
+pub use player::rodio;
 pub use recorder::{AudioBuffer, AudioFormat, AudioRecorder, AudioRecorderBuilder, RecordError};
 pub use shutdown::{ShutdownHandle, ShutdownReceiver};
 
@@ -127,6 +133,7 @@ pub struct PlaybackState {
     status: PlaybackStatus,
     position: Option<Duration>,
     rate: f64,
+    queue_navigation_controls: QueueNavigationControls,
 }
 
 impl PlaybackState {
@@ -137,6 +144,7 @@ impl PlaybackState {
             status: PlaybackStatus::Stopped,
             position: None,
             rate: 0.0,
+            queue_navigation_controls: QueueNavigationControls::enabled(),
         }
     }
 
@@ -147,6 +155,7 @@ impl PlaybackState {
             status: PlaybackStatus::Playing,
             position: Some(position),
             rate: 1.0,
+            queue_navigation_controls: QueueNavigationControls::enabled(),
         }
     }
 
@@ -157,6 +166,7 @@ impl PlaybackState {
             status: PlaybackStatus::Paused,
             position: Some(position),
             rate: 0.0,
+            queue_navigation_controls: QueueNavigationControls::enabled(),
         }
     }
 
@@ -178,11 +188,87 @@ impl PlaybackState {
         self.rate
     }
 
+    /// Get queue navigation control availability.
+    #[must_use]
+    pub const fn queue_navigation_controls(&self) -> QueueNavigationControls {
+        self.queue_navigation_controls
+    }
+
     /// Set playback rate (1.0 = normal speed).
     #[must_use]
     pub const fn with_rate(mut self, rate: f64) -> Self {
         self.rate = rate;
         self
+    }
+
+    /// Set queue navigation control availability.
+    #[must_use]
+    pub const fn with_queue_navigation_controls(
+        mut self,
+        queue_navigation_controls: QueueNavigationControls,
+    ) -> Self {
+        self.queue_navigation_controls = queue_navigation_controls;
+        self
+    }
+}
+
+/// Queue navigation controls exposed to system media UIs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct QueueNavigationControls {
+    next_enabled: bool,
+    previous_enabled: bool,
+}
+
+impl QueueNavigationControls {
+    /// Enable both next and previous actions.
+    #[must_use]
+    pub const fn enabled() -> Self {
+        Self {
+            next_enabled: true,
+            previous_enabled: true,
+        }
+    }
+
+    /// Disable both next and previous actions.
+    #[must_use]
+    pub const fn disabled() -> Self {
+        Self {
+            next_enabled: false,
+            previous_enabled: false,
+        }
+    }
+
+    /// Whether next is enabled.
+    #[must_use]
+    pub const fn next_enabled(self) -> bool {
+        self.next_enabled
+    }
+
+    /// Whether previous is enabled.
+    #[must_use]
+    pub const fn previous_enabled(self) -> bool {
+        self.previous_enabled
+    }
+
+    /// Set next enabled state.
+    #[must_use]
+    pub const fn with_next_enabled(mut self, next_enabled: bool) -> Self {
+        self.next_enabled = next_enabled;
+        self
+    }
+
+    /// Set previous enabled state.
+    #[must_use]
+    pub const fn with_previous_enabled(mut self, previous_enabled: bool) -> Self {
+        self.previous_enabled = previous_enabled;
+        self
+    }
+}
+
+impl Default for QueueNavigationControls {
+    fn default() -> Self {
+        Self::enabled()
     }
 }
 
@@ -208,6 +294,16 @@ pub enum MediaCommand {
     SeekForward(Duration),
     /// Seek backward by an amount.
     SeekBackward(Duration),
+    /// Audio focus was regained after a previous interruption.
+    AudioFocusGained,
+    /// Audio focus was lost permanently.
+    AudioFocusLost,
+    /// Audio focus was lost temporarily; playback may resume on focus gain.
+    AudioFocusLostTransient,
+    /// Audio focus was lost temporarily and playback should duck.
+    AudioFocusLostDuck,
+    /// Audio output became noisy (for example, headphones were disconnected).
+    AudioBecomingNoisy,
 }
 
 /// Errors that can occur with media control.
@@ -303,5 +399,34 @@ impl MediaSession {
         self.inner.clear()
     }
 
+    /// Poll one pending media command from system controls.
+    #[must_use]
+    pub fn poll_command(&self) -> Option<MediaCommand> {
+        self.inner.poll_command()
+    }
+
     // run_loop is now handled automatically in the background
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PlaybackState, QueueNavigationControls};
+    use std::time::Duration;
+
+    #[test]
+    fn playback_state_enables_queue_navigation_by_default() {
+        let state = PlaybackState::playing(Duration::from_secs(1));
+
+        assert!(state.queue_navigation_controls().next_enabled());
+        assert!(state.queue_navigation_controls().previous_enabled());
+    }
+
+    #[test]
+    fn playback_state_can_disable_queue_navigation() {
+        let state = PlaybackState::paused(Duration::from_secs(1))
+            .with_queue_navigation_controls(QueueNavigationControls::disabled());
+
+        assert!(!state.queue_navigation_controls().next_enabled());
+        assert!(!state.queue_navigation_controls().previous_enabled());
+    }
 }

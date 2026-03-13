@@ -31,6 +31,13 @@ fn executable_from_home(home: &Path, executable: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.exists())
 }
 
+fn executable_from_path(executable: &str) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    env::split_paths(&path)
+        .flat_map(|dir| executable_candidates(&dir, executable))
+        .find(|candidate| candidate.exists())
+}
+
 fn resolve_kotlinc_path() -> PathBuf {
     if let Some(kotlinc) = env::var_os("KOTLINC") {
         let kotlinc_path = PathBuf::from(kotlinc);
@@ -52,6 +59,10 @@ fn resolve_kotlinc_path() -> PathBuf {
             kotlin_home.display(),
             kotlin_home.display()
         );
+    }
+
+    if let Some(path) = executable_from_path("kotlinc") {
+        return path;
     }
 
     if cfg!(target_os = "windows")
@@ -83,17 +94,31 @@ fn resolve_java_path() -> PathBuf {
     PathBuf::from("java")
 }
 
-fn kotlin_home_from_compiler(kotlinc_path: &Path) -> Option<PathBuf> {
-    if let Some(kotlin_home) = env::var_os("KOTLIN_HOME") {
-        return Some(PathBuf::from(kotlin_home));
+fn push_unique_path(paths: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !paths.iter().any(|existing| existing == &candidate) {
+        paths.push(candidate);
     }
-    kotlinc_path.parent()?.parent().map(PathBuf::from)
 }
 
-fn detect_kotlin_stdlib_jars(kotlinc_path: &Path) -> Vec<PathBuf> {
-    let Some(kotlin_home) = kotlin_home_from_compiler(kotlinc_path) else {
-        return Vec::new();
-    };
+fn kotlin_home_candidates(kotlinc_path: &Path) -> Vec<PathBuf> {
+    let mut homes = Vec::new();
+    if let Some(kotlin_home) = env::var_os("KOTLIN_HOME") {
+        push_unique_path(&mut homes, PathBuf::from(kotlin_home));
+    }
+
+    let compiler_paths = [Some(kotlinc_path.to_path_buf()), fs::canonicalize(kotlinc_path).ok()];
+    for compiler_path in compiler_paths.into_iter().flatten() {
+        let Some(home) = compiler_path.parent().and_then(Path::parent).map(PathBuf::from) else {
+            continue;
+        };
+        push_unique_path(&mut homes, home.clone());
+        push_unique_path(&mut homes, home.join("libexec"));
+    }
+
+    homes
+}
+
+fn kotlin_stdlib_jars_in_home(kotlin_home: &Path) -> Vec<PathBuf> {
     let lib_dir = kotlin_home.join("lib");
     let Ok(entries) = fs::read_dir(&lib_dir) else {
         return Vec::new();
@@ -115,6 +140,16 @@ fn detect_kotlin_stdlib_jars(kotlinc_path: &Path) -> Vec<PathBuf> {
         .collect::<Vec<_>>();
     jars.sort();
     jars
+}
+
+fn detect_kotlin_stdlib_jars(kotlinc_path: &Path) -> Vec<PathBuf> {
+    for kotlin_home in kotlin_home_candidates(kotlinc_path) {
+        let jars = kotlin_stdlib_jars_in_home(&kotlin_home);
+        if !jars.is_empty() {
+            return jars;
+        }
+    }
+    Vec::new()
 }
 
 fn command_for_executable(executable: &Path) -> Command {

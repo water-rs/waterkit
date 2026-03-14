@@ -33,9 +33,9 @@ pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> jni::errors::Re
     let dex_path = format!("{cache_path_str}/waterkit_fs.dex");
 
     // Write DEX bytes to file
-    std::fs::write(&dex_path, DEX_BYTES).unwrap_or_else(|e| {
-        eprintln!("Failed to write DEX: {e}");
-    });
+    if let Err(error) = std::fs::write(&dex_path, DEX_BYTES) {
+        tracing::error!("waterkit-fs: failed to write embedded DEX: {error}");
+    }
 
     // Create DexClassLoader
     let dex_path_jstring = env.new_string(&dex_path)?;
@@ -98,8 +98,8 @@ fn call_helper_method(
 
 pub fn documents_dir_with_context(env: &mut JNIEnv, context: &JObject) -> Option<PathBuf> {
     call_helper_method(env, context, "getDocumentsDir")
-        .unwrap_or_else(|e| {
-            eprintln!("Error getting documents dir: {e}");
+        .unwrap_or_else(|error| {
+            tracing::error!("waterkit-fs: failed to resolve Android documents dir: {error}");
             None
         })
         .map(PathBuf::from)
@@ -107,19 +107,19 @@ pub fn documents_dir_with_context(env: &mut JNIEnv, context: &JObject) -> Option
 
 pub fn cache_dir_with_context(env: &mut JNIEnv, context: &JObject) -> Option<PathBuf> {
     call_helper_method(env, context, "getCacheDir")
-        .unwrap_or_else(|e| {
-            eprintln!("Error getting cache dir: {e}");
+        .unwrap_or_else(|error| {
+            tracing::error!("waterkit-fs: failed to resolve Android cache dir: {error}");
             None
         })
         .map(PathBuf::from)
 }
 
 pub fn documents_dir() -> Option<PathBuf> {
-    eprintln!("Android: documents_dir requires Context.");
+    tracing::warn!("waterkit-fs: Android documents_dir requires Context");
     None
 }
 
 pub fn cache_dir() -> Option<PathBuf> {
-    eprintln!("Android: cache_dir requires Context.");
+    tracing::warn!("waterkit-fs: Android cache_dir requires Context");
     None
 }

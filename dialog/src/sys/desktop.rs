@@ -87,6 +87,39 @@ pub async fn show_open_single_file(
     Ok(result.map(|f| f.path().to_path_buf()))
 }
 
+/// Show a file dialog to open multiple files.
+///
+/// # Errors
+/// Returns an error if the native dialog fails to show or is not supported.
+pub async fn show_open_multiple_files(
+    dialog: crate::FileDialog,
+) -> Result<Option<Vec<std::path::PathBuf>>, DialogError> {
+    let mut builder = rfd::AsyncFileDialog::new();
+
+    if let Some(location) = &dialog.location {
+        builder = builder.set_directory(location);
+    }
+
+    if let Some(title) = &dialog.title {
+        builder = builder.set_title(title);
+    }
+
+    for (name, extensions) in &dialog.filters {
+        let exts: Vec<&str> = extensions.iter().map(std::string::String::as_str).collect();
+        builder = builder.add_filter(name, &exts);
+    }
+
+    let result = builder.pick_files().await;
+
+    Ok(result.map(|files| {
+        assert!(
+            !files.is_empty(),
+            "waterkit-dialog desktop multiple file picker returned an empty selection"
+        );
+        files.into_iter().map(|file| file.path().to_path_buf()).collect()
+    }))
+}
+
 /// A native handle to a selected media file.
 #[derive(Debug, Clone)]
 pub struct Selection(std::path::PathBuf);

@@ -24,6 +24,7 @@ static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
 pub struct Selection(pub String);
 
 type PickerCallback = oneshot::Sender<Option<String>>;
+type MultiPickerCallback = oneshot::Sender<Option<Vec<String>>>;
 
 static NEXT_PICKER_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -34,6 +35,11 @@ fn photo_picker_callbacks() -> &'static Mutex<HashMap<u64, PickerCallback>> {
 
 fn file_picker_callbacks() -> &'static Mutex<HashMap<u64, PickerCallback>> {
     static LOCK: OnceLock<Mutex<HashMap<u64, PickerCallback>>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn multiple_file_picker_callbacks() -> &'static Mutex<HashMap<u64, MultiPickerCallback>> {
+    static LOCK: OnceLock<Mutex<HashMap<u64, MultiPickerCallback>>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -111,6 +117,35 @@ pub extern "system" fn Java_waterkit_dialog_DialogHelper_onFilePickerResult(
             panic!("waterkit-dialog: unknown file picker request id in callback: {request_id}")
         });
     let _ = tx.send(uri);
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_waterkit_dialog_DialogHelper_onFilePickerMultipleResult(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_id: jlong,
+    uris: JObject,
+) {
+    assert!(
+        request_id > 0,
+        "waterkit-dialog: invalid multiple file picker request id: {request_id}"
+    );
+    let encoded = decode_optional_string(&mut env, uris);
+    let uris = crate::decode_string_list(encoded);
+    let tx = multiple_file_picker_callbacks()
+        .lock()
+        .unwrap_or_else(|error| {
+            panic!(
+                "waterkit-dialog: multiple file picker callback map lock poisoned: {error}"
+            )
+        })
+        .remove(&request_id_from_jlong(request_id))
+        .unwrap_or_else(|| {
+            panic!(
+                "waterkit-dialog: unknown multiple file picker request id in callback: {request_id}"
+            )
+        });
+    let _ = tx.send(uris);
 }
 
 /// Initialize the DEX class loader. Must be called with a valid Context.
@@ -332,6 +367,54 @@ fn launch_file_picker_with_context(
     Ok(rx)
 }
 
+fn launch_multiple_file_picker_with_context(
+    env: &mut JNIEnv,
+    context: &JObject,
+    dialog: &FileDialog,
+) -> Result<oneshot::Receiver<Option<Vec<String>>>, DialogError> {
+    init_with_context(env, context)?;
+    let helper_class = get_helper_class(env)?;
+
+    let request_id = NEXT_PICKER_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    let request_id_jlong = jlong_from_request_id(request_id)?;
+    let (tx, rx) = oneshot::channel();
+    multiple_file_picker_callbacks()
+        .lock()
+        .map_err(|e| {
+            DialogError::PlatformError(format!("multiple file picker callback map lock: {e}"))
+        })?
+        .insert(request_id, tx);
+
+    let filters_csv = build_filters_csv(dialog);
+    let filters_jstr = env
+        .new_string(filters_csv)
+        .map_err(|e| DialogError::PlatformError(format!("new_string filters: {e}")))?;
+    let launch_result = env.call_static_method(
+        helper_class,
+        "pickMultipleFiles",
+        "(Landroid/content/Context;Ljava/lang/String;J)V",
+        &[
+            JValue::Object(context),
+            JValue::Object(&filters_jstr),
+            JValue::Long(request_id_jlong),
+        ],
+    );
+    if let Err(error) = launch_result {
+        multiple_file_picker_callbacks()
+            .lock()
+            .map_err(|e| {
+                DialogError::PlatformError(format!(
+                    "multiple file picker callback map lock cleanup: {e}"
+                ))
+            })?
+            .remove(&request_id);
+        return Err(DialogError::PlatformError(format!(
+            "pickMultipleFiles: {error}"
+        )));
+    }
+    Ok(rx)
+}
+
 /// Show an alert dialog with JNI context.
 ///
 /// # Errors
@@ -529,6 +612,37 @@ pub async fn show_open_single_file(
     let picked_uri = rx.await.map_err(|_| DialogError::Cancelled)?;
     match picked_uri {
         Some(uri) => load_media(Selection(uri)).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+/// Show a file picker and copy the selected files into app cache.
+///
+/// # Errors
+/// Returns an error if `ndk-context` is unavailable or JNI operations fail.
+pub async fn show_open_multiple_files(
+    dialog: FileDialog,
+) -> Result<Option<Vec<std::path::PathBuf>>, DialogError> {
+    let (vm, context) = ensure_context_global()?;
+    let rx = {
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| DialogError::PlatformError(format!("attach_current_thread: {e}")))?;
+        launch_multiple_file_picker_with_context(&mut env, context.as_obj(), &dialog)?
+    };
+    let picked_uris = rx.await.map_err(|_| DialogError::Cancelled)?;
+    match picked_uris {
+        Some(uris) => {
+            assert!(
+                !uris.is_empty(),
+                "waterkit-dialog android multiple file picker returned an empty selection"
+            );
+            let mut paths = Vec::with_capacity(uris.len());
+            for uri in uris {
+                paths.push(load_media(Selection(uri)).await?);
+            }
+            Ok(Some(paths))
+        }
         None => Ok(None),
     }
 }

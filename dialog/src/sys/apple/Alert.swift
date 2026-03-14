@@ -90,6 +90,7 @@ private var activeDelegates: [UInt64: Any] = [:]
 private var activeProviders: [UInt64: NSItemProvider] = [:]
 private var activeFilePickerDelegates: [UInt64: Any] = [:]
 private var nextHandleId: UInt64 = 1
+private let pathListSeparator = "\u{0000}"
 
 func show_photo_picker_bridge(media_type: RustStr, cb_id: UInt64) {
     let typeStr = media_type.toString()
@@ -151,6 +152,39 @@ func show_open_file_bridge(extensions_csv: RustStr, cb_id: UInt64) {
         let picker = UIDocumentPickerViewController(documentTypes: documentTypes, in: .import)
         picker.delegate = delegate
         picker.allowsMultipleSelection = false
+        topVC.present(picker, animated: true)
+    }
+}
+
+func show_open_multiple_files_bridge(extensions_csv: RustStr, cb_id: UInt64) {
+    let extensions = extensions_csv
+        .toString()
+        .split(separator: ",")
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        .filter { !$0.isEmpty }
+
+    DispatchQueue.main.async {
+        guard let topVC = getTopViewController() else {
+            on_open_multiple_files_result(cb_id, nil as String?)
+            return
+        }
+
+        let documentTypes: [String]
+        if #available(iOS 14.0, *) {
+            let mapped = extensions.compactMap { ext in
+                UTType(filenameExtension: ext)?.identifier
+            }
+            documentTypes = mapped.isEmpty ? [UTType.item.identifier] : mapped
+        } else {
+            documentTypes = ["public.data"]
+        }
+
+        let delegate = MultiFilePickerDelegate(cbId: cb_id)
+        activeFilePickerDelegates[cb_id] = delegate
+
+        let picker = UIDocumentPickerViewController(documentTypes: documentTypes, in: .import)
+        picker.delegate = delegate
+        picker.allowsMultipleSelection = true
         topVC.present(picker, animated: true)
     }
 }
@@ -263,6 +297,35 @@ final class FilePickerDelegate: NSObject, UIDocumentPickerDelegate {
             return
         }
         finish(copyToTemporaryLocation(first))
+    }
+}
+
+final class MultiFilePickerDelegate: NSObject, UIDocumentPickerDelegate {
+    let cbId: UInt64
+
+    init(cbId: UInt64) {
+        self.cbId = cbId
+    }
+
+    private func finish(_ paths: String?) {
+        on_open_multiple_files_result(cbId, paths)
+        activeFilePickerDelegates.removeValue(forKey: cbId)
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        finish(nil)
+    }
+
+    func documentPicker(
+        _ controller: UIDocumentPickerViewController,
+        didPickDocumentsAt urls: [URL]
+    ) {
+        let copied = urls.compactMap(copyToTemporaryLocation)
+        if copied.isEmpty {
+            finish(nil)
+            return
+        }
+        finish(copied.joined(separator: pathListSeparator))
     }
 }
 #endif

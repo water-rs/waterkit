@@ -122,6 +122,7 @@ passkey = ["dep:waterkit-passkey"]
 
 
 [workspace.dependencies]
+tracing = "0.1.44"
 # Functional Crates
 waterkit-permission = { path = "permission", version = "0.1.0" }
 waterkit-location = { path = "location", version = "0.1.0" }

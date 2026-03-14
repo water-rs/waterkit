@@ -95,10 +95,13 @@ class DialogHelper {
         const val REQUEST_CODE_PHOTO_PICK = 9876
         /** Request code for generic file picker. */
         const val REQUEST_CODE_FILE_PICK = 9877
+        /** Request code for generic multiple-file picker. */
+        const val REQUEST_CODE_FILE_PICK_MULTIPLE = 9878
 
         private enum class PickerKind {
             Photo,
             File,
+            FileMultiple,
         }
 
         private data class PendingPicker(
@@ -113,6 +116,9 @@ class DialogHelper {
 
         @JvmStatic
         external fun onFilePickerResult(requestId: Long, uri: String?)
+
+        @JvmStatic
+        external fun onFilePickerMultipleResult(requestId: Long, uris: String?)
 
         private fun launchPicker(
             context: Context,
@@ -142,6 +148,7 @@ class DialogHelper {
                     when (pending.kind) {
                         PickerKind.Photo -> onPhotoPickerResult(pending.requestId, null)
                         PickerKind.File -> onFilePickerResult(pending.requestId, null)
+                        PickerKind.FileMultiple -> onFilePickerMultipleResult(pending.requestId, null)
                     }
                 }
             }
@@ -185,7 +192,24 @@ class DialogHelper {
                 return null
             }
             val uri = if (resultCode == Activity.RESULT_OK && data != null) {
-                data.data?.toString()
+                when (pending.kind) {
+                    PickerKind.FileMultiple -> {
+                        val clipData = data.clipData
+                        if (clipData != null && clipData.itemCount > 0) {
+                            buildString {
+                                for (index in 0 until clipData.itemCount) {
+                                    if (index > 0) {
+                                        append('\u0000')
+                                    }
+                                    append(clipData.getItemAt(index).uri.toString())
+                                }
+                            }
+                        } else {
+                            data.data?.toString()
+                        }
+                    }
+                    else -> data.data?.toString()
+                }
             } else {
                 null
             }
@@ -193,6 +217,7 @@ class DialogHelper {
             when (pending.kind) {
                 PickerKind.Photo -> onPhotoPickerResult(pending.requestId, uri)
                 PickerKind.File -> onFilePickerResult(pending.requestId, uri)
+                PickerKind.FileMultiple -> onFilePickerMultipleResult(pending.requestId, uri)
             }
             return uri
         }
@@ -234,6 +259,41 @@ class DialogHelper {
             }
 
             launchPicker(context, intent, REQUEST_CODE_FILE_PICK, requestId, PickerKind.File)
+        }
+
+        @JvmStatic
+        fun pickMultipleFiles(context: Context, extensionsCsv: String, requestId: Long) {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            }
+
+            val mimeTypes = extensionsCsv
+                .split(',')
+                .map { it.trim().lowercase() }
+                .filter { it.isNotEmpty() }
+                .mapNotNull { extension ->
+                    MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+                }
+                .distinct()
+
+            when (mimeTypes.size) {
+                0 -> intent.type = "*/*"
+                1 -> intent.type = mimeTypes[0]
+                else -> {
+                    intent.type = "*/*"
+                    intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes.toTypedArray())
+                }
+            }
+
+            launchPicker(
+                context,
+                intent,
+                REQUEST_CODE_FILE_PICK_MULTIPLE,
+                requestId,
+                PickerKind.FileMultiple,
+            )
         }
 
         @JvmStatic

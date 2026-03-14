@@ -35,6 +35,19 @@ pub mod android {
 mod error;
 pub use error::*;
 
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+pub(crate) const PATH_LIST_SEPARATOR: char = '\0';
+
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+pub(crate) fn decode_string_list(encoded: Option<String>) -> Option<Vec<String>> {
+    encoded.map(|encoded| {
+        encoded
+            .split(PATH_LIST_SEPARATOR)
+            .map(std::string::ToString::to_string)
+            .collect()
+    })
+}
+
 /// Types of dialogs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogType {
@@ -151,7 +164,17 @@ impl FileDialog {
         sys::show_open_single_file(self).await
     }
 
-    // Future: show_open_multiple_files, show_save_single_file
+    /// Show the dialog to select multiple files to open.
+    ///
+    /// # Errors
+    /// Returns an error if the native dialog fails to show or is not supported.
+    pub async fn show_open_multiple_files(
+        self,
+    ) -> Result<Option<Vec<std::path::PathBuf>>, DialogError> {
+        sys::show_open_multiple_files(self).await
+    }
+
+    // Future: show_save_single_file
 }
 
 impl Default for FileDialog {
@@ -228,5 +251,20 @@ impl PhotoPicker {
 impl Default for PhotoPicker {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PATH_LIST_SEPARATOR, decode_string_list};
+
+    #[test]
+    fn decode_string_list_roundtrips_nul_separated_payload() {
+        let encoded = format!("a{PATH_LIST_SEPARATOR}b{PATH_LIST_SEPARATOR}c");
+        assert_eq!(
+            decode_string_list(Some(encoded)),
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
+        assert_eq!(decode_string_list(None), None);
     }
 }

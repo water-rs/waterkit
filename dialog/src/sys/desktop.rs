@@ -116,7 +116,10 @@ pub async fn show_open_multiple_files(
             !files.is_empty(),
             "waterkit-dialog desktop multiple file picker returned an empty selection"
         );
-        files.into_iter().map(|file| file.path().to_path_buf()).collect()
+        files
+            .into_iter()
+            .map(|file| file.path().to_path_buf())
+            .collect()
     }))
 }
 

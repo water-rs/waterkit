@@ -1,8 +1,6 @@
 //! Apple platform (iOS/macOS) media control implementation using swift-bridge.
 
-use crate::{
-    MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus, PlayerError,
-};
+use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus, PlayerError};
 use std::{sync::RwLock, time::Duration};
 
 mod host_bridge;
@@ -182,9 +180,9 @@ fn convert_result(result: ffi::MediaResultFFI) -> Result<(), MediaError> {
 fn convert_player_result(result: ffi::PlayerResultFFI) -> Result<(), PlayerError> {
     match result {
         ffi::PlayerResultFFI::Success => Ok(()),
-        ffi::PlayerResultFFI::LoadFailed => {
-            Err(PlayerError::LoadFailed("Apple audio player failed to load media".into()))
-        }
+        ffi::PlayerResultFFI::LoadFailed => Err(PlayerError::LoadFailed(
+            "Apple audio player failed to load media".into(),
+        )),
         ffi::PlayerResultFFI::PlaybackFailed => Err(PlayerError::PlaybackFailed(
             "Apple audio player operation failed".into(),
         )),
@@ -204,8 +202,10 @@ fn player_state_from_ffi(state: ffi::PlayerStateFFI) -> NativeAudioPlayerState {
 
     NativeAudioPlayerState {
         status,
-        position: (state.position_secs >= 0.0).then(|| Duration::from_secs_f64(state.position_secs)),
-        duration: (state.duration_secs >= 0.0).then(|| Duration::from_secs_f64(state.duration_secs)),
+        position: (state.position_secs >= 0.0)
+            .then(|| Duration::from_secs_f64(state.position_secs)),
+        duration: (state.duration_secs >= 0.0)
+            .then(|| Duration::from_secs_f64(state.duration_secs)),
     }
 }
 
@@ -230,7 +230,9 @@ fn playback_state_to_ffi(state: &PlaybackState) -> ffi::PlaybackStateFFI {
 
     ffi::PlaybackStateFFI {
         status,
-        position_secs: state.position().map_or(-1.0, |position| position.as_secs_f64()),
+        position_secs: state
+            .position()
+            .map_or(-1.0, |position| position.as_secs_f64()),
         rate: state.rate(),
         next_enabled: state.queue_navigation_controls().next_enabled(),
         previous_enabled: state.queue_navigation_controls().previous_enabled(),
@@ -254,9 +256,9 @@ impl MediaSessionInner {
 
     #[allow(clippy::unused_self)]
     pub fn set_playback_state(&self, state: &PlaybackState) -> Result<(), MediaError> {
-        convert_result(ffi::media_session_set_playback_state(playback_state_to_ffi(
-            state,
-        )))
+        convert_result(ffi::media_session_set_playback_state(
+            playback_state_to_ffi(state),
+        ))
     }
 
     #[allow(clippy::unused_self)]

@@ -5,8 +5,8 @@ use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStat
 use futures::Stream;
 use lofty::prelude::*;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -380,7 +380,9 @@ impl AudioPlayer {
     }
 
     fn playback_rate(&self) -> f32 {
-        clamp_playback_rate(f32::from_bits(self.playback_rate_bits.load(Ordering::Acquire)))
+        clamp_playback_rate(f32::from_bits(
+            self.playback_rate_bits.load(Ordering::Acquire),
+        ))
     }
 
     fn set_playback_rate_bits(&self, rate: f32) {
@@ -400,9 +402,13 @@ impl AudioPlayer {
         let state = self.native_state();
         match state.status {
             PlaybackStatus::Stopped => PlaybackState::stopped(),
-            PlaybackStatus::Paused => PlaybackState::paused(state.position.unwrap_or(Duration::ZERO)),
-            PlaybackStatus::Playing => PlaybackState::playing(state.position.unwrap_or(Duration::ZERO))
-                .with_rate(f64::from(self.playback_rate())),
+            PlaybackStatus::Paused => {
+                PlaybackState::paused(state.position.unwrap_or(Duration::ZERO))
+            }
+            PlaybackStatus::Playing => {
+                PlaybackState::playing(state.position.unwrap_or(Duration::ZERO))
+                    .with_rate(f64::from(self.playback_rate()))
+            }
         }
     }
 
@@ -413,7 +419,8 @@ impl AudioPlayer {
     }
 
     fn update_now_playing(&self) {
-        self.media_center.update(&self.metadata, &self.playback_state());
+        self.media_center
+            .update(&self.metadata, &self.playback_state());
     }
 
     fn apply_playback_preferences(&self) -> Result<(), PlayerError> {

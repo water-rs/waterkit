@@ -97,11 +97,7 @@ pub fn enter_picture_in_picture(
         return apple::enter_picture_in_picture(host_id, aspect_ratio);
     }
 
-    #[cfg(not(any(
-        target_os = "android",
-        target_os = "ios",
-        target_os = "macos"
-    )))]
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "macos")))]
     {
         let _ = host_id;
         let _ = aspect_ratio;
@@ -129,11 +125,7 @@ pub fn sync_picture_in_picture_controller(
         return apple::sync_picture_in_picture_controller(state);
     }
 
-    #[cfg(not(any(
-        target_os = "android",
-        target_os = "ios",
-        target_os = "macos"
-    )))]
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "macos")))]
     {
         let _ = state;
         Err(VideoError::Unsupported(
@@ -159,11 +151,7 @@ pub fn is_picture_in_picture_active(host_id: PictureInPictureHostId) -> Result<b
         return apple::is_picture_in_picture_active(host_id);
     }
 
-    #[cfg(not(any(
-        target_os = "android",
-        target_os = "ios",
-        target_os = "macos"
-    )))]
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "macos")))]
     {
         let _ = host_id;
         Err(VideoError::Unsupported(
@@ -193,11 +181,7 @@ pub fn poll_picture_in_picture_command(
         return apple::poll_picture_in_picture_command(host_id);
     }
 
-    #[cfg(not(any(
-        target_os = "android",
-        target_os = "ios",
-        target_os = "macos"
-    )))]
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "macos")))]
     {
         let _ = host_id;
         Ok(None)
@@ -455,13 +439,13 @@ mod android {
                 ))
             })?;
 
-        let dex_class_loader_class = env
-            .find_class("dalvik/system/DexClassLoader")
-            .map_err(|error| {
-                VideoError::Unsupported(format!(
-                    "Android picture in picture DexClassLoader lookup failed: {error}"
-                ))
-            })?;
+        let dex_class_loader_class =
+            env.find_class("dalvik/system/DexClassLoader")
+                .map_err(|error| {
+                    VideoError::Unsupported(format!(
+                        "Android picture in picture DexClassLoader lookup failed: {error}"
+                    ))
+                })?;
 
         let class_loader = env
             .new_object(

@@ -1,7 +1,5 @@
 use super::{MediaSessionInner, poll_next_command};
-use crate::{
-    MediaCommand, MediaError, MediaMetadata, PlaybackState, QueueNavigationControls,
-};
+use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, QueueNavigationControls};
 use std::{
     ffi::{CStr, c_char},
     time::Duration,
@@ -230,7 +228,7 @@ pub unsafe extern "C" fn waterkit_audio_apple_media_session_clear() -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn waterkit_audio_apple_media_session_poll_command(
-) -> WaterKitAppleMediaCommandFFI {
+pub unsafe extern "C" fn waterkit_audio_apple_media_session_poll_command()
+-> WaterKitAppleMediaCommandFFI {
     media_command_to_ffi(poll_next_command())
 }

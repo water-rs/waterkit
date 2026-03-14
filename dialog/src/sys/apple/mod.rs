@@ -31,8 +31,7 @@ fn open_file_callbacks() -> &'static Mutex<HashMap<u64, oneshot::Sender<Option<S
     LOCK.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn open_multiple_file_callbacks(
-) -> &'static Mutex<HashMap<u64, oneshot::Sender<Option<String>>>> {
+fn open_multiple_file_callbacks() -> &'static Mutex<HashMap<u64, oneshot::Sender<Option<String>>>> {
     static LOCK: OnceLock<Mutex<HashMap<u64, oneshot::Sender<Option<String>>>>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(HashMap::new()))
 }

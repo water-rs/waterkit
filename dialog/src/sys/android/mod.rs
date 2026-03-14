@@ -135,9 +135,7 @@ pub extern "system" fn Java_waterkit_dialog_DialogHelper_onFilePickerMultipleRes
     let tx = multiple_file_picker_callbacks()
         .lock()
         .unwrap_or_else(|error| {
-            panic!(
-                "waterkit-dialog: multiple file picker callback map lock poisoned: {error}"
-            )
+            panic!("waterkit-dialog: multiple file picker callback map lock poisoned: {error}")
         })
         .remove(&request_id_from_jlong(request_id))
         .unwrap_or_else(|| {

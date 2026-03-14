@@ -17,12 +17,12 @@ mod recorder;
 mod shutdown;
 mod sys;
 
+#[cfg(not(target_os = "ios"))]
+pub use player::rodio;
 pub use player::{
     AudioDevice, AudioPlayer, AudioStreamFormat, ListenerPose, PlaybackMode, PlayerError,
     SpatialPosition, SpatialScene,
 };
-#[cfg(not(target_os = "ios"))]
-pub use player::rodio;
 pub use recorder::{AudioBuffer, AudioFormat, AudioRecorder, AudioRecorderBuilder, RecordError};
 pub use shutdown::{ShutdownHandle, ShutdownReceiver};
 

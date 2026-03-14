@@ -106,9 +106,16 @@ fn kotlin_home_candidates(kotlinc_path: &Path) -> Vec<PathBuf> {
         push_unique_path(&mut homes, PathBuf::from(kotlin_home));
     }
 
-    let compiler_paths = [Some(kotlinc_path.to_path_buf()), fs::canonicalize(kotlinc_path).ok()];
+    let compiler_paths = [
+        Some(kotlinc_path.to_path_buf()),
+        fs::canonicalize(kotlinc_path).ok(),
+    ];
     for compiler_path in compiler_paths.into_iter().flatten() {
-        let Some(home) = compiler_path.parent().and_then(Path::parent).map(PathBuf::from) else {
+        let Some(home) = compiler_path
+            .parent()
+            .and_then(Path::parent)
+            .map(PathBuf::from)
+        else {
             continue;
         };
         push_unique_path(&mut homes, home.clone());

@@ -169,8 +169,10 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         #[cfg(feature = "haptic")]
         {
             log::info!("Testing waterkit-haptic...");
-            match waterkit_content::haptic::Haptic::impact(waterkit_content::haptic::Intensity::LOW)
-            {
+            match waterkit_content::haptic::Haptic::impact(
+                waterkit_content::haptic::Intensity::LOW,
+            )
+            .await {
                 Ok(_) => log::info!("Haptic feedback SUCCESS"),
                 Err(e) => log::error!("Haptic feedback FAILED: {e}"),
             }

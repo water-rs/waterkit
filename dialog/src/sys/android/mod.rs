@@ -262,34 +262,15 @@ fn ensure_context_global() -> Result<(JavaVM, GlobalRef), DialogError> {
     Ok((vm, global))
 }
 
-fn build_filters_csv(dialog: &FileDialog) -> String {
-    let mut extensions = Vec::new();
-    for (_, filter_extensions) in &dialog.filters {
-        for ext in filter_extensions {
-            let normalized = ext.trim().trim_start_matches('.').to_ascii_lowercase();
-            if normalized.is_empty() {
-                continue;
-            }
-            if !extensions
-                .iter()
-                .any(|existing: &String| existing == &normalized)
-            {
-                extensions.push(normalized);
-            }
-        }
-    }
-    extensions.join(",")
-}
-
 fn launch_photo_picker_with_context(
     env: &mut JNIEnv,
     context: &JObject,
-    picker: &crate::PhotoPicker,
+    media_type: crate::MediaType,
 ) -> Result<oneshot::Receiver<Option<String>>, DialogError> {
     init_with_context(env, context)?;
     let helper_class = get_helper_class(env)?;
 
-    let type_int = match picker.media_type {
+    let type_int = match media_type {
         crate::MediaType::Image | crate::MediaType::LivePhoto => 0,
         crate::MediaType::Video => 1,
     };
@@ -339,7 +320,7 @@ fn launch_file_picker_with_context(
         .map_err(|e| DialogError::PlatformError(format!("file picker callback map lock: {e}")))?
         .insert(request_id, tx);
 
-    let filters_csv = build_filters_csv(dialog);
+    let filters_csv = crate::collect_filter_extensions(dialog).join(",");
     let filters_jstr = env
         .new_string(filters_csv)
         .map_err(|e| DialogError::PlatformError(format!("new_string filters: {e}")))?;
@@ -383,7 +364,7 @@ fn launch_multiple_file_picker_with_context(
         })?
         .insert(request_id, tx);
 
-    let filters_csv = build_filters_csv(dialog);
+    let filters_csv = crate::collect_filter_extensions(dialog).join(",");
     let filters_jstr = env
         .new_string(filters_csv)
         .map_err(|e| DialogError::PlatformError(format!("new_string filters: {e}")))?;
@@ -496,7 +477,7 @@ pub fn show_confirm_with_context(
 pub fn show_photo_picker_with_context(
     _env: &mut JNIEnv,
     _context: &JObject,
-    _picker: &crate::PhotoPicker,
+    _media_type: crate::MediaType,
 ) -> Result<Option<Selection>, DialogError> {
     Err(DialogError::PlatformError(
         "show_photo_picker_with_context is unavailable in non-blocking mode; use show_photo_picker()"
@@ -580,14 +561,14 @@ pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
 /// # Errors
 /// Returns an error if `ndk-context` is unavailable or JNI operations fail.
 pub async fn show_photo_picker(
-    picker: crate::PhotoPicker,
+    media_type: crate::MediaType,
 ) -> Result<Option<Selection>, DialogError> {
     let (vm, context) = ensure_context_global()?;
     let rx = {
         let mut env = vm
             .attach_current_thread()
             .map_err(|e| DialogError::PlatformError(format!("attach_current_thread: {e}")))?;
-        launch_photo_picker_with_context(&mut env, context.as_obj(), &picker)?
+        launch_photo_picker_with_context(&mut env, context.as_obj(), media_type)?
     };
     let picked_uri = rx.await.map_err(|_| DialogError::Cancelled)?;
     Ok(picked_uri.map(Selection))
@@ -609,7 +590,10 @@ pub async fn show_open_single_file(
     };
     let picked_uri = rx.await.map_err(|_| DialogError::Cancelled)?;
     match picked_uri {
-        Some(uri) => load_media(Selection(uri)).await.map(Some),
+        Some(uri) => {
+            let path = load_media(Selection(uri)).await?;
+            crate::finalize_selected_file(&dialog, path).map(Some)
+        }
         None => Ok(None),
     }
 }
@@ -631,15 +615,11 @@ pub async fn show_open_multiple_files(
     let picked_uris = rx.await.map_err(|_| DialogError::Cancelled)?;
     match picked_uris {
         Some(uris) => {
-            assert!(
-                !uris.is_empty(),
-                "waterkit-dialog android multiple file picker returned an empty selection"
-            );
             let mut paths = Vec::with_capacity(uris.len());
             for uri in uris {
                 paths.push(load_media(Selection(uri)).await?);
             }
-            Ok(Some(paths))
+            crate::finalize_selected_files(&dialog, paths).map(Some)
         }
         None => Ok(None),
     }

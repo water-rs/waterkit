@@ -35,6 +35,10 @@ pub mod android {
 mod error;
 pub use error::*;
 
+use std::path::{Path, PathBuf};
+
+use waterkit_fs::WaterFs;
+
 #[cfg(any(target_os = "android", target_os = "ios", test))]
 pub(crate) const PATH_LIST_SEPARATOR: char = '\0';
 
@@ -115,6 +119,8 @@ pub struct FileDialog {
     pub location: Option<std::path::PathBuf>,
     /// File filters name -> `extensions`
     pub filters: Vec<(String, Vec<String>)>,
+    /// Import selected files into the application's cache directory subtree before returning.
+    pub import_to_cache_subdir: Option<PathBuf>,
 }
 
 impl FileDialog {
@@ -125,6 +131,7 @@ impl FileDialog {
             title: None,
             location: None,
             filters: Vec::new(),
+            import_to_cache_subdir: None,
         }
     }
 
@@ -153,6 +160,13 @@ impl FileDialog {
                 .map(std::string::ToString::to_string)
                 .collect(),
         ));
+        self
+    }
+
+    /// Import selected files into the application's cache directory subtree before returning.
+    #[must_use]
+    pub fn import_to_cache_subdir(mut self, cache_subdir: impl Into<PathBuf>) -> Self {
+        self.import_to_cache_subdir = Some(cache_subdir.into());
         self
     }
 
@@ -194,12 +208,53 @@ pub enum MediaType {
     LivePhoto,
 }
 
+/// The resolved kind of a loaded media selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadedMediaKind {
+    /// A still image asset.
+    Image,
+    /// A video asset.
+    Video,
+}
+
+/// A loaded media asset copied or resolved to a local path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedMedia {
+    path: PathBuf,
+    kind: LoadedMediaKind,
+}
+
+impl LoadedMedia {
+    fn new(path: PathBuf, kind: LoadedMediaKind) -> Self {
+        Self { path, kind }
+    }
+
+    /// Returns the local file path for the loaded media asset.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Returns the resolved media kind.
+    #[must_use]
+    pub const fn kind(&self) -> LoadedMediaKind {
+        self.kind
+    }
+
+    /// Consumes the loaded asset and returns its local file path.
+    #[must_use]
+    pub fn into_path(self) -> PathBuf {
+        self.path
+    }
+}
+
 /// A handle to a selected photo/media.
 ///
 /// Use `load()` to download or copy the media to a local temporary file.
 #[derive(Debug, Clone)]
 pub struct PhotoHandle {
     handle: sys::Selection,
+    requested_media_type: MediaType,
 }
 
 impl PhotoHandle {
@@ -211,7 +266,26 @@ impl PhotoHandle {
     /// # Errors
     /// Returns an error if loading fails.
     pub async fn load(self) -> Result<std::path::PathBuf, DialogError> {
-        sys::load_media(self.handle).await
+        Ok(self.load_media().await?.into_path())
+    }
+
+    /// Load the media to a local file and resolve its concrete media kind.
+    ///
+    /// # Errors
+    /// Returns an error if loading fails.
+    pub async fn load_media(self) -> Result<LoadedMedia, DialogError> {
+        let requested_media_type = self.requested_media_type;
+        let path = sys::load_media(self.handle).await?;
+        let kind = infer_loaded_media_kind(&path);
+
+        if matches!(requested_media_type, MediaType::LivePhoto) {
+            tracing::warn!(
+                "waterkit-dialog: native live photo picker returned a single asset; downgraded to {:?}",
+                kind
+            );
+        }
+
+        Ok(LoadedMedia::new(path, kind))
     }
 }
 
@@ -243,8 +317,12 @@ impl PhotoPicker {
     /// # Errors
     /// Returns an error if the picker fails to show or is not supported.
     pub async fn pick(self) -> Result<Option<PhotoHandle>, DialogError> {
-        (sys::show_photo_picker(self).await?)
-            .map_or(Ok(None), |handle| Ok(Some(PhotoHandle { handle })))
+        (sys::show_photo_picker(self.media_type).await?).map_or(Ok(None), |handle| {
+            Ok(Some(PhotoHandle {
+                handle,
+                requested_media_type: self.media_type,
+            }))
+        })
     }
 }
 
@@ -254,9 +332,78 @@ impl Default for PhotoPicker {
     }
 }
 
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+pub(crate) fn collect_filter_extensions(dialog: &FileDialog) -> Vec<String> {
+    let mut extensions = Vec::new();
+    for (_, filter_extensions) in &dialog.filters {
+        for ext in filter_extensions {
+            let normalized = ext.trim().trim_start_matches('.').to_ascii_lowercase();
+            if normalized.is_empty() {
+                continue;
+            }
+            if !extensions
+                .iter()
+                .any(|existing: &String| existing == &normalized)
+            {
+                extensions.push(normalized);
+            }
+        }
+    }
+    extensions
+}
+
+pub(crate) fn finalize_selected_file(
+    dialog: &FileDialog,
+    path: PathBuf,
+) -> Result<PathBuf, DialogError> {
+    dialog
+        .import_to_cache_subdir
+        .as_deref()
+        .map_or(Ok(path.clone()), |cache_subdir| {
+            WaterFs::import_file_to_cache(&path, cache_subdir).map_err(DialogError::from)
+        })
+}
+
+pub(crate) fn finalize_selected_files(
+    dialog: &FileDialog,
+    paths: Vec<PathBuf>,
+) -> Result<Vec<PathBuf>, DialogError> {
+    assert!(
+        !paths.is_empty(),
+        "waterkit-dialog picker returned an empty file selection"
+    );
+
+    paths
+        .into_iter()
+        .map(|path| finalize_selected_file(dialog, path))
+        .collect()
+}
+
+fn infer_loaded_media_kind(path: &Path) -> LoadedMediaKind {
+    let extension = path
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_lowercase);
+
+    if extension.as_deref().is_some_and(|extension| {
+        matches!(
+            extension,
+            "mp4" | "mov" | "avi" | "mkv" | "webm" | "m4v" | "3gp" | "hevc"
+        )
+    }) {
+        LoadedMediaKind::Video
+    } else {
+        LoadedMediaKind::Image
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PATH_LIST_SEPARATOR, decode_string_list};
+    use super::{
+        FileDialog, LoadedMediaKind, PATH_LIST_SEPARATOR, collect_filter_extensions,
+        decode_string_list, finalize_selected_files, infer_loaded_media_kind,
+    };
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn decode_string_list_roundtrips_nul_separated_payload() {
@@ -266,5 +413,44 @@ mod tests {
             Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
         );
         assert_eq!(decode_string_list(None), None);
+    }
+
+    #[test]
+    fn collect_filter_extensions_normalizes_and_deduplicates() {
+        let dialog = FileDialog::new()
+            .add_filter("Images", &[".PNG", "jpg", ""])
+            .add_filter("More", &["png", " gif "]);
+        assert_eq!(
+            collect_filter_extensions(&dialog),
+            vec!["png".to_string(), "jpg".to_string(), "gif".to_string()]
+        );
+    }
+
+    #[test]
+    fn infer_loaded_media_kind_uses_video_extensions() {
+        assert_eq!(
+            infer_loaded_media_kind(Path::new("/tmp/example.mov")),
+            LoadedMediaKind::Video
+        );
+        assert_eq!(
+            infer_loaded_media_kind(Path::new("/tmp/example.heic")),
+            LoadedMediaKind::Image
+        );
+    }
+
+    #[test]
+    fn finalize_selected_files_rejects_empty_selection() {
+        let result =
+            std::panic::catch_unwind(|| finalize_selected_files(&FileDialog::new(), Vec::new()));
+        assert!(result.is_err(), "empty file selections must fail fast");
+    }
+
+    #[test]
+    fn finalize_selected_files_preserves_paths_without_import_policy() {
+        let paths = vec![PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b.txt")];
+        assert_eq!(
+            finalize_selected_files(&FileDialog::new(), paths.clone()).unwrap(),
+            paths
+        );
     }
 }

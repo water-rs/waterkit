@@ -138,7 +138,7 @@ pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
 }
 
 pub async fn show_photo_picker(
-    picker: crate::PhotoPicker,
+    media_type: crate::MediaType,
 ) -> Result<Option<Selection>, DialogError> {
     let (tx, rx) = oneshot::channel();
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -148,7 +148,7 @@ pub async fn show_photo_picker(
         .map_err(|_| DialogError::PlatformError("dialog callback registry poisoned".into()))?
         .insert(id, tx);
 
-    let media_type = match picker.media_type {
+    let media_type = match media_type {
         crate::MediaType::Image => "image",
         crate::MediaType::Video => "video",
         crate::MediaType::LivePhoto => "livephoto",
@@ -170,25 +170,12 @@ pub async fn show_open_single_file(
         .map_err(|_| DialogError::PlatformError("dialog callback registry poisoned".into()))?
         .insert(id, tx);
 
-    let mut extensions = Vec::new();
-    for (_, filter_extensions) in dialog.filters {
-        for ext in filter_extensions {
-            let normalized = ext.trim().trim_start_matches('.').to_ascii_lowercase();
-            if normalized.is_empty() {
-                continue;
-            }
-            if !extensions
-                .iter()
-                .any(|existing: &String| existing == &normalized)
-            {
-                extensions.push(normalized);
-            }
-        }
-    }
-
+    let extensions = crate::collect_filter_extensions(&dialog);
     ffi::show_open_file_bridge(&extensions.join(","), id);
     let path = rx.await.map_err(|_| DialogError::Cancelled)?;
-    Ok(path.map(std::path::PathBuf::from))
+    path.map(std::path::PathBuf::from)
+        .map(|path| crate::finalize_selected_file(&dialog, path))
+        .transpose()
 }
 
 pub async fn show_open_multiple_files(
@@ -202,31 +189,17 @@ pub async fn show_open_multiple_files(
         .map_err(|_| DialogError::PlatformError("dialog callback registry poisoned".into()))?
         .insert(id, tx);
 
-    let mut extensions = Vec::new();
-    for (_, filter_extensions) in dialog.filters {
-        for ext in filter_extensions {
-            let normalized = ext.trim().trim_start_matches('.').to_ascii_lowercase();
-            if normalized.is_empty() {
-                continue;
-            }
-            if !extensions
-                .iter()
-                .any(|existing: &String| existing == &normalized)
-            {
-                extensions.push(normalized);
-            }
-        }
-    }
-
+    let extensions = crate::collect_filter_extensions(&dialog);
     ffi::show_open_multiple_files_bridge(&extensions.join(","), id);
     let encoded_paths = rx.await.map_err(|_| DialogError::Cancelled)?;
-    Ok(crate::decode_string_list(encoded_paths).map(|paths| {
-        assert!(
-            !paths.is_empty(),
-            "waterkit-dialog apple multiple file picker returned an empty selection"
-        );
-        paths.into_iter().map(std::path::PathBuf::from).collect()
-    }))
+    crate::decode_string_list(encoded_paths)
+        .map(|paths| {
+            crate::finalize_selected_files(
+                &dialog,
+                paths.into_iter().map(std::path::PathBuf::from).collect(),
+            )
+        })
+        .transpose()
 }
 
 pub async fn load_media(handle: Selection) -> Result<std::path::PathBuf, DialogError> {

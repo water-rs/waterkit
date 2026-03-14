@@ -84,7 +84,9 @@ pub async fn show_open_single_file(
 
     let result = builder.pick_file().await;
 
-    Ok(result.map(|f| f.path().to_path_buf()))
+    result
+        .map(|file| crate::finalize_selected_file(&dialog, file.path().to_path_buf()))
+        .transpose()
 }
 
 /// Show a file dialog to open multiple files.
@@ -111,16 +113,17 @@ pub async fn show_open_multiple_files(
 
     let result = builder.pick_files().await;
 
-    Ok(result.map(|files| {
-        assert!(
-            !files.is_empty(),
-            "waterkit-dialog desktop multiple file picker returned an empty selection"
-        );
-        files
-            .into_iter()
-            .map(|file| file.path().to_path_buf())
-            .collect()
-    }))
+    result
+        .map(|files| {
+            crate::finalize_selected_files(
+                &dialog,
+                files
+                    .into_iter()
+                    .map(|file| file.path().to_path_buf())
+                    .collect(),
+            )
+        })
+        .transpose()
 }
 
 /// A native handle to a selected media file.
@@ -137,11 +140,11 @@ pub async fn load_media(handle: Selection) -> Result<std::path::PathBuf, DialogE
 /// # Errors
 /// Returns an error if the native dialog fails to show or is not supported.
 pub async fn show_photo_picker(
-    picker: crate::PhotoPicker,
+    media_type: crate::MediaType,
 ) -> Result<Option<Selection>, DialogError> {
     let mut builder = rfd::AsyncFileDialog::new();
 
-    let exts = match picker.media_type {
+    let exts = match media_type {
         crate::MediaType::Image => vec!["png", "jpg", "jpeg", "gif", "bmp", "webp", "heic"],
         crate::MediaType::Video => vec!["mp4", "mov", "avi", "mkv", "webm"],
         crate::MediaType::LivePhoto => vec!["png", "jpg", "jpeg", "heic", "mov"], // Fallback

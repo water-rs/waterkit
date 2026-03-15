@@ -130,9 +130,17 @@ pub async fn show_open_multiple_files(
 #[derive(Debug, Clone)]
 pub struct Selection(std::path::PathBuf);
 
-/// Load the media from a handle.
-pub async fn load_media(handle: Selection) -> Result<std::path::PathBuf, DialogError> {
-    Ok(handle.0)
+pub async fn load_photo_media(
+    handle: Selection,
+    requested_media_type: crate::MediaType,
+) -> Result<crate::LoadedMedia, DialogError> {
+    if matches!(requested_media_type, crate::MediaType::LivePhoto) {
+        return Err(DialogError::Unsupported(
+            "live photo picker is only supported on iOS".into(),
+        ));
+    }
+
+    Ok(crate::loaded_media_from_path(handle.0))
 }
 
 /// Show a photo picker.
@@ -142,12 +150,18 @@ pub async fn load_media(handle: Selection) -> Result<std::path::PathBuf, DialogE
 pub async fn show_photo_picker(
     media_type: crate::MediaType,
 ) -> Result<Option<Selection>, DialogError> {
+    if matches!(media_type, crate::MediaType::LivePhoto) {
+        return Err(DialogError::Unsupported(
+            "live photo picker is only supported on iOS".into(),
+        ));
+    }
+
     let mut builder = rfd::AsyncFileDialog::new();
 
     let exts = match media_type {
         crate::MediaType::Image => vec!["png", "jpg", "jpeg", "gif", "bmp", "webp", "heic"],
         crate::MediaType::Video => vec!["mp4", "mov", "avi", "mkv", "webm"],
-        crate::MediaType::LivePhoto => vec!["png", "jpg", "jpeg", "heic", "mov"], // Fallback
+        crate::MediaType::LivePhoto => unreachable!("live photo picker must return early"),
     };
 
     builder = builder.add_filter("Media", &exts);

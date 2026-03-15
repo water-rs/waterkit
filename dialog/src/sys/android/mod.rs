@@ -563,6 +563,12 @@ pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
 pub async fn show_photo_picker(
     media_type: crate::MediaType,
 ) -> Result<Option<Selection>, DialogError> {
+    if matches!(media_type, crate::MediaType::LivePhoto) {
+        return Err(DialogError::Unsupported(
+            "live photo picker is only supported on iOS".into(),
+        ));
+    }
+
     let (vm, context) = ensure_context_global()?;
     let rx = {
         let mut env = vm
@@ -638,4 +644,18 @@ pub async fn load_media(handle: Selection) -> Result<std::path::PathBuf, DialogE
         load_media_with_context(&mut env, context.as_obj(), &handle)
     })
     .await
+}
+
+pub async fn load_photo_media(
+    handle: Selection,
+    requested_media_type: crate::MediaType,
+) -> Result<crate::LoadedMedia, DialogError> {
+    if matches!(requested_media_type, crate::MediaType::LivePhoto) {
+        return Err(DialogError::Unsupported(
+            "live photo picker is only supported on iOS".into(),
+        ));
+    }
+
+    let path = load_media(handle).await?;
+    Ok(crate::loaded_media_from_path(path))
 }

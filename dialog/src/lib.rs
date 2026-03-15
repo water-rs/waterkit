@@ -204,7 +204,7 @@ pub enum MediaType {
     Image,
     /// Videos only.
     Video,
-    /// Live Photos only (iOS). Falls back to Image on other platforms.
+    /// Live Photos only (iOS). Other platforms report this as unsupported.
     LivePhoto,
 }
 
@@ -215,36 +215,80 @@ pub enum LoadedMediaKind {
     Image,
     /// A video asset.
     Video,
+    /// A live photo asset composed of paired still and motion resources.
+    LivePhoto,
 }
 
-/// A loaded media asset copied or resolved to a local path.
+/// A loaded live photo asset composed of paired still and motion resources.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoadedMedia {
-    path: PathBuf,
-    kind: LoadedMediaKind,
+pub struct LoadedLivePhoto {
+    image: PathBuf,
+    video: PathBuf,
+}
+
+impl LoadedLivePhoto {
+    #[cfg(any(target_os = "ios", test))]
+    fn new(image: PathBuf, video: PathBuf) -> Self {
+        Self { image, video }
+    }
+
+    /// Returns the local still-image path for the live photo.
+    #[must_use]
+    pub fn image(&self) -> &Path {
+        &self.image
+    }
+
+    /// Returns the local paired-video path for the live photo.
+    #[must_use]
+    pub fn video(&self) -> &Path {
+        &self.video
+    }
+
+    /// Consumes the live photo and returns its paired file paths.
+    #[must_use]
+    pub fn into_parts(self) -> (PathBuf, PathBuf) {
+        (self.image, self.video)
+    }
+}
+
+/// A loaded media asset copied or resolved to local file paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadedMedia {
+    /// A still image asset.
+    Image(PathBuf),
+    /// A video asset.
+    Video(PathBuf),
+    /// A live photo asset with paired still and motion resources.
+    LivePhoto(LoadedLivePhoto),
 }
 
 impl LoadedMedia {
-    fn new(path: PathBuf, kind: LoadedMediaKind) -> Self {
-        Self { path, kind }
-    }
-
     /// Returns the local file path for the loaded media asset.
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.path
+        match self {
+            Self::Image(path) | Self::Video(path) => path,
+            Self::LivePhoto(live_photo) => live_photo.image(),
+        }
     }
 
     /// Returns the resolved media kind.
     #[must_use]
     pub const fn kind(&self) -> LoadedMediaKind {
-        self.kind
+        match self {
+            Self::Image(_) => LoadedMediaKind::Image,
+            Self::Video(_) => LoadedMediaKind::Video,
+            Self::LivePhoto(_) => LoadedMediaKind::LivePhoto,
+        }
     }
 
-    /// Consumes the loaded asset and returns its local file path.
+    /// Returns the paired live photo payload when the asset is a live photo.
     #[must_use]
-    pub fn into_path(self) -> PathBuf {
-        self.path
+    pub fn as_live_photo(&self) -> Option<&LoadedLivePhoto> {
+        match self {
+            Self::LivePhoto(live_photo) => Some(live_photo),
+            Self::Image(_) | Self::Video(_) => None,
+        }
     }
 }
 
@@ -266,7 +310,12 @@ impl PhotoHandle {
     /// # Errors
     /// Returns an error if loading fails.
     pub async fn load(self) -> Result<std::path::PathBuf, DialogError> {
-        Ok(self.load_media().await?.into_path())
+        match self.load_media().await? {
+            LoadedMedia::Image(path) | LoadedMedia::Video(path) => Ok(path),
+            LoadedMedia::LivePhoto(_) => Err(DialogError::Unsupported(
+                "live photo selections require PhotoHandle::load_media()".into(),
+            )),
+        }
     }
 
     /// Load the media to a local file and resolve its concrete media kind.
@@ -274,18 +323,7 @@ impl PhotoHandle {
     /// # Errors
     /// Returns an error if loading fails.
     pub async fn load_media(self) -> Result<LoadedMedia, DialogError> {
-        let requested_media_type = self.requested_media_type;
-        let path = sys::load_media(self.handle).await?;
-        let kind = infer_loaded_media_kind(&path);
-
-        if matches!(requested_media_type, MediaType::LivePhoto) {
-            tracing::warn!(
-                "waterkit-dialog: native live photo picker returned a single asset; downgraded to {:?}",
-                kind
-            );
-        }
-
-        Ok(LoadedMedia::new(path, kind))
+        sys::load_photo_media(self.handle, self.requested_media_type).await
     }
 }
 
@@ -379,6 +417,7 @@ pub(crate) fn finalize_selected_files(
         .collect()
 }
 
+#[cfg(any(not(target_os = "ios"), test))]
 fn infer_loaded_media_kind(path: &Path) -> LoadedMediaKind {
     let extension = path
         .extension()
@@ -397,11 +436,46 @@ fn infer_loaded_media_kind(path: &Path) -> LoadedMediaKind {
     }
 }
 
+#[cfg(any(not(target_os = "ios"), test))]
+pub(crate) fn loaded_media_from_path(path: PathBuf) -> LoadedMedia {
+    match infer_loaded_media_kind(&path) {
+        LoadedMediaKind::Image => LoadedMedia::Image(path),
+        LoadedMediaKind::Video => LoadedMedia::Video(path),
+        LoadedMediaKind::LivePhoto => {
+            panic!("single-path media classification must not resolve to LivePhoto")
+        }
+    }
+}
+
+#[cfg(any(target_os = "ios", test))]
+pub(crate) fn decode_loaded_media_payload(
+    encoded: Option<String>,
+) -> Result<LoadedMedia, DialogError> {
+    let parts = decode_string_list(encoded).ok_or(DialogError::Cancelled)?;
+    assert!(
+        !parts.is_empty(),
+        "waterkit-dialog loaded media payload must contain at least a kind tag"
+    );
+
+    match parts.as_slice() {
+        [kind, path] if kind == "image" => Ok(LoadedMedia::Image(PathBuf::from(path))),
+        [kind, path] if kind == "video" => Ok(LoadedMedia::Video(PathBuf::from(path))),
+        [kind, image, video] if kind == "livephoto" => Ok(LoadedMedia::LivePhoto(
+            LoadedLivePhoto::new(PathBuf::from(image), PathBuf::from(video)),
+        )),
+        [kind, ..] => Err(DialogError::PlatformError(format!(
+            "unknown loaded media payload kind: {kind}"
+        ))),
+        [] => panic!("loaded media payload unexpectedly empty"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        FileDialog, LoadedMediaKind, PATH_LIST_SEPARATOR, collect_filter_extensions,
-        decode_string_list, finalize_selected_files, infer_loaded_media_kind,
+        FileDialog, LoadedLivePhoto, LoadedMedia, LoadedMediaKind, PATH_LIST_SEPARATOR,
+        collect_filter_extensions, decode_loaded_media_payload, decode_string_list,
+        finalize_selected_files, infer_loaded_media_kind, loaded_media_from_path,
     };
     use std::path::{Path, PathBuf};
 
@@ -435,6 +509,27 @@ mod tests {
         assert_eq!(
             infer_loaded_media_kind(Path::new("/tmp/example.heic")),
             LoadedMediaKind::Image
+        );
+    }
+
+    #[test]
+    fn loaded_media_from_path_preserves_video_classification() {
+        assert_eq!(
+            loaded_media_from_path(PathBuf::from("/tmp/example.mov")),
+            LoadedMedia::Video(PathBuf::from("/tmp/example.mov"))
+        );
+    }
+
+    #[test]
+    fn decode_loaded_media_payload_handles_live_photo_pairs() {
+        let encoded =
+            format!("livephoto{PATH_LIST_SEPARATOR}/tmp/a.heic{PATH_LIST_SEPARATOR}/tmp/a.mov");
+        assert_eq!(
+            decode_loaded_media_payload(Some(encoded)).unwrap(),
+            LoadedMedia::LivePhoto(LoadedLivePhoto::new(
+                PathBuf::from("/tmp/a.heic"),
+                PathBuf::from("/tmp/a.mov"),
+            ))
         );
     }
 

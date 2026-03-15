@@ -1,6 +1,7 @@
 import Foundation
 #if os(iOS)
 import UIKit
+import Photos
 import PhotosUI
 import UniformTypeIdentifiers
 #elseif os(macOS)
@@ -86,8 +87,13 @@ private func getTopViewController() -> UIViewController? {
 
 // Keep delegates alive
 private var activeDelegates: [UInt64: Any] = [:]
-// Keep providers alive for handles
-private var activeProviders: [UInt64: NSItemProvider] = [:]
+// Keep picker selections alive for handles
+private struct PhotoPickerSelection {
+    let itemProvider: NSItemProvider
+    let assetIdentifier: String?
+}
+
+private var activeSelections: [UInt64: PhotoPickerSelection] = [:]
 private var activeFilePickerDelegates: [UInt64: Any] = [:]
 private var nextHandleId: UInt64 = 1
 private let pathListSeparator = "\u{0000}"
@@ -189,39 +195,161 @@ func show_open_multiple_files_bridge(extensions_csv: RustStr, cb_id: UInt64) {
     }
 }
 
-func load_media_bridge(handle_id: UInt64, cb_id: UInt64) {
+func load_photo_media_bridge(handle_id: UInt64, media_type: RustStr, cb_id: UInt64) {
+    let requestedMediaType = media_type.toString()
+
     DispatchQueue.main.async {
-        guard let provider = activeProviders[handle_id] else {
+        guard let selection = activeSelections[handle_id] else {
             on_load_media_result(cb_id, nil as String?)
             return
         }
-        
-        // Clean up provider reference after loading? 
-        // Or keep it? The "Handle" implies ownership. If we load, we might want to keep it valid (re-loadable).
-        // For now, let's keep it.
-        
-        if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
-             loadFile(provider, type: UTType.movie.identifier, cb_id: cb_id)
-        } else if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
-             loadFile(provider, type: UTType.image.identifier, cb_id: cb_id)
+
+        if requestedMediaType == "livephoto" {
+            loadLivePhoto(selection, cbId: cb_id)
+            return
+        }
+
+        if selection.itemProvider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
+            loadSingleMedia(
+                selection.itemProvider,
+                type: UTType.movie.identifier,
+                kind: "video",
+                cbId: cb_id
+            )
+        } else if selection.itemProvider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+            loadSingleMedia(
+                selection.itemProvider,
+                type: UTType.image.identifier,
+                kind: "image",
+                cbId: cb_id
+            )
         } else {
-             on_load_media_result(cb_id, nil as String?)
+            on_load_media_result(cb_id, nil as String?)
         }
     }
 }
 
-private func loadFile(_ provider: NSItemProvider, type: String, cb_id: UInt64) {
+private func loadSingleMedia(_ provider: NSItemProvider, type: String, kind: String, cbId: UInt64) {
     provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
         guard let url = url else {
-            on_load_media_result(cb_id, nil as String?)
+            on_load_media_result(cbId, nil as String?)
             return
         }
 
-        on_load_media_result(cb_id, copyToTemporaryLocation(url))
+        let copied = copyToTemporaryLocation(
+            url,
+            preferredFilename: provider.suggestedName,
+            typeIdentifier: type
+        )
+        on_load_media_result(cbId, copied.map { encodeLoadedMediaPayload(kind: kind, paths: [$0]) })
     }
 }
 
-private func copyToTemporaryLocation(_ sourceUrl: URL) -> String? {
+private func loadLivePhoto(_ selection: PhotoPickerSelection, cbId: UInt64) {
+    guard let assetIdentifier = selection.assetIdentifier else {
+        on_load_media_result(cbId, nil as String?)
+        return
+    }
+
+    let assets = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
+    guard let asset = assets.firstObject else {
+        on_load_media_result(cbId, nil as String?)
+        return
+    }
+
+    let resources = PHAssetResource.assetResources(for: asset)
+    guard
+        let imageResource = preferredImageResource(from: resources),
+        let videoResource = preferredVideoResource(from: resources)
+    else {
+        on_load_media_result(cbId, nil as String?)
+        return
+    }
+
+    let options = PHAssetResourceRequestOptions()
+    options.isNetworkAccessAllowed = true
+
+    let group = DispatchGroup()
+    var imagePath: String?
+    var videoPath: String?
+
+    group.enter()
+    writeAssetResourceToTemporaryLocation(imageResource, options: options) { path in
+        imagePath = path
+        group.leave()
+    }
+
+    group.enter()
+    writeAssetResourceToTemporaryLocation(videoResource, options: options) { path in
+        videoPath = path
+        group.leave()
+    }
+
+    group.notify(queue: .main) {
+        guard let imagePath, let videoPath else {
+            on_load_media_result(cbId, nil as String?)
+            return
+        }
+
+        on_load_media_result(
+            cbId,
+            encodeLoadedMediaPayload(kind: "livephoto", paths: [imagePath, videoPath])
+        )
+    }
+}
+
+private func writeAssetResourceToTemporaryLocation(
+    _ resource: PHAssetResource,
+    options: PHAssetResourceRequestOptions,
+    completion: @escaping (String?) -> Void
+) {
+    let destination = temporaryDestinationURL(
+        preferredFilename: resource.originalFilename,
+        typeIdentifier: resource.uniformTypeIdentifier
+    )
+
+    PHAssetResourceManager.default().writeData(
+        for: resource,
+        toFile: destination,
+        options: options
+    ) { error in
+        if error != nil {
+            completion(nil)
+        } else {
+            completion(destination.path)
+        }
+    }
+}
+
+private func preferredImageResource(from resources: [PHAssetResource]) -> PHAssetResource? {
+    let preferredTypes: [PHAssetResourceType] = [.fullSizePhoto, .photo, .alternatePhoto]
+    for type in preferredTypes {
+        if let resource = resources.first(where: { $0.type == type }) {
+            return resource
+        }
+    }
+    return nil
+}
+
+private func preferredVideoResource(from resources: [PHAssetResource]) -> PHAssetResource? {
+    let preferredTypes: [PHAssetResourceType] = [.fullSizePairedVideo, .pairedVideo, .video]
+    for type in preferredTypes {
+        if let resource = resources.first(where: { $0.type == type }) {
+            return resource
+        }
+    }
+    return nil
+}
+
+private func encodeLoadedMediaPayload(kind: String, paths: [String]) -> String {
+    ([kind] + paths).joined(separator: pathListSeparator)
+}
+
+private func copyToTemporaryLocation(
+    _ sourceUrl: URL,
+    preferredFilename: String? = nil,
+    typeIdentifier: String? = nil
+) -> String? {
     let hasScopedAccess = sourceUrl.startAccessingSecurityScopedResource()
     defer {
         if hasScopedAccess {
@@ -229,9 +357,11 @@ private func copyToTemporaryLocation(_ sourceUrl: URL) -> String? {
         }
     }
 
-    let tmpDir = FileManager.default.temporaryDirectory
-    let extensionSuffix = sourceUrl.pathExtension.isEmpty ? "" : ".\(sourceUrl.pathExtension)"
-    let dstUrl = tmpDir.appendingPathComponent(UUID().uuidString + extensionSuffix)
+    let dstUrl = temporaryDestinationURL(
+        sourceUrl: sourceUrl,
+        preferredFilename: preferredFilename,
+        typeIdentifier: typeIdentifier
+    )
 
     do {
         if FileManager.default.fileExists(atPath: dstUrl.path) {
@@ -242,6 +372,48 @@ private func copyToTemporaryLocation(_ sourceUrl: URL) -> String? {
     } catch {
         return nil
     }
+}
+
+private func temporaryDestinationURL(
+    sourceUrl: URL? = nil,
+    preferredFilename: String? = nil,
+    typeIdentifier: String? = nil
+) -> URL {
+    let tmpDir = FileManager.default.temporaryDirectory
+    let extensionSuffix = resolvedFilenameExtension(
+        sourceUrl: sourceUrl,
+        preferredFilename: preferredFilename,
+        typeIdentifier: typeIdentifier
+    )
+    let fileName = extensionSuffix.isEmpty ? UUID().uuidString : "\(UUID().uuidString).\(extensionSuffix)"
+    return tmpDir.appendingPathComponent(fileName)
+}
+
+private func resolvedFilenameExtension(
+    sourceUrl: URL?,
+    preferredFilename: String?,
+    typeIdentifier: String?
+) -> String {
+    if let sourceUrl, !sourceUrl.pathExtension.isEmpty {
+        return sourceUrl.pathExtension
+    }
+
+    if let preferredFilename, !preferredFilename.isEmpty {
+        let ext = URL(fileURLWithPath: preferredFilename).pathExtension
+        if !ext.isEmpty {
+            return ext
+        }
+    }
+
+    if let typeIdentifier {
+        if #available(iOS 14.0, *) {
+            if let type = UTType(importedAs: typeIdentifier).preferredFilenameExtension {
+                return type
+            }
+        }
+    }
+
+    return ""
 }
 
 
@@ -263,10 +435,13 @@ class PhotoPickerDelegate: NSObject, PHPickerViewControllerDelegate {
             return
         }
         
-        // Store provider and return handle
+        // Store provider + asset metadata and return handle
         let handleId = nextHandleId
         nextHandleId += 1
-        activeProviders[handleId] = result.itemProvider
+        activeSelections[handleId] = PhotoPickerSelection(
+            itemProvider: result.itemProvider,
+            assetIdentifier: result.assetIdentifier
+        )
         
         on_photo_picker_result(cb_id, handleId)
     }
@@ -320,7 +495,9 @@ final class MultiFilePickerDelegate: NSObject, UIDocumentPickerDelegate {
         _ controller: UIDocumentPickerViewController,
         didPickDocumentsAt urls: [URL]
     ) {
-        let copied = urls.compactMap(copyToTemporaryLocation)
+        let copied = urls.compactMap { url in
+            copyToTemporaryLocation(url)
+        }
         if copied.isEmpty {
             finish(nil)
             return

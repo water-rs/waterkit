@@ -224,6 +224,7 @@ jiff = "0.2"
 
 # URL encoding
 percent-encoding = "2.3"
+url = "2.5"
 
 # System/OS
 sysinfo = "0.37"

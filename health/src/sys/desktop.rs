@@ -1,6 +1,8 @@
+use std::path::{Path, PathBuf};
+
 use crate::{HealthDataType, HealthError, HealthSample};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use waterkit_fs::WaterFs;
 
 const STORE_FILE_NAME: &str = "health.json";
 
@@ -78,46 +80,18 @@ fn sample_overlaps(sample: &HealthSample, start: &str, end: &str) -> bool {
 }
 
 fn store_path() -> Result<PathBuf, HealthError> {
-    let mut base = dirs::data_local_dir().ok_or_else(|| {
-        HealthError::PlatformError("unable to resolve local data directory".to_string())
-    })?;
-    base.push("waterkit");
-    base.push("health");
-    base.push(STORE_FILE_NAME);
-    Ok(base)
+    WaterFs::data_local_path(Path::new("waterkit").join("health").join(STORE_FILE_NAME))
+        .map_err(|error| HealthError::PlatformError(format!("resolve health store path: {error}")))
 }
 
 fn load_store(path: &Path) -> Result<HealthStore, HealthError> {
-    if !path.exists() {
-        return Ok(HealthStore::default());
-    }
-    let bytes = std::fs::read(path).map_err(|error| {
-        HealthError::PlatformError(format!("read health store {}: {error}", path.display()))
-    })?;
-    if bytes.is_empty() {
-        return Ok(HealthStore::default());
-    }
-    serde_json::from_slice(&bytes).map_err(|error| {
-        HealthError::PlatformError(format!("parse health store {}: {error}", path.display()))
+    WaterFs::load_json_store(path).map_err(|error| {
+        HealthError::PlatformError(format!("load health store {}: {error}", path.display()))
     })
 }
 
 fn write_store(path: &Path, store: &HealthStore) -> Result<(), HealthError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            HealthError::PlatformError(format!(
-                "create health store directory {}: {error}",
-                parent.display()
-            ))
-        })?;
-    }
-    let bytes = serde_json::to_vec_pretty(store).map_err(|error| {
-        HealthError::PlatformError(format!(
-            "serialize health store {}: {error}",
-            path.display()
-        ))
-    })?;
-    std::fs::write(path, bytes).map_err(|error| {
+    WaterFs::write_json_store(path, store).map_err(|error| {
         HealthError::PlatformError(format!("write health store {}: {error}", path.display()))
     })
 }

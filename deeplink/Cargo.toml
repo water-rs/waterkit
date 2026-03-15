@@ -17,6 +17,7 @@ workspace = true
 thiserror = { workspace = true }
 futures = { workspace = true }
 async-channel = { workspace = true }
+url = { workspace = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 swift-bridge.workspace = true

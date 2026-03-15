@@ -1,5 +1,7 @@
-use crate::{Calendar, CalendarError, Event, EventData};
 use std::path::{Path, PathBuf};
+
+use crate::{Calendar, CalendarError, Event, EventData};
+use waterkit_fs::WaterFs;
 
 const STORE_FILE_NAME: &str = "calendar.json";
 const DEFAULT_CALENDAR_ID: &str = "desktop-default";
@@ -122,46 +124,19 @@ fn event_overlaps(event: &Event, start: &str, end: &str) -> bool {
 }
 
 fn store_path() -> Result<PathBuf, CalendarError> {
-    let mut base = dirs::data_local_dir().ok_or_else(|| {
-        CalendarError::PlatformError("unable to resolve local data directory".to_string())
-    })?;
-    base.push("waterkit");
-    base.push("calendar");
-    base.push(STORE_FILE_NAME);
-    Ok(base)
+    WaterFs::data_local_path(Path::new("waterkit").join("calendar").join(STORE_FILE_NAME)).map_err(
+        |error| CalendarError::PlatformError(format!("resolve calendar store path: {error}")),
+    )
 }
 
 fn load_store(path: &Path) -> Result<CalendarStore, CalendarError> {
-    if !path.exists() {
-        return Ok(CalendarStore::default());
-    }
-    let bytes = std::fs::read(path).map_err(|error| {
-        CalendarError::PlatformError(format!("read calendar store {}: {error}", path.display()))
-    })?;
-    if bytes.is_empty() {
-        return Ok(CalendarStore::default());
-    }
-    serde_json::from_slice(&bytes).map_err(|error| {
-        CalendarError::PlatformError(format!("parse calendar store {}: {error}", path.display()))
+    WaterFs::load_json_store(path).map_err(|error| {
+        CalendarError::PlatformError(format!("load calendar store {}: {error}", path.display()))
     })
 }
 
 fn write_store(path: &Path, store: &CalendarStore) -> Result<(), CalendarError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            CalendarError::PlatformError(format!(
-                "create calendar store directory {}: {error}",
-                parent.display()
-            ))
-        })?;
-    }
-    let bytes = serde_json::to_vec_pretty(store).map_err(|error| {
-        CalendarError::PlatformError(format!(
-            "serialize calendar store {}: {error}",
-            path.display()
-        ))
-    })?;
-    std::fs::write(path, bytes).map_err(|error| {
+    WaterFs::write_json_store(path, store).map_err(|error| {
         CalendarError::PlatformError(format!("write calendar store {}: {error}", path.display()))
     })
 }

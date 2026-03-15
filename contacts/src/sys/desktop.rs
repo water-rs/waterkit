@@ -1,5 +1,7 @@
-use crate::{Contact, ContactData, ContactsError};
 use std::path::{Path, PathBuf};
+
+use crate::{Contact, ContactData, ContactsError};
+use waterkit_fs::WaterFs;
 
 const STORE_FILE_NAME: &str = "contacts.json";
 
@@ -122,46 +124,19 @@ fn field_contains(value: Option<&str>, query: &str) -> bool {
 }
 
 fn store_path() -> Result<PathBuf, ContactsError> {
-    let mut base = dirs::data_local_dir().ok_or_else(|| {
-        ContactsError::PlatformError("unable to resolve local data directory".to_string())
-    })?;
-    base.push("waterkit");
-    base.push("contacts");
-    base.push(STORE_FILE_NAME);
-    Ok(base)
+    WaterFs::data_local_path(Path::new("waterkit").join("contacts").join(STORE_FILE_NAME)).map_err(
+        |error| ContactsError::PlatformError(format!("resolve contacts store path: {error}")),
+    )
 }
 
 fn load_store(path: &Path) -> Result<ContactsStore, ContactsError> {
-    if !path.exists() {
-        return Ok(ContactsStore::default());
-    }
-    let bytes = std::fs::read(path).map_err(|error| {
-        ContactsError::PlatformError(format!("read contacts store {}: {error}", path.display()))
-    })?;
-    if bytes.is_empty() {
-        return Ok(ContactsStore::default());
-    }
-    serde_json::from_slice(&bytes).map_err(|error| {
-        ContactsError::PlatformError(format!("parse contacts store {}: {error}", path.display()))
+    WaterFs::load_json_store(path).map_err(|error| {
+        ContactsError::PlatformError(format!("load contacts store {}: {error}", path.display()))
     })
 }
 
 fn write_store(path: &Path, store: &ContactsStore) -> Result<(), ContactsError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            ContactsError::PlatformError(format!(
-                "create contacts store directory {}: {error}",
-                parent.display()
-            ))
-        })?;
-    }
-    let bytes = serde_json::to_vec_pretty(store).map_err(|error| {
-        ContactsError::PlatformError(format!(
-            "serialize contacts store {}: {error}",
-            path.display()
-        ))
-    })?;
-    std::fs::write(path, bytes).map_err(|error| {
+    WaterFs::write_json_store(path, store).map_err(|error| {
         ContactsError::PlatformError(format!("write contacts store {}: {error}", path.display()))
     })
 }

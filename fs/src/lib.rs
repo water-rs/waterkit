@@ -12,6 +12,9 @@ use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+
 /// Cross-platform File System Utilities
 ///
 /// This struct provides access to file system operations like finding sandbox paths.
@@ -63,6 +66,66 @@ impl WaterFs {
         {
             None
         }
+    }
+
+    /// Resolves a path under the application's local data directory.
+    ///
+    /// # Errors
+    /// Returns an error when the platform cannot provide a local data directory.
+    pub fn data_local_path(path: impl AsRef<Path>) -> io::Result<PathBuf> {
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        {
+            dirs::data_local_dir()
+                .map(|root| root.join(path))
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "local data directory is unavailable",
+                    )
+                })
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        {
+            let _ = path;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "local data directory is unavailable on this platform",
+            ))
+        }
+    }
+
+    /// Loads a JSON store, defaulting to `T::default()` when the file is absent or empty.
+    ///
+    /// # Errors
+    /// Returns an error when reading or decoding the store fails.
+    pub fn load_json_store<T>(path: &Path) -> io::Result<T>
+    where
+        T: Default + DeserializeOwned,
+    {
+        match std::fs::read(path) {
+            Ok(bytes) if bytes.is_empty() => Ok(T::default()),
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(T::default()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Writes a JSON store, creating parent directories as needed.
+    ///
+    /// # Errors
+    /// Returns an error when serialization or writing fails.
+    pub fn write_json_store<T>(path: &Path, value: &T) -> io::Result<()>
+    where
+        T: Serialize,
+    {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let bytes = serde_json::to_vec_pretty(value)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        std::fs::write(path, bytes)
     }
 
     /// Imports a file into the application's cache directory subtree.
@@ -125,5 +188,18 @@ mod tests {
         )
         .expect_err("root path should not have importable file name");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn load_json_store_defaults_on_missing_file() {
+        #[derive(Default, serde::Deserialize)]
+        struct TestStore {
+            value: u32,
+        }
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("missing.json");
+        let store = WaterFs::load_json_store::<TestStore>(&path).expect("missing store defaults");
+        assert_eq!(store.value, 0);
     }
 }

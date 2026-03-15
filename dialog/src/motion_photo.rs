@@ -305,4 +305,32 @@ mod tests {
         );
         assert!(parse_motion_photo_metadata(xmp).unwrap().is_none());
     }
+
+    #[test]
+    #[ignore = "requires WATERKIT_REAL_MOTION_PHOTO_SAMPLE to point at a real Android Motion Photo file"]
+    fn validates_real_motion_photo_sample() {
+        let sample_path = PathBuf::from(std::env::var("WATERKIT_REAL_MOTION_PHOTO_SAMPLE").expect(
+            "WATERKIT_REAL_MOTION_PHOTO_SAMPLE must point at a real Android Motion Photo sample",
+        ));
+        let sample_bytes =
+            fs::read(&sample_path).expect("real Motion Photo sample must be readable");
+        let xmp = extract_xmp_packet(&sample_bytes)
+            .unwrap()
+            .expect("real Motion Photo sample must contain XMP metadata");
+        let metadata = parse_motion_photo_metadata(xmp)
+            .unwrap()
+            .expect("real Motion Photo sample must expose Motion Photo metadata");
+
+        let live_photo = load_live_photo_from_motion_photo(&sample_path)
+            .unwrap()
+            .expect("real Motion Photo sample must decode into paired media");
+        let extracted_video =
+            fs::read(live_photo.video()).expect("extracted motion video must exist");
+
+        assert_eq!(live_photo.image(), sample_path.as_path());
+        assert_eq!(extracted_video.len(), metadata.video_length);
+        assert_eq!(&extracted_video[4..8], b"ftyp");
+
+        fs::remove_file(live_photo.video()).expect("extracted motion video must be removable");
+    }
 }

@@ -563,12 +563,6 @@ pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
 pub async fn show_photo_picker(
     media_type: crate::MediaType,
 ) -> Result<Option<Selection>, DialogError> {
-    if matches!(media_type, crate::MediaType::LivePhoto) {
-        return Err(DialogError::Unsupported(
-            "live photo picker is only supported on iOS".into(),
-        ));
-    }
-
     let (vm, context) = ensure_context_global()?;
     let rx = {
         let mut env = vm
@@ -650,12 +644,16 @@ pub async fn load_photo_media(
     handle: Selection,
     requested_media_type: crate::MediaType,
 ) -> Result<crate::LoadedMedia, DialogError> {
-    if matches!(requested_media_type, crate::MediaType::LivePhoto) {
-        return Err(DialogError::Unsupported(
-            "live photo picker is only supported on iOS".into(),
-        ));
+    let path = load_media(handle).await?;
+    if let Some(live_photo) = crate::motion_photo::load_live_photo_from_motion_photo(&path)? {
+        return Ok(crate::LoadedMedia::LivePhoto(live_photo));
     }
 
-    let path = load_media(handle).await?;
-    Ok(crate::loaded_media_from_path(path))
+    match requested_media_type {
+        crate::MediaType::Image => Ok(crate::LoadedMedia::Image(path)),
+        crate::MediaType::Video => Ok(crate::LoadedMedia::Video(path)),
+        crate::MediaType::LivePhoto => Err(DialogError::Unsupported(
+            "the selected Android asset is not a Motion Photo".into(),
+        )),
+    }
 }

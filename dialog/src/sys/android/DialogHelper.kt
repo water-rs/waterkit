@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
@@ -305,17 +306,60 @@ class DialogHelper {
         private fun copyUriToCache(ctx: Context, uri: android.net.Uri): String? {
             try {
                 val inputStream = ctx.contentResolver.openInputStream(uri) ?: return null
-                val fileName = "picked_media_" + System.currentTimeMillis()
+                val extension = inferUriExtension(ctx, uri)
+                val fileName = buildString {
+                    append("picked_media_")
+                    append(System.currentTimeMillis())
+                    extension?.let {
+                        append('.')
+                        append(it)
+                    }
+                }
                 val file = java.io.File(ctx.cacheDir, fileName)
                 val outputStream = java.io.FileOutputStream(file)
-                inputStream.copyTo(outputStream)
-                inputStream.close()
-                outputStream.close()
+                inputStream.use { source ->
+                    outputStream.use { sink ->
+                        source.copyTo(sink)
+                    }
+                }
                 return file.absolutePath
             } catch (e: Exception) {
                 e.printStackTrace()
                 return null
             }
+        }
+
+        private fun inferUriExtension(ctx: Context, uri: android.net.Uri): String? {
+            val displayName = ctx.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (!cursor.moveToFirst()) {
+                    return@use null
+                }
+                val columnIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (columnIndex < 0) {
+                    return@use null
+                }
+                cursor.getString(columnIndex)
+            }
+
+            val displayExtension = displayName
+                ?.substringAfterLast('.', "")
+                ?.lowercase()
+                ?.takeIf { it.isNotEmpty() }
+            if (displayExtension != null) {
+                return displayExtension
+            }
+
+            val mimeType = ctx.contentResolver.getType(uri) ?: return null
+            return MimeTypeMap.getSingleton()
+                .getExtensionFromMimeType(mimeType)
+                ?.lowercase()
+                ?.takeIf { it.isNotEmpty() }
         }
     }
 }

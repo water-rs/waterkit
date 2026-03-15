@@ -19,6 +19,8 @@
 #![warn(missing_docs)]
 
 // Internal platform-specific implementations.
+#[cfg(any(target_os = "android", test))]
+mod motion_photo;
 mod sys;
 
 /// Android-specific JNI functions for dialog handling.
@@ -204,7 +206,7 @@ pub enum MediaType {
     Image,
     /// Videos only.
     Video,
-    /// Live Photos only (iOS). Other platforms report this as unsupported.
+    /// Live Photos and Motion Photos.
     LivePhoto,
 }
 
@@ -227,8 +229,11 @@ pub struct LoadedLivePhoto {
 }
 
 impl LoadedLivePhoto {
-    #[cfg(any(target_os = "ios", test))]
-    fn new(image: PathBuf, video: PathBuf) -> Self {
+    #[cfg_attr(
+        not(any(target_os = "android", target_os = "ios", test)),
+        allow(dead_code)
+    )]
+    pub(crate) fn new(image: PathBuf, video: PathBuf) -> Self {
         Self { image, video }
     }
 
@@ -418,6 +423,7 @@ pub(crate) fn finalize_selected_files(
 }
 
 #[cfg(any(not(target_os = "ios"), test))]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn infer_loaded_media_kind(path: &Path) -> LoadedMediaKind {
     let extension = path
         .extension()
@@ -437,6 +443,7 @@ fn infer_loaded_media_kind(path: &Path) -> LoadedMediaKind {
 }
 
 #[cfg(any(not(target_os = "ios"), test))]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub(crate) fn loaded_media_from_path(path: PathBuf) -> LoadedMedia {
     match infer_loaded_media_kind(&path) {
         LoadedMediaKind::Image => LoadedMedia::Image(path),

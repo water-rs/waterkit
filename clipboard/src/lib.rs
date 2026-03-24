@@ -170,8 +170,15 @@ impl Clipboard {
     ///
     /// Returns an error if the clipboard cannot be accessed.
     pub async fn text(&self) -> Result<Option<String>, ClipboardError> {
-        let inner = Arc::clone(&self.inner);
-        blocking::unblock(move || inner.get_text()).await
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.inner.get_text().await
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let inner = Arc::clone(&self.inner);
+            blocking::unblock(move || inner.get_text()).await
+        }
     }
 
     /// Get HTML content from the clipboard.
@@ -180,8 +187,15 @@ impl Clipboard {
     ///
     /// Returns an error if the clipboard cannot be accessed.
     pub async fn html(&self) -> Result<Option<String>, ClipboardError> {
-        let inner = Arc::clone(&self.inner);
-        blocking::unblock(move || inner.get_html()).await
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.inner.get_html().await
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let inner = Arc::clone(&self.inner);
+            blocking::unblock(move || inner.get_html()).await
+        }
     }
 
     /// Get file paths from the clipboard.
@@ -190,8 +204,15 @@ impl Clipboard {
     ///
     /// Returns an error if the clipboard cannot be accessed.
     pub async fn files(&self) -> Result<Vec<PathBuf>, ClipboardError> {
-        let inner = Arc::clone(&self.inner);
-        blocking::unblock(move || inner.get_files()).await
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.inner.get_files().await
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let inner = Arc::clone(&self.inner);
+            blocking::unblock(move || inner.get_files()).await
+        }
     }
 
     /// Get image content from the clipboard as raw RGBA pixels.
@@ -201,8 +222,15 @@ impl Clipboard {
     /// Returns an error if the clipboard cannot be accessed or if
     /// image conversion fails.
     pub async fn image(&self) -> Result<Option<Image>, ClipboardError> {
-        let inner = Arc::clone(&self.inner);
-        blocking::unblock(move || inner.get_image()).await
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.inner.get_image().await
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let inner = Arc::clone(&self.inner);
+            blocking::unblock(move || inner.get_image()).await
+        }
     }
 
     /// Get custom data from the clipboard.
@@ -217,15 +245,26 @@ impl Clipboard {
     pub async fn data<T: ClipboardData + Send + 'static>(
         &self,
     ) -> Result<Option<T>, ClipboardError> {
-        let inner = Arc::clone(&self.inner);
-        blocking::unblock(move || {
-            if let Some(bytes) = inner.get_binary(T::MIME_TYPE)? {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(bytes) = self.inner.get_binary(T::MIME_TYPE).await? {
                 Ok(Some(T::decode(&bytes)?))
             } else {
                 Ok(None)
             }
-        })
-        .await
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let inner = Arc::clone(&self.inner);
+            blocking::unblock(move || {
+                if let Some(bytes) = inner.get_binary(T::MIME_TYPE)? {
+                    Ok(Some(T::decode(&bytes)?))
+                } else {
+                    Ok(None)
+                }
+            })
+            .await
+        }
     }
 
     /// Get raw binary data from the clipboard by MIME type.
@@ -236,9 +275,16 @@ impl Clipboard {
     ///
     /// Returns an error if the clipboard cannot be accessed.
     pub async fn binary(&self, mime: &str) -> Result<Option<Vec<u8>>, ClipboardError> {
-        let inner = Arc::clone(&self.inner);
-        let mime = mime.to_string();
-        blocking::unblock(move || inner.get_binary(&mime)).await
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.inner.get_binary(mime).await
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let inner = Arc::clone(&self.inner);
+            let mime = mime.to_string();
+            blocking::unblock(move || inner.get_binary(&mime)).await
+        }
     }
 
     // ========== Write (sync - we control the data) ==========

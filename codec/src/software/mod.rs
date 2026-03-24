@@ -6,6 +6,6 @@
 // Software fallback only available on desktop platforms (where rav1e/rav1d are enabled)
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android"))
+    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
 ))]
 pub mod av1;

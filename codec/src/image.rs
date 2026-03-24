@@ -2,12 +2,12 @@ use half::f16;
 use image::{ColorType, DynamicImage, GenericImageView};
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android"))
+    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
 ))]
 use std::io::Cursor;
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android"))
+    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
 ))]
 use yuv::{YuvBiPlanarImage, YuvConversionMode, YuvRange, YuvStandardMatrix, yuv_nv12_to_rgba};
 
@@ -16,7 +16,7 @@ use crate::CodecError;
 use crate::image_apple;
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android"))
+    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
 ))]
 use crate::software::av1::Av1Decoder;
 
@@ -112,7 +112,7 @@ impl DecodedImage {
 /// Returns [`CodecError::DecodingFailed`] when decoding fails.
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android"))
+    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
 ))]
 pub fn decode_image(data: &[u8]) -> Result<DecodedImage, CodecError> {
     match decode_image_platform(data) {
@@ -137,7 +137,7 @@ pub fn decode_image(data: &[u8]) -> Result<DecodedImage, CodecError> {
 /// Returns [`CodecError::DecodingFailed`] when decoding fails.
 #[cfg(not(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android"))
+    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
 )))]
 pub fn decode_image(data: &[u8]) -> Result<DecodedImage, CodecError> {
     decode_image_platform(data)
@@ -289,7 +289,7 @@ fn is_avif_brand(brand: [u8; 4]) -> bool {
 
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android"))
+    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
 ))]
 fn is_avif(data: &[u8]) -> bool {
     matches!(image::guess_format(data), Ok(image::ImageFormat::Avif))
@@ -297,7 +297,7 @@ fn is_avif(data: &[u8]) -> bool {
 
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android"))
+    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
 ))]
 fn decode_avif_software(data: &[u8]) -> Result<DecodedImage, CodecError> {
     let mut cursor = Cursor::new(data);
@@ -410,7 +410,7 @@ fn decode_avif_software(data: &[u8]) -> Result<DecodedImage, CodecError> {
 
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android"))
+    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
 ))]
 fn encode_rgba8_to_hdr_rgba16f(rgba8: &[u8], bit_depth: u8) -> Vec<u8> {
     let max_code = 2f32.powi(i32::from(bit_depth)) - 1.0;

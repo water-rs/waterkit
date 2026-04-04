@@ -1,7 +1,8 @@
 //! Apple platform build utilities.
 
+use std::collections::BTreeSet;
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 fn has_ios26_background_task_apis(sdk: &str, target: &str) -> bool {
@@ -113,6 +114,190 @@ impl SwiftBridgeCrate {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppleTargetOs {
+    Ios,
+    Macos,
+}
+
+impl AppleTargetOs {
+    fn from_cfg_target_os(target_os: &str) -> Option<Self> {
+        match target_os {
+            "ios" => Some(Self::Ios),
+            "macos" => Some(Self::Macos),
+            _ => None,
+        }
+    }
+
+    fn matches_swift_os(self, name: &str) -> Option<bool> {
+        match name {
+            "iOS" => Some(matches!(self, Self::Ios)),
+            "macOS" => Some(matches!(self, Self::Macos)),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SwiftConditionalFrame {
+    parent_active: bool,
+    branch_matched: bool,
+    current_active: bool,
+}
+
+fn swift_bridge_static_lib_name(pkg_name: &str) -> String {
+    format!("{}_swift_bridge", pkg_name.replace('-', "_"))
+}
+
+fn discover_swift_bridge_crates(
+    manifest_dir: &Path,
+    bridges: &[String],
+    target_os: AppleTargetOs,
+) -> Vec<SwiftBridgeCrate> {
+    bridges
+        .iter()
+        .filter_map(|bridge| {
+            let bridge_path = manifest_dir.join(bridge);
+            let swift_sources = discover_swift_sources_for_bridge(&bridge_path);
+            if swift_sources.is_empty() {
+                return None;
+            }
+
+            let mut crate_def = SwiftBridgeCrate::new(bridge_path);
+            let frameworks = infer_swift_frameworks(&swift_sources, target_os);
+            for source in swift_sources {
+                crate_def = crate_def.swift_source(source);
+            }
+            for framework in frameworks {
+                crate_def = crate_def.framework(framework);
+            }
+            Some(crate_def)
+        })
+        .collect()
+}
+
+fn discover_swift_sources_for_bridge(bridge_path: &Path) -> Vec<PathBuf> {
+    let Some(bridge_dir) = bridge_path.parent() else {
+        return Vec::new();
+    };
+
+    let Ok(entries) = std::fs::read_dir(bridge_dir) else {
+        return Vec::new();
+    };
+
+    let mut swift_sources = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "swift") {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    swift_sources.sort();
+    swift_sources
+}
+
+fn infer_swift_frameworks(swift_sources: &[PathBuf], target_os: AppleTargetOs) -> Vec<String> {
+    let mut frameworks = BTreeSet::new();
+    for source in swift_sources {
+        let contents = std::fs::read_to_string(source)
+            .unwrap_or_else(|_| panic!("Failed to read {}", source.display()));
+        frameworks.extend(infer_swift_frameworks_from_source(&contents, target_os));
+    }
+    frameworks.into_iter().collect()
+}
+
+fn infer_swift_frameworks_from_source(
+    contents: &str,
+    target_os: AppleTargetOs,
+) -> BTreeSet<String> {
+    let mut frameworks = BTreeSet::new();
+    let mut frames = Vec::<SwiftConditionalFrame>::new();
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+
+        if let Some(condition) = trimmed.strip_prefix("#if os(") {
+            let os_name = condition.strip_suffix(')').unwrap_or_else(|| {
+                panic!("Unsupported Swift conditional directive: {trimmed}");
+            });
+            let parent_active = frames.last().map_or(true, |frame| frame.current_active);
+            let current_active = parent_active
+                && target_os.matches_swift_os(os_name).unwrap_or_else(|| {
+                    panic!("Unsupported Swift target conditional os({os_name})");
+                });
+            frames.push(SwiftConditionalFrame {
+                parent_active,
+                branch_matched: current_active,
+                current_active,
+            });
+            continue;
+        }
+
+        if let Some(condition) = trimmed.strip_prefix("#elseif os(") {
+            let os_name = condition.strip_suffix(')').unwrap_or_else(|| {
+                panic!("Unsupported Swift conditional directive: {trimmed}");
+            });
+            let frame = frames.last_mut().unwrap_or_else(|| {
+                panic!("Encountered `#elseif` without matching `#if`: {trimmed}");
+            });
+            if !frame.parent_active || frame.branch_matched {
+                frame.current_active = false;
+            } else {
+                let matches = target_os.matches_swift_os(os_name).unwrap_or_else(|| {
+                    panic!("Unsupported Swift target conditional os({os_name})");
+                });
+                frame.current_active = matches;
+                if matches {
+                    frame.branch_matched = true;
+                }
+            }
+            continue;
+        }
+
+        if trimmed == "#else" {
+            let frame = frames.last_mut().unwrap_or_else(|| {
+                panic!("Encountered `#else` without matching `#if`");
+            });
+            frame.current_active = frame.parent_active && !frame.branch_matched;
+            frame.branch_matched = true;
+            continue;
+        }
+
+        if trimmed == "#endif" {
+            frames.pop().unwrap_or_else(|| {
+                panic!("Encountered `#endif` without matching `#if`");
+            });
+            continue;
+        }
+
+        if frames.last().is_some_and(|frame| !frame.current_active) {
+            continue;
+        }
+
+        let Some(module) = trimmed.strip_prefix("import ").map(str::trim) else {
+            continue;
+        };
+        if should_link_swift_import(module) {
+            frameworks.insert(module.to_string());
+        }
+    }
+
+    assert!(
+        frames.is_empty(),
+        "Unclosed Swift conditional compilation block while inferring frameworks"
+    );
+
+    frameworks
+}
+
+fn should_link_swift_import(module: &str) -> bool {
+    !matches!(module, "Foundation" | "OSLog" | "ObjectiveC")
+}
+
 /// Generate Swift bridge code from bridge modules.
 ///
 /// This is for crates that only need bridge generation, not full Swift compilation.
@@ -121,6 +306,7 @@ impl SwiftBridgeCrate {
 /// * `bridges` - Iterator of paths to Rust bridge modules (e.g., "src/sys/apple/mod.rs")
 pub fn build_apple_bridge(bridges: impl IntoIterator<Item = impl AsRef<str>>) {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let pkg_name = env::var("CARGO_PKG_NAME").unwrap();
 
     let bridges: Vec<String> = bridges
@@ -136,11 +322,23 @@ pub fn build_apple_bridge(bridges: impl IntoIterator<Item = impl AsRef<str>>) {
     {
         let bridge_refs: Vec<&str> = bridges.iter().map(String::as_str).collect();
         swift_bridge_build::parse_bridges(bridge_refs).write_all_concatenated(out_dir, &pkg_name);
+
+        let target_os = AppleTargetOs::from_cfg_target_os(
+            &env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS is required"),
+        )
+        .expect("build_apple_bridge only supports Apple targets");
+        let swift_bridge_crates = discover_swift_bridge_crates(&manifest_dir, &bridges, target_os);
+        if !swift_bridge_crates.is_empty() {
+            compile_multi_swift(
+                &swift_bridge_static_lib_name(&pkg_name),
+                swift_bridge_crates,
+            );
+        }
     }
 
     #[cfg(not(any(target_os = "ios", target_os = "macos")))]
     {
-        let _ = (out_dir, pkg_name, bridges);
+        let _ = (out_dir, manifest_dir, pkg_name, bridges);
     }
 }
 
@@ -543,3 +741,79 @@ pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = Swif
 /// No-op on non-Apple platforms.
 #[cfg(not(any(target_os = "ios", target_os = "macos")))]
 pub fn compile_multi_swift(_lib_name: &str, _crates: impl IntoIterator<Item = SwiftBridgeCrate>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AppleTargetOs, discover_swift_bridge_crates, infer_swift_frameworks_from_source,
+        swift_bridge_static_lib_name,
+    };
+
+    #[test]
+    fn infers_only_active_platform_frameworks_from_conditionals() {
+        let contents = r#"
+import Foundation
+#if os(iOS)
+import UIKit
+import CoreHaptics
+#elseif os(macOS)
+import AppKit
+#endif
+import OSLog
+"#;
+
+        let ios = infer_swift_frameworks_from_source(contents, AppleTargetOs::Ios);
+        assert!(ios.contains("UIKit"));
+        assert!(ios.contains("CoreHaptics"));
+        assert!(!ios.contains("AppKit"));
+        assert!(!ios.contains("OSLog"));
+
+        let macos = infer_swift_frameworks_from_source(contents, AppleTargetOs::Macos);
+        assert!(macos.contains("AppKit"));
+        assert!(!macos.contains("UIKit"));
+        assert!(!macos.contains("CoreHaptics"));
+    }
+
+    #[test]
+    fn discovers_swift_sources_next_to_bridge_module() {
+        let root = std::env::temp_dir().join(format!(
+            "waterkit-build-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_nanos()
+        ));
+        let apple_dir = root.join("src/sys/apple");
+        std::fs::create_dir_all(&apple_dir).expect("create swift dir");
+        std::fs::write(
+            apple_dir.join("mod.rs"),
+            "#[swift_bridge::bridge] mod ffi {}",
+        )
+        .expect("write bridge");
+        std::fs::write(
+            apple_dir.join("Feature.swift"),
+            "import Foundation\n#if os(iOS)\nimport UIKit\n#endif\n",
+        )
+        .expect("write swift source");
+
+        let discovered = discover_swift_bridge_crates(
+            &root,
+            &[String::from("src/sys/apple/mod.rs")],
+            AppleTargetOs::Ios,
+        );
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].swift_sources.len(), 1);
+        assert!(discovered[0].frameworks.contains(&String::from("UIKit")));
+
+        std::fs::remove_dir_all(&root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn sanitizes_generated_swift_bridge_library_name() {
+        assert_eq!(
+            swift_bridge_static_lib_name("waterkit-haptic"),
+            "waterkit_haptic_swift_bridge"
+        );
+    }
+}

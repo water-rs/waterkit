@@ -7,15 +7,23 @@ class LocationDelegate: NSObject, CLLocationManagerDelegate {
     var location: CLLocation?
     var error: Error?
     var completed = false
+    var runLoop: CFRunLoop?
+
+    private func finish() {
+        completed = true
+        if let runLoop {
+            CFRunLoopStop(runLoop)
+        }
+    }
     
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         location = locations.last
-        completed = true
+        finish()
     }
     
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         self.error = error
-        completed = true
+        finish()
     }
 }
 
@@ -40,13 +48,12 @@ func get_current_location() -> LocationResult {
     let delegate = LocationDelegate()
     manager.delegate = delegate
     manager.desiredAccuracy = kCLLocationAccuracyBest
+    delegate.runLoop = CFRunLoopGetCurrent()
     
     manager.requestLocation()
     
-    // Wait for result (with timeout)
-    let timeout = Date().addingTimeInterval(10)
-    while !delegate.completed && Date() < timeout {
-        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    if !delegate.completed {
+        _ = CFRunLoopRunInMode(.defaultMode, 10.0, false)
     }
     
     if !delegate.completed {

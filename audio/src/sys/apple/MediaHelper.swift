@@ -7,6 +7,7 @@ import OSLog
 
 private var commandHandlerRegistered = false
 private var silentPlayer: AVAudioPlayer?
+private let silentPlayerDelegate = SilentPlayerDelegate()
 private let logger = Logger(subsystem: "dev.waterui", category: "WaterKitMedia")
 
 #if os(iOS)
@@ -30,9 +31,24 @@ func media_session_init() -> MediaResultFFI {
 }
 
 #if os(macOS)
-/// Activates the audio session by playing a silent audio buffer.
-/// This workaround is required on macOS because MPNowPlayingInfoCenter
-/// only appears in Control Center when the app has an active audio session.
+private final class SilentPlayerDelegate: NSObject, AVAudioPlayerDelegate {
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        if silentPlayer === player {
+            silentPlayer = nil
+        }
+    }
+
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        if silentPlayer === player {
+            silentPlayer = nil
+        }
+        if let error {
+            logger.warning("Silent audio activation decode failed: \(error.localizedDescription)")
+        }
+    }
+}
+
+/// Activates the Control Center media session by emitting a short silent audio pulse.
 private func activateAudioSessionWithSilence() {
     // Create a short silent audio buffer (0.1 seconds of silence)
     let sampleRate: Double = 44100
@@ -49,13 +65,13 @@ private func activateAudioSessionWithSilence() {
         do {
             silentPlayer = try AVAudioPlayer(data: wavData)
             silentPlayer?.volume = 0
-            silentPlayer?.play()
-            // Stop after a brief moment - the play() call is what activates the session
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                silentPlayer?.stop()
+            silentPlayer?.delegate = silentPlayerDelegate
+            silentPlayer?.prepareToPlay()
+            if silentPlayer?.play() == false {
+                silentPlayer = nil
+                logger.warning("Silent audio activation pulse did not start playback")
             }
         } catch {
-            // Silent failure - not critical if this doesn't work
             logger.warning("Failed to create silent audio player: \(error.localizedDescription)")
         }
     }

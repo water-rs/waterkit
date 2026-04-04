@@ -48,6 +48,15 @@ class LocationPermissionDelegate: NSObject, CLLocationManagerDelegate {
     var authorizationStatus: CLAuthorizationStatus?
     var completed = false
     var isFirstCallback = true
+    var runLoop: CFRunLoop?
+
+    private func finish(with status: CLAuthorizationStatus) {
+        authorizationStatus = status
+        completed = true
+        if let runLoop {
+            CFRunLoopStop(runLoop)
+        }
+    }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
@@ -56,14 +65,12 @@ class LocationPermissionDelegate: NSObject, CLLocationManagerDelegate {
             isFirstCallback = false
             // If already determined on first callback, we're done
             if status != .notDetermined {
-                authorizationStatus = status
-                completed = true
+                finish(with: status)
             }
             return
         }
         // Subsequent callbacks indicate actual status change
-        authorizationStatus = status
-        completed = true
+        finish(with: status)
     }
 }
 
@@ -73,11 +80,6 @@ private var locationDelegate: LocationPermissionDelegate?
 private func requestLocationPermission() -> PermissionResult {
     let manager = CLLocationManager()
     let delegate = LocationPermissionDelegate()
-    manager.delegate = delegate
-
-    // Keep references alive
-    locationManager = manager
-    locationDelegate = delegate
 
     // Check if already determined
     let currentStatus = manager.authorizationStatus
@@ -85,13 +87,22 @@ private func requestLocationPermission() -> PermissionResult {
         return statusFromCLAuthorizationStatus(currentStatus)
     }
 
+    manager.delegate = delegate
+    delegate.runLoop = CFRunLoopGetCurrent()
+
+    // Keep references alive while the authorization flow is in flight.
+    locationManager = manager
+    locationDelegate = delegate
+    defer {
+        locationManager = nil
+        locationDelegate = nil
+    }
+
     // Request authorization
     manager.requestWhenInUseAuthorization()
 
-    // Run the main run loop to allow the authorization dialog to appear
-    let timeout = Date().addingTimeInterval(60)
-    while !delegate.completed && Date() < timeout {
-        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    if !delegate.completed {
+        _ = CFRunLoopRunInMode(.defaultMode, 60.0, false)
     }
 
     if let status = delegate.authorizationStatus {

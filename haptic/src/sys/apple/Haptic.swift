@@ -98,10 +98,14 @@ func haptic_play_pattern(timings: RustVec<Int32>, intensities: RustVec<Float>, i
     var events: [CHHapticEvent] = []
     var currentTime: TimeInterval = 0
 
-    for i in 0..<timings.len() {
-        let duration = TimeInterval(timings.get(index: i)) / 1000.0
-        if !is_pause.get(index: i) {
-            let intensityParam = CHHapticEventParameter(parameterID: .hapticIntensity, value: intensities.get(index: i))
+    for index in 0..<timings.len() {
+        let vectorIndex = UInt(index)
+        let duration = TimeInterval(timings.get(index: vectorIndex)!) / 1000.0
+        if !is_pause.get(index: vectorIndex)! {
+            let intensityParam = CHHapticEventParameter(
+                parameterID: .hapticIntensity,
+                value: intensities.get(index: vectorIndex)!
+            )
             let sharpnessParam = CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.5)
             let event = CHHapticEvent(
                 eventType: .hapticContinuous,

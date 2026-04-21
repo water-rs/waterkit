@@ -6,13 +6,16 @@ import OSLog
 // MARK: - Media Session State
 
 private var commandHandlerRegistered = false
-private var silentPlayer: AVAudioPlayer?
-private let silentPlayerDelegate = SilentPlayerDelegate()
 private let logger = Logger(subsystem: "dev.waterui", category: "WaterKitMedia")
 
 #if os(iOS)
 private var systemEventObserverTokens: [NSObjectProtocol] = []
 private var systemEventObserversRegistered = false
+#endif
+
+#if os(macOS)
+private var silentPlayer: AVAudioPlayer?
+private let silentPlayerDelegate = SilentPlayerDelegate()
 #endif
 
 // MARK: - FFI Functions

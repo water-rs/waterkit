@@ -214,7 +214,7 @@ byteorder = "1.5"
 winit = "0.30"
 pollster = "0.4"
 nokhwa = { version = "0.10", features = ["input-native", "output-wgpu"] }
-rav1e = "0.8"
+rav1e = { version = "0.8", default-features = false, features = ["threading"] }
 rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
 media-codec = "0.8"
 timestretch = "0.2"
@@ -229,9 +229,10 @@ url = "2.5"
 # System/OS
 sysinfo = "0.37"
 dirs = "6.0"
-rfd = "0.16"
+rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "async-std"] }
 arboard = "3"
 clipboard-rs = { version = "0.3", features = ["image"] }
+wayland-sys = { version = "0.30.1", features = ["dlopen"] }
 notify-rust = "4"
 futures-timer = "3"
 netdev = "0.40"

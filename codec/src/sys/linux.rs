@@ -784,6 +784,8 @@ fn build_h264_avcc_from_annex_b(bitstream: &[u8]) -> Option<Vec<u8>> {
     if sps.len() < 4 {
         return None;
     }
+    let sps_len = u16::try_from(sps.len()).ok()?;
+    let pps_len = u16::try_from(pps.len()).ok()?;
 
     let mut avcc = Vec::with_capacity(11 + sps.len() + pps.len());
     avcc.push(1);
@@ -792,10 +794,10 @@ fn build_h264_avcc_from_annex_b(bitstream: &[u8]) -> Option<Vec<u8>> {
     avcc.push(sps[3]);
     avcc.push(0xFC | 0x03);
     avcc.push(0xE0 | 1);
-    avcc.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+    avcc.extend_from_slice(&sps_len.to_be_bytes());
     avcc.extend_from_slice(&sps);
     avcc.push(1);
-    avcc.extend_from_slice(&(pps.len() as u16).to_be_bytes());
+    avcc.extend_from_slice(&pps_len.to_be_bytes());
     avcc.extend_from_slice(&pps);
 
     Some(avcc)

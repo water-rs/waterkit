@@ -665,6 +665,10 @@ impl Recording<'_> {
 
     /// Get the recording duration so far.
     #[must_use]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "This public wrapper delegates to platform backends; mobile recording duration queries are not const."
+    )]
     pub fn duration(&self) -> Duration {
         self.camera.inner.recording_duration()
     }
@@ -697,6 +701,10 @@ impl RawRecording<'_> {
 
     /// Get the RAW recording duration so far.
     #[must_use]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "This public wrapper delegates to platform backends; mobile raw recording duration queries are not const."
+    )]
     pub fn duration(&self) -> Duration {
         self.camera.inner.raw_recording_duration()
     }

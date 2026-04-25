@@ -157,6 +157,10 @@ impl CameraInner {
             .collect())
     }
 
+    #[allow(
+        clippy::unused_async,
+        reason = "Camera opening is async on mobile backends; the desktop backend keeps the same platform abstraction surface."
+    )]
     pub async fn open(
         camera_id: &str,
         config: CameraConfig,
@@ -238,6 +242,7 @@ impl CameraInner {
         if controls.stabilization.is_some() {
             return Err(CameraError::ControlUnsupported("stabilization".into()));
         }
+        self.controls = controls.clone();
         Ok(())
     }
 
@@ -312,7 +317,7 @@ impl CameraInner {
         )
     }
 
-    pub async fn capture_photo(&mut self) -> Result<Photo, CameraError> {
+    pub async fn capture_photo(&self) -> Result<Photo, CameraError> {
         // Wait for next frame from the stream
         let raw = self
             .frame_receiver
@@ -366,41 +371,70 @@ impl CameraInner {
         })
     }
 
-    pub async fn capture_raw_photo(&mut self) -> Result<RawPhoto, CameraError> {
+    #[allow(
+        clippy::unused_self,
+        clippy::unused_async,
+        reason = "RAW capture is async on supported platform backends; desktop reports the unsupported capability through the same API."
+    )]
+    pub async fn capture_raw_photo(&self) -> Result<RawPhoto, CameraError> {
         Err(CameraError::ControlUnsupported(
             "raw photo not supported on desktop".into(),
         ))
     }
 
-    pub fn start_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "Recording is an instance API on supported camera backends; desktop has no recording session state to touch."
+    )]
+    pub fn start_recording(&self, _path: &Path) -> Result<(), CameraError> {
         Err(CameraError::ControlUnsupported(
             "recording not supported on desktop".into(),
         ))
     }
 
-    pub fn stop_recording(&mut self) -> Result<(), CameraError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "Recording is an instance API on supported camera backends; desktop has no recording session state to touch."
+    )]
+    pub fn stop_recording(&self) -> Result<(), CameraError> {
         Err(CameraError::ControlUnsupported(
             "recording not supported on desktop".into(),
         ))
     }
 
-    pub fn recording_duration(&self) -> Duration {
+    #[allow(
+        clippy::unused_self,
+        reason = "Recording is an instance API on supported camera backends; desktop has no recording session timer."
+    )]
+    pub const fn recording_duration(&self) -> Duration {
         Duration::ZERO
     }
 
-    pub fn start_raw_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "Raw recording is an instance API on supported camera backends; desktop has no raw recording session state."
+    )]
+    pub fn start_raw_recording(&self, _path: &Path) -> Result<(), CameraError> {
         Err(CameraError::ControlUnsupported(
             "raw recording not supported on desktop".into(),
         ))
     }
 
-    pub fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "Raw recording is an instance API on supported camera backends; desktop has no raw recording session state."
+    )]
+    pub fn stop_raw_recording(&self) -> Result<(), CameraError> {
         Err(CameraError::ControlUnsupported(
             "raw recording not supported on desktop".into(),
         ))
     }
 
-    pub fn raw_recording_duration(&self) -> Duration {
+    #[allow(
+        clippy::unused_self,
+        reason = "Raw recording is an instance API on supported camera backends; desktop has no raw recording session timer."
+    )]
+    pub const fn raw_recording_duration(&self) -> Duration {
         Duration::ZERO
     }
 }

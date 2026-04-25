@@ -214,7 +214,10 @@ fn timestamp_from_jni_double(value: f64) -> Result<u64, SensorError> {
     Ok(value as u64)
 }
 
-// Check sensor availability with manual context (helper)
+/// Check sensor availability with an explicit Android `Context`.
+///
+/// # Errors
+/// Returns [`SensorError`] when DEX initialization, helper loading, or the JNI call fails.
 pub fn is_sensor_available_with_context(
     env: &mut JNIEnv,
     context: &JObject,
@@ -244,7 +247,11 @@ pub fn is_sensor_available_with_context(
     Ok(result)
 }
 
-// Read sensor with manual context (helper)
+/// Read a sensor with an explicit Android `Context`.
+///
+/// # Errors
+/// Returns [`SensorError`] when DEX initialization, helper loading, JNI access, or payload
+/// decoding fails.
 pub fn read_sensor_with_context(
     env: &mut JNIEnv,
     context: &JObject,
@@ -267,7 +274,11 @@ pub fn read_sensor_with_context(
     parse_sensor_result(env, result)
 }
 
-// Read pressure with manual context (helper)
+/// Read pressure data with an explicit Android `Context`.
+///
+/// # Errors
+/// Returns [`SensorError`] when DEX initialization, helper loading, JNI access, or payload
+/// decoding fails.
 pub fn read_pressure_with_context(
     env: &mut JNIEnv,
     context: &JObject,
@@ -289,7 +300,11 @@ pub fn read_pressure_with_context(
     parse_scalar_result(env, result)
 }
 
-// Read light with manual context (helper)
+/// Read ambient light data with an explicit Android `Context`.
+///
+/// # Errors
+/// Returns [`SensorError`] when DEX initialization, helper loading, JNI access, or payload
+/// decoding fails.
 pub fn read_light_with_context(
     env: &mut JNIEnv,
     context: &JObject,

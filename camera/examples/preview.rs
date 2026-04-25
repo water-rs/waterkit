@@ -47,48 +47,9 @@ impl App {
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,
     ) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout, wgpu::Sampler) {
-        // Shader for fullscreen quad with texture
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Camera Preview Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                r"
-                struct VertexOutput {
-                    @builtin(position) position: vec4<f32>,
-                    @location(0) tex_coords: vec2<f32>,
-                };
-
-                @vertex
-                fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-                    // Fullscreen triangle
-                    var positions = array<vec2<f32>, 3>(
-                        vec2<f32>(-1.0, -3.0),
-                        vec2<f32>(3.0, 1.0),
-                        vec2<f32>(-1.0, 1.0),
-                    );
-                    var tex_coords = array<vec2<f32>, 3>(
-                        vec2<f32>(0.0, 2.0),
-                        vec2<f32>(2.0, 0.0),
-                        vec2<f32>(0.0, 0.0),
-                    );
-
-                    var output: VertexOutput;
-                    output.position = vec4<f32>(positions[vertex_index], 0.0, 1.0);
-                    output.tex_coords = tex_coords[vertex_index];
-                    return output;
-                }
-
-                @group(0) @binding(0)
-                var t_diffuse: texture_2d<f32>;
-                @group(0) @binding(1)
-                var s_diffuse: sampler;
-
-                @fragment
-                fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-                    return textureSample(t_diffuse, s_diffuse, in.tex_coords);
-                }
-            "
-                .into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("preview.wgsl").into()),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -149,7 +110,7 @@ impl App {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
+            multiview: None,
             cache: None,
         });
 
@@ -159,7 +120,7 @@ impl App {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
 
@@ -243,7 +204,6 @@ impl App {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
-                multiview_mask: None,
             });
 
             render_pass.set_pipeline(pipeline);

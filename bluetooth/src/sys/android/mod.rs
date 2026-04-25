@@ -23,6 +23,9 @@ static CLASSIC_DISCOVERY_CALLBACKS: OnceLock<
 static NEXT_CALLBACK_STATE_ID: AtomicI64 = AtomicI64::new(1);
 const HELPER_CLASS_NAME: &str = "waterkit.bluetooth.BluetoothHelper";
 const BOND_BONDED: i32 = 12;
+type GattResultSender<T> = oneshot::Sender<Result<T, BluetoothError>>;
+type CharacteristicKey = (String, String);
+type SubscriptionMap = BTreeMap<CharacteristicKey, async_channel::Sender<Vec<u8>>>;
 
 #[derive(Debug, Clone)]
 struct ScanCallbackState {
@@ -59,15 +62,15 @@ enum SppCommand {
 
 #[derive(Debug)]
 struct GattCallbackState {
-    connect: Mutex<Option<oneshot::Sender<Result<(), BluetoothError>>>>,
-    discover_services: Mutex<Option<oneshot::Sender<Result<Vec<GattService>, BluetoothError>>>>,
-    reads: Mutex<BTreeMap<(String, String), oneshot::Sender<Result<Vec<u8>, BluetoothError>>>>,
-    writes: Mutex<BTreeMap<(String, String), oneshot::Sender<Result<(), BluetoothError>>>>,
-    subscriptions: Mutex<BTreeMap<(String, String), async_channel::Sender<Vec<u8>>>>,
+    connect: Mutex<Option<GattResultSender<()>>>,
+    discover_services: Mutex<Option<GattResultSender<Vec<GattService>>>>,
+    reads: Mutex<BTreeMap<CharacteristicKey, GattResultSender<Vec<u8>>>>,
+    writes: Mutex<BTreeMap<CharacteristicKey, GattResultSender<()>>>,
+    subscriptions: Mutex<SubscriptionMap>,
 }
 
 impl GattCallbackState {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             connect: Mutex::new(None),
             discover_services: Mutex::new(None),
@@ -295,6 +298,10 @@ fn get_helper_class<'local>(
     load_class(env, HELPER_CLASS_NAME)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "This JNI bridge decodes one Android BluetoothDevice payload end-to-end; splitting it would obscure the field extraction order."
+)]
 fn get_paired_devices_with_context(
     env: &mut JNIEnv<'_>,
     context: &JObject<'_>,
@@ -322,7 +329,9 @@ fn get_paired_devices_with_context(
     let count = env
         .get_array_length(&paired)
         .map_err(|e| BluetoothError::PlatformError(format!("get_array_length: {e}")))?;
-    let mut devices = Vec::with_capacity(count as usize);
+    let mut devices = Vec::with_capacity(usize::try_from(count).map_err(|_| {
+        BluetoothError::PlatformError(format!("paired device count is negative: {count}"))
+    })?);
 
     for index in 0..count {
         let device_obj = env
@@ -404,7 +413,8 @@ fn get_paired_devices_with_context(
                     BluetoothError::PlatformError(format!(
                         "BluetoothClass.getMajorDeviceClass return decode: {e}"
                     ))
-                })? as u32
+                })?
+                .cast_unsigned()
         };
 
         let bond_state = env
@@ -456,6 +466,10 @@ impl BleScannerInner {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Starting an Android BLE scan requires a single JNI transaction that creates the callback, filter array, and scanner together."
+    )]
     pub fn start_scan(
         &self,
         filter: &ScanFilter,
@@ -602,10 +616,9 @@ impl BleScannerInner {
             callbacks.insert(callback_state_id, scan_state);
         }
 
-        let mut stored_session = self.session.lock().map_err(|error| {
+        *self.session.lock().map_err(|error| {
             BluetoothError::PlatformError(format!("BLE scan session mutex poisoned: {error}"))
-        })?;
-        *stored_session = Some(session);
+        })? = Some(session);
         Ok(rx)
     }
 
@@ -653,6 +666,10 @@ impl Drop for BleScannerInner {
 }
 
 #[unsafe(no_mangle)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "JNI scan callbacks decode the full Android payload at the native boundary; keeping the decode in one callback preserves ownership and null-check order."
+)]
 pub extern "system" fn Java_waterkit_bluetooth_BleScanBridgeCallback_onScanResultNative(
     mut env: JNIEnv,
     callback: JObject,
@@ -726,7 +743,12 @@ pub extern "system" fn Java_waterkit_bluetooth_BleScanBridgeCallback_onScanResul
                 "waterkit-bluetooth: get service UUID array length failed in scan callback: {error}"
             )
         });
-    let mut parsed_uuids = Vec::with_capacity(service_uuids_len as usize);
+    let mut parsed_uuids =
+        Vec::with_capacity(usize::try_from(service_uuids_len).unwrap_or_else(|_| {
+            panic!(
+                "waterkit-bluetooth: service UUID array length was negative: {service_uuids_len}"
+            )
+        }));
     for index in 0..service_uuids_len {
         let value = env
             .get_object_array_element(&service_uuids, index)
@@ -1194,7 +1216,7 @@ impl std::fmt::Debug for BleConnectionInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BleConnectionInner")
             .field("callback_state_id", &self.callback_state_id)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -1233,6 +1255,10 @@ impl BleConnectionInner {
         })
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Connecting GATT on Android is one ordered JNI setup sequence: callback state, Java callback, connect call, and callback await."
+    )]
     pub async fn connect(device_id: &DeviceId) -> Result<Self, BluetoothError> {
         match adapter_state().await? {
             AdapterState::PoweredOn => {}
@@ -1385,12 +1411,15 @@ impl BleConnectionInner {
                 })
         })?;
         if !started {
-            let mut discover_slot = state.discover_services.lock().map_err(|error| {
-                BluetoothError::PlatformError(format!(
-                    "GATT discover_services slot mutex poisoned: {error}"
-                ))
-            })?;
-            discover_slot.take();
+            state
+                .discover_services
+                .lock()
+                .map_err(|error| {
+                    BluetoothError::PlatformError(format!(
+                        "GATT discover_services slot mutex poisoned: {error}"
+                    ))
+                })?
+                .take();
             return Err(BluetoothError::GattError(
                 "BluetoothGatt.discoverServices returned false".into(),
             ));
@@ -1444,10 +1473,13 @@ impl BleConnectionInner {
         })?;
 
         if !started {
-            let mut reads = state.reads.lock().map_err(|error| {
-                BluetoothError::PlatformError(format!("GATT read map mutex poisoned: {error}"))
-            })?;
-            reads.remove(&key);
+            state
+                .reads
+                .lock()
+                .map_err(|error| {
+                    BluetoothError::PlatformError(format!("GATT read map mutex poisoned: {error}"))
+                })?
+                .remove(&key);
             return Err(BluetoothError::GattError(
                 "BluetoothGatt.readCharacteristic returned false".into(),
             ));
@@ -1526,10 +1558,13 @@ impl BleConnectionInner {
         })?;
 
         if !started {
-            let mut writes = state.writes.lock().map_err(|error| {
-                BluetoothError::PlatformError(format!("GATT write map mutex poisoned: {error}"))
-            })?;
-            writes.remove(&key);
+            state
+                .writes
+                .lock()
+                .map_err(|error| {
+                    BluetoothError::PlatformError(format!("GATT write map mutex poisoned: {error}"))
+                })?
+                .remove(&key);
             return Err(BluetoothError::GattError(
                 "BluetoothGatt.writeCharacteristic returned false".into(),
             ));
@@ -1540,7 +1575,11 @@ impl BleConnectionInner {
         })?
     }
 
-    #[allow(clippy::unused_async)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::unused_async,
+        reason = "Android notification subscription is one JNI descriptor transaction; the API is async to match callback-based GATT operations."
+    )]
     pub async fn subscribe(
         &self,
         service: &Uuid,
@@ -1671,12 +1710,15 @@ impl BleConnectionInner {
         })?;
 
         if !enabled {
-            let mut subscriptions = state.subscriptions.lock().map_err(|error| {
-                BluetoothError::PlatformError(format!(
-                    "GATT subscription map mutex poisoned: {error}"
-                ))
-            })?;
-            subscriptions.remove(&key);
+            state
+                .subscriptions
+                .lock()
+                .map_err(|error| {
+                    BluetoothError::PlatformError(format!(
+                        "GATT subscription map mutex poisoned: {error}"
+                    ))
+                })?
+                .remove(&key);
             return Err(BluetoothError::GattError(
                 "enable characteristic notifications failed".into(),
             ));
@@ -1685,6 +1727,10 @@ impl BleConnectionInner {
         Ok(rx)
     }
 
+    #[allow(
+        clippy::unused_async,
+        reason = "The public connection API is async across platform backends; Android close is synchronous."
+    )]
     pub async fn disconnect(self) {
         let _ = self.close_gatt();
         if let Ok(mut states) = gatt_callbacks().lock() {
@@ -1774,7 +1820,7 @@ pub extern "system" fn Java_waterkit_bluetooth_ClassicDiscoveryBridgeCallback_on
             rssi: None,
             is_connected: false,
         },
-        device_class: major_device_class as u32,
+        device_class: major_device_class.cast_unsigned(),
         is_paired: is_paired != 0,
     }) {
         debug_assert!(
@@ -1892,12 +1938,11 @@ impl ClassicBluetoothInner {
             callbacks.insert(callback_state_id, tx);
         }
 
-        let mut stored_session = self.discovery_session.lock().map_err(|error| {
+        *self.discovery_session.lock().map_err(|error| {
             BluetoothError::PlatformError(format!(
                 "classic discovery session mutex poisoned: {error}"
             ))
-        })?;
-        *stored_session = Some(session);
+        })? = Some(session);
         Ok(rx)
     }
 
@@ -1945,6 +1990,10 @@ impl ClassicBluetoothInner {
         future::ready(with_android_context(get_paired_devices_with_context)).await
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Opening Android SPP requires one ordered JNI/socket setup plus worker-thread ownership transfer."
+    )]
     pub async fn connect_spp(
         &self,
         device_id: &DeviceId,
@@ -2235,7 +2284,11 @@ impl Drop for SppStreamInner {
 
 /// Android-specific Bluetooth functions requiring JNI context.
 pub mod jni_api {
-    use super::*;
+    use super::{get_helper_class, init_dex};
+    use crate::AdapterState;
+    use crate::BluetoothError;
+    use jni::JNIEnv;
+    use jni::objects::{JObject, JValue};
 
     /// Get adapter state with JNI context.
     ///

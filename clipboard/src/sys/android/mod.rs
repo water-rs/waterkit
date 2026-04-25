@@ -12,6 +12,7 @@ use std::time::Duration;
 
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
+type ClipboardPresence = (bool, bool, bool, bool);
 
 /// Get JNI environment and context from `ndk_context`.
 /// Panics if Android context is not available.
@@ -92,6 +93,50 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), ClipboardError> {
 
     let _ = CLASS_LOADER.set(global_ref);
     Ok(())
+}
+
+fn query_clipboard_presence(env: &mut JNIEnv, context: &GlobalRef) -> ClipboardPresence {
+    let Ok(helper_class) = get_helper_class(env) else {
+        return (false, false, false, false);
+    };
+    let context = context.as_obj();
+    let has_text = env
+        .call_static_method(
+            &helper_class,
+            "hasText",
+            "(Landroid/content/Context;)Z",
+            &[JValue::Object(context)],
+        )
+        .and_then(jni::objects::JValueGen::z)
+        .unwrap_or(false);
+    let has_html = env
+        .call_static_method(
+            &helper_class,
+            "hasHtml",
+            "(Landroid/content/Context;)Z",
+            &[JValue::Object(context)],
+        )
+        .and_then(jni::objects::JValueGen::z)
+        .unwrap_or(false);
+    let has_files = env
+        .call_static_method(
+            &helper_class,
+            "hasFiles",
+            "(Landroid/content/Context;)Z",
+            &[JValue::Object(context)],
+        )
+        .and_then(jni::objects::JValueGen::z)
+        .unwrap_or(false);
+    let has_image = env
+        .call_static_method(
+            &helper_class,
+            "hasImage",
+            "(Landroid/content/Context;)Z",
+            &[JValue::Object(context)],
+        )
+        .and_then(jni::objects::JValueGen::z)
+        .unwrap_or(false);
+    (has_text, has_html, has_files, has_image)
 }
 
 fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<jni::objects::JClass<'a>, ClipboardError> {
@@ -381,7 +426,11 @@ impl ClipboardInner {
                 ClipboardError::Platform(format!("JNI error convert_byte_array: {e}"))
             })?;
 
-            Ok(Some(Image::new(width as u32, height as u32, bytes)))
+            Ok(Some(Image::new(
+                width.cast_unsigned(),
+                height.cast_unsigned(),
+                bytes,
+            )))
         })
     }
 
@@ -604,8 +653,7 @@ impl ClipboardInner {
 /// Uses polling since Android doesn't have a native clipboard change listener
 /// that works across all API levels.
 /// Returns a receiver and a stop flag.
-pub fn start_watch()
--> Result<(async_channel::Receiver<ClipboardEvent>, Arc<AtomicBool>), ClipboardError> {
+pub fn start_watch() -> (async_channel::Receiver<ClipboardEvent>, Arc<AtomicBool>) {
     let (sender, receiver) = async_channel::unbounded();
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = Arc::clone(&stop);
@@ -623,52 +671,11 @@ pub fn start_watch()
             thread::sleep(Duration::from_millis(500));
 
             // Check clipboard types
-            let (has_text, has_html, has_files, has_image) =
-                if let Ok(mut env) = vm.attach_current_thread() {
-                    if let Ok(helper_class) = get_helper_class(&mut env) {
-                        let has_text = env
-                            .call_static_method(
-                                &helper_class,
-                                "hasText",
-                                "(Landroid/content/Context;)Z",
-                                &[JValue::Object(context.as_obj())],
-                            )
-                            .and_then(jni::objects::JValueGen::z)
-                            .unwrap_or(false);
-                        let has_html = env
-                            .call_static_method(
-                                &helper_class,
-                                "hasHtml",
-                                "(Landroid/content/Context;)Z",
-                                &[JValue::Object(context.as_obj())],
-                            )
-                            .and_then(jni::objects::JValueGen::z)
-                            .unwrap_or(false);
-                        let has_files = env
-                            .call_static_method(
-                                &helper_class,
-                                "hasFiles",
-                                "(Landroid/content/Context;)Z",
-                                &[JValue::Object(context.as_obj())],
-                            )
-                            .and_then(jni::objects::JValueGen::z)
-                            .unwrap_or(false);
-                        let has_image = env
-                            .call_static_method(
-                                &helper_class,
-                                "hasImage",
-                                "(Landroid/content/Context;)Z",
-                                &[JValue::Object(context.as_obj())],
-                            )
-                            .and_then(jni::objects::JValueGen::z)
-                            .unwrap_or(false);
-                        (has_text, has_html, has_files, has_image)
-                    } else {
-                        (false, false, false, false)
-                    }
-                } else {
-                    (false, false, false, false)
-                };
+            let (has_text, has_html, has_files, has_image) = vm
+                .attach_current_thread()
+                .map_or((false, false, false, false), |mut env| {
+                    query_clipboard_presence(&mut env, &context)
+                });
 
             // Only send event if types changed
             if has_text != last_has_text
@@ -689,5 +696,5 @@ pub fn start_watch()
         }
     });
 
-    Ok((receiver, stop))
+    (receiver, stop)
 }

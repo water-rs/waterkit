@@ -368,7 +368,7 @@ impl AppRefreshRequest {
         &self.identifier
     }
 
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(target_os = "ios")]
     pub(crate) const fn earliest_begin_after_value(&self) -> Option<Duration> {
         self.earliest_begin_after
     }
@@ -420,17 +420,17 @@ impl ProcessingRequest {
         &self.identifier
     }
 
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(target_os = "ios")]
     pub(crate) const fn earliest_begin_after_value(&self) -> Option<Duration> {
         self.earliest_begin_after
     }
 
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(target_os = "ios")]
     pub(crate) const fn requires_network_connectivity_value(&self) -> bool {
         self.requires_network_connectivity
     }
 
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(target_os = "ios")]
     pub(crate) const fn requires_external_power_value(&self) -> bool {
         self.requires_external_power
     }
@@ -526,12 +526,12 @@ impl ContinuedProcessingRequest {
         &self.subtitle
     }
 
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(target_os = "ios")]
     pub(crate) const fn strategy_value(&self) -> ContinuedProcessingStrategy {
         self.strategy
     }
 
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(target_os = "ios")]
     pub(crate) const fn requires_gpu_value(&self) -> bool {
         self.requires_gpu
     }
@@ -790,6 +790,10 @@ pub fn initialize(config: BootstrapConfig) -> Result<BackgroundRuntime, Backgrou
 
 /// Query background capabilities on the current platform.
 #[must_use]
+#[allow(
+    clippy::missing_const_for_fn,
+    reason = "The public API delegates to platform backends; Apple and fallback backends are not const."
+)]
 pub fn capabilities() -> BackgroundCapabilities {
     sys::capabilities()
 }

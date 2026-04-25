@@ -2,7 +2,7 @@
 
 use crate::{HapticError, HapticPattern, HapticStep, Intensity};
 use jni::JNIEnv;
-use jni::objects::{GlobalRef, JObject, JValue};
+use jni::objects::{GlobalRef, JClass, JObject, JValue};
 use std::mem::ManuallyDrop;
 use std::sync::OnceLock;
 
@@ -99,16 +99,31 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JObject<'a>, HapticError
     .map_err(|e| HapticError::Unknown(format!("loadClass result: {e}")))
 }
 
+fn duration_millis_i64(duration: std::time::Duration) -> Result<i64, HapticError> {
+    i64::try_from(duration.as_millis()).map_err(|_| {
+        HapticError::Unknown(format!(
+            "haptic duration exceeds i64 milliseconds: {duration:?}"
+        ))
+    })
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "Intensity is constrained to 0.0..=1.0 and Android amplitudes are integer values in 0..=255."
+)]
+fn amplitude_i32(intensity: Intensity) -> i32 {
+    (intensity.value() * 255.0).round() as i32
+}
+
 /// Check if haptic feedback is available (requires context).
 pub fn is_available_with_context(env: &mut JNIEnv, context: &JObject) -> Result<bool, HapticError> {
     init_with_context(env, context)?;
 
-    let helper_class = get_helper_class(env)?;
-    let helper_jclass: jni::objects::JClass = helper_class.into();
+    let helper: JClass = get_helper_class(env)?.into();
 
     let result = env
         .call_static_method(
-            helper_jclass,
+            helper,
             "isAvailable",
             "(Landroid/content/Context;)Z",
             &[JValue::Object(context)],
@@ -128,11 +143,10 @@ pub fn impact_with_context(
 ) -> Result<(), HapticError> {
     init_with_context(env, context)?;
 
-    let helper_class = get_helper_class(env)?;
-    let helper_jclass: jni::objects::JClass = helper_class.into();
+    let helper: JClass = get_helper_class(env)?.into();
 
     env.call_static_method(
-        helper_jclass,
+        helper,
         "impact",
         "(Landroid/content/Context;F)V",
         &[JValue::Object(context), JValue::Float(intensity.value())],
@@ -146,11 +160,10 @@ pub fn impact_with_context(
 pub fn selection_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), HapticError> {
     init_with_context(env, context)?;
 
-    let helper_class = get_helper_class(env)?;
-    let helper_jclass: jni::objects::JClass = helper_class.into();
+    let helper: JClass = get_helper_class(env)?.into();
 
     env.call_static_method(
-        helper_jclass,
+        helper,
         "selection",
         "(Landroid/content/Context;)V",
         &[JValue::Object(context)],
@@ -168,11 +181,10 @@ pub fn notification_with_context(
 ) -> Result<(), HapticError> {
     init_with_context(env, context)?;
 
-    let helper_class = get_helper_class(env)?;
-    let helper_jclass: jni::objects::JClass = helper_class.into();
+    let helper: JClass = get_helper_class(env)?.into();
 
     env.call_static_method(
-        helper_jclass,
+        helper,
         "notification",
         "(Landroid/content/Context;I)V",
         &[JValue::Object(context), JValue::Int(notification_type)],
@@ -200,36 +212,47 @@ pub fn play_pattern_with_context(
                 duration,
                 intensity,
             } => {
-                timings.push(duration.as_millis() as i64);
-                amplitudes.push((intensity.value() * 255.0) as i32);
+                timings.push(duration_millis_i64(*duration)?);
+                amplitudes.push(amplitude_i32(*intensity));
             }
             HapticStep::Pause(duration) => {
-                timings.push(duration.as_millis() as i64);
+                timings.push(duration_millis_i64(*duration)?);
                 amplitudes.push(0);
             }
         }
     }
 
-    let helper_class = get_helper_class(env)?;
-    let helper_jclass: jni::objects::JClass = helper_class.into();
+    let helper: JClass = get_helper_class(env)?.into();
+    let timings_len = i32::try_from(timings.len()).map_err(|_| {
+        HapticError::Unknown(format!(
+            "haptic timing count exceeds i32: {}",
+            timings.len()
+        ))
+    })?;
+    let amplitudes_len = i32::try_from(amplitudes.len()).map_err(|_| {
+        HapticError::Unknown(format!(
+            "haptic amplitude count exceeds i32: {}",
+            amplitudes.len()
+        ))
+    })?;
 
     // Create Java long[] for timings
     let timings_array = env
-        .new_long_array(timings.len() as i32)
+        .new_long_array(timings_len)
         .map_err(|e| HapticError::Unknown(format!("new_long_array: {e}")))?;
     env.set_long_array_region(&timings_array, 0, &timings)
         .map_err(|e| HapticError::Unknown(format!("set_long_array_region: {e}")))?;
 
     // Create Java int[] for amplitudes
     let amplitudes_array = env
-        .new_int_array(amplitudes.len() as i32)
+        .new_int_array(amplitudes_len)
         .map_err(|e| HapticError::Unknown(format!("new_int_array: {e}")))?;
     env.set_int_array_region(&amplitudes_array, 0, &amplitudes)
         .map_err(|e| HapticError::Unknown(format!("set_int_array_region: {e}")))?;
 
     let result = env
         .call_static_method(
-            helper_jclass,
+            helper,
             "playPattern",
             "(Landroid/content/Context;[J[I)Z",
             &[

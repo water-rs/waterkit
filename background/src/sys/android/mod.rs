@@ -47,7 +47,7 @@ impl BackgroundRuntimeInner {
             requires_network_connectivity: false,
             requires_external_power: false,
         };
-        schedule_job(spec, &self.job_service_class)
+        schedule_job(&spec, &self.job_service_class)
     }
 
     pub fn submit_processing(&self, request: ProcessingRequest) -> Result<(), BackgroundError> {
@@ -64,7 +64,7 @@ impl BackgroundRuntimeInner {
             requires_network_connectivity,
             requires_external_power,
         };
-        schedule_job(spec, &self.job_service_class)
+        schedule_job(&spec, &self.job_service_class)
     }
 
     pub fn submit_continued_processing(
@@ -96,7 +96,7 @@ impl BackgroundRuntimeInner {
             requires_network_connectivity: false,
             requires_external_power: false,
         };
-        schedule_job(spec, &self.job_service_class)
+        schedule_job(&spec, &self.job_service_class)
     }
 
     #[allow(
@@ -160,14 +160,14 @@ struct JobSpec<'a> {
     requires_external_power: bool,
 }
 
-fn schedule_job(spec: JobSpec<'_>, job_service_class: &str) -> Result<(), BackgroundError> {
+fn schedule_job(spec: &JobSpec<'_>, job_service_class: &str) -> Result<(), BackgroundError> {
     let JobSpec {
         identifier,
         kind,
         min_latency_ms,
         requires_network_connectivity,
         requires_external_power,
-    } = spec;
+    } = *spec;
     let job_id = job_id_for_identifier(identifier, kind);
 
     with_env_context(|env, context| {
@@ -195,10 +195,7 @@ fn schedule_job(spec: JobSpec<'_>, job_service_class: &str) -> Result<(), Backgr
         if result != JOB_SCHEDULER_RESULT_SUCCESS {
             return Err(BackgroundError::SchedulerRejected {
                 code: result,
-                message: format!(
-                    "JobScheduler.schedule returned {result} for `{}`",
-                    identifier
-                ),
+                message: format!("JobScheduler.schedule returned {result} for `{identifier}`"),
             });
         }
 

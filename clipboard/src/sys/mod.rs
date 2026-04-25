@@ -124,6 +124,10 @@ pub fn start_watch() -> Result<
 
 /// Start watching for clipboard changes.
 #[cfg(target_os = "android")]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "The platform-neutral clipboard watcher API is fallible; Android's polling watcher currently cannot fail during construction."
+)]
 pub fn start_watch() -> Result<
     (
         async_channel::Receiver<ClipboardEvent>,
@@ -131,7 +135,7 @@ pub fn start_watch() -> Result<
     ),
     ClipboardError,
 > {
-    let (receiver, stop_flag) = android::start_watch()?;
+    let (receiver, stop_flag) = android::start_watch();
     Ok((
         receiver,
         Arc::new(WatcherShutdown {

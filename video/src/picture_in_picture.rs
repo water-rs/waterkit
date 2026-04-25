@@ -168,6 +168,10 @@ pub fn is_picture_in_picture_active(host_id: PictureInPictureHostId) -> Result<b
 /// # Errors
 ///
 /// Returns an error when the current platform helper cannot be reached.
+#[allow(
+    clippy::missing_const_for_fn,
+    reason = "Apple picture-in-picture command polling is delegated through a non-const platform helper"
+)]
 pub fn poll_picture_in_picture_command(
     host_id: PictureInPictureHostId,
 ) -> Result<Option<PictureInPictureCommand>, VideoError> {

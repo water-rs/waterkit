@@ -22,7 +22,7 @@ private let sensorReadTimeout: DispatchTimeInterval = .seconds(1)
 private func readMotionVectorSample<T>(
     startUpdates: (OperationQueue, @escaping (T?, Error?) -> Void) -> Void,
     stopUpdates: () -> Void,
-    map: (T) -> SensorReading
+    map: @escaping (T) -> SensorReading
 ) -> SensorResult {
     var result: SensorResult = .Timeout
     let semaphore = DispatchSemaphore(value: 0)

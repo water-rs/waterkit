@@ -44,10 +44,10 @@ compile_error!("waterkit-audio supports only macOS, iOS, Android, Windows, and L
 pub use apple::MediaSessionInner;
 
 #[cfg(target_os = "ios")]
-pub(crate) use apple::{NativeAudioPlayerInner, NativeAudioPlayerState};
+pub use apple::{NativeAudioPlayerInner, NativeAudioPlayerState};
 
 #[cfg(target_os = "android")]
-pub(crate) use android::MediaSessionInner;
+pub use android::MediaSessionInner;
 
 #[cfg(target_os = "windows")]
 pub(crate) use windows::MediaSessionInner;

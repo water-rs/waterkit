@@ -65,11 +65,7 @@ pub fn decode_isobmff_image(data: &[u8]) -> Result<AppleDecodedImage, CodecError
 
     let expected_len = usize::try_from(decoded.width)
         .ok()
-        .and_then(|width| {
-            usize::try_from(decoded.height)
-                .ok()
-                .map(|height| (width, height))
-        })
+        .zip(usize::try_from(decoded.height).ok())
         .and_then(|(width, height)| width.checked_mul(height))
         .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
         .ok_or_else(|| CodecError::DecodingFailed("ISOBMFF decoded buffer size overflow".into()))?;

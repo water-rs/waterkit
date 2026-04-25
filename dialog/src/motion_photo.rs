@@ -30,7 +30,11 @@ struct MotionPhotoMetadata {
     video_type: MotionVideoType,
 }
 
-pub(crate) fn load_live_photo_from_motion_photo(
+#[allow(
+    clippy::redundant_pub_crate,
+    reason = "Android dialog backend needs sibling-module access to motion photo parsing"
+)]
+pub(super) fn load_live_photo_from_motion_photo(
     path: &Path,
 ) -> Result<Option<LoadedLivePhoto>, DialogError> {
     let bytes = fs::read(path).map_err(|error| {

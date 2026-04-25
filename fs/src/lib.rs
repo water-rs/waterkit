@@ -9,6 +9,12 @@ mod sys;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
+/// Android-specific JNI helpers that require an explicit `Context`.
+#[cfg(target_os = "android")]
+pub mod android {
+    pub use crate::sys::{cache_dir_with_context, documents_dir_with_context};
+}
+
 use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::io;
@@ -24,6 +30,26 @@ use serde::de::DeserializeOwned;
 pub struct WaterFs;
 
 impl WaterFs {
+    /// Gets the application's documents directory from an Android `Context`.
+    #[cfg(target_os = "android")]
+    #[must_use]
+    pub fn documents_dir_with_context(
+        env: &mut jni::JNIEnv,
+        context: &jni::objects::JObject,
+    ) -> Option<PathBuf> {
+        sys::documents_dir_with_context(env, context)
+    }
+
+    /// Gets the application's cache directory from an Android `Context`.
+    #[cfg(target_os = "android")]
+    #[must_use]
+    pub fn cache_dir_with_context(
+        env: &mut jni::JNIEnv,
+        context: &jni::objects::JObject,
+    ) -> Option<PathBuf> {
+        sys::cache_dir_with_context(env, context)
+    }
+
     /// Gets the application's documents directory.
     #[must_use]
     pub fn documents_dir() -> Option<PathBuf> {

@@ -267,7 +267,7 @@ impl SpatialScene {
     }
 }
 
-fn clamp_playback_rate(rate: f32) -> f32 {
+const fn clamp_playback_rate(rate: f32) -> f32 {
     if rate.is_finite() {
         rate.clamp(0.25, 4.0)
     } else {
@@ -433,6 +433,10 @@ impl AudioPlayer {
     /// # Errors
     ///
     /// Returns an error if the file cannot be opened or the native player fails to load it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the supplied path is not valid UTF-8.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, PlayerError> {
         let path = path.as_ref();
         let runtime = Self::initialize_runtime()?;
@@ -482,7 +486,11 @@ impl AudioPlayer {
     /// # Errors
     ///
     /// Returns an error if the URL cannot be loaded by the native player.
-    #[allow(clippy::future_not_send)]
+    #[allow(
+        clippy::future_not_send,
+        clippy::unused_async,
+        reason = "the cross-platform URL player API is async even when the iOS native call completes synchronously"
+    )]
     pub async fn open_url(url: &str) -> Result<Self, PlayerError> {
         let runtime = Self::initialize_runtime()?;
         runtime.player.load_url(url)?;
@@ -516,7 +524,11 @@ impl AudioPlayer {
     /// # Errors
     ///
     /// Always returns [`PlayerError::SpatialNotEnabled`] on iOS.
-    #[allow(clippy::future_not_send)]
+    #[allow(
+        clippy::future_not_send,
+        clippy::unused_async,
+        reason = "the cross-platform URL player API is async even when iOS rejects spatial URL playback synchronously"
+    )]
     pub async fn open_url_spatial(_url: &str, _scene: SpatialScene) -> Result<Self, PlayerError> {
         Err(PlayerError::SpatialNotEnabled)
     }
@@ -532,7 +544,11 @@ impl AudioPlayer {
     /// # Errors
     ///
     /// Always returns [`PlayerError::SpatialNotEnabled`] on iOS.
-    pub fn spatial_scene(&self) -> Result<SpatialScene, PlayerError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform audio player API is instance-based"
+    )]
+    pub const fn spatial_scene(&self) -> Result<SpatialScene, PlayerError> {
         Err(PlayerError::SpatialNotEnabled)
     }
 
@@ -541,7 +557,11 @@ impl AudioPlayer {
     /// # Errors
     ///
     /// Always returns [`PlayerError::SpatialNotEnabled`] on iOS.
-    pub fn set_spatial_scene(&self, _scene: SpatialScene) -> Result<(), PlayerError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform audio player API is instance-based"
+    )]
+    pub const fn set_spatial_scene(&self, _scene: SpatialScene) -> Result<(), PlayerError> {
         Err(PlayerError::SpatialNotEnabled)
     }
 
@@ -550,7 +570,14 @@ impl AudioPlayer {
     /// # Errors
     ///
     /// Always returns [`PlayerError::SpatialNotEnabled`] on iOS.
-    pub fn set_emitter_position(&self, _position: SpatialPosition) -> Result<(), PlayerError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform audio player API is instance-based"
+    )]
+    pub const fn set_emitter_position(
+        &self,
+        _position: SpatialPosition,
+    ) -> Result<(), PlayerError> {
         Err(PlayerError::SpatialNotEnabled)
     }
 
@@ -559,7 +586,11 @@ impl AudioPlayer {
     /// # Errors
     ///
     /// Always returns [`PlayerError::SpatialNotEnabled`] on iOS.
-    pub fn set_listener_pose(&self, _pose: ListenerPose) -> Result<(), PlayerError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform audio player API is instance-based"
+    )]
+    pub const fn set_listener_pose(&self, _pose: ListenerPose) -> Result<(), PlayerError> {
         Err(PlayerError::SpatialNotEnabled)
     }
 
@@ -568,7 +599,11 @@ impl AudioPlayer {
     /// # Errors
     ///
     /// Always returns [`PlayerError::SpatialNotEnabled`] on iOS.
-    pub fn set_pan(&self, _pan: f32) -> Result<(), PlayerError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform audio player API is instance-based"
+    )]
+    pub const fn set_pan(&self, _pan: f32) -> Result<(), PlayerError> {
         Err(PlayerError::SpatialNotEnabled)
     }
 

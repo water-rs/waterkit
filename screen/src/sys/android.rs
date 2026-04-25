@@ -133,7 +133,7 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, Error> {
         .new_string("waterkit.screen.ScreenHelper")
         .map_err(|e| Error::Platform(format!("new_string: {e}")))?;
 
-    let loaded = env
+    let loaded_class = env
         .call_method(
             loader.as_obj(),
             "loadClass",
@@ -144,7 +144,7 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, Error> {
         .l()
         .map_err(|e| Error::Platform(format!("loadClass result: {e}")))?;
 
-    Ok(loaded.into())
+    Ok(loaded_class.into())
 }
 
 /// Initialize the screen module with Android context.
@@ -179,8 +179,8 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     env.get_int_array_region(&dims_array, 0, &mut dims_buf)
         .map_err(|e| Error::Platform(format!("get_int_array_region: {e}")))?;
 
-    let width = dims_buf[0].max(1920) as u32;
-    let height = dims_buf[1].max(1080) as u32;
+    let width = dims_buf[0].max(1920).cast_unsigned();
+    let height = dims_buf[1].max(1080).cast_unsigned();
 
     Ok(vec![ScreenInfo::new(
         0,
@@ -402,40 +402,34 @@ impl ScreenStreamInner {
                     .ok()
                     .and_then(|r| r.l().ok());
 
-                if let Some(frame_obj) = frame_result {
-                    if !frame_obj.is_null() {
-                        let array: jni::objects::JByteArray = frame_obj.into();
-                        if let Ok(bytes) = env.convert_byte_array(&array) {
-                            // Get dimensions
-                            let dims_result = env
-                                .call_static_method(
-                                    &helper_class,
-                                    "getFrameDimensions",
-                                    "()[I",
-                                    &[],
-                                )
-                                .ok()
-                                .and_then(|r| r.l().ok());
+                if let Some(frame_obj) = frame_result
+                    && !frame_obj.is_null()
+                {
+                    let array: jni::objects::JByteArray = frame_obj.into();
+                    if let Ok(bytes) = env.convert_byte_array(&array) {
+                        // Get dimensions
+                        let dims_result = env
+                            .call_static_method(&helper_class, "getFrameDimensions", "()[I", &[])
+                            .ok()
+                            .and_then(|r| r.l().ok());
 
-                            let (w, h) = if let Some(dims_obj) = dims_result {
-                                let dims_array: jni::objects::JIntArray = dims_obj.into();
-                                let mut buf = [0i32; 2];
-                                let _ = env.get_int_array_region(&dims_array, 0, &mut buf);
-                                (buf[0] as u32, buf[1] as u32)
-                            } else {
-                                (width, height)
-                            };
+                        let (w, h) = dims_result.map_or((width, height), |dims_obj| {
+                            let dims_array: jni::objects::JIntArray = dims_obj.into();
+                            let mut buf = [0i32; 2];
+                            let _ = env.get_int_array_region(&dims_array, 0, &mut buf);
+                            (buf[0].cast_unsigned(), buf[1].cast_unsigned())
+                        });
 
-                            let raw = RawFrame {
-                                data: bytes,
-                                width: w,
-                                height: h,
-                                timestamp_ns: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map_or(0, |d| d.as_nanos() as u64),
-                            };
-                            let _ = sender.try_send(raw);
-                        }
+                        let timestamp_ns = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
+                        let raw = RawFrame {
+                            data: bytes,
+                            width: w,
+                            height: h,
+                            timestamp_ns,
+                        };
+                        let _ = sender.try_send(raw);
                     }
                 }
 
@@ -460,15 +454,15 @@ impl ScreenStreamInner {
 
     pub async fn next_frame(&self) -> Option<ScreenFrame> {
         let raw = self.frame_receiver.recv().await.ok()?;
-        Some(self.create_frame(raw))
+        Some(self.create_frame(&raw))
     }
 
     pub fn try_next_frame(&self) -> Option<ScreenFrame> {
         let raw = self.frame_receiver.try_recv().ok()?;
-        Some(self.create_frame(raw))
+        Some(self.create_frame(&raw))
     }
 
-    fn create_frame(&self, raw: RawFrame) -> ScreenFrame {
+    fn create_frame(&self, raw: &RawFrame) -> ScreenFrame {
         // Create GPU texture
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("ScreenFrame"),

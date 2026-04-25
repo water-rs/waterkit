@@ -1,13 +1,11 @@
 //! Android media control implementation using JNI and `MediaSession`.
 
-use crate::{
-    MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus,
-};
+use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
 use jni::JNIEnv;
 use jni::JavaVM;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::mem::ManuallyDrop;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Embedded DEX bytecode containing `MediaSessionHelper` class.
@@ -323,7 +321,6 @@ fn poll_command_with_context(env: &mut JNIEnv) -> Result<Option<MediaCommand>, M
 pub struct MediaCenterInner {
     vm: JavaVM,
     context: GlobalRef,
-    handler: Mutex<Option<Box<dyn MediaCommandHandler>>>,
 }
 
 impl core::fmt::Debug for MediaCenterInner {
@@ -370,11 +367,7 @@ impl MediaCenterInner {
             context
         };
 
-        Ok(Self {
-            vm,
-            context,
-            handler: Mutex::new(None),
-        })
+        Ok(Self { vm, context })
     }
 
     pub fn set_metadata(&self, metadata: &MediaMetadata) -> Result<(), MediaError> {
@@ -383,19 +376,6 @@ impl MediaCenterInner {
 
     pub fn set_playback_state(&self, state: &PlaybackState) -> Result<(), MediaError> {
         self.with_attached_env(|env, _context| set_playback_state_with_context(env, state))
-    }
-
-    pub fn set_command_handler(
-        &self,
-        handler: Box<dyn MediaCommandHandler>,
-    ) -> Result<(), MediaError> {
-        let mut slot = self
-            .handler
-            .lock()
-            .map_err(|e| MediaError::Unknown(format!("command handler lock poisoned: {e}")))?;
-        *slot = Some(handler);
-        drop(slot);
-        Ok(())
     }
 
     pub fn request_audio_focus(&self) -> Result<(), MediaError> {
@@ -419,16 +399,12 @@ impl MediaCenterInner {
         });
     }
 
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform media center integration API is instance-based"
+    )]
     pub fn run_loop(&self, duration: Duration) {
         std::thread::sleep(duration);
-        if let Some(command) = self.poll_command() {
-            let guard = self.handler.lock().unwrap_or_else(|e| {
-                panic!("waterkit-audio: command handler lock poisoned in run_loop: {e}")
-            });
-            if let Some(handler) = guard.as_ref() {
-                handler.on_command(command);
-            }
-        }
     }
 
     pub fn poll_command(&self) -> Option<MediaCommand> {

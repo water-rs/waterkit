@@ -36,10 +36,14 @@ impl BackgroundRuntimeInner {
     }
 
     pub fn submit_app_refresh(&self, request: AppRefreshRequest) -> Result<(), BackgroundError> {
+        let AppRefreshRequest {
+            identifier,
+            earliest_begin_after,
+        } = request;
         let spec = JobSpec {
-            identifier: request.identifier(),
+            identifier: &identifier,
             kind: TaskKind::AppRefresh,
-            min_latency_ms: duration_ms(request.earliest_begin_after_value()),
+            min_latency_ms: duration_ms(earliest_begin_after),
             requires_network_connectivity: false,
             requires_external_power: false,
         };
@@ -47,12 +51,18 @@ impl BackgroundRuntimeInner {
     }
 
     pub fn submit_processing(&self, request: ProcessingRequest) -> Result<(), BackgroundError> {
+        let ProcessingRequest {
+            identifier,
+            earliest_begin_after,
+            requires_network_connectivity,
+            requires_external_power,
+        } = request;
         let spec = JobSpec {
-            identifier: request.identifier(),
+            identifier: &identifier,
             kind: TaskKind::Processing,
-            min_latency_ms: duration_ms(request.earliest_begin_after_value()),
-            requires_network_connectivity: request.requires_network_connectivity_value(),
-            requires_external_power: request.requires_external_power_value(),
+            min_latency_ms: duration_ms(earliest_begin_after),
+            requires_network_connectivity,
+            requires_external_power,
         };
         schedule_job(spec, &self.job_service_class)
     }
@@ -61,20 +71,26 @@ impl BackgroundRuntimeInner {
         &self,
         request: ContinuedProcessingRequest,
     ) -> Result<(), BackgroundError> {
-        if request.requires_gpu_value() {
+        let ContinuedProcessingRequest {
+            identifier,
+            strategy,
+            requires_gpu,
+            ..
+        } = request;
+        if requires_gpu {
             return Err(BackgroundError::ConfigurationMissing(
                 "android continued processing does not support GPU requirements".into(),
             ));
         }
 
-        if matches!(request.strategy_value(), ContinuedProcessingStrategy::Fail) {
+        if matches!(strategy, ContinuedProcessingStrategy::Fail) {
             return Err(BackgroundError::ConfigurationMissing(
                 "android continued processing only supports queue strategy".into(),
             ));
         }
 
         let spec = JobSpec {
-            identifier: request.identifier(),
+            identifier: &identifier,
             kind: TaskKind::ContinuedProcessing,
             min_latency_ms: 0,
             requires_network_connectivity: false,
@@ -83,6 +99,10 @@ impl BackgroundRuntimeInner {
         schedule_job(spec, &self.job_service_class)
     }
 
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform background runtime API is instance-based"
+    )]
     pub fn cancel(&self, identifier: &TaskIdentifier) -> Result<(), BackgroundError> {
         let refresh_job_id = job_id_for_identifier(identifier, TaskKind::AppRefresh);
         let processing_job_id = job_id_for_identifier(identifier, TaskKind::Processing);
@@ -96,6 +116,10 @@ impl BackgroundRuntimeInner {
         })
     }
 
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform background runtime API is instance-based"
+    )]
     pub fn cancel_all(&self) -> Result<(), BackgroundError> {
         with_env_context(|env, context| {
             let scheduler = get_job_scheduler(env, context)?;
@@ -107,7 +131,7 @@ impl BackgroundRuntimeInner {
 }
 
 #[must_use]
-pub fn capabilities() -> BackgroundCapabilities {
+pub const fn capabilities() -> BackgroundCapabilities {
     BackgroundCapabilities {
         supports_app_refresh: true,
         supports_processing: true,
@@ -137,10 +161,24 @@ struct JobSpec<'a> {
 }
 
 fn schedule_job(spec: JobSpec<'_>, job_service_class: &str) -> Result<(), BackgroundError> {
-    let job_id = job_id_for_identifier(spec.identifier, spec.kind);
+    let JobSpec {
+        identifier,
+        kind,
+        min_latency_ms,
+        requires_network_connectivity,
+        requires_external_power,
+    } = spec;
+    let job_id = job_id_for_identifier(identifier, kind);
 
     with_env_context(|env, context| {
         let scheduler = get_job_scheduler(env, context)?;
+        let spec = JobSpec {
+            identifier,
+            kind,
+            min_latency_ms,
+            requires_network_connectivity,
+            requires_external_power,
+        };
         let job_info = build_job_info(env, context, job_id, &spec, job_service_class)?;
 
         let result = env
@@ -159,7 +197,7 @@ fn schedule_job(spec: JobSpec<'_>, job_service_class: &str) -> Result<(), Backgr
                 code: result,
                 message: format!(
                     "JobScheduler.schedule returned {result} for `{}`",
-                    spec.identifier
+                    identifier
                 ),
             });
         }

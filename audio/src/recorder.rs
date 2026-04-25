@@ -235,6 +235,10 @@ impl AudioRecorder {
     /// # Errors
     ///
     /// Returns an error if device enumeration fails.
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "desktop recorder device enumeration is not const even though the mobile placeholder is"
+    )]
     pub fn list_devices() -> Result<Vec<InputDevice>, RecordError> {
         crate::sys::AudioRecorderInner::list_devices()
     }
@@ -273,6 +277,10 @@ impl AudioRecorder {
     /// Try to read audio data without waiting.
     ///
     /// Returns `None` if no data is available.
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "desktop recorder reads runtime state even though the mobile placeholder is const"
+    )]
     pub fn try_read(&mut self) -> Option<AudioBuffer> {
         self.inner.try_read()
     }
@@ -286,6 +294,10 @@ impl AudioRecorder {
     /// # Errors
     ///
     /// Returns an error if reading fails or recording is not active.
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "desktop recorder reads runtime state even though the mobile placeholder is const"
+    )]
     pub fn read_blocking(&mut self) -> Result<AudioBuffer, RecordError> {
         self.inner.read_blocking()
     }
@@ -297,6 +309,10 @@ impl AudioRecorder {
 
     /// Check if currently recording.
     #[must_use]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "desktop recorder reads runtime state even though the mobile placeholder is const"
+    )]
     pub fn is_recording(&self) -> bool {
         self.inner.is_recording()
     }

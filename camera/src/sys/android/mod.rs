@@ -192,7 +192,6 @@ impl AndroidBridge {
     }
 
     fn read_java_string(
-        &self,
         env: &mut jni::JNIEnv,
         object: JObject,
         context: &str,
@@ -426,9 +425,9 @@ impl AndroidBridge {
                     )));
                 }
 
-                let id = self.read_java_string(env, id_obj, "camera id")?;
-                let name = self.read_java_string(env, name_obj, "camera name")?;
-                let is_front_raw = self.read_java_string(env, is_front_obj, "camera facing")?;
+                let id = Self::read_java_string(env, id_obj, "camera id")?;
+                let name = Self::read_java_string(env, name_obj, "camera name")?;
+                let is_front_raw = Self::read_java_string(env, is_front_obj, "camera facing")?;
 
                 let is_front_facing = match is_front_raw.as_str() {
                     "true" | "True" | "TRUE" => true,
@@ -1068,6 +1067,10 @@ impl CameraInner {
     }
 
     /// Open a camera by ID.
+    #[allow(
+        clippy::unused_async,
+        reason = "the cross-platform camera open API is async even when the Android JNI setup completes synchronously"
+    )]
     pub async fn open(
         camera_id: &str,
         config: CameraConfig,
@@ -1340,7 +1343,11 @@ impl CameraInner {
         )
     }
 
-    pub async fn capture_photo(&mut self) -> Result<Photo, CameraError> {
+    #[allow(
+        clippy::unused_async,
+        reason = "the cross-platform camera capture API is async even when the Android JNI call completes synchronously"
+    )]
+    pub async fn capture_photo(&self) -> Result<Photo, CameraError> {
         let encoded = self.bridge.capture_photo_data()?;
         let (rgba, width, height) = decode_encoded_photo(&encoded)?;
 
@@ -1388,7 +1395,11 @@ impl CameraInner {
         })
     }
 
-    pub async fn capture_raw_photo(&mut self) -> Result<RawPhoto, CameraError> {
+    #[allow(
+        clippy::unused_async,
+        reason = "the cross-platform camera raw capture API is async even when the Android JNI call completes synchronously"
+    )]
+    pub async fn capture_raw_photo(&self) -> Result<RawPhoto, CameraError> {
         if !self.capabilities.supports_raw_photo {
             return Err(CameraError::ControlUnsupported("raw_photo".into()));
         }

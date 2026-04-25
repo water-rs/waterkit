@@ -57,28 +57,48 @@ pub struct ClipboardInner;
 
 impl ClipboardInner {
     /// Create a new clipboard handle.
-    pub fn new() -> Result<Self, ClipboardError> {
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard constructor can fail on other backends"
+    )]
+    pub const fn new() -> Result<Self, ClipboardError> {
         Ok(Self)
     }
 
     // ========== Query (sync) ==========
 
     /// Check if text is available.
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform clipboard backend API is instance-based"
+    )]
     pub fn has_text(&self) -> bool {
         ffi::clipboard_has_text()
     }
 
     /// Check if HTML is available.
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform clipboard backend API is instance-based"
+    )]
     pub fn has_html(&self) -> bool {
         ffi::clipboard_has_html()
     }
 
     /// Check if files are available.
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform clipboard backend API is instance-based"
+    )]
     pub fn has_files(&self) -> bool {
         ffi::clipboard_has_files()
     }
 
     /// Check if image is available.
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform clipboard backend API is instance-based"
+    )]
     pub fn has_image(&self) -> bool {
         ffi::clipboard_has_image()
     }
@@ -86,16 +106,30 @@ impl ClipboardInner {
     // ========== Read (sync, called from blocking::unblock) ==========
 
     /// Get text content.
+    #[allow(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard backend API is fallible and instance-based"
+    )]
     pub fn get_text(&self) -> Result<Option<String>, ClipboardError> {
         Ok(ffi::clipboard_get_text())
     }
 
     /// Get HTML content.
+    #[allow(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard backend API is fallible and instance-based"
+    )]
     pub fn get_html(&self) -> Result<Option<String>, ClipboardError> {
         Ok(ffi::clipboard_get_html())
     }
 
     /// Get file paths.
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform clipboard backend API is instance-based"
+    )]
     pub fn get_files(&self) -> Result<Vec<PathBuf>, ClipboardError> {
         if let Some(url) = ffi::clipboard_get_file_url()
             && let Some(path) = url.strip_prefix("file://")
@@ -111,6 +145,11 @@ impl ClipboardInner {
 
     /// Get image as RGBA.
     #[allow(clippy::cast_possible_truncation)] // Image dimensions from Swift are always valid u32
+    #[allow(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard backend API is fallible and instance-based"
+    )]
     pub fn get_image(&self) -> Result<Option<Image>, ClipboardError> {
         let image = ffi::clipboard_get_image();
         if !image.is_valid {
@@ -124,6 +163,11 @@ impl ClipboardInner {
     }
 
     /// Get binary data by MIME type.
+    #[allow(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard backend API is fallible and instance-based"
+    )]
     pub fn get_binary(&self, mime: &str) -> Result<Option<Vec<u8>>, ClipboardError> {
         let data = ffi::clipboard_get_binary(mime.to_string());
         if !data.is_valid {
@@ -135,18 +179,33 @@ impl ClipboardInner {
     // ========== Write (sync) ==========
 
     /// Set text content.
+    #[allow(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard backend API is fallible and instance-based"
+    )]
     pub fn set_text(&self, text: &str) -> Result<(), ClipboardError> {
         ffi::clipboard_set_text(text.to_string());
         Ok(())
     }
 
     /// Set HTML content.
+    #[allow(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard backend API is fallible and instance-based"
+    )]
     pub fn set_html(&self, html: &str, alt_text: Option<&str>) -> Result<(), ClipboardError> {
         ffi::clipboard_set_html(html.to_string(), alt_text.unwrap_or("").to_string());
         Ok(())
     }
 
     /// Set file paths.
+    #[allow(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard backend API is fallible and instance-based"
+    )]
     pub fn set_files(&self, files: &[PathBuf]) -> Result<(), ClipboardError> {
         if files.is_empty() {
             return Ok(());
@@ -165,6 +224,10 @@ impl ClipboardInner {
     }
 
     /// Set image from a file path.
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform clipboard backend API is instance-based"
+    )]
     pub fn set_image_from_path(&self, path: &Path) -> Result<(), ClipboardError> {
         let path_str = path.to_string_lossy().to_string();
         if !ffi::clipboard_set_image_from_path(path_str) {
@@ -176,6 +239,11 @@ impl ClipboardInner {
     }
 
     /// Set binary data with MIME type.
+    #[allow(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard backend API is fallible and instance-based"
+    )]
     pub fn set_binary(&self, data: &[u8], mime: &str) -> Result<(), ClipboardError> {
         ffi::clipboard_set_binary(data.to_vec(), mime.to_string());
         Ok(())
@@ -194,6 +262,11 @@ impl ClipboardInner {
     }
 
     /// Clear clipboard.
+    #[allow(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard backend API is fallible and instance-based"
+    )]
     pub fn clear(&self) -> Result<(), ClipboardError> {
         ffi::clipboard_clear();
         Ok(())
@@ -204,6 +277,10 @@ impl ClipboardInner {
 ///
 /// Uses polling with `UIPasteboard.changeCount`.
 /// Returns a receiver and a stop flag.
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "the cross-platform clipboard watch API is fallible on other backends"
+)]
 pub fn start_watch()
 -> Result<(async_channel::Receiver<ClipboardEvent>, Arc<AtomicBool>), ClipboardError> {
     let (sender, receiver) = async_channel::unbounded();

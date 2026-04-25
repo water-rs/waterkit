@@ -46,12 +46,13 @@ pub(crate) const PATH_LIST_SEPARATOR: char = '\0';
 
 #[cfg(any(target_os = "android", target_os = "ios", test))]
 pub(crate) fn decode_string_list(encoded: Option<String>) -> Option<Vec<String>> {
-    encoded.map(|encoded| {
+    let encoded = encoded?;
+    Some(
         encoded
             .split(PATH_LIST_SEPARATOR)
             .map(std::string::ToString::to_string)
-            .collect()
-    })
+            .collect(),
+    )
 }
 
 /// Types of dialogs.

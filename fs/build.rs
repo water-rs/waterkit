@@ -6,8 +6,4 @@ fn main() {
     if target_os == "ios" || target_os == "macos" {
         waterkit_build::build_apple_bridge(["src/sys/apple/mod.rs"]);
     }
-
-    if target_os == "android" {
-        waterkit_build::build_kotlin(&["src/sys/android/FsHelper.kt"]);
-    }
 }

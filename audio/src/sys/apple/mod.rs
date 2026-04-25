@@ -196,7 +196,7 @@ fn convert_player_result(result: ffi::PlayerResultFFI) -> Result<(), PlayerError
 }
 
 #[cfg(target_os = "ios")]
-fn player_state_from_ffi(state: ffi::PlayerStateFFI) -> NativeAudioPlayerState {
+fn player_state_from_ffi(state: &ffi::PlayerStateFFI) -> NativeAudioPlayerState {
     let status = match state.state {
         0 => PlaybackStatus::Stopped,
         1 => PlaybackStatus::Paused,
@@ -339,53 +339,83 @@ impl NativeAudioPlayerInner {
         Ok(Self)
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn load_file(&self, path: &str) -> Result<(), PlayerError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the zero-sized iOS player handle represents a process-wide native player"
+    )]
+    pub fn load_file(self, path: &str) -> Result<(), PlayerError> {
         convert_player_result(ffi::audio_player_load_file(path.to_owned()))
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn load_url(&self, url: &str) -> Result<(), PlayerError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the zero-sized iOS player handle represents a process-wide native player"
+    )]
+    pub fn load_url(self, url: &str) -> Result<(), PlayerError> {
         convert_player_result(ffi::audio_player_load_url(url.to_owned()))
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn play(&self) -> Result<(), PlayerError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the zero-sized iOS player handle represents a process-wide native player"
+    )]
+    pub fn play(self) -> Result<(), PlayerError> {
         convert_player_result(ffi::audio_player_resume())
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn pause(&self) -> Result<(), PlayerError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the zero-sized iOS player handle represents a process-wide native player"
+    )]
+    pub fn pause(self) -> Result<(), PlayerError> {
         convert_player_result(ffi::audio_player_pause())
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn stop(&self) -> Result<(), PlayerError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the zero-sized iOS player handle represents a process-wide native player"
+    )]
+    pub fn stop(self) -> Result<(), PlayerError> {
         convert_player_result(ffi::audio_player_stop())
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn seek(&self, position: Duration) -> Result<(), PlayerError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the zero-sized iOS player handle represents a process-wide native player"
+    )]
+    pub fn seek(self, position: Duration) -> Result<(), PlayerError> {
         convert_player_result(ffi::audio_player_seek(position.as_secs_f64()))
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn set_volume(&self, volume: f32) -> Result<(), PlayerError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the zero-sized iOS player handle represents a process-wide native player"
+    )]
+    pub fn set_volume(self, volume: f32) -> Result<(), PlayerError> {
         convert_player_result(ffi::audio_player_set_volume(volume))
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn set_playback_rate(&self, rate: f32) -> Result<(), PlayerError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the zero-sized iOS player handle represents a process-wide native player"
+    )]
+    pub fn set_playback_rate(self, rate: f32) -> Result<(), PlayerError> {
         convert_player_result(ffi::audio_player_set_playback_rate(rate))
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn set_preserve_pitch(&self, preserve_pitch: bool) -> Result<(), PlayerError> {
+    #[allow(
+        clippy::unused_self,
+        reason = "the zero-sized iOS player handle represents a process-wide native player"
+    )]
+    pub fn set_preserve_pitch(self, preserve_pitch: bool) -> Result<(), PlayerError> {
         convert_player_result(ffi::audio_player_set_preserve_pitch(preserve_pitch))
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn state(&self) -> NativeAudioPlayerState {
-        player_state_from_ffi(ffi::audio_player_get_state())
+    #[allow(
+        clippy::unused_self,
+        reason = "the zero-sized iOS player handle represents a process-wide native player"
+    )]
+    pub fn state(self) -> NativeAudioPlayerState {
+        player_state_from_ffi(&ffi::audio_player_get_state())
     }
 }

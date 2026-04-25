@@ -158,7 +158,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         #[cfg(feature = "fs")]
         {
             log::info!("Testing waterkit-fs...");
-            match waterkit_content::fs::WaterFs::cache_dir() {
+            match waterkit_content::fs::WaterFs::cache_dir_with_context(&mut env, activity) {
                 Some(path) => log::info!("FS cache_dir: {path:?}"),
                 None => log::error!("FS cache_dir: None"),
             }

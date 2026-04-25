@@ -2,9 +2,8 @@
 
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
-use std::collections::HashMap;
 use std::mem::ManuallyDrop;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use crate::{InterruptionLevel, Notification, NotificationError};
 
@@ -14,99 +13,13 @@ static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"
 /// Cached class loader for the embedded DEX.
 static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
 
-/// Action channel senders keyed by notification ID.
-static ACTION_WAITERS: OnceLock<Mutex<HashMap<String, async_channel::Sender<String>>>> =
-    OnceLock::new();
-
-/// Backlog for actions that arrive before a waiter is registered.
-static ACTION_BACKLOG: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-
-fn action_waiters() -> &'static Mutex<HashMap<String, async_channel::Sender<String>>> {
-    ACTION_WAITERS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn action_backlog() -> &'static Mutex<HashMap<String, String>> {
-    ACTION_BACKLOG.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn remove_action_waiter(notification_id: &str) {
-    action_waiters()
-        .lock()
-        .expect("waterkit-notification: action waiters mutex poisoned")
-        .remove(notification_id);
-    action_backlog()
-        .lock()
-        .expect("waterkit-notification: action backlog mutex poisoned")
-        .remove(notification_id);
-}
-
-fn register_action_waiter(notification_id: &str, sender: &async_channel::Sender<String>) {
-    let previous = action_waiters()
-        .lock()
-        .expect("waterkit-notification: action waiters mutex poisoned")
-        .insert(notification_id.to_owned(), sender.clone());
-    assert!(
-        previous.is_none(),
-        "waterkit-notification: duplicate action waiter for notification {notification_id}"
-    );
-
-    let pending = action_backlog()
-        .lock()
-        .expect("waterkit-notification: action backlog mutex poisoned")
-        .remove(notification_id);
-    if let Some(action_url) = pending {
-        let _ = sender.try_send(action_url);
-    }
-}
-
 fn dispatch_action(notification_id: String, action_url: String) {
-    let sender = action_waiters()
-        .lock()
-        .expect("waterkit-notification: action waiters mutex poisoned")
-        .remove(&notification_id);
-    if let Some(sender) = sender {
-        let _ = sender.try_send(action_url);
-        return;
-    }
-    action_backlog()
-        .lock()
-        .expect("waterkit-notification: action backlog mutex poisoned")
-        .insert(notification_id, action_url);
+    let _ = (notification_id, action_url);
 }
 
 /// Handle to a shown notification (Android).
 #[derive(Debug)]
-pub struct NotificationHandleInner {
-    notification_id: String,
-    action_rx: Option<async_channel::Receiver<String>>,
-    cleanup_on_drop: bool,
-}
-
-impl NotificationHandleInner {
-    /// Wait for user interaction and invoke callback with action URL.
-    pub fn wait_for_action<F: FnOnce(&str) + Send + 'static>(mut self, callback: F) {
-        let Some(action_rx) = self.action_rx.take() else {
-            return;
-        };
-        let notification_id = self.notification_id.clone();
-        self.cleanup_on_drop = false;
-
-        std::thread::spawn(move || {
-            if let Ok(action_url) = action_rx.recv_blocking() {
-                callback(&action_url);
-            }
-            remove_action_waiter(&notification_id);
-        });
-    }
-}
-
-impl Drop for NotificationHandleInner {
-    fn drop(&mut self) {
-        if self.cleanup_on_drop {
-            remove_action_waiter(&self.notification_id);
-        }
-    }
-}
+pub struct NotificationHandleInner;
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_waterkit_notification_NotificationHelper_onAction<'local>(
@@ -217,7 +130,7 @@ pub fn show_notification_with_context(
         .new_string("waterkit.notification.NotificationHelper")
         .map_err(|e| NotificationError::Platform(format!("new_string: {e}")))?;
 
-    let helper_class = env
+    let loaded_class = env
         .call_method(
             class_loader.as_obj(),
             "loadClass",
@@ -228,7 +141,7 @@ pub fn show_notification_with_context(
         .l()
         .map_err(|e| NotificationError::Platform(format!("loadClass result: {e}")))?;
 
-    let helper_jclass: jni::objects::JClass = helper_class.into();
+    let helper_jclass: jni::objects::JClass = loaded_class.into();
 
     let jtitle = env
         .new_string(&notification.title)
@@ -267,14 +180,6 @@ pub fn show_notification_with_context(
         .new_string(notification_id)
         .map_err(|e| NotificationError::Platform(format!("new_string: {e}")))?;
 
-    let action_rx = if notification.actions.is_empty() {
-        None
-    } else {
-        let (action_tx, action_rx) = async_channel::bounded(1);
-        register_action_waiter(notification_id, &action_tx);
-        Some(action_rx)
-    };
-
     env.call_static_method(
         helper_jclass,
         "showNotification",
@@ -290,11 +195,7 @@ pub fn show_notification_with_context(
     )
     .map_err(|e| NotificationError::Platform(format!("showNotification call failed: {e}")))?;
 
-    Ok(NotificationHandleInner {
-        notification_id: notification_id.to_owned(),
-        action_rx,
-        cleanup_on_drop: true,
-    })
+    Ok(NotificationHandleInner)
 }
 
 /// Show a notification by resolving Android context via `ndk_context`.

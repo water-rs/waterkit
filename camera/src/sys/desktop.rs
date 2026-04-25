@@ -211,7 +211,7 @@ impl CameraInner {
         })
     }
 
-    pub fn capabilities(&self) -> &CameraCapabilities {
+    pub const fn capabilities(&self) -> &CameraCapabilities {
         &self.capabilities
     }
 
@@ -241,11 +241,11 @@ impl CameraInner {
         Ok(())
     }
 
-    pub fn controls(&self) -> &CameraControls {
+    pub const fn controls(&self) -> &CameraControls {
         &self.controls
     }
 
-    pub fn resolution(&self) -> Resolution {
+    pub const fn resolution(&self) -> Resolution {
         self.resolution
     }
 

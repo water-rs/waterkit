@@ -159,7 +159,7 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, BiometricErr
         .new_string("waterkit.biometric.BiometricHelper")
         .map_err(|e| BiometricError::PlatformError(format!("new_string: {e}")))?;
 
-    let loaded = env
+    let loaded_class = env
         .call_method(
             loader.as_obj(),
             "loadClass",
@@ -170,7 +170,7 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, BiometricErr
         .l()
         .map_err(|e| BiometricError::PlatformError(format!("loadClass res: {e}")))?;
 
-    Ok(loaded.into())
+    Ok(loaded_class.into())
 }
 
 #[unsafe(no_mangle)]

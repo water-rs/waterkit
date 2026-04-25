@@ -55,7 +55,7 @@ mod fallback {
             Err(CameraError::Unsupported)
         }
 
-        pub fn capabilities(&self) -> &CameraCapabilities {
+        pub const fn capabilities(&self) -> &CameraCapabilities {
             static EMPTY: CameraCapabilities = CameraCapabilities {
                 resolutions: Vec::new(),
                 frame_rates: Vec::new(),
@@ -86,7 +86,7 @@ mod fallback {
             Err(CameraError::Unsupported)
         }
 
-        pub fn controls(&self) -> &CameraControls {
+        pub const fn controls(&self) -> &CameraControls {
             static EMPTY: CameraControls = CameraControls {
                 exposure: None,
                 focus: None,
@@ -99,7 +99,7 @@ mod fallback {
             &EMPTY
         }
 
-        pub fn resolution(&self) -> Resolution {
+        pub const fn resolution(&self) -> Resolution {
             Resolution::HD
         }
 

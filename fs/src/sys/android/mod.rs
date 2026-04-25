@@ -1,114 +1,87 @@
 //! Android filesystem implementation using JNI.
 
 use jni::JNIEnv;
-use jni::objects::{GlobalRef, JObject, JValue};
+use jni::objects::{JObject, JValue};
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
-/// Embedded DEX bytecode containing `FsHelper` class.
-static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
-
-/// Cached class loader for the embedded DEX.
-static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
-
-/// Initialize the DEX class loader. Must be called with a valid Context.
-pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> jni::errors::Result<()> {
-    if CLASS_LOADER.get().is_some() {
-        return Ok(());
+fn string_object_to_path(
+    env: &mut JNIEnv,
+    value: &JObject,
+) -> jni::errors::Result<Option<PathBuf>> {
+    if value.is_null() {
+        return Ok(None);
     }
-
-    // Write DEX to cache directory
-    let cache_dir = env
-        .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])?
-        .l()?;
-
-    let cache_path = env
-        .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])?
-        .l()?;
-
-    let cache_path_str: String = env.get_string((&cache_path).into())?.into();
-    let dex_path = format!("{cache_path_str}/waterkit_fs.dex");
-
-    // Write DEX bytes to file
-    if let Err(error) = std::fs::write(&dex_path, DEX_BYTES) {
-        tracing::error!("waterkit-fs: failed to write embedded DEX: {error}");
-    }
-
-    // Create DexClassLoader
-    let dex_path_jstring = env.new_string(&dex_path)?;
-    let parent_loader = env
-        .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])?
-        .l()?;
-
-    let dex_class_loader_class = env.find_class("dalvik/system/DexClassLoader")?;
-    let class_loader = env.new_object(
-        dex_class_loader_class,
-        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V",
-        &[
-            JValue::Object(&dex_path_jstring),
-            JValue::Object(&cache_path),
-            JValue::Object(&JObject::null()),
-            JValue::Object(&parent_loader),
-        ],
-    )?;
-
-    let global_ref = env.new_global_ref(class_loader)?;
-    let _ = CLASS_LOADER.set(global_ref);
-    Ok(())
+    let path: String = env.get_string(value.into())?.into();
+    Ok(Some(PathBuf::from(path)))
 }
 
-fn call_helper_method(
+fn file_object_to_path(env: &mut JNIEnv, file: &JObject) -> jni::errors::Result<Option<PathBuf>> {
+    if file.is_null() {
+        return Ok(None);
+    }
+    let absolute_path = env
+        .call_method(file, "getAbsolutePath", "()Ljava/lang/String;", &[])?
+        .l()?;
+    string_object_to_path(env, &absolute_path)
+}
+
+fn call_context_file_method(
     env: &mut JNIEnv,
     context: &JObject,
     method_name: &str,
-) -> jni::errors::Result<Option<String>> {
-    init_with_context(env, context)?;
-
-    let class_loader = CLASS_LOADER.get().unwrap();
-    let helper_class_name = env.new_string("waterkit.fs.FsHelper")?;
-
-    let helper_class = env
-        .call_method(
-            class_loader.as_obj(),
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
-            &[JValue::Object(&helper_class_name)],
-        )?
+    signature: &str,
+    args: &[JValue],
+) -> jni::errors::Result<Option<PathBuf>> {
+    let file = env
+        .call_method(context, method_name, signature, args)?
         .l()?;
-
-    let helper_jclass: jni::objects::JClass = helper_class.into();
-    let result = env.call_static_method(
-        helper_jclass,
-        method_name,
-        "(Landroid/content/Context;)Ljava/lang/String;",
-        &[JValue::Object(context)],
-    )?;
-
-    let obj = result.l()?;
-    if obj.is_null() {
-        Ok(None)
-    } else {
-        let s: String = env.get_string((&obj).into())?.into();
-        Ok(Some(s))
-    }
+    file_object_to_path(env, &file)
 }
 
+/// Gets the application's documents directory using an Android `Context`.
 pub fn documents_dir_with_context(env: &mut JNIEnv, context: &JObject) -> Option<PathBuf> {
-    call_helper_method(env, context, "getDocumentsDir")
-        .unwrap_or_else(|error| {
-            tracing::error!("waterkit-fs: failed to resolve Android documents dir: {error}");
-            None
-        })
-        .map(PathBuf::from)
+    let documents_value = env.get_static_field(
+        "android/os/Environment",
+        "DIRECTORY_DOCUMENTS",
+        "Ljava/lang/String;",
+    );
+    let documents_kind = match documents_value {
+        Ok(value) => match value.l() {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!(
+                    "waterkit-fs: failed to convert Android documents constant: {error}"
+                );
+                return None;
+            }
+        },
+        Err(error) => {
+            tracing::error!("waterkit-fs: failed to resolve Android documents constant: {error}");
+            return None;
+        }
+    };
+
+    call_context_file_method(
+        env,
+        context,
+        "getExternalFilesDir",
+        "(Ljava/lang/String;)Ljava/io/File;",
+        &[JValue::Object(&documents_kind)],
+    )
+    .unwrap_or_else(|error| {
+        tracing::error!("waterkit-fs: failed to resolve Android documents dir: {error}");
+        None
+    })
 }
 
+/// Gets the application's cache directory using an Android `Context`.
 pub fn cache_dir_with_context(env: &mut JNIEnv, context: &JObject) -> Option<PathBuf> {
-    call_helper_method(env, context, "getCacheDir")
-        .unwrap_or_else(|error| {
+    call_context_file_method(env, context, "getCacheDir", "()Ljava/io/File;", &[]).unwrap_or_else(
+        |error| {
             tracing::error!("waterkit-fs: failed to resolve Android cache dir: {error}");
             None
-        })
-        .map(PathBuf::from)
+        },
+    )
 }
 
 pub fn documents_dir() -> Option<PathBuf> {

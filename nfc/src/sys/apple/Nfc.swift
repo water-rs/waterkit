@@ -146,7 +146,7 @@ class NFCSession: NSObject, NFCNDEFReaderSessionDelegate {
     }
 
     private func reportSessionError(_ message: String) {
-        errorCallback?.call(message)
+        errorCallback?(message)
         errorCallback = nil
     }
 

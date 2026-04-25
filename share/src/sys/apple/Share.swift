@@ -5,7 +5,11 @@ import UIKit
 import AppKit
 #endif
 
-func share_show_sheet(items_json: RustStr, subject: Optional<RustString>, callback: __private__RustFnOnceCallbackBoolNoRet) {
+func share_show_sheet(
+    items_json: RustStr,
+    subject: Optional<RustString>,
+    callback: @escaping (Bool) -> Void
+) {
     let itemsStr = items_json.toString()
     let subjectStr = subject?.toString()
 
@@ -42,10 +46,10 @@ func share_show_sheet(items_json: RustStr, subject: Optional<RustString>, callba
             vc.setValue(subject, forKey: "subject")
         }
         vc.completionWithItemsHandler = { _, completed, _, _ in
-            callback.call(completed)
+            callback(completed)
         }
         guard let topVC = getTopViewController() else {
-            callback.call(false)
+            callback(false)
             return
         }
         topVC.present(vc, animated: true)
@@ -56,7 +60,7 @@ func share_show_sheet(items_json: RustStr, subject: Optional<RustString>, callba
            let contentView = window.contentView {
             picker.show(relativeTo: .zero, of: contentView, preferredEdge: .minY)
         }
-        callback.call(true)
+        callback(true)
         #endif
     }
 }

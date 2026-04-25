@@ -1,10 +1,5 @@
 //! iOS clipboard implementation using swift-bridge.
 
-#![allow(clippy::unnecessary_wraps)] // API consistency with other platforms
-#![allow(clippy::needless_pass_by_ref_mut)] // API consistency with other platforms
-#![allow(clippy::unused_self)] // Methods use global UIPasteboard, &self is for API consistency
-#![allow(clippy::missing_const_for_fn)] // FFI calls cannot be const
-
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
 use std::path::{Path, PathBuf};

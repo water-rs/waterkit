@@ -1,8 +1,6 @@
 //! Android JNI generic test harness.
 
 #![cfg(target_os = "android")]
-#![allow(non_snake_case)]
-#![allow(clippy::cargo_common_metadata)]
 
 use jni::JNIEnv;
 use jni::objects::JObject;

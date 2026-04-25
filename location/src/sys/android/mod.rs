@@ -1,8 +1,5 @@
 //! Android location implementation using JNI.
 
-#![allow(dead_code)] // Functions and statics are exported for Android app usage
-#![allow(clippy::similar_names)] // JNI variable naming patterns
-
 use crate::{Location, LocationError, Timestamp};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};

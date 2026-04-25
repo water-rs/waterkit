@@ -1,10 +1,5 @@
 //! Android sensor implementation using JNI.
 
-#![allow(dead_code)] // Functions and statics are exported for Android app usage
-#![allow(clippy::cast_possible_truncation)] // Intentional truncation for timestamps
-#![allow(clippy::cast_sign_loss)] // Array lengths from JNI
-#![allow(clippy::option_if_let_else)] // Pattern used for readability
-
 use crate::{ScalarData, SensorData, SensorError, SensorStream};
 use futures::stream;
 use jni::JNIEnv;

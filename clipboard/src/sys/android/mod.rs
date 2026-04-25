@@ -1,10 +1,5 @@
 //! Android clipboard implementation using JNI and `ndk_context`.
 
-#![allow(clippy::unnecessary_wraps)] // API consistency with other platforms
-#![allow(clippy::needless_pass_by_ref_mut)] // API consistency with other platforms
-#![allow(clippy::cast_sign_loss)] // JNI integer conversions
-#![allow(clippy::option_if_let_else)] // Pattern used for readability
-
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
 use jni::JNIEnv;

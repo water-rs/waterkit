@@ -8,41 +8,55 @@ func nfc_is_available_bridge() -> Bool {
     return NFCNDEFReaderSession.readingAvailable
 }
 
-func nfc_start_session(message: RustStr, cb_id: UInt64) {
+func nfc_start_session(
+    message: RustStr,
+    tag_ctx: UInt64,
+    error_callback: @escaping (String) -> Void
+) {
     let msg = message.toString()
     DispatchQueue.main.async {
-        let session = NFCSession(callbackId: cb_id, message: msg)
-        activeSessions[cb_id] = session
+        let session = NFCSession(tagCtx: tag_ctx, message: msg, errorCallback: error_callback)
+        activeSessions[tag_ctx] = session
         session.start()
     }
 }
 
-func nfc_stop_session(cb_id: UInt64) {
+func nfc_stop_session(tag_ctx: UInt64) {
     DispatchQueue.main.async {
-        if let session = activeSessions.removeValue(forKey: cb_id) {
+        if let session = activeSessions.removeValue(forKey: tag_ctx) {
             session.stop()
         }
     }
 }
 
-func nfc_write_message(cb_id: UInt64, records_json: RustStr, write_cb_id: UInt64) {
+func nfc_write_message(
+    tag_ctx: UInt64,
+    records_json: RustStr,
+    callback: @escaping (String) -> Void
+) {
     let json = records_json.toString()
     DispatchQueue.main.async {
-        guard let session = activeSessions[cb_id] else {
-            on_nfc_write_result(write_cb_id, "No active session")
+        guard let session = activeSessions[tag_ctx] else {
+            callback("No active session")
             return
         }
-        session.pendingWrite = (write_cb_id, json)
+        session.pendingWrite = (callback, json)
     }
 }
 
 class NFCSession: NSObject, NFCNDEFReaderSessionDelegate {
-    let callbackId: UInt64
+    let tagCtx: UInt64
     var readerSession: NFCNDEFReaderSession?
-    var pendingWrite: (UInt64, String)? = nil
+    var errorCallback: ((String) -> Void)?
+    var pendingWrite: (((String) -> Void), String)? = nil
 
-    init(callbackId: UInt64, message: String) {
-        self.callbackId = callbackId
+    init(
+        tagCtx: UInt64,
+        message: String,
+        errorCallback: @escaping (String) -> Void
+    ) {
+        self.tagCtx = tagCtx
+        self.errorCallback = errorCallback
         super.init()
         self.readerSession = NFCNDEFReaderSession(delegate: self, queue: .main, invalidateAfterFirstRead: false)
         self.readerSession?.alertMessage = message
@@ -67,7 +81,7 @@ class NFCSession: NSObject, NFCNDEFReaderSessionDelegate {
                 if !recordsJson.isEmpty { recordsJson += ";" }
                 recordsJson += "\(tnf):\(typeHex):\(payloadHex)"
             }
-            on_nfc_tag_discovered(callbackId, "", "4", recordsJson)
+            on_nfc_tag_discovered_raw(tagCtx, "", "4", recordsJson)
         }
     }
 
@@ -76,35 +90,35 @@ class NFCSession: NSObject, NFCNDEFReaderSessionDelegate {
 
         session.connect(to: tag) { error in
             if let error = error {
-                on_nfc_session_error(self.callbackId, error.localizedDescription)
+                self.reportSessionError(error.localizedDescription)
                 return
             }
 
             tag.queryNDEFStatus { status, capacity, error in
                 if let error = error {
-                    on_nfc_session_error(self.callbackId, error.localizedDescription)
+                    self.reportSessionError(error.localizedDescription)
                     return
                 }
 
-                if let (writeCbId, recordsJson) = self.pendingWrite {
+                if let (writeCallback, recordsJson) = self.pendingWrite {
                     self.pendingWrite = nil
                     if status == .readWrite {
                         let records = self.parseRecords(recordsJson)
                         let ndefMessage = NFCNDEFMessage(records: records)
                         tag.writeNDEF(ndefMessage) { error in
                             if let error = error {
-                                on_nfc_write_result(writeCbId, error.localizedDescription)
+                                writeCallback(error.localizedDescription)
                             } else {
-                                on_nfc_write_result(writeCbId, nil)
+                                writeCallback("")
                             }
                         }
                     } else {
-                        on_nfc_write_result(writeCbId, "Tag is read-only")
+                        writeCallback("Tag is read-only")
                     }
                 } else {
                     tag.readNDEF { message, error in
                         if let error = error {
-                            on_nfc_session_error(self.callbackId, error.localizedDescription)
+                            self.reportSessionError(error.localizedDescription)
                             return
                         }
                         var recordsJson = ""
@@ -117,7 +131,7 @@ class NFCSession: NSObject, NFCNDEFReaderSessionDelegate {
                                 recordsJson += "\(tnf):\(typeHex):\(payloadHex)"
                             }
                         }
-                        on_nfc_tag_discovered(self.callbackId, "", "4", recordsJson.isEmpty ? nil : recordsJson)
+                        on_nfc_tag_discovered_raw(self.tagCtx, "", "4", recordsJson.isEmpty ? nil : recordsJson)
                     }
                 }
             }
@@ -127,8 +141,13 @@ class NFCSession: NSObject, NFCNDEFReaderSessionDelegate {
     func readerSessionDidBecomeActive(_ session: NFCNDEFReaderSession) {}
 
     func readerSession(_ session: NFCNDEFReaderSession, didInvalidateWithError error: Error) {
-        on_nfc_session_error(callbackId, error.localizedDescription)
-        activeSessions.removeValue(forKey: callbackId)
+        reportSessionError(error.localizedDescription)
+        activeSessions.removeValue(forKey: tagCtx)
+    }
+
+    private func reportSessionError(_ message: String) {
+        errorCallback?.call(message)
+        errorCallback = nil
     }
 
     private func parseRecords(_ json: String) -> [NFCNDEFPayload] {
@@ -163,14 +182,22 @@ func nfc_is_available_bridge() -> Bool {
     return false
 }
 
-func nfc_start_session(message: RustStr, cb_id: UInt64) {
-    on_nfc_session_error(cb_id, "NFC not available on macOS")
+func nfc_start_session(
+    message: RustStr,
+    tag_ctx: UInt64,
+    error_callback: @escaping (String) -> Void
+) {
+    error_callback("NFC not available on macOS")
 }
 
-func nfc_stop_session(cb_id: UInt64) {}
+func nfc_stop_session(tag_ctx: UInt64) {}
 
-func nfc_write_message(cb_id: UInt64, records_json: RustStr, write_cb_id: UInt64) {
-    on_nfc_write_result(write_cb_id, "NFC not available on macOS")
+func nfc_write_message(
+    tag_ctx: UInt64,
+    records_json: RustStr,
+    callback: @escaping (String) -> Void
+) {
+    callback("NFC not available on macOS")
 }
 
 #endif

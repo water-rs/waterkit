@@ -1,10 +1,5 @@
 //! Android haptic implementation using JNI.
 
-#![allow(dead_code)] // Functions and statics are exported for Android app usage
-#![allow(clippy::cast_possible_truncation)] // Intentional truncation for JNI
-#![allow(clippy::similar_names)] // JNI variable naming patterns
-#![allow(clippy::cast_possible_wrap)] // JNI array size conversions
-
 use crate::{HapticError, HapticPattern, HapticStep, Intensity};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};

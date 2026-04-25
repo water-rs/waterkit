@@ -18,7 +18,6 @@ thiserror = { workspace = true }
 futures = { workspace = true }
 blocking = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 waterkit-fs = { workspace = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]

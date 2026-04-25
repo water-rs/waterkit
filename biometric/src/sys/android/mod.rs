@@ -1,9 +1,5 @@
 //! Android biometric authentication implementation using JNI.
 
-#![allow(dead_code)] // Functions and statics are exported for Android app usage
-#![allow(clippy::similar_names)] // JNI variable naming patterns
-#![allow(clippy::redundant_closure_for_method_calls)] // Clippy false positive
-
 use crate::{BiometricError, BiometricType};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};

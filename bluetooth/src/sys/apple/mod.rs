@@ -40,7 +40,7 @@ mod ffi {
             device_id: &str,
             service_uuid: &str,
             char_uuid: &str,
-            data: &[u8],
+            data: Vec<u8>,
             callback: Box<dyn FnOnce(String) -> ()>,
         );
         fn bluetooth_subscribe(
@@ -60,7 +60,7 @@ mod ffi {
             connect_ctx: u64,
         );
         fn bluetooth_classic_spp_read(stream_ctx: u64, max_bytes: u64, read_ctx: u64);
-        fn bluetooth_classic_spp_write(stream_ctx: u64, data: &[u8], write_ctx: u64);
+        fn bluetooth_classic_spp_write(stream_ctx: u64, data: Vec<u8>, write_ctx: u64);
         fn bluetooth_classic_spp_close(stream_ctx: u64, close_ctx: u64);
     }
 
@@ -357,7 +357,7 @@ impl BleConnectionInner {
             &self.device_id,
             &service.0,
             &characteristic.0,
-            data,
+            data.to_vec(),
             Box::new(move |error: String| {
                 if error.is_empty() {
                     let _ = tx.send(Ok(()));
@@ -591,7 +591,7 @@ impl SppStreamInner {
         {
             let (tx, rx) = oneshot::channel::<Result<u64, BluetoothError>>();
             let write_ctx = Box::into_raw(Box::new(tx)) as usize as u64;
-            ffi::bluetooth_classic_spp_write(self.stream_ctx, data, write_ctx);
+            ffi::bluetooth_classic_spp_write(self.stream_ctx, data.to_vec(), write_ctx);
             let written = rx.await.map_err(|_| {
                 BluetoothError::ConnectionFailed("classic SPP write callback dropped".into())
             })??;

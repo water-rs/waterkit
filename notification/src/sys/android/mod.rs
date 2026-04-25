@@ -1,9 +1,5 @@
 //! Android notification implementation using JNI.
 
-#![allow(dead_code)] // Functions and statics are used by Android app via JNI
-#![allow(clippy::similar_names)] // JNI variable naming patterns
-#![allow(clippy::unused_self)] // API consistency
-
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
 use std::collections::HashMap;

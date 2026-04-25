@@ -1,8 +1,5 @@
 //! Android filesystem implementation using JNI.
 
-#![allow(dead_code)] // Functions and statics are exported for Android app usage
-#![allow(clippy::similar_names)] // JNI variable naming patterns
-
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::path::PathBuf;

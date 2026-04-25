@@ -16,7 +16,6 @@ workspace = true
 [dependencies]
 futures = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 waterkit-fs = { workspace = true }
 roxmltree = "0.21"
 

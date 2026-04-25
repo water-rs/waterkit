@@ -2,13 +2,6 @@
 //!
 //! This backend uses pure VA-API via `cros-codecs`.
 
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::missing_const_for_fn,
-    clippy::uninlined_format_args
-)]
-
 use crate::CodecError;
 use cros_codecs::decoder::stateless::h264::H264;
 use cros_codecs::decoder::stateless::h265::H265;

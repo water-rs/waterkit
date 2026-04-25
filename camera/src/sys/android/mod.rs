@@ -1,9 +1,5 @@
 //! Android camera implementation using Camera2 + `MediaRecorder` via JNI/Kotlin bridge.
 
-#![allow(clippy::needless_pass_by_ref_mut)] // API consistency across platforms
-#![allow(clippy::unused_async)] // API consistency across platforms
-#![allow(clippy::unused_self)]
-
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
     ExposureMode, FlashMode, FocusMode, Frame, Photo, PixelFormat, RawPhoto, RawPhotoFormat,

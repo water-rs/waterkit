@@ -1,7 +1,5 @@
 //! Android media control implementation using JNI and `MediaSession`.
 
-#![allow(dead_code)] // Functions and statics are exported for Android app usage
-
 use crate::{
     MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus,
 };

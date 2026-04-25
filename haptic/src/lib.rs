@@ -2,8 +2,6 @@
 //!
 //! This crate provides a unified API for triggering haptic feedback (vibration)
 //! across iOS, macOS, Android, Windows, and Linux platforms.
-
-#![allow(clippy::missing_const_for_fn)] // Platform implementations vary
 //!
 //! # Example
 //!
@@ -256,7 +254,7 @@ impl Haptic {
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
     pub async fn impact(intensity: Intensity) -> Result<(), HapticError> {
-        sys::impact(intensity)
+        std::future::ready(sys::impact(intensity)).await
     }
 
     /// Trigger a selection feedback (light tap for UI selection changes).
@@ -265,7 +263,7 @@ impl Haptic {
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
     pub async fn selection() -> Result<(), HapticError> {
-        sys::selection()
+        std::future::ready(sys::selection()).await
     }
 
     /// Trigger a success notification feedback.
@@ -274,7 +272,7 @@ impl Haptic {
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
     pub async fn notification_success() -> Result<(), HapticError> {
-        sys::notification_success()
+        std::future::ready(sys::notification_success()).await
     }
 
     /// Trigger a warning notification feedback.
@@ -283,7 +281,7 @@ impl Haptic {
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
     pub async fn notification_warning() -> Result<(), HapticError> {
-        sys::notification_warning()
+        std::future::ready(sys::notification_warning()).await
     }
 
     /// Trigger an error notification feedback.
@@ -292,7 +290,7 @@ impl Haptic {
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
     pub async fn notification_error() -> Result<(), HapticError> {
-        sys::notification_error()
+        std::future::ready(sys::notification_error()).await
     }
 
     /// Play a custom haptic pattern.
@@ -304,6 +302,6 @@ impl Haptic {
         if pattern.steps.is_empty() {
             return Err(HapticError::InvalidPattern("pattern is empty".into()));
         }
-        sys::play_pattern(pattern)
+        std::future::ready(sys::play_pattern(pattern)).await
     }
 }

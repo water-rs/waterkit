@@ -1,18 +1,5 @@
 //! Linux media control implementation using MPRIS D-Bus.
 
-// MPRIS interface methods are required by zbus but may not be called from Rust
-#![allow(dead_code)]
-// These lints apply to D-Bus interface methods and cross-platform API methods
-#![allow(
-    clippy::unused_self,
-    clippy::unnecessary_wraps,
-    clippy::missing_const_for_fn,
-    clippy::used_underscore_binding, // D-Bus interface parameters may be unused
-    clippy::cast_possible_truncation, // MPRIS uses i64 for microseconds
-    clippy::cast_sign_loss, // MPRIS position/duration are always positive
-    clippy::significant_drop_tightening // Complex lock patterns in D-Bus handlers
-)]
-
 use crate::{
     MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus,
     QueueNavigationControls,

@@ -33,7 +33,7 @@ const APPLE_MEDIA_COMMAND_AUDIO_FOCUS_LOST_TRANSIENT: i32 = 12;
 const APPLE_MEDIA_COMMAND_AUDIO_FOCUS_LOST_DUCK: i32 = 13;
 const APPLE_MEDIA_COMMAND_AUDIO_BECOMING_NOISY: i32 = 14;
 
-fn ffi_result_code(result: Result<(), MediaError>) -> i32 {
+const fn ffi_result_code(result: &Result<(), MediaError>) -> i32 {
     match result {
         Ok(()) => APPLE_MEDIA_RESULT_SUCCESS,
         Err(MediaError::InitializationFailed(_)) => APPLE_MEDIA_RESULT_INITIALIZATION_FAILED,
@@ -112,7 +112,7 @@ fn playback_state_from_raw(
     }
 }
 
-fn media_command_to_ffi(command: Option<MediaCommand>) -> WaterKitAppleMediaCommandFFI {
+const fn media_command_to_ffi(command: Option<&MediaCommand>) -> WaterKitAppleMediaCommandFFI {
     match command {
         None => WaterKitAppleMediaCommandFFI {
             kind: APPLE_MEDIA_COMMAND_NONE,
@@ -179,7 +179,7 @@ fn media_command_to_ffi(command: Option<MediaCommand>) -> WaterKitAppleMediaComm
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn waterkit_audio_apple_media_session_init() -> i32 {
-    ffi_result_code(MediaSessionInner::new().map(|_| ()))
+    ffi_result_code(&MediaSessionInner::new().map(|_| ()))
 }
 
 #[unsafe(no_mangle)]
@@ -192,7 +192,7 @@ pub unsafe extern "C" fn waterkit_audio_apple_media_session_set_metadata(
 ) -> i32 {
     let session = MediaSessionInner;
     let metadata = media_metadata_from_raw(title, artist, album, artwork_url, duration_secs);
-    ffi_result_code(session.set_metadata(&metadata))
+    ffi_result_code(&session.set_metadata(&metadata))
 }
 
 #[unsafe(no_mangle)]
@@ -206,29 +206,30 @@ pub unsafe extern "C" fn waterkit_audio_apple_media_session_set_playback_state(
     let session = MediaSessionInner;
     let state =
         playback_state_from_raw(status, position_secs, rate, next_enabled, previous_enabled);
-    ffi_result_code(session.set_playback_state(&state))
+    ffi_result_code(&session.set_playback_state(&state))
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn waterkit_audio_apple_media_session_request_audio_focus() -> i32 {
     let session = MediaSessionInner;
-    ffi_result_code(session.request_audio_focus())
+    ffi_result_code(&session.request_audio_focus())
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn waterkit_audio_apple_media_session_abandon_audio_focus() -> i32 {
     let session = MediaSessionInner;
-    ffi_result_code(session.abandon_audio_focus())
+    ffi_result_code(&session.abandon_audio_focus())
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn waterkit_audio_apple_media_session_clear() -> i32 {
     let session = MediaSessionInner;
-    ffi_result_code(session.clear())
+    ffi_result_code(&session.clear())
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn waterkit_audio_apple_media_session_poll_command()
 -> WaterKitAppleMediaCommandFFI {
-    media_command_to_ffi(poll_next_command())
+    let command = poll_next_command();
+    media_command_to_ffi(command.as_ref())
 }

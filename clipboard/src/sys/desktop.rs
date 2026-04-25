@@ -2,9 +2,6 @@
 //!
 //! Supports Windows, Linux, and macOS.
 
-#![allow(clippy::unnecessary_wraps)] // API consistency with other platforms
-#![allow(clippy::needless_pass_by_ref_mut)] // API consistency with other platforms
-
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
 use clipboard_rs::common::RustImage;
@@ -74,23 +71,35 @@ impl ClipboardInner {
 
     /// Get text content.
     pub fn get_text(&self) -> Result<Option<String>, ClipboardError> {
+        if !self.has_text() {
+            return Ok(None);
+        }
         let ctx = self.lock_ctx();
-        Ok(ctx.get_text().ok())
+        ctx.get_text()
+            .map(Some)
+            .map_err(|e| ClipboardError::Platform(e.to_string()))
     }
 
     /// Get HTML content.
     pub fn get_html(&self) -> Result<Option<String>, ClipboardError> {
+        if !self.has_html() {
+            return Ok(None);
+        }
         let ctx = self.lock_ctx();
-        Ok(ctx.get_html().ok())
+        ctx.get_html()
+            .map(Some)
+            .map_err(|e| ClipboardError::Platform(e.to_string()))
     }
 
     /// Get file paths.
     pub fn get_files(&self) -> Result<Vec<PathBuf>, ClipboardError> {
+        if !self.has_files() {
+            return Ok(Vec::new());
+        }
         let ctx = self.lock_ctx();
-        Ok(ctx
-            .get_files()
+        ctx.get_files()
             .map(|files| files.into_iter().map(PathBuf::from).collect())
-            .unwrap_or_default())
+            .map_err(|e| ClipboardError::Platform(e.to_string()))
     }
 
     /// Get image as RGBA.
@@ -111,7 +120,11 @@ impl ClipboardInner {
     /// Get binary data by MIME type.
     pub fn get_binary(&self, mime: &str) -> Result<Option<Vec<u8>>, ClipboardError> {
         let ctx = self.lock_ctx();
-        Ok(ctx.get_buffer(mime).ok())
+        match ctx.get_buffer(mime) {
+            Ok(buffer) => Ok(Some(buffer)),
+            Err(error) if error.to_string().contains("not found") => Ok(None),
+            Err(error) => Err(ClipboardError::Platform(error.to_string())),
+        }
     }
 
     // ========== Write (sync) ==========

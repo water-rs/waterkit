@@ -7,13 +7,6 @@
 //! 3. Pass the result to `onPermissionResult()`
 //! 4. Call `startCapture()` to begin screen capture
 
-#![allow(clippy::cast_sign_loss)] // JNI array lengths
-#![allow(clippy::cast_possible_truncation)] // Timestamps
-#![allow(clippy::similar_names)] // JNI variable naming patterns
-#![allow(clippy::option_if_let_else)] // Pattern used for readability
-#![allow(clippy::collapsible_if)] // Readability
-#![allow(clippy::needless_pass_by_value)] // API design
-
 use crate::frame::ScreenFrame;
 use crate::screenshot::{ImageFormat, Screenshot};
 use crate::stream::StreamConfig;

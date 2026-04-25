@@ -1,6 +1,8 @@
 //! Apple platform (iOS/macOS) media control implementation using swift-bridge.
 
-use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus, PlayerError};
+#[cfg(target_os = "ios")]
+use crate::PlayerError;
+use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
 use std::{sync::RwLock, time::Duration};
 
 mod host_bridge;
@@ -177,6 +179,7 @@ fn convert_result(result: ffi::MediaResultFFI) -> Result<(), MediaError> {
     }
 }
 
+#[cfg(target_os = "ios")]
 fn convert_player_result(result: ffi::PlayerResultFFI) -> Result<(), PlayerError> {
     match result {
         ffi::PlayerResultFFI::Success => Ok(()),
@@ -192,6 +195,7 @@ fn convert_player_result(result: ffi::PlayerResultFFI) -> Result<(), PlayerError
     }
 }
 
+#[cfg(target_os = "ios")]
 fn player_state_from_ffi(state: ffi::PlayerStateFFI) -> NativeAudioPlayerState {
     let status = match state.state {
         0 => PlaybackStatus::Stopped,
@@ -317,6 +321,7 @@ impl MediaCenterInner {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(target_os = "ios")]
 pub struct NativeAudioPlayerState {
     pub status: PlaybackStatus,
     pub position: Option<Duration>,
@@ -324,8 +329,10 @@ pub struct NativeAudioPlayerState {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg(target_os = "ios")]
 pub struct NativeAudioPlayerInner;
 
+#[cfg(target_os = "ios")]
 impl NativeAudioPlayerInner {
     pub fn new() -> Result<Self, PlayerError> {
         convert_player_result(ffi::audio_player_init())?;

@@ -233,7 +233,7 @@ impl LoadedLivePhoto {
         not(any(target_os = "android", target_os = "ios", test)),
         allow(dead_code)
     )]
-    pub(crate) fn new(image: PathBuf, video: PathBuf) -> Self {
+    pub(crate) const fn new(image: PathBuf, video: PathBuf) -> Self {
         Self { image, video }
     }
 
@@ -289,7 +289,7 @@ impl LoadedMedia {
 
     /// Returns the paired live photo payload when the asset is a live photo.
     #[must_use]
-    pub fn as_live_photo(&self) -> Option<&LoadedLivePhoto> {
+    pub const fn as_live_photo(&self) -> Option<&LoadedLivePhoto> {
         match self {
             Self::LivePhoto(live_photo) => Some(live_photo),
             Self::Image(_) | Self::Video(_) => None,
@@ -399,12 +399,12 @@ pub(crate) fn finalize_selected_file(
     dialog: &FileDialog,
     path: PathBuf,
 ) -> Result<PathBuf, DialogError> {
-    dialog
-        .import_to_cache_subdir
-        .as_deref()
-        .map_or(Ok(path.clone()), |cache_subdir| {
+    match dialog.import_to_cache_subdir.as_deref() {
+        Some(cache_subdir) => {
             WaterFs::import_file_to_cache(&path, cache_subdir).map_err(DialogError::from)
-        })
+        }
+        None => Ok(path),
+    }
 }
 
 pub(crate) fn finalize_selected_files(

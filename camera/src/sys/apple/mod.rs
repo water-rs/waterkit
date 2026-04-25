@@ -2,17 +2,6 @@
 //!
 //! Uses Metal texture interop for zero-copy frame rendering with wgpu.
 
-// These functions need &mut self for API consistency across platforms
-#![allow(clippy::needless_pass_by_ref_mut)]
-// Async is required for API consistency across platforms
-#![allow(clippy::unused_async)]
-// Result is required for API consistency (other platforms may fail)
-#![allow(clippy::unnecessary_wraps)]
-// Self is needed for API consistency across platforms
-#![allow(clippy::unused_self)]
-// Const fn not needed for these accessors that may change
-#![allow(clippy::missing_const_for_fn)]
-
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
     ExposureControl, ExposureMode, FlashMode, FocusControl, FocusMode, Frame, Photo, PixelFormat,
@@ -373,10 +362,14 @@ impl CameraInner {
     /// List available camera devices.
     pub fn list() -> Result<Vec<CameraInfo>, CameraError> {
         let count = ffi::camera_device_count();
-        #[allow(clippy::cast_sign_loss)]
-        let mut devices = Vec::with_capacity(count as usize);
+        let count = usize::try_from(count).map_err(|_| {
+            CameraError::EnumerationFailed("Apple camera device count was negative".into())
+        })?;
+        let mut devices = Vec::with_capacity(count);
 
         for i in 0..count {
+            let i =
+                i32::try_from(i).expect("Apple camera device index originated from an i32 count");
             let id = ffi::camera_device_id(i);
             let name = ffi::camera_device_name(i);
             let description = ffi::camera_device_description(i);
@@ -404,6 +397,7 @@ impl CameraInner {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
     ) -> Result<Self, CameraError> {
+        std::future::ready(()).await;
         convert_result(ffi::camera_open(camera_id.to_string()), camera_id)?;
 
         // Set resolution
@@ -543,7 +537,7 @@ impl CameraInner {
         }
     }
 
-    pub fn capabilities(&self) -> &CameraCapabilities {
+    pub const fn capabilities(&self) -> &CameraCapabilities {
         &self.capabilities
     }
 
@@ -769,11 +763,11 @@ impl CameraInner {
         Ok(())
     }
 
-    pub fn controls(&self) -> &CameraControls {
+    pub const fn controls(&self) -> &CameraControls {
         &self.controls
     }
 
-    pub fn resolution(&self) -> Resolution {
+    pub const fn resolution(&self) -> Resolution {
         self.resolution
     }
 
@@ -822,7 +816,8 @@ impl CameraInner {
         .filter_map(|opt| async move { opt })
     }
 
-    pub async fn capture_photo(&mut self) -> Result<Photo, CameraError> {
+    pub async fn capture_photo(&self) -> Result<Photo, CameraError> {
+        std::future::ready(()).await;
         convert_result(ffi::camera_take_photo(), "take_photo")?;
 
         let len = ffi::camera_get_photo_len();
@@ -891,7 +886,8 @@ impl CameraInner {
         })
     }
 
-    pub async fn capture_raw_photo(&mut self) -> Result<RawPhoto, CameraError> {
+    pub async fn capture_raw_photo(&self) -> Result<RawPhoto, CameraError> {
+        std::future::ready(()).await;
         if !self.capabilities.supports_raw_photo {
             return Err(CameraError::ControlUnsupported("raw_photo".into()));
         }

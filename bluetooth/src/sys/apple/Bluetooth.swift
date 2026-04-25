@@ -9,20 +9,20 @@ private var centralDelegate: CentralManagerDelegate?
 private var peripherals: [String: CBPeripheral] = [:]
 private var peripheralDelegates: [String: PeripheralDelegate] = [:]
 
-func bluetooth_adapter_state(cb_id: UInt64) {
+func bluetooth_adapter_state(callback: @escaping (String) -> Void) {
     if centralDelegate == nil {
         centralDelegate = CentralManagerDelegate()
         centralManager = CBCentralManager(delegate: centralDelegate!, queue: .main)
     }
-    centralDelegate!.pendingStateCallbacks.append(cb_id)
+    centralDelegate!.pendingStateCallbacks.append(callback)
     if centralManager!.state != .unknown {
         centralDelegate!.flushStateCallbacks(centralManager!.state)
     }
 }
 
-func bluetooth_start_scan(cb_id: UInt64, service_uuids: RustString) {
+func bluetooth_start_scan(scan_ctx: UInt64, service_uuids: RustString) {
     guard let cm = centralManager else { return }
-    centralDelegate?.scanCallbackId = cb_id
+    centralDelegate?.scanCallbackId = scan_ctx
     let uuidStr = service_uuids.toString()
     var uuids: [CBUUID]? = nil
     if !uuidStr.isEmpty {
@@ -33,18 +33,18 @@ func bluetooth_start_scan(cb_id: UInt64, service_uuids: RustString) {
     ])
 }
 
-func bluetooth_stop_scan(cb_id: UInt64) {
+func bluetooth_stop_scan(scan_ctx: UInt64) {
     centralManager?.stopScan()
     centralDelegate?.scanCallbackId = nil
 }
 
-func bluetooth_connect(device_id: RustStr, cb_id: UInt64) {
+func bluetooth_connect(device_id: RustStr, callback: @escaping (String) -> Void) {
     let idStr = device_id.toString()
     guard let cm = centralManager, let peripheral = peripherals[idStr] else {
-        on_connect_result(cb_id, "Device not found")
+        callback("Device not found")
         return
     }
-    centralDelegate?.connectCallbacks[idStr] = cb_id
+    centralDelegate?.connectCallbacks[idStr] = callback
     cm.connect(peripheral, options: nil)
 }
 
@@ -54,53 +54,67 @@ func bluetooth_disconnect(device_id: RustStr) {
     cm.cancelPeripheralConnection(peripheral)
 }
 
-func bluetooth_discover_services(device_id: RustStr, cb_id: UInt64) {
+func bluetooth_discover_services(
+    device_id: RustStr,
+    callback: @escaping (String, String) -> Void
+) {
     let idStr = device_id.toString()
     guard let peripheral = peripherals[idStr] else {
-        on_discover_services_result(cb_id, nil, "Device not found")
+        callback("", "Device not found")
         return
     }
     let delegate = peripheralDelegates[idStr] ?? PeripheralDelegate(deviceId: idStr)
     peripheralDelegates[idStr] = delegate
     peripheral.delegate = delegate
-    delegate.discoverServicesCallback = cb_id
+    delegate.discoverServicesCallback = callback
     peripheral.discoverServices(nil)
 }
 
-func bluetooth_read_characteristic(device_id: RustStr, service_uuid: RustStr, char_uuid: RustStr, cb_id: UInt64) {
+func bluetooth_read_characteristic(
+    device_id: RustStr,
+    service_uuid: RustStr,
+    char_uuid: RustStr,
+    callback: @escaping (RustVec<UInt8>, String) -> Void
+) {
     let idStr = device_id.toString()
     let svcUuid = CBUUID(string: service_uuid.toString())
     let chrUuid = CBUUID(string: char_uuid.toString())
     guard let peripheral = peripherals[idStr] else {
-        on_read_result(cb_id, nil, "Device not found")
+        callback(RustVec<UInt8>(), "Device not found")
         return
     }
     guard let service = peripheral.services?.first(where: { $0.uuid == svcUuid }),
           let characteristic = service.characteristics?.first(where: { $0.uuid == chrUuid }) else {
-        on_read_result(cb_id, nil, "Characteristic not found")
+        callback(RustVec<UInt8>(), "Characteristic not found")
         return
     }
     let delegate = peripheralDelegates[idStr]
-    delegate?.readCallbacks[chrUuid.uuidString] = cb_id
+    delegate?.readCallbacks[chrUuid.uuidString] = callback
     peripheral.readValue(for: characteristic)
 }
 
-func bluetooth_write_characteristic(device_id: RustStr, service_uuid: RustStr, char_uuid: RustStr, data: RustSlice<UInt8>, cb_id: UInt64) {
+func bluetooth_write_characteristic(
+    device_id: RustStr,
+    service_uuid: RustStr,
+    char_uuid: RustStr,
+    data: RustVec<UInt8>,
+    callback: @escaping (String) -> Void
+) {
     let idStr = device_id.toString()
     let svcUuid = CBUUID(string: service_uuid.toString())
     let chrUuid = CBUUID(string: char_uuid.toString())
     guard let peripheral = peripherals[idStr] else {
-        on_write_result(cb_id, "Device not found")
+        callback("Device not found")
         return
     }
     guard let service = peripheral.services?.first(where: { $0.uuid == svcUuid }),
           let characteristic = service.characteristics?.first(where: { $0.uuid == chrUuid }) else {
-        on_write_result(cb_id, "Characteristic not found")
+        callback("Characteristic not found")
         return
     }
     let delegate = peripheralDelegates[idStr]
-    delegate?.writeCallbacks[chrUuid.uuidString] = cb_id
-    let bytes = Data(bytes: data.start(), count: data.len())
+    delegate?.writeCallbacks[chrUuid.uuidString] = callback
+    let bytes = Data(data)
     peripheral.writeValue(bytes, for: characteristic, type: .withResponse)
 }
 
@@ -119,9 +133,9 @@ func bluetooth_subscribe(device_id: RustStr, service_uuid: RustStr, char_uuid: R
 }
 
 class CentralManagerDelegate: NSObject, CBCentralManagerDelegate {
-    var pendingStateCallbacks: [UInt64] = []
+    var pendingStateCallbacks: [(String) -> Void] = []
     var scanCallbackId: UInt64? = nil
-    var connectCallbacks: [String: UInt64] = [:]
+    var connectCallbacks: [String: (String) -> Void] = [:]
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         flushStateCallbacks(central.state)
@@ -137,8 +151,8 @@ class CentralManagerDelegate: NSObject, CBCentralManagerDelegate {
         case .resetting: stateStr = "resetting"
         default: stateStr = "unknown"
         }
-        for cbId in pendingStateCallbacks {
-            on_adapter_state_result(cbId, stateStr)
+        for callback in pendingStateCallbacks {
+            callback(stateStr)
         }
         pendingStateCallbacks.removeAll()
     }
@@ -157,24 +171,24 @@ class CentralManagerDelegate: NSObject, CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         let deviceId = peripheral.identifier.uuidString
-        if let cbId = connectCallbacks.removeValue(forKey: deviceId) {
-            on_connect_result(cbId, nil)
+        if let callback = connectCallbacks.removeValue(forKey: deviceId) {
+            callback("")
         }
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         let deviceId = peripheral.identifier.uuidString
-        if let cbId = connectCallbacks.removeValue(forKey: deviceId) {
-            on_connect_result(cbId, error?.localizedDescription ?? "Unknown error")
+        if let callback = connectCallbacks.removeValue(forKey: deviceId) {
+            callback(error?.localizedDescription ?? "Unknown error")
         }
     }
 }
 
 class PeripheralDelegate: NSObject, CBPeripheralDelegate {
     let deviceId: String
-    var discoverServicesCallback: UInt64? = nil
-    var readCallbacks: [String: UInt64] = [:]
-    var writeCallbacks: [String: UInt64] = [:]
+    var discoverServicesCallback: ((String, String) -> Void)? = nil
+    var readCallbacks: [String: (RustVec<UInt8>, String) -> Void] = [:]
+    var writeCallbacks: [String: (String) -> Void] = [:]
     var notifyCallbacks: [String: UInt64] = [:]
 
     init(deviceId: String) {
@@ -183,14 +197,14 @@ class PeripheralDelegate: NSObject, CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard let cbId = discoverServicesCallback else { return }
+        guard let callback = discoverServicesCallback else { return }
         discoverServicesCallback = nil
         if let error = error {
-            on_discover_services_result(cbId, nil, error.localizedDescription)
+            callback("", error.localizedDescription)
             return
         }
         guard let services = peripheral.services else {
-            on_discover_services_result(cbId, "", nil)
+            callback("", "")
             return
         }
         for service in services {
@@ -199,12 +213,12 @@ class PeripheralDelegate: NSObject, CBPeripheralDelegate {
         // Wait for characteristics - store pending count
         pendingServiceCount = services.count
         discoveredServicesJson = ""
-        self.discoverServicesCbId = cbId
+        self.discoverServicesCompletion = callback
     }
 
     private var pendingServiceCount = 0
     private var discoveredServicesJson = ""
-    private var discoverServicesCbId: UInt64? = nil
+    private var discoverServicesCompletion: ((String, String) -> Void)? = nil
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         pendingServiceCount -= 1
@@ -221,20 +235,23 @@ class PeripheralDelegate: NSObject, CBPeripheralDelegate {
             }.joined(separator: ",")
         }
         discoveredServicesJson += "\(service.uuid.uuidString):\(isPrimary):\(chars);"
-        if pendingServiceCount <= 0, let cbId = discoverServicesCbId {
-            discoverServicesCbId = nil
-            on_discover_services_result(cbId, discoveredServicesJson, nil)
+        if pendingServiceCount <= 0, let callback = discoverServicesCompletion {
+            discoverServicesCompletion = nil
+            callback(discoveredServicesJson, "")
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         let charUuid = characteristic.uuid.uuidString
-        if let cbId = readCallbacks.removeValue(forKey: charUuid) {
+        if let callback = readCallbacks.removeValue(forKey: charUuid) {
             if let error = error {
-                on_read_result(cbId, nil, error.localizedDescription)
+                callback(RustVec<UInt8>(), error.localizedDescription)
             } else {
-                let data = characteristic.value.map { Array($0) } ?? []
-                on_read_result(cbId, data, nil)
+                let data = RustVec<UInt8>()
+                for byte in characteristic.value ?? Data() {
+                    data.push(value: byte)
+                }
+                callback(data, "")
             }
         } else {
             // Notification
@@ -251,11 +268,11 @@ class PeripheralDelegate: NSObject, CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         let charUuid = characteristic.uuid.uuidString
-        if let cbId = writeCallbacks.removeValue(forKey: charUuid) {
+        if let callback = writeCallbacks.removeValue(forKey: charUuid) {
             if let error = error {
-                on_write_result(cbId, error.localizedDescription)
+                callback(error.localizedDescription)
             } else {
-                on_write_result(cbId, nil)
+                callback("")
             }
         }
     }
@@ -276,7 +293,7 @@ private final class ClassicBluetoothManager: NSObject, IOBluetoothDeviceInquiryD
         guard let inquiry = IOBluetoothDeviceInquiry(delegate: self) else {
             return "Failed to create classic Bluetooth inquiry"
         }
-        inquiry.searchType = IOBluetoothDeviceSearchTypes(kIOBluetoothDeviceSearchClassic)
+        inquiry.searchType = kIOBluetoothDeviceSearchClassic.rawValue
         inquiry.updateNewDeviceNames = false
         let status = inquiry.start()
         guard status == kIOReturnSuccess else {
@@ -368,7 +385,7 @@ private final class ClassicBluetoothManager: NSObject, IOBluetoothDeviceInquiryD
         stream.enqueueRead(maxBytes: maxBytes, readCtx: readCtx)
     }
 
-    func writeSpp(streamCtx: UInt64, bytes: UnsafeBufferPointer<UInt8>, writeCtx: UInt64) {
+    func writeSpp(streamCtx: UInt64, bytes: Data, writeCtx: UInt64) {
         guard let stream = streams[streamCtx] else {
             on_classic_spp_write_result_raw(writeCtx, 0, "SPP stream not found")
             return
@@ -527,7 +544,7 @@ private final class ClassicSppStream: NSObject, IOBluetoothRFCOMMChannelDelegate
         pendingReads.append((maxBytes, readCtx))
     }
 
-    func enqueueWrite(bytes: UnsafeBufferPointer<UInt8>, writeCtx: UInt64) {
+    func enqueueWrite(bytes: Data, writeCtx: UInt64) {
         if isClosed {
             on_classic_spp_write_result_raw(writeCtx, 0, "SPP stream closed")
             return
@@ -540,7 +557,7 @@ private final class ClassicSppStream: NSObject, IOBluetoothRFCOMMChannelDelegate
             )
             return
         }
-        let payload = NSMutableData(bytes: bytes.baseAddress, length: bytes.count)
+        let payload = NSMutableData(data: bytes)
         pendingWrites[writeCtx] = payload
         let refcon = UnsafeMutableRawPointer(bitPattern: UInt(writeCtx))
         let status = channel.writeAsync(payload.mutableBytes, length: UInt16(payload.length), refcon: refcon)
@@ -751,9 +768,9 @@ func bluetooth_classic_spp_read(stream_ctx: UInt64, max_bytes: UInt64, read_ctx:
     #endif
 }
 
-func bluetooth_classic_spp_write(stream_ctx: UInt64, data: RustSlice<UInt8>, write_ctx: UInt64) {
+func bluetooth_classic_spp_write(stream_ctx: UInt64, data: RustVec<UInt8>, write_ctx: UInt64) {
     #if os(macOS)
-    let bytes = UnsafeBufferPointer(start: data.start(), count: data.len())
+    let bytes = Data(data)
     ClassicBluetoothManager.shared.writeSpp(streamCtx: stream_ctx, bytes: bytes, writeCtx: write_ctx)
     #else
     let _ = stream_ctx

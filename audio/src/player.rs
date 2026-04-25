@@ -438,9 +438,15 @@ impl SinkBackend {
     }
 }
 
-fn clamp_playback_rate(rate: f32) -> f32 {
+const fn clamp_playback_rate(rate: f32) -> f32 {
     if rate.is_finite() {
-        rate.clamp(0.25, 4.0)
+        if rate < 0.25 {
+            0.25
+        } else if rate > 4.0 {
+            4.0
+        } else {
+            rate
+        }
     } else {
         1.0
     }
@@ -476,7 +482,7 @@ struct PlaybackParams {
 }
 
 impl PlaybackParams {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             rate_bits: AtomicU32::new(1.0f32.to_bits()),
             preserve_pitch: AtomicBool::new(true),
@@ -504,7 +510,7 @@ impl PlaybackParams {
 
 #[derive(Debug)]
 enum StretchCore {
-    Interleaved(StreamProcessor),
+    Interleaved(Box<StreamProcessor>),
     PerChannel {
         processors: Vec<StreamProcessor>,
         pending: Vec<VecDeque<f32>>,
@@ -524,14 +530,16 @@ impl PitchStretchEngine {
     fn new(channels: usize, sample_rate: u32, ratio: f32) -> Self {
         let clamped_ratio = f64::from(ratio.clamp(0.25, 4.0));
         if channels <= 2 {
+            let channels_u32 =
+                u32::try_from(channels).expect("audio channel count must fit in u32");
             let params = StretchParams::new(clamped_ratio)
                 .with_sample_rate(sample_rate)
-                .with_channels(channels as u32)
+                .with_channels(channels_u32)
                 .with_quality_mode(QualityMode::Balanced);
             return Self {
                 channels,
                 sample_rate,
-                core: StretchCore::Interleaved(StreamProcessor::new(params)),
+                core: StretchCore::Interleaved(Box::new(StreamProcessor::new(params))),
                 input_channels: Vec::new(),
                 output_channels: Vec::new(),
             };
@@ -760,12 +768,11 @@ where
         self.chunk_buffer.clear();
         let target_samples = STRETCH_CHUNK_FRAMES.saturating_mul(usize::from(self.channels));
         while self.chunk_buffer.len() < target_samples {
-            match self.inner.next() {
-                Some(sample) => self.chunk_buffer.push(sample),
-                None => {
-                    self.input_finished = true;
-                    break;
-                }
+            if let Some(sample) = self.inner.next() {
+                self.chunk_buffer.push(sample);
+            } else {
+                self.input_finished = true;
+                break;
             }
         }
 
@@ -939,7 +946,7 @@ impl PlaybackClock {
         self.rate = next_rate;
     }
 
-    fn reanchor_after_seek(&mut self, sink_position: Duration, source_position: Duration) {
+    const fn reanchor_after_seek(&mut self, sink_position: Duration, source_position: Duration) {
         self.sink_anchor = sink_position;
         self.source_anchor = source_position;
     }
@@ -1768,15 +1775,15 @@ mod tests {
         adaptive
             .try_seek(Duration::from_millis(1500))
             .expect("seek with preserve-pitch enabled should succeed");
-        let seeked_source_pos = Duration::from_nanos(seek_probe.load(Ordering::Acquire));
-        assert_duration_close(seeked_source_pos, Duration::from_millis(2250), 2);
+        let sought_source_pos = Duration::from_nanos(seek_probe.load(Ordering::Acquire));
+        assert_duration_close(sought_source_pos, Duration::from_millis(2250), 2);
 
         params.set_preserve_pitch(false);
         adaptive
             .try_seek(Duration::from_millis(900))
             .expect("seek with preserve-pitch disabled should succeed");
-        let seeked_source_pos = Duration::from_nanos(seek_probe.load(Ordering::Acquire));
-        assert_duration_close(seeked_source_pos, Duration::from_millis(900), 2);
+        let sought_source_pos = Duration::from_nanos(seek_probe.load(Ordering::Acquire));
+        assert_duration_close(sought_source_pos, Duration::from_millis(900), 2);
     }
 
     #[test]

@@ -4,8 +4,6 @@
 //! - Media center: platform-specific "Now Playing" integration
 //! - Recording: cpal on desktop, native on mobile
 
-#![allow(clippy::redundant_pub_crate)]
-
 use crate::{MediaCommand, MediaMetadata, PlaybackState};
 use std::time::Duration;
 

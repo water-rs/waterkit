@@ -1,5 +1,4 @@
 //! Apple `VideoToolbox` hardware encoding and decoding.
-#![allow(clippy::duplicated_attributes)]
 
 use objc2::rc::Retained;
 use objc2_core_media::{
@@ -31,9 +30,14 @@ pub enum CodecType {
 }
 
 #[link(name = "CoreMedia", kind = "framework")]
+unsafe extern "C" {}
 #[link(name = "VideoToolbox", kind = "framework")]
+unsafe extern "C" {}
 #[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {}
 #[link(name = "CoreVideo", kind = "framework")]
+unsafe extern "C" {}
+
 unsafe extern "C" {
     static kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms: *const c_void;
     static kCFAllocatorDefault: *const c_void;

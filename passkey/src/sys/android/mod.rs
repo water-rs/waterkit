@@ -1,8 +1,5 @@
 //! Android passkey backend via dynamically loaded Kotlin helper.
 
-#![allow(clippy::similar_names)]
-#![allow(clippy::redundant_closure_for_method_calls)]
-
 use std::mem::ManuallyDrop;
 
 use async_trait::async_trait;

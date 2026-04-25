@@ -1,8 +1,5 @@
 //! Apple platform (iOS/macOS) haptic implementation using swift-bridge.
 
-#![allow(clippy::unnecessary_wraps)] // API requires Result for cross-platform consistency
-#![allow(clippy::cast_possible_truncation)] // Durations are clamped to i32::MAX before cast
-
 use crate::{HapticError, HapticPattern, HapticStep, Intensity};
 
 #[swift_bridge::bridge]
@@ -24,32 +21,47 @@ pub fn is_available() -> bool {
     ffi::haptic_is_available()
 }
 
+fn ensure_available() -> Result<(), HapticError> {
+    is_available().then_some(()).ok_or(HapticError::Unsupported)
+}
+
 pub fn impact(intensity: Intensity) -> Result<(), HapticError> {
+    ensure_available()?;
     ffi::haptic_impact(intensity.value());
     Ok(())
 }
 
 pub fn selection() -> Result<(), HapticError> {
+    ensure_available()?;
     ffi::haptic_selection();
     Ok(())
 }
 
 pub fn notification_success() -> Result<(), HapticError> {
+    ensure_available()?;
     ffi::haptic_notification(0);
     Ok(())
 }
 
 pub fn notification_warning() -> Result<(), HapticError> {
+    ensure_available()?;
     ffi::haptic_notification(1);
     Ok(())
 }
 
 pub fn notification_error() -> Result<(), HapticError> {
+    ensure_available()?;
     ffi::haptic_notification(2);
     Ok(())
 }
 
+fn duration_ms_i32(duration: std::time::Duration) -> i32 {
+    let clamped = duration.as_millis().min(i32::MAX as u128);
+    i32::try_from(clamped).expect("clamped haptic duration must fit in i32")
+}
+
 pub fn play_pattern(pattern: &HapticPattern) -> Result<(), HapticError> {
+    ensure_available()?;
     let mut timings = Vec::with_capacity(pattern.steps().len());
     let mut intensities = Vec::with_capacity(pattern.steps().len());
     let mut is_pause = Vec::with_capacity(pattern.steps().len());
@@ -60,14 +72,13 @@ pub fn play_pattern(pattern: &HapticPattern) -> Result<(), HapticError> {
                 duration,
                 intensity,
             } => {
-                // Saturate at i32::MAX for extremely long durations
-                let ms = duration.as_millis().min(i32::MAX as u128) as i32;
+                let ms = duration_ms_i32(*duration);
                 timings.push(ms);
                 intensities.push(intensity.value());
                 is_pause.push(false);
             }
             HapticStep::Pause(duration) => {
-                let ms = duration.as_millis().min(i32::MAX as u128) as i32;
+                let ms = duration_ms_i32(*duration);
                 timings.push(ms);
                 intensities.push(0.0);
                 is_pause.push(true);

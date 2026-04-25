@@ -1,8 +1,11 @@
 //! Apple platform build utilities.
 
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
 use std::collections::BTreeSet;
 use std::env;
-use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+use std::path::Path;
+use std::path::PathBuf;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 fn has_ios26_background_task_apis(sdk: &str, target: &str) -> bool {
@@ -114,12 +117,14 @@ impl SwiftBridgeCrate {
     }
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppleTargetOs {
     Ios,
     Macos,
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
 impl AppleTargetOs {
     fn from_cfg_target_os(target_os: &str) -> Option<Self> {
         match target_os {
@@ -138,6 +143,7 @@ impl AppleTargetOs {
     }
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
 #[derive(Debug, Clone, Copy)]
 struct SwiftConditionalFrame {
     parent_active: bool,
@@ -145,10 +151,12 @@ struct SwiftConditionalFrame {
     current_active: bool,
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
 fn swift_bridge_static_lib_name(pkg_name: &str) -> String {
     format!("{}_swift_bridge", pkg_name.replace('-', "_"))
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
 fn discover_swift_bridge_crates(
     manifest_dir: &Path,
     bridges: &[String],
@@ -176,6 +184,7 @@ fn discover_swift_bridge_crates(
         .collect()
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
 fn discover_swift_sources_for_bridge(bridge_path: &Path) -> Vec<PathBuf> {
     let Some(bridge_dir) = bridge_path.parent() else {
         return Vec::new();
@@ -200,6 +209,7 @@ fn discover_swift_sources_for_bridge(bridge_path: &Path) -> Vec<PathBuf> {
     swift_sources
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
 fn infer_swift_frameworks(swift_sources: &[PathBuf], target_os: AppleTargetOs) -> Vec<String> {
     let mut frameworks = BTreeSet::new();
     for source in swift_sources {
@@ -210,6 +220,7 @@ fn infer_swift_frameworks(swift_sources: &[PathBuf], target_os: AppleTargetOs) -
     frameworks.into_iter().collect()
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
 fn infer_swift_frameworks_from_source(
     contents: &str,
     target_os: AppleTargetOs,
@@ -224,7 +235,7 @@ fn infer_swift_frameworks_from_source(
             let os_name = condition.strip_suffix(')').unwrap_or_else(|| {
                 panic!("Unsupported Swift conditional directive: {trimmed}");
             });
-            let parent_active = frames.last().map_or(true, |frame| frame.current_active);
+            let parent_active = frames.last().is_none_or(|frame| frame.current_active);
             let current_active = parent_active
                 && target_os.matches_swift_os(os_name).unwrap_or_else(|| {
                     panic!("Unsupported Swift target conditional os({os_name})");
@@ -294,6 +305,7 @@ fn infer_swift_frameworks_from_source(
     frameworks
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
 fn should_link_swift_import(module: &str) -> bool {
     !matches!(module, "Foundation" | "OSLog" | "ObjectiveC")
 }

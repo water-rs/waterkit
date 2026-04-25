@@ -1,9 +1,4 @@
 //! Android background scheduler backend using `JobScheduler`.
-#![allow(
-    clippy::missing_const_for_fn,
-    clippy::needless_pass_by_value,
-    clippy::unused_self
-)]
 
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};

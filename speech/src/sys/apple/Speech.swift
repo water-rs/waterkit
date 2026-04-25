@@ -6,8 +6,8 @@ import Speech
 
 private var synthesizer = AVSpeechSynthesizer()
 
-func speech_tts_init(callback: __private__RustFnOnceCallbackBoolNoRet) {
-    callback.call(true)
+func speech_tts_init(callback: @escaping (Bool) -> Void) {
+    callback(true)
 }
 
 func speech_available_voices() -> RustString {
@@ -24,7 +24,7 @@ func speech_speak(
     pitch: Float,
     volume: Float,
     voice_id: Optional<RustString>,
-    callback: __private__RustFnOnceCallbackStringNoRet
+    callback: @escaping (String) -> Void
 ) {
     let textStr = text.toString()
     let utterance = AVSpeechUtterance(string: textStr)
@@ -62,8 +62,8 @@ func speech_recognition_available() -> Bool {
 func speech_recognition_start(
     language: Optional<RustString>,
     partial_results: Bool,
-    result_ctx: UnsafeMutableRawPointer,
-    error_callback: __private__RustFnOnceCallbackStringNoRet
+    result_ctx: UInt64,
+    error_callback: @escaping (String) -> Void
 ) {
     #if os(iOS)
     let locale: Locale
@@ -73,7 +73,7 @@ func speech_recognition_start(
         locale = Locale.current
     }
     guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable else {
-        error_callback.call("Speech recognition not available")
+        error_callback("Speech recognition not available")
         return
     }
 
@@ -91,7 +91,7 @@ func speech_recognition_start(
     do {
         try audioEngine.start()
     } catch {
-        error_callback.call(error.localizedDescription)
+        error_callback(error.localizedDescription)
         return
     }
 
@@ -108,9 +108,9 @@ func speech_recognition_start(
         }
     }
 
-    error_callback.call("")
+    error_callback("")
     #else
-    error_callback.call("Speech recognition not available on macOS")
+    error_callback("Speech recognition not available on macOS")
     #endif
 }
 
@@ -119,17 +119,17 @@ func speech_recognition_stop() {
 }
 
 class SpeechDelegate: NSObject, AVSpeechSynthesizerDelegate {
-    let callback: __private__RustFnOnceCallbackStringNoRet
+    let callback: (String) -> Void
 
-    init(callback: __private__RustFnOnceCallbackStringNoRet) {
+    init(callback: @escaping (String) -> Void) {
         self.callback = callback
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        callback.call("")
+        callback("")
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        callback.call("")
+        callback("")
     }
 }

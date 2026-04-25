@@ -3,17 +3,6 @@
 //! Desktop cameras don't support professional controls (ISO, focus, etc.).
 //! Frames are uploaded to GPU textures via CPU copy.
 
-// These functions need &mut self for API consistency across platforms
-#![allow(clippy::needless_pass_by_ref_mut)]
-// Async is required for API consistency across platforms
-#![allow(clippy::unused_async)]
-// Result is required for API consistency (other platforms may fail)
-#![allow(clippy::unnecessary_wraps)]
-// Self is needed for API consistency across platforms
-#![allow(clippy::unused_self)]
-// Const fn not needed for these accessors that may change
-#![allow(clippy::missing_const_for_fn)]
-
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
     Frame, Photo, PixelFormat, RawPhoto, Resolution, StabilizationMode,

@@ -54,7 +54,7 @@ impl PictureInPictureControllerState {
 }
 
 /// Commands emitted by picture-in-picture playback controls.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PictureInPictureCommand {
     /// Request playback to start or resume.
     Play,
@@ -89,12 +89,12 @@ pub fn enter_picture_in_picture(
 ) -> Result<(), VideoError> {
     #[cfg(target_os = "android")]
     {
-        return android::enter_picture_in_picture(host_id, aspect_ratio);
+        android::enter_picture_in_picture(host_id, aspect_ratio)
     }
 
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     {
-        return apple::enter_picture_in_picture(host_id, aspect_ratio);
+        apple::enter_picture_in_picture(host_id, aspect_ratio)
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "macos")))]
@@ -117,12 +117,13 @@ pub fn sync_picture_in_picture_controller(
 ) -> Result<(), VideoError> {
     #[cfg(target_os = "android")]
     {
-        return android::sync_picture_in_picture_controller(state);
+        android::sync_picture_in_picture_controller(state)
     }
 
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     {
-        return apple::sync_picture_in_picture_controller(state);
+        apple::sync_picture_in_picture_controller(state);
+        Ok(())
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "macos")))]
@@ -143,12 +144,12 @@ pub fn is_picture_in_picture_active(host_id: PictureInPictureHostId) -> Result<b
     #[cfg(target_os = "android")]
     {
         let _ = host_id;
-        return android::is_picture_in_picture_active();
+        android::is_picture_in_picture_active()
     }
 
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     {
-        return apple::is_picture_in_picture_active(host_id);
+        Ok(apple::is_picture_in_picture_active(host_id))
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "macos")))]
@@ -173,12 +174,12 @@ pub fn poll_picture_in_picture_command(
     #[cfg(target_os = "android")]
     {
         let _ = host_id;
-        return Ok(None);
+        Ok(None)
     }
 
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     {
-        return apple::poll_picture_in_picture_command(host_id);
+        apple::poll_picture_in_picture_command(host_id)
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "macos")))]
@@ -626,9 +627,7 @@ mod apple {
         }
     }
 
-    pub(super) fn sync_picture_in_picture_controller(
-        state: PictureInPictureControllerState,
-    ) -> Result<(), VideoError> {
+    pub(super) fn sync_picture_in_picture_controller(state: PictureInPictureControllerState) {
         let (aspect_width, aspect_height) = state.aspect_ratio.unwrap_or((0, 0));
         unsafe {
             waterkit_video_apple_pip_bridge_sync_host_state(
@@ -639,7 +638,6 @@ mod apple {
                 aspect_height,
             );
         }
-        Ok(())
     }
 
     pub(super) fn enter_picture_in_picture(
@@ -667,10 +665,8 @@ mod apple {
         }
     }
 
-    pub(super) fn is_picture_in_picture_active(
-        host_id: PictureInPictureHostId,
-    ) -> Result<bool, VideoError> {
-        Ok(unsafe { waterkit_video_apple_pip_bridge_is_active(host_id.get()) })
+    pub(super) fn is_picture_in_picture_active(host_id: PictureInPictureHostId) -> bool {
+        unsafe { waterkit_video_apple_pip_bridge_is_active(host_id.get()) }
     }
 
     pub(super) fn poll_picture_in_picture_command(
@@ -681,8 +677,8 @@ mod apple {
         unsafe {
             waterkit_video_apple_pip_bridge_poll_command_kind(
                 host_id.get(),
-                &mut kind,
-                &mut value_secs,
+                &raw mut kind,
+                &raw mut value_secs,
             );
         }
         let command = match kind {
@@ -697,8 +693,7 @@ mod apple {
             )),
             _ => {
                 return Err(VideoError::Unsupported(format!(
-                    "Apple picture in picture helper returned unknown command kind {}",
-                    kind
+                    "Apple picture in picture helper returned unknown command kind {kind}"
                 )));
             }
         };

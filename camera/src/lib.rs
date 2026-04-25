@@ -7,7 +7,6 @@
 //! The camera API is fully RAII-based: cameras start streaming when opened
 //! and stop when dropped.
 
-#![allow(clippy::missing_const_for_fn)] // Platform implementations vary
 //!
 //! # Example
 //!
@@ -575,7 +574,7 @@ pub struct RawPhoto {
 impl RawPhoto {
     /// RAW photo bytes.
     #[must_use]
-    pub fn data(&self) -> &[u8] {
+    pub const fn data(&self) -> &[u8] {
         self.data.as_slice()
     }
 
@@ -821,7 +820,7 @@ impl Camera {
 
     /// Get camera capabilities.
     #[must_use]
-    pub fn capabilities(&self) -> &CameraCapabilities {
+    pub const fn capabilities(&self) -> &CameraCapabilities {
         self.inner.capabilities()
     }
 
@@ -839,13 +838,13 @@ impl Camera {
 
     /// Get the current control values.
     #[must_use]
-    pub fn controls(&self) -> &CameraControls {
+    pub const fn controls(&self) -> &CameraControls {
         self.inner.controls()
     }
 
     /// Get the current resolution.
     #[must_use]
-    pub fn resolution(&self) -> Resolution {
+    pub const fn resolution(&self) -> Resolution {
         self.inner.resolution()
     }
 

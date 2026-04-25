@@ -278,6 +278,11 @@ impl VideoReader {
 
     /// Read the next video sample (encoded data).
     /// Returns (data, `pts_ms`, `is_keyframe`) or None if at end.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the sample index exceeds the MP4 reader range or
+    /// when the underlying container reader fails to load the sample.
     pub fn read_sample(&mut self) -> Result<Option<(Vec<u8>, u64, bool)>, VideoError> {
         if self.current_index >= self.sample_metas.len() {
             return Ok(None);
@@ -471,14 +476,17 @@ fn is_sync_sample(track: &mp4::Mp4Track, sample_id: u32) -> bool {
         if sample_sizes_count == 0 {
             return sample_id == 1;
         }
-        return sample_id == 1 || sample_id % sample_sizes_count == 0;
+        return sample_id == 1 || sample_id.is_multiple_of(sample_sizes_count);
     }
 
-    if let Some(stss) = &track.trak.mdia.minf.stbl.stss {
-        stss.entries.binary_search(&sample_id).is_ok()
-    } else {
-        true
-    }
+    track
+        .trak
+        .mdia
+        .minf
+        .stbl
+        .stss
+        .as_ref()
+        .is_none_or(|stss| stss.entries.binary_search(&sample_id).is_ok())
 }
 
 fn extract_box_from_file(path: &Path, box_type: [u8; 4]) -> Result<Option<Vec<u8>>, VideoError> {
@@ -557,7 +565,7 @@ fn parse_tx3g_sample_text(bytes: &[u8]) -> Result<String, VideoError> {
 }
 
 fn decode_utf16(bytes: &[u8], little_endian: bool) -> Result<String, VideoError> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err(VideoError::Container(
             "tx3g UTF-16 subtitle payload must have an even byte length".to_string(),
         ));

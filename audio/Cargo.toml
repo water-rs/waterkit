@@ -58,3 +58,4 @@ futures.workspace = true
 mpris-server = "0.9"
 zenwave = "0.3"
 smol = "2"
+tracing.workspace = true

@@ -53,7 +53,7 @@ pub use android::MediaSessionInner;
 pub(crate) use windows::MediaSessionInner;
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::MediaSessionInner;
+pub use linux::MediaSessionInner;
 
 /// Platform-specific media center integration.
 ///

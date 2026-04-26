@@ -1598,6 +1598,8 @@ mod tests {
         time::Duration,
     };
 
+    const NANOS_PER_SECOND: u128 = 1_000_000_000;
+
     #[derive(Debug)]
     struct TrackingSource {
         samples: Vec<f32>,
@@ -1625,7 +1627,13 @@ mod tests {
 
             let total_samples = frames.saturating_mul(usize::from(channels));
             let samples = (0..total_samples)
-                .map(|index| ((index % 257) as f32 / 257.0) * 2.0 - 1.0)
+                .map(|index| {
+                    let normalized = f32::from(
+                        u16::try_from(index % 257)
+                            .expect("sample fixture modulo should fit into u16"),
+                    ) / 257.0;
+                    normalized.mul_add(2.0, -1.0)
+                })
                 .collect();
 
             Self {
@@ -1665,21 +1673,37 @@ mod tests {
 
         fn total_duration(&self) -> Option<Duration> {
             let total_frames = self.samples.len() / usize::from(self.channels);
+            let total_frames =
+                u32::try_from(total_frames).expect("tracking source fixture should fit u32 frames");
             Some(Duration::from_secs_f64(
-                total_frames as f64 / f64::from(self.sample_rate),
+                f64::from(total_frames) / f64::from(self.sample_rate),
             ))
         }
 
         fn try_seek(&mut self, position: Duration) -> Result<(), rodio::source::SeekError> {
+            let target_frames = position
+                .as_nanos()
+                .checked_mul(u128::from(self.sample_rate))
+                .expect("tracking source seek position should fit u128 frame-nanos");
+            let target_frames = (target_frames + (NANOS_PER_SECOND / 2)) / NANOS_PER_SECOND;
             let target_frames =
-                (position.as_secs_f64() * f64::from(self.sample_rate)).round() as usize;
+                usize::try_from(target_frames).expect("tracking source seek should fit usize");
             let total_frames = self.samples.len() / usize::from(self.channels);
             let clamped_frames = target_frames.min(total_frames);
             self.cursor = clamped_frames.saturating_mul(usize::from(self.channels));
-            let recorded = position.as_nanos().min(u128::from(u64::MAX)) as u64;
+            let recorded = u64::try_from(position.as_nanos().min(u128::from(u64::MAX)))
+                .expect("recorded seek position is clamped to u64");
             self.last_seek_nanos.store(recorded, Ordering::Release);
             Ok(())
         }
+    }
+
+    fn assert_f32_close(actual: f32, expected: f32) {
+        let delta = (actual - expected).abs();
+        assert!(
+            delta <= f32::EPSILON,
+            "f32 mismatch: actual={actual} expected={expected} delta={delta}"
+        );
     }
 
     fn assert_duration_close(actual: Duration, expected: Duration, tolerance_ms: u64) {
@@ -1739,13 +1763,13 @@ mod tests {
     #[test]
     fn preserve_pitch_policy_selects_expected_sink_speed() {
         assert!(should_use_pitch_stretch(1.25, true));
-        assert_eq!(sink_speed_for_playback(1.25, true), 1.0);
+        assert_f32_close(sink_speed_for_playback(1.25, true), 1.0);
 
         assert!(!should_use_pitch_stretch(1.25, false));
-        assert_eq!(sink_speed_for_playback(1.25, false), 1.25);
+        assert_f32_close(sink_speed_for_playback(1.25, false), 1.25);
 
         assert!(!should_use_pitch_stretch(1.0, true));
-        assert_eq!(sink_speed_for_playback(1.0, true), 1.0);
+        assert_f32_close(sink_speed_for_playback(1.0, true), 1.0);
     }
 
     #[test]
@@ -1753,7 +1777,12 @@ mod tests {
         let channels = 6usize;
         let mut engine = PitchStretchEngine::new(channels, 48_000, 0.75);
         let input: Vec<f32> = (0..(4096 * channels))
-            .map(|index| ((index % 97) as f32 / 97.0) * 2.0 - 1.0)
+            .map(|index| {
+                let normalized = f32::from(
+                    u16::try_from(index % 97).expect("sample fixture modulo should fit into u16"),
+                ) / 97.0;
+                normalized.mul_add(2.0, -1.0)
+            })
             .collect();
 
         let output = engine.process(&input);
@@ -1794,11 +1823,11 @@ mod tests {
         params.set_rate(1.25);
         params.set_preserve_pitch(true);
 
-        let mut adaptive = AdaptivePlaybackSource::new(source, Arc::clone(&params));
+        let adaptive = AdaptivePlaybackSource::new(source, Arc::clone(&params));
         let mut output = Vec::new();
         let mut emitted_samples = 0usize;
 
-        while let Some(sample) = adaptive.next() {
+        for sample in adaptive {
             if emitted_samples == 3000 {
                 params.set_preserve_pitch(false);
             }

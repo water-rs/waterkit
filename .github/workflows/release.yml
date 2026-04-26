@@ -14,33 +14,11 @@ jobs:
   release-plz:
     name: Release
     runs-on: ubuntu-latest
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
-    env:
-      WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+    if: github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.workflow_run.head_sha }}
-      - name: Ensure local branch context
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          HEAD_SHA="$(git rev-parse HEAD)"
-          CURRENT_BRANCH="$(git symbolic-ref -q --short HEAD || true)"
-          if [[ -n "${CURRENT_BRANCH}" ]]; then
-            echo "Using branch ${CURRENT_BRANCH} at ${HEAD_SHA}"
-            exit 0
-          fi
-
-          TARGET_BRANCH="${WORKFLOW_HEAD_BRANCH:-main}"
-          echo "Detached HEAD detected at ${HEAD_SHA}; creating local branch ${TARGET_BRANCH}."
-          git checkout -q -B "${TARGET_BRANCH}" "${HEAD_SHA}"
       - uses: dtolnay/rust-toolchain@stable
       - uses: MarcoIeni/release-plz-action@v0.5
         env:

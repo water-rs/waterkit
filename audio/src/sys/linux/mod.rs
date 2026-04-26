@@ -194,6 +194,10 @@ impl MprisPlayer {
         }
     }
 
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "zbus owns D-Bus method arguments when generating #[interface] dispatch glue."
+    )]
     fn set_position(&self, track_id: ObjectPath<'_>, position: i64) -> zbus::fdo::Result<()> {
         let duration = Duration::from_micros(u64::try_from(position).map_err(|_| {
             zbus::fdo::Error::InvalidArgs(format!(
@@ -212,7 +216,7 @@ impl MprisPlayer {
 
 fn dispatch_command(cmd: MediaCommand) {
     if let Ok(mut queue) = PENDING_COMMANDS.write() {
-        queue.push(cmd.clone());
+        queue.push(cmd);
     }
 }
 
@@ -282,10 +286,12 @@ impl MediaSessionInner {
             );
         }
 
-        let mut guard = CURRENT_METADATA
-            .write()
-            .map_err(|error| poisoned_lock("metadata", error))?;
-        *guard = mpris_metadata;
+        {
+            let mut guard = CURRENT_METADATA
+                .write()
+                .map_err(|error| poisoned_lock("metadata", error))?;
+            *guard = mpris_metadata;
+        }
 
         Ok(())
     }
@@ -308,10 +314,12 @@ impl MediaSessionInner {
             *guard = duration_micros_i64(position)?;
         }
 
-        let mut queue_navigation = CURRENT_QUEUE_NAVIGATION
-            .write()
-            .map_err(|error| poisoned_lock("queue navigation", error))?;
-        *queue_navigation = state.queue_navigation_controls();
+        {
+            let mut queue_navigation = CURRENT_QUEUE_NAVIGATION
+                .write()
+                .map_err(|error| poisoned_lock("queue navigation", error))?;
+            *queue_navigation = state.queue_navigation_controls();
+        }
 
         Ok(())
     }

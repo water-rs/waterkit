@@ -50,7 +50,7 @@ pub use apple::{NativeAudioPlayerInner, NativeAudioPlayerState};
 pub use android::MediaSessionInner;
 
 #[cfg(target_os = "windows")]
-pub(crate) use windows::MediaSessionInner;
+pub(super) use windows::MediaSessionInner;
 
 #[cfg(target_os = "linux")]
 pub use linux::MediaSessionInner;

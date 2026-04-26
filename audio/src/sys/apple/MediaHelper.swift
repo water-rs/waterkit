@@ -1,11 +1,22 @@
 import Foundation
 import MediaPlayer
 import AVFoundation
+import OSLog
 
 // MARK: - Media Session State
 
 private var commandHandlerRegistered = false
+private let logger = Logger(subsystem: "dev.waterui", category: "WaterKitMedia")
+
+#if os(iOS)
+private var systemEventObserverTokens: [NSObjectProtocol] = []
+private var systemEventObserversRegistered = false
+#endif
+
+#if os(macOS)
 private var silentPlayer: AVAudioPlayer?
+private let silentPlayerDelegate = SilentPlayerDelegate()
+#endif
 
 // MARK: - FFI Functions
 
@@ -15,13 +26,32 @@ func media_session_init() -> MediaResultFFI {
     #if os(macOS)
     activateAudioSessionWithSilence()
     #endif
+    media_session_register_command_handler()
+    #if os(iOS)
+    registerSystemEventObservers()
+    #endif
     return .Success
 }
 
 #if os(macOS)
-/// Activates the audio session by playing a silent audio buffer.
-/// This workaround is required on macOS because MPNowPlayingInfoCenter
-/// only appears in Control Center when the app has an active audio session.
+private final class SilentPlayerDelegate: NSObject, AVAudioPlayerDelegate {
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        if silentPlayer === player {
+            silentPlayer = nil
+        }
+    }
+
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        if silentPlayer === player {
+            silentPlayer = nil
+        }
+        if let error {
+            logger.warning("Silent audio activation decode failed: \(error.localizedDescription)")
+        }
+    }
+}
+
+/// Activates the Control Center media session by emitting a short silent audio pulse.
 private func activateAudioSessionWithSilence() {
     // Create a short silent audio buffer (0.1 seconds of silence)
     let sampleRate: Double = 44100
@@ -38,14 +68,14 @@ private func activateAudioSessionWithSilence() {
         do {
             silentPlayer = try AVAudioPlayer(data: wavData)
             silentPlayer?.volume = 0
-            silentPlayer?.play()
-            // Stop after a brief moment - the play() call is what activates the session
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                silentPlayer?.stop()
+            silentPlayer?.delegate = silentPlayerDelegate
+            silentPlayer?.prepareToPlay()
+            if silentPlayer?.play() == false {
+                silentPlayer = nil
+                logger.warning("Silent audio activation pulse did not start playback")
             }
         } catch {
-            // Silent failure - not critical if this doesn't work
-            print("waterkit-media: Failed to create silent audio player: \(error)")
+            logger.warning("Failed to create silent audio player: \(error.localizedDescription)")
         }
     }
 }
@@ -128,6 +158,7 @@ func media_session_set_metadata(metadata: MediaMetadataFFI) -> MediaResultFFI {
 
 func media_session_set_playback_state(state: PlaybackStateFFI) -> MediaResultFFI {
     var nowPlayingInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+    let commandCenter = MPRemoteCommandCenter.shared()
     
     // Update position
     if state.position_secs >= 0 {
@@ -136,6 +167,9 @@ func media_session_set_playback_state(state: PlaybackStateFFI) -> MediaResultFFI
     
     // Update rate
     nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = state.rate
+
+    commandCenter.nextTrackCommand.isEnabled = state.next_enabled
+    commandCenter.previousTrackCommand.isEnabled = state.previous_enabled
     
     MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
     
@@ -252,6 +286,116 @@ func media_session_abandon_audio_focus() -> MediaResultFFI {
     #endif
 }
 
+#if os(iOS)
+private func registerSystemEventObservers() {
+    guard !systemEventObserversRegistered else { return }
+
+    let center = NotificationCenter.default
+    let audioSession = AVAudioSession.sharedInstance()
+    let interruption = center.addObserver(
+        forName: AVAudioSession.interruptionNotification,
+        object: audioSession,
+        queue: .main
+    ) { notification in
+        handleAudioSessionInterruption(notification)
+    }
+    let routeChange = center.addObserver(
+        forName: AVAudioSession.routeChangeNotification,
+        object: audioSession,
+        queue: .main
+    ) { notification in
+        handleAudioSessionRouteChange(notification)
+    }
+    let silenceSecondaryAudioHint = center.addObserver(
+        forName: AVAudioSession.silenceSecondaryAudioHintNotification,
+        object: audioSession,
+        queue: .main
+    ) { notification in
+        handleAudioSessionSilenceSecondaryAudioHint(notification)
+    }
+
+    systemEventObserverTokens = [interruption, routeChange, silenceSecondaryAudioHint]
+    systemEventObserversRegistered = true
+}
+
+private func unregisterSystemEventObservers() {
+    guard systemEventObserversRegistered else { return }
+
+    let center = NotificationCenter.default
+    for token in systemEventObserverTokens {
+        center.removeObserver(token)
+    }
+    systemEventObserverTokens.removeAll()
+    systemEventObserversRegistered = false
+}
+
+private func handleAudioSessionInterruption(_ notification: Notification) {
+    guard
+        let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+        let type = AVAudioSession.InterruptionType(rawValue: rawType)
+    else {
+        return
+    }
+
+    switch type {
+    case .began:
+        rust_on_audio_focus_lost_transient()
+    case .ended:
+        let rawOptions = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+        let options = AVAudioSession.InterruptionOptions(rawValue: rawOptions)
+        if options.contains(.shouldResume) {
+            rust_on_audio_focus_gained()
+        } else {
+            rust_on_audio_focus_lost()
+        }
+    @unknown default:
+        fatalError("Unsupported AVAudioSession interruption type")
+    }
+}
+
+private func handleAudioSessionRouteChange(_ notification: Notification) {
+    guard
+        let rawReason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+        let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason)
+    else {
+        return
+    }
+
+    switch reason {
+    case .oldDeviceUnavailable:
+        rust_on_audio_becoming_noisy()
+    case .newDeviceAvailable,
+         .categoryChange,
+         .override,
+         .wakeFromSleep,
+         .noSuitableRouteForCategory,
+         .routeConfigurationChange,
+         .unknown:
+        return
+    @unknown default:
+        fatalError("Unsupported AVAudioSession route change reason")
+    }
+}
+
+private func handleAudioSessionSilenceSecondaryAudioHint(_ notification: Notification) {
+    guard
+        let rawType = notification.userInfo?[AVAudioSessionSilenceSecondaryAudioHintTypeKey] as? UInt,
+        let type = AVAudioSession.SilenceSecondaryAudioHintType(rawValue: rawType)
+    else {
+        return
+    }
+
+    switch type {
+    case .begin:
+        rust_on_audio_focus_lost_duck()
+    case .end:
+        rust_on_audio_focus_gained()
+    @unknown default:
+        fatalError("Unsupported AVAudioSession silence secondary audio hint type")
+    }
+}
+#endif
+
 /// Run the macOS run loop for the specified duration.
 /// This is required for MPRemoteCommandCenter to receive events in CLI apps.
 func media_session_run_loop(duration_secs: Double) {
@@ -262,6 +406,9 @@ func media_session_run_loop(duration_secs: Double) {
 
 func media_session_clear() -> MediaResultFFI {
     MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    #if os(iOS)
+    unregisterSystemEventObservers()
+    #endif
     return .Success
 }
 

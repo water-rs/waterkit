@@ -5,7 +5,7 @@
 pub enum BackgroundError {
     /// This platform does not support background tasks via this module.
     #[error("background tasks are not supported on this platform")]
-    NotSupported,
+    Unsupported,
 
     /// The provided identifier was invalid.
     #[error("invalid task identifier `{identifier}`: {reason}")]

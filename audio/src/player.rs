@@ -8,16 +8,27 @@ use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState};
 use futures::Stream;
 use lofty::prelude::*;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source, SpatialSink};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
+use timestretch::{QualityMode, StreamProcessor, StretchParams};
 
 // Re-export rodio for advanced users
 pub use rodio;
+
+/// Audio stream format information.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudioStreamFormat {
+    /// Number of interleaved channels.
+    pub channels: u16,
+    /// Sample rate in Hz.
+    pub sample_rate_hz: u32,
+}
 
 /// Audio output device.
 #[derive(Debug, Clone)]
@@ -359,6 +370,13 @@ impl SinkBackend {
         }
     }
 
+    fn set_speed(&self, speed: f32) {
+        match self {
+            Self::Standard(sink) => sink.set_speed(speed),
+            Self::Spatial { sink, .. } => sink.set_speed(speed),
+        }
+    }
+
     fn is_paused(&self) -> bool {
         match self {
             Self::Standard(sink) => sink.is_paused(),
@@ -420,6 +438,520 @@ impl SinkBackend {
     }
 }
 
+const fn clamp_playback_rate(rate: f32) -> f32 {
+    if rate.is_finite() {
+        if rate < 0.25 {
+            0.25
+        } else if rate > 4.0 {
+            4.0
+        } else {
+            rate
+        }
+    } else {
+        1.0
+    }
+}
+
+const PRESERVE_PITCH_RATE_EPSILON: f32 = 0.001;
+const STRETCH_CHUNK_FRAMES: usize = 2048;
+
+fn should_use_pitch_stretch(rate: f32, preserve_pitch: bool) -> bool {
+    preserve_pitch && (rate - 1.0).abs() > PRESERVE_PITCH_RATE_EPSILON
+}
+
+fn sink_speed_for_playback(rate: f32, preserve_pitch: bool) -> f32 {
+    if should_use_pitch_stretch(rate, preserve_pitch) {
+        1.0
+    } else {
+        rate
+    }
+}
+
+fn duration_mul_rate(duration: Duration, rate: f32) -> Duration {
+    duration.mul_f64(f64::from(rate))
+}
+
+fn duration_div_rate(duration: Duration, rate: f32) -> Duration {
+    duration.mul_f64(1.0 / f64::from(rate))
+}
+
+#[derive(Debug)]
+struct PlaybackParams {
+    rate_bits: AtomicU32,
+    preserve_pitch: AtomicBool,
+}
+
+impl PlaybackParams {
+    const fn new() -> Self {
+        Self {
+            rate_bits: AtomicU32::new(1.0f32.to_bits()),
+            preserve_pitch: AtomicBool::new(true),
+        }
+    }
+
+    fn rate(&self) -> f32 {
+        let encoded = f32::from_bits(self.rate_bits.load(Ordering::Acquire));
+        clamp_playback_rate(encoded)
+    }
+
+    fn set_rate(&self, rate: f32) {
+        let clamped = clamp_playback_rate(rate);
+        self.rate_bits.store(clamped.to_bits(), Ordering::Release);
+    }
+
+    fn preserve_pitch(&self) -> bool {
+        self.preserve_pitch.load(Ordering::Acquire)
+    }
+
+    fn set_preserve_pitch(&self, preserve_pitch: bool) {
+        self.preserve_pitch.store(preserve_pitch, Ordering::Release);
+    }
+}
+
+#[derive(Debug)]
+enum StretchCore {
+    Interleaved(Box<StreamProcessor>),
+    PerChannel {
+        processors: Vec<StreamProcessor>,
+        pending: Vec<VecDeque<f32>>,
+    },
+}
+
+#[derive(Debug)]
+struct PitchStretchEngine {
+    channels: usize,
+    sample_rate: u32,
+    core: StretchCore,
+    input_channels: Vec<Vec<f32>>,
+    output_channels: Vec<Vec<f32>>,
+}
+
+impl PitchStretchEngine {
+    fn new(channels: usize, sample_rate: u32, ratio: f32) -> Self {
+        let clamped_ratio = f64::from(ratio.clamp(0.25, 4.0));
+        if channels <= 2 {
+            let channels_u32 =
+                u32::try_from(channels).expect("audio channel count must fit in u32");
+            let params = StretchParams::new(clamped_ratio)
+                .with_sample_rate(sample_rate)
+                .with_channels(channels_u32)
+                .with_quality_mode(QualityMode::Balanced);
+            return Self {
+                channels,
+                sample_rate,
+                core: StretchCore::Interleaved(Box::new(StreamProcessor::new(params))),
+                input_channels: Vec::new(),
+                output_channels: Vec::new(),
+            };
+        }
+
+        let mut processors = Vec::with_capacity(channels);
+        let mut pending = Vec::with_capacity(channels);
+        for _ in 0..channels {
+            let params = StretchParams::new(clamped_ratio)
+                .with_sample_rate(sample_rate)
+                .with_channels(1)
+                .with_quality_mode(QualityMode::Balanced);
+            processors.push(StreamProcessor::new(params));
+            pending.push(VecDeque::new());
+        }
+        let input_channels = (0..channels)
+            .map(|_| Vec::with_capacity(STRETCH_CHUNK_FRAMES))
+            .collect();
+        let output_channels = (0..channels)
+            .map(|_| Vec::with_capacity(STRETCH_CHUNK_FRAMES * 2))
+            .collect();
+
+        Self {
+            channels,
+            sample_rate,
+            core: StretchCore::PerChannel {
+                processors,
+                pending,
+            },
+            input_channels,
+            output_channels,
+        }
+    }
+
+    fn set_ratio(&mut self, ratio: f32) {
+        let clamped_ratio = f64::from(ratio.clamp(0.25, 4.0));
+        match &mut self.core {
+            StretchCore::Interleaved(processor) => processor.set_stretch_ratio(clamped_ratio),
+            StretchCore::PerChannel { processors, .. } => {
+                for processor in processors {
+                    processor.set_stretch_ratio(clamped_ratio);
+                }
+            }
+        }
+    }
+
+    fn process(&mut self, interleaved: &[f32]) -> Vec<f32> {
+        assert!(
+            interleaved.len().is_multiple_of(self.channels),
+            "pitch stretcher received channel-misaligned input: channels={} samples={}",
+            self.channels,
+            interleaved.len()
+        );
+
+        match &mut self.core {
+            StretchCore::Interleaved(processor) => {
+                let mut output = Vec::with_capacity(interleaved.len());
+                processor
+                    .process_into(interleaved, &mut output)
+                    .expect("pitch-preserving processor failed during streaming");
+                output
+            }
+            StretchCore::PerChannel {
+                processors,
+                pending,
+            } => {
+                for channel_input in &mut self.input_channels {
+                    channel_input.clear();
+                }
+                for frame in interleaved.chunks_exact(self.channels) {
+                    for (index, sample) in frame.iter().enumerate() {
+                        self.input_channels[index].push(*sample);
+                    }
+                }
+
+                for (index, processor) in processors.iter_mut().enumerate() {
+                    let input = &self.input_channels[index];
+                    let output = &mut self.output_channels[index];
+                    output.clear();
+                    processor
+                        .process_into(input, output)
+                        .expect("pitch-preserving processor failed during multichannel streaming");
+                    pending[index].extend(output.iter().copied());
+                }
+
+                Self::drain_interleaved_pending(pending)
+            }
+        }
+    }
+
+    fn flush(&mut self) -> Vec<f32> {
+        match &mut self.core {
+            StretchCore::Interleaved(processor) => {
+                let mut output = Vec::new();
+                processor
+                    .flush_into(&mut output)
+                    .expect("pitch-preserving processor flush failed");
+                output
+            }
+            StretchCore::PerChannel {
+                processors,
+                pending,
+            } => {
+                for (index, processor) in processors.iter_mut().enumerate() {
+                    let output = &mut self.output_channels[index];
+                    output.clear();
+                    processor
+                        .flush_into(output)
+                        .expect("pitch-preserving processor flush failed for multichannel input");
+                    pending[index].extend(output.iter().copied());
+                }
+                Self::drain_interleaved_pending(pending)
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        match &mut self.core {
+            StretchCore::Interleaved(processor) => processor.reset(),
+            StretchCore::PerChannel {
+                processors,
+                pending,
+            } => {
+                for processor in processors {
+                    processor.reset();
+                }
+                for channel_pending in pending {
+                    channel_pending.clear();
+                }
+            }
+        }
+    }
+
+    fn drain_interleaved_pending(pending: &mut [VecDeque<f32>]) -> Vec<f32> {
+        if pending.is_empty() {
+            return Vec::new();
+        }
+
+        let mut output = Vec::new();
+        while pending.iter().all(|channel| !channel.is_empty()) {
+            for channel in pending.iter_mut() {
+                let sample = channel
+                    .pop_front()
+                    .expect("pending channel queue must contain a sample");
+                output.push(sample);
+            }
+        }
+        output
+    }
+}
+
+#[derive(Debug)]
+struct AdaptivePlaybackSource<S>
+where
+    S: Source<Item = f32>,
+{
+    inner: S,
+    params: Arc<PlaybackParams>,
+    channels: u16,
+    sample_rate: u32,
+    chunk_buffer: Vec<f32>,
+    output_buffer: VecDeque<f32>,
+    stretch_engine: Option<PitchStretchEngine>,
+    last_stretch_active: bool,
+    input_finished: bool,
+}
+
+impl<S> AdaptivePlaybackSource<S>
+where
+    S: Source<Item = f32>,
+{
+    fn new(inner: S, params: Arc<PlaybackParams>) -> Self {
+        let channels = inner.channels();
+        assert!(
+            channels > 0,
+            "audio source must report at least one channel"
+        );
+        let sample_rate = inner.sample_rate();
+        assert!(
+            sample_rate > 0,
+            "audio source must report a non-zero sample rate"
+        );
+
+        Self {
+            inner,
+            params,
+            channels,
+            sample_rate,
+            chunk_buffer: Vec::with_capacity(STRETCH_CHUNK_FRAMES * usize::from(channels)),
+            output_buffer: VecDeque::with_capacity(STRETCH_CHUNK_FRAMES * usize::from(channels)),
+            stretch_engine: None,
+            last_stretch_active: false,
+            input_finished: false,
+        }
+    }
+
+    fn current_rate(&self) -> f32 {
+        self.params.rate()
+    }
+
+    fn stretch_active(&self) -> bool {
+        should_use_pitch_stretch(self.current_rate(), self.params.preserve_pitch())
+    }
+
+    fn ensure_stretch_engine(&mut self, rate: f32) -> &mut PitchStretchEngine {
+        let expected_channels = usize::from(self.channels);
+        let stretch_ratio = 1.0 / rate;
+        if self.stretch_engine.as_ref().is_none_or(|engine| {
+            engine.channels != expected_channels || engine.sample_rate != self.sample_rate
+        }) {
+            self.stretch_engine = Some(PitchStretchEngine::new(
+                expected_channels,
+                self.sample_rate,
+                stretch_ratio,
+            ));
+        }
+        let engine = self
+            .stretch_engine
+            .as_mut()
+            .expect("stretch engine must be initialized");
+        engine.set_ratio(stretch_ratio);
+        engine
+    }
+
+    fn read_chunk(&mut self) {
+        self.chunk_buffer.clear();
+        let target_samples = STRETCH_CHUNK_FRAMES.saturating_mul(usize::from(self.channels));
+        while self.chunk_buffer.len() < target_samples {
+            if let Some(sample) = self.inner.next() {
+                self.chunk_buffer.push(sample);
+            } else {
+                self.input_finished = true;
+                break;
+            }
+        }
+
+        assert!(
+            self.chunk_buffer.is_empty()
+                || self
+                    .chunk_buffer
+                    .len()
+                    .is_multiple_of(usize::from(self.channels)),
+            "audio source emitted channel-misaligned sample count: channels={} samples={}",
+            self.channels,
+            self.chunk_buffer.len()
+        );
+    }
+
+    fn on_mode_switch(&mut self, stretch_active: bool) {
+        if self.last_stretch_active == stretch_active {
+            return;
+        }
+        self.output_buffer.clear();
+        if let Some(engine) = self.stretch_engine.as_mut() {
+            engine.reset();
+        }
+        self.last_stretch_active = stretch_active;
+    }
+
+    fn refill_output(&mut self) {
+        let stretch_active = self.stretch_active();
+        self.on_mode_switch(stretch_active);
+
+        if stretch_active {
+            let rate = self.current_rate();
+            self.read_chunk();
+            let mut input_chunk = std::mem::take(&mut self.chunk_buffer);
+            let output = {
+                let input_finished = self.input_finished;
+                let engine = self.ensure_stretch_engine(rate);
+                if input_chunk.is_empty() {
+                    if input_finished {
+                        engine.flush()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    engine.process(&input_chunk)
+                }
+            };
+            self.output_buffer.extend(output);
+            input_chunk.clear();
+            self.chunk_buffer = input_chunk;
+            return;
+        }
+
+        self.read_chunk();
+        self.output_buffer.extend(self.chunk_buffer.iter().copied());
+    }
+}
+
+impl<S> Iterator for AdaptivePlaybackSource<S>
+where
+    S: Source<Item = f32>,
+{
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(sample) = self.output_buffer.pop_front() {
+                return Some(sample);
+            }
+
+            if self.input_finished {
+                self.refill_output();
+                return self.output_buffer.pop_front();
+            }
+
+            self.refill_output();
+        }
+    }
+}
+
+impl<S> Source for AdaptivePlaybackSource<S>
+where
+    S: Source<Item = f32>,
+{
+    fn current_frame_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        let seek_source_position = if self.stretch_active() {
+            duration_mul_rate(pos, self.current_rate())
+        } else {
+            pos
+        };
+
+        self.inner.try_seek(seek_source_position)?;
+        self.output_buffer.clear();
+        if let Some(engine) = self.stretch_engine.as_mut() {
+            engine.reset();
+        }
+        self.input_finished = false;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PlaybackClock {
+    rate: f32,
+    sink_anchor: Duration,
+    source_anchor: Duration,
+}
+
+impl PlaybackClock {
+    #[cfg(test)]
+    const fn new() -> Self {
+        Self {
+            rate: 1.0,
+            sink_anchor: Duration::ZERO,
+            source_anchor: Duration::ZERO,
+        }
+    }
+
+    const fn at_start(rate: f32) -> Self {
+        Self {
+            rate,
+            sink_anchor: Duration::ZERO,
+            source_anchor: Duration::ZERO,
+        }
+    }
+
+    fn source_position(self, sink_position: Duration) -> Duration {
+        if sink_position >= self.sink_anchor {
+            let delta = sink_position.saturating_sub(self.sink_anchor);
+            self.source_anchor
+                .saturating_add(duration_mul_rate(delta, self.rate))
+        } else {
+            let delta = self.sink_anchor.saturating_sub(sink_position);
+            self.source_anchor
+                .saturating_sub(duration_mul_rate(delta, self.rate))
+        }
+    }
+
+    fn sink_position(self, source_position: Duration) -> Duration {
+        if source_position >= self.source_anchor {
+            let delta = source_position.saturating_sub(self.source_anchor);
+            self.sink_anchor
+                .saturating_add(duration_div_rate(delta, self.rate))
+        } else {
+            let delta = self.source_anchor.saturating_sub(source_position);
+            self.sink_anchor
+                .saturating_sub(duration_div_rate(delta, self.rate))
+        }
+    }
+
+    fn reanchor_for_rate_change(&mut self, sink_position: Duration, next_rate: f32) {
+        let source_position = self.source_position(sink_position);
+        self.sink_anchor = sink_position;
+        self.source_anchor = source_position;
+        self.rate = next_rate;
+    }
+
+    const fn reanchor_after_seek(&mut self, sink_position: Duration, source_position: Duration) {
+        self.sink_anchor = sink_position;
+        self.source_anchor = source_position;
+    }
+}
+
 struct RuntimeHandles {
     stream_handle: OutputStreamHandle,
     media_center: Arc<crate::sys::MediaCenterIntegration>,
@@ -453,6 +985,10 @@ pub struct AudioPlayer {
 
     // State
     metadata: MediaMetadata,
+    source_format: Option<AudioStreamFormat>,
+    output_format: Option<AudioStreamFormat>,
+    playback_params: Arc<PlaybackParams>,
+    playback_clock: RwLock<PlaybackClock>,
     media_center: Arc<crate::sys::MediaCenterIntegration>,
 
     // Deferred metadata updates: builder methods set this flag,
@@ -470,6 +1006,8 @@ impl std::fmt::Debug for AudioPlayer {
         f.debug_struct("AudioPlayer")
             .field("mode", &self.mode())
             .field("metadata", &self.metadata)
+            .field("source_format", &self.source_format)
+            .field("output_format", &self.output_format)
             .finish_non_exhaustive()
     }
 }
@@ -535,6 +1073,10 @@ impl AudioPlayer {
 
         let source =
             Decoder::new(reader).map_err(|e| PlayerError::UnsupportedFormat(e.to_string()))?;
+        let source_format = Some(AudioStreamFormat {
+            channels: source.channels(),
+            sample_rate_hz: source.sample_rate(),
+        });
 
         let mut metadata = MediaMetadata::default();
 
@@ -562,7 +1104,13 @@ impl AudioPlayer {
             metadata = metadata.with_title(stem.to_string_lossy().into_owned());
         }
 
-        sink.append(source);
+        let playback_params = Arc::new(PlaybackParams::new());
+        let playback_source = AdaptivePlaybackSource::new(
+            source.convert_samples::<f32>(),
+            Arc::clone(&playback_params),
+        );
+
+        sink.append(playback_source);
         sink.pause();
 
         runtime
@@ -573,6 +1121,10 @@ impl AudioPlayer {
             stream_handle: runtime.stream_handle,
             sink,
             metadata,
+            source_format,
+            output_format: source_format,
+            playback_params,
+            playback_clock: RwLock::new(PlaybackClock::at_start(1.0)),
             media_center: runtime.media_center,
             metadata_dirty: AtomicBool::new(false),
             shutdown_handle: runtime.shutdown_handle,
@@ -597,6 +1149,10 @@ impl AudioPlayer {
 
         let source = Decoder::new(std::io::Cursor::new(bytes))
             .map_err(|e| PlayerError::UnsupportedFormat(e.to_string()))?;
+        let source_format = Some(AudioStreamFormat {
+            channels: source.channels(),
+            sample_rate_hz: source.sample_rate(),
+        });
 
         let mut metadata = MediaMetadata::default();
         if let Some(d) = source.total_duration() {
@@ -604,7 +1160,13 @@ impl AudioPlayer {
         }
         metadata = metadata.with_title(Self::title_from_url(url));
 
-        sink.append(source);
+        let playback_params = Arc::new(PlaybackParams::new());
+        let playback_source = AdaptivePlaybackSource::new(
+            source.convert_samples::<f32>(),
+            Arc::clone(&playback_params),
+        );
+
+        sink.append(playback_source);
         sink.pause();
 
         runtime
@@ -615,6 +1177,10 @@ impl AudioPlayer {
             stream_handle: runtime.stream_handle,
             sink,
             metadata,
+            source_format,
+            output_format: source_format,
+            playback_params,
+            playback_clock: RwLock::new(PlaybackClock::at_start(1.0)),
             media_center: runtime.media_center,
             metadata_dirty: AtomicBool::new(false),
             shutdown_handle: runtime.shutdown_handle,
@@ -833,6 +1399,10 @@ impl AudioPlayer {
     pub fn stop(&self) {
         self.flush_metadata();
         self.sink.stop();
+        let current_rate = self.playback_params.rate();
+        if let Ok(mut clock) = self.playback_clock.write() {
+            *clock = PlaybackClock::at_start(current_rate);
+        }
         self.media_center.clear();
         self.update_now_playing();
     }
@@ -840,13 +1410,55 @@ impl AudioPlayer {
     /// Seek to a specific position.
     pub fn seek(&self, position: Duration) {
         self.flush_metadata();
-        let _ = self.sink.try_seek(position);
+        let target_sink_position = self
+            .playback_clock
+            .read()
+            .map_or(position, |clock| clock.sink_position(position));
+        if self.sink.try_seek(target_sink_position).is_ok()
+            && let Ok(mut clock) = self.playback_clock.write()
+        {
+            clock.reanchor_after_seek(target_sink_position, position);
+        }
         self.update_now_playing();
     }
 
     /// Set volume (0.0 to 1.0).
     pub fn set_volume(&self, volume: f32) {
         self.sink.set_volume(volume.clamp(0.0, 1.0));
+    }
+
+    /// Set playback rate (1.0 = normal speed).
+    pub fn set_playback_rate(&self, rate: f32) {
+        let clamped = clamp_playback_rate(rate);
+        let sink_position = self.sink.get_pos();
+        if let Ok(mut clock) = self.playback_clock.write() {
+            clock.reanchor_for_rate_change(sink_position, clamped);
+        }
+        self.playback_params.set_rate(clamped);
+        let sink_speed = sink_speed_for_playback(clamped, self.playback_params.preserve_pitch());
+        self.sink.set_speed(sink_speed);
+        self.update_now_playing();
+    }
+
+    /// Enable/disable pitch preservation during rate changes.
+    pub fn set_preserve_pitch(&self, preserve_pitch: bool) {
+        self.playback_params.set_preserve_pitch(preserve_pitch);
+        let rate = self.playback_params.rate();
+        let sink_speed = sink_speed_for_playback(rate, preserve_pitch);
+        self.sink.set_speed(sink_speed);
+        self.update_now_playing();
+    }
+
+    /// Source audio format reported by the decoder.
+    #[must_use]
+    pub const fn source_format(&self) -> Option<AudioStreamFormat> {
+        self.source_format
+    }
+
+    /// Current output format.
+    #[must_use]
+    pub const fn output_format(&self) -> Option<AudioStreamFormat> {
+        self.output_format
     }
 
     // --- State Queries ---
@@ -871,7 +1483,10 @@ impl AudioPlayer {
 
     /// Get current playback position.
     pub fn position(&self) -> Duration {
-        self.sink.get_pos()
+        let sink_position = self.sink.get_pos();
+        self.playback_clock
+            .read()
+            .map_or(sink_position, |clock| clock.source_position(sink_position))
     }
 
     /// Get total duration.
@@ -918,13 +1533,19 @@ impl AudioPlayer {
     // --- Internal ---
 
     fn update_now_playing(&self) {
-        let state = if self.is_playing() {
-            PlaybackState::playing(self.sink.get_pos())
+        let position = self.position();
+        let base_state = if self.is_playing() {
+            PlaybackState::playing(position)
         } else if self.sink.empty() {
             PlaybackState::stopped()
         } else {
-            PlaybackState::paused(self.sink.get_pos())
+            PlaybackState::paused(position)
         };
+        let rate = self
+            .playback_clock
+            .read()
+            .map_or(1.0_f64, |clock| f64::from(clock.rate));
+        let state = base_state.with_rate(rate);
 
         self.media_center.update(&self.metadata, &state);
     }
@@ -964,7 +1585,134 @@ impl Drop for AudioPlayer {
 
 #[cfg(test)]
 mod tests {
-    use super::{ListenerPose, SpatialPosition, SpatialScene};
+    use super::{
+        AdaptivePlaybackSource, ListenerPose, PitchStretchEngine, PlaybackClock, PlaybackParams,
+        SpatialPosition, SpatialScene, should_use_pitch_stretch, sink_speed_for_playback,
+    };
+    use rodio::Source;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        },
+        time::Duration,
+    };
+
+    const NANOS_PER_SECOND: u128 = 1_000_000_000;
+
+    #[derive(Debug)]
+    struct TrackingSource {
+        samples: Vec<f32>,
+        channels: u16,
+        sample_rate: u32,
+        cursor: usize,
+        last_seek_nanos: Arc<AtomicU64>,
+    }
+
+    impl TrackingSource {
+        fn new(
+            channels: u16,
+            sample_rate: u32,
+            frames: usize,
+            last_seek_nanos: Arc<AtomicU64>,
+        ) -> Self {
+            assert!(
+                channels > 0,
+                "tracking source requires at least one channel"
+            );
+            assert!(
+                sample_rate > 0,
+                "tracking source requires a non-zero sample rate"
+            );
+
+            let total_samples = frames.saturating_mul(usize::from(channels));
+            let samples = (0..total_samples)
+                .map(|index| {
+                    let normalized = f32::from(
+                        u16::try_from(index % 257)
+                            .expect("sample fixture modulo should fit into u16"),
+                    ) / 257.0;
+                    normalized.mul_add(2.0, -1.0)
+                })
+                .collect();
+
+            Self {
+                samples,
+                channels,
+                sample_rate,
+                cursor: 0,
+                last_seek_nanos,
+            }
+        }
+    }
+
+    impl Iterator for TrackingSource {
+        type Item = f32;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let sample = self.samples.get(self.cursor).copied();
+            if sample.is_some() {
+                self.cursor = self.cursor.saturating_add(1);
+            }
+            sample
+        }
+    }
+
+    impl Source for TrackingSource {
+        fn current_frame_len(&self) -> Option<usize> {
+            None
+        }
+
+        fn channels(&self) -> u16 {
+            self.channels
+        }
+
+        fn sample_rate(&self) -> u32 {
+            self.sample_rate
+        }
+
+        fn total_duration(&self) -> Option<Duration> {
+            let total_frames = self.samples.len() / usize::from(self.channels);
+            let total_frames =
+                u32::try_from(total_frames).expect("tracking source fixture should fit u32 frames");
+            Some(Duration::from_secs_f64(
+                f64::from(total_frames) / f64::from(self.sample_rate),
+            ))
+        }
+
+        fn try_seek(&mut self, position: Duration) -> Result<(), rodio::source::SeekError> {
+            let target_frames = position
+                .as_nanos()
+                .checked_mul(u128::from(self.sample_rate))
+                .expect("tracking source seek position should fit u128 frame-nanos");
+            let target_frames = (target_frames + (NANOS_PER_SECOND / 2)) / NANOS_PER_SECOND;
+            let target_frames =
+                usize::try_from(target_frames).expect("tracking source seek should fit usize");
+            let total_frames = self.samples.len() / usize::from(self.channels);
+            let clamped_frames = target_frames.min(total_frames);
+            self.cursor = clamped_frames.saturating_mul(usize::from(self.channels));
+            let recorded = u64::try_from(position.as_nanos().min(u128::from(u64::MAX)))
+                .expect("recorded seek position is clamped to u64");
+            self.last_seek_nanos.store(recorded, Ordering::Release);
+            Ok(())
+        }
+    }
+
+    fn assert_f32_close(actual: f32, expected: f32) {
+        let delta = (actual - expected).abs();
+        assert!(
+            delta <= f32::EPSILON,
+            "f32 mismatch: actual={actual} expected={expected} delta={delta}"
+        );
+    }
+
+    fn assert_duration_close(actual: Duration, expected: Duration, tolerance_ms: u64) {
+        let delta = actual.abs_diff(expected);
+        assert!(
+            delta <= Duration::from_millis(tolerance_ms),
+            "duration mismatch: actual={actual:?} expected={expected:?} delta={delta:?}"
+        );
+    }
 
     #[test]
     fn listener_pose_rejects_overlapping_ears() {
@@ -986,5 +1734,120 @@ mod tests {
         let title =
             super::AudioPlayer::title_from_url("https://example.com/audio/track.mp3?token=abc");
         assert_eq!(title, "track.mp3");
+    }
+
+    #[test]
+    fn playback_clock_preserves_continuity_across_rate_change() {
+        let mut clock = PlaybackClock::new();
+        let sink_before_change = Duration::from_secs(4);
+        let source_before_change = clock.source_position(sink_before_change);
+        assert_eq!(source_before_change, Duration::from_secs(4));
+
+        clock.reanchor_for_rate_change(sink_before_change, 2.0);
+
+        let sink_after_change = Duration::from_secs(5);
+        let source_after_change = clock.source_position(sink_after_change);
+        assert_eq!(source_after_change, Duration::from_secs(6));
+    }
+
+    #[test]
+    fn playback_clock_seek_mapping_round_trips() {
+        let mut clock = PlaybackClock::new();
+        clock.reanchor_for_rate_change(Duration::from_millis(2250), 1.5);
+        let source_target = Duration::from_secs(12);
+        let sink_target = clock.sink_position(source_target);
+        let mapped_back = clock.source_position(sink_target);
+        assert_duration_close(mapped_back, source_target, 1);
+    }
+
+    #[test]
+    fn preserve_pitch_policy_selects_expected_sink_speed() {
+        assert!(should_use_pitch_stretch(1.25, true));
+        assert_f32_close(sink_speed_for_playback(1.25, true), 1.0);
+
+        assert!(!should_use_pitch_stretch(1.25, false));
+        assert_f32_close(sink_speed_for_playback(1.25, false), 1.25);
+
+        assert!(!should_use_pitch_stretch(1.0, true));
+        assert_f32_close(sink_speed_for_playback(1.0, true), 1.0);
+    }
+
+    #[test]
+    fn multichannel_pitch_stretch_preserves_channel_alignment() {
+        let channels = 6usize;
+        let mut engine = PitchStretchEngine::new(channels, 48_000, 0.75);
+        let input: Vec<f32> = (0..(4096 * channels))
+            .map(|index| {
+                let normalized = f32::from(
+                    u16::try_from(index % 97).expect("sample fixture modulo should fit into u16"),
+                ) / 97.0;
+                normalized.mul_add(2.0, -1.0)
+            })
+            .collect();
+
+        let output = engine.process(&input);
+        assert!(output.len().is_multiple_of(channels));
+
+        let flushed = engine.flush();
+        assert!(flushed.len().is_multiple_of(channels));
+    }
+
+    #[test]
+    fn adaptive_source_seek_tracks_preserve_pitch_mode() {
+        let seek_probe = Arc::new(AtomicU64::new(0));
+        let source = TrackingSource::new(2, 48_000, 48_000, Arc::clone(&seek_probe));
+        let params = Arc::new(PlaybackParams::new());
+        params.set_rate(1.5);
+        params.set_preserve_pitch(true);
+
+        let mut adaptive = AdaptivePlaybackSource::new(source, Arc::clone(&params));
+        adaptive
+            .try_seek(Duration::from_millis(1500))
+            .expect("seek with preserve-pitch enabled should succeed");
+        let sought_source_pos = Duration::from_nanos(seek_probe.load(Ordering::Acquire));
+        assert_duration_close(sought_source_pos, Duration::from_millis(2250), 2);
+
+        params.set_preserve_pitch(false);
+        adaptive
+            .try_seek(Duration::from_millis(900))
+            .expect("seek with preserve-pitch disabled should succeed");
+        let sought_source_pos = Duration::from_nanos(seek_probe.load(Ordering::Acquire));
+        assert_duration_close(sought_source_pos, Duration::from_millis(900), 2);
+    }
+
+    #[test]
+    fn adaptive_source_keeps_multichannel_alignment_across_mode_switches() {
+        let channels = 6u16;
+        let source = TrackingSource::new(channels, 48_000, 8192, Arc::new(AtomicU64::new(0)));
+        let params = Arc::new(PlaybackParams::new());
+        params.set_rate(1.25);
+        params.set_preserve_pitch(true);
+
+        let adaptive = AdaptivePlaybackSource::new(source, Arc::clone(&params));
+        let mut output = Vec::new();
+        let mut emitted_samples = 0usize;
+
+        for sample in adaptive {
+            if emitted_samples == 3000 {
+                params.set_preserve_pitch(false);
+            }
+            if emitted_samples == 6000 {
+                params.set_preserve_pitch(true);
+                params.set_rate(0.8);
+            }
+            if emitted_samples == 9000 {
+                params.set_rate(1.0);
+            }
+            output.push(sample);
+            emitted_samples = emitted_samples.saturating_add(1);
+        }
+
+        assert!(!output.is_empty(), "adaptive playback must produce output");
+        assert!(
+            output.len().is_multiple_of(usize::from(channels)),
+            "adaptive output lost channel alignment: channels={} samples={}",
+            channels,
+            output.len()
+        );
     }
 }

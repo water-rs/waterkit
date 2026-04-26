@@ -3,36 +3,28 @@
 //! Desktop cameras don't support professional controls (ISO, focus, etc.).
 //! Frames are uploaded to GPU textures via CPU copy.
 
-// These functions need &mut self for API consistency across platforms
-#![allow(clippy::needless_pass_by_ref_mut)]
-// Async is required for API consistency across platforms
-#![allow(clippy::unused_async)]
-// Result is required for API consistency (other platforms may fail)
-#![allow(clippy::unnecessary_wraps)]
-// Self is needed for API consistency across platforms
-#![allow(clippy::unused_self)]
-// Const fn not needed for these accessors that may change
-#![allow(clippy::missing_const_for_fn)]
-
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
     Frame, Photo, PixelFormat, RawPhoto, Resolution, StabilizationMode,
 };
 use nokhwa::Camera as NokhwaCamera;
 use nokhwa::pixel_format::RgbAFormat;
-use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType};
+use nokhwa::utils::{
+    CameraFormat as NokhwaCameraFormat, CameraIndex, FrameFormat as NokhwaFrameFormat,
+    RequestedFormat, RequestedFormatType, Resolution as NokhwaResolution,
+};
 use std::num::NonZeroU8;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Internal frame data from nokhwa.
 struct RawFrame {
     data: Vec<u8>,
     width: u32,
     height: u32,
-    timestamp: std::time::Instant,
+    timestamp: Instant,
 }
 
 /// Wrapper around `NokhwaCamera` that implements Send.
@@ -54,7 +46,99 @@ pub struct CameraInner {
     controls: CameraControls,
     frame_receiver: async_channel::Receiver<RawFrame>,
     streaming: Arc<AtomicBool>,
-    start_time: Arc<Mutex<std::time::Instant>>,
+    start_instant: Instant,
+}
+
+fn parse_camera_index(camera_id: &str) -> CameraIndex {
+    camera_id.parse::<u32>().map_or_else(
+        |_| CameraIndex::String(camera_id.to_string()),
+        CameraIndex::Index,
+    )
+}
+
+fn build_desktop_capabilities(
+    detected_resolution: Resolution,
+    config: &CameraConfig,
+) -> Result<CameraCapabilities, CameraError> {
+    let mut resolutions = Vec::with_capacity(4);
+    resolutions.push(detected_resolution);
+    if !resolutions.contains(&config.resolution) {
+        resolutions.push(config.resolution);
+    }
+    if !resolutions.contains(&Resolution::HD) {
+        resolutions.push(Resolution::HD);
+    }
+    if !resolutions.contains(&Resolution::FULL_HD) {
+        resolutions.push(Resolution::FULL_HD);
+    }
+
+    let mut frame_rates = vec![config.frame_rate.max(1)];
+    if !frame_rates.contains(&30) {
+        frame_rates.push(30);
+    }
+
+    let capabilities = CameraCapabilities {
+        resolutions,
+        frame_rates,
+        iso_range: None,
+        exposure_duration_range: None,
+        supports_exposure_compensation: false,
+        supports_manual_focus: false,
+        supports_manual_white_balance: false,
+        zoom_range: None,
+        dynamic_ranges: vec![DynamicRangeProfile::Sdr],
+        supports_dolby_vision: false,
+        stabilization_modes: vec![StabilizationMode::Off],
+        has_flash: false,
+        has_torch: false,
+        supports_concurrent_multi_camera: false,
+        max_concurrent_cameras: NonZeroU8::MIN,
+        uses_system_photo_pipeline: false,
+        uses_system_video_pipeline: false,
+        supports_raw_photo: false,
+        raw_photo_formats: Vec::new(),
+        supports_raw_video: false,
+        raw_video_formats: Vec::new(),
+    };
+    capabilities.validate()?;
+    Ok(capabilities)
+}
+
+fn spawn_capture_thread(
+    camera: Arc<Mutex<SendableCamera>>,
+    sender: async_channel::Sender<RawFrame>,
+    streaming: Arc<AtomicBool>,
+) {
+    std::thread::spawn(move || {
+        while streaming.load(Ordering::SeqCst) {
+            if sender.is_closed() {
+                break;
+            }
+
+            let frame = {
+                let mut guard = camera.lock().unwrap();
+                guard.0.frame().ok()
+            };
+
+            if let Some(frame) = frame {
+                let decoded = frame.decode_image::<RgbAFormat>();
+                if let Ok(img) = decoded {
+                    let raw = RawFrame {
+                        data: img.into_raw(),
+                        width: frame.resolution().width(),
+                        height: frame.resolution().height(),
+                        timestamp: Instant::now(),
+                    };
+                    let _ = sender.force_send(raw);
+                }
+            } else {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+
+        let mut guard = camera.lock().unwrap();
+        let _ = guard.0.stop_stream();
+    });
 }
 
 impl CameraInner {
@@ -73,20 +157,25 @@ impl CameraInner {
             .collect())
     }
 
+    #[allow(
+        clippy::unused_async,
+        reason = "Camera opening is async on mobile backends; the desktop backend keeps the same platform abstraction surface."
+    )]
     pub async fn open(
         camera_id: &str,
         config: CameraConfig,
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
     ) -> Result<Self, CameraError> {
-        let index = camera_id.parse::<u32>().map_or_else(
-            |_| CameraIndex::String(camera_id.to_string()),
-            CameraIndex::Index,
-        );
+        let index = parse_camera_index(camera_id);
 
-        let requested = RequestedFormat::new::<RgbAFormat>(RequestedFormatType::HighestResolution(
-            nokhwa::utils::Resolution::new(config.resolution.width, config.resolution.height),
-        ));
+        let requested_format = NokhwaCameraFormat::new(
+            NokhwaResolution::new(config.resolution.width, config.resolution.height),
+            NokhwaFrameFormat::RAWRGB,
+            config.frame_rate.max(1),
+        );
+        let requested =
+            RequestedFormat::new::<RgbAFormat>(RequestedFormatType::Closest(requested_format));
 
         let mut camera = NokhwaCamera::new(index, requested)
             .map_err(|e| CameraError::OpenFailed(e.to_string()))?;
@@ -98,33 +187,9 @@ impl CameraInner {
         };
 
         // Create frame channel
-        let (sender, receiver) = async_channel::bounded(2);
+        let (sender, receiver) = async_channel::bounded(1);
 
-        // Desktop cameras have no professional controls
-        let capabilities = CameraCapabilities {
-            resolutions: vec![res, Resolution::HD, Resolution::FULL_HD],
-            frame_rates: vec![30],
-            iso_range: None,
-            exposure_duration_range: None,
-            supports_exposure_compensation: false,
-            supports_manual_focus: false,
-            supports_manual_white_balance: false,
-            zoom_range: None,
-            dynamic_ranges: vec![DynamicRangeProfile::Sdr],
-            supports_dolby_vision: false,
-            stabilization_modes: vec![StabilizationMode::Off],
-            has_flash: false,
-            has_torch: false,
-            supports_concurrent_multi_camera: false,
-            max_concurrent_cameras: NonZeroU8::MIN,
-            uses_system_photo_pipeline: false,
-            uses_system_video_pipeline: false,
-            supports_raw_photo: false,
-            raw_photo_formats: Vec::new(),
-            supports_raw_video: false,
-            raw_video_formats: Vec::new(),
-        };
-        capabilities.validate()?;
+        let capabilities = build_desktop_capabilities(res, &config)?;
 
         // Start streaming immediately (RAII)
         camera
@@ -132,42 +197,11 @@ impl CameraInner {
             .map_err(|e| CameraError::StartFailed(e.to_string()))?;
 
         let streaming = Arc::new(AtomicBool::new(true));
-        let start_time = Arc::new(Mutex::new(std::time::Instant::now()));
+        let start_instant = Instant::now();
 
         // Wrap camera in SendableCamera for thread safety
         let camera = Arc::new(Mutex::new(SendableCamera(camera)));
-        let streaming_clone = streaming.clone();
-        let start_time_clone = start_time.clone();
-
-        std::thread::spawn(move || {
-            while streaming_clone.load(Ordering::SeqCst) {
-                let frame = {
-                    let mut guard = camera.lock().unwrap();
-                    guard.0.frame().ok()
-                };
-
-                if let Some(frame) = frame {
-                    let decoded = frame.decode_image::<RgbAFormat>();
-                    if let Ok(img) = decoded {
-                        let raw = RawFrame {
-                            data: img.into_raw(),
-                            width: frame.resolution().width(),
-                            height: frame.resolution().height(),
-                            timestamp: *start_time_clone.lock().unwrap(),
-                        };
-                        // Non-blocking send
-                        let _ = sender.try_send(raw);
-                    }
-                }
-
-                // Small sleep to prevent busy loop
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-
-            // Stop the camera when thread exits
-            let mut guard = camera.lock().unwrap();
-            let _ = guard.0.stop_stream();
-        });
+        spawn_capture_thread(camera, sender, Arc::clone(&streaming));
 
         Ok(Self {
             device,
@@ -177,45 +211,46 @@ impl CameraInner {
             controls: CameraControls::default(),
             frame_receiver: receiver,
             streaming,
-            start_time,
+            start_instant,
         })
     }
 
-    pub fn capabilities(&self) -> &CameraCapabilities {
+    pub const fn capabilities(&self) -> &CameraCapabilities {
         &self.capabilities
     }
 
     pub fn apply_controls(&mut self, controls: &CameraControls) -> Result<(), CameraError> {
         // Desktop cameras don't support professional controls
         if controls.exposure.is_some() {
-            return Err(CameraError::ControlNotSupported("exposure".into()));
+            return Err(CameraError::ControlUnsupported("exposure".into()));
         }
         if controls.focus.is_some() {
-            return Err(CameraError::ControlNotSupported("focus".into()));
+            return Err(CameraError::ControlUnsupported("focus".into()));
         }
         if controls.white_balance.is_some() {
-            return Err(CameraError::ControlNotSupported("white_balance".into()));
+            return Err(CameraError::ControlUnsupported("white_balance".into()));
         }
         if controls.zoom.is_some() {
-            return Err(CameraError::ControlNotSupported("zoom".into()));
+            return Err(CameraError::ControlUnsupported("zoom".into()));
         }
         if controls.flash.is_some() {
-            return Err(CameraError::ControlNotSupported("flash".into()));
+            return Err(CameraError::ControlUnsupported("flash".into()));
         }
         if controls.dynamic_range.is_some() {
-            return Err(CameraError::ControlNotSupported("dynamic_range".into()));
+            return Err(CameraError::ControlUnsupported("dynamic_range".into()));
         }
         if controls.stabilization.is_some() {
-            return Err(CameraError::ControlNotSupported("stabilization".into()));
+            return Err(CameraError::ControlUnsupported("stabilization".into()));
         }
+        self.controls = controls.clone();
         Ok(())
     }
 
-    pub fn controls(&self) -> &CameraControls {
+    pub const fn controls(&self) -> &CameraControls {
         &self.controls
     }
 
-    pub fn resolution(&self) -> Resolution {
+    pub const fn resolution(&self) -> Resolution {
         self.resolution
     }
 
@@ -223,11 +258,11 @@ impl CameraInner {
         let device = self.device.clone();
         let queue = self.queue.clone();
         let receiver = self.frame_receiver.clone();
-        let start_time = self.start_time.clone();
+        let start_instant = self.start_instant;
 
         futures::stream::unfold(
-            (device, queue, receiver, start_time),
-            move |(device, queue, receiver, start_time)| async move {
+            (device, queue, receiver, start_instant),
+            move |(device, queue, receiver, start_instant)| async move {
                 let raw = receiver.recv().await.ok()?;
 
                 // Create GPU texture
@@ -267,10 +302,7 @@ impl CameraInner {
                     },
                 );
 
-                let timestamp = {
-                    let start = *start_time.lock().unwrap();
-                    raw.timestamp.duration_since(start)
-                };
+                let timestamp = raw.timestamp.saturating_duration_since(start_instant);
 
                 let frame = Frame {
                     texture,
@@ -280,12 +312,12 @@ impl CameraInner {
                     timestamp,
                 };
 
-                Some((frame, (device, queue, receiver, start_time)))
+                Some((frame, (device, queue, receiver, start_instant)))
             },
         )
     }
 
-    pub async fn capture_photo(&mut self) -> Result<Photo, CameraError> {
+    pub async fn capture_photo(&self) -> Result<Photo, CameraError> {
         // Wait for next frame from the stream
         let raw = self
             .frame_receiver
@@ -339,41 +371,70 @@ impl CameraInner {
         })
     }
 
-    pub async fn capture_raw_photo(&mut self) -> Result<RawPhoto, CameraError> {
-        Err(CameraError::ControlNotSupported(
+    #[allow(
+        clippy::unused_self,
+        clippy::unused_async,
+        reason = "RAW capture is async on supported platform backends; desktop reports the unsupported capability through the same API."
+    )]
+    pub async fn capture_raw_photo(&self) -> Result<RawPhoto, CameraError> {
+        Err(CameraError::ControlUnsupported(
             "raw photo not supported on desktop".into(),
         ))
     }
 
-    pub fn start_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
-        Err(CameraError::ControlNotSupported(
+    #[allow(
+        clippy::unused_self,
+        reason = "Recording is an instance API on supported camera backends; desktop has no recording session state to touch."
+    )]
+    pub fn start_recording(&self, _path: &Path) -> Result<(), CameraError> {
+        Err(CameraError::ControlUnsupported(
             "recording not supported on desktop".into(),
         ))
     }
 
-    pub fn stop_recording(&mut self) -> Result<(), CameraError> {
-        Err(CameraError::ControlNotSupported(
+    #[allow(
+        clippy::unused_self,
+        reason = "Recording is an instance API on supported camera backends; desktop has no recording session state to touch."
+    )]
+    pub fn stop_recording(&self) -> Result<(), CameraError> {
+        Err(CameraError::ControlUnsupported(
             "recording not supported on desktop".into(),
         ))
     }
 
-    pub fn recording_duration(&self) -> Duration {
+    #[allow(
+        clippy::unused_self,
+        reason = "Recording is an instance API on supported camera backends; desktop has no recording session timer."
+    )]
+    pub const fn recording_duration(&self) -> Duration {
         Duration::ZERO
     }
 
-    pub fn start_raw_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
-        Err(CameraError::ControlNotSupported(
+    #[allow(
+        clippy::unused_self,
+        reason = "Raw recording is an instance API on supported camera backends; desktop has no raw recording session state."
+    )]
+    pub fn start_raw_recording(&self, _path: &Path) -> Result<(), CameraError> {
+        Err(CameraError::ControlUnsupported(
             "raw recording not supported on desktop".into(),
         ))
     }
 
-    pub fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
-        Err(CameraError::ControlNotSupported(
+    #[allow(
+        clippy::unused_self,
+        reason = "Raw recording is an instance API on supported camera backends; desktop has no raw recording session state."
+    )]
+    pub fn stop_raw_recording(&self) -> Result<(), CameraError> {
+        Err(CameraError::ControlUnsupported(
             "raw recording not supported on desktop".into(),
         ))
     }
 
-    pub fn raw_recording_duration(&self) -> Duration {
+    #[allow(
+        clippy::unused_self,
+        reason = "Raw recording is an instance API on supported camera backends; desktop has no raw recording session timer."
+    )]
+    pub const fn raw_recording_duration(&self) -> Duration {
         Duration::ZERO
     }
 }

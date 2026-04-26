@@ -25,6 +25,8 @@ jobs:
             libxkbcommon-dev \
             libasound2-dev \
             libudev-dev \
+            libva-dev \
+            libgbm-dev \
             libdav1d-dev \
             nasm \
             libavutil-dev \

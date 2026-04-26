@@ -167,7 +167,7 @@ pub enum NfcError {
     ReadOnly,
     /// Not supported on this platform.
     #[error("not supported")]
-    NotSupported,
+    Unsupported,
     /// Platform-specific error.
     #[error("platform error: {0}")]
     PlatformError(String),

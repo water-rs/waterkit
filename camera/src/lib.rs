@@ -7,7 +7,6 @@
 //! The camera API is fully RAII-based: cameras start streaming when opened
 //! and stop when dropped.
 
-#![allow(clippy::missing_const_for_fn)] // Platform implementations vary
 //!
 //! # Example
 //!
@@ -575,7 +574,7 @@ pub struct RawPhoto {
 impl RawPhoto {
     /// RAW photo bytes.
     #[must_use]
-    pub fn data(&self) -> &[u8] {
+    pub const fn data(&self) -> &[u8] {
         self.data.as_slice()
     }
 
@@ -666,6 +665,10 @@ impl Recording<'_> {
 
     /// Get the recording duration so far.
     #[must_use]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "This public wrapper delegates to platform backends; mobile recording duration queries are not const."
+    )]
     pub fn duration(&self) -> Duration {
         self.camera.inner.recording_duration()
     }
@@ -698,6 +701,10 @@ impl RawRecording<'_> {
 
     /// Get the RAW recording duration so far.
     #[must_use]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "This public wrapper delegates to platform backends; mobile raw recording duration queries are not const."
+    )]
     pub fn duration(&self) -> Duration {
         self.camera.inner.raw_recording_duration()
     }
@@ -720,7 +727,7 @@ impl Drop for RawRecording<'_> {
 pub enum CameraError {
     /// Camera is not supported on this platform.
     #[error("camera not supported on this platform")]
-    NotSupported,
+    Unsupported,
     /// Failed to enumerate cameras.
     #[error("failed to enumerate cameras: {0}")]
     EnumerationFailed(String),
@@ -744,7 +751,7 @@ pub enum CameraError {
     AlreadyInUse,
     /// The requested control is not supported.
     #[error("control not supported: {0}")]
-    ControlNotSupported(String),
+    ControlUnsupported(String),
     /// The requested value is out of range.
     #[error("value out of range: {0}")]
     ValueOutOfRange(String),
@@ -821,7 +828,7 @@ impl Camera {
 
     /// Get camera capabilities.
     #[must_use]
-    pub fn capabilities(&self) -> &CameraCapabilities {
+    pub const fn capabilities(&self) -> &CameraCapabilities {
         self.inner.capabilities()
     }
 
@@ -831,7 +838,7 @@ impl Camera {
     /// any control is not supported on this camera/platform.
     ///
     /// # Errors
-    /// Returns [`CameraError::ControlNotSupported`] if a control is not available.
+    /// Returns [`CameraError::ControlUnsupported`] if a control is not available.
     /// Returns [`CameraError::ValueOutOfRange`] if a value is outside the supported range.
     pub fn apply_controls(&mut self, controls: &CameraControls) -> Result<(), CameraError> {
         self.inner.apply_controls(controls)
@@ -839,13 +846,13 @@ impl Camera {
 
     /// Get the current control values.
     #[must_use]
-    pub fn controls(&self) -> &CameraControls {
+    pub const fn controls(&self) -> &CameraControls {
         self.inner.controls()
     }
 
     /// Get the current resolution.
     #[must_use]
-    pub fn resolution(&self) -> Resolution {
+    pub const fn resolution(&self) -> Resolution {
         self.inner.resolution()
     }
 
@@ -875,7 +882,7 @@ impl Camera {
     ///
     /// # Errors
     /// Returns [`CameraError::CaptureFailed`] if RAW photo capture fails.
-    /// Returns [`CameraError::ControlNotSupported`] if RAW photo is unsupported.
+    /// Returns [`CameraError::ControlUnsupported`] if RAW photo is unsupported.
     pub async fn capture_raw_photo(&mut self) -> Result<RawPhoto, CameraError> {
         self.inner.capture_raw_photo().await
     }

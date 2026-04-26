@@ -16,6 +16,8 @@ workspace = true
 [dependencies]
 futures = { workspace = true }
 thiserror = { workspace = true }
+waterkit-fs = { workspace = true }
+roxmltree = "0.21"
 
 # iOS
 [target.'cfg(target_os = "ios")'.dependencies]

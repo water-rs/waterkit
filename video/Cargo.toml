@@ -13,6 +13,9 @@ categories = ["multimedia::video", "gui"]
 [lints]
 workspace = true
 
+[build-dependencies]
+waterkit-build.workspace = true
+
 [dependencies]
 thiserror.workspace = true
 wgpu.workspace = true
@@ -27,3 +30,10 @@ waterkit-codec = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { workspace = true }
+ndk-context = "0.1"
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge = { workspace = true }

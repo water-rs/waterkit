@@ -1,15 +1,11 @@
 //! Android media control implementation using JNI and `MediaSession`.
 
-#![allow(dead_code)] // Functions and statics are exported for Android app usage
-
-use crate::{
-    MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus,
-};
+use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
 use jni::JNIEnv;
 use jni::JavaVM;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::mem::ManuallyDrop;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Embedded DEX bytecode containing `MediaSessionHelper` class.
@@ -194,12 +190,16 @@ pub fn set_playback_state_with_context(
     env.call_static_method::<&JClass, _, _>(
         &helper_class,
         "setPlaybackState",
-        "(IJF)V",
+        "(IJFZZ)V",
         &[
             JValue::Int(status),
             JValue::Long(position_ms),
             #[allow(clippy::cast_possible_truncation)]
             JValue::Float(state.rate() as f32),
+            JValue::Bool(u8::from(state.queue_navigation_controls().next_enabled())),
+            JValue::Bool(u8::from(
+                state.queue_navigation_controls().previous_enabled(),
+            )),
         ],
     )
     .map_err(|e| MediaError::UpdateFailed(format!("setPlaybackState: {e}")))?;
@@ -252,6 +252,11 @@ fn parse_media_command(raw: &str) -> Result<MediaCommand, MediaError> {
         "stop" => Ok(MediaCommand::Stop),
         "next" => Ok(MediaCommand::Next),
         "previous" => Ok(MediaCommand::Previous),
+        "audio_focus_gained" => Ok(MediaCommand::AudioFocusGained),
+        "audio_focus_lost" => Ok(MediaCommand::AudioFocusLost),
+        "audio_focus_lost_transient" => Ok(MediaCommand::AudioFocusLostTransient),
+        "audio_focus_lost_duck" => Ok(MediaCommand::AudioFocusLostDuck),
+        "audio_becoming_noisy" => Ok(MediaCommand::AudioBecomingNoisy),
         _ if raw.starts_with("seek:") => {
             let millis = raw
                 .split_once(':')
@@ -316,7 +321,6 @@ fn poll_command_with_context(env: &mut JNIEnv) -> Result<Option<MediaCommand>, M
 pub struct MediaCenterInner {
     vm: JavaVM,
     context: GlobalRef,
-    handler: Mutex<Option<Box<dyn MediaCommandHandler>>>,
 }
 
 impl core::fmt::Debug for MediaCenterInner {
@@ -363,11 +367,7 @@ impl MediaCenterInner {
             context
         };
 
-        Ok(Self {
-            vm,
-            context,
-            handler: Mutex::new(None),
-        })
+        Ok(Self { vm, context })
     }
 
     pub fn set_metadata(&self, metadata: &MediaMetadata) -> Result<(), MediaError> {
@@ -376,19 +376,6 @@ impl MediaCenterInner {
 
     pub fn set_playback_state(&self, state: &PlaybackState) -> Result<(), MediaError> {
         self.with_attached_env(|env, _context| set_playback_state_with_context(env, state))
-    }
-
-    pub fn set_command_handler(
-        &self,
-        handler: Box<dyn MediaCommandHandler>,
-    ) -> Result<(), MediaError> {
-        let mut slot = self
-            .handler
-            .lock()
-            .map_err(|e| MediaError::Unknown(format!("command handler lock poisoned: {e}")))?;
-        *slot = Some(handler);
-        drop(slot);
-        Ok(())
     }
 
     pub fn request_audio_focus(&self) -> Result<(), MediaError> {
@@ -412,16 +399,12 @@ impl MediaCenterInner {
         });
     }
 
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform media center integration API is instance-based"
+    )]
     pub fn run_loop(&self, duration: Duration) {
         std::thread::sleep(duration);
-        if let Some(command) = self.poll_command() {
-            let guard = self.handler.lock().unwrap_or_else(|e| {
-                panic!("waterkit-audio: command handler lock poisoned in run_loop: {e}")
-            });
-            if let Some(handler) = guard.as_ref() {
-                handler.on_command(command);
-            }
-        }
     }
 
     pub fn poll_command(&self) -> Option<MediaCommand> {

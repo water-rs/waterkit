@@ -1,9 +1,5 @@
 //! Android camera implementation using Camera2 + `MediaRecorder` via JNI/Kotlin bridge.
 
-#![allow(clippy::needless_pass_by_ref_mut)] // API consistency across platforms
-#![allow(clippy::unused_async)] // API consistency across platforms
-#![allow(clippy::unused_self)]
-
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
     ExposureMode, FlashMode, FocusMode, Frame, Photo, PixelFormat, RawPhoto, RawPhotoFormat,
@@ -196,7 +192,6 @@ impl AndroidBridge {
     }
 
     fn read_java_string(
-        &self,
         env: &mut jni::JNIEnv,
         object: JObject,
         context: &str,
@@ -430,9 +425,9 @@ impl AndroidBridge {
                     )));
                 }
 
-                let id = self.read_java_string(env, id_obj, "camera id")?;
-                let name = self.read_java_string(env, name_obj, "camera name")?;
-                let is_front_raw = self.read_java_string(env, is_front_obj, "camera facing")?;
+                let id = Self::read_java_string(env, id_obj, "camera id")?;
+                let name = Self::read_java_string(env, name_obj, "camera name")?;
+                let is_front_raw = Self::read_java_string(env, is_front_obj, "camera facing")?;
 
                 let is_front_facing = match is_front_raw.as_str() {
                     "true" | "True" | "TRUE" => true,
@@ -713,13 +708,23 @@ impl AndroidBridge {
         self.with_env(|env| self.frame_size_internal(env))
     }
 
-    fn get_frame(&self, start_instant: Instant) -> Result<Option<RawFrame>, CameraError> {
+    fn wait_for_frame(
+        &self,
+        start_instant: Instant,
+        timeout_ms: i32,
+        expected_size: Resolution,
+    ) -> Result<Option<RawFrame>, CameraError> {
         self.with_env(|env| {
             let frame_obj = env
-                .call_method(self.helper.as_obj(), "getFrame", "()[B", &[])
+                .call_method(
+                    self.helper.as_obj(),
+                    "waitForNextFrame",
+                    "(I)[B",
+                    &[JValue::Int(timeout_ms.max(0))],
+                )
                 .and_then(jni::objects::JValueGen::l)
                 .map_err(|error| {
-                    CameraError::CaptureFailed(format!("getFrame JNI call: {error}"))
+                    CameraError::CaptureFailed(format!("waitForNextFrame JNI call: {error}"))
                 })?;
 
             if frame_obj.is_null() {
@@ -731,7 +736,27 @@ impl AndroidBridge {
                 CameraError::CaptureFailed(format!("convert_byte_array(frame): {error}"))
             })?;
 
-            let size = self.frame_size_internal(env)?;
+            let hinted_expected = usize::try_from(expected_size.width)
+                .ok()
+                .and_then(|width| {
+                    usize::try_from(expected_size.height)
+                        .ok()
+                        .and_then(move |height| width.checked_mul(height))
+                })
+                .and_then(|pixels| pixels.checked_mul(4))
+                .ok_or_else(|| {
+                    CameraError::CaptureFailed(format!(
+                        "frame size overflow: {}x{}",
+                        expected_size.width, expected_size.height
+                    ))
+                })?;
+
+            let size = if data.len() == hinted_expected {
+                expected_size
+            } else {
+                self.frame_size_internal(env)?
+            };
+
             let expected = usize::try_from(size.width)
                 .ok()
                 .and_then(|width| {
@@ -815,7 +840,7 @@ impl AndroidBridge {
         if self.call_bool_with_float("setZoom", value)? {
             Ok(())
         } else {
-            Err(CameraError::ControlNotSupported("zoom".into()))
+            Err(CameraError::ControlUnsupported("zoom".into()))
         }
     }
 
@@ -823,7 +848,7 @@ impl AndroidBridge {
         if self.call_bool_with_int("setFlashMode", value)? {
             Ok(())
         } else {
-            Err(CameraError::ControlNotSupported("flash".into()))
+            Err(CameraError::ControlUnsupported("flash".into()))
         }
     }
 
@@ -831,7 +856,7 @@ impl AndroidBridge {
         if self.call_bool_with_int("setStabilizationMode", value)? {
             Ok(())
         } else {
-            Err(CameraError::ControlNotSupported("stabilization".into()))
+            Err(CameraError::ControlUnsupported("stabilization".into()))
         }
     }
 
@@ -839,7 +864,7 @@ impl AndroidBridge {
         if self.call_bool_with_int("setDynamicRange", value)? {
             Ok(())
         } else {
-            Err(CameraError::ControlNotSupported("dynamic_range".into()))
+            Err(CameraError::ControlUnsupported("dynamic_range".into()))
         }
     }
 
@@ -847,7 +872,7 @@ impl AndroidBridge {
         if self.call_bool_with_float("setExposureCompensation", value)? {
             Ok(())
         } else {
-            Err(CameraError::ControlNotSupported(
+            Err(CameraError::ControlUnsupported(
                 "exposure_compensation".into(),
             ))
         }
@@ -857,7 +882,7 @@ impl AndroidBridge {
         if self.call_bool_with_int("setFocusMode", value)? {
             Ok(())
         } else {
-            Err(CameraError::ControlNotSupported("focus_mode".into()))
+            Err(CameraError::ControlUnsupported("focus_mode".into()))
         }
     }
 
@@ -865,7 +890,7 @@ impl AndroidBridge {
         if self.call_bool_with_float("setFocusDistanceNormalized", value)? {
             Ok(())
         } else {
-            Err(CameraError::ControlNotSupported("focus_distance".into()))
+            Err(CameraError::ControlUnsupported("focus_distance".into()))
         }
     }
 
@@ -1042,6 +1067,10 @@ impl CameraInner {
     }
 
     /// Open a camera by ID.
+    #[allow(
+        clippy::unused_async,
+        reason = "the cross-platform camera open API is async even when the Android JNI setup completes synchronously"
+    )]
     pub async fn open(
         camera_id: &str,
         config: CameraConfig,
@@ -1075,18 +1104,28 @@ impl CameraInner {
             }
         };
 
-        let (sender, receiver) = async_channel::bounded(2);
+        let (sender, receiver) = async_channel::bounded(1);
         let running = Arc::new(AtomicBool::new(true));
         let running_for_thread = Arc::clone(&running);
         let bridge_for_thread = Arc::clone(&bridge);
         let start_instant = Instant::now();
-        let sleep_ms = (1_000_u64 / u64::from(config.frame_rate.max(1))).max(5);
+        let frame_wait_ms = i32::try_from((1_000_u64 / u64::from(config.frame_rate.max(1))).max(5))
+            .unwrap_or(i32::MAX);
+        let mut frame_resolution = resolution;
 
         std::thread::spawn(move || {
             while running_for_thread.load(Ordering::SeqCst) {
-                match bridge_for_thread.get_frame(start_instant) {
+                match bridge_for_thread.wait_for_frame(
+                    start_instant,
+                    frame_wait_ms,
+                    frame_resolution,
+                ) {
                     Ok(Some(frame)) => {
-                        let _ = sender.try_send(frame);
+                        frame_resolution = Resolution {
+                            width: frame.width,
+                            height: frame.height,
+                        };
+                        let _ = sender.force_send(frame);
                     }
                     Ok(None) => {}
                     Err(_) => {
@@ -1094,8 +1133,6 @@ impl CameraInner {
                         break;
                     }
                 }
-
-                std::thread::sleep(Duration::from_millis(sleep_ms));
             }
 
             let _ = bridge_for_thread.stop_capture();
@@ -1124,14 +1161,14 @@ impl CameraInner {
     pub fn apply_controls(&mut self, controls: &CameraControls) -> Result<(), CameraError> {
         if let Some(ref exposure) = controls.exposure {
             if exposure.mode != ExposureMode::Auto {
-                return Err(CameraError::ControlNotSupported(
+                return Err(CameraError::ControlUnsupported(
                     "manual exposure mode".into(),
                 ));
             }
 
             if let Some(ev) = exposure.compensation {
                 if !self.capabilities.supports_exposure_compensation {
-                    return Err(CameraError::ControlNotSupported(
+                    return Err(CameraError::ControlUnsupported(
                         "exposure_compensation".into(),
                     ));
                 }
@@ -1139,7 +1176,7 @@ impl CameraInner {
             }
 
             if exposure.iso.is_some() || exposure.duration.is_some() {
-                return Err(CameraError::ControlNotSupported(
+                return Err(CameraError::ControlUnsupported(
                     "manual ISO/exposure duration".into(),
                 ));
             }
@@ -1163,7 +1200,7 @@ impl CameraInner {
                 self.bridge.set_focus_distance_normalized(distance)?;
             }
             if focus.point_of_interest.is_some() {
-                return Err(CameraError::ControlNotSupported(
+                return Err(CameraError::ControlUnsupported(
                     "focus point of interest".into(),
                 ));
             }
@@ -1171,14 +1208,14 @@ impl CameraInner {
         }
 
         if controls.white_balance.is_some() {
-            return Err(CameraError::ControlNotSupported(
+            return Err(CameraError::ControlUnsupported(
                 "manual white balance".into(),
             ));
         }
 
         if let Some(zoom) = controls.zoom {
             let Some((min, max)) = self.capabilities.zoom_range else {
-                return Err(CameraError::ControlNotSupported("zoom".into()));
+                return Err(CameraError::ControlUnsupported("zoom".into()));
             };
             if zoom < min || zoom > max {
                 return Err(CameraError::ValueOutOfRange(format!(
@@ -1202,7 +1239,7 @@ impl CameraInner {
 
         if let Some(profile) = controls.dynamic_range {
             if !self.capabilities.dynamic_ranges.contains(&profile) {
-                return Err(CameraError::ControlNotSupported(format!(
+                return Err(CameraError::ControlUnsupported(format!(
                     "dynamic range {profile:?}"
                 )));
             }
@@ -1222,7 +1259,7 @@ impl CameraInner {
                 .stabilization_modes
                 .contains(&stabilization)
             {
-                return Err(CameraError::ControlNotSupported(format!(
+                return Err(CameraError::ControlUnsupported(format!(
                     "stabilization {stabilization:?}"
                 )));
             }
@@ -1306,7 +1343,11 @@ impl CameraInner {
         )
     }
 
-    pub async fn capture_photo(&mut self) -> Result<Photo, CameraError> {
+    #[allow(
+        clippy::unused_async,
+        reason = "the cross-platform camera capture API is async even when the Android JNI call completes synchronously"
+    )]
+    pub async fn capture_photo(&self) -> Result<Photo, CameraError> {
         let encoded = self.bridge.capture_photo_data()?;
         let (rgba, width, height) = decode_encoded_photo(&encoded)?;
 
@@ -1354,9 +1395,13 @@ impl CameraInner {
         })
     }
 
-    pub async fn capture_raw_photo(&mut self) -> Result<RawPhoto, CameraError> {
+    #[allow(
+        clippy::unused_async,
+        reason = "the cross-platform camera raw capture API is async even when the Android JNI call completes synchronously"
+    )]
+    pub async fn capture_raw_photo(&self) -> Result<RawPhoto, CameraError> {
         if !self.capabilities.supports_raw_photo {
-            return Err(CameraError::ControlNotSupported("raw_photo".into()));
+            return Err(CameraError::ControlUnsupported("raw_photo".into()));
         }
         let dng = self.bridge.capture_raw_photo_data()?;
         let resolution = self.bridge.frame_size()?;
@@ -1408,7 +1453,7 @@ impl CameraInner {
 
     pub fn start_raw_recording(&mut self, path: &Path) -> Result<(), CameraError> {
         if !self.capabilities.supports_raw_video {
-            return Err(CameraError::ControlNotSupported("raw_video".into()));
+            return Err(CameraError::ControlUnsupported("raw_video".into()));
         }
         if self.recording_mode.is_some() {
             return Err(CameraError::AlreadyInUse);

@@ -1,10 +1,5 @@
 //! Android sensor implementation using JNI.
 
-#![allow(dead_code)] // Functions and statics are exported for Android app usage
-#![allow(clippy::cast_possible_truncation)] // Intentional truncation for timestamps
-#![allow(clippy::cast_sign_loss)] // Array lengths from JNI
-#![allow(clippy::option_if_let_else)] // Pattern used for readability
-
 use crate::{ScalarData, SensorData, SensorError, SensorStream};
 use futures::stream;
 use jni::JNIEnv;
@@ -148,9 +143,11 @@ fn ensure_dex_loaded() -> Result<(), SensorError> {
 
 fn parse_sensor_result(env: &mut JNIEnv, result: JObject) -> Result<SensorData, SensorError> {
     let arr: jni::objects::JDoubleArray = result.into();
-    let len =
+    let len = usize::try_from(
         env.get_array_length(&arr)
-            .map_err(|e| SensorError::Unknown(format!("get_array_length: {e}")))? as usize;
+            .map_err(|e| SensorError::Unknown(format!("get_array_length: {e}")))?,
+    )
+    .map_err(|error| SensorError::Unknown(format!("negative sensor result length: {error}")))?;
 
     if len < 1 {
         return Err(SensorError::NotAvailable);
@@ -168,14 +165,21 @@ fn parse_sensor_result(env: &mut JNIEnv, result: JObject) -> Result<SensorData, 
         return Err(SensorError::Unknown("Invalid result array".into()));
     }
 
-    Ok(SensorData::new(buf[1], buf[2], buf[3], buf[4] as u64))
+    Ok(SensorData::new(
+        buf[1],
+        buf[2],
+        buf[3],
+        timestamp_from_jni_double(buf[4])?,
+    ))
 }
 
 fn parse_scalar_result(env: &mut JNIEnv, result: JObject) -> Result<ScalarData, SensorError> {
     let arr: jni::objects::JDoubleArray = result.into();
-    let len =
+    let len = usize::try_from(
         env.get_array_length(&arr)
-            .map_err(|e| SensorError::Unknown(format!("get_array_length: {e}")))? as usize;
+            .map_err(|e| SensorError::Unknown(format!("get_array_length: {e}")))?,
+    )
+    .map_err(|error| SensorError::Unknown(format!("negative sensor result length: {error}")))?;
 
     if len < 1 {
         return Err(SensorError::NotAvailable);
@@ -193,10 +197,27 @@ fn parse_scalar_result(env: &mut JNIEnv, result: JObject) -> Result<ScalarData, 
         return Err(SensorError::Unknown("Invalid result array".into()));
     }
 
-    Ok(ScalarData::new(buf[1], buf[2] as u64))
+    Ok(ScalarData::new(buf[1], timestamp_from_jni_double(buf[2])?))
 }
 
-// Check sensor availability with manual context (helper)
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "Android sensor helper returns epoch milliseconds as a non-negative finite double"
+)]
+fn timestamp_from_jni_double(value: f64) -> Result<u64, SensorError> {
+    if !value.is_finite() || value < 0.0 {
+        return Err(SensorError::Unknown(format!(
+            "invalid Android sensor timestamp: {value}"
+        )));
+    }
+    Ok(value as u64)
+}
+
+/// Check sensor availability with an explicit Android `Context`.
+///
+/// # Errors
+/// Returns [`SensorError`] when DEX initialization, helper loading, or the JNI call fails.
 pub fn is_sensor_available_with_context(
     env: &mut JNIEnv,
     context: &JObject,
@@ -226,7 +247,11 @@ pub fn is_sensor_available_with_context(
     Ok(result)
 }
 
-// Read sensor with manual context (helper)
+/// Read a sensor with an explicit Android `Context`.
+///
+/// # Errors
+/// Returns [`SensorError`] when DEX initialization, helper loading, JNI access, or payload
+/// decoding fails.
 pub fn read_sensor_with_context(
     env: &mut JNIEnv,
     context: &JObject,
@@ -249,7 +274,11 @@ pub fn read_sensor_with_context(
     parse_sensor_result(env, result)
 }
 
-// Read pressure with manual context (helper)
+/// Read pressure data with an explicit Android `Context`.
+///
+/// # Errors
+/// Returns [`SensorError`] when DEX initialization, helper loading, JNI access, or payload
+/// decoding fails.
 pub fn read_pressure_with_context(
     env: &mut JNIEnv,
     context: &JObject,
@@ -271,7 +300,11 @@ pub fn read_pressure_with_context(
     parse_scalar_result(env, result)
 }
 
-// Read light with manual context (helper)
+/// Read ambient light data with an explicit Android `Context`.
+///
+/// # Errors
+/// Returns [`SensorError`] when DEX initialization, helper loading, JNI access, or payload
+/// decoding fails.
 pub fn read_light_with_context(
     env: &mut JNIEnv,
     context: &JObject,
@@ -391,10 +424,7 @@ pub fn accelerometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>,
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
     Ok(Box::pin(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
-        match accelerometer_read().await {
-            Ok(data) => Some((data, ())),
-            _ => None,
-        }
+        (accelerometer_read().await).map_or(None, |data| Some((data, ())))
     })))
 }
 
@@ -414,10 +444,7 @@ pub fn gyroscope_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, Sen
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
     Ok(Box::pin(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
-        match gyroscope_read().await {
-            Ok(data) => Some((data, ())),
-            _ => None,
-        }
+        (gyroscope_read().await).map_or(None, |data| Some((data, ())))
     })))
 }
 
@@ -437,10 +464,7 @@ pub fn magnetometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, 
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
     Ok(Box::pin(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
-        match magnetometer_read().await {
-            Ok(data) => Some((data, ())),
-            _ => None,
-        }
+        (magnetometer_read().await).map_or(None, |data| Some((data, ())))
     })))
 }
 
@@ -460,10 +484,7 @@ pub fn barometer_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, Sen
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
     Ok(Box::pin(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
-        match barometer_read().await {
-            Ok(data) => Some((data, ())),
-            _ => None,
-        }
+        (barometer_read().await).map_or(None, |data| Some((data, ())))
     })))
 }
 
@@ -483,9 +504,6 @@ pub fn ambient_light_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>,
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
     Ok(Box::pin(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
-        match ambient_light_read().await {
-            Ok(data) => Some((data, ())),
-            _ => None,
-        }
+        (ambient_light_read().await).map_or(None, |data| Some((data, ())))
     })))
 }

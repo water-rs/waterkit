@@ -17,6 +17,31 @@ private func currentTimestampMs() -> UInt64 {
 #if os(iOS)
 
 private let motionManager = CMMotionManager()
+private let sensorReadTimeout: DispatchTimeInterval = .seconds(1)
+
+private func readMotionVectorSample<T>(
+    startUpdates: (OperationQueue, @escaping (T?, Error?) -> Void) -> Void,
+    stopUpdates: () -> Void,
+    map: @escaping (T) -> SensorReading
+) -> SensorResult {
+    var result: SensorResult = .Timeout
+    let semaphore = DispatchSemaphore(value: 0)
+    let queue = OperationQueue()
+
+    startUpdates(queue) { data, _ in
+        if let data {
+            result = .Success(map(data))
+        }
+        semaphore.signal()
+    }
+
+    if semaphore.wait(timeout: .now() + sensorReadTimeout) == .timedOut {
+        result = .Timeout
+    }
+
+    stopUpdates()
+    return result
+}
 
 func is_accelerometer_available() -> Bool {
     return motionManager.isAccelerometerAvailable
@@ -26,30 +51,19 @@ func read_accelerometer() -> SensorResult {
     guard motionManager.isAccelerometerAvailable else {
         return .NotAvailable
     }
-    
+
     motionManager.accelerometerUpdateInterval = 0.01
-    motionManager.startAccelerometerUpdates()
-    
-    var attempts = 0
-    while motionManager.accelerometerData == nil && attempts < 100 {
-        Thread.sleep(forTimeInterval: 0.01)
-        attempts += 1
+    return readMotionVectorSample(
+        startUpdates: motionManager.startAccelerometerUpdates(to:withHandler:),
+        stopUpdates: motionManager.stopAccelerometerUpdates
+    ) { data in
+        SensorReading(
+            x: data.acceleration.x,
+            y: data.acceleration.y,
+            z: data.acceleration.z,
+            timestamp_ms: currentTimestampMs()
+        )
     }
-    
-    guard let data = motionManager.accelerometerData else {
-        motionManager.stopAccelerometerUpdates()
-        return .Timeout
-    }
-    
-    let reading = SensorReading(
-        x: data.acceleration.x,
-        y: data.acceleration.y,
-        z: data.acceleration.z,
-        timestamp_ms: currentTimestampMs()
-    )
-    
-    motionManager.stopAccelerometerUpdates()
-    return .Success(reading)
 }
 
 func is_gyroscope_available() -> Bool {
@@ -60,30 +74,19 @@ func read_gyroscope() -> SensorResult {
     guard motionManager.isGyroAvailable else {
         return .NotAvailable
     }
-    
+
     motionManager.gyroUpdateInterval = 0.01
-    motionManager.startGyroUpdates()
-    
-    var attempts = 0
-    while motionManager.gyroData == nil && attempts < 100 {
-        Thread.sleep(forTimeInterval: 0.01)
-        attempts += 1
+    return readMotionVectorSample(
+        startUpdates: motionManager.startGyroUpdates(to:withHandler:),
+        stopUpdates: motionManager.stopGyroUpdates
+    ) { data in
+        SensorReading(
+            x: data.rotationRate.x,
+            y: data.rotationRate.y,
+            z: data.rotationRate.z,
+            timestamp_ms: currentTimestampMs()
+        )
     }
-    
-    guard let data = motionManager.gyroData else {
-        motionManager.stopGyroUpdates()
-        return .Timeout
-    }
-    
-    let reading = SensorReading(
-        x: data.rotationRate.x,
-        y: data.rotationRate.y,
-        z: data.rotationRate.z,
-        timestamp_ms: currentTimestampMs()
-    )
-    
-    motionManager.stopGyroUpdates()
-    return .Success(reading)
 }
 
 func is_magnetometer_available() -> Bool {
@@ -94,30 +97,19 @@ func read_magnetometer() -> SensorResult {
     guard motionManager.isMagnetometerAvailable else {
         return .NotAvailable
     }
-    
+
     motionManager.magnetometerUpdateInterval = 0.01
-    motionManager.startMagnetometerUpdates()
-    
-    var attempts = 0
-    while motionManager.magnetometerData == nil && attempts < 100 {
-        Thread.sleep(forTimeInterval: 0.01)
-        attempts += 1
+    return readMotionVectorSample(
+        startUpdates: motionManager.startMagnetometerUpdates(to:withHandler:),
+        stopUpdates: motionManager.stopMagnetometerUpdates
+    ) { data in
+        SensorReading(
+            x: data.magneticField.x,
+            y: data.magneticField.y,
+            z: data.magneticField.z,
+            timestamp_ms: currentTimestampMs()
+        )
     }
-    
-    guard let data = motionManager.magnetometerData else {
-        motionManager.stopMagnetometerUpdates()
-        return .Timeout
-    }
-    
-    let reading = SensorReading(
-        x: data.magneticField.x,
-        y: data.magneticField.y,
-        z: data.magneticField.z,
-        timestamp_ms: currentTimestampMs()
-    )
-    
-    motionManager.stopMagnetometerUpdates()
-    return .Success(reading)
 }
 
 func is_barometer_available() -> Bool {
@@ -146,8 +138,7 @@ func read_barometer() -> ScalarResult {
         semaphore.signal()
     }
     
-    let timeout = DispatchTime.now() + .seconds(1)
-    if semaphore.wait(timeout: timeout) == .timedOut {
+    if semaphore.wait(timeout: .now() + sensorReadTimeout) == .timedOut {
         result = .Timeout
     }
     

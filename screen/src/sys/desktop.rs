@@ -8,6 +8,8 @@ use crate::{Error, ScreenInfo, Screenshot};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use brightness::blocking::{Brightness, brightness_devices};
 use std::io::Cursor;
+#[cfg(target_os = "linux")]
+use wayland_sys as _;
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn map_brightness_error(error: &brightness::Error) -> Error {

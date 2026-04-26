@@ -1,7 +1,14 @@
 use crate::{RecognitionConfig, RecognitionResult, SpeechError, TtsConfig, Voice};
+use std::io::BufRead;
+use std::process::{Command, Stdio};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-pub const fn recognition_is_available() -> bool {
-    false
+const LINUX_RECOGNIZER_ENV: &str = "WATERKIT_SPEECH_LINUX_RECOGNIZER";
+const LANGUAGE_PLACEHOLDER: &str = "{language}";
+
+pub fn recognition_is_available() -> bool {
+    std::env::var(LINUX_RECOGNIZER_ENV).is_ok_and(|value| !value.trim().is_empty())
 }
 
 #[derive(Debug)]
@@ -76,17 +83,98 @@ impl TtsInner {
 }
 
 #[derive(Debug)]
-pub struct SpeechRecognizerInner;
+pub struct SpeechRecognizerInner {
+    child: Mutex<Option<std::process::Child>>,
+    stopping: AtomicBool,
+}
 
 impl SpeechRecognizerInner {
     #[allow(clippy::unused_async)]
     pub async fn start(
-        _config: RecognitionConfig,
+        config: RecognitionConfig,
     ) -> Result<(Self, async_channel::Receiver<RecognitionResult>), SpeechError> {
-        Err(SpeechError::NotSupported)
+        let recognizer_command = std::env::var(LINUX_RECOGNIZER_ENV)
+            .map_err(|_| SpeechError::NotAvailable)?
+            .trim()
+            .to_string();
+        if recognizer_command.is_empty() {
+            return Err(SpeechError::NotAvailable);
+        }
+
+        let mut child = Command::new("sh")
+            .arg("-lc")
+            .arg(build_linux_command(
+                &recognizer_command,
+                config.language.as_deref(),
+            ))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .spawn()
+            .map_err(|e| SpeechError::PlatformError(format!("spawn recognizer command: {e}")))?;
+
+        let stdout = child.stdout.take().ok_or_else(|| {
+            SpeechError::PlatformError("recognizer command did not expose stdout".into())
+        })?;
+        let (tx, rx) = async_channel::bounded(64);
+
+        std::thread::Builder::new()
+            .name("waterkit-speech-linux-recognizer".to_string())
+            .spawn(move || {
+                let reader = std::io::BufReader::new(stdout);
+                for line_result in reader.lines() {
+                    let Ok(line) = line_result else {
+                        break;
+                    };
+                    let text = line.trim().to_string();
+                    if text.is_empty() {
+                        continue;
+                    }
+                    let _ = tx.try_send(RecognitionResult {
+                        text,
+                        is_final: true,
+                        confidence: None,
+                    });
+                }
+                tx.close();
+            })
+            .map_err(|e| {
+                SpeechError::PlatformError(format!("spawn recognizer reader thread: {e}"))
+            })?;
+
+        Ok((
+            Self {
+                child: Mutex::new(Some(child)),
+                stopping: AtomicBool::new(false),
+            },
+            rx,
+        ))
     }
 
-    pub const fn stop(&self) {
-        let _ = self;
+    pub fn stop(&self) {
+        self.stopping.store(true, Ordering::Relaxed);
+        if let Ok(mut child_guard) = self.child.lock()
+            && let Some(child) = child_guard.as_mut()
+        {
+            let _ = child.kill();
+        }
     }
+}
+
+impl Drop for SpeechRecognizerInner {
+    fn drop(&mut self) {
+        self.stopping.store(true, Ordering::Relaxed);
+        if let Ok(child_guard) = self.child.get_mut()
+            && let Some(child) = child_guard.as_mut()
+        {
+            let _ = child.kill();
+        }
+    }
+}
+
+fn build_linux_command(command: &str, language: Option<&str>) -> String {
+    let Some(language) = language else {
+        return command.to_string();
+    };
+    command.replace(LANGUAGE_PLACEHOLDER, language)
 }

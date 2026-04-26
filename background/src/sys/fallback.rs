@@ -13,30 +13,30 @@ impl BackgroundRuntimeInner {
         _event_ctx: u64,
         _config: &BootstrapConfig,
     ) -> Result<Self, BackgroundError> {
-        Err(BackgroundError::NotSupported)
+        Err(BackgroundError::Unsupported)
     }
 
     pub fn submit_app_refresh(&self, _request: AppRefreshRequest) -> Result<(), BackgroundError> {
-        Err(BackgroundError::NotSupported)
+        Err(BackgroundError::Unsupported)
     }
 
     pub fn submit_processing(&self, _request: ProcessingRequest) -> Result<(), BackgroundError> {
-        Err(BackgroundError::NotSupported)
+        Err(BackgroundError::Unsupported)
     }
 
     pub fn submit_continued_processing(
         &self,
         _request: ContinuedProcessingRequest,
     ) -> Result<(), BackgroundError> {
-        Err(BackgroundError::NotSupported)
+        Err(BackgroundError::Unsupported)
     }
 
     pub const fn cancel(&self, _identifier: &TaskIdentifier) -> Result<(), BackgroundError> {
-        Err(BackgroundError::NotSupported)
+        Err(BackgroundError::Unsupported)
     }
 
     pub const fn cancel_all(&self) -> Result<(), BackgroundError> {
-        Err(BackgroundError::NotSupported)
+        Err(BackgroundError::Unsupported)
     }
 }
 
@@ -50,5 +50,5 @@ pub const fn complete_task(
     _task_token: u64,
     _success: bool,
 ) -> Result<(), BackgroundError> {
-    Err(BackgroundError::NotSupported)
+    Err(BackgroundError::Unsupported)
 }

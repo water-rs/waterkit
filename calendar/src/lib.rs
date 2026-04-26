@@ -1,14 +1,15 @@
 //! Cross-platform calendar and events access.
 //!
 //! Provides read/write access to the device's calendar store.
-//! Full implementation on iOS, macOS, and Android.
+//! iOS/macOS and Android use native system stores. Windows/Linux use a
+//! persistent desktop store under the user's local data directory.
 
 #![warn(missing_docs)]
 
 mod sys;
 
 /// A calendar on the device.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Calendar {
     /// Platform-specific calendar identifier.
     pub id: String,
@@ -45,7 +46,7 @@ pub struct RecurrenceRule {
 }
 
 /// A calendar event.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Event {
     /// Platform-specific event identifier.
     pub id: String,
@@ -66,7 +67,7 @@ pub struct Event {
 }
 
 /// Data for creating an event.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EventData {
     /// Event title.
     pub title: String,
@@ -133,7 +134,7 @@ pub enum CalendarError {
     ReadOnly,
     /// Not supported on this platform.
     #[error("not supported")]
-    NotSupported,
+    Unsupported,
     /// Platform error.
     #[error("platform error: {0}")]
     PlatformError(String),

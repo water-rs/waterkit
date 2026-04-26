@@ -20,6 +20,9 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::*;
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod desktop_common;
+
 #[cfg(not(any(
     target_os = "ios",
     target_os = "macos",

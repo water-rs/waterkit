@@ -1,3 +1,4 @@
+use crate::sys::desktop_common::DesktopDeepLinkHandlerInner;
 use crate::{DeepLink, DeepLinkError};
 
 #[allow(clippy::unused_async)]
@@ -28,20 +29,22 @@ pub async fn can_open_url(url: &str) -> Result<bool, DeepLinkError> {
 }
 
 #[derive(Debug)]
-pub struct DeepLinkHandlerInner;
+pub struct DeepLinkHandlerInner {
+    inner: DesktopDeepLinkHandlerInner,
+}
 
 impl DeepLinkHandlerInner {
     #[allow(clippy::unused_async)]
     pub async fn start() -> Result<(Self, async_channel::Receiver<DeepLink>), DeepLinkError> {
-        Err(DeepLinkError::NotSupported)
+        let (inner, rx) = DesktopDeepLinkHandlerInner::start().await?;
+        Ok((Self { inner }, rx))
     }
 
-    pub const fn initial_link(&self) -> Result<Option<DeepLink>, DeepLinkError> {
-        let _ = self;
-        Err(DeepLinkError::NotSupported)
+    pub fn initial_link(&self) -> Result<Option<DeepLink>, DeepLinkError> {
+        self.inner.initial_link()
     }
 
-    pub const fn stop(&self) {
-        let _ = self;
+    pub fn stop(&self) {
+        self.inner.stop();
     }
 }

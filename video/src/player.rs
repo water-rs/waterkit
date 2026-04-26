@@ -119,7 +119,7 @@ impl VideoPlayer {
     /// # Errors
     /// Returns error if decoding fails.
     pub fn next_frame(&mut self) -> Result<Option<PlayerFrame>, VideoError> {
-        let Some((sample_data, pts, _is_keyframe)) = self.reader.read_sample() else {
+        let Some((sample_data, pts, _is_keyframe)) = self.reader.read_sample()? else {
             return Ok(None);
         };
 
@@ -177,7 +177,7 @@ impl VideoPlayer {
 
 /// Detect codec type from codec configuration data.
 fn detect_codec_type(config: Option<&[u8]>) -> Result<CodecType, VideoError> {
-    let config = config.ok_or_else(|| VideoError::NotSupported("No codec config found".into()))?;
+    let config = config.ok_or_else(|| VideoError::Unsupported("No codec config found".into()))?;
 
     // Check for avcC (H.264) - starts with version byte 0x01
     // The structure is: version(1) + profile(1) + compatibility(1) + level(1) + ...
@@ -215,7 +215,7 @@ fn detect_codec_type(config: Option<&[u8]>) -> Result<CodecType, VideoError> {
         }
     }
 
-    Err(VideoError::NotSupported(
+    Err(VideoError::Unsupported(
         "Unknown codec (only H.264 and H.265 are supported)".into(),
     ))
 }

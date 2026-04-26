@@ -24,7 +24,7 @@ waterkit-haptic = "0.1"
 | **macOS** | `NSHapticFeedbackManager` | Basic feedback only |
 | **Android** | `VibrationEffect` | Full support with amplitude control |
 | **Windows** | `SimpleHapticsController` | Basic feedback with intensity |
-| **Linux** | N/A | Not supported (no haptic hardware) |
+| **Linux** | `feedbackd` (`org.sigxcpu.Feedback`) | Event-based haptic feedback and patterns on environments exposing feedbackd |
 
 ## Usage
 

@@ -2,24 +2,20 @@
 //!
 //! This backend uses pure VA-API via `cros-codecs`.
 
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::missing_const_for_fn,
-    clippy::uninlined_format_args
-)]
-
 use crate::CodecError;
 use cros_codecs::decoder::stateless::h264::H264;
 use cros_codecs::decoder::stateless::h265::H265;
-use cros_codecs::decoder::stateless::{DecodeError, DynStatelessVideoDecoder, StatelessDecoder};
+use cros_codecs::decoder::stateless::{
+    DecodeError, DynStatelessVideoDecoder, StatelessDecoder, StatelessVideoDecoder,
+};
 use cros_codecs::decoder::{DecodedHandle, DecoderEvent};
-use cros_codecs::encoder::h264::{self, EncoderConfig as H264EncoderConfig};
+use cros_codecs::encoder::h264::EncoderConfig as H264EncoderConfig;
+use cros_codecs::encoder::stateless::h264;
 use cros_codecs::encoder::{FrameMetadata, VideoEncoder};
 use cros_codecs::video_frame::VideoFrame;
-use cros_codecs::video_frame::gbm_video_frame::{GbmDevice, GbmUsage};
+use cros_codecs::video_frame::gbm_video_frame::{GbmDevice, GbmUsage, GbmVideoFrame};
 use cros_codecs::video_frame::generic_dma_video_frame::GenericDmaVideoFrame;
-use cros_codecs::{BlockingMode, Fourcc, Resolution};
+use cros_codecs::{BlockingMode, Fourcc, FrameLayout, Resolution};
 use std::fmt;
 use std::sync::Arc;
 
@@ -165,11 +161,20 @@ impl LinuxDecoder {
         let mut offset = 0;
 
         while offset < packet.len() {
+            let gbm_device = Arc::clone(&self.gbm_device);
+            let display_resolution = self.display_resolution;
+            let coded_resolution = self.coded_resolution;
+            let mut allocate_frame = || {
+                Some(Self::allocate_decode_frame(
+                    &gbm_device,
+                    display_resolution,
+                    coded_resolution,
+                ))
+            };
             match self
                 .decoder
-                .decode(self.next_timestamp, &packet[offset..], &mut || {
-                    Some(self.allocate_decode_frame())
-                }) {
+                .decode(self.next_timestamp, &packet[offset..], &mut allocate_frame)
+            {
                 Ok(consumed) => {
                     if consumed == 0 {
                         return Err(CodecError::DecodingFailed(
@@ -180,7 +185,7 @@ impl LinuxDecoder {
                     self.next_timestamp += 1;
                     self.collect_decoder_events(&mut frames)?;
                 }
-                Err(DecodeError::NotEnoughOutputBuffers(_)) | Err(DecodeError::CheckEvents) => {
+                Err(DecodeError::NotEnoughOutputBuffers(_) | DecodeError::CheckEvents) => {
                     self.collect_decoder_events(&mut frames)?;
                 }
                 Err(e) => {
@@ -203,15 +208,19 @@ impl LinuxDecoder {
         }
     }
 
-    fn allocate_decode_frame(&self) -> GenericDmaVideoFrame {
-        Arc::clone(&self.gbm_device)
+    fn allocate_decode_frame(
+        gbm_device: &Arc<GbmDevice>,
+        display_resolution: Resolution,
+        coded_resolution: Resolution,
+    ) -> GenericDmaVideoFrame {
+        Arc::clone(gbm_device)
             .new_frame(
                 Fourcc::from(b"NV12"),
-                self.display_resolution,
-                self.coded_resolution,
+                display_resolution,
+                coded_resolution,
                 GbmUsage::Decode,
             )
-            .and_then(|frame| frame.to_generic_dma_video_frame())
+            .and_then(GbmVideoFrame::to_generic_dma_video_frame)
             .expect("failed to allocate VA-API decode output frame")
     }
 
@@ -375,7 +384,7 @@ impl LinuxEncoder {
 
         let metadata = FrameMetadata {
             timestamp: self.frame_count,
-            layout: Default::default(),
+            layout: FrameLayout::default(),
             force_keyframe: false,
         };
 
@@ -491,9 +500,9 @@ fn parse_h264_avcc(payload: &[u8]) -> Result<(usize, Vec<u8>), CodecError> {
         ));
     }
 
-    let num_pps = payload[cursor] as usize;
+    let pps_count = payload[cursor] as usize;
     cursor += 1;
-    for _ in 0..num_pps {
+    for _ in 0..pps_count {
         let nal = read_u16_len_nal(payload, &mut cursor, "PPS")?;
         prefix_nalus.extend_from_slice(&START_CODE);
         prefix_nalus.extend_from_slice(nal);
@@ -687,7 +696,7 @@ fn allocate_encode_frame(
             coded_resolution,
             usage,
         )
-        .and_then(|frame| frame.to_generic_dma_video_frame())
+        .and_then(GbmVideoFrame::to_generic_dma_video_frame)
         .map_err(|e| CodecError::EncodingFailed(format!("failed to allocate encode frame: {e}")))
 }
 
@@ -775,6 +784,8 @@ fn build_h264_avcc_from_annex_b(bitstream: &[u8]) -> Option<Vec<u8>> {
     if sps.len() < 4 {
         return None;
     }
+    let sps_len = u16::try_from(sps.len()).ok()?;
+    let pps_len = u16::try_from(pps.len()).ok()?;
 
     let mut avcc = Vec::with_capacity(11 + sps.len() + pps.len());
     avcc.push(1);
@@ -783,10 +794,10 @@ fn build_h264_avcc_from_annex_b(bitstream: &[u8]) -> Option<Vec<u8>> {
     avcc.push(sps[3]);
     avcc.push(0xFC | 0x03);
     avcc.push(0xE0 | 1);
-    avcc.extend_from_slice(&(sps.len() as u16).to_be_bytes());
+    avcc.extend_from_slice(&sps_len.to_be_bytes());
     avcc.extend_from_slice(&sps);
     avcc.push(1);
-    avcc.extend_from_slice(&(pps.len() as u16).to_be_bytes());
+    avcc.extend_from_slice(&pps_len.to_be_bytes());
     avcc.extend_from_slice(&pps);
 
     Some(avcc)
@@ -798,9 +809,7 @@ fn annex_b_nalus(data: &[u8]) -> Vec<&[u8]> {
 
     while let Some((start_idx, start_len)) = find_start_code(data, cursor) {
         let nalu_start = start_idx + start_len;
-        let end_idx = find_start_code(data, nalu_start)
-            .map(|(idx, _)| idx)
-            .unwrap_or(data.len());
+        let end_idx = find_start_code(data, nalu_start).map_or(data.len(), |(idx, _)| idx);
         if nalu_start < end_idx {
             nalus.push(&data[nalu_start..end_idx]);
         }

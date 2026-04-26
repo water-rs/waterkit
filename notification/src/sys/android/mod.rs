@@ -1,11 +1,7 @@
 //! Android notification implementation using JNI.
 
-#![allow(dead_code)] // Functions and statics are used by Android app via JNI
-#![allow(clippy::similar_names)] // JNI variable naming patterns
-#![allow(clippy::unused_self)] // API consistency
-
 use jni::JNIEnv;
-use jni::objects::{GlobalRef, JObject, JValue};
+use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
 use std::mem::ManuallyDrop;
 use std::sync::OnceLock;
 
@@ -17,15 +13,38 @@ static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"
 /// Cached class loader for the embedded DEX.
 static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
 
+fn dispatch_action(notification_id: String, action_url: String) {
+    let _ = (notification_id, action_url);
+}
+
 /// Handle to a shown notification (Android).
 #[derive(Debug)]
 pub struct NotificationHandleInner;
 
-impl NotificationHandleInner {
-    /// Wait for user interaction (not supported on Android).
-    pub fn wait_for_action<F: FnOnce(&str)>(self, _callback: F) {
-        // Actions are not supported on Android via this API
-    }
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_waterkit_notification_NotificationHelper_onAction<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    notification_id: JString<'local>,
+    action_url: JString<'local>,
+) {
+    let notification_id = env
+        .get_string(&notification_id)
+        .unwrap_or_else(|error| {
+            panic!("waterkit-notification: decode notification id failed: {error}")
+        })
+        .to_str()
+        .unwrap_or_else(|error| {
+            panic!("waterkit-notification: invalid UTF-8 notification id: {error}")
+        })
+        .to_owned();
+    let action_url = env
+        .get_string(&action_url)
+        .unwrap_or_else(|error| panic!("waterkit-notification: decode action url failed: {error}"))
+        .to_str()
+        .unwrap_or_else(|error| panic!("waterkit-notification: invalid UTF-8 action url: {error}"))
+        .to_owned();
+    dispatch_action(notification_id, action_url);
 }
 
 /// Initialize the DEX class loader. Must be called with a valid Context.
@@ -111,7 +130,7 @@ pub fn show_notification_with_context(
         .new_string("waterkit.notification.NotificationHelper")
         .map_err(|e| NotificationError::Platform(format!("new_string: {e}")))?;
 
-    let helper_class = env
+    let loaded_class = env
         .call_method(
             class_loader.as_obj(),
             "loadClass",
@@ -122,7 +141,7 @@ pub fn show_notification_with_context(
         .l()
         .map_err(|e| NotificationError::Platform(format!("loadClass result: {e}")))?;
 
-    let helper_jclass: jni::objects::JClass = helper_class.into();
+    let helper_jclass: jni::objects::JClass = loaded_class.into();
 
     let jtitle = env
         .new_string(&notification.title)
@@ -154,17 +173,24 @@ pub fn show_notification_with_context(
     let jactions = env
         .new_string(&actions_json)
         .map_err(|e| NotificationError::Platform(format!("new_string: {e}")))?;
+    let notification_id = notification.id.as_deref().ok_or_else(|| {
+        NotificationError::Platform("notification id missing in Android backend".into())
+    })?;
+    let jnotification_id = env
+        .new_string(notification_id)
+        .map_err(|e| NotificationError::Platform(format!("new_string: {e}")))?;
 
     env.call_static_method(
         helper_jclass,
         "showNotification",
-        "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;)V",
+        "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;)V",
         &[
             JValue::Object(context),
             JValue::Object(&jtitle),
             JValue::Object(&jbody),
             JValue::Int(importance),
             JValue::Object(&jactions),
+            JValue::Object(&jnotification_id),
         ],
     )
     .map_err(|e| NotificationError::Platform(format!("showNotification call failed: {e}")))?;

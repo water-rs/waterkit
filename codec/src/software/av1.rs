@@ -144,6 +144,22 @@ impl fmt::Debug for Av1Decoder {
     }
 }
 
+struct PictureLayout {
+    width: usize,
+    height: usize,
+    width_u32: u32,
+    height_u32: u32,
+    bit_depth: usize,
+    y_stride: usize,
+    uv_stride: usize,
+    y_min_stride: usize,
+    uv_min_stride: usize,
+    uv_width: usize,
+    uv_height: usize,
+    y_size: usize,
+    uv_size: usize,
+}
+
 impl Av1Decoder {
     pub fn new() -> Result<Self, CodecError> {
         let mut settings = MaybeUninit::<Dav1dSettings>::uninit();
@@ -191,6 +207,7 @@ impl Av1Decoder {
         }
 
         let mut frames = Vec::new();
+        let mut saw_would_block_once = false;
         loop {
             let mut picture = Dav1dPicture::default();
             let status = unsafe {
@@ -200,12 +217,19 @@ impl Av1Decoder {
                 let frame = Self::picture_to_cpu_frame(&picture);
                 unsafe { rav1d_lib::dav1d_picture_unref(Some(NonNull::from(&mut picture))) };
                 frames.push(frame?);
+                saw_would_block_once = false;
                 continue;
             }
             if status.0 < 0
                 && std::io::Error::from_raw_os_error(-status.0).kind() == ErrorKind::WouldBlock
             {
-                break;
+                if saw_would_block_once {
+                    break;
+                }
+                // `dav1d` may require one extra poll after the first EAGAIN to drain
+                // frames that became available during internal scheduling.
+                saw_would_block_once = true;
+                continue;
             }
             return Err(CodecError::DecodingFailed(format!(
                 "rav1d get_picture failed with code {}",
@@ -217,11 +241,39 @@ impl Av1Decoder {
     }
 
     fn picture_to_cpu_frame(picture: &Dav1dPicture) -> Result<CpuFrame, CodecError> {
+        let layout = Self::picture_layout(picture)?;
+        let y_ptr = Self::plane_ptr(picture, 0, "Y")?;
+        let u_ptr = Self::plane_ptr(picture, 1, "U")?;
+        let v_ptr = Self::plane_ptr(picture, 2, "V")?;
+
+        let mut nv12 = Vec::with_capacity(layout.y_size + layout.uv_size);
+
+        if layout.bit_depth == 8 {
+            Self::copy_8_bit_i420_to_nv12(&layout, y_ptr, u_ptr, v_ptr, &mut nv12);
+        } else {
+            Self::copy_high_bit_depth_i420_to_nv12(&layout, y_ptr, u_ptr, v_ptr, &mut nv12)?;
+        }
+
+        Ok(CpuFrame {
+            data: nv12,
+            width: layout.width_u32,
+            height: layout.height_u32,
+            timestamp_ns: 0,
+        })
+    }
+
+    fn picture_layout(picture: &Dav1dPicture) -> Result<PictureLayout, CodecError> {
         let width = usize::try_from(picture.p.w).map_err(|_| {
             CodecError::DecodingFailed(format!("rav1d returned invalid width {}", picture.p.w))
         })?;
+        let width_u32 = u32::try_from(width).map_err(|_| {
+            CodecError::DecodingFailed(format!("rav1d width {width} exceeds supported range"))
+        })?;
         let height = usize::try_from(picture.p.h).map_err(|_| {
             CodecError::DecodingFailed(format!("rav1d returned invalid height {}", picture.p.h))
+        })?;
+        let height_u32 = u32::try_from(height).map_err(|_| {
+            CodecError::DecodingFailed(format!("rav1d height {height} exceeds supported range"))
         })?;
         if picture.p.layout != DAV1D_PIXEL_LAYOUT_I420 {
             return Err(CodecError::DecodingFailed(format!(
@@ -229,7 +281,13 @@ impl Av1Decoder {
                 picture.p.layout
             )));
         }
-        if picture.p.bpc != 8 {
+        let bit_depth = usize::try_from(picture.p.bpc).map_err(|_| {
+            CodecError::DecodingFailed(format!(
+                "rav1d returned invalid bit depth {}",
+                picture.p.bpc
+            ))
+        })?;
+        if !(8..=16).contains(&bit_depth) {
             return Err(CodecError::DecodingFailed(format!(
                 "rav1d returned unsupported bit depth {}",
                 picture.p.bpc
@@ -247,38 +305,113 @@ impl Av1Decoder {
                 picture.stride[1]
             ))
         })?;
-        let y_ptr = Self::plane_ptr(picture, 0, "Y")?;
-        let u_ptr = Self::plane_ptr(picture, 1, "U")?;
-        let v_ptr = Self::plane_ptr(picture, 2, "V")?;
 
+        let sample_bytes = if bit_depth <= 8 { 1 } else { 2 };
+        let uv_width = width.div_ceil(2);
+        let uv_height = height.div_ceil(2);
         let y_size = width * height;
-        let uv_size = width * (height / 2); // Interleaved UV
-        let mut nv12 = Vec::with_capacity(y_size + uv_size);
-
-        // Copy Y plane (remove stride padding)
-        for row in 0..height {
-            let src = unsafe { y_ptr.add(row * y_stride) };
-            let row_bytes = unsafe { slice::from_raw_parts(src, width) };
-            nv12.extend_from_slice(row_bytes);
+        let uv_size = uv_width * uv_height * 2; // Interleaved UV
+        let y_min_stride = width
+            .checked_mul(sample_bytes)
+            .ok_or_else(|| CodecError::DecodingFailed("rav1d Y stride overflow".to_string()))?;
+        if y_stride < y_min_stride {
+            return Err(CodecError::DecodingFailed(format!(
+                "rav1d Y stride {y_stride} is smaller than required {y_min_stride}"
+            )));
+        }
+        let uv_min_stride = uv_width
+            .checked_mul(sample_bytes)
+            .ok_or_else(|| CodecError::DecodingFailed("rav1d UV stride overflow".to_string()))?;
+        if uv_stride < uv_min_stride {
+            return Err(CodecError::DecodingFailed(format!(
+                "rav1d UV stride {uv_stride} is smaller than required {uv_min_stride}"
+            )));
         }
 
-        // Interleave U and V planes
-        let uv_width = width / 2;
-        let uv_height = height / 2;
-        for row in 0..uv_height {
-            let u_row = unsafe { slice::from_raw_parts(u_ptr.add(row * uv_stride), uv_width) };
-            let v_row = unsafe { slice::from_raw_parts(v_ptr.add(row * uv_stride), uv_width) };
-            for col in 0..uv_width {
+        Ok(PictureLayout {
+            width,
+            height,
+            width_u32,
+            height_u32,
+            bit_depth,
+            y_stride,
+            uv_stride,
+            y_min_stride,
+            uv_min_stride,
+            uv_width,
+            uv_height,
+            y_size,
+            uv_size,
+        })
+    }
+
+    fn copy_8_bit_i420_to_nv12(
+        layout: &PictureLayout,
+        y_ptr: *const u8,
+        u_ptr: *const u8,
+        v_ptr: *const u8,
+        nv12: &mut Vec<u8>,
+    ) {
+        for row in 0..layout.height {
+            let src = unsafe { y_ptr.add(row * layout.y_stride) };
+            let row_bytes = unsafe { slice::from_raw_parts(src, layout.width) };
+            nv12.extend_from_slice(row_bytes);
+        }
+        for row in 0..layout.uv_height {
+            let u_row = unsafe {
+                slice::from_raw_parts(u_ptr.add(row * layout.uv_stride), layout.uv_width)
+            };
+            let v_row = unsafe {
+                slice::from_raw_parts(v_ptr.add(row * layout.uv_stride), layout.uv_width)
+            };
+            for col in 0..layout.uv_width {
                 nv12.push(u_row[col]);
                 nv12.push(v_row[col]);
             }
         }
+    }
 
-        Ok(CpuFrame {
-            data: nv12,
-            width: width as u32,
-            height: height as u32,
-            timestamp_ns: 0,
+    fn copy_high_bit_depth_i420_to_nv12(
+        layout: &PictureLayout,
+        y_ptr: *const u8,
+        u_ptr: *const u8,
+        v_ptr: *const u8,
+        nv12: &mut Vec<u8>,
+    ) -> Result<(), CodecError> {
+        let shift = layout.bit_depth - 8;
+        for row in 0..layout.height {
+            let src = unsafe { y_ptr.add(row * layout.y_stride) };
+            let row_bytes = unsafe { slice::from_raw_parts(src, layout.y_min_stride) };
+            for col in 0..layout.width {
+                let i = col * 2;
+                let value = u16::from_ne_bytes([row_bytes[i], row_bytes[i + 1]]);
+                nv12.push(Self::downshift_sample(value, shift, "Y")?);
+            }
+        }
+        for row in 0..layout.uv_height {
+            let u_row = unsafe {
+                slice::from_raw_parts(u_ptr.add(row * layout.uv_stride), layout.uv_min_stride)
+            };
+            let v_row = unsafe {
+                slice::from_raw_parts(v_ptr.add(row * layout.uv_stride), layout.uv_min_stride)
+            };
+            for col in 0..layout.uv_width {
+                let i = col * 2;
+                let u = u16::from_ne_bytes([u_row[i], u_row[i + 1]]);
+                let v = u16::from_ne_bytes([v_row[i], v_row[i + 1]]);
+                nv12.push(Self::downshift_sample(u, shift, "U")?);
+                nv12.push(Self::downshift_sample(v, shift, "V")?);
+            }
+        }
+        Ok(())
+    }
+
+    fn downshift_sample(value: u16, shift: usize, plane: &'static str) -> Result<u8, CodecError> {
+        let shifted = value >> shift;
+        u8::try_from(shifted).map_err(|_| {
+            CodecError::DecodingFailed(format!(
+                "rav1d {plane} sample {shifted} out of range after downshift"
+            ))
         })
     }
 

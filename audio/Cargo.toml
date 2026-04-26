@@ -14,21 +14,24 @@ categories = ["multimedia::audio", "gui"]
 workspace = true
 
 [dependencies]
-# Cross-platform audio playback (default features include vorbis/mp3/flac/wav)
 thiserror = { workspace = true }
-rodio = { workspace = true }
-# Cross-platform audio I/O (for recording)
-cpal = { workspace = true }
 # Audio metadata extraction
 lofty = "0.21"
 # Async primitives (runtime-agnostic)
 async-channel = { workspace = true }
 futures = { workspace = true }
+timestretch = { workspace = true }
 # HTTP client
 # zenwave = "0.3"  # Moved to platform-specific sections below
 
 [build-dependencies]
 waterkit-build.workspace = true
+
+[target.'cfg(any(target_os = "macos", target_os = "android", target_os = "windows", target_os = "linux"))'.dependencies]
+# Cross-platform audio playback (default features include vorbis/mp3/flac/wav)
+rodio = { workspace = true }
+# Cross-platform audio I/O (for recording)
+cpal = { workspace = true }
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
@@ -55,3 +58,4 @@ futures.workspace = true
 mpris-server = "0.9"
 zenwave = "0.3"
 smol = "2"
+tracing.workspace = true

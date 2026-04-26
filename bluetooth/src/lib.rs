@@ -218,13 +218,13 @@ impl BleConnection {
     ///
     /// # Errors
     /// Returns error if subscription fails.
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn subscribe(
+    #[allow(clippy::future_not_send)]
+    pub async fn subscribe(
         &self,
         service: &Uuid,
         characteristic: &Uuid,
     ) -> Result<async_channel::Receiver<Vec<u8>>, BluetoothError> {
-        self.inner.subscribe(service, characteristic)
+        self.inner.subscribe(service, characteristic).await
     }
 
     /// Disconnect from the peripheral.
@@ -269,17 +269,15 @@ impl ClassicBluetooth {
     ///
     /// # Errors
     /// Returns error if discovery cannot be started.
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn start_discovery(
+    pub async fn start_discovery(
         &self,
     ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
-        self.inner.start_discovery()
+        self.inner.start_discovery().await
     }
 
     /// Stop device discovery.
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn stop_discovery(&self) {
-        self.inner.stop_discovery();
+    pub async fn stop_discovery(&self) {
+        self.inner.stop_discovery().await;
     }
 
     /// Get list of paired/bonded devices.
@@ -316,6 +314,7 @@ impl SppStream {
     ///
     /// # Errors
     /// Returns error if read fails.
+    #[allow(clippy::future_not_send)]
     pub async fn read(&self, buf: &mut [u8]) -> Result<usize, BluetoothError> {
         self.inner.read(buf).await
     }
@@ -324,6 +323,7 @@ impl SppStream {
     ///
     /// # Errors
     /// Returns error if write fails.
+    #[allow(clippy::future_not_send)]
     pub async fn write(&self, data: &[u8]) -> Result<usize, BluetoothError> {
         self.inner.write(data).await
     }
@@ -361,7 +361,7 @@ pub enum BluetoothError {
     GattError(String),
     /// Not supported on this platform.
     #[error("not supported on this platform")]
-    NotSupported,
+    Unsupported,
     /// Platform-specific error.
     #[error("platform error: {0}")]
     PlatformError(String),

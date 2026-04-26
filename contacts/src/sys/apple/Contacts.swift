@@ -1,11 +1,11 @@
 import Foundation
 import Contacts
 
-func contacts_fetch_all(callback: __private__RustFnOnceCallbackStringStringNoRet) {
+func contacts_fetch_all(callback: @escaping (String, String) -> Void) {
     let store = CNContactStore()
     store.requestAccess(for: .contacts) { granted, error in
         if !granted {
-            callback.call("", error?.localizedDescription ?? "Permission denied")
+            callback("", error?.localizedDescription ?? "Permission denied")
             return
         }
         let keys: [CNKeyDescriptor] = [
@@ -29,14 +29,14 @@ func contacts_fetch_all(callback: __private__RustFnOnceCallbackStringStringNoRet
                 if !result.isEmpty { result += "\n" }
                 result += line
             }
-            callback.call(result, "")
+            callback(result, "")
         } catch {
-            callback.call("", error.localizedDescription)
+            callback("", error.localizedDescription)
         }
     }
 }
 
-func contacts_search(query: RustStr, callback: __private__RustFnOnceCallbackStringStringNoRet) {
+func contacts_search(query: RustStr, callback: @escaping (String, String) -> Void) {
     let queryStr = query.toString()
     let store = CNContactStore()
     let keys: [CNKeyDescriptor] = [
@@ -58,13 +58,13 @@ func contacts_search(query: RustStr, callback: __private__RustFnOnceCallbackStri
             if !result.isEmpty { result += "\n" }
             result += line
         }
-        callback.call(result, "")
+        callback(result, "")
     } catch {
-        callback.call("", error.localizedDescription)
+        callback("", error.localizedDescription)
     }
 }
 
-func contacts_get(id: RustStr, callback: __private__RustFnOnceCallbackStringStringNoRet) {
+func contacts_get(id: RustStr, callback: @escaping (String, String) -> Void) {
     let idStr = id.toString()
     let store = CNContactStore()
     let keys: [CNKeyDescriptor] = [
@@ -83,13 +83,13 @@ func contacts_get(id: RustStr, callback: __private__RustFnOnceCallbackStringStri
         let emails = contact.emailAddresses.map { $0.value as String }.joined(separator: ",")
         let birthday = contact.birthday.map { "\($0.year ?? 0)-\(String(format: "%02d", $0.month ?? 0))-\(String(format: "%02d", $0.day ?? 0))" } ?? ""
         let line = "\(contact.identifier)\t\(contact.givenName)\t\(contact.familyName)\t\(contact.organizationName)\t\(phones)\t\(emails)\t\(birthday)\t\(contact.note)"
-        callback.call(line, "")
+        callback(line, "")
     } catch {
-        callback.call("", error.localizedDescription)
+        callback("", error.localizedDescription)
     }
 }
 
-func contacts_create(json: RustStr, callback: __private__RustFnOnceCallbackStringStringNoRet) {
+func contacts_create(json: RustStr, callback: @escaping (String, String) -> Void) {
     let jsonStr = json.toString()
     let parts = jsonStr.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
     let contact = CNMutableContact()
@@ -116,13 +116,13 @@ func contacts_create(json: RustStr, callback: __private__RustFnOnceCallbackStrin
     do {
         try store.execute(saveRequest)
         let line = "\(contact.identifier)\t\(contact.givenName)\t\(contact.familyName)\t\(contact.organizationName)\t\t\t\t"
-        callback.call(line, "")
+        callback(line, "")
     } catch {
-        callback.call("", error.localizedDescription)
+        callback("", error.localizedDescription)
     }
 }
 
-func contacts_delete(id: RustStr, callback: __private__RustFnOnceCallbackStringNoRet) {
+func contacts_delete(id: RustStr, callback: @escaping (String) -> Void) {
     let idStr = id.toString()
     let store = CNContactStore()
     let keys: [CNKeyDescriptor] = [CNContactIdentifierKey as CNKeyDescriptor]
@@ -132,8 +132,8 @@ func contacts_delete(id: RustStr, callback: __private__RustFnOnceCallbackStringN
         let saveRequest = CNSaveRequest()
         saveRequest.delete(mutable)
         try store.execute(saveRequest)
-        callback.call("")
+        callback("")
     } catch {
-        callback.call(error.localizedDescription)
+        callback(error.localizedDescription)
     }
 }

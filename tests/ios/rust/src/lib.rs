@@ -94,7 +94,7 @@ fn run_tests() {
         #[cfg(feature = "haptic")]
         {
             println!("Testing waterkit-haptic...");
-            match waterkit::haptic::Haptic::notification_success() {
+            match waterkit::haptic::Haptic::notification_success().await {
                 Ok(_) => println!("Haptic: feedback SUCCESS"),
                 Err(e) => println!("Haptic FAILED: {e:?}"),
             }

@@ -49,11 +49,13 @@
 
 mod frame;
 mod image;
+#[cfg(target_vendor = "apple")]
+mod image_apple;
 mod software;
 mod sys;
 
 pub use frame::{DecodedFrame, GpuFrame, YuvConverter};
-pub use image::{DecodedImage, DecodedPixelFormat, decode_image};
+pub use image::{DecodedImage, DecodedPixelFormat, decode_image, decode_image_platform};
 
 use std::vec::IntoIter;
 use thiserror::Error;
@@ -241,7 +243,7 @@ enum DecoderInner {
     Linux(sys::linux::LinuxDecoder),
     #[cfg(all(
         feature = "software-fallback",
-        not(any(target_os = "ios", target_os = "android"))
+        not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
     ))]
     Av1(software::av1::Av1Decoder),
 }
@@ -345,13 +347,13 @@ impl Decoder {
 
             #[cfg(all(
                 feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
+                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
             ))]
             CodecType::Av1 => DecoderInner::Av1(software::av1::Av1Decoder::new()?),
 
             #[cfg(not(all(
                 feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
+                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
             )))]
             CodecType::Av1 => {
                 return Err(CodecError::Unsupported(
@@ -447,7 +449,7 @@ impl Decoder {
 
             #[cfg(all(
                 feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
+                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
             ))]
             DecoderInner::Av1(dec) => {
                 let cpu_frames = dec.decode(data)?;
@@ -566,7 +568,7 @@ impl Decoder {
 
             #[cfg(all(
                 feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
+                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
             ))]
             DecoderInner::Av1(dec) => {
                 let cpu_frames = dec.decode(data)?;
@@ -639,7 +641,7 @@ enum EncoderInner {
     Linux(sys::linux::LinuxEncoder),
     #[cfg(all(
         feature = "software-fallback",
-        not(any(target_os = "ios", target_os = "android"))
+        not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
     ))]
     Av1(Box<software::av1::Av1Encoder>),
 }
@@ -724,7 +726,7 @@ impl Encoder {
 
             #[cfg(all(
                 feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
+                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
             ))]
             CodecType::Av1 => EncoderInner::Av1(Box::new(software::av1::Av1Encoder::new(
                 width as usize,
@@ -733,7 +735,7 @@ impl Encoder {
 
             #[cfg(not(all(
                 feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
+                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
             )))]
             CodecType::Av1 => {
                 return Err(CodecError::Unsupported(
@@ -776,7 +778,7 @@ impl Encoder {
 
             #[cfg(all(
                 feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
+                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
             ))]
             EncoderInner::Av1(enc) => enc.encode_nv12(data),
         }
@@ -804,7 +806,7 @@ impl Encoder {
             EncoderInner::Apple(enc) => enc.encode_iosurface(iosurface_ptr),
             #[cfg(all(
                 feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
+                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
             ))]
             EncoderInner::Av1(_) => Err(CodecError::Unsupported(
                 "IOSurface encoding not supported for AV1".into(),
@@ -830,7 +832,7 @@ impl Encoder {
 
             #[cfg(all(
                 feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android"))
+                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
             ))]
             EncoderInner::Av1(_) => None, // AV1 doesn't use codec config atoms
         }

@@ -28,6 +28,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 
 /**
@@ -85,14 +86,13 @@ class CameraHelper(private val appContext: Context) {
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
 
-    private var latestFrame: ByteArray? = null
+    private val frameQueue: LinkedBlockingDeque<ByteArray> = LinkedBlockingDeque(1)
     private var latestPhotoData: ByteArray? = null
     private var latestRawPhotoData: ByteArray? = null
     private var latestRawImage: Image? = null
     private var pendingPhotoLatch: CountDownLatch? = null
     private var pendingRawImageLatch: CountDownLatch? = null
 
-    private val frameLock = Any()
     private val photoLock = Any()
     private val rawPhotoLock = Any()
     private val rawVideoLock = Any()
@@ -233,9 +233,8 @@ class CameraHelper(private val appContext: Context) {
                     frameHeight = image.height
                     val rgba = yuv420ToRgba(image)
                     val timestampNs = SystemClock.elapsedRealtimeNanos()
-                    synchronized(frameLock) {
-                        latestFrame = rgba
-                    }
+                    frameQueue.pollLast()
+                    frameQueue.offerLast(rgba)
                     maybeWriteRawVideoFrame(rgba, image.width, image.height, timestampNs)
                 } catch (error: Exception) {
                     Log.e(TAG, "Failed to process camera frame", error)
@@ -707,10 +706,23 @@ class CameraHelper(private val appContext: Context) {
      * Returns null if no new frame is available.
      */
     fun getFrame(): ByteArray? {
-        synchronized(frameLock) {
-            val frame = latestFrame
-            latestFrame = null
-            return frame
+        return frameQueue.pollFirst()
+    }
+
+    /**
+     * Wait for the next available frame and consume it.
+     * Returns null on timeout or if no frame is available.
+     */
+    fun waitForNextFrame(timeoutMs: Int): ByteArray? {
+        return try {
+            if (timeoutMs <= 0) {
+                frameQueue.pollFirst()
+            } else {
+                frameQueue.pollFirst(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+            }
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            null
         }
     }
 
@@ -741,9 +753,7 @@ class CameraHelper(private val appContext: Context) {
         releaseRecorder()
         stopRawVideoRecordingInternal()
 
-        synchronized(frameLock) {
-            latestFrame = null
-        }
+        frameQueue.clear()
         synchronized(photoLock) {
             latestPhotoData = null
             pendingPhotoLatch?.countDown()

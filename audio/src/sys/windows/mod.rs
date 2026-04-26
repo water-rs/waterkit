@@ -81,6 +81,12 @@ fn set_playback_status_inner(
     };
 
     controls.SetPlaybackStatus(status).map_err(win_err_update)?;
+    controls
+        .SetIsNextEnabled(state.queue_navigation_controls().next_enabled())
+        .map_err(win_err_update)?;
+    controls
+        .SetIsPreviousEnabled(state.queue_navigation_controls().previous_enabled())
+        .map_err(win_err_update)?;
 
     Ok(())
 }
@@ -96,8 +102,8 @@ fn create_controls() -> Result<(MediaPlayer, SystemMediaTransportControls), Medi
     controls.SetIsPlayEnabled(true).map_err(win_err_init)?;
     controls.SetIsPauseEnabled(true).map_err(win_err_init)?;
     controls.SetIsStopEnabled(true).map_err(win_err_init)?;
-    controls.SetIsNextEnabled(true).map_err(win_err_init)?;
-    controls.SetIsPreviousEnabled(true).map_err(win_err_init)?;
+    controls.SetIsNextEnabled(false).map_err(win_err_init)?;
+    controls.SetIsPreviousEnabled(false).map_err(win_err_init)?;
 
     Ok((media_player, controls))
 }
@@ -201,6 +207,11 @@ impl MediaSessionInner {
             .SetPlaybackStatus(MediaPlaybackStatus::Closed)
             .map_err(win_err_update)?;
         Ok(())
+    }
+
+    #[allow(clippy::unused_self)]
+    pub fn poll_command(&self) -> Option<MediaCommand> {
+        PENDING_COMMANDS.write().ok()?.pop()
     }
 }
 

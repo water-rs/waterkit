@@ -1,9 +1,4 @@
 //! Android background scheduler backend using `JobScheduler`.
-#![allow(
-    clippy::missing_const_for_fn,
-    clippy::needless_pass_by_value,
-    clippy::unused_self
-)]
 
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
@@ -11,7 +6,8 @@ use jni::{JavaVM, errors::Error as JniError};
 
 use crate::{
     AppRefreshRequest, BackgroundCapabilities, BackgroundError, BootstrapConfig,
-    ContinuedProcessingRequest, ProcessingRequest, TaskIdentifier, TaskKind,
+    ContinuedProcessingRequest, ContinuedProcessingStrategy, ProcessingRequest, TaskIdentifier,
+    TaskKind,
 };
 
 const JOB_SCHEDULER_SERVICE: &str = "jobscheduler";
@@ -40,45 +36,90 @@ impl BackgroundRuntimeInner {
     }
 
     pub fn submit_app_refresh(&self, request: AppRefreshRequest) -> Result<(), BackgroundError> {
+        let AppRefreshRequest {
+            identifier,
+            earliest_begin_after,
+        } = request;
         let spec = JobSpec {
-            identifier: request.identifier(),
+            identifier: &identifier,
             kind: TaskKind::AppRefresh,
-            min_latency_ms: duration_ms(request.earliest_begin_after_value()),
+            min_latency_ms: duration_ms(earliest_begin_after),
             requires_network_connectivity: false,
             requires_external_power: false,
         };
-        schedule_job(spec, &self.job_service_class)
+        schedule_job(&spec, &self.job_service_class)
     }
 
     pub fn submit_processing(&self, request: ProcessingRequest) -> Result<(), BackgroundError> {
+        let ProcessingRequest {
+            identifier,
+            earliest_begin_after,
+            requires_network_connectivity,
+            requires_external_power,
+        } = request;
         let spec = JobSpec {
-            identifier: request.identifier(),
+            identifier: &identifier,
             kind: TaskKind::Processing,
-            min_latency_ms: duration_ms(request.earliest_begin_after_value()),
-            requires_network_connectivity: request.requires_network_connectivity_value(),
-            requires_external_power: request.requires_external_power_value(),
+            min_latency_ms: duration_ms(earliest_begin_after),
+            requires_network_connectivity,
+            requires_external_power,
         };
-        schedule_job(spec, &self.job_service_class)
+        schedule_job(&spec, &self.job_service_class)
     }
 
     pub fn submit_continued_processing(
         &self,
-        _request: ContinuedProcessingRequest,
+        request: ContinuedProcessingRequest,
     ) -> Result<(), BackgroundError> {
-        Err(BackgroundError::NotSupported)
+        let ContinuedProcessingRequest {
+            identifier,
+            strategy,
+            requires_gpu,
+            ..
+        } = request;
+        if requires_gpu {
+            return Err(BackgroundError::ConfigurationMissing(
+                "android continued processing does not support GPU requirements".into(),
+            ));
+        }
+
+        if matches!(strategy, ContinuedProcessingStrategy::Fail) {
+            return Err(BackgroundError::ConfigurationMissing(
+                "android continued processing only supports queue strategy".into(),
+            ));
+        }
+
+        let spec = JobSpec {
+            identifier: &identifier,
+            kind: TaskKind::ContinuedProcessing,
+            min_latency_ms: 0,
+            requires_network_connectivity: false,
+            requires_external_power: false,
+        };
+        schedule_job(&spec, &self.job_service_class)
     }
 
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform background runtime API is instance-based"
+    )]
     pub fn cancel(&self, identifier: &TaskIdentifier) -> Result<(), BackgroundError> {
         let refresh_job_id = job_id_for_identifier(identifier, TaskKind::AppRefresh);
         let processing_job_id = job_id_for_identifier(identifier, TaskKind::Processing);
+        let continued_job_id = job_id_for_identifier(identifier, TaskKind::ContinuedProcessing);
 
         with_env_context(|env, context| {
             let scheduler = get_job_scheduler(env, context)?;
             cancel_job(env, &scheduler, refresh_job_id)?;
-            cancel_job(env, &scheduler, processing_job_id)
+            cancel_job(env, &scheduler, processing_job_id)?;
+            cancel_job(env, &scheduler, continued_job_id)
         })
     }
 
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform background runtime API is instance-based"
+    )]
     pub fn cancel_all(&self) -> Result<(), BackgroundError> {
         with_env_context(|env, context| {
             let scheduler = get_job_scheduler(env, context)?;
@@ -90,11 +131,11 @@ impl BackgroundRuntimeInner {
 }
 
 #[must_use]
-pub fn capabilities() -> BackgroundCapabilities {
+pub const fn capabilities() -> BackgroundCapabilities {
     BackgroundCapabilities {
         supports_app_refresh: true,
         supports_processing: true,
-        supports_continued_processing: false,
+        supports_continued_processing: true,
         supports_continued_processing_gpu: false,
         supports_launch_events: false,
     }
@@ -105,7 +146,9 @@ pub fn complete_task(
     _task_token: u64,
     _success: bool,
 ) -> Result<(), BackgroundError> {
-    Err(BackgroundError::NotSupported)
+    unreachable!(
+        "waterkit-background: Android backend does not emit launch events and cannot complete tasks"
+    )
 }
 
 #[derive(Debug)]
@@ -117,11 +160,25 @@ struct JobSpec<'a> {
     requires_external_power: bool,
 }
 
-fn schedule_job(spec: JobSpec<'_>, job_service_class: &str) -> Result<(), BackgroundError> {
-    let job_id = job_id_for_identifier(spec.identifier, spec.kind);
+fn schedule_job(spec: &JobSpec<'_>, job_service_class: &str) -> Result<(), BackgroundError> {
+    let JobSpec {
+        identifier,
+        kind,
+        min_latency_ms,
+        requires_network_connectivity,
+        requires_external_power,
+    } = *spec;
+    let job_id = job_id_for_identifier(identifier, kind);
 
     with_env_context(|env, context| {
         let scheduler = get_job_scheduler(env, context)?;
+        let spec = JobSpec {
+            identifier,
+            kind,
+            min_latency_ms,
+            requires_network_connectivity,
+            requires_external_power,
+        };
         let job_info = build_job_info(env, context, job_id, &spec, job_service_class)?;
 
         let result = env
@@ -138,10 +195,7 @@ fn schedule_job(spec: JobSpec<'_>, job_service_class: &str) -> Result<(), Backgr
         if result != JOB_SCHEDULER_RESULT_SUCCESS {
             return Err(BackgroundError::SchedulerRejected {
                 code: result,
-                message: format!(
-                    "JobScheduler.schedule returned {result} for `{}`",
-                    spec.identifier
-                ),
+                message: format!("JobScheduler.schedule returned {result} for `{identifier}`"),
             });
         }
 

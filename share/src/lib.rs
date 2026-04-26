@@ -6,7 +6,36 @@
 
 mod sys;
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use std::path::PathBuf;
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+const MAILTO_COMPONENT_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'&')
+    .add(b'+')
+    .add(b'?')
+    .add(b'=')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}');
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub(crate) fn mailto_url(subject: Option<&str>, body: &str) -> String {
+    let mut url = String::from("mailto:?");
+    if let Some(subject) = subject {
+        url.push_str("subject=");
+        url.push_str(&utf8_percent_encode(subject, MAILTO_COMPONENT_SET).to_string());
+        url.push('&');
+    }
+    url.push_str("body=");
+    url.push_str(&utf8_percent_encode(body, MAILTO_COMPONENT_SET).to_string());
+    url
+}
 
 /// Android-specific JNI helper for cases where you already have `JNIEnv` + `Context`.
 ///
@@ -115,7 +144,7 @@ pub enum ShareResult {
 pub enum ShareError {
     /// Sharing is not supported on this platform.
     #[error("sharing not supported")]
-    NotSupported,
+    Unsupported,
     /// No content to share.
     #[error("no content to share")]
     EmptyContent,

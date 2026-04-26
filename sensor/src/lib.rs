@@ -28,6 +28,15 @@
 /// Platform-specific implementations.
 mod sys;
 
+/// Android-specific JNI helpers that require an explicit `Context`.
+#[cfg(target_os = "android")]
+pub mod android {
+    pub use crate::sys::android::{
+        is_sensor_available_with_context, read_light_with_context, read_pressure_with_context,
+        read_sensor_with_context,
+    };
+}
+
 use futures::Stream;
 use std::pin::Pin;
 

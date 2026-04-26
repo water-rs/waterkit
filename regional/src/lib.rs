@@ -164,13 +164,16 @@ pub fn current_settings() -> SystemSettingsContext {
     runtime()
         .state
         .lock()
-        .map(|state| state.current.clone())
-        .unwrap_or_else(|_| detect_system_context())
+        .map_or_else(|_| detect_system_context(), |state| state.current.clone())
 }
 
 /// Registers a listener for system settings updates.
 ///
 /// The callback is invoked immediately with the current context.
+///
+/// # Panics
+///
+/// Panics if the runtime mutex is poisoned or listener id generation overflows.
 pub fn register_listener<F>(callback: F) -> ListenerHandle
 where
     F: Fn(SystemSettingsContext) + Send + Sync + 'static,
@@ -186,9 +189,10 @@ where
         state.next_listener_id = state
             .next_listener_id
             .checked_add(1)
-            .unwrap_or(state.next_listener_id);
-        let current = state.current.clone();
+            .expect("waterkit-regional listener id overflow");
         state.listeners.insert(id, callback.clone());
+        let current = state.current.clone();
+        drop(state);
         (id, current)
     };
 
@@ -198,6 +202,10 @@ where
 }
 
 /// Refreshes system settings context and notifies listeners when changed.
+///
+/// # Panics
+///
+/// Panics if the runtime mutex is poisoned.
 #[must_use]
 pub fn refresh() -> SystemSettingsContext {
     let next = {
@@ -215,6 +223,10 @@ pub fn refresh() -> SystemSettingsContext {
 }
 
 /// Sets an explicit runtime context override and notifies listeners.
+///
+/// # Panics
+///
+/// Panics if the runtime mutex is poisoned.
 #[must_use]
 pub fn set_settings(context: SystemSettingsContext) -> SystemSettingsContext {
     let listeners = {
@@ -238,6 +250,10 @@ pub fn set_settings(context: SystemSettingsContext) -> SystemSettingsContext {
 }
 
 /// Clears explicit override and re-reads context from system APIs.
+///
+/// # Panics
+///
+/// Panics if the runtime mutex is poisoned.
 #[must_use]
 pub fn clear_override() -> SystemSettingsContext {
     {
@@ -266,7 +282,11 @@ pub fn set_locale_tag(locale_tag: impl Into<String>) -> SystemSettingsContext {
         preferred.insert(0, locale_tag.clone());
     }
 
-    set_settings(SystemSettingsContext::new(locale_tag, preferred, current.timezone().to_string()))
+    set_settings(SystemSettingsContext::new(
+        locale_tag,
+        preferred,
+        current.timezone().to_string(),
+    ))
 }
 
 /// Starts a background polling loop to refresh system settings periodically.

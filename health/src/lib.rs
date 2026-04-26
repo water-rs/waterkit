@@ -3,14 +3,14 @@
 //! Provides read/write access to health and fitness data.
 //! - iOS: `HealthKit`
 //! - Android: `Health Connect`
-//! - Desktop: Not supported
+//! - Desktop: persistent local data store
 
 #![warn(missing_docs)]
 
 mod sys;
 
 /// Type of health data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum HealthDataType {
     /// Step count.
@@ -32,7 +32,7 @@ pub enum HealthDataType {
 }
 
 /// A health data sample.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct HealthSample {
     data_type: HealthDataType,
@@ -157,7 +157,7 @@ pub enum HealthError {
     PermissionDenied,
     /// Not supported on this platform.
     #[error("not supported")]
-    NotSupported,
+    Unsupported,
     /// Platform error.
     #[error("platform error: {0}")]
     PlatformError(String),

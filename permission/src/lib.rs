@@ -65,7 +65,7 @@ pub enum PermissionStatus {
 pub enum PermissionError {
     /// The permission type is not supported on this platform.
     #[error("permission not supported on this platform")]
-    NotSupported,
+    Unsupported,
     /// An unknown error occurred.
     #[error("unknown error: {0}")]
     Unknown(String),

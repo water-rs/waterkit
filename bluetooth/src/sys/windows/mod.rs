@@ -3,15 +3,25 @@ use crate::{
     DeviceId, GattCharacteristic, GattService, ScanFilter, ScanResult, Uuid,
 };
 use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows::Devices::Bluetooth::Advertisement::{
     BluetoothLEAdvertisementReceivedEventArgs, BluetoothLEAdvertisementWatcher,
 };
 use windows::Devices::Bluetooth::GenericAttributeProfile::{
-    GattCharacteristicProperties, GattCommunicationStatus, GattDeviceService,
+    GattCharacteristic as WinGattCharacteristic, GattCharacteristicProperties,
+    GattClientCharacteristicConfigurationDescriptorValue, GattCommunicationStatus,
+    GattDeviceService, GattValueChangedEventArgs,
 };
-use windows::Devices::Bluetooth::{BluetoothAdapter, BluetoothLEDevice};
+use windows::Devices::Bluetooth::Rfcomm::RfcommServiceId;
+use windows::Devices::Bluetooth::{
+    BluetoothAdapter, BluetoothDevice as WinBluetoothDevice, BluetoothLEDevice,
+};
+use windows::Devices::Enumeration::DeviceInformation;
 use windows::Devices::Radios::RadioState;
 use windows::Foundation::TypedEventHandler;
+use windows::Networking::Sockets::StreamSocket;
+use windows::Storage::Streams::{DataReader, DataWriter};
 
 fn guid_to_uuid(guid: windows::core::GUID) -> Uuid {
     Uuid(format!("{guid:?}"))
@@ -20,6 +30,35 @@ fn guid_to_uuid(guid: windows::core::GUID) -> Uuid {
 fn parse_guid(uuid: &Uuid) -> Result<windows::core::GUID, BluetoothError> {
     windows::core::GUID::try_from(uuid.0.as_str())
         .map_err(|_| BluetoothError::GattError("Invalid UUID".into()))
+}
+
+fn connection_failed(message: impl Into<String>) -> BluetoothError {
+    BluetoothError::ConnectionFailed(message.into())
+}
+
+fn connection_failed_with_context(context: &str, error: impl std::fmt::Display) -> BluetoothError {
+    connection_failed(format!("{context}: {error}"))
+}
+
+fn device_from_info(info: &DeviceInformation, paired: bool) -> ClassicDevice {
+    let device_id = info
+        .Id()
+        .map_or_else(|_| String::new(), |value| value.to_string());
+    let name = info
+        .Name()
+        .map(|value| value.to_string())
+        .ok()
+        .filter(|value| !value.is_empty());
+    ClassicDevice {
+        device: BluetoothDevice {
+            id: DeviceId(device_id),
+            name,
+            rssi: None,
+            is_connected: false,
+        },
+        device_class: 0,
+        is_paired: paired,
+    }
 }
 
 pub async fn adapter_state() -> Result<AdapterState, BluetoothError> {
@@ -116,6 +155,13 @@ impl BleScannerInner {
 #[derive(Debug)]
 pub struct BleConnectionInner {
     device: BluetoothLEDevice,
+    subscriptions: Mutex<Vec<SubscriptionState>>,
+}
+
+#[derive(Debug)]
+struct SubscriptionState {
+    characteristic: WinGattCharacteristic,
+    token: i64,
 }
 
 impl BleConnectionInner {
@@ -126,7 +172,10 @@ impl BleConnectionInner {
             .map_err(|e| BluetoothError::ConnectionFailed(e.to_string()))?
             .await
             .map_err(|e| BluetoothError::ConnectionFailed(e.to_string()))?;
-        Ok(Self { device })
+        Ok(Self {
+            device,
+            subscriptions: Mutex::new(Vec::new()),
+        })
     }
 
     #[allow(clippy::future_not_send)]
@@ -252,19 +301,184 @@ impl BleConnectionInner {
         Ok(())
     }
 
-    pub const fn subscribe(
-        &self,
-        _service: &Uuid,
-        _characteristic: &Uuid,
-    ) -> Result<async_channel::Receiver<Vec<u8>>, BluetoothError> {
-        let _ = self;
-        // Notifications require GattCharacteristic.ValueChanged event handler
-        // For now return not supported until full implementation
-        Err(BluetoothError::NotSupported)
+    #[allow(clippy::future_not_send)]
+    async fn find_subscription_characteristic(
+        device: &BluetoothLEDevice,
+        service_guid: windows::core::GUID,
+        characteristic_guid: windows::core::GUID,
+    ) -> Result<WinGattCharacteristic, BluetoothError> {
+        let service_operation =
+            device
+                .GetGattServicesForUuidAsync(service_guid)
+                .map_err(|error| {
+                    connection_failed_with_context("start GATT service query failed", error)
+                })?;
+        let service_result = service_operation
+            .await
+            .map_err(|error| connection_failed_with_context("GATT service query failed", error))?;
+        if service_result
+            .Status()
+            .unwrap_or(GattCommunicationStatus::Unreachable)
+            != GattCommunicationStatus::Success
+        {
+            return Err(connection_failed(
+                "GATT service query returned unsuccessful status",
+            ));
+        }
+
+        let services = service_result
+            .Services()
+            .map_err(|error| connection_failed_with_context("load GATT services failed", error))?;
+        let service = services
+            .First()
+            .and_then(|iter| iter.Current())
+            .map_err(|_| connection_failed("GATT service not found"))?;
+
+        let characteristic_operation = service
+            .GetCharacteristicsForUuidAsync(characteristic_guid)
+            .map_err(|error| {
+                connection_failed_with_context("start GATT characteristic query failed", error)
+            })?;
+        let chars_result = characteristic_operation.await.map_err(|error| {
+            connection_failed_with_context("GATT characteristic query failed", error)
+        })?;
+        if chars_result
+            .Status()
+            .unwrap_or(GattCommunicationStatus::Unreachable)
+            != GattCommunicationStatus::Success
+        {
+            return Err(connection_failed(
+                "GATT characteristic query returned unsuccessful status",
+            ));
+        }
+
+        let characteristics = chars_result.Characteristics().map_err(|error| {
+            connection_failed_with_context("load GATT characteristics failed", error)
+        })?;
+        characteristics
+            .First()
+            .and_then(|iter| iter.Current())
+            .map_err(|_| connection_failed("GATT characteristic not found"))
     }
 
-    #[allow(clippy::unused_async)]
+    fn register_value_changed_handler(
+        characteristic: &WinGattCharacteristic,
+        tx: async_channel::Sender<Vec<u8>>,
+    ) -> Result<i64, BluetoothError> {
+        characteristic
+            .ValueChanged(&TypedEventHandler::<
+                WinGattCharacteristic,
+                GattValueChangedEventArgs,
+            >::new(move |_, args| {
+                let Some(args) = args.as_ref() else {
+                    return Ok(());
+                };
+                let Ok(buffer) = args.CharacteristicValue() else {
+                    return Ok(());
+                };
+                let Ok(reader) = DataReader::FromBuffer(&buffer) else {
+                    return Ok(());
+                };
+                let Ok(len) = reader.UnconsumedBufferLength() else {
+                    return Ok(());
+                };
+                let mut bytes = vec![0u8; len as usize];
+                if reader.ReadBytes(&mut bytes).is_ok() {
+                    let _ = tx.try_send(bytes);
+                }
+                Ok(())
+            }))
+            .map_err(|error| {
+                connection_failed_with_context("register notification handler failed", error)
+            })
+    }
+
+    async fn set_notification_state(
+        characteristic: &WinGattCharacteristic,
+        mode: GattClientCharacteristicConfigurationDescriptorValue,
+    ) -> Result<GattCommunicationStatus, BluetoothError> {
+        let operation = characteristic
+            .WriteClientCharacteristicConfigurationDescriptorAsync(mode)
+            .map_err(|error| {
+                connection_failed_with_context("start notification state write failed", error)
+            })?;
+        operation.await.map_err(|error| {
+            connection_failed_with_context("notification state write failed", error)
+        })
+    }
+
+    async fn enable_notifications(
+        characteristic: &WinGattCharacteristic,
+    ) -> Result<bool, BluetoothError> {
+        let notify_status = Self::set_notification_state(
+            characteristic,
+            GattClientCharacteristicConfigurationDescriptorValue::Notify,
+        )
+        .await;
+        if notify_status? == GattCommunicationStatus::Success {
+            return Ok(true);
+        }
+
+        Ok(Self::set_notification_state(
+            characteristic,
+            GattClientCharacteristicConfigurationDescriptorValue::Indicate,
+        )
+        .await?
+            == GattCommunicationStatus::Success)
+    }
+
+    #[allow(clippy::future_not_send)]
+    pub async fn subscribe(
+        &self,
+        service: &Uuid,
+        characteristic: &Uuid,
+    ) -> Result<async_channel::Receiver<Vec<u8>>, BluetoothError> {
+        let service_guid = parse_guid(service)?;
+        let characteristic_guid = parse_guid(characteristic)?;
+        let target =
+            Self::find_subscription_characteristic(&self.device, service_guid, characteristic_guid)
+                .await?;
+        let (tx, rx) = async_channel::bounded(64);
+        let token = Self::register_value_changed_handler(&target, tx)?;
+        if !Self::enable_notifications(&target).await? {
+            let _ = target.RemoveValueChanged(token);
+            return Err(connection_failed(
+                "BLE characteristic does not support notifications",
+            ));
+        }
+        self.subscriptions
+            .lock()
+            .map_err(|error| {
+                BluetoothError::PlatformError(format!(
+                    "BLE subscription registry mutex poisoned: {error}"
+                ))
+            })?
+            .push(SubscriptionState {
+                characteristic: target,
+                token,
+            });
+
+        Ok(rx)
+    }
+
+    async fn teardown_subscriptions(&self) {
+        let states = if let Ok(mut guard) = self.subscriptions.lock() {
+            std::mem::take(&mut *guard)
+        } else {
+            return;
+        };
+        for state in states {
+            let _ = Self::set_notification_state(
+                &state.characteristic,
+                GattClientCharacteristicConfigurationDescriptorValue::None,
+            )
+            .await;
+            let _ = state.characteristic.RemoveValueChanged(state.token);
+        }
+    }
+
     pub async fn disconnect(self) {
+        self.teardown_subscriptions().await;
         drop(self.device);
     }
 
@@ -312,7 +526,9 @@ impl BleConnectionInner {
 }
 
 #[derive(Debug)]
-pub struct ClassicBluetoothInner;
+pub struct ClassicBluetoothInner {
+    discovering: AtomicBool,
+}
 
 impl ClassicBluetoothInner {
     pub async fn new() -> Result<Self, BluetoothError> {
@@ -320,49 +536,200 @@ impl ClassicBluetoothInner {
         if state != AdapterState::PoweredOn {
             return Err(BluetoothError::NotAvailable);
         }
-        Ok(Self)
+        Ok(Self {
+            discovering: AtomicBool::new(false),
+        })
     }
 
-    pub const fn start_discovery(
+    pub async fn start_discovery(
         &self,
     ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
-        let _ = self;
-        Err(BluetoothError::NotSupported)
-    }
+        self.discovering.store(true, Ordering::Relaxed);
+        let selector = WinBluetoothDevice::GetDeviceSelector().map_err(|error| {
+            connection_failed_with_context("get classic selector failed", error)
+        })?;
+        let devices = DeviceInformation::FindAllAsyncAqsFilter(&selector)
+            .map_err(|error| {
+                connection_failed_with_context("start classic discovery failed", error)
+            })?
+            .await
+            .map_err(|error| connection_failed_with_context("classic discovery failed", error))?;
 
-    pub const fn stop_discovery(&self) {
-        let _ = self;
+        let (tx, rx) = async_channel::bounded(64);
+        for info in &devices {
+            let paired = info
+                .Pairing()
+                .and_then(|pairing| pairing.IsPaired())
+                .unwrap_or(false);
+            if tx.try_send(device_from_info(&info, paired)).is_err() {
+                break;
+            }
+        }
+        Ok(rx)
     }
 
     #[allow(clippy::unused_async)]
+    pub async fn stop_discovery(&self) {
+        self.discovering.store(false, Ordering::Relaxed);
+    }
+
     pub async fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {
-        Err(BluetoothError::NotSupported)
+        let selector = WinBluetoothDevice::GetDeviceSelectorFromPairingState(true)
+            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+        let devices = DeviceInformation::FindAllAsyncAqsFilter(&selector)
+            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?
+            .await
+            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+        let mut paired = Vec::new();
+        for info in &devices {
+            paired.push(device_from_info(&info, true));
+        }
+        Ok(paired)
     }
 
-    #[allow(clippy::unused_async)]
     pub async fn connect_spp(
         &self,
-        _device_id: &DeviceId,
-        _uuid: &Uuid,
+        device_id: &DeviceId,
+        uuid: &Uuid,
     ) -> Result<SppStreamInner, BluetoothError> {
-        Err(BluetoothError::NotSupported)
+        let _ = self.discovering.load(Ordering::Relaxed);
+        let service = resolve_rfcomm_service(&device_id.0, &uuid.0).await?;
+        let host = service
+            .ConnectionHostName()
+            .map_err(|error| connection_failed_with_context("get RFCOMM host failed", error))?;
+        let service_name = service.ConnectionServiceName().map_err(|error| {
+            connection_failed_with_context("get RFCOMM service name failed", error)
+        })?;
+
+        let socket = StreamSocket::new().map_err(|error| {
+            connection_failed_with_context("create stream socket failed", error)
+        })?;
+        socket
+            .ConnectAsync(&host, &service_name)
+            .map_err(|error| {
+                connection_failed_with_context("start RFCOMM socket connect failed", error)
+            })?
+            .await
+            .map_err(|error| {
+                connection_failed_with_context("connect RFCOMM socket failed", error)
+            })?;
+
+        Ok(SppStreamInner { socket })
     }
 }
 
-#[derive(Debug)]
-pub struct SppStreamInner;
+async fn resolve_rfcomm_service(
+    device_id: &str,
+    service_uuid: &str,
+) -> Result<windows::Devices::Bluetooth::Rfcomm::RfcommDeviceService, BluetoothError> {
+    let guid = windows::core::GUID::try_from(service_uuid)
+        .map_err(|_| connection_failed("invalid SPP UUID"))?;
+    let service_id = RfcommServiceId::FromUuid(guid).map_err(|error| {
+        connection_failed_with_context("create RFCOMM service id failed", error)
+    })?;
+
+    let device = WinBluetoothDevice::FromIdAsync(&windows::core::HSTRING::from(device_id))
+        .map_err(|error| {
+            connection_failed_with_context("start Bluetooth device resolve failed", error)
+        })?
+        .await
+        .map_err(|error| {
+            connection_failed_with_context("resolve Bluetooth device failed", error)
+        })?;
+
+    let services_result = device
+        .GetRfcommServicesForIdAsync(&service_id)
+        .map_err(|error| connection_failed_with_context("start RFCOMM query failed", error))?
+        .await
+        .map_err(|error| connection_failed_with_context("query RFCOMM services failed", error))?;
+
+    let services = services_result
+        .Services()
+        .map_err(|error| connection_failed_with_context("load RFCOMM services failed", error))?;
+    services
+        .First()
+        .and_then(|iter| iter.Current())
+        .map_err(|_| connection_failed("RFCOMM service not found"))
+}
+
+#[allow(clippy::future_not_send)]
+async fn read_spp_bytes(
+    socket: &StreamSocket,
+    max_bytes: usize,
+) -> Result<Vec<u8>, BluetoothError> {
+    let input_stream = socket
+        .InputStream()
+        .map_err(|error| connection_failed_with_context("get RFCOMM input stream failed", error))?;
+    let reader = DataReader::CreateDataReader(&input_stream)
+        .map_err(|error| connection_failed_with_context("create RFCOMM reader failed", error))?;
+    let request_len = u32::try_from(max_bytes)
+        .map_err(|_| connection_failed(format!("read size exceeds u32: {max_bytes}")))?;
+    let loaded = reader
+        .LoadAsync(request_len)
+        .map_err(|error| connection_failed_with_context("start RFCOMM read failed", error))?
+        .await
+        .map_err(|error| connection_failed_with_context("RFCOMM read failed", error))?;
+    if loaded == 0 {
+        return Err(connection_failed("RFCOMM stream closed"));
+    }
+
+    let mut data = vec![0u8; loaded as usize];
+    reader.ReadBytes(&mut data).map_err(|error| {
+        connection_failed_with_context("decode RFCOMM read bytes failed", error)
+    })?;
+    Ok(data)
+}
+
+#[allow(clippy::future_not_send)]
+async fn write_spp_bytes(socket: &StreamSocket, data: &[u8]) -> Result<usize, BluetoothError> {
+    let output_stream = socket.OutputStream().map_err(|error| {
+        connection_failed_with_context("get RFCOMM output stream failed", error)
+    })?;
+    let writer = DataWriter::CreateDataWriter(&output_stream)
+        .map_err(|error| connection_failed_with_context("create RFCOMM writer failed", error))?;
+    writer.WriteBytes(data).map_err(|error| {
+        connection_failed_with_context("encode RFCOMM write bytes failed", error)
+    })?;
+    let stored = writer
+        .StoreAsync()
+        .map_err(|error| connection_failed_with_context("start RFCOMM write failed", error))?
+        .await
+        .map_err(|error| connection_failed_with_context("RFCOMM write failed", error))?;
+    let _ = writer
+        .FlushAsync()
+        .map_err(|error| connection_failed_with_context("start RFCOMM flush failed", error))?
+        .await
+        .map_err(|error| connection_failed_with_context("RFCOMM flush failed", error))?;
+    usize::try_from(stored)
+        .map_err(|_| connection_failed(format!("RFCOMM write size exceeds usize: {stored}")))
+}
+
+pub struct SppStreamInner {
+    socket: StreamSocket,
+}
+
+impl std::fmt::Debug for SppStreamInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SppStreamInner").finish()
+    }
+}
 
 impl SppStreamInner {
-    #[allow(clippy::unused_async)]
-    pub async fn read(&self, _buf: &mut [u8]) -> Result<usize, BluetoothError> {
-        Err(BluetoothError::NotSupported)
+    #[allow(clippy::future_not_send)]
+    pub async fn read(&self, buf: &mut [u8]) -> Result<usize, BluetoothError> {
+        let data = read_spp_bytes(&self.socket, buf.len()).await?;
+        let read = data.len().min(buf.len());
+        buf[..read].copy_from_slice(&data[..read]);
+        Ok(read)
+    }
+
+    #[allow(clippy::future_not_send)]
+    pub async fn write(&self, data: &[u8]) -> Result<usize, BluetoothError> {
+        write_spp_bytes(&self.socket, data).await
     }
 
     #[allow(clippy::unused_async)]
-    pub async fn write(&self, _data: &[u8]) -> Result<usize, BluetoothError> {
-        Err(BluetoothError::NotSupported)
+    pub async fn close(self) {
+        drop(self.socket);
     }
-
-    #[allow(clippy::unused_async)]
-    pub async fn close(self) {}
 }

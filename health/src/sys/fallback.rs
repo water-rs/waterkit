@@ -9,7 +9,7 @@ pub async fn request_authorization(
     _read: &[HealthDataType],
     _write: &[HealthDataType],
 ) -> Result<(), HealthError> {
-    Err(HealthError::NotSupported)
+    Err(HealthError::Unsupported)
 }
 
 #[allow(clippy::unused_async)]
@@ -18,10 +18,10 @@ pub async fn query_samples(
     _start: &str,
     _end: &str,
 ) -> Result<Vec<HealthSample>, HealthError> {
-    Err(HealthError::NotSupported)
+    Err(HealthError::Unsupported)
 }
 
 #[allow(clippy::unused_async)]
 pub async fn write_sample(_sample: HealthSample) -> Result<(), HealthError> {
-    Err(HealthError::NotSupported)
+    Err(HealthError::Unsupported)
 }

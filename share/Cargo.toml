@@ -16,6 +16,7 @@ workspace = true
 [dependencies]
 thiserror = { workspace = true }
 futures = { workspace = true }
+percent-encoding = { workspace = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 swift-bridge.workspace = true

@@ -1,5 +1,4 @@
 //! Apple `VideoToolbox` hardware encoding and decoding.
-#![allow(clippy::duplicated_attributes)]
 
 use objc2::rc::Retained;
 use objc2_core_media::{
@@ -14,7 +13,9 @@ use objc2_core_video::{
     kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
 };
 use objc2_io_surface::IOSurfaceRef;
-use objc2_video_toolbox::{VTCompressionSession, VTEncodeInfoFlags};
+use objc2_video_toolbox::{
+    VTCompressionSession, VTDecodeInfoFlags, VTDecompressionOutputCallbackRecord, VTEncodeInfoFlags,
+};
 use std::ffi::c_void;
 use std::fmt;
 use std::ptr;
@@ -29,9 +30,14 @@ pub enum CodecType {
 }
 
 #[link(name = "CoreMedia", kind = "framework")]
+unsafe extern "C" {}
 #[link(name = "VideoToolbox", kind = "framework")]
+unsafe extern "C" {}
 #[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {}
 #[link(name = "CoreVideo", kind = "framework")]
+unsafe extern "C" {}
+
 unsafe extern "C" {
     static kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms: *const c_void;
     static kCFAllocatorDefault: *const c_void;
@@ -77,7 +83,7 @@ unsafe extern "C" {
         format_description: *const c_void,
         decoder_specification: *const c_void,
         image_buffer_attributes: *const c_void,
-        output_callback: *const c_void, // VTDecompressionOutputCallbackRecord
+        output_callback: *const VTDecompressionOutputCallbackRecord,
         decompression_session_out: *mut *mut c_void, // VTDecompressionSessionRef
     ) -> i32;
 
@@ -148,7 +154,7 @@ unsafe extern "C" {
 
     fn CFNumberCreate(
         allocator: *const c_void,
-        theType: i64,
+        theType: i32,
         valuePtr: *const c_void,
     ) -> *const c_void;
 
@@ -183,10 +189,6 @@ struct EncoderContext {
     encoded_data: Mutex<Vec<u8>>,
     codec_config: Mutex<Option<Vec<u8>>>,
 }
-
-#[allow(clippy::non_send_fields_in_send_ty)]
-unsafe impl Send for AppleEncoder {}
-unsafe impl Sync for AppleEncoder {}
 
 // C-callback for VideoToolbox - receives encoded data
 // C-callback for VideoToolbox - receives encoded data
@@ -608,7 +610,7 @@ impl AppleEncoder {
 
         // Create CVPixelBuffer from IOSurface (zero-copy)
         let mut pixel_buffer_ptr: *mut CVPixelBuffer = ptr::null_mut();
-        unsafe {
+        let pixel_buffer = unsafe {
             let status = CVPixelBufferCreateWithIOSurface(
                 ptr::null(),                    // default allocator
                 iosurface_ptr as *const c_void, // IOSurfaceRef
@@ -621,7 +623,10 @@ impl AppleEncoder {
                     "CVPixelBufferCreateWithIOSurface failed: {status}"
                 )));
             }
-        }
+
+            // Follows CoreFoundation create rule: returned object is +1 retained.
+            CFRetained::from_raw(NonNull::new_unchecked(pixel_buffer_ptr))
+        };
 
         // Clear output buffer
         if let Ok(mut lock) = self.context.encoded_data.lock() {
@@ -629,7 +634,7 @@ impl AppleEncoder {
         }
 
         // Encode the frame
-        let pixel_buffer_ref = unsafe { &*pixel_buffer_ptr };
+        let pixel_buffer_ref: &CVPixelBuffer = &pixel_buffer;
 
         unsafe {
             use objc2_core_media::CMTimeFlags;
@@ -722,7 +727,7 @@ impl AppleEncoder {
 
         // Create CVPixelBuffer with NV12 format
         let mut pixel_buffer_ptr: *mut CVPixelBuffer = ptr::null_mut();
-        unsafe {
+        let pixel_buffer = unsafe {
             let status = CVPixelBufferCreate(
                 None,
                 self.width as usize,
@@ -737,9 +742,11 @@ impl AppleEncoder {
                     "CVPixelBufferCreate failed: {status}"
                 )));
             }
-        }
+            // Follows CoreFoundation create rule: returned object is +1 retained.
+            CFRetained::from_raw(NonNull::new_unchecked(pixel_buffer_ptr))
+        };
 
-        let pixel_buffer = unsafe { &*pixel_buffer_ptr };
+        let pixel_buffer_ref: &CVPixelBuffer = &pixel_buffer;
 
         // Copy NV12 data to pixel buffer planes
         unsafe {
@@ -748,7 +755,8 @@ impl AppleEncoder {
                 CVPixelBufferLockFlags,
             };
 
-            let lock_status = CVPixelBufferLockBaseAddress(pixel_buffer, CVPixelBufferLockFlags(0));
+            let lock_status =
+                CVPixelBufferLockBaseAddress(pixel_buffer_ref, CVPixelBufferLockFlags(0));
             if lock_status != 0 {
                 return Err(CodecError::EncodingFailed(format!(
                     "CVPixelBufferLockBaseAddress failed: {lock_status}"
@@ -756,8 +764,8 @@ impl AppleEncoder {
             }
 
             // Copy Y plane
-            let y_base = CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, 0);
-            let y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, 0);
+            let y_base = CVPixelBufferGetBaseAddressOfPlane(pixel_buffer_ref, 0);
+            let y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer_ref, 0);
             for row in 0..self.height as usize {
                 ptr::copy_nonoverlapping(
                     nv12.as_ptr().add(row * self.width as usize),
@@ -767,8 +775,8 @@ impl AppleEncoder {
             }
 
             // Copy UV plane
-            let uv_base = CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, 1);
-            let uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, 1);
+            let uv_base = CVPixelBufferGetBaseAddressOfPlane(pixel_buffer_ref, 1);
+            let uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer_ref, 1);
             let uv_height = self.height as usize / 2;
             for row in 0..uv_height {
                 ptr::copy_nonoverlapping(
@@ -778,7 +786,7 @@ impl AppleEncoder {
                 );
             }
 
-            CVPixelBufferUnlockBaseAddress(pixel_buffer, CVPixelBufferLockFlags(0));
+            CVPixelBufferUnlockBaseAddress(pixel_buffer_ref, CVPixelBufferLockFlags(0));
         }
 
         // Clear output buffer
@@ -807,7 +815,7 @@ impl AppleEncoder {
 
             let mut info_flags = VTEncodeInfoFlags(0);
             let status = self.session.encode_frame(
-                pixel_buffer,
+                pixel_buffer_ref,
                 presentation_time,
                 duration,
                 None,
@@ -844,26 +852,9 @@ impl AppleEncoder {
     }
 }
 
-#[repr(C)]
-struct VTDecompressionOutputCallbackRecord {
-    decompression_output_callback: extern "C" fn(
-        *mut c_void,
-        *mut c_void,
-        i32,
-        u32,                // VTDecodeInfoFlags
-        *mut CVPixelBuffer, // CVImageBufferRef
-        CMTime,
-        CMTime,
-    ),
-    decompression_output_ref_con: *mut c_void,
-}
-
 struct DecoderContext {
     decoded_surfaces: Mutex<Vec<IOSurfaceFrame>>,
 }
-
-unsafe impl Send for DecoderContext {}
-unsafe impl Sync for DecoderContext {}
 
 /// Apple `VideoToolbox` hardware decoder.
 pub struct AppleDecoder {
@@ -881,9 +872,6 @@ impl fmt::Debug for AppleDecoder {
     }
 }
 
-unsafe impl Send for AppleDecoder {}
-unsafe impl Sync for AppleDecoder {}
-
 /// Zero-copy decoded frame backed by `IOSurface` (NV12 format).
 #[derive(Clone)]
 pub struct IOSurfaceFrame {
@@ -899,7 +887,6 @@ pub struct IOSurfaceFrame {
 
 #[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for IOSurfaceFrame {}
-unsafe impl Sync for IOSurfaceFrame {}
 
 impl fmt::Debug for IOSurfaceFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -911,11 +898,11 @@ impl fmt::Debug for IOSurfaceFrame {
     }
 }
 
-extern "C" fn decode_callback(
+unsafe extern "C-unwind" fn decode_callback(
     decompression_output_ref_con: *mut c_void,
     _source_frame_ref_con: *mut c_void,
     status: i32,
-    _info_flags: u32,
+    _info_flags: VTDecodeInfoFlags,
     image_buffer: *mut CVPixelBuffer,
     _presentation_time_stamp: CMTime,
     _presentation_duration: CMTime,
@@ -1055,8 +1042,8 @@ impl AppleDecoder {
             }
 
             let callback_record = VTDecompressionOutputCallbackRecord {
-                decompression_output_callback: decode_callback,
-                decompression_output_ref_con: Arc::as_ptr(&context) as *mut c_void,
+                decompressionOutputCallback: Some(decode_callback),
+                decompressionOutputRefCon: Arc::as_ptr(&context) as *mut c_void,
             };
 
             // Request NV12 output (420v)
@@ -1068,7 +1055,7 @@ impl AppleDecoder {
             );
 
             let pixel_format_key: *const c_void =
-                ptr::from_ref(&kCVPixelBufferPixelFormatTypeKey).cast::<c_void>();
+                ptr::from_ref(kCVPixelBufferPixelFormatTypeKey).cast::<c_void>();
 
             let attr_keys = [pixel_format_key];
             let attr_values = [pixel_format_number];
@@ -1087,7 +1074,7 @@ impl AppleDecoder {
                 format_desc,
                 ptr::null(),
                 image_buffer_attrs,
-                ptr::from_ref(&callback_record).cast::<c_void>(),
+                ptr::from_ref(&callback_record),
                 &raw mut session,
             );
 
@@ -1234,5 +1221,23 @@ impl AppleDecoder {
             frames.append(&mut lock);
         }
         Ok(frames)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppleDecoder, CodecType};
+
+    // Big Buck Bunny H.264 avcC from ffprobe.
+    const AVC_CONFIG: &[u8] = &[
+        0x01, 0x64, 0x00, 0x32, 0xFF, 0xE1, 0x00, 0x1B, 0x67, 0x64, 0x00, 0x32, 0xAC, 0x72, 0x84,
+        0x40, 0x50, 0x05, 0xBB, 0x01, 0x10, 0x00, 0x00, 0x03, 0x00, 0x10, 0x00, 0x00, 0x03, 0x03,
+        0xC0, 0xF1, 0x83, 0x18, 0x46, 0x01, 0x00, 0x07, 0x68, 0xE8, 0x43, 0x87, 0x4B, 0x22, 0xC0,
+    ];
+
+    #[test]
+    fn decoder_init_h264_smoke() {
+        let decoder = AppleDecoder::new(CodecType::H264, Some(AVC_CONFIG), 1280, 720);
+        assert!(decoder.is_ok(), "decoder init failed: {decoder:?}");
     }
 }

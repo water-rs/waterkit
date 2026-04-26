@@ -1,8 +1,6 @@
 //! Android JNI generic test harness.
 
 #![cfg(target_os = "android")]
-#![allow(non_snake_case)]
-#![allow(clippy::cargo_common_metadata)]
 
 use jni::JNIEnv;
 use jni::objects::JObject;
@@ -160,7 +158,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         #[cfg(feature = "fs")]
         {
             log::info!("Testing waterkit-fs...");
-            match waterkit_content::fs::WaterFs::cache_dir() {
+            match waterkit_content::fs::WaterFs::cache_dir_with_context(&mut env, activity) {
                 Some(path) => log::info!("FS cache_dir: {path:?}"),
                 None => log::error!("FS cache_dir: None"),
             }
@@ -170,6 +168,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         {
             log::info!("Testing waterkit-haptic...");
             match waterkit_content::haptic::Haptic::impact(waterkit_content::haptic::Intensity::LOW)
+                .await
             {
                 Ok(_) => log::info!("Haptic feedback SUCCESS"),
                 Err(e) => log::error!("Haptic feedback FAILED: {e}"),

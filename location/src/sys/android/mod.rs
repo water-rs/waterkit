@@ -1,8 +1,5 @@
 //! Android location implementation using JNI.
 
-#![allow(dead_code)] // Functions and statics are exported for Android app usage
-#![allow(clippy::similar_names)] // JNI variable naming patterns
-
 use crate::{Location, LocationError, Timestamp};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
@@ -128,7 +125,7 @@ pub fn get_location_with_context(
         .new_string("waterkit.location.LocationHelper")
         .map_err(|e| LocationError::Unknown(format!("new_string: {e}")))?;
 
-    let helper_class = env
+    let loaded_class = env
         .call_method(
             class_loader.as_obj(),
             "loadClass",
@@ -139,7 +136,7 @@ pub fn get_location_with_context(
         .l()
         .map_err(|e| LocationError::Unknown(format!("loadClass result: {e}")))?;
 
-    let helper_jclass: jni::objects::JClass = helper_class.into();
+    let helper_jclass: jni::objects::JClass = loaded_class.into();
     let result = env
         .call_static_method(
             helper_jclass,

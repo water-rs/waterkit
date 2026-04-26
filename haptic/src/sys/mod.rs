@@ -53,27 +53,27 @@ mod fallback {
     }
 
     pub fn impact(_intensity: Intensity) -> Result<(), HapticError> {
-        Err(HapticError::NotSupported)
+        Err(HapticError::Unsupported)
     }
 
     pub fn selection() -> Result<(), HapticError> {
-        Err(HapticError::NotSupported)
+        Err(HapticError::Unsupported)
     }
 
     pub fn notification_success() -> Result<(), HapticError> {
-        Err(HapticError::NotSupported)
+        Err(HapticError::Unsupported)
     }
 
     pub fn notification_warning() -> Result<(), HapticError> {
-        Err(HapticError::NotSupported)
+        Err(HapticError::Unsupported)
     }
 
     pub fn notification_error() -> Result<(), HapticError> {
-        Err(HapticError::NotSupported)
+        Err(HapticError::Unsupported)
     }
 
     pub fn play_pattern(_pattern: &HapticPattern) -> Result<(), HapticError> {
-        Err(HapticError::NotSupported)
+        Err(HapticError::Unsupported)
     }
 }
 

@@ -4,14 +4,19 @@
 //! - Media center: platform-specific "Now Playing" integration
 //! - Recording: cpal on desktop, native on mobile
 
-#![allow(clippy::redundant_pub_crate)]
-
 use crate::{MediaCommand, MediaMetadata, PlaybackState};
 use std::time::Duration;
 
-// Recording - use cpal on all desktop platforms
+// Recording - use cpal on desktop platforms, explicit mobile inner elsewhere
+#[cfg(not(target_os = "ios"))]
 mod desktop_record;
+#[cfg(not(target_os = "ios"))]
 pub use desktop_record::AudioRecorderInner;
+
+#[cfg(target_os = "ios")]
+mod mobile_record;
+#[cfg(target_os = "ios")]
+pub use mobile_record::AudioRecorderInner;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple;
@@ -38,14 +43,17 @@ compile_error!("waterkit-audio supports only macOS, iOS, Android, Windows, and L
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 pub use apple::MediaSessionInner;
 
+#[cfg(target_os = "ios")]
+pub use apple::{NativeAudioPlayerInner, NativeAudioPlayerState};
+
 #[cfg(target_os = "android")]
-pub(crate) use android::MediaSessionInner;
+pub use android::MediaSessionInner;
 
 #[cfg(target_os = "windows")]
-pub(crate) use windows::MediaSessionInner;
+pub use windows::MediaSessionInner;
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::MediaSessionInner;
+pub use linux::MediaSessionInner;
 
 /// Platform-specific media center integration.
 ///

@@ -5,24 +5,24 @@ import UIKit
 import AppKit
 #endif
 
-private var linkContext: UnsafeMutableRawPointer? = nil
+private var linkContext: UInt64? = nil
 private var initialUrl: String? = nil
 
-func deeplink_open_url(url: RustStr, callback: __private__RustFnOnceCallbackBoolNoRet) {
+func deeplink_open_url(url: RustStr, callback: @escaping (Bool) -> Void) {
     let urlStr = url.toString()
     guard let nsUrl = URL(string: urlStr) else {
-        callback.call(false)
+        callback(false)
         return
     }
     #if os(iOS)
     DispatchQueue.main.async {
         UIApplication.shared.open(nsUrl, options: [:]) { success in
-            callback.call(success)
+            callback(success)
         }
     }
     #elseif os(macOS)
     let success = NSWorkspace.shared.open(nsUrl)
-    callback.call(success)
+    callback(success)
     #endif
 }
 
@@ -36,7 +36,7 @@ func deeplink_can_open_url(url: RustStr) -> Bool {
     #endif
 }
 
-func deeplink_start_listener(link_ctx: UnsafeMutableRawPointer) {
+func deeplink_start_listener(link_ctx: UInt64) {
     linkContext = link_ctx
     #if os(iOS)
     NotificationCenter.default.addObserver(

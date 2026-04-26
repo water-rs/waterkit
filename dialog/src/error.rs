@@ -17,5 +17,5 @@ pub enum DialogError {
 
     /// The requested feature is not supported on this platform.
     #[error("Not supported: {0}")]
-    NotSupported(String),
+    Unsupported(String),
 }

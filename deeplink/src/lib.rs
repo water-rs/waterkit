@@ -10,6 +10,7 @@
 mod sys;
 
 use std::collections::HashMap;
+use url::Url;
 
 /// Android-specific JNI helpers that require `JNIEnv` and `Context`.
 #[cfg(target_os = "android")]
@@ -34,41 +35,17 @@ impl DeepLink {
     /// # Errors
     /// Returns error if the URL is malformed.
     pub fn parse(url: &str) -> Result<Self, DeepLinkError> {
-        let parts: Vec<&str> = url.splitn(2, "://").collect();
-        if parts.len() < 2 {
-            return Err(DeepLinkError::InvalidUrl(url.to_string()));
-        }
-
-        let scheme = parts[0].to_string();
-        let rest = parts[1];
-        let (host_and_path, query_string) = rest.split_once('?').unwrap_or((rest, ""));
-        let (host, path) = host_and_path.find('/').map_or_else(
-            || (Some(host_and_path.to_string()), String::new()),
-            |idx| {
-                (
-                    Some(host_and_path[..idx].to_string()),
-                    host_and_path[idx..].to_string(),
-                )
-            },
-        );
-
-        let query_params = if query_string.is_empty() {
-            HashMap::new()
-        } else {
-            query_string
-                .split('&')
-                .filter_map(|pair| {
-                    let mut kv = pair.splitn(2, '=');
-                    Some((kv.next()?.to_string(), kv.next().unwrap_or("").to_string()))
-                })
-                .collect()
-        };
+        let parsed = Url::parse(url).map_err(|_| DeepLinkError::InvalidUrl(url.to_string()))?;
+        let query_params = parsed
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
 
         Ok(Self {
             url: url.to_string(),
-            scheme,
-            host,
-            path,
+            scheme: parsed.scheme().to_string(),
+            host: parsed.host_str().map(str::to_string),
+            path: parsed.path().to_string(),
             query_params,
         })
     }
@@ -161,7 +138,7 @@ pub enum DeepLinkError {
     InvalidUrl(String),
     /// Not supported.
     #[error("not supported")]
-    NotSupported,
+    Unsupported,
     /// Permission denied.
     #[error("permission denied")]
     PermissionDenied,

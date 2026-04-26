@@ -3,9 +3,11 @@ package waterkit.notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Context.NOTIFICATION_SERVICE
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.app.Notification
@@ -13,15 +15,66 @@ import org.json.JSONArray
 
 class NotificationHelper {
     companion object {
+        private const val ACTION_NOTIFICATION_ACTION =
+            "waterkit.notification.ACTION_NOTIFICATION_ACTION"
+        private const val EXTRA_NOTIFICATION_ID = "waterkit.notification.EXTRA_NOTIFICATION_ID"
+        private const val EXTRA_ACTION_URL = "waterkit.notification.EXTRA_ACTION_URL"
+
+        @Volatile
+        private var receiverRegistered = false
+
+        @JvmStatic
+        external fun onAction(notificationId: String, actionUrl: String)
+
+        private fun ensureReceiverRegistered(context: Context) {
+            if (receiverRegistered) {
+                return
+            }
+            synchronized(this) {
+                if (receiverRegistered) {
+                    return
+                }
+                val filter = IntentFilter(ACTION_NOTIFICATION_ACTION)
+                val receiver = NotificationActionReceiver()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                } else {
+                    @Suppress("DEPRECATION")
+                    context.registerReceiver(receiver, filter)
+                }
+                receiverRegistered = true
+            }
+        }
+
+        private class NotificationActionReceiver : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent?) {
+                if (intent?.action != ACTION_NOTIFICATION_ACTION) {
+                    return
+                }
+                val notificationId = intent.getStringExtra(EXTRA_NOTIFICATION_ID) ?: return
+                val actionUrl = intent.getStringExtra(EXTRA_ACTION_URL) ?: return
+                onAction(notificationId, actionUrl)
+
+                try {
+                    val openIntent = Intent(Intent.ACTION_VIEW, Uri.parse(actionUrl))
+                    openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(openIntent)
+                } catch (_: Exception) {
+                }
+            }
+        }
+
         @JvmStatic
         fun showNotification(
             context: Context,
             title: String,
             body: String,
             importance: Int,
-            actionsJson: String
+            actionsJson: String,
+            notificationId: String
         ) {
             val manager = context.getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            ensureReceiverRegistered(context)
 
             // Create channel ID based on importance level
             val channelId = when (importance) {
@@ -74,11 +127,14 @@ class NotificationHelper {
                         val label = action.getString("label")
                         val url = action.getString("url")
 
-                        // Create intent to open URL
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                        val pendingIntent = PendingIntent.getActivity(
+                        val intent = Intent(ACTION_NOTIFICATION_ACTION)
+                            .setPackage(context.packageName)
+                            .putExtra(EXTRA_NOTIFICATION_ID, notificationId)
+                            .putExtra(EXTRA_ACTION_URL, url)
+                        val requestCode = notificationId.hashCode() xor i
+                        val pendingIntent = PendingIntent.getBroadcast(
                             context,
-                            i,
+                            requestCode,
                             intent,
                             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                         )
@@ -101,7 +157,7 @@ class NotificationHelper {
                 }
             }
 
-            manager.notify(System.currentTimeMillis().toInt(), builder.build())
+            manager.notify(notificationId.hashCode(), builder.build())
         }
     }
 }

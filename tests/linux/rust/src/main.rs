@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 #[cfg(target_os = "linux")]
 use waterkit_permission::Permission;
 

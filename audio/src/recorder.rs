@@ -99,7 +99,7 @@ impl AudioBuffer {
 #[derive(Debug, Clone)]
 pub enum RecordError {
     /// Recording is not supported on this platform.
-    NotSupported,
+    Unsupported,
     /// Failed to enumerate input devices.
     EnumerationFailed(String),
     /// Device not found.
@@ -121,7 +121,7 @@ pub enum RecordError {
 impl fmt::Display for RecordError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotSupported => write!(f, "recording not supported on this platform"),
+            Self::Unsupported => write!(f, "recording not supported on this platform"),
             Self::EnumerationFailed(msg) => write!(f, "failed to enumerate devices: {msg}"),
             Self::DeviceNotFound(id) => write!(f, "device not found: {id}"),
             Self::OpenFailed(msg) => write!(f, "failed to open device: {msg}"),
@@ -235,6 +235,10 @@ impl AudioRecorder {
     /// # Errors
     ///
     /// Returns an error if device enumeration fails.
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "desktop recorder device enumeration is not const even though the mobile placeholder is"
+    )]
     pub fn list_devices() -> Result<Vec<InputDevice>, RecordError> {
         crate::sys::AudioRecorderInner::list_devices()
     }
@@ -273,6 +277,10 @@ impl AudioRecorder {
     /// Try to read audio data without waiting.
     ///
     /// Returns `None` if no data is available.
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "desktop recorder reads runtime state even though the mobile placeholder is const"
+    )]
     pub fn try_read(&mut self) -> Option<AudioBuffer> {
         self.inner.try_read()
     }
@@ -286,6 +294,10 @@ impl AudioRecorder {
     /// # Errors
     ///
     /// Returns an error if reading fails or recording is not active.
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "desktop recorder reads runtime state even though the mobile placeholder is const"
+    )]
     pub fn read_blocking(&mut self) -> Result<AudioBuffer, RecordError> {
         self.inner.read_blocking()
     }
@@ -297,6 +309,10 @@ impl AudioRecorder {
 
     /// Check if currently recording.
     #[must_use]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "desktop recorder reads runtime state even though the mobile placeholder is const"
+    )]
     pub fn is_recording(&self) -> bool {
         self.inner.is_recording()
     }

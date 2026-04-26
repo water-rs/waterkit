@@ -50,6 +50,33 @@ object ScreenHelper {
     private var screenWidth: Int = 0
     private var screenHeight: Int = 0
 
+    private fun screenshotFrameTimeoutMs(): Long {
+        val refreshRateHz = getRefreshRateHz().takeIf { it > 0f } ?: 60.0f
+        return maxOf(1L, (30_000f / refreshRateHz).toLong())
+    }
+
+    private fun waitForNextFrame(timeoutMs: Long): ByteArray? {
+        synchronized(frameLock) {
+            val deadlineNs = System.nanoTime() + (timeoutMs * 1_000_000L)
+            while (latestFrame == null) {
+                val remainingNs = deadlineNs - System.nanoTime()
+                if (remainingNs <= 0) {
+                    return null
+                }
+                val remainingMs = maxOf(1L, (remainingNs + 999_999L) / 1_000_000L)
+                try {
+                    frameLock.wait(remainingMs)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return null
+                }
+            }
+            val frame = latestFrame
+            latestFrame = null
+            return frame
+        }
+    }
+
     /**
      * Initialize with application context.
      */
@@ -116,6 +143,9 @@ object ScreenHelper {
 
         return try {
             startBackgroundThread()
+            synchronized(frameLock) {
+                latestFrame = null
+            }
 
             // Create ImageReader for capturing frames
             imageReader = ImageReader.newInstance(
@@ -163,6 +193,7 @@ object ScreenHelper {
 
                         synchronized(frameLock) {
                             latestFrame = rgba
+                            frameLock.notifyAll()
                         }
 
                         if (croppedBitmap !== bitmap) {
@@ -259,42 +290,39 @@ object ScreenHelper {
             return null
         }
 
-        repeat(30) {
-            val frame = getFrame()
-            if (frame != null) {
-                val width = frameWidth
-                val height = frameHeight
-                if (width <= 0 || height <= 0) {
-                    stopCapture()
-                    return null
-                }
-
-                val pixelCount = width * height
-                if (frame.size < pixelCount * 4) {
-                    stopCapture()
-                    return null
-                }
-
-                val pixels = IntArray(pixelCount)
-                var src = 0
-                for (i in 0 until pixelCount) {
-                    val r = frame[src].toInt() and 0xFF
-                    val g = frame[src + 1].toInt() and 0xFF
-                    val b = frame[src + 2].toInt() and 0xFF
-                    val a = frame[src + 3].toInt() and 0xFF
-                    pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
-                    src += 4
-                }
-
-                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
-                val output = ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
-                bitmap.recycle()
+        val frame = waitForNextFrame(screenshotFrameTimeoutMs())
+        if (frame != null) {
+            val width = frameWidth
+            val height = frameHeight
+            if (width <= 0 || height <= 0) {
                 stopCapture()
-                return output.toByteArray()
+                return null
             }
-            Thread.sleep(16)
+
+            val pixelCount = width * height
+            if (frame.size < pixelCount * 4) {
+                stopCapture()
+                return null
+            }
+
+            val pixels = IntArray(pixelCount)
+            var src = 0
+            for (i in 0 until pixelCount) {
+                val r = frame[src].toInt() and 0xFF
+                val g = frame[src + 1].toInt() and 0xFF
+                val b = frame[src + 2].toInt() and 0xFF
+                val a = frame[src + 3].toInt() and 0xFF
+                pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
+                src += 4
+            }
+
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+            val output = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+            bitmap.recycle()
+            stopCapture()
+            return output.toByteArray()
         }
 
         stopCapture()

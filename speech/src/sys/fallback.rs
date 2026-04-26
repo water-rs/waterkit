@@ -10,16 +10,16 @@ pub struct TtsInner;
 impl TtsInner {
     #[allow(clippy::unused_async)]
     pub async fn new() -> Result<Self, SpeechError> {
-        Err(SpeechError::NotSupported)
+        Err(SpeechError::Unsupported)
     }
 
     pub fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
-        Err(SpeechError::NotSupported)
+        Err(SpeechError::Unsupported)
     }
 
     #[allow(clippy::unused_async)]
     pub async fn speak(&self, _text: &str, _config: &TtsConfig) -> Result<(), SpeechError> {
-        Err(SpeechError::NotSupported)
+        Err(SpeechError::Unsupported)
     }
 
     pub fn stop(&self) {}
@@ -37,7 +37,7 @@ impl SpeechRecognizerInner {
     pub async fn start(
         _config: RecognitionConfig,
     ) -> Result<(Self, async_channel::Receiver<RecognitionResult>), SpeechError> {
-        Err(SpeechError::NotSupported)
+        Err(SpeechError::Unsupported)
     }
 
     pub fn stop(&self) {}

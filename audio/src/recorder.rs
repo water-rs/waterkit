@@ -267,42 +267,13 @@ impl AudioRecorder {
     }
 
     /// # Errors
+    /// Returns the async stream of recorded audio buffers.
     ///
-    /// Returns an error if reading fails or recording is not active.
-    #[allow(clippy::future_not_send)]
-    pub async fn read(&mut self) -> Result<AudioBuffer, RecordError> {
-        self.inner.read().await
-    }
-
-    /// Try to read audio data without waiting.
-    ///
-    /// Returns `None` if no data is available.
-    #[allow(
-        clippy::missing_const_for_fn,
-        reason = "desktop recorder reads runtime state even though the mobile placeholder is const"
-    )]
-    pub fn try_read(&mut self) -> Option<AudioBuffer> {
-        self.inner.try_read()
-    }
-
-    /// Read audio data synchronously (blocking).
-    ///
-    /// Use this method when calling from a non-async context (e.g., a dedicated thread).
-    /// This is more reliable than using `pollster::block_on(read())` as it doesn't
-    /// depend on async runtime waker semantics.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if reading fails or recording is not active.
-    #[allow(
-        clippy::missing_const_for_fn,
-        reason = "desktop recorder reads runtime state even though the mobile placeholder is const"
-    )]
-    pub fn read_blocking(&mut self) -> Result<AudioBuffer, RecordError> {
-        self.inner.read_blocking()
-    }
-
-    /// Get an async stream of audio buffers.
+    /// Replaces the legacy `read`, `try_read`, and `read_blocking`
+    /// methods — call `stream().next().await` (async),
+    /// `stream().try_next()` (non-blocking peek), or
+    /// `futures::executor::block_on(stream().next())` (sync) at the call
+    /// site instead.
     pub fn stream(&self) -> impl futures::Stream<Item = AudioBuffer> {
         self.inner.receiver()
     }

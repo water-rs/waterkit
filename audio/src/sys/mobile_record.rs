@@ -38,35 +38,6 @@ impl AudioRecorderInner {
         Err(RecordError::Unsupported)
     }
 
-    /// Read audio buffer (async).
-    #[allow(
-        clippy::future_not_send,
-        clippy::unused_async,
-        clippy::unused_self,
-        reason = "the cross-platform recorder API is async and instance-based"
-    )]
-    pub async fn read(&self) -> Result<AudioBuffer, RecordError> {
-        Err(RecordError::Unsupported)
-    }
-
-    /// Try to read without waiting.
-    #[allow(
-        clippy::unused_self,
-        reason = "the cross-platform recorder API is instance-based"
-    )]
-    pub const fn try_read(&self) -> Option<AudioBuffer> {
-        None
-    }
-
-    /// Read audio buffer synchronously (blocking).
-    #[allow(
-        clippy::unused_self,
-        reason = "the cross-platform recorder API is instance-based"
-    )]
-    pub const fn read_blocking(&self) -> Result<AudioBuffer, RecordError> {
-        Err(RecordError::Unsupported)
-    }
-
     /// Check if recording.
     #[allow(
         clippy::unused_self,

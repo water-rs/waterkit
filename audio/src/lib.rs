@@ -327,12 +327,6 @@ pub enum MediaError {
     Unknown(String),
 }
 
-/// Handler for media commands from system controls.
-pub trait MediaCommandHandler: Send + Sync {
-    /// Handle a media command.
-    fn on_command(&self, command: MediaCommand);
-}
-
 /// Manager for media control and "Now Playing" information.
 #[derive(Debug)]
 pub struct MediaSession {
@@ -399,13 +393,9 @@ impl MediaSession {
         self.inner.clear()
     }
 
-    /// Poll one pending media command from system controls.
-    #[must_use]
-    pub fn poll_command(&self) -> Option<MediaCommand> {
-        self.inner.poll_command()
-    }
-
-    // run_loop is now handled automatically in the background
+    // Media commands from system controls are consumed via
+    // `AudioPlayer::commands()`'s push-based stream — there is
+    // intentionally no manual `poll_command` on the session.
 }
 
 #[cfg(test)]

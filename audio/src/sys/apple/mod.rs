@@ -279,11 +279,6 @@ impl MediaSessionInner {
     pub fn clear(&self) -> Result<(), MediaError> {
         convert_result(ffi::media_session_clear())
     }
-
-    #[allow(clippy::unused_self)]
-    pub fn poll_command(&self) -> Option<MediaCommand> {
-        poll_next_command()
-    }
 }
 
 /// Media center integration for Apple platforms.

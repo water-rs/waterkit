@@ -140,38 +140,6 @@ impl AudioRecorderInner {
         Ok(())
     }
 
-    /// Read audio buffer (async).
-    #[allow(clippy::future_not_send)]
-    pub async fn read(&self) -> Result<AudioBuffer, RecordError> {
-        if !self.recording.load(Ordering::Relaxed) {
-            return Err(RecordError::NotRecording);
-        }
-
-        self.receiver
-            .recv()
-            .await
-            .map_err(|e| RecordError::ReadFailed(e.to_string()))
-    }
-
-    /// Try to read without waiting.
-    pub fn try_read(&self) -> Option<AudioBuffer> {
-        self.receiver.try_recv().ok()
-    }
-
-    /// Read audio buffer synchronously (blocking).
-    ///
-    /// Use this method when calling from a non-async context (e.g., a dedicated thread).
-    /// This is more reliable than using `pollster::block_on(read())` as it doesn't
-    /// depend on async runtime waker semantics.
-    pub fn read_blocking(&self) -> Result<AudioBuffer, RecordError> {
-        if !self.recording.load(Ordering::Relaxed) {
-            return Err(RecordError::NotRecording);
-        }
-
-        self.receiver
-            .recv_blocking()
-            .map_err(|e| RecordError::ReadFailed(e.to_string()))
-    }
 
     /// Check if recording.
     pub fn is_recording(&self) -> bool {

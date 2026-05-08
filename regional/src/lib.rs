@@ -1,16 +1,28 @@
-//! Runtime system settings context (locale, preferred languages, region, timezone).
+//! Runtime system settings context (locale, preferred languages, region,
+//! timezone).
 //!
-//! This crate exposes a callback-registration API that does not depend on `nami`.
+//! `waterkit-regional` exposes a [`RegionalContext`] handle. Each
+//! `RegionalContext` owns its own state — there is **no** global static.
+//! Multiple contexts in the same process are isolated and useful for tests
+//! that need a fixed locale.
+//!
+//! Reactive consumers should hold the [`Subscribed<SystemSettingsContext>`]
+//! returned by [`RegionalContext::current`] and react to its changes via
+//! `nami::Signal::watch` or `subscribed.stream()`.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-/// A full system settings context captured from the current system.
+use waterkit_core::{Subscribed, SubscribedSink, subscribed};
+
+/// A normalized snapshot of system settings (locale, preferred languages,
+/// region, timezone).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SystemSettingsContext {
     locale_tag: String,
@@ -20,7 +32,7 @@ pub struct SystemSettingsContext {
 }
 
 impl SystemSettingsContext {
-    /// Creates a normalized system settings context.
+    /// Constructs a normalized system settings context.
     #[must_use]
     pub fn new(
         locale_tag: impl Into<String>,
@@ -81,7 +93,7 @@ impl SystemSettingsContext {
         &self.timezone
     }
 
-    /// Returns a copy with a new locale tag.
+    /// Returns a clone with a different locale tag.
     #[must_use]
     pub fn with_locale_tag(&self, locale_tag: impl Into<String>) -> Self {
         Self::new(
@@ -92,250 +104,184 @@ impl SystemSettingsContext {
     }
 }
 
-type Listener = Arc<dyn Fn(SystemSettingsContext) + Send + Sync + 'static>;
-
-struct Runtime {
-    state: Mutex<State>,
-    auto_refresh_started: AtomicBool,
-}
-
-struct State {
-    current: SystemSettingsContext,
-    override_context: Option<SystemSettingsContext>,
-    listeners: HashMap<u64, Listener>,
-    next_listener_id: u64,
-}
-
-impl Runtime {
-    fn new() -> Self {
-        Self {
-            state: Mutex::new(State {
-                current: detect_system_context(),
-                override_context: None,
-                listeners: HashMap::new(),
-                next_listener_id: 1,
-            }),
-            auto_refresh_started: AtomicBool::new(false),
-        }
-    }
-
-    fn remove_listener(&self, id: u64) {
-        if let Ok(mut state) = self.state.lock() {
-            state.listeners.remove(&id);
-        }
-    }
-}
-
-fn runtime() -> &'static Runtime {
-    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(Runtime::new)
-}
-
-/// Subscription handle returned by [`register_listener`].
+/// Owns one snapshot of system settings plus an override.
 ///
-/// Dropping the handle automatically unregisters the listener.
+/// `RegionalContext` lives on a thread that has a nami-compatible
+/// `LocalExecutor` polling (typically the UI thread) — the held
+/// `Subscribed<T>` requires it. Cross-thread producers (auto-refresh
+/// worker, OS callbacks) push updates through cloned [`SubscribedSink`]
+/// handles, which are `Send`.
 #[derive(Debug)]
-pub struct ListenerHandle {
-    id: Option<u64>,
+pub struct RegionalContext {
+    subscribed: Subscribed<SystemSettingsContext>,
+    sink: SubscribedSink<SystemSettingsContext>,
+    override_state: Arc<Mutex<Option<SystemSettingsContext>>>,
 }
 
-impl ListenerHandle {
-    /// Unregisters the listener immediately.
-    pub fn unregister(mut self) {
-        self.unregister_inner();
-    }
-
-    fn unregister_inner(&mut self) {
-        if let Some(id) = self.id.take() {
-            runtime().remove_listener(id);
+impl RegionalContext {
+    /// Detects the current system settings and returns a fresh context.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no `LocalExecutor` is set up on the calling thread —
+    /// `RegionalContext` requires one to drive the `Subscribed` mailbox.
+    #[must_use]
+    pub fn new() -> Self {
+        let initial = detect_system_context();
+        let (subscribed, sink) = subscribed(initial);
+        Self {
+            subscribed,
+            sink,
+            override_state: Arc::new(Mutex::new(None)),
         }
     }
-}
 
-impl Drop for ListenerHandle {
-    fn drop(&mut self) {
-        self.unregister_inner();
+    /// Returns the reactive [`Subscribed`] view. Watchers / stream
+    /// consumers see updates whenever [`refresh`](Self::refresh),
+    /// [`set_settings`](Self::set_settings),
+    /// [`clear_override`](Self::clear_override), or
+    /// [`set_locale_tag`](Self::set_locale_tag) yield a new value.
+    #[must_use]
+    pub const fn current(&self) -> &Subscribed<SystemSettingsContext> {
+        &self.subscribed
     }
-}
 
-/// Returns the current system settings snapshot.
-#[must_use]
-pub fn current_settings() -> SystemSettingsContext {
-    runtime()
-        .state
-        .lock()
-        .map_or_else(|_| detect_system_context(), |state| state.current.clone())
-}
+    /// Synchronous snapshot of the current settings.
+    #[must_use]
+    pub fn snapshot(&self) -> SystemSettingsContext {
+        self.subscribed.get()
+    }
 
-/// Registers a listener for system settings updates.
-///
-/// The callback is invoked immediately with the current context.
-///
-/// # Panics
-///
-/// Panics if the runtime mutex is poisoned or listener id generation overflows.
-pub fn register_listener<F>(callback: F) -> ListenerHandle
-where
-    F: Fn(SystemSettingsContext) + Send + Sync + 'static,
-{
-    let callback: Listener = Arc::new(callback);
-
-    let (id, current) = {
-        let mut state = runtime()
-            .state
-            .lock()
-            .expect("waterkit-regional runtime mutex poisoned");
-        let id = state.next_listener_id;
-        state.next_listener_id = state
-            .next_listener_id
-            .checked_add(1)
-            .expect("waterkit-regional listener id overflow");
-        state.listeners.insert(id, callback.clone());
-        let current = state.current.clone();
-        drop(state);
-        (id, current)
-    };
-
-    callback(current);
-
-    ListenerHandle { id: Some(id) }
-}
-
-/// Refreshes system settings context and notifies listeners when changed.
-///
-/// # Panics
-///
-/// Panics if the runtime mutex is poisoned.
-#[must_use]
-pub fn refresh() -> SystemSettingsContext {
-    let next = {
-        let state = runtime()
-            .state
-            .lock()
-            .expect("waterkit-regional runtime mutex poisoned");
-        state
-            .override_context
-            .clone()
-            .unwrap_or_else(detect_system_context)
-    };
-
-    publish_if_changed(next)
-}
-
-/// Sets an explicit runtime context override and notifies listeners.
-///
-/// # Panics
-///
-/// Panics if the runtime mutex is poisoned.
-#[must_use]
-pub fn set_settings(context: SystemSettingsContext) -> SystemSettingsContext {
-    let listeners = {
-        let mut state = runtime()
-            .state
-            .lock()
-            .expect("waterkit-regional runtime mutex poisoned");
-        state.override_context = Some(context.clone());
-        if state.current == context {
-            return context;
+    /// Re-detects from system APIs (or the active override) and pushes
+    /// the next value to subscribers when it differs from the previous
+    /// snapshot.
+    pub fn refresh(&self) -> SystemSettingsContext {
+        let next = override_snapshot(&self.override_state).unwrap_or_else(detect_system_context);
+        if self.subscribed.get() != next {
+            self.sink.set(next.clone());
         }
-        state.current = context.clone();
-        state.listeners.values().cloned().collect::<Vec<_>>()
-    };
-
-    for listener in listeners {
-        listener(context.clone());
+        next
     }
 
-    context
-}
-
-/// Clears explicit override and re-reads context from system APIs.
-///
-/// # Panics
-///
-/// Panics if the runtime mutex is poisoned.
-#[must_use]
-pub fn clear_override() -> SystemSettingsContext {
-    {
-        let mut state = runtime()
-            .state
-            .lock()
-            .expect("waterkit-regional runtime mutex poisoned");
-        state.override_context = None;
+    /// Installs an explicit override and notifies subscribers.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal override mutex is poisoned.
+    pub fn set_settings(&self, context: SystemSettingsContext) {
+        {
+            let mut guard = self
+                .override_state
+                .lock()
+                .expect("regional override mutex poisoned");
+            *guard = Some(context.clone());
+        }
+        if self.subscribed.get() != context {
+            self.sink.set(context);
+        }
     }
-    refresh()
-}
 
-/// Sets only locale tag while preserving current timezone and language ordering.
-#[must_use]
-pub fn set_locale_tag(locale_tag: impl Into<String>) -> SystemSettingsContext {
-    let current = current_settings();
-    let locale_tag = normalize_locale_tag(&locale_tag.into());
+    /// Clears any explicit override and re-reads from system APIs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal override mutex is poisoned.
+    #[must_use]
+    pub fn clear_override(&self) -> SystemSettingsContext {
+        {
+            let mut guard = self
+                .override_state
+                .lock()
+                .expect("regional override mutex poisoned");
+            *guard = None;
+        }
+        self.refresh()
+    }
 
-    let mut preferred = current.preferred_languages().to_vec();
-    if let Some(pos) = preferred.iter().position(|lang| lang == &locale_tag) {
-        if pos != 0 {
-            preferred.remove(pos);
+    /// Replaces just the locale tag while preserving timezone and the
+    /// preferred-language ordering.
+    pub fn set_locale_tag(&self, locale_tag: impl Into<String>) -> SystemSettingsContext {
+        let current = self.snapshot();
+        let locale_tag = normalize_locale_tag(&locale_tag.into());
+
+        let mut preferred = current.preferred_languages().to_vec();
+        if let Some(pos) = preferred.iter().position(|lang| lang == &locale_tag) {
+            if pos != 0 {
+                preferred.remove(pos);
+                preferred.insert(0, locale_tag.clone());
+            }
+        } else {
             preferred.insert(0, locale_tag.clone());
         }
-    } else {
-        preferred.insert(0, locale_tag.clone());
+
+        let next =
+            SystemSettingsContext::new(locale_tag, preferred, current.timezone().to_string());
+        self.set_settings(next.clone());
+        next
     }
 
-    set_settings(SystemSettingsContext::new(
-        locale_tag,
-        preferred,
-        current.timezone().to_string(),
-    ))
-}
-
-/// Starts a background polling loop to refresh system settings periodically.
-///
-/// This function is idempotent and starts at most one polling thread.
-pub fn start_auto_refresh(interval: Duration) {
-    if runtime().auto_refresh_started.swap(true, Ordering::SeqCst) {
-        return;
-    }
-
-    let interval = if interval.is_zero() {
-        Duration::from_secs(2)
-    } else {
-        interval
-    };
-
-    thread::spawn(move || {
-        loop {
+    /// Spawns a background thread that periodically detects system
+    /// settings and pushes them through the sink. Drop the returned
+    /// [`AutoRefreshGuard`] to stop the thread.
+    ///
+    /// `interval` of zero is normalized to two seconds.
+    #[must_use]
+    pub fn auto_refresh(&self, interval: Duration) -> AutoRefreshGuard {
+        let interval = if interval.is_zero() {
+            Duration::from_secs(2)
+        } else {
+            interval
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_handle = Arc::clone(&stop);
+        let sink = self.sink.clone();
+        let override_state = Arc::clone(&self.override_state);
+        let join = thread::spawn(move || loop {
             thread::sleep(interval);
-            let _ = refresh();
+            if stop_handle.load(Ordering::Acquire) {
+                break;
+            }
+            let next = override_snapshot(&override_state).unwrap_or_else(detect_system_context);
+            sink.set(next);
+        });
+        AutoRefreshGuard {
+            stop,
+            join: Some(join),
         }
-    });
-}
-
-/// Starts auto refresh with a 2-second interval.
-pub fn start_auto_refresh_default() {
-    start_auto_refresh(Duration::from_secs(2));
-}
-
-fn publish_if_changed(next: SystemSettingsContext) -> SystemSettingsContext {
-    let listeners = {
-        let mut state = runtime()
-            .state
-            .lock()
-            .expect("waterkit-regional runtime mutex poisoned");
-
-        if state.current == next {
-            return next;
-        }
-
-        state.current = next.clone();
-        state.listeners.values().cloned().collect::<Vec<_>>()
-    };
-
-    for listener in listeners {
-        listener(next.clone());
     }
+}
 
-    next
+fn override_snapshot(
+    state: &Arc<Mutex<Option<SystemSettingsContext>>>,
+) -> Option<SystemSettingsContext> {
+    state
+        .lock()
+        .expect("regional override mutex poisoned")
+        .clone()
+}
+
+impl Default for RegionalContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Drop guard for [`RegionalContext::auto_refresh`].
+#[derive(Debug)]
+pub struct AutoRefreshGuard {
+    stop: Arc<AtomicBool>,
+    join: Option<JoinHandle<()>>,
+}
+
+impl Drop for AutoRefreshGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(handle) = self.join.take() {
+            // Best effort — drop blocks briefly until the thread sleep
+            // wakes up and observes the stop flag.
+            let _ = handle.join();
+        }
+    }
 }
 
 fn detect_system_context() -> SystemSettingsContext {

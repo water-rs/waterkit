@@ -133,7 +133,7 @@ impl NfcReaderInner {
         })
         .await
         {
-            return Err(NfcError::PlatformError(err));
+            return Err(NfcError::Platform(err));
         }
 
         Ok((
@@ -172,7 +172,7 @@ impl NfcReaderInner {
             }),
         );
         rx.await
-            .map_err(|_| NfcError::PlatformError("callback dropped".into()))?
+            .map_err(|_| NfcError::Platform("callback dropped".into()))?
     }
 
     pub fn stop(&self) {

@@ -22,14 +22,14 @@ impl TtsInner {
     #[allow(clippy::unused_async)]
     pub async fn new() -> Result<Self, SpeechError> {
         let synth =
-            SpeechSynthesizer::new().map_err(|e| SpeechError::PlatformError(e.to_string()))?;
+            SpeechSynthesizer::new().map_err(|e| SpeechError::Platform(e.to_string()))?;
         Ok(Self { synth })
     }
 
     pub fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
         let _ = self;
         let voices = SpeechSynthesizer::AllVoices()
-            .map_err(|e| SpeechError::PlatformError(e.to_string()))?;
+            .map_err(|e| SpeechError::Platform(e.to_string()))?;
         let mut result = Vec::new();
         for voice in &voices {
             let id = voice.Id().map_or_else(|_| String::new(), |s| s.to_string());
@@ -49,9 +49,9 @@ impl TtsInner {
         let stream = self
             .synth
             .SynthesizeTextToStreamAsync(&text_hstring)
-            .map_err(|e| SpeechError::PlatformError(e.to_string()))?
+            .map_err(|e| SpeechError::Platform(e.to_string()))?
             .await
-            .map_err(|e| SpeechError::PlatformError(e.to_string()))?;
+            .map_err(|e| SpeechError::Platform(e.to_string()))?;
         drop(stream);
         Ok(())
     }
@@ -89,30 +89,30 @@ impl SpeechRecognizerInner {
         let recognizer = if let Some(language_tag) = config.language.as_deref() {
             let tag: windows::core::HSTRING = language_tag.into();
             let language = Language::CreateLanguage(&tag)
-                .map_err(|e| SpeechError::PlatformError(e.to_string()))?;
+                .map_err(|e| SpeechError::Platform(e.to_string()))?;
             WinSpeechRecognizer::Create(&language).map_err(|e| {
-                SpeechError::PlatformError(format!(
+                SpeechError::Platform(format!(
                     "create recognizer for language {language_tag}: {e}"
                 ))
             })?
         } else {
-            WinSpeechRecognizer::new().map_err(|e| SpeechError::PlatformError(e.to_string()))?
+            WinSpeechRecognizer::new().map_err(|e| SpeechError::Platform(e.to_string()))?
         };
 
         let compilation = recognizer
             .CompileConstraintsAsync()
-            .map_err(|e| SpeechError::PlatformError(format!("CompileConstraintsAsync: {e}")))?
+            .map_err(|e| SpeechError::Platform(format!("CompileConstraintsAsync: {e}")))?
             .await
-            .map_err(|e| SpeechError::PlatformError(format!("compile constraints await: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("compile constraints await: {e}")))?;
         let compilation_status = compilation
             .Status()
-            .map_err(|e| SpeechError::PlatformError(format!("compile status: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("compile status: {e}")))?;
         if compilation_status != SpeechRecognitionResultStatus::Success {
             return Err(SpeechError::NotAvailable);
         }
 
         let session = recognizer.ContinuousRecognitionSession().map_err(|e| {
-            SpeechError::PlatformError(format!("ContinuousRecognitionSession: {e}"))
+            SpeechError::Platform(format!("ContinuousRecognitionSession: {e}"))
         })?;
 
         let (tx, rx) = async_channel::bounded(32);
@@ -154,7 +154,7 @@ impl SpeechRecognizerInner {
                     Ok(())
                 },
             ))
-            .map_err(|e| SpeechError::PlatformError(format!("register ResultGenerated: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("register ResultGenerated: {e}")))?;
 
         let tx_for_completed = tx.clone();
         let completed_cookie = session
@@ -166,14 +166,14 @@ impl SpeechRecognizerInner {
                     Ok(())
                 },
             ))
-            .map_err(|e| SpeechError::PlatformError(format!("register Completed: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("register Completed: {e}")))?;
 
         if let Err(e) = session
             .StartWithModeAsync(mode)
-            .map_err(|error| SpeechError::PlatformError(format!("StartWithModeAsync: {error}")))?
+            .map_err(|error| SpeechError::Platform(format!("StartWithModeAsync: {error}")))?
             .await
             .map_err(|error| {
-                SpeechError::PlatformError(format!("StartWithModeAsync await: {error}"))
+                SpeechError::Platform(format!("StartWithModeAsync await: {error}"))
             })
         {
             let _ = session.RemoveResultGenerated(result_cookie);

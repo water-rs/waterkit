@@ -1,7 +1,9 @@
 //! Apple platform (iOS/macOS) sensor implementation using swift-bridge.
 
-use crate::{ScalarData, SensorData, SensorError, SensorStream};
+use crate::sys::SensorStream;
+use crate::{ScalarData, SensorData, SensorError};
 use futures::stream;
+use waterkit_core::Timestamp;
 
 #[swift_bridge::bridge]
 mod ffi {
@@ -51,15 +53,20 @@ mod ffi {
     }
 }
 
-const fn convert_reading(reading: &ffi::SensorReading) -> SensorData {
-    SensorData::new(reading.x, reading.y, reading.z, reading.timestamp_ms)
+fn ts_from_ms(ms: u64) -> Timestamp {
+    let signed = i64::try_from(ms).unwrap_or(i64::MAX);
+    Timestamp::from_millisecond(signed).unwrap_or_default()
 }
 
-const fn convert_scalar(reading: &ffi::ScalarReading) -> ScalarData {
-    ScalarData::new(reading.value, reading.timestamp_ms)
+fn convert_reading(reading: &ffi::SensorReading) -> SensorData {
+    SensorData::new(reading.x, reading.y, reading.z, ts_from_ms(reading.timestamp_ms))
 }
 
-const fn convert_result(result: ffi::SensorResult) -> Result<SensorData, SensorError> {
+fn convert_scalar(reading: &ffi::ScalarReading) -> ScalarData {
+    ScalarData::new(reading.value, ts_from_ms(reading.timestamp_ms))
+}
+
+fn convert_result(result: ffi::SensorResult) -> Result<SensorData, SensorError> {
     match result {
         ffi::SensorResult::Success(r) => Ok(convert_reading(&r)),
         ffi::SensorResult::NotAvailable => Err(SensorError::NotAvailable),
@@ -68,7 +75,7 @@ const fn convert_result(result: ffi::SensorResult) -> Result<SensorData, SensorE
     }
 }
 
-const fn convert_scalar_result(result: ffi::ScalarResult) -> Result<ScalarData, SensorError> {
+fn convert_scalar_result(result: ffi::ScalarResult) -> Result<ScalarData, SensorError> {
     match result {
         ffi::ScalarResult::Success(r) => Ok(convert_scalar(&r)),
         ffi::ScalarResult::NotAvailable => Err(SensorError::NotAvailable),

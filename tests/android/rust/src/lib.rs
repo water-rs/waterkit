@@ -58,7 +58,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         #[cfg(feature = "sensor")]
         {
             log::info!("Testing waterkit-sensor...");
-            if waterkit_content::sensor::Accelerometer::is_available() {
+            if waterkit_content::sensor::Accelerometer::capabilities().available {
                 match waterkit_content::sensor::Accelerometer::read().await {
                     Ok(data) => log::info!(
                         "Accelerometer Read: x={:.2} y={:.2} z={:.2}",
@@ -270,7 +270,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         #[cfg(feature = "speech")]
         {
             log::info!("Testing waterkit-speech...");
-            let recognizer_available = waterkit_content::speech::SpeechRecognizer::is_available();
+            let recognizer_available = waterkit_content::speech::SpeechRecognizer::capabilities();
             log::info!("Speech recognizer available: {recognizer_available}");
             if let Err(e) = waterkit_content::speech::android::init_with_context(&mut env, activity)
             {

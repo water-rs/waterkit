@@ -23,10 +23,10 @@ where
 {
     let android_context = ndk_context::android_context();
     let vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) }
-        .map_err(|e| NfcError::PlatformError(format!("JavaVM::from_raw: {e}")))?;
+        .map_err(|e| NfcError::Platform(format!("JavaVM::from_raw: {e}")))?;
     let mut env = vm
         .attach_current_thread()
-        .map_err(|e| NfcError::PlatformError(format!("attach_current_thread: {e}")))?;
+        .map_err(|e| NfcError::Platform(format!("attach_current_thread: {e}")))?;
 
     let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
     assert!(
@@ -44,41 +44,41 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), NfcError> {
     let cache_dir = env
         .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| NfcError::PlatformError(format!("getCacheDir: {e}")))?;
+        .map_err(|e| NfcError::Platform(format!("getCacheDir: {e}")))?;
     let cache_path = env
         .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| NfcError::PlatformError(format!("getAbsolutePath: {e}")))?;
+        .map_err(|e| NfcError::Platform(format!("getAbsolutePath: {e}")))?;
     let dex_path = format!(
         "{}/waterkit_nfc.dex",
         env.get_string((&cache_path).into())
-            .map_err(|e| NfcError::PlatformError(format!("get_string: {e}")))?
+            .map_err(|e| NfcError::Platform(format!("get_string: {e}")))?
             .to_str()
-            .map_err(|e| NfcError::PlatformError(format!("to_str: {e}")))?
+            .map_err(|e| NfcError::Platform(format!("to_str: {e}")))?
     );
     let _ = std::fs::remove_file(&dex_path);
     std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| NfcError::PlatformError(format!("write DEX: {e}")))?;
+        .map_err(|e| NfcError::Platform(format!("write DEX: {e}")))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(&dex_path)
-            .map_err(|e| NfcError::PlatformError(format!("metadata DEX: {e}")))?
+            .map_err(|e| NfcError::Platform(format!("metadata DEX: {e}")))?
             .permissions();
         perms.set_mode(0o444);
         std::fs::set_permissions(&dex_path, perms)
-            .map_err(|e| NfcError::PlatformError(format!("set_permissions DEX: {e}")))?;
+            .map_err(|e| NfcError::Platform(format!("set_permissions DEX: {e}")))?;
     }
     let dex_path_jstring = env
         .new_string(&dex_path)
-        .map_err(|e| NfcError::PlatformError(format!("new_string: {e}")))?;
+        .map_err(|e| NfcError::Platform(format!("new_string: {e}")))?;
     let parent_loader = env
         .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| NfcError::PlatformError(format!("getClassLoader: {e}")))?;
+        .map_err(|e| NfcError::Platform(format!("getClassLoader: {e}")))?;
     let dex_class = env
         .find_class("dalvik/system/DexClassLoader")
-        .map_err(|e| NfcError::PlatformError(format!("find_class: {e}")))?;
+        .map_err(|e| NfcError::Platform(format!("find_class: {e}")))?;
     let loader = env
         .new_object(
             dex_class,
@@ -90,10 +90,10 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), NfcError> {
                 JValue::Object(&parent_loader),
             ],
         )
-        .map_err(|e| NfcError::PlatformError(format!("new_object: {e}")))?;
+        .map_err(|e| NfcError::Platform(format!("new_object: {e}")))?;
     let global = env
         .new_global_ref(loader)
-        .map_err(|e| NfcError::PlatformError(format!("global_ref: {e}")))?;
+        .map_err(|e| NfcError::Platform(format!("global_ref: {e}")))?;
     if CLASS_LOADER.set(global).is_err() {
         assert!(
             CLASS_LOADER.get().is_some(),
@@ -108,10 +108,10 @@ fn helper_class<'local>(
 ) -> Result<jni::objects::JClass<'local>, NfcError> {
     let helper_class_name = env
         .new_string(NFC_HELPER_CLASS_NAME)
-        .map_err(|e| NfcError::PlatformError(format!("new_string: {e}")))?;
+        .map_err(|e| NfcError::Platform(format!("new_string: {e}")))?;
     let loader = CLASS_LOADER
         .get()
-        .ok_or_else(|| NfcError::PlatformError("Class loader not initialized".into()))?;
+        .ok_or_else(|| NfcError::Platform("Class loader not initialized".into()))?;
     let cls = env
         .call_method(
             loader.as_obj(),
@@ -120,7 +120,7 @@ fn helper_class<'local>(
             &[JValue::Object(&helper_class_name)],
         )
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| NfcError::PlatformError(format!("loadClass: {e}")))?;
+        .map_err(|e| NfcError::Platform(format!("loadClass: {e}")))?;
     Ok(cls.into())
 }
 
@@ -145,7 +145,7 @@ const fn decode_tag_type(code: i32) -> NfcTagType {
 
 fn hex_decode(hex: &str) -> Result<Vec<u8>, NfcError> {
     if !hex.len().is_multiple_of(2) {
-        return Err(NfcError::PlatformError(format!(
+        return Err(NfcError::Platform(format!(
             "invalid hex length for NFC payload: {}",
             hex.len()
         )));
@@ -154,9 +154,9 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>, NfcError> {
     let mut bytes = Vec::with_capacity(hex.len() / 2);
     for chunk in hex.as_bytes().chunks_exact(2) {
         let value = std::str::from_utf8(chunk)
-            .map_err(|e| NfcError::PlatformError(format!("hex utf8 decode failed: {e}")))?;
+            .map_err(|e| NfcError::Platform(format!("hex utf8 decode failed: {e}")))?;
         let byte = u8::from_str_radix(value, 16)
-            .map_err(|e| NfcError::PlatformError(format!("hex parse failed for '{value}': {e}")))?;
+            .map_err(|e| NfcError::Platform(format!("hex parse failed for '{value}': {e}")))?;
         bytes.push(byte);
     }
     Ok(bytes)
@@ -176,16 +176,16 @@ fn parse_ndef_records(records: &str) -> Result<NdefMessage, NfcError> {
         let mut parts = record.splitn(3, ':');
         let tnf = parts
             .next()
-            .ok_or_else(|| NfcError::PlatformError("missing NDEF TNF".into()))?
+            .ok_or_else(|| NfcError::Platform("missing NDEF TNF".into()))?
             .parse::<u8>()
-            .map_err(|e| NfcError::PlatformError(format!("invalid NDEF TNF: {e}")))?;
+            .map_err(|e| NfcError::Platform(format!("invalid NDEF TNF: {e}")))?;
         let record_type = parts
             .next()
-            .ok_or_else(|| NfcError::PlatformError("missing NDEF record type".into()))
+            .ok_or_else(|| NfcError::Platform("missing NDEF record type".into()))
             .and_then(hex_decode)?;
         let payload = parts
             .next()
-            .ok_or_else(|| NfcError::PlatformError("missing NDEF payload".into()))
+            .ok_or_else(|| NfcError::Platform("missing NDEF payload".into()))
             .and_then(hex_decode)?;
 
         parsed.push(NdefRecord {
@@ -305,7 +305,7 @@ impl NfcReaderInner {
                     std::thread::sleep(Duration::from_millis(250));
                 }
             })
-            .map_err(|error| NfcError::PlatformError(format!("spawn NFC session worker: {error}")))?;
+            .map_err(|error| NfcError::Platform(format!("spawn NFC session worker: {error}")))?;
 
         Ok((
             Self {
@@ -321,7 +321,7 @@ impl NfcReaderInner {
         let records_json = encode_ndef_records(&message);
         let tag = {
             let guard = self.latest_tag.lock().map_err(|error| {
-                NfcError::PlatformError(format!("latest tag mutex poisoned in write(): {error}"))
+                NfcError::Platform(format!("latest tag mutex poisoned in write(): {error}"))
             })?;
             guard.clone().ok_or_else(|| {
                 NfcError::WriteFailed("no NFC tag discovered in active session".into())
@@ -380,9 +380,9 @@ pub mod jni_api {
             "(Landroid/content/Context;)Z",
             &[JValue::Object(context)],
         )
-        .map_err(|e| NfcError::PlatformError(format!("isAvailable: {e}")))?
+        .map_err(|e| NfcError::Platform(format!("isAvailable: {e}")))?
         .z()
-        .map_err(|e| NfcError::PlatformError(format!("isAvailable return: {e}")))
+        .map_err(|e| NfcError::Platform(format!("isAvailable return: {e}")))
     }
 
     /// Read the currently dispatched NFC tag from Activity intent.
@@ -400,7 +400,7 @@ pub mod jni_api {
         let intent = env
             .call_method(context, "getIntent", "()Landroid/content/Intent;", &[])
             .and_then(jni::objects::JValueGen::l)
-            .map_err(|e| NfcError::PlatformError(format!("Context.getIntent failed: {e}")))?;
+            .map_err(|e| NfcError::Platform(format!("Context.getIntent failed: {e}")))?;
         if intent.is_null() {
             return Ok(None);
         }
@@ -408,20 +408,20 @@ pub mod jni_api {
         let action = env
             .call_method(&intent, "getAction", "()Ljava/lang/String;", &[])
             .and_then(jni::objects::JValueGen::l)
-            .map_err(|e| NfcError::PlatformError(format!("Intent.getAction failed: {e}")))?;
+            .map_err(|e| NfcError::Platform(format!("Intent.getAction failed: {e}")))?;
         if action.is_null() {
             return Ok(None);
         }
         let action_value: String = env
             .get_string(&JString::from(action))
-            .map_err(|e| NfcError::PlatformError(format!("decode intent action failed: {e}")))?
+            .map_err(|e| NfcError::Platform(format!("decode intent action failed: {e}")))?
             .into();
         if !is_nfc_intent_action(&action_value) {
             return Ok(None);
         }
 
         let tag_extra_key = env.new_string(EXTRA_TAG_KEY).map_err(|e| {
-            NfcError::PlatformError(format!("new_string EXTRA_TAG_KEY failed: {e}"))
+            NfcError::Platform(format!("new_string EXTRA_TAG_KEY failed: {e}"))
         })?;
         let tag = env
             .call_method(
@@ -432,14 +432,14 @@ pub mod jni_api {
             )
             .and_then(jni::objects::JValueGen::l)
             .map_err(|e| {
-                NfcError::PlatformError(format!("Intent.getParcelableExtra failed: {e}"))
+                NfcError::Platform(format!("Intent.getParcelableExtra failed: {e}"))
             })?;
         if tag.is_null() {
             return Ok(None);
         }
         let tag_global = env
             .new_global_ref(&tag)
-            .map_err(|e| NfcError::PlatformError(format!("new_global_ref tag failed: {e}")))?;
+            .map_err(|e| NfcError::Platform(format!("new_global_ref tag failed: {e}")))?;
 
         let tag_id = env
             .call_static_method(
@@ -449,15 +449,15 @@ pub mod jni_api {
                 &[JValue::Object(&tag)],
             )
             .and_then(jni::objects::JValueGen::l)
-            .map_err(|e| NfcError::PlatformError(format!("NfcHelper.getTagId failed: {e}")))?;
+            .map_err(|e| NfcError::Platform(format!("NfcHelper.getTagId failed: {e}")))?;
         if tag_id.is_null() {
-            return Err(NfcError::PlatformError(
+            return Err(NfcError::Platform(
                 "NfcHelper.getTagId returned null".into(),
             ));
         }
         let tag_id_value: String = env
             .get_string(&JString::from(tag_id))
-            .map_err(|e| NfcError::PlatformError(format!("decode tag id failed: {e}")))?
+            .map_err(|e| NfcError::Platform(format!("decode tag id failed: {e}")))?
             .into();
 
         let tag_type = env
@@ -467,9 +467,9 @@ pub mod jni_api {
                 "(Landroid/nfc/Tag;)I",
                 &[JValue::Object(&tag)],
             )
-            .map_err(|e| NfcError::PlatformError(format!("NfcHelper.getTagType failed: {e}")))?
+            .map_err(|e| NfcError::Platform(format!("NfcHelper.getTagType failed: {e}")))?
             .i()
-            .map_err(|e| NfcError::PlatformError(format!("decode tag type failed: {e}")))?;
+            .map_err(|e| NfcError::Platform(format!("decode tag type failed: {e}")))?;
 
         let records = env
             .call_static_method(
@@ -479,14 +479,14 @@ pub mod jni_api {
                 &[JValue::Object(&tag)],
             )
             .and_then(jni::objects::JValueGen::l)
-            .map_err(|e| NfcError::PlatformError(format!("NfcHelper.readTag failed: {e}")))?;
+            .map_err(|e| NfcError::Platform(format!("NfcHelper.readTag failed: {e}")))?;
         let records = if records.is_null() {
             None
         } else {
             Some(
                 env.get_string(&JString::from(records))
                     .map_err(|e| {
-                        NfcError::PlatformError(format!("decode NDEF records failed: {e}"))
+                        NfcError::Platform(format!("decode NDEF records failed: {e}"))
                     })?
                     .into(),
             )
@@ -516,7 +516,7 @@ pub mod jni_api {
 
         let records = env
             .new_string(records_json)
-            .map_err(|e| NfcError::PlatformError(format!("new_string records_json failed: {e}")))?;
+            .map_err(|e| NfcError::Platform(format!("new_string records_json failed: {e}")))?;
         let error_value = env
             .call_static_method(
                 cls,
@@ -525,14 +525,14 @@ pub mod jni_api {
                 &[JValue::Object(tag), JValue::Object(&records)],
             )
             .and_then(jni::objects::JValueGen::l)
-            .map_err(|e| NfcError::PlatformError(format!("NfcHelper.writeTag failed: {e}")))?;
+            .map_err(|e| NfcError::Platform(format!("NfcHelper.writeTag failed: {e}")))?;
         if error_value.is_null() {
             return Ok(());
         }
 
         let error_message: String = env
             .get_string(&JString::from(error_value))
-            .map_err(|e| NfcError::PlatformError(format!("decode writeTag error failed: {e}")))?
+            .map_err(|e| NfcError::Platform(format!("decode writeTag error failed: {e}")))?
             .into();
         if error_message.to_ascii_lowercase().contains("read-only") {
             return Err(NfcError::ReadOnly);

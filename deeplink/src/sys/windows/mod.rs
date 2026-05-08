@@ -5,11 +5,11 @@ use crate::{DeepLink, DeepLinkError};
 pub async fn open_url(url: &str) -> Result<(), DeepLinkError> {
     let uri: windows::core::HSTRING = url.into();
     let win_uri = windows::Foundation::Uri::CreateUri(&uri)
-        .map_err(|e| DeepLinkError::PlatformError(e.to_string()))?;
+        .map_err(|e| DeepLinkError::Platform(e.to_string()))?;
     windows::System::Launcher::LaunchUriAsync(&win_uri)
-        .map_err(|e| DeepLinkError::PlatformError(e.to_string()))?
+        .map_err(|e| DeepLinkError::Platform(e.to_string()))?
         .await
-        .map_err(|e| DeepLinkError::PlatformError(e.to_string()))?;
+        .map_err(|e| DeepLinkError::Platform(e.to_string()))?;
     Ok(())
 }
 
@@ -17,14 +17,14 @@ pub async fn open_url(url: &str) -> Result<(), DeepLinkError> {
 pub async fn can_open_url(url: &str) -> Result<bool, DeepLinkError> {
     let uri: windows::core::HSTRING = url.into();
     let win_uri = windows::Foundation::Uri::CreateUri(&uri)
-        .map_err(|e| DeepLinkError::PlatformError(e.to_string()))?;
+        .map_err(|e| DeepLinkError::Platform(e.to_string()))?;
     let result = windows::System::Launcher::QueryUriSupportAsync(
         &win_uri,
         windows::System::LaunchQuerySupportType::Uri,
     )
-    .map_err(|e| DeepLinkError::PlatformError(e.to_string()))?
+    .map_err(|e| DeepLinkError::Platform(e.to_string()))?
     .await
-    .map_err(|e| DeepLinkError::PlatformError(e.to_string()))?;
+    .map_err(|e| DeepLinkError::Platform(e.to_string()))?;
     Ok(result == windows::System::LaunchQuerySupportStatus::Available)
 }
 

@@ -21,7 +21,7 @@ impl TtsInner {
         let status = std::process::Command::new("which")
             .arg("spd-say")
             .output()
-            .map_err(|e| SpeechError::PlatformError(e.to_string()))?;
+            .map_err(|e| SpeechError::Platform(e.to_string()))?;
         if !status.status.success() {
             return Err(SpeechError::NotAvailable);
         }
@@ -33,7 +33,7 @@ impl TtsInner {
         let output = std::process::Command::new("spd-say")
             .arg("-L")
             .output()
-            .map_err(|e| SpeechError::PlatformError(e.to_string()))?;
+            .map_err(|e| SpeechError::Platform(e.to_string()))?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(stdout
             .lines()
@@ -63,11 +63,11 @@ impl TtsInner {
         let status = cmd
             .status()
             .await
-            .map_err(|e| SpeechError::PlatformError(e.to_string()))?;
+            .map_err(|e| SpeechError::Platform(e.to_string()))?;
         if status.success() {
             Ok(())
         } else {
-            Err(SpeechError::PlatformError("spd-say failed".into()))
+            Err(SpeechError::Platform("spd-say failed".into()))
         }
     }
 
@@ -111,10 +111,10 @@ impl SpeechRecognizerInner {
             .stderr(Stdio::null())
             .stdin(Stdio::null())
             .spawn()
-            .map_err(|e| SpeechError::PlatformError(format!("spawn recognizer command: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("spawn recognizer command: {e}")))?;
 
         let stdout = child.stdout.take().ok_or_else(|| {
-            SpeechError::PlatformError("recognizer command did not expose stdout".into())
+            SpeechError::Platform("recognizer command did not expose stdout".into())
         })?;
         let (tx, rx) = async_channel::bounded(64);
 
@@ -139,7 +139,7 @@ impl SpeechRecognizerInner {
                 tx.close();
             })
             .map_err(|e| {
-                SpeechError::PlatformError(format!("spawn recognizer reader thread: {e}"))
+                SpeechError::Platform(format!("spawn recognizer reader thread: {e}"))
             })?;
 
         Ok((

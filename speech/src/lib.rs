@@ -5,8 +5,12 @@
 //! - **Speech Recognition**: Converting spoken words to text in real-time
 
 #![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
 
 mod sys;
+
+use futures_core::Stream;
+use waterkit_core::Capabilities;
 
 /// Android-specific JNI helpers that require `JNIEnv` and `Context`.
 #[cfg(target_os = "android")]
@@ -125,32 +129,52 @@ impl Default for RecognitionConfig {
     }
 }
 
+/// Capability probe for the speech recognition subsystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RecognizerCapabilities {
+    /// Whether speech recognition is available on this device.
+    pub available: bool,
+}
+
+impl Capabilities for RecognizerCapabilities {
+    fn available(&self) -> bool {
+        self.available
+    }
+}
+
 /// Speech recognition engine.
 #[derive(Debug)]
 pub struct SpeechRecognizer {
     inner: sys::SpeechRecognizerInner,
+    events: async_channel::Receiver<RecognitionResult>,
 }
 
 impl SpeechRecognizer {
-    /// Check if speech recognition is available.
+    /// Probes whether speech recognition is available.
     #[must_use]
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn is_available() -> bool {
-        sys::recognition_is_available()
+    pub fn capabilities() -> RecognizerCapabilities {
+        RecognizerCapabilities {
+            available: sys::recognition_is_available(),
+        }
     }
 
-    /// Start a speech recognition session.
+    /// Starts a speech recognition session.
     ///
     /// # Errors
-    /// Returns error if recognition cannot be started.
-    pub async fn start(
-        config: RecognitionConfig,
-    ) -> Result<(Self, async_channel::Receiver<RecognitionResult>), SpeechError> {
-        let (inner, rx) = sys::SpeechRecognizerInner::start(config).await?;
-        Ok((Self { inner }, rx))
+    ///
+    /// Returns [`SpeechError`] if recognition cannot be started.
+    pub async fn new(config: RecognitionConfig) -> Result<Self, SpeechError> {
+        let (inner, events) = sys::SpeechRecognizerInner::start(config).await?;
+        Ok(Self { inner, events })
     }
 
-    /// Stop speech recognition.
+    /// Returns the stream of recognition results.
+    pub fn events(&self) -> impl Stream<Item = RecognitionResult> + Send + 'static {
+        self.events.clone()
+    }
+
+    /// Stops speech recognition.
     #[allow(clippy::missing_const_for_fn)]
     pub fn stop(&self) {
         self.inner.stop();
@@ -159,6 +183,7 @@ impl SpeechRecognizer {
 
 /// Errors in speech operations.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum SpeechError {
     /// TTS/recognition not available.
     #[error("speech not available")]
@@ -171,5 +196,5 @@ pub enum SpeechError {
     Unsupported,
     /// Platform error.
     #[error("platform error: {0}")]
-    PlatformError(String),
+    Platform(String),
 }

@@ -6,7 +6,7 @@ pub async fn open_url(url: &str) -> Result<(), DeepLinkError> {
     std::process::Command::new("xdg-open")
         .arg(url)
         .spawn()
-        .map_err(|e| DeepLinkError::PlatformError(e.to_string()))?;
+        .map_err(|e| DeepLinkError::Platform(e.to_string()))?;
     Ok(())
 }
 

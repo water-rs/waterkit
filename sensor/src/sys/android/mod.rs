@@ -1,10 +1,12 @@
 //! Android sensor implementation using JNI.
 
-use crate::{ScalarData, SensorData, SensorError, SensorStream};
+use crate::sys::SensorStream;
+use crate::{ScalarData, SensorData, SensorError};
 use futures::stream;
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JObject, JValue};
 use std::sync::OnceLock;
+use waterkit_core::Timestamp;
 
 /// Embedded DEX bytecode containing `SensorHelper` class.
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
@@ -20,22 +22,22 @@ fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), SensorEr
 
     let cache_dir = env
         .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
-        .map_err(|e| SensorError::Unknown(format!("getCacheDir failed: {e}")))?
+        .map_err(|e| SensorError::Platform(format!("getCacheDir failed: {e}")))?
         .l()
-        .map_err(|e| SensorError::Unknown(format!("getCacheDir result: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("getCacheDir result: {e}")))?;
 
     let cache_path = env
         .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
-        .map_err(|e| SensorError::Unknown(format!("getAbsolutePath failed: {e}")))?
+        .map_err(|e| SensorError::Platform(format!("getAbsolutePath failed: {e}")))?
         .l()
-        .map_err(|e| SensorError::Unknown(format!("getAbsolutePath result: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("getAbsolutePath result: {e}")))?;
 
     let dex_path = format!(
         "{}/waterkit_sensor.dex",
         env.get_string((&cache_path).into())
-            .map_err(|e| SensorError::Unknown(format!("get_string failed: {e}")))?
+            .map_err(|e| SensorError::Platform(format!("get_string failed: {e}")))?
             .to_str()
-            .map_err(|e| SensorError::Unknown(format!("to_str failed: {e}")))?
+            .map_err(|e| SensorError::Platform(format!("to_str failed: {e}")))?
     );
 
     // Remove if exists to handle previous read-only setting
@@ -43,35 +45,35 @@ fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), SensorEr
 
     log::info!("Initializing DEX loader with path: {dex_path}");
     std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| SensorError::Unknown(format!("write DEX failed: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("write DEX failed: {e}")))?;
 
     // Make DEX read-only as required by modern Android security
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(&dex_path)
-            .map_err(|e| SensorError::Unknown(format!("metadata DEX failed: {e}")))?
+            .map_err(|e| SensorError::Platform(format!("metadata DEX failed: {e}")))?
             .permissions();
         perms.set_mode(0o444); // Read-only
         std::fs::set_permissions(&dex_path, perms)
-            .map_err(|e| SensorError::Unknown(format!("set_permissions DEX failed: {e}")))?;
+            .map_err(|e| SensorError::Platform(format!("set_permissions DEX failed: {e}")))?;
         log::info!("DEX file permissions set to read-only (0444)");
     }
 
     let dex_path_jstring = env
         .new_string(&dex_path)
-        .map_err(|e| SensorError::Unknown(format!("new_string failed: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("new_string failed: {e}")))?;
 
     log::info!("Creating DexClassLoader...");
     let parent_loader = env
         .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
-        .map_err(|e| SensorError::Unknown(format!("getClassLoader failed: {e}")))?
+        .map_err(|e| SensorError::Platform(format!("getClassLoader failed: {e}")))?
         .l()
-        .map_err(|e| SensorError::Unknown(format!("getClassLoader result: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("getClassLoader result: {e}")))?;
 
     let dex_class_loader_class = env
         .find_class("dalvik/system/DexClassLoader")
-        .map_err(|e| SensorError::Unknown(format!("find DexClassLoader: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("find DexClassLoader: {e}")))?;
 
     let class_loader = env
         .new_object(
@@ -86,13 +88,13 @@ fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), SensorEr
         )
         .map_err(|e| {
             log::error!("new DexClassLoader failed: {e}");
-            SensorError::Unknown(format!("new DexClassLoader: {e}"))
+            SensorError::Platform(format!("new DexClassLoader: {e}"))
         })?;
 
     log::info!("DexClassLoader created successfully.");
     let global_ref = env
         .new_global_ref(class_loader)
-        .map_err(|e| SensorError::Unknown(format!("new_global_ref: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("new_global_ref: {e}")))?;
 
     let _ = CLASS_LOADER.set(global_ref);
     Ok(())
@@ -101,11 +103,11 @@ fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), SensorEr
 fn load_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<jni::objects::JClass<'a>, SensorError> {
     let class_loader = CLASS_LOADER
         .get()
-        .ok_or_else(|| SensorError::Unknown("Class loader not initialized".into()))?;
+        .ok_or_else(|| SensorError::Platform("Class loader not initialized".into()))?;
 
     let helper_class_name = env
         .new_string("waterkit.sensor.SensorHelper")
-        .map_err(|e| SensorError::Unknown(format!("new_string: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("new_string: {e}")))?;
 
     let helper_class = env
         .call_method(
@@ -114,9 +116,9 @@ fn load_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<jni::objects::JClass<'a
             "(Ljava/lang/String;)Ljava/lang/Class;",
             &[JValue::Object(&helper_class_name)],
         )
-        .map_err(|e| SensorError::Unknown(format!("loadClass: {e}")))?
+        .map_err(|e| SensorError::Platform(format!("loadClass: {e}")))?
         .l()
-        .map_err(|e| SensorError::Unknown(format!("loadClass result: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("loadClass result: {e}")))?;
 
     Ok(helper_class.into())
 }
@@ -136,7 +138,7 @@ fn ensure_dex_loaded() -> Result<(), SensorError> {
     let (vm, context) = get_vm_and_context();
     let mut env = vm
         .attach_current_thread()
-        .map_err(|e| SensorError::Unknown(format!("attach_current_thread failed: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("attach_current_thread failed: {e}")))?;
 
     init_with_context(&mut env, &context)
 }
@@ -145,9 +147,9 @@ fn parse_sensor_result(env: &mut JNIEnv, result: JObject) -> Result<SensorData, 
     let arr: jni::objects::JDoubleArray = result.into();
     let len = usize::try_from(
         env.get_array_length(&arr)
-            .map_err(|e| SensorError::Unknown(format!("get_array_length: {e}")))?,
+            .map_err(|e| SensorError::Platform(format!("get_array_length: {e}")))?,
     )
-    .map_err(|error| SensorError::Unknown(format!("negative sensor result length: {error}")))?;
+    .map_err(|error| SensorError::Platform(format!("negative sensor result length: {error}")))?;
 
     if len < 1 {
         return Err(SensorError::NotAvailable);
@@ -155,14 +157,14 @@ fn parse_sensor_result(env: &mut JNIEnv, result: JObject) -> Result<SensorData, 
 
     let mut buf = vec![0.0f64; len];
     env.get_double_array_region(&arr, 0, &mut buf)
-        .map_err(|e| SensorError::Unknown(format!("get_double_array_region: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("get_double_array_region: {e}")))?;
 
     if buf[0] < 0.5 {
         return Err(SensorError::NotAvailable);
     }
 
     if len < 5 {
-        return Err(SensorError::Unknown("Invalid result array".into()));
+        return Err(SensorError::Platform("Invalid result array".into()));
     }
 
     Ok(SensorData::new(
@@ -177,9 +179,9 @@ fn parse_scalar_result(env: &mut JNIEnv, result: JObject) -> Result<ScalarData, 
     let arr: jni::objects::JDoubleArray = result.into();
     let len = usize::try_from(
         env.get_array_length(&arr)
-            .map_err(|e| SensorError::Unknown(format!("get_array_length: {e}")))?,
+            .map_err(|e| SensorError::Platform(format!("get_array_length: {e}")))?,
     )
-    .map_err(|error| SensorError::Unknown(format!("negative sensor result length: {error}")))?;
+    .map_err(|error| SensorError::Platform(format!("negative sensor result length: {error}")))?;
 
     if len < 1 {
         return Err(SensorError::NotAvailable);
@@ -187,14 +189,14 @@ fn parse_scalar_result(env: &mut JNIEnv, result: JObject) -> Result<ScalarData, 
 
     let mut buf = vec![0.0f64; len];
     env.get_double_array_region(&arr, 0, &mut buf)
-        .map_err(|e| SensorError::Unknown(format!("get_double_array_region: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("get_double_array_region: {e}")))?;
 
     if buf[0] < 0.5 {
         return Err(SensorError::NotAvailable);
     }
 
     if len < 3 {
-        return Err(SensorError::Unknown("Invalid result array".into()));
+        return Err(SensorError::Platform("Invalid result array".into()));
     }
 
     Ok(ScalarData::new(buf[1], timestamp_from_jni_double(buf[2])?))
@@ -205,13 +207,15 @@ fn parse_scalar_result(env: &mut JNIEnv, result: JObject) -> Result<ScalarData, 
     clippy::cast_sign_loss,
     reason = "Android sensor helper returns epoch milliseconds as a non-negative finite double"
 )]
-fn timestamp_from_jni_double(value: f64) -> Result<u64, SensorError> {
+fn timestamp_from_jni_double(value: f64) -> Result<Timestamp, SensorError> {
     if !value.is_finite() || value < 0.0 {
-        return Err(SensorError::Unknown(format!(
+        return Err(SensorError::Platform(format!(
             "invalid Android sensor timestamp: {value}"
         )));
     }
-    Ok(value as u64)
+    Timestamp::from_millisecond(value as i64).map_err(|e| {
+        SensorError::Platform(format!("Android sensor timestamp out of range: {e}"))
+    })
 }
 
 /// Check sensor availability with an explicit Android `Context`.
@@ -238,10 +242,10 @@ pub fn is_sensor_available_with_context(
         )
         .map_err(|e| {
             log::error!("isSensorAvailable failed: {e}");
-            SensorError::Unknown(format!("isSensorAvailable: {e}"))
+            SensorError::Platform(format!("isSensorAvailable: {e}"))
         })?
         .z()
-        .map_err(|e| SensorError::Unknown(format!("isSensorAvailable result: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("isSensorAvailable result: {e}")))?;
 
     log::info!("Sensor available: {result}");
     Ok(result)
@@ -267,9 +271,9 @@ pub fn read_sensor_with_context(
             "(Landroid/content/Context;I)[D",
             &[JValue::Object(context), JValue::Int(sensor_type)],
         )
-        .map_err(|e| SensorError::Unknown(format!("readSensor: {e}")))?
+        .map_err(|e| SensorError::Platform(format!("readSensor: {e}")))?
         .l()
-        .map_err(|e| SensorError::Unknown(format!("readSensor result: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("readSensor result: {e}")))?;
 
     parse_sensor_result(env, result)
 }
@@ -293,9 +297,9 @@ pub fn read_pressure_with_context(
             "(Landroid/content/Context;)[D",
             &[JValue::Object(context)],
         )
-        .map_err(|e| SensorError::Unknown(format!("readPressure: {e}")))?
+        .map_err(|e| SensorError::Platform(format!("readPressure: {e}")))?
         .l()
-        .map_err(|e| SensorError::Unknown(format!("readPressure result: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("readPressure result: {e}")))?;
 
     parse_scalar_result(env, result)
 }
@@ -319,9 +323,9 @@ pub fn read_light_with_context(
             "(Landroid/content/Context;)[D",
             &[JValue::Object(context)],
         )
-        .map_err(|e| SensorError::Unknown(format!("readLight: {e}")))?
+        .map_err(|e| SensorError::Platform(format!("readLight: {e}")))?
         .l()
-        .map_err(|e| SensorError::Unknown(format!("readLight result: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("readLight result: {e}")))?;
 
     parse_scalar_result(env, result)
 }
@@ -353,7 +357,7 @@ fn read_sensor_internal(sensor_type: i32) -> Result<SensorData, SensorError> {
     let (vm, context) = get_vm_and_context();
     let mut env = vm
         .attach_current_thread()
-        .map_err(|e| SensorError::Unknown(format!("attach_current_thread: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("attach_current_thread: {e}")))?;
     let helper = load_helper_class(&mut env)?;
     let result = env
         .call_static_method(
@@ -362,9 +366,9 @@ fn read_sensor_internal(sensor_type: i32) -> Result<SensorData, SensorError> {
             "(Landroid/content/Context;I)[D",
             &[JValue::Object(&context), JValue::Int(sensor_type)],
         )
-        .map_err(|e| SensorError::Unknown(format!("readSensor: {e}")))?
+        .map_err(|e| SensorError::Platform(format!("readSensor: {e}")))?
         .l()
-        .map_err(|e| SensorError::Unknown(format!("readSensor result: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("readSensor result: {e}")))?;
     parse_sensor_result(&mut env, result)
 }
 
@@ -373,7 +377,7 @@ fn read_pressure_internal() -> Result<ScalarData, SensorError> {
     let (vm, context) = get_vm_and_context();
     let mut env = vm
         .attach_current_thread()
-        .map_err(|e| SensorError::Unknown(format!("attach_current_thread: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("attach_current_thread: {e}")))?;
     let helper = load_helper_class(&mut env)?;
     let result = env
         .call_static_method(
@@ -382,9 +386,9 @@ fn read_pressure_internal() -> Result<ScalarData, SensorError> {
             "(Landroid/content/Context;)[D",
             &[JValue::Object(&context)],
         )
-        .map_err(|e| SensorError::Unknown(format!("readPressure: {e}")))?
+        .map_err(|e| SensorError::Platform(format!("readPressure: {e}")))?
         .l()
-        .map_err(|e| SensorError::Unknown(format!("readPressure result: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("readPressure result: {e}")))?;
     parse_scalar_result(&mut env, result)
 }
 
@@ -393,7 +397,7 @@ fn read_light_internal() -> Result<ScalarData, SensorError> {
     let (vm, context) = get_vm_and_context();
     let mut env = vm
         .attach_current_thread()
-        .map_err(|e| SensorError::Unknown(format!("attach_current_thread: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("attach_current_thread: {e}")))?;
     let helper = load_helper_class(&mut env)?;
     let result = env
         .call_static_method(
@@ -402,9 +406,9 @@ fn read_light_internal() -> Result<ScalarData, SensorError> {
             "(Landroid/content/Context;)[D",
             &[JValue::Object(&context)],
         )
-        .map_err(|e| SensorError::Unknown(format!("readLight: {e}")))?
+        .map_err(|e| SensorError::Platform(format!("readLight: {e}")))?
         .l()
-        .map_err(|e| SensorError::Unknown(format!("readLight result: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("readLight result: {e}")))?;
     parse_scalar_result(&mut env, result)
 }
 

@@ -17,7 +17,7 @@ fn run_tests() {
         #[cfg(feature = "sensor")]
         {
             println!("Testing waterkit-sensor...");
-            if waterkit::sensor::Accelerometer::is_available() {
+            if waterkit::sensor::Accelerometer::capabilities().available {
                 match waterkit::sensor::Accelerometer::read().await {
                     Ok(data) => println!("Accelerometer: x={} y={} z={}", data.x, data.y, data.z),
                     Err(e) => println!("Accelerometer read failed: {e:?}"),

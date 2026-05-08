@@ -30,10 +30,10 @@ fn ensure_runtime_initialized() -> Result<(), SpeechError> {
 
     let android_context = ndk_context::android_context();
     let vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) }
-        .map_err(|e| SpeechError::PlatformError(format!("JavaVM::from_raw: {e}")))?;
+        .map_err(|e| SpeechError::Platform(format!("JavaVM::from_raw: {e}")))?;
     let mut env = vm
         .attach_current_thread()
-        .map_err(|e| SpeechError::PlatformError(format!("attach_current_thread: {e}")))?;
+        .map_err(|e| SpeechError::Platform(format!("attach_current_thread: {e}")))?;
 
     let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
     assert!(
@@ -50,7 +50,7 @@ fn get_vm() -> Result<Arc<JavaVM>, SpeechError> {
     }
 
     VM.get().cloned().ok_or_else(|| {
-        SpeechError::PlatformError(
+        SpeechError::Platform(
             "Android speech runtime initialization failed: VM missing".into(),
         )
     })
@@ -62,7 +62,7 @@ fn ensure_context() -> Result<GlobalRef, SpeechError> {
     }
 
     CONTEXT.get().cloned().ok_or_else(|| {
-        SpeechError::PlatformError(
+        SpeechError::Platform(
             "Android speech runtime initialization failed: Context missing".into(),
         )
     })
@@ -77,48 +77,48 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), SpeechError> {
     let cache_dir = env
         .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| SpeechError::PlatformError(format!("getCacheDir: {e}")))?;
+        .map_err(|e| SpeechError::Platform(format!("getCacheDir: {e}")))?;
 
     let cache_path = env
         .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| SpeechError::PlatformError(format!("getAbsolutePath: {e}")))?;
+        .map_err(|e| SpeechError::Platform(format!("getAbsolutePath: {e}")))?;
 
     let dex_path = format!(
         "{}/waterkit_speech.dex",
         env.get_string((&cache_path).into())
-            .map_err(|e| SpeechError::PlatformError(format!("get_string: {e}")))?
+            .map_err(|e| SpeechError::Platform(format!("get_string: {e}")))?
             .to_str()
-            .map_err(|e| SpeechError::PlatformError(format!("to_str: {e}")))?
+            .map_err(|e| SpeechError::Platform(format!("to_str: {e}")))?
     );
 
     let _ = std::fs::remove_file(&dex_path);
     std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| SpeechError::PlatformError(format!("write DEX: {e}")))?;
+        .map_err(|e| SpeechError::Platform(format!("write DEX: {e}")))?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(&dex_path)
-            .map_err(|e| SpeechError::PlatformError(format!("metadata DEX: {e}")))?
+            .map_err(|e| SpeechError::Platform(format!("metadata DEX: {e}")))?
             .permissions();
         perms.set_mode(0o444);
         std::fs::set_permissions(&dex_path, perms)
-            .map_err(|e| SpeechError::PlatformError(format!("set_permissions DEX: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("set_permissions DEX: {e}")))?;
     }
 
     let dex_path_jstring = env
         .new_string(&dex_path)
-        .map_err(|e| SpeechError::PlatformError(format!("new_string: {e}")))?;
+        .map_err(|e| SpeechError::Platform(format!("new_string: {e}")))?;
 
     let parent_loader = env
         .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| SpeechError::PlatformError(format!("getClassLoader: {e}")))?;
+        .map_err(|e| SpeechError::Platform(format!("getClassLoader: {e}")))?;
 
     let dex_class = env
         .find_class("dalvik/system/DexClassLoader")
-        .map_err(|e| SpeechError::PlatformError(format!("find DexClassLoader: {e}")))?;
+        .map_err(|e| SpeechError::Platform(format!("find DexClassLoader: {e}")))?;
 
     let loader = env
         .new_object(
@@ -131,11 +131,11 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), SpeechError> {
                 JValue::Object(&parent_loader),
             ],
         )
-        .map_err(|e| SpeechError::PlatformError(format!("new DexClassLoader: {e}")))?;
+        .map_err(|e| SpeechError::Platform(format!("new DexClassLoader: {e}")))?;
 
     let global = env
         .new_global_ref(loader)
-        .map_err(|e| SpeechError::PlatformError(format!("global_ref class_loader: {e}")))?;
+        .map_err(|e| SpeechError::Platform(format!("global_ref class_loader: {e}")))?;
 
     let _ = CLASS_LOADER.set(global);
     register_callback_natives(env)?;
@@ -147,11 +147,11 @@ fn helper_class<'local>(
 ) -> Result<jni::objects::JClass<'local>, SpeechError> {
     let loader = CLASS_LOADER
         .get()
-        .ok_or_else(|| SpeechError::PlatformError("class loader not initialized".into()))?;
+        .ok_or_else(|| SpeechError::Platform("class loader not initialized".into()))?;
 
     let helper_name = env
         .new_string("waterkit.speech.SpeechHelper")
-        .map_err(|e| SpeechError::PlatformError(format!("new_string helper: {e}")))?;
+        .map_err(|e| SpeechError::Platform(format!("new_string helper: {e}")))?;
 
     let cls_obj = env
         .call_method(
@@ -161,7 +161,7 @@ fn helper_class<'local>(
             &[JValue::Object(&helper_name)],
         )
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| SpeechError::PlatformError(format!("loadClass SpeechHelper: {e}")))?;
+        .map_err(|e| SpeechError::Platform(format!("loadClass SpeechHelper: {e}")))?;
 
     Ok(cls_obj.into())
 }
@@ -169,11 +169,11 @@ fn helper_class<'local>(
 fn callback_class<'local>(env: &mut JNIEnv<'local>) -> Result<JClass<'local>, SpeechError> {
     let loader = CLASS_LOADER
         .get()
-        .ok_or_else(|| SpeechError::PlatformError("class loader not initialized".into()))?;
+        .ok_or_else(|| SpeechError::Platform("class loader not initialized".into()))?;
 
     let callback_name = env
         .new_string("waterkit.speech.SpeechInitCallback")
-        .map_err(|e| SpeechError::PlatformError(format!("new_string callback: {e}")))?;
+        .map_err(|e| SpeechError::Platform(format!("new_string callback: {e}")))?;
 
     let cls_obj = env
         .call_method(
@@ -183,7 +183,7 @@ fn callback_class<'local>(env: &mut JNIEnv<'local>) -> Result<JClass<'local>, Sp
             &[JValue::Object(&callback_name)],
         )
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| SpeechError::PlatformError(format!("loadClass SpeechInitCallback: {e}")))?;
+        .map_err(|e| SpeechError::Platform(format!("loadClass SpeechInitCallback: {e}")))?;
 
     Ok(cls_obj.into())
 }
@@ -201,7 +201,7 @@ fn register_callback_natives(env: &mut JNIEnv) -> Result<(), SpeechError> {
     }];
     env.register_native_methods(callback, &callback_natives)
         .map_err(|e| {
-            SpeechError::PlatformError(format!(
+            SpeechError::Platform(format!(
                 "register_native_methods SpeechInitCallback failed: {e}"
             ))
         })?;
@@ -221,7 +221,7 @@ fn register_callback_natives(env: &mut JNIEnv) -> Result<(), SpeechError> {
     ];
     env.register_native_methods(helper, &helper_natives)
         .map_err(|e| {
-            SpeechError::PlatformError(format!("register_native_methods SpeechHelper failed: {e}"))
+            SpeechError::Platform(format!("register_native_methods SpeechHelper failed: {e}"))
         })?;
 
     let _ = CALLBACK_NATIVES_REGISTERED.set(());
@@ -238,14 +238,14 @@ pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), Spee
     if VM.get().is_none() {
         let vm = env
             .get_java_vm()
-            .map_err(|e| SpeechError::PlatformError(format!("get_java_vm: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("get_java_vm: {e}")))?;
         let _ = VM.set(Arc::new(vm));
     }
 
     if CONTEXT.get().is_none() {
         let global = env
             .new_global_ref(context)
-            .map_err(|e| SpeechError::PlatformError(format!("new_global_ref context: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("new_global_ref context: {e}")))?;
         let _ = CONTEXT.set(global);
     }
 
@@ -266,7 +266,7 @@ impl TtsInner {
         let rx = {
             let mut env = vm
                 .attach_current_thread()
-                .map_err(|e| SpeechError::PlatformError(format!("attach_current_thread: {e}")))?;
+                .map_err(|e| SpeechError::Platform(format!("attach_current_thread: {e}")))?;
 
             init_dex(&mut env, context.as_obj())?;
             let helper = helper_class(&mut env)?;
@@ -276,10 +276,10 @@ impl TtsInner {
             let callback_cls = callback_class(&mut env)?;
             let callback = env
                 .new_object(callback_cls, "()V", &[])
-                .map_err(|e| SpeechError::PlatformError(format!("new SpeechInitCallback: {e}")))?;
+                .map_err(|e| SpeechError::Platform(format!("new SpeechInitCallback: {e}")))?;
 
             unsafe { env.set_rust_field(&callback, "waterkit_tts_init_tx", Some(tx)) }
-                .map_err(|e| SpeechError::PlatformError(format!("set_rust_field callback: {e}")))?;
+                .map_err(|e| SpeechError::Platform(format!("set_rust_field callback: {e}")))?;
 
             env.call_static_method(
                 helper,
@@ -287,7 +287,7 @@ impl TtsInner {
                 "(Landroid/content/Context;Lwaterkit/speech/SpeechInitCallback;)V",
                 &[JValue::Object(context.as_obj()), JValue::Object(&callback)],
             )
-            .map_err(|e| SpeechError::PlatformError(format!("initTts: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("initTts: {e}")))?;
             rx
         };
 
@@ -307,29 +307,29 @@ impl TtsInner {
         let mut env = self
             .vm
             .attach_current_thread()
-            .map_err(|e| SpeechError::PlatformError(format!("attach_current_thread: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("attach_current_thread: {e}")))?;
 
         let helper = helper_class(&mut env)?;
         let voices = env
             .call_static_method(helper, "getAvailableVoices", "()[Ljava/lang/String;", &[])
             .and_then(jni::objects::JValueGen::l)
-            .map_err(|e| SpeechError::PlatformError(format!("getAvailableVoices: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("getAvailableVoices: {e}")))?;
 
         let array = jni::objects::JObjectArray::from(voices);
         let len_i32 = env
             .get_array_length(&array)
-            .map_err(|e| SpeechError::PlatformError(format!("voices len: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("voices len: {e}")))?;
         let len = usize::try_from(len_i32)
-            .map_err(|_| SpeechError::PlatformError(format!("negative voices len: {len_i32}")))?;
+            .map_err(|_| SpeechError::Platform(format!("negative voices len: {len_i32}")))?;
 
         let mut out = Vec::with_capacity(len);
         for idx in 0..len_i32 {
             let item = env
                 .get_object_array_element(&array, idx)
-                .map_err(|e| SpeechError::PlatformError(format!("voice[{idx}]: {e}")))?;
+                .map_err(|e| SpeechError::Platform(format!("voice[{idx}]: {e}")))?;
             let text: String = env
                 .get_string(&JString::from(item))
-                .map_err(|e| SpeechError::PlatformError(format!("voice str[{idx}]: {e}")))?
+                .map_err(|e| SpeechError::Platform(format!("voice str[{idx}]: {e}")))?
                 .into();
             let mut parts = text.split('|');
             let id = parts.next().unwrap_or_default().to_string();
@@ -346,19 +346,19 @@ impl TtsInner {
             let mut env = self
                 .vm
                 .attach_current_thread()
-                .map_err(|e| SpeechError::PlatformError(format!("attach_current_thread: {e}")))?;
+                .map_err(|e| SpeechError::Platform(format!("attach_current_thread: {e}")))?;
 
             let helper = helper_class(&mut env)?;
             let text_j = env
                 .new_string(text)
-                .map_err(|e| SpeechError::PlatformError(format!("new_string text: {e}")))?;
+                .map_err(|e| SpeechError::Platform(format!("new_string text: {e}")))?;
             let language_tag = config
                 .voice
                 .as_ref()
                 .map_or("", |voice| voice.language.as_str());
             let language_j = env
                 .new_string(language_tag)
-                .map_err(|e| SpeechError::PlatformError(format!("new_string language: {e}")))?;
+                .map_err(|e| SpeechError::Platform(format!("new_string language: {e}")))?;
 
             env.call_static_method(
                 helper,
@@ -372,7 +372,7 @@ impl TtsInner {
                     JValue::Object(&language_j),
                 ],
             )
-            .map_err(|e| SpeechError::PlatformError(format!("speak: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("speak: {e}")))?;
 
             Ok(())
         })
@@ -475,7 +475,7 @@ impl SpeechRecognizerInner {
         let vm = get_vm()?;
         let mut env = vm
             .attach_current_thread()
-            .map_err(|e| SpeechError::PlatformError(format!("attach_current_thread: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("attach_current_thread: {e}")))?;
 
         init_dex(&mut env, context.as_obj())?;
         let helper = helper_class(&mut env)?;
@@ -483,14 +483,14 @@ impl SpeechRecognizerInner {
         let (tx, rx) = async_channel::bounded(32);
         let session_id = NEXT_RECOGNITION_SESSION_ID.fetch_add(1, Ordering::Relaxed);
         if session_id <= 0 {
-            return Err(SpeechError::PlatformError(format!(
+            return Err(SpeechError::Platform(format!(
                 "invalid recognition session id generated: {session_id}"
             )));
         }
 
         {
             let mut sessions = recognition_sessions().lock().map_err(|e| {
-                SpeechError::PlatformError(format!("recognition session map lock poisoned: {e}"))
+                SpeechError::Platform(format!("recognition session map lock poisoned: {e}"))
             })?;
             sessions.insert(session_id, tx);
         }
@@ -498,7 +498,7 @@ impl SpeechRecognizerInner {
         let language = config.language.unwrap_or_default();
         let language_j = env
             .new_string(language)
-            .map_err(|e| SpeechError::PlatformError(format!("new_string language: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("new_string language: {e}")))?;
         let started = env
             .call_static_method(
                 helper,
@@ -511,15 +511,15 @@ impl SpeechRecognizerInner {
                     JValue::Long(session_id),
                 ],
             )
-            .map_err(|e| SpeechError::PlatformError(format!("startRecognition: {e}")))?
+            .map_err(|e| SpeechError::Platform(format!("startRecognition: {e}")))?
             .z()
-            .map_err(|e| SpeechError::PlatformError(format!("startRecognition result: {e}")))?;
+            .map_err(|e| SpeechError::Platform(format!("startRecognition result: {e}")))?;
 
         if !started {
             recognition_sessions()
                 .lock()
                 .map_err(|e| {
-                    SpeechError::PlatformError(format!(
+                    SpeechError::Platform(format!(
                         "recognition session map lock poisoned: {e}"
                     ))
                 })?

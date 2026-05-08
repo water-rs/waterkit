@@ -71,7 +71,7 @@ impl NfcReaderInner {
                     Ok(())
                 }),
             )
-            .map_err(|e| NfcError::PlatformError(format!("SubscribeForMessage failed: {e}")))?;
+            .map_err(|e| NfcError::Platform(format!("SubscribeForMessage failed: {e}")))?;
 
         Ok((
             Self {
@@ -116,7 +116,7 @@ impl NfcReaderInner {
         let mut publish_id = self
             .publish_id
             .lock()
-            .map_err(|_| NfcError::PlatformError("publish_id mutex poisoned".into()))?;
+            .map_err(|_| NfcError::Platform("publish_id mutex poisoned".into()))?;
         if let Some(old_id) = publish_id.replace(next_publish_id) {
             let _ = self.device.StopPublishingMessage(old_id);
         }

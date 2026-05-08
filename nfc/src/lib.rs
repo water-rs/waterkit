@@ -6,8 +6,11 @@
 //! - **Tag Information**: Identifying tag types and capabilities
 
 #![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
 
 mod sys;
+
+use futures_core::Stream;
 
 /// Android-specific JNI helpers that require `JNIEnv` and `Context`.
 #[cfg(target_os = "android")]
@@ -117,30 +120,36 @@ pub fn is_available() -> bool {
 #[derive(Debug)]
 pub struct NfcReader {
     inner: sys::NfcReaderInner,
+    events: async_channel::Receiver<NfcTag>,
 }
 
 impl NfcReader {
-    /// Start an NFC reading session with a user-visible message.
-    /// Returns a receiver that yields discovered NFC tags.
+    /// Starts an NFC reading session with a user-visible message.
     ///
     /// # Errors
-    /// Returns error if NFC is not available or session cannot be started.
-    pub async fn start_session(
-        message: &str,
-    ) -> Result<(Self, async_channel::Receiver<NfcTag>), NfcError> {
-        let (inner, rx) = sys::NfcReaderInner::start_session(message).await?;
-        Ok((Self { inner }, rx))
+    ///
+    /// Returns [`NfcError`] if NFC is not available or the session
+    /// cannot be started.
+    pub async fn new(message: &str) -> Result<Self, NfcError> {
+        let (inner, events) = sys::NfcReaderInner::start_session(message).await?;
+        Ok(Self { inner, events })
     }
 
-    /// Write an NDEF message to the next discovered tag.
+    /// Returns a `Stream<Item = NfcTag>` of discovered tags.
+    pub fn events(&self) -> impl Stream<Item = NfcTag> + Send + 'static {
+        self.events.clone()
+    }
+
+    /// Writes an NDEF message to the next discovered tag.
     ///
     /// # Errors
-    /// Returns error if write fails.
+    ///
+    /// Returns [`NfcError`] when the write fails.
     pub async fn write(&self, message: NdefMessage) -> Result<(), NfcError> {
         self.inner.write(message).await
     }
 
-    /// Stop the NFC session.
+    /// Stops the NFC session.
     #[allow(clippy::missing_const_for_fn)]
     pub fn stop(&self) {
         self.inner.stop();
@@ -149,6 +158,7 @@ impl NfcReader {
 
 /// Errors that can occur in NFC operations.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum NfcError {
     /// NFC is not available on this device.
     #[error("NFC not available")]
@@ -170,5 +180,5 @@ pub enum NfcError {
     Unsupported,
     /// Platform-specific error.
     #[error("platform error: {0}")]
-    PlatformError(String),
+    Platform(String),
 }

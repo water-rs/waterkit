@@ -85,28 +85,36 @@ impl DeepLink {
 #[derive(Debug)]
 pub struct DeepLinkHandler {
     inner: sys::DeepLinkHandlerInner,
+    events: async_channel::Receiver<DeepLink>,
 }
 
 impl DeepLinkHandler {
-    /// Start listening for incoming deep links.
+    /// Starts listening for incoming deep links.
     ///
     /// # Errors
-    /// Returns error if the handler cannot be initialized.
-    pub async fn start() -> Result<(Self, async_channel::Receiver<DeepLink>), DeepLinkError> {
-        let (inner, rx) = sys::DeepLinkHandlerInner::start().await?;
-        Ok((Self { inner }, rx))
+    ///
+    /// Returns [`DeepLinkError`] if the handler cannot be initialized.
+    pub async fn new() -> Result<Self, DeepLinkError> {
+        let (inner, events) = sys::DeepLinkHandlerInner::start().await?;
+        Ok(Self { inner, events })
     }
 
-    /// Get the initial deep link that launched the app (if any).
+    /// Returns the stream of incoming deep links.
+    pub fn events(&self) -> impl futures_core::Stream<Item = DeepLink> + Send + 'static {
+        self.events.clone()
+    }
+
+    /// Returns the initial deep link that launched the app, if any.
     ///
     /// # Errors
-    /// Returns error if the initial link cannot be retrieved.
+    ///
+    /// Returns [`DeepLinkError`] if the platform query fails.
     #[allow(clippy::missing_const_for_fn)]
     pub fn initial_link(&self) -> Result<Option<DeepLink>, DeepLinkError> {
         self.inner.initial_link()
     }
 
-    /// Stop listening for deep links.
+    /// Stops listening for deep links.
     #[allow(clippy::missing_const_for_fn)]
     pub fn stop(&self) {
         self.inner.stop();
@@ -144,5 +152,5 @@ pub enum DeepLinkError {
     PermissionDenied,
     /// Platform error.
     #[error("platform error: {0}")]
-    PlatformError(String),
+    Platform(String),
 }

@@ -4,8 +4,10 @@
 //! (like `ThinkPads`, Surface devices) have accelerometers accessible
 //! via the `iio-sensor-proxy` service.
 
-use crate::{ScalarData, SensorData, SensorError, SensorStream};
+use crate::sys::SensorStream;
+use crate::{ScalarData, SensorData, SensorError};
 use futures::stream;
+use waterkit_core::Timestamp;
 use zbus::blocking::Connection;
 use zbus::names::InterfaceName;
 
@@ -20,26 +22,24 @@ where
 {
     let proxy = zbus::blocking::fdo::PropertiesProxy::builder(conn)
         .destination(IIO_PROXY_BUS)
-        .map_err(|e| SensorError::Unknown(e.to_string()))?
+        .map_err(|e| SensorError::Platform(e.to_string()))?
         .path(IIO_PROXY_PATH)
-        .map_err(|e| SensorError::Unknown(e.to_string()))?
+        .map_err(|e| SensorError::Platform(e.to_string()))?
         .build()
-        .map_err(|e| SensorError::Unknown(e.to_string()))?;
+        .map_err(|e| SensorError::Platform(e.to_string()))?;
 
     let iface_name = InterfaceName::try_from(IIO_PROXY_IFACE)
-        .map_err(|e| SensorError::Unknown(e.to_string()))?;
+        .map_err(|e| SensorError::Platform(e.to_string()))?;
 
     let value = proxy
         .get(iface_name, property)
-        .map_err(|e| SensorError::Unknown(e.to_string()))?;
+        .map_err(|e| SensorError::Platform(e.to_string()))?;
 
-    T::try_from(value).map_err(|e| SensorError::Unknown(e.to_string()))
+    T::try_from(value).map_err(|e| SensorError::Platform(e.to_string()))
 }
 
-fn timestamp_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+fn timestamp_now() -> Timestamp {
+    Timestamp::now()
 }
 
 // Accelerometer (via iio-sensor-proxy)
@@ -54,7 +54,7 @@ pub fn accelerometer_available() -> bool {
 
 #[allow(clippy::unused_async)]
 pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
-    let conn = Connection::system().map_err(|e| SensorError::Unknown(e.to_string()))?;
+    let conn = Connection::system().map_err(|e| SensorError::Platform(e.to_string()))?;
 
     let has = get_proxy_property::<bool>(&conn, "HasAccelerometer")?;
     if !has {
@@ -115,7 +115,7 @@ pub fn magnetometer_available() -> bool {
 
 #[allow(clippy::unused_async)]
 pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
-    let conn = Connection::system().map_err(|e| SensorError::Unknown(e.to_string()))?;
+    let conn = Connection::system().map_err(|e| SensorError::Platform(e.to_string()))?;
 
     let has = get_proxy_property::<bool>(&conn, "HasCompass")?;
     if !has {
@@ -167,7 +167,7 @@ pub fn ambient_light_available() -> bool {
 
 #[allow(clippy::unused_async)]
 pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
-    let conn = Connection::system().map_err(|e| SensorError::Unknown(e.to_string()))?;
+    let conn = Connection::system().map_err(|e| SensorError::Platform(e.to_string()))?;
 
     let has = get_proxy_property::<bool>(&conn, "HasAmbientLight")?;
     if !has {

@@ -3,18 +3,17 @@
 //! The `*_read()` functions are async to match the cross-platform interface,
 //! even though `WinRT` sensor reads are synchronous.
 
-use crate::{ScalarData, SensorData, SensorError, SensorStream};
+use crate::sys::SensorStream;
+use crate::{ScalarData, SensorData, SensorError};
 use futures::stream;
+use waterkit_core::Timestamp;
 use windows::Devices::Sensors::{
     Accelerometer as WinAccelerometer, Barometer as WinBarometer, Gyrometer as WinGyrometer,
     LightSensor as WinLightSensor, Magnetometer as WinMagnetometer,
 };
 
-#[allow(clippy::cast_possible_truncation)]
-fn timestamp_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
+fn timestamp_now() -> Timestamp {
+    Timestamp::now()
 }
 
 // Accelerometer
@@ -28,7 +27,7 @@ pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
 
     let reading = sensor
         .GetCurrentReading()
-        .map_err(|e| SensorError::Unknown(e.to_string()))?;
+        .map_err(|e| SensorError::Platform(e.to_string()))?;
 
     Ok(SensorData::new(
         reading.AccelerationX().unwrap_or(0.0),
@@ -60,7 +59,7 @@ pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
 
     let reading = sensor
         .GetCurrentReading()
-        .map_err(|e| SensorError::Unknown(e.to_string()))?;
+        .map_err(|e| SensorError::Platform(e.to_string()))?;
 
     Ok(SensorData::new(
         reading.AngularVelocityX().unwrap_or(0.0),
@@ -92,7 +91,7 @@ pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
 
     let reading = sensor
         .GetCurrentReading()
-        .map_err(|e| SensorError::Unknown(e.to_string()))?;
+        .map_err(|e| SensorError::Platform(e.to_string()))?;
 
     Ok(SensorData::new(
         f64::from(reading.MagneticFieldX().unwrap_or(0.0)),
@@ -124,7 +123,7 @@ pub async fn barometer_read() -> Result<ScalarData, SensorError> {
 
     let reading = sensor
         .GetCurrentReading()
-        .map_err(|e| SensorError::Unknown(e.to_string()))?;
+        .map_err(|e| SensorError::Platform(e.to_string()))?;
 
     Ok(ScalarData::new(
         reading.StationPressureInHectopascals().unwrap_or(0.0),
@@ -154,7 +153,7 @@ pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
 
     let reading = sensor
         .GetCurrentReading()
-        .map_err(|e| SensorError::Unknown(e.to_string()))?;
+        .map_err(|e| SensorError::Platform(e.to_string()))?;
 
     Ok(ScalarData::new(
         f64::from(reading.IlluminanceInLux().unwrap_or(0.0)),

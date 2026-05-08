@@ -1,22 +1,20 @@
 //! Cross-platform sensor access.
 //!
-//! This crate provides access to device sensors (accelerometer, gyroscope,
-//! magnetometer, barometer) across iOS, macOS, Android, Windows, and Linux.
+//! Provides access to device sensors (accelerometer, gyroscope,
+//! magnetometer, barometer, ambient light) across iOS, macOS, Android,
+//! Windows, and Linux.
 //!
 //! # Usage
 //!
 //! ```ignore
-//! use waterkit_sensor::{Accelerometer, SensorData};
+//! use waterkit_sensor::Accelerometer;
+//! use futures::StreamExt;
 //!
-//! // Check if accelerometer is available
-//! if Accelerometer::is_available() {
-//!     // One-shot reading
+//! if Accelerometer::capabilities().available {
 //!     let data = Accelerometer::read().await?;
 //!     println!("x={}, y={}, z={}", data.x(), data.y(), data.z());
 //!
-//!     // Or stream updates
-//!     use futures::StreamExt;
-//!     let mut stream = Accelerometer::watch(100)?; // 100ms interval
+//!     let mut stream = Accelerometer::watch(100)?;
 //!     while let Some(data) = stream.next().await {
 //!         println!("x={}, y={}, z={}", data.x(), data.y(), data.z());
 //!     }
@@ -24,8 +22,8 @@
 //! ```
 
 #![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
 
-/// Platform-specific implementations.
 mod sys;
 
 /// Android-specific JNI helpers that require an explicit `Context`.
@@ -37,8 +35,8 @@ pub mod android {
     };
 }
 
-use futures::Stream;
-use std::pin::Pin;
+use futures_core::Stream;
+use waterkit_core::{Capabilities, Timestamp};
 
 /// 3-axis sensor data (accelerometer, gyroscope, magnetometer).
 #[derive(Debug, Clone, PartialEq)]
@@ -47,13 +45,13 @@ pub struct SensorData {
     x: f64,
     y: f64,
     z: f64,
-    timestamp: u64,
+    timestamp: Timestamp,
 }
 
 impl SensorData {
     /// Creates a new `SensorData` instance.
     #[must_use]
-    pub(crate) const fn new(x: f64, y: f64, z: f64, timestamp: u64) -> Self {
+    pub(crate) const fn new(x: f64, y: f64, z: f64, timestamp: Timestamp) -> Self {
         Self { x, y, z, timestamp }
     }
 
@@ -75,25 +73,25 @@ impl SensorData {
         self.z
     }
 
-    /// Timestamp as Unix epoch milliseconds.
+    /// Sample timestamp.
     #[must_use]
-    pub const fn timestamp(&self) -> u64 {
+    pub const fn timestamp(&self) -> Timestamp {
         self.timestamp
     }
 }
 
-/// Single-value sensor data (barometer).
+/// Single-value sensor data (barometer, ambient light).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ScalarData {
     value: f64,
-    timestamp: u64,
+    timestamp: Timestamp,
 }
 
 impl ScalarData {
     /// Creates a new `ScalarData` instance.
     #[must_use]
-    pub(crate) const fn new(value: f64, timestamp: u64) -> Self {
+    pub(crate) const fn new(value: f64, timestamp: Timestamp) -> Self {
         Self { value, timestamp }
     }
 
@@ -103,10 +101,24 @@ impl ScalarData {
         self.value
     }
 
-    /// Timestamp as Unix epoch milliseconds.
+    /// Sample timestamp.
     #[must_use]
-    pub const fn timestamp(&self) -> u64 {
+    pub const fn timestamp(&self) -> Timestamp {
         self.timestamp
+    }
+}
+
+/// Capability probe for a single sensor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SensorCapabilities {
+    /// Whether the sensor is available on this device.
+    pub available: bool,
+}
+
+impl Capabilities for SensorCapabilities {
+    fn available(&self) -> bool {
+        self.available
     }
 }
 
@@ -123,38 +135,41 @@ pub enum SensorError {
     /// Sensor read timed out.
     #[error("sensor read timed out")]
     Timeout,
-    /// An unknown error occurred.
-    #[error("unknown error: {0}")]
-    Unknown(String),
+    /// Platform-level failure with a message.
+    #[error("platform error: {0}")]
+    Platform(String),
 }
-
-/// A boxed Stream of sensor data.
-pub type SensorStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 
 /// Accelerometer sensor (measures linear acceleration in g).
 #[derive(Debug)]
 pub struct Accelerometer;
 
 impl Accelerometer {
-    /// Check if the accelerometer is available.
+    /// Probes whether the accelerometer is available.
     #[must_use]
-    pub fn is_available() -> bool {
-        sys::accelerometer_available()
+    pub fn capabilities() -> SensorCapabilities {
+        SensorCapabilities {
+            available: sys::accelerometer_available(),
+        }
     }
 
-    /// Read the current sensor data.
+    /// Reads the current sensor data.
     ///
     /// # Errors
-    /// Returns a [`SensorError`] if the sensor is not available.
+    ///
+    /// Returns [`SensorError`] when the sensor cannot be read.
     pub async fn read() -> Result<SensorData, SensorError> {
         sys::accelerometer_read().await
     }
 
-    /// Watch for sensor data updates at a specified interval.
+    /// Subscribes to sensor data updates at the given interval.
     ///
     /// # Errors
-    /// Returns a [`SensorError`] if the sensor is not available.
-    pub fn watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+    ///
+    /// Returns [`SensorError`] when the sensor cannot be subscribed to.
+    pub fn watch(
+        interval_ms: u32,
+    ) -> Result<impl Stream<Item = SensorData> + Send + 'static, SensorError> {
         sys::accelerometer_watch(interval_ms)
     }
 }
@@ -164,26 +179,32 @@ impl Accelerometer {
 pub struct Gyroscope;
 
 impl Gyroscope {
-    /// Check if the gyroscope is available.
+    /// Probes whether the gyroscope is available.
     #[must_use]
     #[allow(clippy::missing_const_for_fn)]
-    pub fn is_available() -> bool {
-        sys::gyroscope_available()
+    pub fn capabilities() -> SensorCapabilities {
+        SensorCapabilities {
+            available: sys::gyroscope_available(),
+        }
     }
 
-    /// Read the current sensor data.
+    /// Reads the current sensor data.
     ///
     /// # Errors
-    /// Returns a [`SensorError`] if the sensor is not available.
+    ///
+    /// Returns [`SensorError`] when the sensor cannot be read.
     pub async fn read() -> Result<SensorData, SensorError> {
         sys::gyroscope_read().await
     }
 
-    /// Watch for sensor data updates at a specified interval.
+    /// Subscribes to sensor data updates at the given interval.
     ///
     /// # Errors
-    /// Returns a [`SensorError`] if the sensor is not available.
-    pub fn watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+    ///
+    /// Returns [`SensorError`] when the sensor cannot be subscribed to.
+    pub fn watch(
+        interval_ms: u32,
+    ) -> Result<impl Stream<Item = SensorData> + Send + 'static, SensorError> {
         sys::gyroscope_watch(interval_ms)
     }
 }
@@ -193,54 +214,66 @@ impl Gyroscope {
 pub struct Magnetometer;
 
 impl Magnetometer {
-    /// Check if the magnetometer is available.
+    /// Probes whether the magnetometer is available.
     #[must_use]
-    pub fn is_available() -> bool {
-        sys::magnetometer_available()
+    pub fn capabilities() -> SensorCapabilities {
+        SensorCapabilities {
+            available: sys::magnetometer_available(),
+        }
     }
 
-    /// Read the current sensor data.
+    /// Reads the current sensor data.
     ///
     /// # Errors
-    /// Returns a [`SensorError`] if the sensor is not available.
+    ///
+    /// Returns [`SensorError`] when the sensor cannot be read.
     pub async fn read() -> Result<SensorData, SensorError> {
         sys::magnetometer_read().await
     }
 
-    /// Watch for sensor data updates at a specified interval.
+    /// Subscribes to sensor data updates at the given interval.
     ///
     /// # Errors
-    /// Returns a [`SensorError`] if the sensor is not available.
-    pub fn watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+    ///
+    /// Returns [`SensorError`] when the sensor cannot be subscribed to.
+    pub fn watch(
+        interval_ms: u32,
+    ) -> Result<impl Stream<Item = SensorData> + Send + 'static, SensorError> {
         sys::magnetometer_watch(interval_ms)
     }
 }
 
-/// Barometer sensor.
+/// Barometer sensor (atmospheric pressure).
 #[derive(Debug)]
 pub struct Barometer;
 
 impl Barometer {
-    /// Check if the barometer is available.
+    /// Probes whether the barometer is available.
     #[must_use]
     #[allow(clippy::missing_const_for_fn)]
-    pub fn is_available() -> bool {
-        sys::barometer_available()
+    pub fn capabilities() -> SensorCapabilities {
+        SensorCapabilities {
+            available: sys::barometer_available(),
+        }
     }
 
-    /// Read the current sensor data.
+    /// Reads the current sensor data.
     ///
     /// # Errors
-    /// Returns a [`SensorError`] if the sensor is not available.
+    ///
+    /// Returns [`SensorError`] when the sensor cannot be read.
     pub async fn read() -> Result<ScalarData, SensorError> {
         sys::barometer_read().await
     }
 
-    /// Watch for sensor data updates at a specified interval.
+    /// Subscribes to sensor data updates at the given interval.
     ///
     /// # Errors
-    /// Returns a [`SensorError`] if the sensor is not available.
-    pub fn watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
+    ///
+    /// Returns [`SensorError`] when the sensor cannot be subscribed to.
+    pub fn watch(
+        interval_ms: u32,
+    ) -> Result<impl Stream<Item = ScalarData> + Send + 'static, SensorError> {
         sys::barometer_watch(interval_ms)
     }
 }
@@ -252,25 +285,31 @@ impl Barometer {
 pub struct AmbientLight;
 
 impl AmbientLight {
-    /// Check if the ambient light sensor is available.
+    /// Probes whether the ambient light sensor is available.
     #[must_use]
-    pub fn is_available() -> bool {
-        sys::ambient_light_available()
+    pub fn capabilities() -> SensorCapabilities {
+        SensorCapabilities {
+            available: sys::ambient_light_available(),
+        }
     }
 
-    /// Read the current sensor data.
+    /// Reads the current sensor data.
     ///
     /// # Errors
-    /// Returns a [`SensorError`] if the sensor is not available.
+    ///
+    /// Returns [`SensorError`] when the sensor cannot be read.
     pub async fn read() -> Result<ScalarData, SensorError> {
         sys::ambient_light_read().await
     }
 
-    /// Watch for sensor data updates at a specified interval.
+    /// Subscribes to sensor data updates at the given interval.
     ///
     /// # Errors
-    /// Returns a [`SensorError`] if the sensor is not available.
-    pub fn watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
+    ///
+    /// Returns [`SensorError`] when the sensor cannot be subscribed to.
+    pub fn watch(
+        interval_ms: u32,
+    ) -> Result<impl Stream<Item = ScalarData> + Send + 'static, SensorError> {
         sys::ambient_light_watch(interval_ms)
     }
 }

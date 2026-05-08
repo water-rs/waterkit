@@ -31,14 +31,14 @@ pub async fn open_url(url: &str) -> Result<(), DeepLinkError> {
             if success {
                 let _ = tx.send(Ok(()));
             } else {
-                let _ = tx.send(Err(DeepLinkError::PlatformError(
+                let _ = tx.send(Err(DeepLinkError::Platform(
                     "failed to open URL".into(),
                 )));
             }
         }),
     );
     rx.await
-        .map_err(|_| DeepLinkError::PlatformError("callback dropped".into()))?
+        .map_err(|_| DeepLinkError::Platform("callback dropped".into()))?
 }
 
 #[allow(clippy::unused_async)]

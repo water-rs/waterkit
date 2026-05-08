@@ -1,4 +1,12 @@
 //! Platform-specific sensor implementations.
+//!
+//! `SensorStream<T>` is a crate-private alias that platform code returns
+//! to satisfy the `impl Stream<Item = T>` bound in the public API.
+
+use core::pin::Pin;
+use futures_core::Stream;
+
+pub type SensorStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple;
@@ -35,7 +43,8 @@ pub use linux::*;
     target_os = "linux"
 )))]
 mod fallback {
-    use crate::{ScalarData, SensorData, SensorError, SensorStream};
+    use super::SensorStream;
+    use crate::{ScalarData, SensorData, SensorError};
 
     pub fn accelerometer_available() -> bool {
         false

@@ -59,7 +59,7 @@ impl TtsInner {
         }));
         let success = rx
             .await
-            .map_err(|_| SpeechError::PlatformError("callback dropped".into()))?;
+            .map_err(|_| SpeechError::Platform("callback dropped".into()))?;
         if success {
             Ok(Self)
         } else {
@@ -100,12 +100,12 @@ impl TtsInner {
                 if error.is_empty() {
                     let _ = tx.send(Ok(()));
                 } else {
-                    let _ = tx.send(Err(SpeechError::PlatformError(error)));
+                    let _ = tx.send(Err(SpeechError::Platform(error)));
                 }
             }),
         );
         rx.await
-            .map_err(|_| SpeechError::PlatformError("callback dropped".into()))?
+            .map_err(|_| SpeechError::Platform("callback dropped".into()))?
     }
 
     #[allow(clippy::unused_self)]
@@ -145,7 +145,7 @@ impl SpeechRecognizerInner {
         // Check for immediate error
         let err = err_rx.await.unwrap_or_default();
         if !err.is_empty() {
-            return Err(SpeechError::PlatformError(err));
+            return Err(SpeechError::Platform(err));
         }
         // Leak the sender so it lives as long as needed (dropped when stop is called)
         std::mem::forget(result_tx);

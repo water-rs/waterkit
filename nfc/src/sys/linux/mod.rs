@@ -160,7 +160,7 @@ fn parse_tag(path: &str, objects: &ManagedObjects) -> Option<NfcTag> {
 
 fn dbus_string_value(value: &str) -> Result<OwnedValue, NfcError> {
     Value::from(value).try_into().map_err(|error| {
-        NfcError::PlatformError(format!("encode D-Bus string value failed: {error}"))
+        NfcError::Platform(format!("encode D-Bus string value failed: {error}"))
     })
 }
 
@@ -201,38 +201,38 @@ fn encode_neard_records(
 async fn get_system_connection() -> Result<Connection, NfcError> {
     Connection::system()
         .await
-        .map_err(|error| NfcError::PlatformError(format!("connect system bus failed: {error}")))
+        .map_err(|error| NfcError::Platform(format!("connect system bus failed: {error}")))
 }
 
 async fn has_neard_owner(conn: &Connection) -> Result<bool, NfcError> {
     let proxy = zbus::fdo::DBusProxy::builder(conn)
         .build()
         .await
-        .map_err(|error| NfcError::PlatformError(format!("build DBus proxy failed: {error}")))?;
+        .map_err(|error| NfcError::Platform(format!("build DBus proxy failed: {error}")))?;
     proxy
         .name_has_owner(NEARD_SERVICE.try_into().expect("valid neard service name"))
         .await
-        .map_err(|error| NfcError::PlatformError(format!("query neard owner failed: {error}")))
+        .map_err(|error| NfcError::Platform(format!("query neard owner failed: {error}")))
 }
 
 async fn first_adapter_path(conn: &Connection) -> Result<String, NfcError> {
     let object_manager = zbus::fdo::ObjectManagerProxy::builder(conn)
         .destination(NEARD_SERVICE)
-        .map_err(|error| NfcError::PlatformError(format!("set destination failed: {error}")))?
+        .map_err(|error| NfcError::Platform(format!("set destination failed: {error}")))?
         .path(OBJECT_MANAGER_PATH)
         .map_err(|error| {
-            NfcError::PlatformError(format!("set object manager path failed: {error}"))
+            NfcError::Platform(format!("set object manager path failed: {error}"))
         })?
         .build()
         .await
         .map_err(|error| {
-            NfcError::PlatformError(format!("build object manager proxy failed: {error}"))
+            NfcError::Platform(format!("build object manager proxy failed: {error}"))
         })?;
     let objects = object_manager
         .get_managed_objects()
         .await
         .map_err(|error| {
-            NfcError::PlatformError(format!("list managed objects failed: {error}"))
+            NfcError::Platform(format!("list managed objects failed: {error}"))
         })?;
     for (path, ifaces) in objects {
         if ifaces.contains_key(ADAPTER_IFACE) {
@@ -245,22 +245,22 @@ async fn first_adapter_path(conn: &Connection) -> Result<String, NfcError> {
 async fn start_poll_loop(conn: &Connection, adapter_path: &str) -> Result<(), NfcError> {
     let adapter_proxy = zbus::Proxy::new(conn, NEARD_SERVICE, adapter_path, ADAPTER_IFACE)
         .await
-        .map_err(|error| NfcError::PlatformError(format!("build adapter proxy failed: {error}")))?;
+        .map_err(|error| NfcError::Platform(format!("build adapter proxy failed: {error}")))?;
     adapter_proxy
         .call_method("StartPollLoop", &("Initiator",))
         .await
-        .map_err(|error| NfcError::PlatformError(format!("start poll loop failed: {error}")))?;
+        .map_err(|error| NfcError::Platform(format!("start poll loop failed: {error}")))?;
     Ok(())
 }
 
 async fn stop_poll_loop(conn: &Connection, adapter_path: &str) -> Result<(), NfcError> {
     let adapter_proxy = zbus::Proxy::new(conn, NEARD_SERVICE, adapter_path, ADAPTER_IFACE)
         .await
-        .map_err(|error| NfcError::PlatformError(format!("build adapter proxy failed: {error}")))?;
+        .map_err(|error| NfcError::Platform(format!("build adapter proxy failed: {error}")))?;
     adapter_proxy
         .call_method("StopPollLoop", &())
         .await
-        .map_err(|error| NfcError::PlatformError(format!("stop poll loop failed: {error}")))?;
+        .map_err(|error| NfcError::Platform(format!("stop poll loop failed: {error}")))?;
     Ok(())
 }
 
@@ -398,7 +398,7 @@ impl NfcReaderInner {
                     worker_stopped,
                 );
             })
-            .map_err(|error| NfcError::PlatformError(format!("spawn listener failed: {error}")))?;
+            .map_err(|error| NfcError::Platform(format!("spawn listener failed: {error}")))?;
 
         Ok((
             Self {
@@ -417,7 +417,7 @@ impl NfcReaderInner {
             .latest_tag_path
             .lock()
             .map_err(|error| {
-                NfcError::PlatformError(format!("latest tag mutex poisoned: {error}"))
+                NfcError::Platform(format!("latest tag mutex poisoned: {error}"))
             })?
             .clone()
             .ok_or_else(|| NfcError::WriteFailed("no NFC tag discovered yet".into()))?;
@@ -426,7 +426,7 @@ impl NfcReaderInner {
         let conn = get_system_connection().await?;
         let proxy = zbus::Proxy::new(&conn, NEARD_SERVICE, tag_path, TAG_IFACE)
             .await
-            .map_err(|error| NfcError::PlatformError(format!("build tag proxy failed: {error}")))?;
+            .map_err(|error| NfcError::Platform(format!("build tag proxy failed: {error}")))?;
         proxy
             .call_method("Write", &(records,))
             .await

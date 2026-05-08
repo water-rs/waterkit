@@ -21,8 +21,32 @@ pub mod android {
 // ============================================================================
 
 /// Unique identifier for a Bluetooth device.
+///
+/// Format is platform-specific: macOS uses `CoreBluetooth` identifier
+/// strings, Android uses MAC addresses, Windows uses BLE device IDs,
+/// Linux uses `BlueZ` object paths. Treat the inner string as opaque.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DeviceId(pub String);
+pub struct DeviceId(String);
+
+impl DeviceId {
+    /// Wraps a platform-specific identifier string.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the inner identifier.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for DeviceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// Bluetooth device information.
 #[derive(Debug, Clone)]
@@ -65,8 +89,34 @@ pub async fn adapter_state() -> Result<AdapterState, BluetoothError> {
 // ============================================================================
 
 /// UUID for BLE services and characteristics.
+///
+/// Stored as a string because BLE supports 16-bit short UUIDs (e.g.
+/// `0x180A`) alongside full 128-bit UUIDs, and platforms accept both
+/// forms in different contexts. Treat the inner string as opaque.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Uuid(pub String);
+pub struct Uuid(String);
+
+impl Uuid {
+    /// Wraps a UUID string. Accepts 16-bit (`0x180A`), 128-bit
+    /// (`00001800-0000-1000-8000-00805F9B34FB`), or platform-specific
+    /// formats.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Returns the UUID string.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Uuid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// A BLE GATT service.
 #[derive(Debug, Clone)]

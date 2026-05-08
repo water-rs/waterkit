@@ -378,6 +378,7 @@ pub enum RawVideoFormat {
 ///
 /// Only `Some` values will be applied when passed to [`Camera::apply_controls`].
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct CameraControls {
     /// Exposure settings.
     pub exposure: Option<ExposureControl>,
@@ -385,8 +386,9 @@ pub struct CameraControls {
     pub focus: Option<FocusControl>,
     /// White balance settings.
     pub white_balance: Option<WhiteBalanceControl>,
-    /// Zoom factor (1.0 = no zoom).
-    pub zoom: Option<f32>,
+    /// Zoom factor (`Zoom` newtype enforces the platform-supported
+    /// 1.0..=100.0 range; use `Zoom::new(...)`).
+    pub zoom: Option<waterkit_core::Zoom>,
     /// Flash mode.
     pub flash: Option<FlashMode>,
     /// Dynamic range profile for preview/photo/video capture.

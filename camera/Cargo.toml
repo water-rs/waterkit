@@ -17,6 +17,7 @@ workspace = true
 ignored = ["waterkit-codec"]
 
 [dependencies]
+waterkit-core = { workspace = true }
 thiserror = { workspace = true }
 wgpu.workspace = true
 futures.workspace = true

@@ -562,7 +562,7 @@ impl CameraInner {
             if self.capabilities.zoom_range.is_none() {
                 return Err(CameraError::ControlUnsupported("zoom".into()));
             }
-            convert_result(ffi::camera_set_zoom(zoom), "zoom")?;
+            convert_result(ffi::camera_set_zoom(zoom.get()), "zoom")?;
             self.controls.zoom = Some(zoom);
         }
 

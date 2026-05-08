@@ -97,8 +97,8 @@ pub struct FrameInfo {
     pub width: u32,
     /// Frame height in pixels.
     pub height: u32,
-    /// Presentation timestamp in nanoseconds.
-    pub timestamp_ns: u64,
+    /// Presentation timestamp.
+    pub timestamp: std::time::Duration,
     /// Offset in buffer for Y plane data.
     pub y_offset: usize,
     /// Offset in buffer for UV plane data.
@@ -521,7 +521,7 @@ impl Decoder {
                     infos.push(FrameInfo {
                         width,
                         height,
-                        timestamp_ns: surface.timestamp_ns,
+                        timestamp: std::time::Duration::from_nanos(surface.timestamp_ns),
                         y_offset: offset,
                         uv_offset: offset + y_size,
                         total_bytes,
@@ -613,7 +613,7 @@ fn copy_frames_to_buffer(
         infos.push(FrameInfo {
             width,
             height,
-            timestamp_ns,
+            timestamp: std::time::Duration::from_nanos(timestamp_ns),
             y_offset: offset,
             uv_offset: offset + y_size,
             total_bytes,

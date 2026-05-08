@@ -52,8 +52,8 @@ pub struct VideoFrame {
     pub width: u32,
     /// Frame height in pixels.
     pub height: u32,
-    /// Presentation timestamp in milliseconds.
-    pub pts_ms: u64,
+    /// Presentation timestamp.
+    pub pts: std::time::Duration,
 }
 
 impl VideoFrame {
@@ -105,7 +105,7 @@ impl std::fmt::Debug for VideoFrame {
         f.debug_struct("VideoFrame")
             .field("width", &self.width)
             .field("height", &self.height)
-            .field("pts_ms", &self.pts_ms)
+            .field("pts", &self.pts)
             .field("data_len", &self.data.len())
             .finish()
     }
@@ -277,7 +277,9 @@ impl VideoReader {
     }
 
     /// Read the next video sample (encoded data).
-    /// Returns (data, `pts_ms`, `is_keyframe`) or None if at end.
+    /// Returns `(data, pts_in_timescale_units, is_keyframe)` or None if
+    /// at end. Convert the raw `pts` to `Duration` via the reader's
+    /// [`timescale`](Self::timescale).
     ///
     /// # Errors
     ///

@@ -279,7 +279,7 @@ impl BleScannerInner {
                                 let rssi = signal_prop_i16(props, "RSSI").unwrap_or(0);
                                 let result = ScanResult {
                                     device: BluetoothDevice {
-                                        id: DeviceId(addr),
+                                        id: DeviceId::new(addr),
                                         name,
                                         rssi: Some(rssi),
                                         is_connected: false,
@@ -323,7 +323,7 @@ pub struct BleConnectionInner {
 impl BleConnectionInner {
     pub async fn connect(device_id: &DeviceId) -> Result<Self, BluetoothError> {
         let conn = get_connection().await?;
-        let addr = device_id.0.replace(':', "_");
+        let addr = device_id.as_str().replace(':', "_");
         let device_path = format!("{ADAPTER_PATH}/dev_{addr}");
         let proxy = zbus::Proxy::new(&conn, BLUEZ_SERVICE, device_path.as_str(), DEVICE_IFACE)
             .await
@@ -369,7 +369,7 @@ impl BleConnectionInner {
                         let cuuid = prop_str(cprops, "UUID").unwrap_or_default();
                         let flags = prop_str_array(cprops, "Flags");
                         characteristics.push(GattCharacteristic {
-                            uuid: Uuid(cuuid),
+                            uuid: Uuid::new(cuuid),
                             properties: CharacteristicProperties {
                                 read: flags.iter().any(|f| f == "read"),
                                 write: flags.iter().any(|f| f == "write"),
@@ -383,7 +383,7 @@ impl BleConnectionInner {
                     }
                 }
                 services.push(GattService {
-                    uuid: Uuid(uuid),
+                    uuid: Uuid::new(uuid),
                     is_primary,
                     characteristics,
                 });
@@ -558,7 +558,7 @@ impl BleConnectionInner {
                 && let Some(props) = ifaces.get(GATT_CHAR_IFACE)
             {
                 let cuuid = prop_str(props, "UUID").unwrap_or_default();
-                if cuuid == uuid.0 {
+                if cuuid == uuid.as_str() {
                     return Ok(path_str);
                 }
             }
@@ -635,7 +635,7 @@ impl ClassicBluetoothInner {
                     }
                     let device = ClassicDevice {
                         device: BluetoothDevice {
-                            id: DeviceId(addr),
+                            id: DeviceId::new(addr),
                             name: signal_prop_str(props, "Name"),
                             rssi: signal_prop_i16(props, "RSSI"),
                             is_connected: signal_prop_bool(props, "Connected").unwrap_or(false),
@@ -695,7 +695,7 @@ impl ClassicBluetoothInner {
             }
             paired.push(ClassicDevice {
                 device: BluetoothDevice {
-                    id: DeviceId(addr),
+                    id: DeviceId::new(addr),
                     name: prop_str(props, "Name"),
                     rssi: prop_i16(props, "RSSI"),
                     is_connected: prop_bool(props, "Connected").unwrap_or(false),
@@ -714,7 +714,7 @@ impl ClassicBluetoothInner {
     ) -> Result<SppStreamInner, BluetoothError> {
         let (command_tx, command_rx) = async_channel::unbounded();
         let (connect_tx, connect_rx) = oneshot::channel::<Result<(), BluetoothError>>();
-        let worker = spawn_spp_worker(device_id.0.clone(), uuid.0.clone(), command_rx, connect_tx)?;
+        let worker = spawn_spp_worker(device_id.as_str().to_string(), uuid.as_str().to_string(), command_rx, connect_tx)?;
 
         match connect_rx.await.map_err(|error| {
             BluetoothError::ConnectionFailed(format!("SPP connect callback dropped: {error}"))

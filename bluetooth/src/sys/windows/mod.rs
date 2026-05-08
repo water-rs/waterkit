@@ -24,11 +24,11 @@ use windows::Networking::Sockets::StreamSocket;
 use windows::Storage::Streams::{DataReader, DataWriter};
 
 fn guid_to_uuid(guid: windows::core::GUID) -> Uuid {
-    Uuid(format!("{guid:?}"))
+    Uuid::new(format!("{guid:?}"))
 }
 
 fn parse_guid(uuid: &Uuid) -> Result<windows::core::GUID, BluetoothError> {
-    windows::core::GUID::try_from(uuid.0.as_str())
+    windows::core::GUID::try_from(uuid.as_str())
         .map_err(|_| BluetoothError::GattError("Invalid UUID".into()))
 }
 
@@ -51,7 +51,7 @@ fn device_from_info(info: &DeviceInformation, paired: bool) -> ClassicDevice {
         .filter(|value| !value.is_empty());
     ClassicDevice {
         device: BluetoothDevice {
-            id: DeviceId(device_id),
+            id: DeviceId::new(device_id),
             name,
             rssi: None,
             is_connected: false,
@@ -124,7 +124,7 @@ impl BleScannerInner {
                 }
                 let result = ScanResult {
                     device: BluetoothDevice {
-                        id: DeviceId(device_id),
+                        id: DeviceId::new(device_id),
                         name: args
                             .Advertisement()
                             .ok()
@@ -166,7 +166,7 @@ struct SubscriptionState {
 
 impl BleConnectionInner {
     pub async fn connect(device_id: &DeviceId) -> Result<Self, BluetoothError> {
-        let addr = u64::from_str_radix(&device_id.0, 16)
+        let addr = u64::from_str_radix(device_id.as_str(), 16)
             .map_err(|e| BluetoothError::DeviceNotFound(e.to_string()))?;
         let device = BluetoothLEDevice::FromBluetoothAddressAsync(addr)
             .map_err(|e| BluetoothError::ConnectionFailed(e.to_string()))?
@@ -198,7 +198,7 @@ impl BleConnectionInner {
             .map_err(|e| BluetoothError::GattError(e.to_string()))?;
         let mut out = Vec::new();
         for svc in &services {
-            let uuid = Uuid(
+            let uuid = Uuid::new(
                 svc.Uuid()
                     .map_or_else(|_| String::new(), |u| format!("{u:?}")),
             );
@@ -210,7 +210,7 @@ impl BleConnectionInner {
             let mut characteristics = Vec::new();
             if let Ok(chars) = chars_result.Characteristics() {
                 for c in &chars {
-                    let cuuid = Uuid(
+                    let cuuid = Uuid::new(
                         c.Uuid()
                             .map_or_else(|_| String::new(), |u| format!("{u:?}")),
                     );
@@ -593,7 +593,7 @@ impl ClassicBluetoothInner {
         uuid: &Uuid,
     ) -> Result<SppStreamInner, BluetoothError> {
         let _ = self.discovering.load(Ordering::Relaxed);
-        let service = resolve_rfcomm_service(&device_id.0, &uuid.0).await?;
+        let service = resolve_rfcomm_service(device_id.as_str(), uuid.as_str()).await?;
         let host = service
             .ConnectionHostName()
             .map_err(|error| connection_failed_with_context("get RFCOMM host failed", error))?;
@@ -624,7 +624,7 @@ async fn resolve_rfcomm_service(
 ) -> Result<windows::Devices::Bluetooth::Rfcomm::RfcommDeviceService, BluetoothError> {
     let guid = windows::core::GUID::try_from(service_uuid)
         .map_err(|_| connection_failed("invalid SPP UUID"))?;
-    let service_id = RfcommServiceId::FromUuid(guid).map_err(|error| {
+    let service_id = RfcommServiceId::FromUuid::new(guid).map_err(|error| {
         connection_failed_with_context("create RFCOMM service id failed", error)
     })?;
 

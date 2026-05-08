@@ -52,7 +52,7 @@ impl std::fmt::Debug for DecodedFrame {
         f.debug_struct("DecodedFrame")
             .field("width", &self.width())
             .field("height", &self.height())
-            .field("timestamp_ns", &self.timestamp_ns())
+            .field("timestamp", &self.timestamp())
             .finish_non_exhaustive()
     }
 }
@@ -134,10 +134,10 @@ impl DecodedFrame {
         }
     }
 
-    /// Get the presentation timestamp in nanoseconds.
+    /// Returns the presentation timestamp.
     #[must_use]
-    pub const fn timestamp_ns(&self) -> u64 {
-        match &self.inner {
+    pub const fn timestamp(&self) -> std::time::Duration {
+        let ns = match &self.inner {
             #[cfg(target_vendor = "apple")]
             DecodedFrameInner::Hardware { timestamp_ns, .. } => *timestamp_ns,
             #[cfg(any(
@@ -148,7 +148,8 @@ impl DecodedFrame {
                 )
             ))]
             DecodedFrameInner::Software { timestamp_ns, .. } => *timestamp_ns,
-        }
+        };
+        std::time::Duration::from_nanos(ns)
     }
 
     /// Convert to GPU frame by uploading to the user's device.
@@ -297,7 +298,7 @@ impl std::fmt::Debug for GpuFrame {
         f.debug_struct("GpuFrame")
             .field("width", &self.width)
             .field("height", &self.height)
-            .field("timestamp_ns", &self.timestamp_ns)
+            .field("timestamp", &self.timestamp())
             .finish_non_exhaustive()
     }
 }
@@ -437,10 +438,10 @@ impl GpuFrame {
         self.height
     }
 
-    /// Get the presentation timestamp in nanoseconds.
+    /// Returns the presentation timestamp.
     #[must_use]
-    pub const fn timestamp_ns(&self) -> u64 {
-        self.timestamp_ns
+    pub const fn timestamp(&self) -> std::time::Duration {
+        std::time::Duration::from_nanos(self.timestamp_ns)
     }
 
     /// Convert YUV to RGBA using a compute shader.

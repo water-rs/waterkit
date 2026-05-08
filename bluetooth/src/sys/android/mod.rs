@@ -431,7 +431,7 @@ fn get_paired_devices_with_context(
 
         devices.push(ClassicDevice {
             device: BluetoothDevice {
-                id: DeviceId(address),
+                id: DeviceId::new(address),
                 name,
                 rssi: None,
                 is_connected: false,
@@ -494,7 +494,7 @@ impl BleScannerInner {
         let service_uuids: Vec<String> = filter
             .service_uuids
             .iter()
-            .map(|uuid| uuid.0.clone())
+            .map(|uuid| uuid.as_str().to_string())
             .collect();
 
         let session = with_android_context(|env, context| {
@@ -767,13 +767,13 @@ pub extern "system" fn Java_waterkit_bluetooth_BleScanBridgeCallback_onScanResul
             })
             .into();
         if !value.is_empty() {
-            parsed_uuids.push(Uuid(value));
+            parsed_uuids.push(Uuid::new(value));
         }
     }
 
     if let Err(error) = state.sender.try_send(ScanResult {
         device: BluetoothDevice {
-            id: DeviceId(device_address),
+            id: DeviceId::new(device_address),
             name: device_name,
             rssi: i16::try_from(rssi).ok(),
             is_connected: false,
@@ -812,7 +812,7 @@ fn parse_services_payload(payload: &str) -> Result<Vec<GattService>, BluetoothEr
                 )));
             }
             characteristics.push(GattCharacteristic {
-                uuid: Uuid(parts[0].to_string()),
+                uuid: Uuid::new(parts[0]),
                 properties: CharacteristicProperties {
                     read: parts[1] == "1",
                     write: parts[2] == "1",
@@ -824,7 +824,7 @@ fn parse_services_payload(payload: &str) -> Result<Vec<GattService>, BluetoothEr
         }
 
         services.push(GattService {
-            uuid: Uuid(service_uuid.to_string()),
+            uuid: Uuid::new(service_uuid),
             is_primary,
             characteristics,
         });
@@ -1311,7 +1311,7 @@ impl BleConnectionInner {
                 ))
             })?;
 
-            let address = env.new_string(&device_id.0).map_err(|error| {
+            let address = env.new_string(device_id.as_str()).map_err(|error| {
                 BluetoothError::Platform(format!("new_string address failed: {error}"))
             })?;
             let gatt = env
@@ -1333,7 +1333,7 @@ impl BleConnectionInner {
                     BluetoothError::Platform(format!("connectGatt return decode failed: {error}"))
                 })?;
             if gatt.is_null() {
-                return Err(BluetoothError::DeviceNotFound(device_id.0.clone()));
+                return Err(BluetoothError::DeviceNotFound(device_id.as_str().to_string()));
             }
 
             let gatt = env.new_global_ref(gatt).map_err(|error| {
@@ -1815,7 +1815,7 @@ pub extern "system" fn Java_waterkit_bluetooth_ClassicDiscoveryBridgeCallback_on
 
     if let Err(error) = sender.try_send(ClassicDevice {
         device: BluetoothDevice {
-            id: DeviceId(device_address),
+            id: DeviceId::new(device_address),
             name: device_name,
             rssi: None,
             is_connected: false,
@@ -1999,8 +1999,8 @@ impl ClassicBluetoothInner {
         device_id: &DeviceId,
         uuid: &Uuid,
     ) -> Result<SppStreamInner, BluetoothError> {
-        let device_id = device_id.0.clone();
-        let service_uuid = uuid.0.clone();
+        let device_id = device_id.as_str().to_string();
+        let service_uuid = uuid.as_str().to_string();
         let (command_tx, command_rx) = async_channel::unbounded();
         let (connect_tx, connect_rx) = oneshot::channel::<Result<(), BluetoothError>>();
 

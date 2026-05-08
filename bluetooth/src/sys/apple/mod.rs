@@ -103,11 +103,11 @@ fn on_scan_result_raw(
     let service_uuids: Vec<Uuid> = service_uuids_csv
         .split(',')
         .filter(|s| !s.is_empty())
-        .map(|s| Uuid(s.to_string()))
+        .map(Uuid::new)
         .collect();
     let result = ScanResult {
         device: BluetoothDevice {
-            id: DeviceId(device_id.to_string()),
+            id: DeviceId::new(device_id),
             name,
             rssi: Some(rssi),
             is_connected: false,
@@ -140,7 +140,7 @@ fn on_classic_scan_result_raw(
     let tx = unsafe { &*(scan_ctx as usize as *const async_channel::Sender<ClassicDevice>) };
     let _ = tx.try_send(ClassicDevice {
         device: BluetoothDevice {
-            id: DeviceId(device_id.to_string()),
+            id: DeviceId::new(device_id),
             name,
             rssi: None,
             is_connected,
@@ -289,7 +289,7 @@ impl BleConnectionInner {
     pub async fn connect(device_id: &DeviceId) -> Result<Self, BluetoothError> {
         let (tx, rx) = futures::channel::oneshot::channel();
         ffi::bluetooth_connect(
-            &device_id.0,
+            device_id.as_str(),
             Box::new(move |error: String| {
                 if error.is_empty() {
                     let _ = tx.send(Ok(()));
@@ -301,7 +301,7 @@ impl BleConnectionInner {
         rx.await
             .map_err(|_| BluetoothError::ConnectionFailed("callback dropped".into()))??;
         Ok(Self {
-            device_id: device_id.0.clone(),
+            device_id: device_id.as_str().to_string(),
             notify_txs: Mutex::new(HashMap::new()),
         })
     }
@@ -534,7 +534,7 @@ impl ClassicBluetoothInner {
             let stream_ctx = (&raw const *stream_ctx_token) as usize as u64;
             let (tx, rx) = oneshot::channel::<Result<(), BluetoothError>>();
             let connect_ctx = Box::into_raw(Box::new(tx)) as usize as u64;
-            ffi::bluetooth_classic_connect_spp(&device_id.0, &uuid.0, stream_ctx, connect_ctx);
+            ffi::bluetooth_classic_connect_spp(device_id.as_str(), uuid.as_str(), stream_ctx, connect_ctx);
             rx.await.map_err(|_| {
                 BluetoothError::ConnectionFailed("classic SPP connect callback dropped".into())
             })??;
@@ -655,7 +655,7 @@ fn parse_classic_paired_devices(payload: &str) -> Result<Vec<ClassicDevice>, Blu
             };
             Ok(ClassicDevice {
                 device: BluetoothDevice {
-                    id: DeviceId(parts[0].to_string()),
+                    id: DeviceId::new(parts[0]),
                     name,
                     rssi: None,
                     is_connected,
@@ -674,7 +674,7 @@ fn parse_services_json(json: &str) -> Vec<GattService> {
         if parts.len() < 2 {
             continue;
         }
-        let uuid = Uuid(parts[0].to_string());
+        let uuid = Uuid::new(parts[0]);
         let is_primary = parts[1] == "1";
         let mut characteristics = Vec::new();
         if parts.len() == 3 {
@@ -682,7 +682,7 @@ fn parse_services_json(json: &str) -> Vec<GattService> {
                 let cparts: Vec<&str> = char_str.split(':').collect();
                 if cparts.len() >= 6 {
                     characteristics.push(GattCharacteristic {
-                        uuid: Uuid(cparts[0].to_string()),
+                        uuid: Uuid::new(cparts[0]),
                         properties: CharacteristicProperties {
                             read: cparts[1] == "1",
                             write: cparts[2] == "1",

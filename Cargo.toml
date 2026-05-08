@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tests/macos/passkey", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video", "regional", "bluetooth", "nfc", "share", "speech", "contacts", "calendar", "health", "deeplink", "background", "passkey"]
+members = ["tests/shared/dialog-demo", "waterkit-build", "waterkit-core", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tests/macos/passkey", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video", "regional", "bluetooth", "nfc", "share", "speech", "contacts", "calendar", "health", "deeplink", "background", "passkey"]
 
 
 [workspace.package]
@@ -123,6 +123,12 @@ passkey = ["dep:waterkit-passkey"]
 
 [workspace.dependencies]
 tracing = "0.1.44"
+# Reactive primitive (vendored alongside waterui's submodule)
+nami = { version = "0.10.1", path = "../vendor/nami" }
+nami-core = { version = "0.3.2", path = "../vendor/nami/core" }
+executor-core = { version = "0.7.1", features = ["std"] }
+# Core primitives shared by every functional crate.
+waterkit-core = { path = "waterkit-core", version = "0.1.0" }
 # Functional Crates
 waterkit-permission = { path = "permission", version = "0.1.0" }
 waterkit-location = { path = "location", version = "0.1.0" }

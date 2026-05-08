@@ -97,7 +97,7 @@ fn classic_discovery_callbacks()
 fn next_callback_state_id() -> Result<i64, BluetoothError> {
     let id = NEXT_CALLBACK_STATE_ID.fetch_add(1, Ordering::Relaxed);
     if id <= 0 {
-        return Err(BluetoothError::PlatformError(format!(
+        return Err(BluetoothError::Platform(format!(
             "invalid callback state id generated: {id}"
         )));
     }
@@ -110,10 +110,10 @@ where
 {
     let android_context = ndk_context::android_context();
     let vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) }
-        .map_err(|e| BluetoothError::PlatformError(format!("JavaVM::from_raw: {e}")))?;
+        .map_err(|e| BluetoothError::Platform(format!("JavaVM::from_raw: {e}")))?;
     let mut env = vm
         .attach_current_thread()
-        .map_err(|e| BluetoothError::PlatformError(format!("attach_current_thread: {e}")))?;
+        .map_err(|e| BluetoothError::Platform(format!("attach_current_thread: {e}")))?;
 
     let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
     assert!(
@@ -131,41 +131,41 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), BluetoothError> {
     let cache_dir = env
         .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| BluetoothError::PlatformError(format!("getCacheDir: {e}")))?;
+        .map_err(|e| BluetoothError::Platform(format!("getCacheDir: {e}")))?;
     let cache_path = env
         .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| BluetoothError::PlatformError(format!("getAbsolutePath: {e}")))?;
+        .map_err(|e| BluetoothError::Platform(format!("getAbsolutePath: {e}")))?;
     let dex_path = format!(
         "{}/waterkit_bluetooth.dex",
         env.get_string((&cache_path).into())
-            .map_err(|e| BluetoothError::PlatformError(format!("get_string: {e}")))?
+            .map_err(|e| BluetoothError::Platform(format!("get_string: {e}")))?
             .to_str()
-            .map_err(|e| BluetoothError::PlatformError(format!("to_str: {e}")))?
+            .map_err(|e| BluetoothError::Platform(format!("to_str: {e}")))?
     );
     let _ = std::fs::remove_file(&dex_path);
     std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| BluetoothError::PlatformError(format!("write DEX: {e}")))?;
+        .map_err(|e| BluetoothError::Platform(format!("write DEX: {e}")))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(&dex_path)
-            .map_err(|e| BluetoothError::PlatformError(format!("metadata DEX: {e}")))?
+            .map_err(|e| BluetoothError::Platform(format!("metadata DEX: {e}")))?
             .permissions();
         perms.set_mode(0o444);
         std::fs::set_permissions(&dex_path, perms)
-            .map_err(|e| BluetoothError::PlatformError(format!("set_permissions DEX: {e}")))?;
+            .map_err(|e| BluetoothError::Platform(format!("set_permissions DEX: {e}")))?;
     }
     let dex_path_jstring = env
         .new_string(&dex_path)
-        .map_err(|e| BluetoothError::PlatformError(format!("new_string: {e}")))?;
+        .map_err(|e| BluetoothError::Platform(format!("new_string: {e}")))?;
     let parent_loader = env
         .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| BluetoothError::PlatformError(format!("getClassLoader: {e}")))?;
+        .map_err(|e| BluetoothError::Platform(format!("getClassLoader: {e}")))?;
     let dex_class = env
         .find_class("dalvik/system/DexClassLoader")
-        .map_err(|e| BluetoothError::PlatformError(format!("find_class: {e}")))?;
+        .map_err(|e| BluetoothError::Platform(format!("find_class: {e}")))?;
     let loader = env
         .new_object(
             dex_class,
@@ -177,10 +177,10 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), BluetoothError> {
                 JValue::Object(&parent_loader),
             ],
         )
-        .map_err(|e| BluetoothError::PlatformError(format!("new_object: {e}")))?;
+        .map_err(|e| BluetoothError::Platform(format!("new_object: {e}")))?;
     let global = env
         .new_global_ref(loader)
-        .map_err(|e| BluetoothError::PlatformError(format!("global_ref: {e}")))?;
+        .map_err(|e| BluetoothError::Platform(format!("global_ref: {e}")))?;
     if CLASS_LOADER.set(global).is_err() {
         assert!(
             CLASS_LOADER.get().is_some(),
@@ -196,10 +196,10 @@ fn load_class<'local>(
 ) -> Result<JClass<'local>, BluetoothError> {
     let class_name = env
         .new_string(class_name)
-        .map_err(|e| BluetoothError::PlatformError(format!("new_string class_name: {e}")))?;
+        .map_err(|e| BluetoothError::Platform(format!("new_string class_name: {e}")))?;
     let loader = CLASS_LOADER
         .get()
-        .ok_or_else(|| BluetoothError::PlatformError("Class loader not initialized".into()))?;
+        .ok_or_else(|| BluetoothError::Platform("Class loader not initialized".into()))?;
     let class = env
         .call_method(
             loader.as_obj(),
@@ -208,7 +208,7 @@ fn load_class<'local>(
             &[JValue::Object(&class_name)],
         )
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| BluetoothError::PlatformError(format!("loadClass: {e}")))?;
+        .map_err(|e| BluetoothError::Platform(format!("loadClass: {e}")))?;
     Ok(class.into())
 }
 
@@ -225,7 +225,7 @@ fn register_callback_natives(env: &mut JNIEnv) -> Result<(), BluetoothError> {
     }];
     env.register_native_methods(scan_callback_class, &scan_natives)
         .map_err(|e| {
-            BluetoothError::PlatformError(format!(
+            BluetoothError::Platform(format!(
                 "register_native_methods BleScanBridgeCallback failed: {e}"
             ))
         })?;
@@ -264,7 +264,7 @@ fn register_callback_natives(env: &mut JNIEnv) -> Result<(), BluetoothError> {
     ];
     env.register_native_methods(gatt_callback_class, &gatt_natives)
         .map_err(|e| {
-            BluetoothError::PlatformError(format!(
+            BluetoothError::Platform(format!(
                 "register_native_methods BleGattBridgeCallback failed: {e}"
             ))
         })?;
@@ -279,7 +279,7 @@ fn register_callback_natives(env: &mut JNIEnv) -> Result<(), BluetoothError> {
     }];
     env.register_native_methods(classic_callback_class, &classic_natives)
         .map_err(|e| {
-            BluetoothError::PlatformError(format!(
+            BluetoothError::Platform(format!(
                 "register_native_methods ClassicDiscoveryBridgeCallback failed: {e}"
             ))
         })?;
@@ -315,12 +315,12 @@ fn get_paired_devices_with_context(
             "(Landroid/content/Context;)[Landroid/bluetooth/BluetoothDevice;",
             &[JValue::Object(context)],
         )
-        .map_err(|e| BluetoothError::PlatformError(format!("getPairedDevices: {e}")))?
+        .map_err(|e| BluetoothError::Platform(format!("getPairedDevices: {e}")))?
         .l()
-        .map_err(|e| BluetoothError::PlatformError(format!("pairedDevices return: {e}")))?;
+        .map_err(|e| BluetoothError::Platform(format!("pairedDevices return: {e}")))?;
 
     if paired_obj.is_null() {
-        return Err(BluetoothError::PlatformError(
+        return Err(BluetoothError::Platform(
             "BluetoothHelper.getPairedDevices returned null".into(),
         ));
     }
@@ -328,46 +328,46 @@ fn get_paired_devices_with_context(
     let paired = JObjectArray::from(paired_obj);
     let count = env
         .get_array_length(&paired)
-        .map_err(|e| BluetoothError::PlatformError(format!("get_array_length: {e}")))?;
+        .map_err(|e| BluetoothError::Platform(format!("get_array_length: {e}")))?;
     let mut devices = Vec::with_capacity(usize::try_from(count).map_err(|_| {
-        BluetoothError::PlatformError(format!("paired device count is negative: {count}"))
+        BluetoothError::Platform(format!("paired device count is negative: {count}"))
     })?);
 
     for index in 0..count {
         let device_obj = env
             .get_object_array_element(&paired, index)
-            .map_err(|e| BluetoothError::PlatformError(format!("get_object_array_element: {e}")))?;
+            .map_err(|e| BluetoothError::Platform(format!("get_object_array_element: {e}")))?;
         if device_obj.is_null() {
             continue;
         }
 
         let address_obj = env
             .call_method(&device_obj, "getAddress", "()Ljava/lang/String;", &[])
-            .map_err(|e| BluetoothError::PlatformError(format!("BluetoothDevice.getAddress: {e}")))?
+            .map_err(|e| BluetoothError::Platform(format!("BluetoothDevice.getAddress: {e}")))?
             .l()
             .map_err(|e| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "BluetoothDevice.getAddress return decode: {e}"
                 ))
             })?;
         if address_obj.is_null() {
-            return Err(BluetoothError::PlatformError(
+            return Err(BluetoothError::Platform(
                 "BluetoothDevice.getAddress returned null".into(),
             ));
         }
         let address: String = env
             .get_string(&JString::from(address_obj))
             .map_err(|e| {
-                BluetoothError::PlatformError(format!("BluetoothDevice.getAddress get_string: {e}"))
+                BluetoothError::Platform(format!("BluetoothDevice.getAddress get_string: {e}"))
             })?
             .into();
 
         let name_obj = env
             .call_method(&device_obj, "getName", "()Ljava/lang/String;", &[])
-            .map_err(|e| BluetoothError::PlatformError(format!("BluetoothDevice.getName: {e}")))?
+            .map_err(|e| BluetoothError::Platform(format!("BluetoothDevice.getName: {e}")))?
             .l()
             .map_err(|e| {
-                BluetoothError::PlatformError(format!("BluetoothDevice.getName return decode: {e}"))
+                BluetoothError::Platform(format!("BluetoothDevice.getName return decode: {e}"))
             })?;
         let name = if name_obj.is_null() {
             None
@@ -375,7 +375,7 @@ fn get_paired_devices_with_context(
             let value: String = env
                 .get_string(&JString::from(name_obj))
                 .map_err(|e| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothDevice.getName get_string: {e}"
                     ))
                 })?
@@ -391,11 +391,11 @@ fn get_paired_devices_with_context(
                 &[],
             )
             .map_err(|e| {
-                BluetoothError::PlatformError(format!("BluetoothDevice.getBluetoothClass: {e}"))
+                BluetoothError::Platform(format!("BluetoothDevice.getBluetoothClass: {e}"))
             })?
             .l()
             .map_err(|e| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "BluetoothDevice.getBluetoothClass return decode: {e}"
                 ))
             })?;
@@ -404,13 +404,13 @@ fn get_paired_devices_with_context(
         } else {
             env.call_method(&class_obj, "getMajorDeviceClass", "()I", &[])
                 .map_err(|e| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothClass.getMajorDeviceClass: {e}"
                     ))
                 })?
                 .i()
                 .map_err(|e| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothClass.getMajorDeviceClass return decode: {e}"
                     ))
                 })?
@@ -420,11 +420,11 @@ fn get_paired_devices_with_context(
         let bond_state = env
             .call_method(&device_obj, "getBondState", "()I", &[])
             .map_err(|e| {
-                BluetoothError::PlatformError(format!("BluetoothDevice.getBondState: {e}"))
+                BluetoothError::Platform(format!("BluetoothDevice.getBondState: {e}"))
             })?
             .i()
             .map_err(|e| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "BluetoothDevice.getBondState return decode: {e}"
                 ))
             })?;
@@ -476,10 +476,10 @@ impl BleScannerInner {
     ) -> Result<async_channel::Receiver<ScanResult>, BluetoothError> {
         {
             let session = self.session.lock().map_err(|error| {
-                BluetoothError::PlatformError(format!("BLE scan session mutex poisoned: {error}"))
+                BluetoothError::Platform(format!("BLE scan session mutex poisoned: {error}"))
             })?;
             if session.is_some() {
-                return Err(BluetoothError::PlatformError(
+                return Err(BluetoothError::Platform(
                     "BLE scan already active on this scanner".into(),
                 ));
             }
@@ -505,7 +505,7 @@ impl BleScannerInner {
             let callback = env
                 .new_object(callback_class, "()V", &[])
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "new BleScanBridgeCallback failed: {error}"
                     ))
                 })?;
@@ -516,7 +516,7 @@ impl BleScannerInner {
                 JValue::Long(callback_state_id),
             )
             .map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "set BleScanBridgeCallback.waterkit_scan_state failed: {error}"
                 ))
             })?;
@@ -525,12 +525,12 @@ impl BleScannerInner {
                 JObject::null()
             } else {
                 let string_class = env.find_class("java/lang/String").map_err(|error| {
-                    BluetoothError::PlatformError(format!("find java/lang/String failed: {error}"))
+                    BluetoothError::Platform(format!("find java/lang/String failed: {error}"))
                 })?;
                 let array = env
                     .new_object_array(
                         i32::try_from(service_uuids.len()).map_err(|_| {
-                            BluetoothError::PlatformError(format!(
+                            BluetoothError::Platform(format!(
                                 "service UUID filter count exceeds i32: {}",
                                 service_uuids.len()
                             ))
@@ -539,26 +539,26 @@ impl BleScannerInner {
                         JObject::null(),
                     )
                     .map_err(|error| {
-                        BluetoothError::PlatformError(format!(
+                        BluetoothError::Platform(format!(
                             "new service UUID object array failed: {error}"
                         ))
                     })?;
 
                 for (index, uuid) in service_uuids.iter().enumerate() {
                     let value = env.new_string(uuid).map_err(|error| {
-                        BluetoothError::PlatformError(format!("new_string UUID failed: {error}"))
+                        BluetoothError::Platform(format!("new_string UUID failed: {error}"))
                     })?;
                     env.set_object_array_element(
                         &array,
                         i32::try_from(index).map_err(|_| {
-                            BluetoothError::PlatformError(format!(
+                            BluetoothError::Platform(format!(
                                 "service UUID index exceeds i32: {index}"
                             ))
                         })?,
                         &value,
                     )
                     .map_err(|error| {
-                        BluetoothError::PlatformError(format!(
+                        BluetoothError::Platform(format!(
                             "set service UUID array element failed: {error}"
                         ))
                     })?;
@@ -578,13 +578,13 @@ impl BleScannerInner {
                     ],
                 )
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothHelper.startBleScan failed: {error}"
                     ))
                 })?
                 .l()
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothHelper.startBleScan return decode failed: {error}"
                     ))
                 })?;
@@ -594,10 +594,10 @@ impl BleScannerInner {
             }
 
             let scanner = env.new_global_ref(scanner).map_err(|error| {
-                BluetoothError::PlatformError(format!("new_global_ref scanner failed: {error}"))
+                BluetoothError::Platform(format!("new_global_ref scanner failed: {error}"))
             })?;
             let callback = env.new_global_ref(callback).map_err(|error| {
-                BluetoothError::PlatformError(format!("new_global_ref callback failed: {error}"))
+                BluetoothError::Platform(format!("new_global_ref callback failed: {error}"))
             })?;
 
             Ok(BleScanSession {
@@ -609,7 +609,7 @@ impl BleScannerInner {
 
         {
             let mut callbacks = scan_callbacks().lock().map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "BLE scan callback registry mutex poisoned: {error}"
                 ))
             })?;
@@ -617,7 +617,7 @@ impl BleScannerInner {
         }
 
         *self.session.lock().map_err(|error| {
-            BluetoothError::PlatformError(format!("BLE scan session mutex poisoned: {error}"))
+            BluetoothError::Platform(format!("BLE scan session mutex poisoned: {error}"))
         })? = Some(session);
         Ok(rx)
     }
@@ -649,7 +649,7 @@ impl BleScannerInner {
                 ],
             )
             .map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "BluetoothHelper.stopBleScan failed: {error}"
                 ))
             })?;
@@ -851,10 +851,10 @@ fn jni_uuid_from_string<'local>(
     uuid: &str,
 ) -> Result<JObject<'local>, BluetoothError> {
     let uuid_class = env.find_class("java/util/UUID").map_err(|error| {
-        BluetoothError::PlatformError(format!("find java/util/UUID failed: {error}"))
+        BluetoothError::Platform(format!("find java/util/UUID failed: {error}"))
     })?;
     let uuid = env.new_string(uuid).map_err(|error| {
-        BluetoothError::PlatformError(format!("new_string UUID failed: {error}"))
+        BluetoothError::Platform(format!("new_string UUID failed: {error}"))
     })?;
     env.call_static_method(
         uuid_class,
@@ -862,10 +862,10 @@ fn jni_uuid_from_string<'local>(
         "(Ljava/lang/String;)Ljava/util/UUID;",
         &[JValue::Object(&uuid)],
     )
-    .map_err(|error| BluetoothError::PlatformError(format!("UUID.fromString failed: {error}")))?
+    .map_err(|error| BluetoothError::Platform(format!("UUID.fromString failed: {error}")))?
     .l()
     .map_err(|error| {
-        BluetoothError::PlatformError(format!("UUID.fromString decode failed: {error}"))
+        BluetoothError::Platform(format!("UUID.fromString decode failed: {error}"))
     })
 }
 
@@ -884,11 +884,11 @@ fn jni_characteristic<'local>(
             &[JValue::Object(&service_uuid_obj)],
         )
         .map_err(|error| {
-            BluetoothError::PlatformError(format!("BluetoothGatt.getService failed: {error}"))
+            BluetoothError::Platform(format!("BluetoothGatt.getService failed: {error}"))
         })?
         .l()
         .map_err(|error| {
-            BluetoothError::PlatformError(format!(
+            BluetoothError::Platform(format!(
                 "BluetoothGatt.getService decode failed: {error}"
             ))
         })?;
@@ -907,13 +907,13 @@ fn jni_characteristic<'local>(
             &[JValue::Object(&characteristic_uuid_obj)],
         )
         .map_err(|error| {
-            BluetoothError::PlatformError(format!(
+            BluetoothError::Platform(format!(
                 "BluetoothGattService.getCharacteristic failed: {error}"
             ))
         })?
         .l()
         .map_err(|error| {
-            BluetoothError::PlatformError(format!(
+            BluetoothError::Platform(format!(
                 "BluetoothGattService.getCharacteristic decode failed: {error}"
             ))
         })?;
@@ -1225,14 +1225,14 @@ impl BleConnectionInner {
         gatt_callbacks()
             .lock()
             .map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "GATT callback registry mutex poisoned: {error}"
                 ))
             })?
             .get(&self.callback_state_id)
             .cloned()
             .ok_or_else(|| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "missing GATT callback state for id {}",
                     self.callback_state_id
                 ))
@@ -1243,13 +1243,13 @@ impl BleConnectionInner {
         with_android_context(|env, _context| {
             env.call_method(self.gatt.as_obj(), "disconnect", "()V", &[])
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothGatt.disconnect failed: {error}"
                     ))
                 })?;
             env.call_method(self.gatt.as_obj(), "close", "()V", &[])
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!("BluetoothGatt.close failed: {error}"))
+                    BluetoothError::Platform(format!("BluetoothGatt.close failed: {error}"))
                 })?;
             Ok(())
         })
@@ -1274,13 +1274,13 @@ impl BleConnectionInner {
         let (connect_tx, connect_rx) = oneshot::channel::<Result<(), BluetoothError>>();
         {
             let mut connect_slot = callback_state.connect.lock().map_err(|error| {
-                BluetoothError::PlatformError(format!("GATT connect slot mutex poisoned: {error}"))
+                BluetoothError::Platform(format!("GATT connect slot mutex poisoned: {error}"))
             })?;
             *connect_slot = Some(connect_tx);
         }
         {
             let mut states = gatt_callbacks().lock().map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "GATT callback registry mutex poisoned: {error}"
                 ))
             })?;
@@ -1295,7 +1295,7 @@ impl BleConnectionInner {
             let callback = env
                 .new_object(callback_class, "()V", &[])
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "new BleGattBridgeCallback failed: {error}"
                     ))
                 })?;
@@ -1306,13 +1306,13 @@ impl BleConnectionInner {
                 JValue::Long(callback_state_id),
             )
             .map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "set BleGattBridgeCallback.waterkit_gatt_state failed: {error}"
                 ))
             })?;
 
             let address = env.new_string(&device_id.0).map_err(|error| {
-                BluetoothError::PlatformError(format!("new_string address failed: {error}"))
+                BluetoothError::Platform(format!("new_string address failed: {error}"))
             })?;
             let gatt = env
                 .call_static_method(
@@ -1326,21 +1326,21 @@ impl BleConnectionInner {
                     ],
                 )
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!("BluetoothHelper.connectGatt failed: {error}"))
+                    BluetoothError::Platform(format!("BluetoothHelper.connectGatt failed: {error}"))
                 })?
                 .l()
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!("connectGatt return decode failed: {error}"))
+                    BluetoothError::Platform(format!("connectGatt return decode failed: {error}"))
                 })?;
             if gatt.is_null() {
                 return Err(BluetoothError::DeviceNotFound(device_id.0.clone()));
             }
 
             let gatt = env.new_global_ref(gatt).map_err(|error| {
-                BluetoothError::PlatformError(format!("new_global_ref gatt failed: {error}"))
+                BluetoothError::Platform(format!("new_global_ref gatt failed: {error}"))
             })?;
             let callback = env.new_global_ref(callback).map_err(|error| {
-                BluetoothError::PlatformError(format!("new_global_ref callback failed: {error}"))
+                BluetoothError::Platform(format!("new_global_ref callback failed: {error}"))
             })?;
             Ok((gatt, callback))
         });
@@ -1384,7 +1384,7 @@ impl BleConnectionInner {
         let (tx, rx) = oneshot::channel::<Result<Vec<GattService>, BluetoothError>>();
         {
             let mut discover_slot = state.discover_services.lock().map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "GATT discover_services slot mutex poisoned: {error}"
                 ))
             })?;
@@ -1399,13 +1399,13 @@ impl BleConnectionInner {
         let started = with_android_context(|env, _context| {
             env.call_method(self.gatt.as_obj(), "discoverServices", "()Z", &[])
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothGatt.discoverServices failed: {error}"
                     ))
                 })?
                 .z()
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothGatt.discoverServices return decode failed: {error}"
                     ))
                 })
@@ -1415,7 +1415,7 @@ impl BleConnectionInner {
                 .discover_services
                 .lock()
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "GATT discover_services slot mutex poisoned: {error}"
                     ))
                 })?
@@ -1440,7 +1440,7 @@ impl BleConnectionInner {
         let (tx, rx) = oneshot::channel::<Result<Vec<u8>, BluetoothError>>();
         {
             let mut reads = state.reads.lock().map_err(|error| {
-                BluetoothError::PlatformError(format!("GATT read map mutex poisoned: {error}"))
+                BluetoothError::Platform(format!("GATT read map mutex poisoned: {error}"))
             })?;
             if reads.insert(key.clone(), tx).is_some() {
                 return Err(BluetoothError::GattError(format!(
@@ -1460,13 +1460,13 @@ impl BleConnectionInner {
                 &[JValue::Object(&characteristic_obj)],
             )
             .map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "BluetoothGatt.readCharacteristic failed: {error}"
                 ))
             })?
             .z()
             .map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "BluetoothGatt.readCharacteristic return decode failed: {error}"
                 ))
             })
@@ -1477,7 +1477,7 @@ impl BleConnectionInner {
                 .reads
                 .lock()
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!("GATT read map mutex poisoned: {error}"))
+                    BluetoothError::Platform(format!("GATT read map mutex poisoned: {error}"))
                 })?
                 .remove(&key);
             return Err(BluetoothError::GattError(
@@ -1501,7 +1501,7 @@ impl BleConnectionInner {
         let (tx, rx) = oneshot::channel::<Result<(), BluetoothError>>();
         {
             let mut writes = state.writes.lock().map_err(|error| {
-                BluetoothError::PlatformError(format!("GATT write map mutex poisoned: {error}"))
+                BluetoothError::Platform(format!("GATT write map mutex poisoned: {error}"))
             })?;
             if writes.insert(key.clone(), tx).is_some() {
                 return Err(BluetoothError::GattError(format!(
@@ -1515,7 +1515,7 @@ impl BleConnectionInner {
             let characteristic_obj =
                 jni_characteristic(env, self.gatt.as_obj(), &service.0, &characteristic.0)?;
             let payload = env.byte_array_from_slice(data).map_err(|error| {
-                BluetoothError::PlatformError(format!("byte_array_from_slice failed: {error}"))
+                BluetoothError::Platform(format!("byte_array_from_slice failed: {error}"))
             })?;
             let set_value = env
                 .call_method(
@@ -1525,13 +1525,13 @@ impl BleConnectionInner {
                     &[JValue::Object(&JObject::from(payload))],
                 )
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothGattCharacteristic.setValue failed: {error}"
                     ))
                 })?
                 .z()
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothGattCharacteristic.setValue return decode failed: {error}"
                     ))
                 })?;
@@ -1545,13 +1545,13 @@ impl BleConnectionInner {
                 &[JValue::Object(&characteristic_obj)],
             )
             .map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "BluetoothGatt.writeCharacteristic failed: {error}"
                 ))
             })?
             .z()
             .map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "BluetoothGatt.writeCharacteristic return decode failed: {error}"
                 ))
             })
@@ -1562,7 +1562,7 @@ impl BleConnectionInner {
                 .writes
                 .lock()
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!("GATT write map mutex poisoned: {error}"))
+                    BluetoothError::Platform(format!("GATT write map mutex poisoned: {error}"))
                 })?
                 .remove(&key);
             return Err(BluetoothError::GattError(
@@ -1590,7 +1590,7 @@ impl BleConnectionInner {
         let (tx, rx) = async_channel::unbounded();
         {
             let mut subscriptions = state.subscriptions.lock().map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "GATT subscription map mutex poisoned: {error}"
                 ))
             })?;
@@ -1608,13 +1608,13 @@ impl BleConnectionInner {
                     &[JValue::Object(&characteristic_obj), JValue::Bool(1)],
                 )
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothGatt.setCharacteristicNotification failed: {error}"
                     ))
                 })?
                 .z()
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "setCharacteristicNotification return decode failed: {error}"
                     ))
                 })?;
@@ -1632,13 +1632,13 @@ impl BleConnectionInner {
                     &[JValue::Object(&descriptor_uuid)],
                 )
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothGattCharacteristic.getDescriptor failed: {error}"
                     ))
                 })?
                 .l()
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothGattCharacteristic.getDescriptor return decode failed: {error}"
                     ))
                 })?;
@@ -1651,20 +1651,20 @@ impl BleConnectionInner {
             let descriptor_class = env
                 .find_class("android/bluetooth/BluetoothGattDescriptor")
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "find BluetoothGattDescriptor class failed: {error}"
                     ))
                 })?;
             let enable_value = env
                 .get_static_field(descriptor_class, "ENABLE_NOTIFICATION_VALUE", "[B")
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "read ENABLE_NOTIFICATION_VALUE failed: {error}"
                     ))
                 })?
                 .l()
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "decode ENABLE_NOTIFICATION_VALUE failed: {error}"
                     ))
                 })?;
@@ -1676,13 +1676,13 @@ impl BleConnectionInner {
                     &[JValue::Object(&enable_value)],
                 )
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothGattDescriptor.setValue failed: {error}"
                     ))
                 })?
                 .z()
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothGattDescriptor.setValue return decode failed: {error}"
                     ))
                 })?;
@@ -1697,13 +1697,13 @@ impl BleConnectionInner {
                 &[JValue::Object(&descriptor)],
             )
             .map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "BluetoothGatt.writeDescriptor failed: {error}"
                 ))
             })?
             .z()
             .map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "BluetoothGatt.writeDescriptor return decode failed: {error}"
                 ))
             })
@@ -1714,7 +1714,7 @@ impl BleConnectionInner {
                 .subscriptions
                 .lock()
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "GATT subscription map mutex poisoned: {error}"
                     ))
                 })?
@@ -1745,13 +1745,13 @@ impl Drop for BleConnectionInner {
         let _ = with_android_context(|env, _context| {
             env.call_method(self.gatt.as_obj(), "disconnect", "()V", &[])
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothGatt.disconnect failed: {error}"
                     ))
                 })?;
             env.call_method(self.gatt.as_obj(), "close", "()V", &[])
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!("BluetoothGatt.close failed: {error}"))
+                    BluetoothError::Platform(format!("BluetoothGatt.close failed: {error}"))
                 })?;
             Ok(())
         });
@@ -1858,12 +1858,12 @@ impl ClassicBluetoothInner {
     ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
         {
             let session = self.discovery_session.lock().map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "classic discovery session mutex poisoned: {error}"
                 ))
             })?;
             if session.is_some() {
-                return Err(BluetoothError::PlatformError(
+                return Err(BluetoothError::Platform(
                     "classic discovery already active".into(),
                 ));
             }
@@ -1880,7 +1880,7 @@ impl ClassicBluetoothInner {
             let callback = env
                 .new_object(callback_class, "()V", &[])
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "new ClassicDiscoveryBridgeCallback failed: {error}"
                     ))
                 })?;
@@ -1891,7 +1891,7 @@ impl ClassicBluetoothInner {
                 JValue::Long(callback_state_id),
             )
             .map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "set waterkit_classic_discovery_state failed: {error}"
                 ))
             })?;
@@ -1904,13 +1904,13 @@ impl ClassicBluetoothInner {
                     &[JValue::Object(context), JValue::Object(&callback)],
                 )
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "BluetoothHelper.startClassicDiscovery failed: {error}"
                     ))
                 })?
                 .z()
                 .map_err(|error| {
-                    BluetoothError::PlatformError(format!(
+                    BluetoothError::Platform(format!(
                         "startClassicDiscovery return decode failed: {error}"
                     ))
                 })?;
@@ -1921,7 +1921,7 @@ impl ClassicBluetoothInner {
             }
 
             let callback = env.new_global_ref(callback).map_err(|error| {
-                BluetoothError::PlatformError(format!("new_global_ref callback failed: {error}"))
+                BluetoothError::Platform(format!("new_global_ref callback failed: {error}"))
             })?;
             Ok(ClassicDiscoverySession {
                 callback,
@@ -1931,7 +1931,7 @@ impl ClassicBluetoothInner {
 
         {
             let mut callbacks = classic_discovery_callbacks().lock().map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "classic discovery callback registry mutex poisoned: {error}"
                 ))
             })?;
@@ -1939,7 +1939,7 @@ impl ClassicBluetoothInner {
         }
 
         *self.discovery_session.lock().map_err(|error| {
-            BluetoothError::PlatformError(format!(
+            BluetoothError::Platform(format!(
                 "classic discovery session mutex poisoned: {error}"
             ))
         })? = Some(session);
@@ -1970,7 +1970,7 @@ impl ClassicBluetoothInner {
                 &[JValue::Object(context)],
             )
             .map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "BluetoothHelper.stopClassicDiscovery failed: {error}"
                 ))
             })?;
@@ -2011,10 +2011,10 @@ impl ClassicBluetoothInner {
                     init_dex(env, context)?;
                     let helper_class = get_helper_class(env)?;
                     let device_id = env.new_string(device_id).map_err(|error| {
-                        BluetoothError::PlatformError(format!("new_string device_id failed: {error}"))
+                        BluetoothError::Platform(format!("new_string device_id failed: {error}"))
                     })?;
                     let service_uuid = env.new_string(service_uuid).map_err(|error| {
-                        BluetoothError::PlatformError(format!(
+                        BluetoothError::Platform(format!(
                             "new_string service_uuid failed: {error}"
                         ))
                     })?;
@@ -2030,13 +2030,13 @@ impl ClassicBluetoothInner {
                             ],
                         )
                         .map_err(|error| {
-                            BluetoothError::PlatformError(format!(
+                            BluetoothError::Platform(format!(
                                 "BluetoothHelper.connectSpp failed: {error}"
                             ))
                         })?
                         .l()
                         .map_err(|error| {
-                            BluetoothError::PlatformError(format!(
+                            BluetoothError::Platform(format!(
                                 "connectSpp return decode failed: {error}"
                             ))
                         })?;
@@ -2046,7 +2046,7 @@ impl ClassicBluetoothInner {
                         ));
                     }
                     env.new_global_ref(socket).map_err(|error| {
-                        BluetoothError::PlatformError(format!(
+                        BluetoothError::Platform(format!(
                             "new_global_ref BluetoothSocket failed: {error}"
                         ))
                     })
@@ -2070,7 +2070,7 @@ impl ClassicBluetoothInner {
                                 init_dex(env, context)?;
                                 let helper_class = get_helper_class(env)?;
                                 let max_bytes = i32::try_from(max_bytes).map_err(|_| {
-                                    BluetoothError::PlatformError(format!(
+                                    BluetoothError::Platform(format!(
                                         "SPP read size exceeds i32: {max_bytes}"
                                     ))
                                 })?;
@@ -2085,13 +2085,13 @@ impl ClassicBluetoothInner {
                                         ],
                                     )
                                     .map_err(|error| {
-                                        BluetoothError::PlatformError(format!(
+                                        BluetoothError::Platform(format!(
                                             "BluetoothHelper.readSpp failed: {error}"
                                         ))
                                     })?
                                     .l()
                                     .map_err(|error| {
-                                        BluetoothError::PlatformError(format!(
+                                        BluetoothError::Platform(format!(
                                             "readSpp return decode failed: {error}"
                                         ))
                                     })?;
@@ -2101,7 +2101,7 @@ impl ClassicBluetoothInner {
                                     ));
                                 }
                                 env.convert_byte_array(JByteArray::from(bytes)).map_err(|error| {
-                                    BluetoothError::PlatformError(format!(
+                                    BluetoothError::Platform(format!(
                                         "decode readSpp byte array failed: {error}"
                                     ))
                                 })
@@ -2113,7 +2113,7 @@ impl ClassicBluetoothInner {
                                 init_dex(env, context)?;
                                 let helper_class = get_helper_class(env)?;
                                 let payload = env.byte_array_from_slice(&data).map_err(|error| {
-                                    BluetoothError::PlatformError(format!(
+                                    BluetoothError::Platform(format!(
                                         "byte_array_from_slice failed in writeSpp: {error}"
                                     ))
                                 })?;
@@ -2128,18 +2128,18 @@ impl ClassicBluetoothInner {
                                         ],
                                     )
                                     .map_err(|error| {
-                                        BluetoothError::PlatformError(format!(
+                                        BluetoothError::Platform(format!(
                                             "BluetoothHelper.writeSpp failed: {error}"
                                         ))
                                     })?
                                     .i()
                                     .map_err(|error| {
-                                        BluetoothError::PlatformError(format!(
+                                        BluetoothError::Platform(format!(
                                             "writeSpp return decode failed: {error}"
                                         ))
                                     })?;
                                 usize::try_from(written).map_err(|_| {
-                                    BluetoothError::PlatformError(format!(
+                                    BluetoothError::Platform(format!(
                                         "writeSpp returned negative byte count: {written}"
                                     ))
                                 })
@@ -2157,7 +2157,7 @@ impl ClassicBluetoothInner {
                                     &[JValue::Object(socket.as_obj())],
                                 )
                                 .map_err(|error| {
-                                    BluetoothError::PlatformError(format!(
+                                    BluetoothError::Platform(format!(
                                         "BluetoothHelper.closeSpp failed: {error}"
                                     ))
                                 })?;
@@ -2179,7 +2179,7 @@ impl ClassicBluetoothInner {
                         &[JValue::Object(socket.as_obj())],
                     )
                     .map_err(|error| {
-                        BluetoothError::PlatformError(format!(
+                        BluetoothError::Platform(format!(
                             "BluetoothHelper.closeSpp failed during worker shutdown: {error}"
                         ))
                     })?;
@@ -2187,7 +2187,7 @@ impl ClassicBluetoothInner {
                 });
             })
             .map_err(|error| {
-                BluetoothError::PlatformError(format!("spawn SPP worker failed: {error}"))
+                BluetoothError::Platform(format!("spawn SPP worker failed: {error}"))
             })?;
 
         match connect_rx.await.map_err(|error| {
@@ -2307,9 +2307,9 @@ pub mod jni_api {
                 "(Landroid/content/Context;)I",
                 &[JValue::Object(context)],
             )
-            .map_err(|e| BluetoothError::PlatformError(format!("getAdapterState: {e}")))?
+            .map_err(|e| BluetoothError::Platform(format!("getAdapterState: {e}")))?
             .i()
-            .map_err(|e| BluetoothError::PlatformError(format!("return: {e}")))?;
+            .map_err(|e| BluetoothError::Platform(format!("return: {e}")))?;
         match state {
             0 => Ok(AdapterState::PoweredOff),
             1 => Ok(AdapterState::PoweredOn),

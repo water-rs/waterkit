@@ -17,6 +17,7 @@ workspace = true
 waterkit-build.workspace = true
 
 [dependencies]
+waterkit-core = { workspace = true }
 thiserror.workspace = true
 wgpu.workspace = true
 async-channel.workspace = true

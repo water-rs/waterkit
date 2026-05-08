@@ -148,7 +148,8 @@ impl BleScanner {
     pub fn start_scan(
         &self,
         filter: &ScanFilter,
-    ) -> Result<async_channel::Receiver<ScanResult>, BluetoothError> {
+    ) -> Result<impl futures_core::Stream<Item = ScanResult> + Send + 'static, BluetoothError>
+    {
         self.inner.start_scan(filter)
     }
 
@@ -223,7 +224,7 @@ impl BleConnection {
         &self,
         service: &Uuid,
         characteristic: &Uuid,
-    ) -> Result<async_channel::Receiver<Vec<u8>>, BluetoothError> {
+    ) -> Result<impl futures_core::Stream<Item = Vec<u8>> + Send + 'static, BluetoothError> {
         self.inner.subscribe(service, characteristic).await
     }
 
@@ -271,7 +272,8 @@ impl ClassicBluetooth {
     /// Returns error if discovery cannot be started.
     pub async fn start_discovery(
         &self,
-    ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
+    ) -> Result<impl futures_core::Stream<Item = ClassicDevice> + Send + 'static, BluetoothError>
+    {
         self.inner.start_discovery().await
     }
 
@@ -340,6 +342,7 @@ impl SppStream {
 
 /// Errors that can occur in Bluetooth operations.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum BluetoothError {
     /// Bluetooth is not available on this device.
     #[error("Bluetooth not available")]
@@ -364,5 +367,5 @@ pub enum BluetoothError {
     Unsupported,
     /// Platform-specific error.
     #[error("platform error: {0}")]
-    PlatformError(String),
+    Platform(String),
 }

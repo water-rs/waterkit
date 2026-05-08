@@ -63,17 +63,17 @@ fn device_from_info(info: &DeviceInformation, paired: bool) -> ClassicDevice {
 
 pub async fn adapter_state() -> Result<AdapterState, BluetoothError> {
     let adapter = BluetoothAdapter::GetDefaultAsync()
-        .map_err(|e| BluetoothError::PlatformError(e.to_string()))?
+        .map_err(|e| BluetoothError::Platform(e.to_string()))?
         .await
-        .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+        .map_err(|e| BluetoothError::Platform(e.to_string()))?;
     let radio = adapter
         .GetRadioAsync()
-        .map_err(|e| BluetoothError::PlatformError(e.to_string()))?
+        .map_err(|e| BluetoothError::Platform(e.to_string()))?
         .await
-        .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+        .map_err(|e| BluetoothError::Platform(e.to_string()))?;
     match radio
         .State()
-        .map_err(|e| BluetoothError::PlatformError(e.to_string()))?
+        .map_err(|e| BluetoothError::Platform(e.to_string()))?
     {
         RadioState::On => Ok(AdapterState::PoweredOn),
         RadioState::Off => Ok(AdapterState::PoweredOff),
@@ -94,7 +94,7 @@ impl BleScannerInner {
             return Err(BluetoothError::NotAvailable);
         }
         let watcher = BluetoothLEAdvertisementWatcher::new()
-            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+            .map_err(|e| BluetoothError::Platform(e.to_string()))?;
         Ok(Self { watcher })
     }
 
@@ -140,10 +140,10 @@ impl BleScannerInner {
                 let _ = tx.try_send(result);
                 Ok(())
             }))
-            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+            .map_err(|e| BluetoothError::Platform(e.to_string()))?;
         self.watcher
             .Start()
-            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+            .map_err(|e| BluetoothError::Platform(e.to_string()))?;
         Ok(rx)
     }
 
@@ -449,7 +449,7 @@ impl BleConnectionInner {
         self.subscriptions
             .lock()
             .map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "BLE subscription registry mutex poisoned: {error}"
                 ))
             })?
@@ -575,11 +575,11 @@ impl ClassicBluetoothInner {
 
     pub async fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {
         let selector = WinBluetoothDevice::GetDeviceSelectorFromPairingState(true)
-            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+            .map_err(|e| BluetoothError::Platform(e.to_string()))?;
         let devices = DeviceInformation::FindAllAsyncAqsFilter(&selector)
-            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?
+            .map_err(|e| BluetoothError::Platform(e.to_string()))?
             .await
-            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+            .map_err(|e| BluetoothError::Platform(e.to_string()))?;
         let mut paired = Vec::new();
         for info in &devices {
             paired.push(device_from_info(&info, true));

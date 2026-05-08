@@ -196,27 +196,27 @@ fn signal_prop_bool(props: &SignalPropertyMap<'_>, key: &str) -> Option<bool> {
 async fn get_connection() -> Result<Connection, BluetoothError> {
     Connection::system()
         .await
-        .map_err(|e| BluetoothError::PlatformError(format!("D-Bus connection failed: {e}")))
+        .map_err(|e| BluetoothError::Platform(format!("D-Bus connection failed: {e}")))
 }
 
 pub async fn adapter_state() -> Result<AdapterState, BluetoothError> {
     let conn = get_connection().await?;
     let proxy = zbus::fdo::PropertiesProxy::builder(&conn)
         .destination(BLUEZ_SERVICE)
-        .map_err(|e| BluetoothError::PlatformError(e.to_string()))?
+        .map_err(|e| BluetoothError::Platform(e.to_string()))?
         .path(ADAPTER_PATH)
-        .map_err(|e| BluetoothError::PlatformError(e.to_string()))?
+        .map_err(|e| BluetoothError::Platform(e.to_string()))?
         .build()
         .await
-        .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+        .map_err(|e| BluetoothError::Platform(e.to_string()))?;
     let adapter_iface = InterfaceName::try_from(ADAPTER_IFACE)
-        .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+        .map_err(|e| BluetoothError::Platform(e.to_string()))?;
     let powered_value = proxy
         .get(adapter_iface, "Powered")
         .await
-        .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+        .map_err(|e| BluetoothError::Platform(e.to_string()))?;
     let powered =
-        bool::try_from(&powered_value).map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+        bool::try_from(&powered_value).map_err(|e| BluetoothError::Platform(e.to_string()))?;
     if powered {
         Ok(AdapterState::PoweredOn)
     } else {
@@ -244,7 +244,7 @@ impl BleScannerInner {
         _filter: &ScanFilter,
     ) -> Result<async_channel::Receiver<ScanResult>, BluetoothError> {
         let _bus_name = self.connection.unique_name().ok_or_else(|| {
-            BluetoothError::PlatformError("D-Bus connection is missing unique bus name".into())
+            BluetoothError::Platform("D-Bus connection is missing unique bus name".into())
         })?;
 
         let (tx, rx) = async_channel::bounded(64);
@@ -588,7 +588,7 @@ impl ClassicBluetoothInner {
         &self,
     ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
         let _bus_name = self.connection.unique_name().ok_or_else(|| {
-            BluetoothError::PlatformError("D-Bus connection is missing unique bus name".into())
+            BluetoothError::Platform("D-Bus connection is missing unique bus name".into())
         })?;
 
         let (tx, rx) = async_channel::bounded(64);
@@ -671,16 +671,16 @@ impl ClassicBluetoothInner {
     pub async fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {
         let object_manager = zbus::fdo::ObjectManagerProxy::builder(&self.connection)
             .destination(BLUEZ_SERVICE)
-            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?
+            .map_err(|e| BluetoothError::Platform(e.to_string()))?
             .path("/")
-            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?
+            .map_err(|e| BluetoothError::Platform(e.to_string()))?
             .build()
             .await
-            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+            .map_err(|e| BluetoothError::Platform(e.to_string()))?;
         let objects = object_manager
             .get_managed_objects()
             .await
-            .map_err(|e| BluetoothError::PlatformError(e.to_string()))?;
+            .map_err(|e| BluetoothError::Platform(e.to_string()))?;
         let mut paired = Vec::new();
         for ifaces in objects.values() {
             let Some(props) = ifaces.get(DEVICE_IFACE) else {
@@ -742,7 +742,7 @@ fn spawn_spp_worker(
     std::thread::Builder::new()
         .name("waterkit-spp-linux".to_owned())
         .spawn(move || run_spp_worker(device_id, service_uuid, command_rx, connect_tx))
-        .map_err(|error| BluetoothError::PlatformError(format!("spawn SPP worker failed: {error}")))
+        .map_err(|error| BluetoothError::Platform(format!("spawn SPP worker failed: {error}")))
 }
 
 #[allow(clippy::needless_pass_by_value)]

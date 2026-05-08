@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 #[cfg(target_os = "ios")]
 fn ios_classic_unavailable_error() -> BluetoothError {
-    BluetoothError::PlatformError(
+    BluetoothError::Platform(
         "iOS does not expose Classic Bluetooth / SPP APIs; use BLE GATT APIs instead".into(),
     )
 }
@@ -158,7 +158,7 @@ fn on_classic_paired_devices_result_raw(query_ctx: u64, payload: &str, error: &s
     let result = if error.is_empty() {
         Ok(payload.to_string())
     } else {
-        Err(BluetoothError::PlatformError(error.to_string()))
+        Err(BluetoothError::Platform(error.to_string()))
     };
     let _ = tx.send(result);
 }
@@ -231,7 +231,7 @@ pub async fn adapter_state() -> Result<AdapterState, BluetoothError> {
         let _ = tx.send(result);
     }));
     rx.await
-        .map_err(|_| BluetoothError::PlatformError("callback dropped".into()))
+        .map_err(|_| BluetoothError::Platform("callback dropped".into()))
 }
 
 #[derive(Debug)]
@@ -456,7 +456,7 @@ impl ClassicBluetoothInner {
             let scan_ctx = (&raw const *scan_tx) as usize as u64;
             let error = ffi::bluetooth_classic_start_discovery(scan_ctx);
             if !error.is_empty() {
-                return Err(BluetoothError::PlatformError(error));
+                return Err(BluetoothError::Platform(error));
             }
 
             self.scan_tx
@@ -508,7 +508,7 @@ impl ClassicBluetoothInner {
             let query_ctx = Box::into_raw(Box::new(tx)) as usize as u64;
             ffi::bluetooth_classic_paired_devices(query_ctx);
             let payload = rx.await.map_err(|_| {
-                BluetoothError::PlatformError("classic paired devices callback dropped".into())
+                BluetoothError::Platform("classic paired devices callback dropped".into())
             })??;
             parse_classic_paired_devices(&payload)
         }
@@ -637,12 +637,12 @@ fn parse_classic_paired_devices(payload: &str) -> Result<Vec<ClassicDevice>, Blu
         .map(|line| {
             let parts: Vec<&str> = line.split('\t').collect();
             if parts.len() != 4 {
-                return Err(BluetoothError::PlatformError(format!(
+                return Err(BluetoothError::Platform(format!(
                     "malformed classic paired device row: {line}"
                 )));
             }
             let device_class = parts[2].parse::<u32>().map_err(|error| {
-                BluetoothError::PlatformError(format!(
+                BluetoothError::Platform(format!(
                     "invalid classic device class '{}' in row '{line}': {error}",
                     parts[2]
                 ))

@@ -216,11 +216,11 @@ impl BootstrapConfig {
         Self::default()
     }
 
-    /// Register an app refresh task identifier.
+    /// Adds an app refresh task identifier.
     ///
     /// # Errors
     /// Returns an error on duplicate registration.
-    pub fn register_app_refresh(
+    pub fn app_refresh(
         mut self,
         identifier: TaskIdentifier,
     ) -> Result<Self, BackgroundError> {
@@ -233,11 +233,11 @@ impl BootstrapConfig {
         Ok(self)
     }
 
-    /// Register a processing task identifier.
+    /// Adds a processing task identifier.
     ///
     /// # Errors
     /// Returns an error on duplicate registration.
-    pub fn register_processing(
+    pub fn processing(
         mut self,
         identifier: TaskIdentifier,
     ) -> Result<Self, BackgroundError> {
@@ -250,11 +250,11 @@ impl BootstrapConfig {
         Ok(self)
     }
 
-    /// Register a continued-processing wildcard pattern.
+    /// Adds a continued-processing wildcard pattern.
     ///
     /// # Errors
     /// Returns an error on duplicate registration.
-    pub fn register_continued_processing(
+    pub fn continued_processing(
         mut self,
         pattern: ContinuedTaskPattern,
     ) -> Result<Self, BackgroundError> {
@@ -679,9 +679,8 @@ pub struct BackgroundRuntime {
 }
 
 impl BackgroundRuntime {
-    /// Subscribe to background task events.
-    #[must_use]
-    pub fn subscribe(&self) -> async_channel::Receiver<BackgroundEvent> {
+    /// Returns the stream of background task events.
+    pub fn events(&self) -> impl futures_core::Stream<Item = BackgroundEvent> + Send + 'static {
         self.events.clone()
     }
 

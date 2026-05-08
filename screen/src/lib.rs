@@ -43,6 +43,7 @@ mod sys;
 pub use frame::ScreenFrame;
 pub use screenshot::{ImageFormat, Screenshot, screenshot, screenshot_primary};
 pub use stream::{ScreenStream, StreamConfig};
+pub use waterkit_core::{Brightness, RefreshRate};
 
 /// Errors returned by screen operations.
 #[derive(Debug, thiserror::Error)]
@@ -165,44 +166,28 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
 ///
 /// Returns [`Error::Unsupported`] when the platform cannot report refresh-rate metadata.
 /// Returns [`Error::MonitorNotFound`] when no displays are available.
-#[cfg(target_os = "ios")]
-pub const fn max_refresh_rate_hz() -> Result<f32, Error> {
-    sys::max_refresh_rate_hz()
+pub fn max_refresh_rate() -> Result<RefreshRate, Error> {
+    let raw = sys::max_refresh_rate_hz()?;
+    RefreshRate::new(raw).map_err(|error| Error::Platform(error.to_string()))
 }
 
-/// Returns the maximum refresh rate across available displays.
+/// Returns the current screen brightness.
 ///
 /// # Errors
 ///
-/// Returns [`Error::Unsupported`] when the platform cannot report refresh-rate metadata.
-/// Returns [`Error::MonitorNotFound`] when no displays are available.
-#[cfg(not(target_os = "ios"))]
-pub fn max_refresh_rate_hz() -> Result<f32, Error> {
-    sys::max_refresh_rate_hz()
+/// Returns [`Error::Platform`] if the brightness cannot be retrieved.
+pub async fn brightness() -> Result<Brightness, Error> {
+    let raw = sys::get_brightness().await?;
+    Brightness::new(raw).map_err(|error| Error::Platform(error.to_string()))
 }
 
-/// Get the current screen brightness level.
-///
-/// Returns a value between 0.0 and 1.0.
+/// Sets the screen brightness.
 ///
 /// # Errors
 ///
-/// Returns [`Error::Platform`] if the brightness level cannot be retrieved.
-pub async fn get_brightness() -> Result<f32, Error> {
-    sys::get_brightness().await
-}
-
-/// Set the screen brightness level.
-///
-/// # Arguments
-///
-/// * `val` - A float between 0.0 and 1.0. Values outside this range will be clamped.
-///
-/// # Errors
-///
-/// Returns [`Error::Platform`] if the brightness level cannot be set.
-pub async fn set_brightness(val: f32) -> Result<(), Error> {
-    sys::set_brightness(val).await
+/// Returns [`Error::Platform`] if the brightness cannot be set.
+pub async fn set_brightness(value: Brightness) -> Result<(), Error> {
+    sys::set_brightness(value.get()).await
 }
 
 /// Initialize the screen subsystem for Android.

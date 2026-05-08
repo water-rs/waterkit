@@ -33,13 +33,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let displays = screens()?;
     let primary = displays
         .iter()
-        .find(|d| d.is_primary)
+        .find(|d| d.is_primary())
         .or_else(|| displays.first())
         .ok_or("No display found")?;
 
     println!(
         "Capturing from: {} ({}x{})",
-        primary.name, primary.width, primary.height
+        primary.name(),
+        primary.width(),
+        primary.height()
     );
 
     // Start capture stream

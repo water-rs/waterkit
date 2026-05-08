@@ -22,7 +22,7 @@ static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
 ///
 /// # Errors
 ///
-/// Returns `LocationError::Unknown` if JNI calls fail or DEX setup cannot be completed.
+/// Returns `LocationError::Platform` if JNI calls fail or DEX setup cannot be completed.
 pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), LocationError> {
     if CLASS_LOADER.get().is_some() {
         return Ok(());
@@ -31,22 +31,22 @@ pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), LocationError> {
     // Write DEX to cache directory
     let cache_dir = env
         .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
-        .map_err(|e| LocationError::Unknown(format!("getCacheDir failed: {e}")))?
+        .map_err(|e| LocationError::Platform(format!("getCacheDir failed: {e}")))?
         .l()
-        .map_err(|e| LocationError::Unknown(format!("getCacheDir result: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("getCacheDir result: {e}")))?;
 
     let cache_path = env
         .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
-        .map_err(|e| LocationError::Unknown(format!("getAbsolutePath failed: {e}")))?
+        .map_err(|e| LocationError::Platform(format!("getAbsolutePath failed: {e}")))?
         .l()
-        .map_err(|e| LocationError::Unknown(format!("getAbsolutePath result: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("getAbsolutePath result: {e}")))?;
 
     let dex_path = format!(
         "{}/waterkit_location.dex",
         env.get_string((&cache_path).into())
-            .map_err(|e| LocationError::Unknown(format!("get_string failed: {e}")))?
+            .map_err(|e| LocationError::Platform(format!("get_string failed: {e}")))?
             .to_str()
-            .map_err(|e| LocationError::Unknown(format!("to_str failed: {e}")))?
+            .map_err(|e| LocationError::Platform(format!("to_str failed: {e}")))?
     );
 
     // Remove if exists to handle previous read-only setting
@@ -54,34 +54,34 @@ pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), LocationError> {
 
     // Write DEX bytes to file
     std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| LocationError::Unknown(format!("write DEX failed: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("write DEX failed: {e}")))?;
 
     // Make DEX read-only as required by modern Android security
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(&dex_path)
-            .map_err(|e| LocationError::Unknown(format!("metadata DEX failed: {e}")))?
+            .map_err(|e| LocationError::Platform(format!("metadata DEX failed: {e}")))?
             .permissions();
         perms.set_mode(0o444); // Read-only
         std::fs::set_permissions(&dex_path, perms)
-            .map_err(|e| LocationError::Unknown(format!("set_permissions DEX failed: {e}")))?;
+            .map_err(|e| LocationError::Platform(format!("set_permissions DEX failed: {e}")))?;
     }
 
     // Create DexClassLoader
     let dex_path_jstring = env
         .new_string(&dex_path)
-        .map_err(|e| LocationError::Unknown(format!("new_string failed: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("new_string failed: {e}")))?;
 
     let parent_loader = env
         .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
-        .map_err(|e| LocationError::Unknown(format!("getClassLoader failed: {e}")))?
+        .map_err(|e| LocationError::Platform(format!("getClassLoader failed: {e}")))?
         .l()
-        .map_err(|e| LocationError::Unknown(format!("getClassLoader result: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("getClassLoader result: {e}")))?;
 
     let dex_class_loader_class = env
         .find_class("dalvik/system/DexClassLoader")
-        .map_err(|e| LocationError::Unknown(format!("find DexClassLoader: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("find DexClassLoader: {e}")))?;
 
     let class_loader = env
         .new_object(
@@ -94,11 +94,11 @@ pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), LocationError> {
                 JValue::Object(&parent_loader),
             ],
         )
-        .map_err(|e| LocationError::Unknown(format!("new DexClassLoader: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("new DexClassLoader: {e}")))?;
 
     let global_ref = env
         .new_global_ref(class_loader)
-        .map_err(|e| LocationError::Unknown(format!("new_global_ref: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("new_global_ref: {e}")))?;
 
     let _ = CLASS_LOADER.set(global_ref);
     Ok(())
@@ -110,7 +110,7 @@ pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), LocationError> {
 ///
 /// Returns:
 /// - `LocationError::NotAvailable` if location services are unavailable.
-/// - `LocationError::Unknown` if JNI calls fail or return invalid data.
+/// - `LocationError::Platform` if JNI calls fail or return invalid data.
 pub fn get_location_with_context(
     env: &mut JNIEnv,
     context: &JObject,
@@ -119,11 +119,11 @@ pub fn get_location_with_context(
 
     let class_loader = CLASS_LOADER
         .get()
-        .ok_or_else(|| LocationError::Unknown("Class loader not initialized".into()))?;
+        .ok_or_else(|| LocationError::Platform("Class loader not initialized".into()))?;
 
     let helper_class_name = env
         .new_string("waterkit.location.LocationHelper")
-        .map_err(|e| LocationError::Unknown(format!("new_string: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("new_string: {e}")))?;
 
     let loaded_class = env
         .call_method(
@@ -132,9 +132,9 @@ pub fn get_location_with_context(
             "(Ljava/lang/String;)Ljava/lang/Class;",
             &[JValue::Object(&helper_class_name)],
         )
-        .map_err(|e| LocationError::Unknown(format!("loadClass: {e}")))?
+        .map_err(|e| LocationError::Platform(format!("loadClass: {e}")))?
         .l()
-        .map_err(|e| LocationError::Unknown(format!("loadClass result: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("loadClass result: {e}")))?;
 
     let helper_jclass: jni::objects::JClass = loaded_class.into();
     let result = env
@@ -144,16 +144,16 @@ pub fn get_location_with_context(
             "(Landroid/content/Context;)[D",
             &[JValue::Object(context)],
         )
-        .map_err(|e| LocationError::Unknown(format!("getLastKnownLocation: {e}")))?
+        .map_err(|e| LocationError::Platform(format!("getLastKnownLocation: {e}")))?
         .l()
-        .map_err(|e| LocationError::Unknown(format!("getLastKnownLocation result: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("getLastKnownLocation result: {e}")))?;
 
     // Parse double array result
     let result_array: jni::objects::JDoubleArray = result.into();
     #[allow(clippy::cast_sign_loss)]
     let len = env
         .get_array_length(&result_array)
-        .map_err(|e| LocationError::Unknown(format!("get_array_length: {e}")))?
+        .map_err(|e| LocationError::Platform(format!("get_array_length: {e}")))?
         as usize;
 
     if len < 1 {
@@ -163,7 +163,7 @@ pub fn get_location_with_context(
     // Copy array elements to a Rust buffer
     let mut buf = vec![0.0f64; len];
     env.get_double_array_region(&result_array, 0, &mut buf)
-        .map_err(|e| LocationError::Unknown(format!("get_double_array_region: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("get_double_array_region: {e}")))?;
 
     let success = buf[0];
     if success < 0.5 {
@@ -171,14 +171,14 @@ pub fn get_location_with_context(
     }
 
     if len < 6 {
-        return Err(LocationError::Unknown("Invalid result array".into()));
+        return Err(LocationError::Platform("Invalid result array".into()));
     }
 
     // Android returns timestamp as milliseconds since Unix epoch
     #[allow(clippy::cast_possible_truncation)]
     let timestamp_ms = buf[5] as i64;
     let timestamp = Timestamp::from_millisecond(timestamp_ms)
-        .map_err(|e| LocationError::Unknown(e.to_string()))?;
+        .map_err(|e| LocationError::Platform(e.to_string()))?;
 
     Ok(Location::new(buf[1], buf[2], timestamp)
         .with_altitude(buf[3])
@@ -190,11 +190,11 @@ pub async fn get_location() -> Result<Location, LocationError> {
     let android_ctx = ndk_context::android_context();
 
     let vm = unsafe { jni::JavaVM::from_raw(android_ctx.vm().cast()) }
-        .map_err(|e| LocationError::Unknown(format!("JavaVM::from_raw failed: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("JavaVM::from_raw failed: {e}")))?;
 
     let mut env = vm
         .attach_current_thread()
-        .map_err(|e| LocationError::Unknown(format!("attach_current_thread failed: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("attach_current_thread failed: {e}")))?;
 
     let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_ctx.context().cast()) });
     assert!(

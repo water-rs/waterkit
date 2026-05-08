@@ -26,7 +26,7 @@ pub async fn get_location() -> Result<Location, LocationError> {
     // Connect to the system bus
     let connection = Connection::system()
         .await
-        .map_err(|e| LocationError::Unknown(format!("D-Bus connection failed: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("D-Bus connection failed: {e}")))?;
 
     // Call GeoClue2 Manager to get a client
     let reply: (zbus::zvariant::OwnedObjectPath,) = connection
@@ -38,10 +38,10 @@ pub async fn get_location() -> Result<Location, LocationError> {
             &(),
         )
         .await
-        .map_err(|e| LocationError::Unknown(format!("GeoClue2 not available: {e}")))?
+        .map_err(|e| LocationError::Platform(format!("GeoClue2 not available: {e}")))?
         .body()
         .deserialize()
-        .map_err(|e| LocationError::Unknown(format!("Failed to parse response: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("Failed to parse response: {e}")))?;
 
     let client_path = reply.0;
 
@@ -59,7 +59,7 @@ pub async fn get_location() -> Result<Location, LocationError> {
             ),
         )
         .await
-        .map_err(|e| LocationError::Unknown(format!("Failed to set desktop ID: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("Failed to set desktop ID: {e}")))?;
 
     // Start the client
     connection
@@ -71,7 +71,7 @@ pub async fn get_location() -> Result<Location, LocationError> {
             &(),
         )
         .await
-        .map_err(|e| LocationError::Unknown(format!("Failed to start GeoClue client: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("Failed to start GeoClue client: {e}")))?;
 
     // Get the location object path
     let location_reply: zbus::zvariant::OwnedValue = connection
@@ -83,10 +83,10 @@ pub async fn get_location() -> Result<Location, LocationError> {
             &("org.freedesktop.GeoClue2.Client", "Location"),
         )
         .await
-        .map_err(|e| LocationError::Unknown(format!("Failed to get location: {e}")))?
+        .map_err(|e| LocationError::Platform(format!("Failed to get location: {e}")))?
         .body()
         .deserialize()
-        .map_err(|e| LocationError::Unknown(format!("Failed to parse location path: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("Failed to parse location path: {e}")))?;
 
     let location_path: zbus::zvariant::OwnedObjectPath = location_reply
         .downcast_ref::<zbus::zvariant::ObjectPath>()
@@ -96,10 +96,10 @@ pub async fn get_location() -> Result<Location, LocationError> {
     // Get latitude and longitude from the location object
     let latitude = get_location_property(&connection, location_path.as_str(), "Latitude")
         .await
-        .map_err(|e| LocationError::Unknown(format!("Failed to get latitude: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("Failed to get latitude: {e}")))?;
     let longitude = get_location_property(&connection, location_path.as_str(), "Longitude")
         .await
-        .map_err(|e| LocationError::Unknown(format!("Failed to get longitude: {e}")))?;
+        .map_err(|e| LocationError::Platform(format!("Failed to get longitude: {e}")))?;
     let altitude = get_location_property(&connection, location_path.as_str(), "Altitude")
         .await
         .ok();

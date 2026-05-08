@@ -37,7 +37,7 @@ pub async fn get_location() -> Result<Location, LocationError> {
     match ffi::get_current_location() {
         ffi::LocationResult::Success(data) => {
             let timestamp = Timestamp::from_millisecond(data.timestamp_ms)
-                .map_err(|e| LocationError::Unknown(e.to_string()))?;
+                .map_err(|e| LocationError::Platform(e.to_string()))?;
 
             let mut location = Location::new(data.latitude, data.longitude, timestamp);
 

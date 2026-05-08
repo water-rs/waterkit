@@ -22,7 +22,7 @@ fn main() -> Result<(), waterkit_notification::NotificationError> {
     Notification::new()
         .title("Urgent: Meeting Starting")
         .body("Your meeting with the team starts in 5 minutes")
-        .time_sensitive()
+        .interruption_level(waterkit_notification::InterruptionLevel::TimeSensitive)
         .show()?;
 
     println!("Time-sensitive notification sent!");

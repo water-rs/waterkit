@@ -8,7 +8,7 @@ const FILETIME_UNIX_DIFF: i64 = 11_644_473_600;
 pub async fn get_location() -> Result<Location, LocationError> {
     use windows::Devices::Geolocation::{GeolocationAccessStatus, Geolocator};
 
-    let map_err = |e: windows::core::Error| LocationError::Unknown(e.to_string());
+    let map_err = |e: windows::core::Error| LocationError::Platform(e.to_string());
 
     // Request access (this also serves as permission check on Windows)
     let access = Geolocator::RequestAccessAsync()
@@ -44,7 +44,7 @@ pub async fn get_location() -> Result<Location, LocationError> {
     let unix_seconds = (filetime / 10_000_000) - FILETIME_UNIX_DIFF;
 
     let timestamp =
-        Timestamp::from_second(unix_seconds).map_err(|e| LocationError::Unknown(e.to_string()))?;
+        Timestamp::from_second(unix_seconds).map_err(|e| LocationError::Platform(e.to_string()))?;
 
     let accuracy = coord.Accuracy().ok();
 

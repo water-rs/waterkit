@@ -1,31 +1,31 @@
 //! Cross-platform location access.
 //!
-//! This crate provides a unified API for accessing device location across
-//! iOS, macOS, Android, Windows, and Linux platforms.
+//! Provides a unified async API for the device's geographic location.
+//! Callers must arrange for [`Permission::Location`] to be granted before
+//! calling [`Location::get`]; the recommended flow is
+//! `waterkit_permission::request(Permission::Location).await` then
+//! `Location::get().await`.
 //!
 //! # Example
 //!
 //! ```no_run
 //! use waterkit_location::Location;
+//! use waterkit_permission::{request, Permission};
 //!
 //! # async fn example() -> Result<(), waterkit_location::LocationError> {
+//! let _ = request(Permission::Location).await;
 //! let location = Location::get().await?;
-//!
 //! println!("Latitude: {}", location.latitude());
 //! println!("Longitude: {}", location.longitude());
-//!
-//! if let Some(altitude) = location.altitude() {
-//!     println!("Altitude: {} meters", altitude);
-//! }
-//!
-//! println!("Timestamp: {:?}", location.timestamp());
 //! # Ok(())
 //! # }
 //! ```
 
+#![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
+
 pub use jiff::Timestamp;
 
-/// Platform-specific implementations.
 mod sys;
 
 pub use waterkit_permission::{Permission, PermissionStatus};
@@ -73,43 +73,28 @@ impl Location {
         }
     }
 
-    /// Get the current device location.
+    /// Returns the current device location.
     ///
-    /// This will request location permission if not already granted.
+    /// **Precondition**: callers must ensure [`Permission::Location`] is
+    /// granted; this function does not trigger the runtime prompt.
+    /// Use `waterkit_permission::request(Permission::Location)` first.
     ///
     /// # Errors
-    /// Returns a `LocationError` if:
-    /// - Permission is denied.
-    /// - Location services are disabled.
-    /// - The request times out.
-    /// - Location is not available.
+    ///
+    /// Returns [`LocationError::PermissionDenied`] when access is denied,
+    /// [`LocationError::ServiceDisabled`] when location services are off,
+    /// [`LocationError::Timeout`] when the request times out, or
+    /// [`LocationError::Platform`] for other OS failures.
     pub async fn get() -> Result<Self, LocationError> {
-        // Check/request permission first
-        Self::ask_permission().await?;
-
         sys::get_location().await
     }
 
-    /// Ask for location permission.
-    ///
-    /// # Errors
-    /// Returns a `LocationError` if:
-    /// - Permission is denied.
-    /// - Location services are disabled.
-    /// - The request times out.
-    pub async fn ask_permission() -> Result<(), LocationError> {
-        let status = waterkit_permission::request(Permission::Location)
-            .await
-            .map_err(|e| LocationError::Unknown(e.to_string()))?;
-
-        if status != PermissionStatus::Granted {
-            return Err(LocationError::PermissionDenied);
-        }
-
-        Ok(())
-    }
-
     /// Sets the altitude in meters above sea level.
+    ///
+    /// `with_*` prefix is preserved here because [`Location`] also has
+    /// getters with bare field names (`altitude()` returns the current
+    /// value); the workspace-wide naming rule is "bare method name =
+    /// setter unless a getter already takes that name."
     #[must_use]
     pub const fn with_altitude(mut self, altitude: f64) -> Self {
         self.altitude = Some(altitude);
@@ -173,6 +158,7 @@ impl Location {
 
 /// Errors that can occur when accessing location.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum LocationError {
     /// Location permission was not granted.
     #[error("location permission denied")]
@@ -186,7 +172,7 @@ pub enum LocationError {
     /// Location is not available.
     #[error("location not available")]
     NotAvailable,
-    /// An unknown error occurred.
-    #[error("unknown error: {0}")]
-    Unknown(String),
+    /// Platform-level failure with a message.
+    #[error("platform error: {0}")]
+    Platform(String),
 }

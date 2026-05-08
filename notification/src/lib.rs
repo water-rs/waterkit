@@ -131,14 +131,12 @@ pub enum Sound {
 /// | Android | ✓ via `PendingIntent` |
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Action {
-    /// Display label for the button.
-    pub label: String,
-    /// URL or deep link to open when clicked.
-    pub url: String,
+    pub(crate) label: String,
+    pub(crate) url: String,
 }
 
 impl Action {
-    /// Create a new URL action.
+    /// Creates a new URL action.
     ///
     /// # Example
     ///
@@ -154,6 +152,18 @@ impl Action {
             label: label.into(),
             url: url.into(),
         }
+    }
+
+    /// Display label for the button.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// URL or deep link to open when clicked.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
     }
 }
 
@@ -182,23 +192,19 @@ impl Action {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextInputAction {
-    /// Unique identifier for this action.
-    pub id: String,
-    /// Button label (e.g., "Reply").
-    pub label: String,
-    /// Placeholder text in the input field.
-    pub placeholder: String,
-    /// Submit button label (iOS/macOS only).
-    pub submit_label: String,
+    pub(crate) id: String,
+    pub(crate) label: String,
+    pub(crate) placeholder: String,
+    pub(crate) submit_label: String,
 }
 
 impl TextInputAction {
-    /// Create a new text input action.
+    /// Creates a new text input action.
     ///
     /// # Arguments
     ///
-    /// * `id` - Unique identifier for the action
-    /// * `label` - Button label shown to the user
+    /// * `id` — unique identifier for the action.
+    /// * `label` — button label shown to the user.
     #[must_use]
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
         Self {
@@ -209,18 +215,42 @@ impl TextInputAction {
         }
     }
 
-    /// Set the placeholder text for the input field.
+    /// Sets the placeholder text for the input field.
     #[must_use]
     pub fn placeholder(mut self, text: impl Into<String>) -> Self {
         self.placeholder = text.into();
         self
     }
 
-    /// Set the submit button label (iOS/macOS only).
+    /// Sets the submit button label (iOS/macOS only).
     #[must_use]
     pub fn submit_label(mut self, label: impl Into<String>) -> Self {
         self.submit_label = label.into();
         self
+    }
+
+    /// Unique identifier for this action.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Button label.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// Placeholder text.
+    #[must_use]
+    pub fn placeholder_text(&self) -> &str {
+        &self.placeholder
+    }
+
+    /// Submit button label.
+    #[must_use]
+    pub fn submit_button_label(&self) -> &str {
+        &self.submit_label
     }
 }
 
@@ -382,14 +412,6 @@ impl Notification {
     pub const fn interruption_level(mut self, level: InterruptionLevel) -> Self {
         self.interruption_level = level;
         self
-    }
-
-    /// Convenience method to set as time-sensitive.
-    ///
-    /// Time-sensitive notifications break through Focus/DND modes.
-    #[must_use]
-    pub const fn time_sensitive(self) -> Self {
-        self.interruption_level(InterruptionLevel::TimeSensitive)
     }
 
     /// Set the timeout duration for the notification.

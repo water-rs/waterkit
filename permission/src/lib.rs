@@ -1,94 +1,71 @@
 //! Cross-platform permission request handling.
 //!
-//! This crate provides a unified API for requesting permissions across
-//! iOS, macOS, Android, Windows, and Linux platforms.
+//! Type definitions ([`Permission`], [`PermissionStatus`],
+//! [`PermissionError`], [`HealthDataKind`]) live in
+//! [`waterkit_core::permission`]. This crate provides the platform calls:
+//!
+//! - [`check`] — async query of the current authorization status.
+//! - [`request`] — async runtime request flow.
+//! - [`status`] — reactive [`Subscribed<PermissionStatus>`] seeded by
+//!   the current status.
 //!
 //! ## Android
 //!
-//! On Android, the async [`check`] and [`request`] functions automatically use
-//! `ndk-context` to resolve the current `Activity`.
-//!
-//! For advanced JNI integration, you can also use:
-//!
-//! - [`android::init_with_activity`] - Initialize with an Activity
-//! - [`android::check_with_activity`] - Check permission status
-//! - [`android::request_with_activity`] - Start a runtime permission request
+//! On Android, the async [`check`] and [`request`] functions automatically
+//! use `ndk-context` to resolve the current `Activity`. For advanced JNI
+//! integration, see [`android::init_with_activity`] etc.
 
 #![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
 
-/// Platform-specific implementations.
 mod sys;
 
-/// Android-specific JNI functions for permission handling.
-///
-/// Use these functions when you have access to the Android Activity context via JNI.
+#[doc(no_inline)]
+pub use waterkit_core::permission::{HealthDataKind, Permission, PermissionError, PermissionStatus};
+use waterkit_core::{Subscribed, subscribed};
+
+/// Android-specific JNI helpers for permission handling.
 #[cfg(target_os = "android")]
 pub mod android {
     pub use crate::sys::android::{check_with_activity, init_with_activity, request_with_activity};
 }
 
-/// Types of permissions that can be requested.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum Permission {
-    /// Access to device location.
-    Location,
-    /// Access to device camera.
-    Camera,
-    /// Access to device microphone.
-    Microphone,
-    /// Access to photo library.
-    Photos,
-    /// Access to contacts.
-    Contacts,
-    /// Access to calendar.
-    Calendar,
-}
-
-/// The current status of a permission.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum PermissionStatus {
-    /// Permission has been granted by the user.
-    Granted,
-    /// Permission has been denied by the user.
-    Denied,
-    /// Permission is restricted (e.g., parental controls on iOS).
-    Restricted,
-    /// Permission has not been requested yet.
-    NotDetermined,
-}
-
-/// Errors that can occur when requesting permissions.
-#[derive(Debug, Clone, thiserror::Error)]
-#[non_exhaustive]
-pub enum PermissionError {
-    /// The permission type is not supported on this platform.
-    #[error("permission not supported on this platform")]
-    Unsupported,
-    /// An unknown error occurred.
-    #[error("unknown error: {0}")]
-    Unknown(String),
-}
-
-/// Check the current status of a permission without requesting it.
+/// Checks the current status of a permission without prompting the user.
 pub async fn check(permission: Permission) -> PermissionStatus {
     sys::check(permission).await
 }
 
-/// Request a permission from the user.
+/// Triggers the runtime permission request flow.
 ///
-/// If the permission has already been granted or denied, this returns
-/// the current status without showing a prompt.
-///
-/// On Android, this starts the runtime permission flow and may return
+/// If the permission has already been granted or denied, returns the
+/// current status without prompting again. On Android the result may be
 /// [`PermissionStatus::NotDetermined`] until the host Activity receives
 /// and applies the permission callback result.
 ///
 /// # Errors
-/// Returns a `PermissionError` if:
-/// - The permission type is not supported on this platform.
-/// - An underlying platform error occurs.
+///
+/// Returns [`PermissionError::Unsupported`] if the permission has no
+/// platform mapping; [`PermissionError::Platform`] for OS-specific
+/// failures (JNI errors, D-Bus errors, ...).
 pub async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
     sys::request(permission).await
+}
+
+/// Reactive view of a permission's authorization status.
+///
+/// Returns a [`Subscribed<PermissionStatus>`] seeded with the current
+/// status from [`check`]. The returned signal is intended to be the
+/// long-lived input to UI code that toggles its presentation based on the
+/// authorization state. The associated sink is held privately; future work
+/// (a platform-specific change-listener registration) will push updates
+/// when the user toggles the permission outside the app.
+#[allow(clippy::missing_panics_doc)]
+pub async fn status(permission: Permission) -> Subscribed<PermissionStatus> {
+    let initial = check(permission).await;
+    let (sub, _sink) = subscribed(initial);
+    // TODO(waterkit-permission #1): wire platform-specific change listeners
+    //   (Apple `CLLocationManager` delegate, Android registerReceiver,
+    //   Windows `WatchPermissions`) and forward via `_sink`. For now the
+    //   signal carries only the initial probe.
+    sub
 }

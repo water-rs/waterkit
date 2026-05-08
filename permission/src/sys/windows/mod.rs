@@ -4,14 +4,22 @@ use crate::{Permission, PermissionError, PermissionStatus};
 
 pub async fn check(permission: Permission) -> PermissionStatus {
     match permission {
-        Permission::Location => check_location().await,
-        _ => PermissionStatus::Granted, // Most permissions are implicit on Windows
+        Permission::Location | Permission::LocationWhenInUse | Permission::LocationAlways => {
+            check_location().await
+        }
+        // Most other permissions are implicit on classic Windows desktop;
+        // capability crates that need a stricter gate (Bluetooth runtime
+        // capability, etc.) will refine this match in their own dedicated
+        // platform code.
+        _ => PermissionStatus::Granted,
     }
 }
 
 pub async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
     match permission {
-        Permission::Location => request_location().await,
+        Permission::Location | Permission::LocationWhenInUse | Permission::LocationAlways => {
+            request_location().await
+        }
         _ => Ok(PermissionStatus::Granted),
     }
 }

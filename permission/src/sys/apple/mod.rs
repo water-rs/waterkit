@@ -27,15 +27,26 @@ mod ffi {
     }
 }
 
-const fn permission_to_ffi(permission: Permission) -> ffi::PermissionType {
-    match permission {
-        Permission::Location => ffi::PermissionType::Location,
+/// Maps a [`Permission`] to its Swift counterpart, returning `None` for
+/// variants that have no Apple mapping yet (Bluetooth runtime permission
+/// is implicit on Apple, NFC has no equivalent gating, etc.).
+const fn permission_to_ffi(permission: Permission) -> Option<ffi::PermissionType> {
+    Some(match permission {
+        Permission::Location | Permission::LocationWhenInUse | Permission::LocationAlways => {
+            ffi::PermissionType::Location
+        }
         Permission::Camera => ffi::PermissionType::Camera,
         Permission::Microphone => ffi::PermissionType::Microphone,
         Permission::Photos => ffi::PermissionType::Photos,
         Permission::Contacts => ffi::PermissionType::Contacts,
         Permission::Calendar => ffi::PermissionType::Calendar,
-    }
+        // Reminders, Bluetooth*, Nfc, Notification, SpeechRecognition,
+        // Tracking, MediaLibrary, BodySensors, HealthRead/Write — not yet
+        // bridged through Permission.swift; falls through with `None`.
+        // The wildcard also catches any future `Permission` variants
+        // added to waterkit-core before they are wired up.
+        _ => return None,
+    })
 }
 
 const fn status_from_ffi(result: ffi::PermissionResult) -> PermissionStatus {
@@ -47,17 +58,25 @@ const fn status_from_ffi(result: ffi::PermissionResult) -> PermissionStatus {
     }
 }
 
-/// Check the status of a permission on Apple platforms.
+/// Checks the status of a permission on Apple platforms.
+///
+/// Returns [`PermissionStatus::NotDetermined`] for permissions that have
+/// no Apple bridge yet — callers should pair this with [`request`] which
+/// returns a typed error.
 pub async fn check(permission: Permission) -> PermissionStatus {
-    let result = ffi::check_permission(permission_to_ffi(permission));
-    status_from_ffi(result)
+    permission_to_ffi(permission).map_or(PermissionStatus::NotDetermined, |p| {
+        status_from_ffi(ffi::check_permission(p))
+    })
 }
 
-/// Request a permission on Apple platforms.
+/// Requests a permission on Apple platforms.
 ///
 /// # Errors
-/// Always returns `Ok` as Apple's request API returns the status directly.
+///
+/// Returns [`PermissionError::Unsupported`] for permissions that have no
+/// Apple bridge.
 pub async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
-    let result = ffi::request_permission(permission_to_ffi(permission));
-    Ok(status_from_ffi(result))
+    permission_to_ffi(permission).map_or(Err(PermissionError::Unsupported), |p| {
+        Ok(status_from_ffi(ffi::request_permission(p)))
+    })
 }

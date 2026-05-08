@@ -26,7 +26,7 @@ pub async fn show_share_sheet(sheet: ShareSheet) -> Result<ShareResult, ShareErr
         }),
     );
     rx.await
-        .map_err(|_| ShareError::PlatformError("callback dropped".into()))
+        .map_err(|_| ShareError::Platform("callback dropped".into()))
 }
 
 fn serialize_items(items: &[ShareItem]) -> Result<String, ShareError> {
@@ -38,13 +38,13 @@ fn serialize_items(items: &[ShareItem]) -> Result<String, ShareError> {
             ShareItem::Image(p) => {
                 let path = p
                     .to_str()
-                    .ok_or_else(|| ShareError::PlatformError("invalid path encoding".into()))?;
+                    .ok_or_else(|| ShareError::Platform("invalid path encoding".into()))?;
                 parts.push(format!("image:{path}"));
             }
             ShareItem::File(p) => {
                 let path = p
                     .to_str()
-                    .ok_or_else(|| ShareError::PlatformError("invalid path encoding".into()))?;
+                    .ok_or_else(|| ShareError::Platform("invalid path encoding".into()))?;
                 parts.push(format!("file:{path}"));
             }
         }

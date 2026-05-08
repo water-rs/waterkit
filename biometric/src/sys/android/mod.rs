@@ -27,13 +27,13 @@ where
 {
     let android_context = ndk_context::android_context();
     let vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) }
-        .map_err(|e| BiometricError::PlatformError(format!("from_raw JavaVM: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("from_raw JavaVM: {e}")))?;
     let mut env = vm
         .attach_current_thread()
-        .map_err(|e| BiometricError::PlatformError(format!("attach_current_thread: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("attach_current_thread: {e}")))?;
     let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
     if context.is_null() {
-        return Err(BiometricError::PlatformError(
+        return Err(BiometricError::Platform(
             "Android Context not available from ndk_context".into(),
         ));
     }
@@ -53,56 +53,56 @@ pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), BiometricError> {
     // Write DEX to cache directory (Copied from haptic crate logic)
     let cache_dir = env
         .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
-        .map_err(|e| BiometricError::PlatformError(format!("getCacheDir: {e}")))?
+        .map_err(|e| BiometricError::Platform(format!("getCacheDir: {e}")))?
         .l()
-        .map_err(|e| BiometricError::PlatformError(format!("getCacheDir res: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("getCacheDir res: {e}")))?;
 
     let cache_path = env
         .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
-        .map_err(|e| BiometricError::PlatformError(format!("getAbsolutePath: {e}")))?
+        .map_err(|e| BiometricError::Platform(format!("getAbsolutePath: {e}")))?
         .l()
-        .map_err(|e| BiometricError::PlatformError(format!("getAbsolutePath res: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("getAbsolutePath res: {e}")))?;
 
     let dex_path = format!(
         "{}/waterkit_biometric.dex",
         env.get_string((&cache_path).into())
-            .map_err(|e| BiometricError::PlatformError(format!("get_string: {e}")))?
+            .map_err(|e| BiometricError::Platform(format!("get_string: {e}")))?
             .to_str()
-            .map_err(|e| BiometricError::PlatformError(format!("to_str: {e}")))?
+            .map_err(|e| BiometricError::Platform(format!("to_str: {e}")))?
     );
 
     // Remove if exists to handle previous read-only setting
     let _ = std::fs::remove_file(&dex_path);
 
     std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| BiometricError::PlatformError(format!("write DEX: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("write DEX: {e}")))?;
 
     // Make DEX read-only as required by modern Android security
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(&dex_path)
-            .map_err(|e| BiometricError::PlatformError(format!("metadata DEX failed: {e}")))?
+            .map_err(|e| BiometricError::Platform(format!("metadata DEX failed: {e}")))?
             .permissions();
         perms.set_mode(0o444); // Read-only
         std::fs::set_permissions(&dex_path, perms).map_err(|e| {
-            BiometricError::PlatformError(format!("set_permissions DEX failed: {e}"))
+            BiometricError::Platform(format!("set_permissions DEX failed: {e}"))
         })?;
     }
 
     let dex_path_jstring = env
         .new_string(&dex_path)
-        .map_err(|e| BiometricError::PlatformError(format!("new_string: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("new_string: {e}")))?;
 
     let parent_loader = env
         .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
-        .map_err(|e| BiometricError::PlatformError(format!("getClassLoader: {e}")))?
+        .map_err(|e| BiometricError::Platform(format!("getClassLoader: {e}")))?
         .l()
-        .map_err(|e| BiometricError::PlatformError(format!("getClassLoader res: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("getClassLoader res: {e}")))?;
 
     let dex_class_loader_class = env
         .find_class("dalvik/system/DexClassLoader")
-        .map_err(|e| BiometricError::PlatformError(format!("find DexClassLoader: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("find DexClassLoader: {e}")))?;
 
     let class_loader = env
         .new_object(
@@ -115,11 +115,11 @@ pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), BiometricError> {
                 JValue::Object(&parent_loader),
             ],
         )
-        .map_err(|e| BiometricError::PlatformError(format!("new DexClassLoader: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("new DexClassLoader: {e}")))?;
 
     let global_ref = env
         .new_global_ref(class_loader)
-        .map_err(|e| BiometricError::PlatformError(format!("new_global_ref: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("new_global_ref: {e}")))?;
 
     let _ = CLASS_LOADER.set(global_ref);
 
@@ -147,17 +147,17 @@ fn register_natives(env: &mut JNIEnv) -> Result<(), BiometricError> {
     }];
 
     env.register_native_methods(helper, &native_methods)
-        .map_err(|e| BiometricError::PlatformError(format!("register_native_methods: {e}")))
+        .map_err(|e| BiometricError::Platform(format!("register_native_methods: {e}")))
 }
 
 fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, BiometricError> {
     let loader = CLASS_LOADER
         .get()
-        .ok_or_else(|| BiometricError::PlatformError("Class loader not initialized".into()))?;
+        .ok_or_else(|| BiometricError::Platform("Class loader not initialized".into()))?;
 
     let helper_class_name = env
         .new_string("waterkit.biometric.BiometricHelper")
-        .map_err(|e| BiometricError::PlatformError(format!("new_string: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("new_string: {e}")))?;
 
     let loaded_class = env
         .call_method(
@@ -166,9 +166,9 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, BiometricErr
             "(Ljava/lang/String;)Ljava/lang/Class;",
             &[JValue::Object(&helper_class_name)],
         )
-        .map_err(|e| BiometricError::PlatformError(format!("loadClass: {e}")))?
+        .map_err(|e| BiometricError::Platform(format!("loadClass: {e}")))?
         .l()
-        .map_err(|e| BiometricError::PlatformError(format!("loadClass res: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("loadClass res: {e}")))?;
 
     Ok(loaded_class.into())
 }
@@ -205,9 +205,9 @@ pub async fn is_available() -> bool {
             "(Landroid/content/Context;)Z",
             &[JValue::Object(context)],
         )
-        .map_err(|e| BiometricError::PlatformError(format!("isAvailable call: {e}")))?
+        .map_err(|e| BiometricError::Platform(format!("isAvailable call: {e}")))?
         .z()
-        .map_err(|e| BiometricError::PlatformError(format!("isAvailable result: {e}")))
+        .map_err(|e| BiometricError::Platform(format!("isAvailable result: {e}")))
     })
     .unwrap_or(false)
 }
@@ -224,9 +224,9 @@ pub async fn get_biometric_type() -> Option<BiometricType> {
                 "(Landroid/content/Context;)I",
                 &[JValue::Object(context)],
             )
-            .map_err(|e| BiometricError::PlatformError(format!("getBiometricType call: {e}")))?
+            .map_err(|e| BiometricError::Platform(format!("getBiometricType call: {e}")))?
             .i()
-            .map_err(|e| BiometricError::PlatformError(format!("getBiometricType result: {e}")))?;
+            .map_err(|e| BiometricError::Platform(format!("getBiometricType result: {e}")))?;
 
         Ok(match biometric_type {
             1 => Some(BiometricType::Fingerprint),
@@ -243,7 +243,7 @@ pub async fn get_biometric_type() -> Option<BiometricType> {
 pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
     let rx = with_android_context(|env, context| authenticate_with_context(env, context, reason))?;
     rx.await.unwrap_or_else(|_| {
-        Err(BiometricError::PlatformError(
+        Err(BiometricError::Platform(
             "Biometric result channel closed".into(),
         ))
     })
@@ -269,7 +269,7 @@ pub fn authenticate_with_context(
 
     let reason_jstr = env
         .new_string(reason)
-        .map_err(|e| BiometricError::PlatformError(format!("new_string: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("new_string: {e}")))?;
 
     let class = get_helper_class(env)?;
     env.call_static_method(
@@ -285,7 +285,7 @@ pub fn authenticate_with_context(
     .map_err(|e| {
         // If fail, we must drop the box to avoid leak
         let _ = unsafe { Box::from_raw(sender_ptr as *mut BiometricSender) };
-        BiometricError::PlatformError(format!("authenticate call: {e}"))
+        BiometricError::Platform(format!("authenticate call: {e}"))
     })?;
 
     Ok(rx)

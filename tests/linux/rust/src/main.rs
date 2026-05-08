@@ -4,8 +4,8 @@ use waterkit_permission::Permission;
 #[cfg(target_os = "linux")]
 fn main() {
     std::mem::drop(waterkit_permission::check(Permission::Location));
-    std::mem::drop(waterkit_biometric::is_available());
-    let _ = waterkit_haptic::Haptic::is_available();
+    std::mem::drop(waterkit_biometric::capabilities());
+    let _ = waterkit_haptic::Haptic::capabilities();
     std::mem::drop(waterkit_bluetooth::adapter_state());
     let _ = waterkit_nfc::is_available();
     let _ = waterkit_share::ShareSheet::text("waterkit");

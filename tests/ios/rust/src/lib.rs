@@ -86,16 +86,17 @@ fn run_tests() {
         #[cfg(feature = "fs")]
         {
             println!("Testing waterkit-fs...");
-            if let Some(path) = waterkit::fs::WaterFs::cache_dir() {
-                println!("FS cache_dir: {path:?}");
+            match waterkit::fs::WaterFs::cache_dir() {
+                Ok(path) => println!("FS cache_dir: {path:?}"),
+                Err(error) => println!("FS cache_dir unavailable: {error}"),
             }
         }
 
         #[cfg(feature = "haptic")]
         {
             println!("Testing waterkit-haptic...");
-            match waterkit::haptic::Haptic::notification_success().await {
-                Ok(_) => println!("Haptic: feedback SUCCESS"),
+            match waterkit::haptic::Haptic::notification_success() {
+                Ok(()) => println!("Haptic: feedback SUCCESS"),
                 Err(e) => println!("Haptic FAILED: {e:?}"),
             }
         }

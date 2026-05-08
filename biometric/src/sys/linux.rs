@@ -51,7 +51,7 @@ pub async fn get_biometric_type() -> Option<BiometricType> {
 pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
     let connection = Connection::system()
         .await
-        .map_err(|e| BiometricError::PlatformError(format!("D-Bus connection failed: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("D-Bus connection failed: {e}")))?;
 
     let device_path = get_default_device(&connection)
         .await
@@ -65,20 +65,20 @@ pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
         FPRINTD_DEVICE_INTERFACE,
     )
     .await
-    .map_err(|e| BiometricError::PlatformError(format!("Device proxy creation failed: {e}")))?;
+    .map_err(|e| BiometricError::Platform(format!("Device proxy creation failed: {e}")))?;
 
     // Claim the device for the current user
     let username = get_current_username();
     device_proxy
         .call_method("Claim", &(username.as_str(),))
         .await
-        .map_err(|e| BiometricError::PlatformError(format!("Failed to claim device: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("Failed to claim device: {e}")))?;
 
     // Start verification
     if let Err(e) = device_proxy.call_method("VerifyStart", &("any",)).await {
         // Try to release on error, ignore result
         let _ = device_proxy.call_method::<_, ()>("Release", &()).await;
-        return Err(BiometricError::PlatformError(format!(
+        return Err(BiometricError::Platform(format!(
             "Failed to start verification: {e}"
         )));
     }
@@ -157,7 +157,7 @@ async fn wait_for_verification(
     let mut stream = device_proxy
         .receive_signal("VerifyStatus")
         .await
-        .map_err(|e| BiometricError::PlatformError(format!("Failed to receive signal: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("Failed to receive signal: {e}")))?;
 
     // Wait for the verification result with timeout
     let timeout = tokio::time::Duration::from_secs(30);
@@ -168,7 +168,7 @@ async fn wait_for_verification(
             let body = signal.body();
             let (result, done): (String, bool) = body
                 .deserialize()
-                .map_err(|e| BiometricError::PlatformError(format!("Signal parse error: {e}")))?;
+                .map_err(|e| BiometricError::Platform(format!("Signal parse error: {e}")))?;
 
             if done {
                 match result.as_str() {
@@ -187,7 +187,7 @@ async fn wait_for_verification(
                         Err(BiometricError::Failed("Remove and retry".into()))
                     }
                     "verify-disconnected" => {
-                        Err(BiometricError::PlatformError("Device disconnected".into()))
+                        Err(BiometricError::Platform("Device disconnected".into()))
                     }
                     "verify-unknown-error" => Err(BiometricError::Failed("Unknown error".into())),
                     other => Err(BiometricError::Failed(format!(

@@ -11,10 +11,10 @@ where
 {
     let android_context = ndk_context::android_context();
     let vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) }
-        .map_err(|e| ShareError::PlatformError(format!("JavaVM::from_raw: {e}")))?;
+        .map_err(|e| ShareError::Platform(format!("JavaVM::from_raw: {e}")))?;
     let mut env = vm
         .attach_current_thread()
-        .map_err(|e| ShareError::PlatformError(format!("attach_current_thread: {e}")))?;
+        .map_err(|e| ShareError::Platform(format!("attach_current_thread: {e}")))?;
 
     let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
     assert!(
@@ -49,7 +49,7 @@ pub mod jni_api {
     ) -> Result<ShareResult, ShareError> {
         let intent_class = env
             .find_class("android/content/Intent")
-            .map_err(|e| ShareError::PlatformError(format!("find_class: {e}")))?;
+            .map_err(|e| ShareError::Platform(format!("find_class: {e}")))?;
 
         let has_multiple_items = sheet.items.len() > 1;
         let action = if has_multiple_items {
@@ -59,56 +59,56 @@ pub mod jni_api {
         };
         let action_jstr = env
             .new_string(action)
-            .map_err(|e| ShareError::PlatformError(format!("new_string: {e}")))?;
+            .map_err(|e| ShareError::Platform(format!("new_string: {e}")))?;
         let intent = env
             .new_object(intent_class, "()V", &[])
-            .map_err(|e| ShareError::PlatformError(format!("new_object: {e}")))?;
+            .map_err(|e| ShareError::Platform(format!("new_object: {e}")))?;
         env.call_method(
             &intent,
             "setAction",
             "(Ljava/lang/String;)Landroid/content/Intent;",
             &[JValue::Object(&action_jstr)],
         )
-        .map_err(|e| ShareError::PlatformError(format!("setAction: {e}")))?;
+        .map_err(|e| ShareError::Platform(format!("setAction: {e}")))?;
 
         for item in &sheet.items {
             match item {
                 ShareItem::Text(text) | ShareItem::Url(text) => {
                     let text_jstr = env
                         .new_string(text)
-                        .map_err(|e| ShareError::PlatformError(format!("new_string: {e}")))?;
+                        .map_err(|e| ShareError::Platform(format!("new_string: {e}")))?;
                     let extra_text = env
                         .new_string("android.intent.extra.TEXT")
-                        .map_err(|e| ShareError::PlatformError(format!("new_string: {e}")))?;
+                        .map_err(|e| ShareError::Platform(format!("new_string: {e}")))?;
                     env.call_method(
                         &intent,
                         "putExtra",
                         "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
                         &[JValue::Object(&extra_text), JValue::Object(&text_jstr)],
                     )
-                    .map_err(|e| ShareError::PlatformError(format!("putExtra: {e}")))?;
+                    .map_err(|e| ShareError::Platform(format!("putExtra: {e}")))?;
                     let mime = env
                         .new_string("text/plain")
-                        .map_err(|e| ShareError::PlatformError(format!("new_string: {e}")))?;
+                        .map_err(|e| ShareError::Platform(format!("new_string: {e}")))?;
                     env.call_method(
                         &intent,
                         "setType",
                         "(Ljava/lang/String;)Landroid/content/Intent;",
                         &[JValue::Object(&mime)],
                     )
-                    .map_err(|e| ShareError::PlatformError(format!("setType: {e}")))?;
+                    .map_err(|e| ShareError::Platform(format!("setType: {e}")))?;
                 }
                 ShareItem::Image(_) | ShareItem::File(_) => {
                     let mime = env
                         .new_string("*/*")
-                        .map_err(|e| ShareError::PlatformError(format!("new_string: {e}")))?;
+                        .map_err(|e| ShareError::Platform(format!("new_string: {e}")))?;
                     env.call_method(
                         &intent,
                         "setType",
                         "(Ljava/lang/String;)Landroid/content/Intent;",
                         &[JValue::Object(&mime)],
                     )
-                    .map_err(|e| ShareError::PlatformError(format!("setType: {e}")))?;
+                    .map_err(|e| ShareError::Platform(format!("setType: {e}")))?;
                 }
             }
         }
@@ -116,10 +116,10 @@ pub mod jni_api {
         if let Some(subject) = &sheet.subject {
             let subject_jstr = env
                 .new_string(subject)
-                .map_err(|e| ShareError::PlatformError(format!("new_string: {e}")))?;
+                .map_err(|e| ShareError::Platform(format!("new_string: {e}")))?;
             let extra_subject = env
                 .new_string("android.intent.extra.SUBJECT")
-                .map_err(|e| ShareError::PlatformError(format!("new_string: {e}")))?;
+                .map_err(|e| ShareError::Platform(format!("new_string: {e}")))?;
             env.call_method(
                 &intent,
                 "putExtra",
@@ -129,15 +129,15 @@ pub mod jni_api {
                     JValue::Object(&subject_jstr),
                 ],
             )
-            .map_err(|e| ShareError::PlatformError(format!("putExtra: {e}")))?;
+            .map_err(|e| ShareError::Platform(format!("putExtra: {e}")))?;
         }
 
         let chooser_title = env
             .new_string("Share")
-            .map_err(|e| ShareError::PlatformError(format!("new_string: {e}")))?;
+            .map_err(|e| ShareError::Platform(format!("new_string: {e}")))?;
         let chooser_class = env
             .find_class("android/content/Intent")
-            .map_err(|e| ShareError::PlatformError(format!("find_class: {e}")))?;
+            .map_err(|e| ShareError::Platform(format!("find_class: {e}")))?;
         let chooser = env
             .call_static_method(
                 chooser_class,
@@ -146,7 +146,7 @@ pub mod jni_api {
                 &[JValue::Object(&intent), JValue::Object(&chooser_title)],
             )
             .and_then(jni::objects::JValueGen::l)
-            .map_err(|e| ShareError::PlatformError(format!("createChooser: {e}")))?;
+            .map_err(|e| ShareError::Platform(format!("createChooser: {e}")))?;
 
         env.call_method(
             context,
@@ -154,7 +154,7 @@ pub mod jni_api {
             "(Landroid/content/Intent;)V",
             &[JValue::Object(&chooser)],
         )
-        .map_err(|e| ShareError::PlatformError(format!("startActivity: {e}")))?;
+        .map_err(|e| ShareError::Platform(format!("startActivity: {e}")))?;
 
         Ok(ShareResult::Shared)
     }

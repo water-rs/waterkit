@@ -24,9 +24,9 @@ fn spawn_haptic_task(
 fn get_controller_blocking() -> Result<SimpleHapticsController, HapticError> {
     let access = block_on(async {
         VibrationDevice::RequestAccessAsync()
-            .map_err(|e| HapticError::Unknown(e.to_string()))?
+            .map_err(|e| HapticError::Platform(e.to_string()))?
             .await
-            .map_err(|e| HapticError::Unknown(e.to_string()))
+            .map_err(|e| HapticError::Platform(e.to_string()))
     })?;
 
     if access != VibrationAccessStatus::Allowed {
@@ -37,14 +37,14 @@ fn get_controller_blocking() -> Result<SimpleHapticsController, HapticError> {
 
     let device = block_on(async {
         VibrationDevice::GetDefaultAsync()
-            .map_err(|e| HapticError::Unknown(e.to_string()))?
+            .map_err(|e| HapticError::Platform(e.to_string()))?
             .await
-            .map_err(|e| HapticError::Unknown(e.to_string()))
+            .map_err(|e| HapticError::Platform(e.to_string()))
     })?;
 
     device
         .SimpleHapticsController()
-        .map_err(|e| HapticError::Unknown(e.to_string()))
+        .map_err(|e| HapticError::Platform(e.to_string()))
 }
 
 fn find_feedback(
@@ -71,7 +71,7 @@ fn send_waveform(
     if let Some(feedback) = find_feedback(controller, waveform_id) {
         controller
             .SendHapticFeedbackWithIntensity(&feedback, intensity)
-            .map_err(|e| HapticError::Unknown(e.to_string()))?;
+            .map_err(|e| HapticError::Platform(e.to_string()))?;
     }
     Ok(())
 }
@@ -79,7 +79,7 @@ fn send_waveform(
 fn run_click_for(duration: Duration, intensity: f64) -> Result<(), HapticError> {
     let controller = get_controller_blocking()?;
     let click_id = KnownSimpleHapticsControllerWaveforms::Click()
-        .map_err(|e| HapticError::Unknown(e.to_string()))?;
+        .map_err(|e| HapticError::Platform(e.to_string()))?;
     send_waveform(&controller, click_id, intensity)?;
     thread::sleep(duration);
     Ok(())
@@ -95,7 +95,7 @@ pub fn impact(intensity: Intensity) -> Result<(), HapticError> {
     } else {
         KnownSimpleHapticsControllerWaveforms::Click()
     }
-    .map_err(|e| HapticError::Unknown(e.to_string()))?;
+    .map_err(|e| HapticError::Platform(e.to_string()))?;
 
     spawn_haptic_task(move || {
         let controller = get_controller_blocking()?;
@@ -105,7 +105,7 @@ pub fn impact(intensity: Intensity) -> Result<(), HapticError> {
 
 pub fn selection() -> Result<(), HapticError> {
     let waveform_id = KnownSimpleHapticsControllerWaveforms::Click()
-        .map_err(|e| HapticError::Unknown(e.to_string()))?;
+        .map_err(|e| HapticError::Platform(e.to_string()))?;
 
     spawn_haptic_task(move || {
         let controller = get_controller_blocking()?;
@@ -119,7 +119,7 @@ pub fn notification_success() -> Result<(), HapticError> {
 
 pub fn notification_warning() -> Result<(), HapticError> {
     let waveform_id = KnownSimpleHapticsControllerWaveforms::BuzzContinuous()
-        .map_err(|e| HapticError::Unknown(e.to_string()))?;
+        .map_err(|e| HapticError::Platform(e.to_string()))?;
 
     spawn_haptic_task(move || {
         let controller = get_controller_blocking()?;
@@ -129,7 +129,7 @@ pub fn notification_warning() -> Result<(), HapticError> {
 
 pub fn notification_error() -> Result<(), HapticError> {
     let waveform_id = KnownSimpleHapticsControllerWaveforms::BuzzContinuous()
-        .map_err(|e| HapticError::Unknown(e.to_string()))?;
+        .map_err(|e| HapticError::Platform(e.to_string()))?;
 
     spawn_haptic_task(move || {
         let controller = get_controller_blocking()?;

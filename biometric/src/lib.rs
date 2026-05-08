@@ -1,12 +1,13 @@
-//! This crate provides a unified API for biometric authentication (`TouchID`, `FaceID`, fingerprint, etc.)
-//! across iOS, macOS, Android, and Windows.
+//! Cross-platform biometric authentication (`TouchID`, `FaceID`,
+//! fingerprint, iris) for iOS, macOS, Android, and Windows.
 
 #![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
 
-/// Platform-specific implementations.
 mod sys;
 
 use thiserror::Error;
+use waterkit_core::Capabilities;
 
 /// Android-specific JNI helpers that require a `JNIEnv` and `Context`.
 #[cfg(target_os = "android")]
@@ -14,17 +15,17 @@ pub mod android {
     pub use crate::sys::android::{authenticate_with_context, init};
 }
 
-/// The type of biometric authentication available.
+/// Type of biometric authentication available on the current device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BiometricType {
     /// Fingerprint authentication (`TouchID`, Android fingerprint, etc.)
     Fingerprint,
-    /// Facial recognition (`FaceID`, Android Face Unlock, Windows Hello Face)
+    /// Facial recognition (`FaceID`, Android Face Unlock, Windows Hello Face).
     Face,
-    /// Iris scanning
+    /// Iris scanning.
     Iris,
-    /// Unknown or other biometric type
+    /// Unknown / unspecified biometric type.
     Unknown,
 }
 
@@ -33,38 +34,53 @@ pub enum BiometricType {
 #[non_exhaustive]
 pub enum BiometricError {
     /// Biometric authentication is not available on this device.
-    #[error("Biometric authentication is not available on this device")]
+    #[error("biometric authentication is not available on this device")]
     NotAvailable,
     /// User cancelled the authentication.
-    #[error("User cancelled the authentication")]
+    #[error("user cancelled the authentication")]
     Cancelled,
     /// Authentication failed with a specific message.
-    #[error("Authentication failed: {0}")]
+    #[error("authentication failed: {0}")]
     Failed(String),
-    /// An error occurred in the platform backend.
-    #[error("Platform error: {0}")]
-    PlatformError(String),
+    /// Platform-level failure (`LAError*`, `BiometricManager`, …).
+    #[error("platform error: {0}")]
+    Platform(String),
 }
 
-/// Checks if biometric authentication is available on the current device.
-pub async fn is_available() -> bool {
-    sys::is_available().await
+/// Capability probe result for the biometric subsystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BiometricCapabilities {
+    /// Whether biometric authentication is available on this device.
+    pub available: bool,
+    /// The detected biometric kind, when known.
+    pub kind: Option<BiometricType>,
 }
 
-/// Request biometric authentication with a reason.
+impl Capabilities for BiometricCapabilities {
+    fn available(&self) -> bool {
+        self.available
+    }
+}
+
+/// Probes the biometric subsystem and returns its current capabilities.
+///
+/// Combines the legacy `is_available` + `get_biometric_type` queries into
+/// one structured result.
+pub async fn capabilities() -> BiometricCapabilities {
+    let kind = sys::get_biometric_type().await;
+    let available = kind.is_some() || sys::is_available().await;
+    BiometricCapabilities { available, kind }
+}
+
+/// Requests biometric authentication with a reason shown to the user.
 ///
 /// # Errors
-/// Returns a [`BiometricError`] if:
-/// - Biometric authentication is not available.
-/// - The user cancels the authentication.
-/// - Authentication fails.
+///
+/// Returns [`BiometricError::NotAvailable`] when biometrics are not set up,
+/// [`BiometricError::Cancelled`] when the user dismisses the prompt,
+/// [`BiometricError::Failed`] when authentication fails, or
+/// [`BiometricError::Platform`] for OS-level failures.
 pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
     sys::authenticate(reason).await
-}
-
-/// Get the available biometric type.
-///
-/// Returns `None` if biometrics are not available.
-pub async fn get_biometric_type() -> Option<BiometricType> {
-    sys::get_biometric_type().await
 }

@@ -89,6 +89,6 @@ pub fn play_pattern(pattern: &HapticPattern) -> Result<(), HapticError> {
     if ffi::haptic_play_pattern(timings, intensities, is_pause) {
         Ok(())
     } else {
-        Err(HapticError::Unknown("pattern playback failed".into()))
+        Err(HapticError::Platform("pattern playback failed".into()))
     }
 }

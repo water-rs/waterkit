@@ -83,7 +83,7 @@ async fn trigger_feedback_event_async(event: &str) -> Result<(), HapticError> {
         .await
         .map(|_| ())
         .map_err(|error| {
-            HapticError::Unknown(format!("failed to trigger feedback `{event}`: {error}"))
+            HapticError::Platform(format!("failed to trigger feedback `{event}`: {error}"))
         })
 }
 

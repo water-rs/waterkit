@@ -104,14 +104,16 @@ impl ShareSheet {
         }
     }
 
-    /// Add another item to share.
+    /// Adds another item to share. Method named `item` to match the
+    /// repo-wide builder convention (no `with_*` / `set_*` / `add_*`
+    /// prefixes; collection field name singular).
     #[must_use]
-    pub fn with_item(mut self, item: ShareItem) -> Self {
+    pub fn item(mut self, item: ShareItem) -> Self {
         self.items.push(item);
         self
     }
 
-    /// Set the subject line.
+    /// Sets the subject line.
     #[must_use]
     pub fn subject(mut self, subject: impl Into<String>) -> Self {
         self.subject = Some(subject.into());
@@ -141,6 +143,7 @@ pub enum ShareResult {
 
 /// Errors that can occur during sharing.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum ShareError {
     /// Sharing is not supported on this platform.
     #[error("sharing not supported")]
@@ -153,5 +156,5 @@ pub enum ShareError {
     FileNotFound(String),
     /// Platform-specific error.
     #[error("platform error: {0}")]
-    PlatformError(String),
+    Platform(String),
 }

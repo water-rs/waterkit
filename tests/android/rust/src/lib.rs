@@ -76,8 +76,8 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         #[cfg(feature = "biometric")]
         {
             log::info!("Testing waterkit-biometric...");
-            let available = waterkit_content::biometric::is_available().await;
-            log::info!("Biometric available: {available}");
+            let caps = waterkit_content::biometric::capabilities().await;
+            log::info!("Biometric available: {} kind: {:?}", caps.available, caps.kind);
             match waterkit_content::biometric::android::authenticate_with_context(
                 &mut env,
                 activity,
@@ -159,8 +159,8 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         {
             log::info!("Testing waterkit-fs...");
             match waterkit_content::fs::WaterFs::cache_dir_with_context(&mut env, activity) {
-                Some(path) => log::info!("FS cache_dir: {path:?}"),
-                None => log::error!("FS cache_dir: None"),
+                Ok(path) => log::info!("FS cache_dir: {path:?}"),
+                Err(error) => log::error!("FS cache_dir unavailable: {error}"),
             }
         }
 
@@ -168,9 +168,8 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         {
             log::info!("Testing waterkit-haptic...");
             match waterkit_content::haptic::Haptic::impact(waterkit_content::haptic::Intensity::LOW)
-                .await
             {
-                Ok(_) => log::info!("Haptic feedback SUCCESS"),
+                Ok(()) => log::info!("Haptic feedback SUCCESS"),
                 Err(e) => log::error!("Haptic feedback FAILED: {e}"),
             }
         }

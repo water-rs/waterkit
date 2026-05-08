@@ -12,13 +12,13 @@ pub async fn show_share_sheet(sheet: ShareSheet) -> Result<ShareResult, ShareErr
         ShareItem::Url(url) => Cow::Borrowed(url.as_str()),
         ShareItem::File(path) | ShareItem::Image(path) => Cow::Borrowed(
             path.to_str()
-                .ok_or_else(|| ShareError::PlatformError("invalid path".into()))?,
+                .ok_or_else(|| ShareError::Platform("invalid path".into()))?,
         ),
         ShareItem::Text(text) => Cow::Owned(crate::mailto_url(sheet.subject.as_deref(), text)),
     };
     let _ = std::process::Command::new("cmd")
         .args(["/C", "start", "", target.as_ref()])
         .spawn()
-        .map_err(|e| ShareError::PlatformError(e.to_string()))?;
+        .map_err(|e| ShareError::Platform(e.to_string()))?;
     Ok(ShareResult::Shared)
 }

@@ -1,7 +1,11 @@
 //! Cross-platform haptic feedback.
 //!
-//! This crate provides a unified API for triggering haptic feedback (vibration)
-//! across iOS, macOS, Android, Windows, and Linux platforms.
+//! This crate provides a unified API for triggering haptic feedback
+//! (vibration) across iOS, macOS, Android, Windows, and Linux.
+//!
+//! All trigger functions are synchronous: the underlying platform calls
+//! return immediately after dispatching to the OS haptic engine. They
+//! must be called on the main / UI thread on Apple platforms.
 //!
 //! # Example
 //!
@@ -9,29 +13,29 @@
 //! use waterkit_haptic::{Haptic, HapticPattern, Intensity};
 //! use std::time::Duration;
 //!
-//! # async fn example() -> Result<(), waterkit_haptic::HapticError> {
-//! // Simple feedback with preset intensity
-//! Haptic::impact(Intensity::MEDIUM).await?;
-//! Haptic::selection().await?;
-//! Haptic::notification_success().await?;
+//! # fn example() -> Result<(), waterkit_haptic::HapticError> {
+//! Haptic::impact(Intensity::MEDIUM)?;
+//! Haptic::selection()?;
+//! Haptic::notification_success()?;
 //!
-//! // Custom pattern
 //! let pattern = HapticPattern::builder()
 //!     .add(Duration::from_millis(100), Intensity::MAX)
 //!     .pause(Duration::from_millis(50))
 //!     .add(Duration::from_millis(200), Intensity::MEDIUM)
 //!     .build();
 //!
-//! Haptic::play(&pattern).await?;
+//! Haptic::play(&pattern)?;
 //! # Ok(())
 //! # }
 //! ```
 
 #![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
 
 mod sys;
 
 use std::time::Duration;
+use waterkit_core::Capabilities;
 
 /// Haptic feedback intensity.
 ///
@@ -216,24 +220,39 @@ pub enum HapticError {
     #[error("haptic engine initialization failed: {0}")]
     InitFailed(String),
 
-    /// An unknown error occurred.
-    #[error("unknown error: {0}")]
-    Unknown(String),
+    /// Platform-level failure with a message.
+    #[error("platform error: {0}")]
+    Platform(String),
+}
+
+/// Capability probe result for the haptic subsystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct HapticCapabilities {
+    /// Whether haptic feedback is available on this device.
+    pub available: bool,
+}
+
+impl Capabilities for HapticCapabilities {
+    fn available(&self) -> bool {
+        self.available
+    }
 }
 
 /// ZST namespace for haptic feedback operations.
 ///
-/// All methods are async so callers can dispatch them off the UI thread.
+/// All methods are synchronous and dispatch to the platform's haptic
+/// engine. On Apple platforms the trigger calls must run on the main
+/// thread.
 ///
 /// # Example
 ///
 /// ```no_run
 /// use waterkit_haptic::{Haptic, Intensity};
 ///
-/// # async fn example() -> Result<(), waterkit_haptic::HapticError> {
-/// // Check availability
-/// if Haptic::is_available() {
-///     Haptic::impact(Intensity::MEDIUM).await?;
+/// # fn example() -> Result<(), waterkit_haptic::HapticError> {
+/// if Haptic::capabilities().available {
+///     Haptic::impact(Intensity::MEDIUM)?;
 /// }
 /// # Ok(())
 /// # }
@@ -242,66 +261,70 @@ pub enum HapticError {
 pub struct Haptic;
 
 impl Haptic {
-    /// Check if haptic feedback is available on this device.
+    /// Probes the haptic subsystem.
     #[must_use]
-    pub fn is_available() -> bool {
-        sys::is_available()
+    pub fn capabilities() -> HapticCapabilities {
+        HapticCapabilities {
+            available: sys::is_available(),
+        }
     }
 
-    /// Trigger an impact feedback with the specified intensity.
+    /// Triggers an impact feedback with the specified intensity.
     ///
     /// # Errors
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
-    pub async fn impact(intensity: Intensity) -> Result<(), HapticError> {
-        std::future::ready(sys::impact(intensity)).await
+    pub fn impact(intensity: Intensity) -> Result<(), HapticError> {
+        sys::impact(intensity)
     }
 
-    /// Trigger a selection feedback (light tap for UI selection changes).
+    /// Triggers a selection feedback (light tap for UI selection changes).
     ///
     /// # Errors
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
-    pub async fn selection() -> Result<(), HapticError> {
-        std::future::ready(sys::selection()).await
+    pub fn selection() -> Result<(), HapticError> {
+        sys::selection()
     }
 
-    /// Trigger a success notification feedback.
+    /// Triggers a success notification feedback.
     ///
     /// # Errors
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
-    pub async fn notification_success() -> Result<(), HapticError> {
-        std::future::ready(sys::notification_success()).await
+    pub fn notification_success() -> Result<(), HapticError> {
+        sys::notification_success()
     }
 
-    /// Trigger a warning notification feedback.
+    /// Triggers a warning notification feedback.
     ///
     /// # Errors
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
-    pub async fn notification_warning() -> Result<(), HapticError> {
-        std::future::ready(sys::notification_warning()).await
+    pub fn notification_warning() -> Result<(), HapticError> {
+        sys::notification_warning()
     }
 
-    /// Trigger an error notification feedback.
+    /// Triggers an error notification feedback.
     ///
     /// # Errors
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
-    pub async fn notification_error() -> Result<(), HapticError> {
-        std::future::ready(sys::notification_error()).await
+    pub fn notification_error() -> Result<(), HapticError> {
+        sys::notification_error()
     }
 
-    /// Play a custom haptic pattern.
+    /// Plays a custom haptic pattern.
     ///
     /// # Errors
     ///
-    /// Returns a [`HapticError`] if haptics are not supported or the pattern is invalid.
-    pub async fn play(pattern: &HapticPattern) -> Result<(), HapticError> {
+    /// Returns [`HapticError::InvalidPattern`] for an empty pattern, or
+    /// [`HapticError::Unsupported`] / [`HapticError::Platform`] from the
+    /// platform engine.
+    pub fn play(pattern: &HapticPattern) -> Result<(), HapticError> {
         if pattern.steps.is_empty() {
             return Err(HapticError::InvalidPattern("pattern is empty".into()));
         }
-        std::future::ready(sys::play_pattern(pattern)).await
+        sys::play_pattern(pattern)
     }
 }

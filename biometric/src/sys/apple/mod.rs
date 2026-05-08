@@ -58,7 +58,7 @@ pub async fn get_biometric_type() -> Option<BiometricType> {
 ///
 /// # Errors
 /// Returns `BiometricError::NotAvailable` if biometrics are not ready,
-/// or `BiometricError::PlatformError` if the channel fails.
+/// or `BiometricError::Platform` if the channel fails.
 pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
     if !is_available().await {
         return Err(BiometricError::NotAvailable);
@@ -70,5 +70,5 @@ pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
     ffi::biometric_authenticate(reason, callback);
 
     rx.await
-        .unwrap_or_else(|_| Err(BiometricError::PlatformError("Channel closed".to_string())))
+        .unwrap_or_else(|_| Err(BiometricError::Platform("Channel closed".to_string())))
 }

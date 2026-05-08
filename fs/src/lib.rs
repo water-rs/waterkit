@@ -1,9 +1,14 @@
 //! Cross-platform file system utilities.
 //!
-//! This crate provides a unified API for accessing common platform directories
-//! such as documents and cache folders across iOS, macOS, Android, Windows, and Linux.
+//! Provides a uniform API for the directories every app needs (documents,
+//! cache, local data) and for cache-imported user files. Every fallible
+//! call returns [`FsError`] so callers see typed reasons (no documents
+//! dir on this platform, missing file name, unsupported on wasm, ...) on
+//! top of an embedded `std::io::Error`.
 
-/// Platform-specific implementations.
+#![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
+
 #[cfg(any(target_os = "ios", target_os = "android"))]
 mod sys;
 #[cfg(target_arch = "wasm32")]
@@ -22,44 +27,89 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use thiserror::Error;
 
-/// Cross-platform File System Utilities
-///
-/// This struct provides access to file system operations like finding sandbox paths.
+/// Errors returned by the `waterkit-fs` API.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum FsError {
+    /// Underlying I/O failure.
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    /// The platform exposes no documents directory.
+    #[error("documents directory is unavailable on this platform")]
+    NoDocumentsDir,
+    /// The platform exposes no cache directory.
+    #[error("cache directory is unavailable on this platform")]
+    NoCacheDir,
+    /// The platform exposes no local-data directory.
+    #[error("local data directory is unavailable on this platform")]
+    NoDataLocalDir,
+    /// Selected path has no file name component.
+    #[error("path has no file name")]
+    NoFileName,
+    /// The requested operation is unsupported on the current platform.
+    #[error("unsupported on this platform: {0}")]
+    Unsupported(&'static str),
+    /// JSON encoding or decoding failed.
+    #[error("json {operation}: {source}")]
+    Json {
+        /// Whether the failure came from encoding or decoding.
+        operation: &'static str,
+        /// Underlying serde error.
+        source: serde_json::Error,
+    },
+}
+
+/// Convenience alias.
+pub type Result<T, E = FsError> = core::result::Result<T, E>;
+
+/// Cross-platform file system utilities.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WaterFs;
 
 impl WaterFs {
-    /// Gets the application's documents directory from an Android `Context`.
+    /// Returns the application's documents directory from an Android `Context`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FsError::NoDocumentsDir`] when the JNI call returns no
+    /// path.
     #[cfg(target_os = "android")]
-    #[must_use]
     pub fn documents_dir_with_context(
         env: &mut jni::JNIEnv,
         context: &jni::objects::JObject,
-    ) -> Option<PathBuf> {
-        sys::documents_dir_with_context(env, context)
+    ) -> Result<PathBuf> {
+        sys::documents_dir_with_context(env, context).ok_or(FsError::NoDocumentsDir)
     }
 
-    /// Gets the application's cache directory from an Android `Context`.
+    /// Returns the application's cache directory from an Android `Context`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FsError::NoCacheDir`] when the JNI call returns no path.
     #[cfg(target_os = "android")]
-    #[must_use]
     pub fn cache_dir_with_context(
         env: &mut jni::JNIEnv,
         context: &jni::objects::JObject,
-    ) -> Option<PathBuf> {
-        sys::cache_dir_with_context(env, context)
+    ) -> Result<PathBuf> {
+        sys::cache_dir_with_context(env, context).ok_or(FsError::NoCacheDir)
     }
 
-    /// Gets the application's documents directory.
-    #[must_use]
-    pub fn documents_dir() -> Option<PathBuf> {
+    /// Returns the application's documents directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FsError::NoDocumentsDir`] on platforms / OS configs
+    /// where no documents directory is exposed.
+    pub fn documents_dir() -> Result<PathBuf> {
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
-            dirs::document_dir()
+            dirs::document_dir().ok_or(FsError::NoDocumentsDir)
         }
         #[cfg(any(target_os = "ios", target_os = "android"))]
         {
-            sys::documents_dir()
+            sys::documents_dir().ok_or(FsError::NoDocumentsDir)
         }
         #[cfg(not(any(
             target_os = "macos",
@@ -69,20 +119,24 @@ impl WaterFs {
             target_os = "android"
         )))]
         {
-            None
+            Err(FsError::NoDocumentsDir)
         }
     }
 
-    /// Gets the application's cache directory.
-    #[must_use]
-    pub fn cache_dir() -> Option<PathBuf> {
+    /// Returns the application's cache directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FsError::NoCacheDir`] on platforms / OS configs where no
+    /// cache directory is exposed.
+    pub fn cache_dir() -> Result<PathBuf> {
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
-            dirs::cache_dir()
+            dirs::cache_dir().ok_or(FsError::NoCacheDir)
         }
         #[cfg(any(target_os = "ios", target_os = "android"))]
         {
-            sys::cache_dir()
+            sys::cache_dir().ok_or(FsError::NoCacheDir)
         }
         #[cfg(not(any(
             target_os = "macos",
@@ -92,149 +146,144 @@ impl WaterFs {
             target_os = "android"
         )))]
         {
-            None
+            Err(FsError::NoCacheDir)
         }
     }
 
     /// Reads a file into memory.
     ///
     /// # Errors
-    /// Returns an error when the file cannot be read.
-    pub async fn read(path: &Path) -> io::Result<Vec<u8>> {
+    ///
+    /// Returns [`FsError::Io`] on read failure.
+    pub async fn read(path: &Path) -> Result<Vec<u8>> {
         #[cfg(target_arch = "wasm32")]
         {
-            web::read(path).await
+            web::read(path).await.map_err(FsError::Io)
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            async_fs::read(path).await
+            async_fs::read(path).await.map_err(FsError::Io)
         }
     }
 
     /// Resolves a path under the application's local data directory.
     ///
     /// # Errors
-    /// Returns an error when the platform cannot provide a local data directory.
-    pub fn data_local_path(path: impl AsRef<Path>) -> io::Result<PathBuf> {
+    ///
+    /// Returns [`FsError::NoDataLocalDir`] on platforms / OS configs
+    /// where no local data directory is exposed.
+    pub fn data_local_path(path: impl AsRef<Path>) -> Result<PathBuf> {
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
             dirs::data_local_dir()
                 .map(|root| root.join(path))
-                .ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::NotFound,
-                        "local data directory is unavailable",
-                    )
-                })
+                .ok_or(FsError::NoDataLocalDir)
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             let _ = path;
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "local data directory is unavailable on this platform",
-            ))
+            Err(FsError::NoDataLocalDir)
         }
     }
 
-    /// Loads a JSON store, defaulting to `T::default()` when the file is absent or empty.
+    /// Loads a JSON store, returning `T::default()` when the file is
+    /// absent or empty.
     ///
     /// # Errors
-    /// Returns an error when reading or decoding the store fails.
-    pub fn load_json_store<T>(path: &Path) -> io::Result<T>
+    ///
+    /// Returns [`FsError::Io`] for filesystem errors other than
+    /// `NotFound`, or [`FsError::Json`] for malformed content.
+    pub fn load_json_store<T>(path: &Path) -> Result<T>
     where
         T: Default + DeserializeOwned,
     {
         match std::fs::read(path) {
             Ok(bytes) if bytes.is_empty() => Ok(T::default()),
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|source| FsError::Json {
+                operation: "decode",
+                source,
+            }),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(T::default()),
-            Err(error) => Err(error),
+            Err(error) => Err(FsError::Io(error)),
         }
     }
 
     /// Writes a JSON store, creating parent directories as needed.
     ///
     /// # Errors
-    /// Returns an error when serialization or writing fails.
-    pub fn write_json_store<T>(path: &Path, value: &T) -> io::Result<()>
+    ///
+    /// Returns [`FsError::Io`] if the write fails, or [`FsError::Json`]
+    /// for serialization failures.
+    pub fn write_json_store<T>(path: &Path, value: &T) -> Result<()>
     where
         T: Serialize,
     {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-
-        let bytes = serde_json::to_vec_pretty(value)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        std::fs::write(path, bytes)
+        let bytes = serde_json::to_vec_pretty(value).map_err(|source| FsError::Json {
+            operation: "encode",
+            source,
+        })?;
+        std::fs::write(path, bytes)?;
+        Ok(())
     }
 
     /// Imports a file into the application's cache directory subtree.
     ///
-    /// If a file with the same name already exists, a numeric suffix is added.
+    /// If a file with the same name already exists, a numeric suffix is
+    /// added.
     ///
     /// # Errors
-    /// Returns an error when the source path has no file name, the cache
-    /// directory is unavailable, or the copy operation fails.
-    pub fn import_file_to_cache(path: &Path, cache_subdir: &Path) -> io::Result<PathBuf> {
+    ///
+    /// Returns [`FsError::NoFileName`] when `path` has no file name,
+    /// [`FsError::NoCacheDir`] when the platform has no cache directory,
+    /// [`FsError::Unsupported`] on wasm, or [`FsError::Io`] for the copy.
+    pub fn import_file_to_cache(path: &Path, cache_subdir: &Path) -> Result<PathBuf> {
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = path;
-            let _ = cache_subdir;
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "import_file_to_cache is unavailable on wasm; import bytes via WaterFs::import_bytes_to_cache",
-            ));
+            let _ = (path, cache_subdir);
+            Err(FsError::Unsupported(
+                "import_file_to_cache: use WaterFs::import_bytes_to_cache on wasm",
+            ))
         }
 
         #[cfg(not(target_arch = "wasm32"))]
-        let file_name = path.file_name().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "selected path has no file name",
-            )
-        })?;
-        #[cfg(not(target_arch = "wasm32"))]
-        let cache_root = Self::cache_dir().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "cache directory is unavailable")
-        })?;
-        #[cfg(not(target_arch = "wasm32"))]
-        let base_dir = cache_root.join(cache_subdir);
-        #[cfg(not(target_arch = "wasm32"))]
-        std::fs::create_dir_all(&base_dir)?;
-        #[cfg(not(target_arch = "wasm32"))]
-        let destination = next_available_cache_path(&base_dir, file_name, Path::exists);
-        #[cfg(not(target_arch = "wasm32"))]
-        std::fs::copy(path, &destination)?;
-        #[cfg(not(target_arch = "wasm32"))]
-        Ok(destination)
+        {
+            let file_name = path.file_name().ok_or(FsError::NoFileName)?;
+            let base_dir = Self::cache_dir()?.join(cache_subdir);
+            std::fs::create_dir_all(&base_dir)?;
+            let destination = next_available_cache_path(&base_dir, file_name, Path::exists);
+            std::fs::copy(path, &destination)?;
+            Ok(destination)
+        }
     }
 
     /// Imports raw bytes into the application's cache directory subtree.
     ///
-    /// If a file with the same name already exists, a numeric suffix is added.
+    /// If a file with the same name already exists, a numeric suffix is
+    /// added.
     ///
     /// # Errors
-    /// Returns an error when the file name is invalid, the cache directory is
-    /// unavailable, or the write operation fails.
+    ///
+    /// Returns [`FsError::NoFileName`] when `file_name` is invalid,
+    /// [`FsError::NoCacheDir`] when no cache directory is available, or
+    /// [`FsError::Io`] for write failures.
     pub async fn import_bytes_to_cache(
         bytes: &[u8],
         file_name: &str,
         cache_subdir: &Path,
-    ) -> io::Result<PathBuf> {
+    ) -> Result<PathBuf> {
         #[cfg(target_arch = "wasm32")]
         {
-            web::import_bytes_to_cache(bytes, file_name, cache_subdir).await
+            web::import_bytes_to_cache(bytes, file_name, cache_subdir)
+                .await
+                .map_err(FsError::Io)
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let file_name = validate_file_name(Path::new(file_name))?;
-            let cache_root = Self::cache_dir().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotFound, "cache directory is unavailable")
-            })?;
-            let base_dir = cache_root.join(cache_subdir);
+            let base_dir = Self::cache_dir()?.join(cache_subdir);
             async_fs::create_dir_all(&base_dir).await?;
 
             let mut index = 0usize;
@@ -248,22 +297,18 @@ impl WaterFs {
                         async_fs::write(&candidate, bytes).await?;
                         return Ok(candidate);
                     }
-                    Err(error) => return Err(error),
+                    Err(error) => return Err(FsError::Io(error)),
                 }
             }
         }
     }
 }
 
-fn validate_file_name(path: &Path) -> io::Result<&OsStr> {
-    path.file_name().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "selected path has no file name",
-        )
-    })
+fn validate_file_name(path: &Path) -> Result<&OsStr> {
+    path.file_name().ok_or(FsError::NoFileName)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn next_available_cache_path(
     base_dir: &Path,
     file_name: &OsStr,
@@ -300,7 +345,7 @@ pub(crate) fn cache_path_candidate(base_dir: &Path, file_name: &OsStr, index: us
 
 #[cfg(test)]
 mod tests {
-    use super::WaterFs;
+    use super::{FsError, WaterFs};
 
     #[test]
     fn import_file_to_cache_rejects_paths_without_filename() {
@@ -309,7 +354,7 @@ mod tests {
             std::path::Path::new("waterui-tests"),
         )
         .expect_err("root path should not have importable file name");
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(matches!(error, FsError::NoFileName));
     }
 
     #[test]

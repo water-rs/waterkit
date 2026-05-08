@@ -38,9 +38,9 @@ pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
     // Actually RequestVerificationAsync takes HSTRING.
     let result =
         UserConsentVerifier::RequestVerificationAsync(&windows::core::HSTRING::from(reason))
-            .map_err(|e| BiometricError::PlatformError(e.to_string()))?
+            .map_err(|e| BiometricError::Platform(e.to_string()))?
             .await
-            .map_err(|e| BiometricError::PlatformError(e.to_string()))?;
+            .map_err(|e| BiometricError::Platform(e.to_string()))?;
 
     match result {
         UserConsentVerificationResult::Verified => Ok(()),

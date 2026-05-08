@@ -97,7 +97,7 @@ fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), Contacts
 fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, ContactsError> {
     let class_loader = CLASS_LOADER
         .get()
-        .ok_or_else(|| ContactsError::PlatformError("class loader not initialized".into()))?;
+        .ok_or_else(|| ContactsError::Platform("class loader not initialized".into()))?;
     let helper_class_name = env
         .new_string("waterkit.contacts.ContactsHelper")
         .map_err(|e| map_jni_error(env, "new_string helper_class_name", e))?;
@@ -207,7 +207,7 @@ fn create_with_context(
         .l()
         .map_err(|e| map_jni_error(env, "ContactsHelper.createContact result", e))?;
     if result.is_null() {
-        return Err(ContactsError::PlatformError(
+        return Err(ContactsError::Platform(
             "createContact returned null".into(),
         ));
     }
@@ -250,7 +250,7 @@ fn parse_contacts_array(
     array_obj: JObject<'_>,
 ) -> Result<Vec<Contact>, ContactsError> {
     if array_obj.is_null() {
-        return Err(ContactsError::PlatformError(
+        return Err(ContactsError::Platform(
             "ContactsHelper returned null contact array".into(),
         ));
     }
@@ -259,7 +259,7 @@ fn parse_contacts_array(
         .get_array_length(&array)
         .map_err(|e| map_jni_error(env, "get_array_length contacts", e))?;
     let len = usize::try_from(len_i32)
-        .map_err(|_| ContactsError::PlatformError(format!("negative contacts len: {len_i32}")))?;
+        .map_err(|_| ContactsError::Platform(format!("negative contacts len: {len_i32}")))?;
 
     let mut contacts = Vec::with_capacity(len);
     for idx in 0..len_i32 {
@@ -267,7 +267,7 @@ fn parse_contacts_array(
             .get_object_array_element(&array, idx)
             .map_err(|e| map_jni_error(env, "get_object_array_element contact", e))?;
         if item.is_null() {
-            return Err(ContactsError::PlatformError(format!(
+            return Err(ContactsError::Platform(format!(
                 "contact at index {idx} is null"
             )));
         }
@@ -284,7 +284,7 @@ fn parse_contact_line(line: &str) -> Result<Contact, ContactsError> {
     let parts: Vec<&str> = line.split('\t').collect();
     let id = parts.first().copied().unwrap_or_default().to_string();
     if id.is_empty() {
-        return Err(ContactsError::PlatformError(
+        return Err(ContactsError::Platform(
             "contact payload missing id".into(),
         ));
     }
@@ -327,7 +327,7 @@ fn parse_contact_line(line: &str) -> Result<Contact, ContactsError> {
         birthday: parts
             .get(6)
             .filter(|s| !s.is_empty())
-            .map(ToString::to_string),
+            .and_then(|s| s.parse::<crate::Date>().ok()),
         note: parts
             .get(7)
             .filter(|s| !s.is_empty())
@@ -349,6 +349,11 @@ fn serialize_contact_data(data: &ContactData) -> String {
         .map(|email| email.address.as_str())
         .collect::<Vec<_>>()
         .join(",");
+    let birthday = data
+        .birthday
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default();
     format!(
         "{}\t{}\t{}\t{}\t{}\t{}\t{}",
         data.given_name.as_deref().unwrap_or(""),
@@ -356,7 +361,7 @@ fn serialize_contact_data(data: &ContactData) -> String {
         data.organization.as_deref().unwrap_or(""),
         phones,
         emails,
-        data.birthday.as_deref().unwrap_or(""),
+        birthday,
         data.note.as_deref().unwrap_or(""),
     )
 }
@@ -366,7 +371,7 @@ fn platform_error(action: &str, err: impl Display) -> ContactsError {
     if is_permission_message(&message) {
         ContactsError::PermissionDenied
     } else {
-        ContactsError::PlatformError(message)
+        ContactsError::Platform(message)
     }
 }
 
@@ -381,7 +386,7 @@ fn map_jni_error(env: &mut JNIEnv<'_>, action: &str, err: impl Display) -> Conta
     if is_permission_message(&message) {
         ContactsError::PermissionDenied
     } else {
-        ContactsError::PlatformError(message)
+        ContactsError::Platform(message)
     }
 }
 

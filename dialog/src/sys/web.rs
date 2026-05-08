@@ -12,7 +12,7 @@ pub struct Selection(rfd::FileHandle);
 
 pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
     AsyncMessageDialog::new()
-        .set_level(message_level(dialog.type_))
+        .set_level(message_level(dialog.kind))
         .set_title(&dialog.title)
         .set_description(&dialog.message)
         .set_buttons(MessageButtons::Ok)
@@ -23,7 +23,7 @@ pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
 
 pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
     let result = AsyncMessageDialog::new()
-        .set_level(message_level(dialog.type_))
+        .set_level(message_level(dialog.kind))
         .set_title(&dialog.title)
         .set_description(&dialog.message)
         .set_buttons(MessageButtons::OkCancel)

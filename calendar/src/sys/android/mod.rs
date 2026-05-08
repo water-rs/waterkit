@@ -5,6 +5,7 @@ use jni::errors::Error as JniError;
 use jni::objects::{GlobalRef, JClass, JObject, JObjectArray, JString, JValue};
 use std::mem::ManuallyDrop;
 use std::sync::OnceLock;
+use waterkit_core::Timestamp;
 
 const HELPER_CLASS_NAME: &str = "waterkit.calendar.CalendarHelper";
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
@@ -16,10 +17,10 @@ where
 {
     let android_context = ndk_context::android_context();
     let vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) }.map_err(|error| {
-        CalendarError::PlatformError(format!("JavaVM::from_raw failed: {error}"))
+        CalendarError::Platform(format!("JavaVM::from_raw failed: {error}"))
     })?;
     let mut env = vm.attach_current_thread().map_err(|error| {
-        CalendarError::PlatformError(format!("attach_current_thread failed: {error}"))
+        CalendarError::Platform(format!("attach_current_thread failed: {error}"))
     })?;
 
     let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
@@ -49,33 +50,33 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), CalendarError> {
     let cache_path_string: String = env
         .get_string(&JString::from(cache_path))
         .map_err(|error| {
-            CalendarError::PlatformError(format!("cache path decode failed: {error}"))
+            CalendarError::Platform(format!("cache path decode failed: {error}"))
         })?
         .into();
 
     let dex_path = format!("{cache_path_string}/waterkit_calendar.dex");
     let _ = std::fs::remove_file(&dex_path);
     std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|error| CalendarError::PlatformError(format!("write DEX failed: {error}")))?;
+        .map_err(|error| CalendarError::Platform(format!("write DEX failed: {error}")))?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
 
         let mut permissions = std::fs::metadata(&dex_path)
-            .map_err(|error| CalendarError::PlatformError(format!("dex metadata failed: {error}")))?
+            .map_err(|error| CalendarError::Platform(format!("dex metadata failed: {error}")))?
             .permissions();
         permissions.set_mode(0o444);
         std::fs::set_permissions(&dex_path, permissions).map_err(|error| {
-            CalendarError::PlatformError(format!("set dex permissions failed: {error}"))
+            CalendarError::Platform(format!("set dex permissions failed: {error}"))
         })?;
     }
 
     let dex_path_java = env.new_string(dex_path).map_err(|error| {
-        CalendarError::PlatformError(format!("new dex path string failed: {error}"))
+        CalendarError::Platform(format!("new dex path string failed: {error}"))
     })?;
     let cache_path_java = env.new_string(cache_path_string).map_err(|error| {
-        CalendarError::PlatformError(format!("new cache path string failed: {error}"))
+        CalendarError::Platform(format!("new cache path string failed: {error}"))
     })?;
 
     let parent_loader = env
@@ -102,7 +103,7 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), CalendarError> {
 
     let class_loader_global = env
         .new_global_ref(class_loader)
-        .map_err(|error| CalendarError::PlatformError(format!("new_global_ref failed: {error}")))?;
+        .map_err(|error| CalendarError::Platform(format!("new_global_ref failed: {error}")))?;
 
     if CLASS_LOADER.set(class_loader_global).is_err() {
         assert!(
@@ -117,10 +118,10 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), CalendarError> {
 fn get_helper_class<'local>(env: &mut JNIEnv<'local>) -> Result<JClass<'local>, CalendarError> {
     let class_loader = CLASS_LOADER
         .get()
-        .ok_or_else(|| CalendarError::PlatformError("class loader not initialized".into()))?;
+        .ok_or_else(|| CalendarError::Platform("class loader not initialized".into()))?;
 
     let helper_name = env.new_string(HELPER_CLASS_NAME).map_err(|error| {
-        CalendarError::PlatformError(format!("new helper class string failed: {error}"))
+        CalendarError::Platform(format!("new helper class string failed: {error}"))
     })?;
 
     let helper_class = env
@@ -153,7 +154,7 @@ fn ensure_calendar_permission(
         .map_err(|error| map_jni_error(env, "CalendarHelper.hasCalendarPermission failed", &error))?
         .z()
         .map_err(|error| {
-            CalendarError::PlatformError(format!(
+            CalendarError::Platform(format!(
                 "hasCalendarPermission result decode failed: {error}"
             ))
         })?;
@@ -176,17 +177,17 @@ fn read_string_array(
 
     let array = JObjectArray::from(array_object);
     let len = env.get_array_length(&array).map_err(|error| {
-        CalendarError::PlatformError(format!("{op_name}: get_array_length failed: {error}"))
+        CalendarError::Platform(format!("{op_name}: get_array_length failed: {error}"))
     })?;
     let len_usize = usize::try_from(len).map_err(|_| {
-        CalendarError::PlatformError(format!("{op_name}: negative array length returned: {len}"))
+        CalendarError::Platform(format!("{op_name}: negative array length returned: {len}"))
     })?;
     let mut rows = Vec::with_capacity(len_usize);
     for index in 0..len {
         let value = env
             .get_object_array_element(&array, index)
             .map_err(|error| {
-                CalendarError::PlatformError(format!(
+                CalendarError::Platform(format!(
                     "{op_name}: get_object_array_element({index}) failed: {error}"
                 ))
             })?;
@@ -197,7 +198,7 @@ fn read_string_array(
         let decoded: String = env
             .get_string(&JString::from(value))
             .map_err(|error| {
-                CalendarError::PlatformError(format!(
+                CalendarError::Platform(format!(
                     "{op_name}: get_string({index}) failed: {error}"
                 ))
             })?
@@ -211,7 +212,7 @@ fn read_string_array(
 fn parse_calendar_row(row: &str) -> Result<Calendar, CalendarError> {
     let parts: Vec<&str> = row.splitn(4, '\t').collect();
     if parts.len() != 4 {
-        return Err(CalendarError::PlatformError(format!(
+        return Err(CalendarError::Platform(format!(
             "malformed calendar row (expected 4 fields): {row}"
         )));
     }
@@ -231,7 +232,7 @@ fn parse_calendar_row(row: &str) -> Result<Calendar, CalendarError> {
 fn parse_event_row(row: &str) -> Result<Event, CalendarError> {
     let parts: Vec<&str> = row.splitn(8, '\t').collect();
     if parts.len() != 8 {
-        return Err(CalendarError::PlatformError(format!(
+        return Err(CalendarError::Platform(format!(
             "malformed event row (expected 8 fields): {row}"
         )));
     }
@@ -249,8 +250,12 @@ fn parse_event_row(row: &str) -> Result<Event, CalendarError> {
         } else {
             Some(parts[3].to_string())
         },
-        start_date: parts[4].to_string(),
-        end_date: parts[5].to_string(),
+        start: parts[4]
+            .parse::<Timestamp>()
+            .map_err(|error| CalendarError::Platform(format!("invalid start: {error}")))?,
+        end: parts[5]
+            .parse::<Timestamp>()
+            .map_err(|error| CalendarError::Platform(format!("invalid end: {error}")))?,
         is_all_day: parts[6] == "1",
         calendar_id: parts[7].to_string(),
     })
@@ -274,7 +279,7 @@ fn list_calendars_with_context(
         .map_err(|error| map_jni_error(env, "CalendarHelper.listCalendars failed", &error))?
         .l()
         .map_err(|error| {
-            CalendarError::PlatformError(format!(
+            CalendarError::Platform(format!(
                 "CalendarHelper.listCalendars result decode failed: {error}"
             ))
         })?;
@@ -286,19 +291,21 @@ fn list_calendars_with_context(
 fn fetch_events_with_context(
     env: &mut JNIEnv,
     context: &JObject,
-    start: &str,
-    end: &str,
+    start: Timestamp,
+    end: Timestamp,
 ) -> Result<Vec<Event>, CalendarError> {
     init_dex(env, context)?;
     ensure_calendar_permission(env, context, false)?;
 
     let helper_class = get_helper_class(env)?;
-    let start_java = env.new_string(start).map_err(|error| {
-        CalendarError::PlatformError(format!("new start string failed: {error}"))
+    let start_str = start.to_string();
+    let end_str = end.to_string();
+    let start_java = env.new_string(&start_str).map_err(|error| {
+        CalendarError::Platform(format!("new start string failed: {error}"))
     })?;
     let end_java = env
-        .new_string(end)
-        .map_err(|error| CalendarError::PlatformError(format!("new end string failed: {error}")))?;
+        .new_string(&end_str)
+        .map_err(|error| CalendarError::Platform(format!("new end string failed: {error}")))?;
 
     let rows_object = env
         .call_static_method(
@@ -314,7 +321,7 @@ fn fetch_events_with_context(
         .map_err(|error| map_jni_error(env, "CalendarHelper.fetchEvents failed", &error))?
         .l()
         .map_err(|error| {
-            CalendarError::PlatformError(format!(
+            CalendarError::Platform(format!(
                 "CalendarHelper.fetchEvents result decode failed: {error}"
             ))
         })?;
@@ -333,28 +340,30 @@ fn create_event_with_context(
 
     let helper_class = get_helper_class(env)?;
     let title_java = env.new_string(&data.title).map_err(|error| {
-        CalendarError::PlatformError(format!("new title string failed: {error}"))
+        CalendarError::Platform(format!("new title string failed: {error}"))
     })?;
     let notes_java = env
         .new_string(data.notes.as_deref().unwrap_or(""))
         .map_err(|error| {
-            CalendarError::PlatformError(format!("new notes string failed: {error}"))
+            CalendarError::Platform(format!("new notes string failed: {error}"))
         })?;
     let location_java = env
         .new_string(data.location.as_deref().unwrap_or(""))
         .map_err(|error| {
-            CalendarError::PlatformError(format!("new location string failed: {error}"))
+            CalendarError::Platform(format!("new location string failed: {error}"))
         })?;
-    let start_java = env.new_string(&data.start_date).map_err(|error| {
-        CalendarError::PlatformError(format!("new start date string failed: {error}"))
+    let start_str = data.start.to_string();
+    let end_str = data.end.to_string();
+    let start_java = env.new_string(&start_str).map_err(|error| {
+        CalendarError::Platform(format!("new start date string failed: {error}"))
     })?;
-    let end_java = env.new_string(&data.end_date).map_err(|error| {
-        CalendarError::PlatformError(format!("new end date string failed: {error}"))
+    let end_java = env.new_string(&end_str).map_err(|error| {
+        CalendarError::Platform(format!("new end date string failed: {error}"))
     })?;
     let calendar_id_java = env
         .new_string(data.calendar_id.as_deref().unwrap_or(""))
         .map_err(|error| {
-            CalendarError::PlatformError(format!("new calendar id string failed: {error}"))
+            CalendarError::Platform(format!("new calendar id string failed: {error}"))
         })?;
 
     let created_event_id = env
@@ -376,11 +385,11 @@ fn create_event_with_context(
         .map_err(|error| map_jni_error(env, "CalendarHelper.createEventIso failed", &error))?
         .j()
         .map_err(|error| {
-            CalendarError::PlatformError(format!("CalendarHelper.createEventIso result decode failed: {error}"))
+            CalendarError::Platform(format!("CalendarHelper.createEventIso result decode failed: {error}"))
         })?;
 
     if created_event_id < 0 {
-        return Err(CalendarError::PlatformError(
+        return Err(CalendarError::Platform(
             "CalendarHelper.createEventIso returned invalid event id".into(),
         ));
     }
@@ -395,13 +404,13 @@ fn create_event_with_context(
         .map_err(|error| map_jni_error(env, "CalendarHelper.fetchEventById failed", &error))?
         .l()
         .map_err(|error| {
-            CalendarError::PlatformError(format!(
+            CalendarError::Platform(format!(
                 "CalendarHelper.fetchEventById result decode failed: {error}"
             ))
         })?;
 
     if created_event_row.is_null() {
-        return Err(CalendarError::PlatformError(format!(
+        return Err(CalendarError::Platform(format!(
             "CalendarHelper.fetchEventById returned null for created event {created_event_id}"
         )));
     }
@@ -409,7 +418,7 @@ fn create_event_with_context(
     let created_event_row: String = env
         .get_string(&JString::from(created_event_row))
         .map_err(|error| {
-            CalendarError::PlatformError(format!(
+            CalendarError::Platform(format!(
                 "CalendarHelper.fetchEventById row decode failed: {error}"
             ))
         })?
@@ -440,7 +449,7 @@ fn delete_event_with_context(
         .map_err(|error| map_jni_error(env, "CalendarHelper.deleteEvent failed", &error))?
         .z()
         .map_err(|error| {
-            CalendarError::PlatformError(format!(
+            CalendarError::Platform(format!(
                 "CalendarHelper.deleteEvent result decode failed: {error}"
             ))
         })?;
@@ -461,7 +470,7 @@ fn map_jni_error(env: &mut JNIEnv<'_>, operation: &str, error: &JniError) -> Cal
     if is_permission_denied_message(&message) {
         CalendarError::PermissionDenied
     } else {
-        CalendarError::PlatformError(message)
+        CalendarError::Platform(message)
     }
 }
 
@@ -504,7 +513,7 @@ pub async fn list_calendars() -> Result<Vec<Calendar>, CalendarError> {
     .await
 }
 
-pub async fn fetch_events(start: &str, end: &str) -> Result<Vec<Event>, CalendarError> {
+pub async fn fetch_events(start: Timestamp, end: Timestamp) -> Result<Vec<Event>, CalendarError> {
     future::ready(with_android_context(|env, context| {
         fetch_events_with_context(env, context, start, end)
     }))

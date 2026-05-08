@@ -65,7 +65,7 @@ pub async fn create(data: ContactData) -> Result<Contact, ContactsError> {
         let mut store = load_store(&path)?;
         let id = format!("desktop-{}", store.next_id);
         store.next_id = store.next_id.checked_add(1).ok_or_else(|| {
-            ContactsError::PlatformError("desktop contact id overflow".to_string())
+            ContactsError::Platform("desktop contact id overflow".to_string())
         })?;
         let contact = Contact {
             id,
@@ -125,18 +125,18 @@ fn field_contains(value: Option<&str>, query: &str) -> bool {
 
 fn store_path() -> Result<PathBuf, ContactsError> {
     WaterFs::data_local_path(Path::new("waterkit").join("contacts").join(STORE_FILE_NAME)).map_err(
-        |error| ContactsError::PlatformError(format!("resolve contacts store path: {error}")),
+        |error| ContactsError::Platform(format!("resolve contacts store path: {error}")),
     )
 }
 
 fn load_store(path: &Path) -> Result<ContactsStore, ContactsError> {
     WaterFs::load_json_store(path).map_err(|error| {
-        ContactsError::PlatformError(format!("load contacts store {}: {error}", path.display()))
+        ContactsError::Platform(format!("load contacts store {}: {error}", path.display()))
     })
 }
 
 fn write_store(path: &Path, store: &ContactsStore) -> Result<(), ContactsError> {
     WaterFs::write_json_store(path, store).map_err(|error| {
-        ContactsError::PlatformError(format!("write contacts store {}: {error}", path.display()))
+        ContactsError::Platform(format!("write contacts store {}: {error}", path.display()))
     })
 }

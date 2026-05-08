@@ -554,13 +554,10 @@ pub struct PasskeyClient {
 }
 
 impl PasskeyClient {
-    /// Creates a client builder.
-    #[must_use]
-    pub fn builder() -> PasskeyClientBuilder {
-        PasskeyClientBuilder::new()
-    }
-
-    /// Creates a client from a relying-party descriptor.
+    /// Creates a client from a relying-party descriptor with sensible
+    /// defaults (Es256 + Rs256, user verification required, discoverable).
+    /// Adjust via the fluent setters before calling
+    /// [`register`](Self::register) / [`authenticate`](Self::authenticate).
     #[must_use]
     pub fn new(relying_party: RelyingParty) -> Self {
         Self {
@@ -571,6 +568,55 @@ impl PasskeyClient {
             user_verification: UserVerificationRequirement::Required,
             discoverable: true,
         }
+    }
+
+    /// Sets default timeout in milliseconds.
+    #[must_use]
+    pub const fn with_timeout_ms(mut self, timeout_ms: u32) -> Self {
+        self.timeout_ms = Some(timeout_ms);
+        self
+    }
+
+    /// Sets default attestation preference.
+    #[must_use]
+    pub const fn with_attestation(mut self, preference: AttestationPreference) -> Self {
+        self.attestation = preference;
+        self
+    }
+
+    /// Sets default user verification requirement.
+    #[must_use]
+    pub const fn with_user_verification(
+        mut self,
+        requirement: UserVerificationRequirement,
+    ) -> Self {
+        self.user_verification = requirement;
+        self
+    }
+
+    /// Sets whether registrations request a discoverable credential.
+    #[must_use]
+    pub const fn with_discoverable(mut self, discoverable: bool) -> Self {
+        self.discoverable = discoverable;
+        self
+    }
+
+    /// Sets default public-key algorithm preferences.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PasskeyError::InvalidInput`] when `algorithms` is empty.
+    pub fn with_pub_key_algorithms(
+        mut self,
+        algorithms: Vec<PublicKeyAlgorithm>,
+    ) -> Result<Self, PasskeyError> {
+        if algorithms.is_empty() {
+            return Err(PasskeyError::InvalidInput(
+                "at least one public key algorithm is required".into(),
+            ));
+        }
+        self.pub_key_algorithms = algorithms;
+        Ok(self)
     }
 
     /// Queries passkey availability.
@@ -642,134 +688,6 @@ impl PasskeyClient {
     #[must_use]
     pub const fn relying_party(&self) -> &RelyingParty {
         &self.relying_party
-    }
-}
-
-/// Builder for [`PasskeyClient`].
-#[derive(Debug, Clone)]
-pub struct PasskeyClientBuilder {
-    rp_id: Option<String>,
-    rp_name: Option<String>,
-    timeout_ms: Option<u32>,
-    attestation: AttestationPreference,
-    pub_key_algorithms: Vec<PublicKeyAlgorithm>,
-    user_verification: UserVerificationRequirement,
-    discoverable: bool,
-}
-
-impl PasskeyClientBuilder {
-    /// Creates a new passkey client builder.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            rp_id: None,
-            rp_name: None,
-            timeout_ms: None,
-            attestation: AttestationPreference::None,
-            pub_key_algorithms: vec![PublicKeyAlgorithm::Es256, PublicKeyAlgorithm::Rs256],
-            user_verification: UserVerificationRequirement::Required,
-            discoverable: true,
-        }
-    }
-
-    /// Sets relying-party ID.
-    #[must_use]
-    pub fn rp_id(mut self, rp_id: impl Into<String>) -> Self {
-        self.rp_id = Some(rp_id.into());
-        self
-    }
-
-    /// Sets relying-party display name.
-    #[must_use]
-    pub fn rp_name(mut self, rp_name: impl Into<String>) -> Self {
-        self.rp_name = Some(rp_name.into());
-        self
-    }
-
-    /// Sets relying-party values at once.
-    #[must_use]
-    pub fn relying_party(mut self, relying_party: RelyingParty) -> Self {
-        let RelyingParty {
-            id: RpId(rp_id),
-            name: rp_name,
-        } = relying_party;
-        self.rp_id = Some(rp_id);
-        self.rp_name = Some(rp_name);
-        self
-    }
-
-    /// Sets default timeout in milliseconds.
-    #[must_use]
-    pub const fn timeout_ms(mut self, timeout_ms: u32) -> Self {
-        self.timeout_ms = Some(timeout_ms);
-        self
-    }
-
-    /// Sets default attestation preference.
-    #[must_use]
-    pub const fn attestation(mut self, preference: AttestationPreference) -> Self {
-        self.attestation = preference;
-        self
-    }
-
-    /// Sets default user verification behavior.
-    #[must_use]
-    pub const fn user_verification(mut self, requirement: UserVerificationRequirement) -> Self {
-        self.user_verification = requirement;
-        self
-    }
-
-    /// Sets default discoverable credential behavior.
-    #[must_use]
-    pub const fn discoverable(mut self, discoverable: bool) -> Self {
-        self.discoverable = discoverable;
-        self
-    }
-
-    /// Sets default public key algorithm preferences.
-    ///
-    /// # Errors
-    /// Returns [`PasskeyError::InvalidInput`] when no algorithms are provided.
-    pub fn pub_key_algorithms(
-        mut self,
-        algorithms: Vec<PublicKeyAlgorithm>,
-    ) -> Result<Self, PasskeyError> {
-        if algorithms.is_empty() {
-            return Err(PasskeyError::InvalidInput(
-                "at least one public key algorithm is required".into(),
-            ));
-        }
-        self.pub_key_algorithms = algorithms;
-        Ok(self)
-    }
-
-    /// Builds a [`PasskeyClient`].
-    ///
-    /// # Errors
-    /// Returns [`PasskeyError::InvalidInput`] if relying-party fields are missing or malformed.
-    pub fn build(self) -> Result<PasskeyClient, PasskeyError> {
-        let rp_id = self
-            .rp_id
-            .ok_or_else(|| PasskeyError::InvalidInput("missing rp id".into()))?;
-        let rp_name = self
-            .rp_name
-            .ok_or_else(|| PasskeyError::InvalidInput("missing rp name".into()))?;
-        let relying_party = RelyingParty::new(rp_id, rp_name)?;
-
-        Ok(PasskeyClient {
-            relying_party,
-            timeout_ms: self.timeout_ms,
-            attestation: self.attestation,
-            pub_key_algorithms: self.pub_key_algorithms,
-            user_verification: self.user_verification,
-            discoverable: self.discoverable,
-        })
-    }
-}
-
-impl Default for PasskeyClientBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

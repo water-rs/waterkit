@@ -10,7 +10,7 @@ pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
     let (tx, rx) = oneshot::channel();
 
     std::thread::spawn(move || {
-        let level = match dialog.type_ {
+        let level = match dialog.kind {
             DialogType::Info => MessageLevel::Info,
             DialogType::Warning => MessageLevel::Warning,
             DialogType::Error => MessageLevel::Error,
@@ -38,7 +38,7 @@ pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
     let (tx, rx) = oneshot::channel();
 
     std::thread::spawn(move || {
-        let level = match dialog.type_ {
+        let level = match dialog.kind {
             DialogType::Info => MessageLevel::Info,
             DialogType::Warning => MessageLevel::Warning,
             DialogType::Error => MessageLevel::Error,

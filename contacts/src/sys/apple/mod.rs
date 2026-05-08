@@ -17,12 +17,12 @@ pub async fn fetch_all() -> Result<Vec<Contact>, ContactsError> {
         if error.is_empty() {
             let _ = tx.send(Ok(json));
         } else {
-            let _ = tx.send(Err(ContactsError::PlatformError(error)));
+            let _ = tx.send(Err(ContactsError::Platform(error)));
         }
     }));
     let json = rx
         .await
-        .map_err(|_| ContactsError::PlatformError("callback dropped".into()))??;
+        .map_err(|_| ContactsError::Platform("callback dropped".into()))??;
     Ok(parse_contacts_json(&json))
 }
 
@@ -34,13 +34,13 @@ pub async fn search(query: &str) -> Result<Vec<Contact>, ContactsError> {
             if error.is_empty() {
                 let _ = tx.send(Ok(json));
             } else {
-                let _ = tx.send(Err(ContactsError::PlatformError(error)));
+                let _ = tx.send(Err(ContactsError::Platform(error)));
             }
         }),
     );
     let json = rx
         .await
-        .map_err(|_| ContactsError::PlatformError("callback dropped".into()))??;
+        .map_err(|_| ContactsError::Platform("callback dropped".into()))??;
     Ok(parse_contacts_json(&json))
 }
 
@@ -52,13 +52,13 @@ pub async fn get(id: &str) -> Result<Contact, ContactsError> {
             if error.is_empty() {
                 let _ = tx.send(Ok(json));
             } else {
-                let _ = tx.send(Err(ContactsError::PlatformError(error)));
+                let _ = tx.send(Err(ContactsError::Platform(error)));
             }
         }),
     );
     let json = rx
         .await
-        .map_err(|_| ContactsError::PlatformError("callback dropped".into()))??;
+        .map_err(|_| ContactsError::Platform("callback dropped".into()))??;
     parse_contacts_json(&json)
         .into_iter()
         .next()
@@ -74,17 +74,17 @@ pub async fn create(data: ContactData) -> Result<Contact, ContactsError> {
             if error.is_empty() {
                 let _ = tx.send(Ok(result_json));
             } else {
-                let _ = tx.send(Err(ContactsError::PlatformError(error)));
+                let _ = tx.send(Err(ContactsError::Platform(error)));
             }
         }),
     );
     let result_json = rx
         .await
-        .map_err(|_| ContactsError::PlatformError("callback dropped".into()))??;
+        .map_err(|_| ContactsError::Platform("callback dropped".into()))??;
     parse_contacts_json(&result_json)
         .into_iter()
         .next()
-        .ok_or_else(|| ContactsError::PlatformError("failed to create contact".into()))
+        .ok_or_else(|| ContactsError::Platform("failed to create contact".into()))
 }
 
 pub async fn delete(id: &str) -> Result<(), ContactsError> {
@@ -95,12 +95,12 @@ pub async fn delete(id: &str) -> Result<(), ContactsError> {
             if error.is_empty() {
                 let _ = tx.send(Ok(()));
             } else {
-                let _ = tx.send(Err(ContactsError::PlatformError(error)));
+                let _ = tx.send(Err(ContactsError::Platform(error)));
             }
         }),
     );
     rx.await
-        .map_err(|_| ContactsError::PlatformError("callback dropped".into()))?
+        .map_err(|_| ContactsError::Platform("callback dropped".into()))?
 }
 
 fn parse_contacts_json(json: &str) -> Vec<Contact> {
@@ -146,7 +146,7 @@ fn parse_contacts_json(json: &str) -> Vec<Contact> {
                 birthday: parts
                     .get(6)
                     .filter(|s| !s.is_empty())
-                    .map(ToString::to_string),
+                    .and_then(|s| s.parse::<crate::Date>().ok()),
                 note: parts
                     .get(7)
                     .filter(|s| !s.is_empty())
@@ -170,6 +170,11 @@ fn serialize_contact_data(data: &ContactData) -> String {
         .map(|e| e.address.as_str())
         .collect::<Vec<_>>()
         .join(",");
+    let birthday = data
+        .birthday
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default();
     format!(
         "{}\t{}\t{}\t{}\t{}\t{}\t{}",
         data.given_name.as_deref().unwrap_or(""),
@@ -177,7 +182,7 @@ fn serialize_contact_data(data: &ContactData) -> String {
         data.organization.as_deref().unwrap_or(""),
         phones,
         emails,
-        data.birthday.as_deref().unwrap_or(""),
+        birthday,
         data.note.as_deref().unwrap_or(""),
     )
 }

@@ -5,11 +5,16 @@
 //! persistent desktop store under the user's local data directory.
 
 #![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
 
 mod sys;
 
+#[doc(no_inline)]
+pub use jiff::civil::Date;
+
 /// A phone number with label.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct PhoneNumber {
     /// The phone number string.
     pub number: String,
@@ -19,6 +24,7 @@ pub struct PhoneNumber {
 
 /// An email address with label.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct EmailAddress {
     /// The email address string.
     pub address: String,
@@ -28,6 +34,7 @@ pub struct EmailAddress {
 
 /// A postal address.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct PostalAddress {
     /// Street address.
     pub street: Option<String>,
@@ -45,6 +52,7 @@ pub struct PostalAddress {
 
 /// A contact entry.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct Contact {
     /// Platform-specific contact identifier.
     pub id: String,
@@ -60,8 +68,8 @@ pub struct Contact {
     pub email_addresses: Vec<EmailAddress>,
     /// Postal addresses.
     pub postal_addresses: Vec<PostalAddress>,
-    /// Birthday (as ISO 8601 date string, e.g., "1990-01-15").
-    pub birthday: Option<String>,
+    /// Birthday (calendar date; year may be a placeholder).
+    pub birthday: Option<Date>,
     /// Note/memo.
     pub note: Option<String>,
     /// Thumbnail image data (PNG/JPEG bytes).
@@ -70,6 +78,7 @@ pub struct Contact {
 
 /// A request to create or update a contact.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct ContactData {
     /// Given (first) name.
     pub given_name: Option<String>,
@@ -83,8 +92,8 @@ pub struct ContactData {
     pub email_addresses: Vec<EmailAddress>,
     /// Postal addresses.
     pub postal_addresses: Vec<PostalAddress>,
-    /// Birthday (ISO 8601 date string).
-    pub birthday: Option<String>,
+    /// Birthday (calendar date; year may be a placeholder).
+    pub birthday: Option<Date>,
     /// Note/memo.
     pub note: Option<String>,
 }
@@ -131,6 +140,7 @@ pub async fn delete(id: &str) -> Result<(), ContactsError> {
 
 /// Errors in contacts operations.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum ContactsError {
     /// Contacts access not available.
     #[error("contacts not available")]
@@ -146,5 +156,5 @@ pub enum ContactsError {
     Unsupported,
     /// Platform error.
     #[error("platform error: {0}")]
-    PlatformError(String),
+    Platform(String),
 }

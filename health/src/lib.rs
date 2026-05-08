@@ -4,10 +4,19 @@
 //! - iOS: `HealthKit`
 //! - Android: `Health Connect`
 //! - Desktop: persistent local data store
+//!
+//! Permissions are requested via `waterkit_permission::request` with
+//! [`waterkit_core::Permission::HealthRead`] /
+//! [`waterkit_core::Permission::HealthWrite`]; this crate no longer ships
+//! its own `request_authorization`.
 
 #![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
 
 mod sys;
+
+use waterkit_core::Capabilities;
+use waterkit_core::Timestamp;
 
 /// Type of health data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -38,8 +47,8 @@ pub struct HealthSample {
     data_type: HealthDataType,
     value: f64,
     unit: String,
-    start_date: String,
-    end_date: String,
+    start: Timestamp,
+    end: Timestamp,
     source: Option<String>,
 }
 
@@ -50,22 +59,22 @@ impl HealthSample {
         data_type: HealthDataType,
         value: f64,
         unit: impl Into<String>,
-        start_date: impl Into<String>,
-        end_date: impl Into<String>,
+        start: Timestamp,
+        end: Timestamp,
     ) -> Self {
         Self {
             data_type,
             value,
             unit: unit.into(),
-            start_date: start_date.into(),
-            end_date: end_date.into(),
+            start,
+            end,
             source: None,
         }
     }
 
     /// Sets the source app/device name.
     #[must_use]
-    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+    pub fn source(mut self, source: impl Into<String>) -> Self {
         self.source = Some(source.into());
         self
     }
@@ -88,59 +97,65 @@ impl HealthSample {
         &self.unit
     }
 
-    /// Start date (ISO 8601).
+    /// Sample start instant.
     #[must_use]
-    pub fn start_date(&self) -> &str {
-        &self.start_date
+    pub const fn start(&self) -> Timestamp {
+        self.start
     }
 
-    /// End date (ISO 8601).
+    /// Sample end instant.
     #[must_use]
-    pub fn end_date(&self) -> &str {
-        &self.end_date
+    pub const fn end(&self) -> Timestamp {
+        self.end
     }
 
     /// Source app/device name.
     #[must_use]
-    pub fn source(&self) -> Option<&str> {
+    pub fn source_name(&self) -> Option<&str> {
         self.source.as_deref()
     }
 }
 
-/// Check if health data is available on this device.
+/// Capability probe result for the health subsystem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct HealthCapabilities {
+    /// Whether health data is accessible at runtime.
+    pub available: bool,
+}
+
+impl Capabilities for HealthCapabilities {
+    fn available(&self) -> bool {
+        self.available
+    }
+}
+
+/// Probes the health subsystem.
 #[must_use]
-#[allow(clippy::missing_const_for_fn)]
-pub fn is_available() -> bool {
-    sys::is_available()
+pub fn capabilities() -> HealthCapabilities {
+    HealthCapabilities {
+        available: sys::is_available(),
+    }
 }
 
-/// Request authorization to read/write health data types.
+/// Queries health samples within a date range.
 ///
 /// # Errors
-/// Returns error if authorization fails.
-pub async fn request_authorization(
-    read_types: &[HealthDataType],
-    write_types: &[HealthDataType],
-) -> Result<(), HealthError> {
-    sys::request_authorization(read_types, write_types).await
-}
-
-/// Query health samples within a date range.
 ///
-/// # Errors
-/// Returns error if the query fails.
+/// Returns [`HealthError`] when the query cannot be executed.
 pub async fn query_samples(
     data_type: HealthDataType,
-    start_date: &str,
-    end_date: &str,
+    start: Timestamp,
+    end: Timestamp,
 ) -> Result<Vec<HealthSample>, HealthError> {
-    sys::query_samples(data_type, start_date, end_date).await
+    sys::query_samples(data_type, start, end).await
 }
 
-/// Write a health sample.
+/// Writes a health sample.
 ///
 /// # Errors
-/// Returns error if writing fails.
+///
+/// Returns [`HealthError`] when the write cannot be performed.
 pub async fn write_sample(sample: HealthSample) -> Result<(), HealthError> {
     sys::write_sample(sample).await
 }
@@ -160,5 +175,5 @@ pub enum HealthError {
     Unsupported,
     /// Platform error.
     #[error("platform error: {0}")]
-    PlatformError(String),
+    Platform(String),
 }

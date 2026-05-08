@@ -105,7 +105,7 @@ pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
         .map_err(|_| DialogError::PlatformError("dialog callback registry poisoned".into()))?
         .insert(id, tx);
 
-    let type_str = match dialog.type_ {
+    let type_str = match dialog.kind {
         DialogType::Info => "info",
         DialogType::Warning => "warning",
         DialogType::Error => "error",
@@ -126,7 +126,7 @@ pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
         .map_err(|_| DialogError::PlatformError("dialog callback registry poisoned".into()))?
         .insert(id, tx);
 
-    let type_str = match dialog.type_ {
+    let type_str = match dialog.kind {
         DialogType::Info => "info",
         DialogType::Warning => "warning",
         DialogType::Error => "error",

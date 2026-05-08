@@ -1,4 +1,5 @@
 use crate::{Calendar, CalendarError, Event, EventData};
+use waterkit_core::Timestamp;
 
 #[allow(clippy::unused_async)]
 pub async fn list_calendars() -> Result<Vec<Calendar>, CalendarError> {
@@ -6,7 +7,10 @@ pub async fn list_calendars() -> Result<Vec<Calendar>, CalendarError> {
 }
 
 #[allow(clippy::unused_async)]
-pub async fn fetch_events(_start: &str, _end: &str) -> Result<Vec<Event>, CalendarError> {
+pub async fn fetch_events(
+    _start: Timestamp,
+    _end: Timestamp,
+) -> Result<Vec<Event>, CalendarError> {
     Err(CalendarError::Unsupported)
 }
 

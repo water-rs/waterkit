@@ -57,6 +57,7 @@ pub(crate) fn decode_string_list(encoded: Option<String>) -> Option<Vec<String>>
 
 /// Types of dialogs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DialogType {
     /// Information dialog.
     Info,
@@ -69,65 +70,98 @@ pub enum DialogType {
 /// A native dialog.
 #[derive(Debug, Clone)]
 pub struct Dialog {
-    /// Title of the dialog.
-    pub title: String,
-    /// Message content of the dialog.
-    pub message: String,
-    /// Type/Icon of the dialog.
-    pub type_: DialogType,
+    pub(crate) title: String,
+    pub(crate) message: String,
+    pub(crate) kind: DialogType,
 }
 
 impl Dialog {
-    /// Create a new dialog with default Info type.
+    /// Constructs a dialog with default `Info` type.
     pub fn new(title: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             title: title.into(),
             message: message.into(),
-            type_: DialogType::Info,
+            kind: DialogType::Info,
         }
     }
 
-    /// Set the dialog type.
+    /// Sets the dialog kind (icon style).
     #[must_use]
-    pub const fn with_type(mut self, type_: DialogType) -> Self {
-        self.type_ = type_;
+    pub const fn kind(mut self, kind: DialogType) -> Self {
+        self.kind = kind;
         self
     }
 
-    /// Show the dialog (blocking or modal).
-    /// Returns when the user dismisses the dialog.
+    /// Returns the dialog title.
+    #[must_use]
+    pub fn title_str(&self) -> &str {
+        &self.title
+    }
+
+    /// Returns the dialog message.
+    #[must_use]
+    pub fn message_str(&self) -> &str {
+        &self.message
+    }
+
+    /// Returns the dialog kind.
+    #[must_use]
+    pub const fn kind_value(&self) -> DialogType {
+        self.kind
+    }
+
+    /// Convenience: build + show an info-style alert in one call.
     ///
     /// # Errors
-    /// Returns an error if the native dialog fails to show or is not supported.
+    ///
+    /// Returns [`DialogError`] if the native dialog cannot be shown.
+    pub async fn alert(title: impl Into<String>, message: impl Into<String>) -> Result<(), DialogError> {
+        Self::new(title, message).show().await
+    }
+
+    /// Convenience: build + show a Yes/No confirmation in one call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DialogError`] if the native dialog cannot be shown.
+    pub async fn confirm(title: impl Into<String>, message: impl Into<String>) -> Result<bool, DialogError> {
+        Self::new(title, message).show_confirm().await
+    }
+
+    /// Shows the dialog as a modal alert.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DialogError`] if the native dialog fails to show or is
+    /// unsupported on this platform.
     pub async fn show(self) -> Result<(), DialogError> {
         sys::show_alert(self).await
     }
 
-    /// Show a confirmation dialog (Yes/No or OK/Cancel).
-    /// Returns true if confirmed (Yes/OK), false otherwise.
+    /// Shows the dialog as a Yes/No (or OK/Cancel) confirmation. Returns
+    /// `true` if confirmed.
     ///
     /// # Errors
-    /// Returns an error if the native dialog fails to show or is not supported.
+    ///
+    /// Returns [`DialogError`] if the native dialog fails to show or is
+    /// unsupported on this platform.
     pub async fn show_confirm(self) -> Result<bool, DialogError> {
         sys::show_confirm(self).await
     }
 }
 
-/// A native file dialog (open/save).
+
+/// A native file open dialog.
 #[derive(Debug, Clone)]
 pub struct FileDialog {
-    /// Title of the dialog
-    pub title: Option<String>,
-    /// Starting directory
-    pub location: Option<std::path::PathBuf>,
-    /// File filters name -> `extensions`
-    pub filters: Vec<(String, Vec<String>)>,
-    /// Import selected files into the application's cache directory subtree before returning.
-    pub import_to_cache_subdir: Option<PathBuf>,
+    pub(crate) title: Option<String>,
+    pub(crate) location: Option<std::path::PathBuf>,
+    pub(crate) filters: Vec<(String, Vec<String>)>,
+    pub(crate) import_to_cache_subdir: Option<PathBuf>,
 }
 
 impl FileDialog {
-    /// Create a new file dialog.
+    /// Constructs a new file dialog with empty configuration.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -138,24 +172,26 @@ impl FileDialog {
         }
     }
 
-    /// Set the title of the dialog.
+    /// Sets the dialog title. `with_*` prefix kept for symmetry with
+    /// the (future) accessor methods.
     #[must_use]
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
     }
 
-    /// Set the starting location.
+    /// Sets the initial directory shown by the dialog.
     #[must_use]
-    pub fn set_location(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+    pub fn with_location(mut self, path: impl Into<std::path::PathBuf>) -> Self {
         self.location = Some(path.into());
         self
     }
 
-    /// Add a file extension filter.
-    /// Usage: `add_filter("Image", &["png", "jpg"])`
+    /// Adds a file extension filter (name + list of extensions).
+    /// Singular method name `with_filter` matches the workspace builder
+    /// convention; call repeatedly to add multiple filters.
     #[must_use]
-    pub fn add_filter(mut self, name: impl Into<String>, extensions: &[&str]) -> Self {
+    pub fn with_filter(mut self, name: impl Into<String>, extensions: &[&str]) -> Self {
         self.filters.push((
             name.into(),
             extensions
@@ -166,32 +202,34 @@ impl FileDialog {
         self
     }
 
-    /// Import selected files into the application's cache directory subtree before returning.
+    /// Imports selected files into the app's cache directory subtree
+    /// before returning their paths. Useful on Apple platforms where
+    /// security-scoped URLs need to be copied into the sandbox.
     #[must_use]
-    pub fn import_to_cache_subdir(mut self, cache_subdir: impl Into<PathBuf>) -> Self {
+    pub fn with_import_to_cache(mut self, cache_subdir: impl Into<PathBuf>) -> Self {
         self.import_to_cache_subdir = Some(cache_subdir.into());
         self
     }
 
-    /// Show the dialog to select a single file to open.
+    /// Shows the dialog to select a single file.
     ///
     /// # Errors
-    /// Returns an error if the native dialog fails to show or is not supported.
-    pub async fn show_open_single_file(self) -> Result<Option<std::path::PathBuf>, DialogError> {
+    ///
+    /// Returns [`DialogError`] if the dialog cannot be displayed.
+    pub async fn pick_single(self) -> Result<Option<std::path::PathBuf>, DialogError> {
         sys::show_open_single_file(self).await
     }
 
-    /// Show the dialog to select multiple files to open.
+    /// Shows the dialog to select multiple files.
     ///
     /// # Errors
-    /// Returns an error if the native dialog fails to show or is not supported.
-    pub async fn show_open_multiple_files(
+    ///
+    /// Returns [`DialogError`] if the dialog cannot be displayed.
+    pub async fn pick_multiple(
         self,
     ) -> Result<Option<Vec<std::path::PathBuf>>, DialogError> {
         sys::show_open_multiple_files(self).await
     }
-
-    // Future: show_save_single_file
 }
 
 impl Default for FileDialog {
@@ -500,8 +538,8 @@ mod tests {
     #[test]
     fn collect_filter_extensions_normalizes_and_deduplicates() {
         let dialog = FileDialog::new()
-            .add_filter("Images", &[".PNG", "jpg", ""])
-            .add_filter("More", &["png", " gif "]);
+            .with_filter("Images", &[".PNG", "jpg", ""])
+            .with_filter("More", &["png", " gif "]);
         assert_eq!(
             collect_filter_extensions(&dialog),
             vec!["png".to_string(), "jpg".to_string(), "gif".to_string()]

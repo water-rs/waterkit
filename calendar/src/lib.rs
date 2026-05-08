@@ -5,17 +5,21 @@
 //! persistent desktop store under the user's local data directory.
 
 #![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
 
 mod sys;
 
+use waterkit_core::Timestamp;
+
 /// A calendar on the device.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct Calendar {
     /// Platform-specific calendar identifier.
     pub id: String,
     /// Calendar title/name.
     pub title: String,
-    /// Calendar color as hex string (e.g., "#FF0000").
+    /// Calendar color as hex string (e.g., `#FF0000`).
     pub color: Option<String>,
     /// Whether the calendar is read-only.
     pub is_read_only: bool,
@@ -23,6 +27,7 @@ pub struct Calendar {
 
 /// Recurrence frequency for repeating events.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub enum RecurrenceFrequency {
     /// Daily recurrence.
     Daily,
@@ -36,17 +41,19 @@ pub enum RecurrenceFrequency {
 
 /// A recurrence rule.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct RecurrenceRule {
     /// Frequency of recurrence.
     pub frequency: RecurrenceFrequency,
     /// Interval (e.g., every 2 weeks).
     pub interval: u32,
-    /// End date (ISO 8601). None = no end.
-    pub end_date: Option<String>,
+    /// End instant; `None` means no end.
+    pub end: Option<Timestamp>,
 }
 
 /// A calendar event.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct Event {
     /// Platform-specific event identifier.
     pub id: String,
@@ -56,10 +63,10 @@ pub struct Event {
     pub notes: Option<String>,
     /// Event location.
     pub location: Option<String>,
-    /// Start date/time (ISO 8601).
-    pub start_date: String,
-    /// End date/time (ISO 8601).
-    pub end_date: String,
+    /// Start instant.
+    pub start: Timestamp,
+    /// End instant.
+    pub end: Timestamp,
     /// Whether this is an all-day event.
     pub is_all_day: bool,
     /// Calendar this event belongs to.
@@ -68,6 +75,7 @@ pub struct Event {
 
 /// Data for creating an event.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub struct EventData {
     /// Event title.
     pub title: String,
@@ -75,50 +83,55 @@ pub struct EventData {
     pub notes: Option<String>,
     /// Event location.
     pub location: Option<String>,
-    /// Start date/time (ISO 8601).
-    pub start_date: String,
-    /// End date/time (ISO 8601).
-    pub end_date: String,
+    /// Start instant.
+    pub start: Timestamp,
+    /// End instant.
+    pub end: Timestamp,
     /// Whether this is an all-day event.
     pub is_all_day: bool,
     /// Calendar ID to add the event to.
     pub calendar_id: Option<String>,
 }
 
-/// List all calendars on the device.
+/// Lists all calendars on the device.
 ///
 /// # Errors
-/// Returns error if calendars cannot be accessed.
+///
+/// Returns [`CalendarError`] when calendars cannot be accessed.
 pub async fn list_calendars() -> Result<Vec<Calendar>, CalendarError> {
     sys::list_calendars().await
 }
 
-/// Fetch events within a date range.
+/// Fetches events within a date range.
 ///
 /// # Errors
-/// Returns error if events cannot be fetched.
-pub async fn fetch_events(start_date: &str, end_date: &str) -> Result<Vec<Event>, CalendarError> {
-    sys::fetch_events(start_date, end_date).await
+///
+/// Returns [`CalendarError`] when events cannot be fetched.
+pub async fn fetch_events(start: Timestamp, end: Timestamp) -> Result<Vec<Event>, CalendarError> {
+    sys::fetch_events(start, end).await
 }
 
-/// Create a new event.
+/// Creates a new event.
 ///
 /// # Errors
-/// Returns error if creation fails.
+///
+/// Returns [`CalendarError`] when creation fails.
 pub async fn create_event(data: EventData) -> Result<Event, CalendarError> {
     sys::create_event(data).await
 }
 
-/// Delete an event by ID.
+/// Deletes an event by ID.
 ///
 /// # Errors
-/// Returns error if deletion fails.
+///
+/// Returns [`CalendarError`] when deletion fails.
 pub async fn delete_event(id: &str) -> Result<(), CalendarError> {
     sys::delete_event(id).await
 }
 
 /// Errors in calendar operations.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum CalendarError {
     /// Calendar access not available.
     #[error("calendar not available")]
@@ -137,5 +150,5 @@ pub enum CalendarError {
     Unsupported,
     /// Platform error.
     #[error("platform error: {0}")]
-    PlatformError(String),
+    Platform(String),
 }

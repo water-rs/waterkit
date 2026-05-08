@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::{Calendar, CalendarError, Event, EventData};
+use waterkit_core::Timestamp;
 use waterkit_fs::WaterFs;
 
 const STORE_FILE_NAME: &str = "calendar.json";
@@ -36,13 +37,11 @@ pub async fn list_calendars() -> Result<Vec<Calendar>, CalendarError> {
     .await
 }
 
-pub async fn fetch_events(start: &str, end: &str) -> Result<Vec<Event>, CalendarError> {
-    let start = start.to_string();
-    let end = end.to_string();
+pub async fn fetch_events(start: Timestamp, end: Timestamp) -> Result<Vec<Event>, CalendarError> {
     blocking::unblock(move || {
         if start > end {
-            return Err(CalendarError::PlatformError(
-                "start date must be less than or equal to end date".to_string(),
+            return Err(CalendarError::Platform(
+                "start instant must be less than or equal to end".to_string(),
             ));
         }
         let path = store_path()?;
@@ -50,7 +49,7 @@ pub async fn fetch_events(start: &str, end: &str) -> Result<Vec<Event>, Calendar
         Ok(store
             .events
             .into_iter()
-            .filter(|event| event_overlaps(event, &start, &end))
+            .filter(|event| event.end >= start && event.start <= end)
             .collect())
     })
     .await
@@ -58,9 +57,9 @@ pub async fn fetch_events(start: &str, end: &str) -> Result<Vec<Event>, Calendar
 
 pub async fn create_event(data: EventData) -> Result<Event, CalendarError> {
     blocking::unblock(move || {
-        if data.start_date > data.end_date {
-            return Err(CalendarError::PlatformError(
-                "event start date must be less than or equal to end date".to_string(),
+        if data.start > data.end {
+            return Err(CalendarError::Platform(
+                "event start must be less than or equal to end".to_string(),
             ));
         }
 
@@ -74,7 +73,7 @@ pub async fn create_event(data: EventData) -> Result<Event, CalendarError> {
             .iter()
             .find(|calendar| calendar.id == calendar_id.as_str())
             .ok_or_else(|| {
-                CalendarError::PlatformError(format!("calendar not found: {calendar_id}"))
+                CalendarError::Platform(format!("calendar not found: {calendar_id}"))
             })?;
         if calendar.is_read_only {
             return Err(CalendarError::ReadOnly);
@@ -85,15 +84,15 @@ pub async fn create_event(data: EventData) -> Result<Event, CalendarError> {
             title: data.title,
             notes: data.notes,
             location: data.location,
-            start_date: data.start_date,
-            end_date: data.end_date,
+            start: data.start,
+            end: data.end,
             is_all_day: data.is_all_day,
             calendar_id,
         };
         store.next_event_id = store
             .next_event_id
             .checked_add(1)
-            .ok_or_else(|| CalendarError::PlatformError("desktop event id overflow".to_string()))?;
+            .ok_or_else(|| CalendarError::Platform("desktop event id overflow".to_string()))?;
         store.events.push(event.clone());
         write_store(&path, &store)?;
         Ok(event)
@@ -119,24 +118,20 @@ pub async fn delete_event(id: &str) -> Result<(), CalendarError> {
     .await
 }
 
-fn event_overlaps(event: &Event, start: &str, end: &str) -> bool {
-    event.end_date.as_str() >= start && event.start_date.as_str() <= end
-}
-
 fn store_path() -> Result<PathBuf, CalendarError> {
     WaterFs::data_local_path(Path::new("waterkit").join("calendar").join(STORE_FILE_NAME)).map_err(
-        |error| CalendarError::PlatformError(format!("resolve calendar store path: {error}")),
+        |error| CalendarError::Platform(format!("resolve calendar store path: {error}")),
     )
 }
 
 fn load_store(path: &Path) -> Result<CalendarStore, CalendarError> {
     WaterFs::load_json_store(path).map_err(|error| {
-        CalendarError::PlatformError(format!("load calendar store {}: {error}", path.display()))
+        CalendarError::Platform(format!("load calendar store {}: {error}", path.display()))
     })
 }
 
 fn write_store(path: &Path, store: &CalendarStore) -> Result<(), CalendarError> {
     WaterFs::write_json_store(path, store).map_err(|error| {
-        CalendarError::PlatformError(format!("write calendar store {}: {error}", path.display()))
+        CalendarError::Platform(format!("write calendar store {}: {error}", path.display()))
     })
 }

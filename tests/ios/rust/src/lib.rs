@@ -139,8 +139,8 @@ fn run_tests() {
         #[cfg(feature = "system")]
         {
             println!("Testing waterkit-system...");
-            let conn = waterkit::system::get_connectivity_info();
-            println!("Connectivity: {:?}", conn.connection_type);
+            let conn = waterkit::system::connectivity();
+            println!("Connectivity: {:?}", conn.connection_type());
         }
 
         #[cfg(feature = "video")]

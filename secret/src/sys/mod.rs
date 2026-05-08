@@ -41,7 +41,7 @@ pub async fn set(
     _account: &str,
     _password: &str,
 ) -> Result<(), crate::SecretError> {
-    Err(crate::SecretError::System("Unsupported platform".into()))
+    Err(crate::SecretError::Platform("Unsupported platform".into()))
 }
 
 #[cfg(not(any(
@@ -53,7 +53,7 @@ pub async fn set(
 )))]
 /// Retrieve a secret (fallback).
 pub async fn get(_service: &str, _account: &str) -> Result<String, crate::SecretError> {
-    Err(crate::SecretError::System("Unsupported platform".into()))
+    Err(crate::SecretError::Platform("Unsupported platform".into()))
 }
 
 #[cfg(not(any(
@@ -65,5 +65,5 @@ pub async fn get(_service: &str, _account: &str) -> Result<String, crate::Secret
 )))]
 /// Delete a secret (fallback).
 pub async fn delete(_service: &str, _account: &str) -> Result<(), crate::SecretError> {
-    Err(crate::SecretError::System("Unsupported platform".into()))
+    Err(crate::SecretError::Platform("Unsupported platform".into()))
 }

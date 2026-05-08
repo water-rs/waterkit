@@ -1,11 +1,11 @@
 //! Cross-platform secure storage.
 //!
-//! This crate provides a unified API for storing secrets securely across
-//! iOS, macOS, Android, Windows, and Linux platforms.
+//! Provides a unified API for storing secrets securely across iOS, macOS,
+//! Android, Windows, and Linux.
 
 #![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
 
-/// Platform-specific implementations.
 mod sys;
 
 /// Android-specific JNI helpers that require an explicit `JNIEnv` and `Context`.
@@ -16,6 +16,7 @@ pub mod android {
 
 /// Errors that can occur when accessing secrets.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SecretError {
     /// The secret could not be found.
     #[error("secret not found")]
@@ -23,9 +24,9 @@ pub enum SecretError {
     /// Permission was denied.
     #[error("permission denied")]
     PermissionDenied,
-    /// An underlying system error occurred.
-    #[error("system error: {0}")]
-    System(String),
+    /// Platform-level failure (keychain, credential manager, libsecret, …).
+    #[error("platform error: {0}")]
+    Platform(String),
     /// Invalid input (e.g. empty service/account).
     #[error("invalid input: {0}")]
     InvalidInput(String),

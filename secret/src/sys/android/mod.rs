@@ -24,7 +24,7 @@ const BASE64_NO_WRAP: i32 = 2;
 const PAYLOAD_SEPARATOR: char = ':';
 
 fn system_error(action: &str, err: impl Display) -> SecretError {
-    SecretError::System(format!("{action}: {err}"))
+    SecretError::Platform(format!("{action}: {err}"))
 }
 
 fn with_android_context<T, F>(f: F) -> Result<T, SecretError>
@@ -39,7 +39,7 @@ where
         .map_err(|err| system_error("failed to attach current thread to JVM", err))?;
     let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
     if context.is_null() {
-        return Err(SecretError::System(
+        return Err(SecretError::Platform(
             "failed to obtain Android Context from ndk_context".into(),
         ));
     }
@@ -320,7 +320,7 @@ fn ensure_hardware_backed<'local>(
     if inside_secure_hardware {
         Ok(())
     } else {
-        Err(SecretError::System(
+        Err(SecretError::Platform(
             "Android keystore key is not hardware-backed".into(),
         ))
     }
@@ -355,7 +355,7 @@ fn ensure_secret_key<'local>(
         .map_err(|err| system_error("KeyStore.getKey JNI result conversion failed", err))?;
 
     if key.is_null() {
-        return Err(SecretError::System(
+        return Err(SecretError::Platform(
             "Android keystore returned null key".into(),
         ));
     }
@@ -472,7 +472,7 @@ fn decrypt_payload<'local>(
 ) -> Result<String, SecretError> {
     let (iv_encoded, ciphertext_encoded) =
         payload.split_once(PAYLOAD_SEPARATOR).ok_or_else(|| {
-            SecretError::System(
+            SecretError::Platform(
                 "stored Android secret payload is malformed (missing separator)".into(),
             )
         })?;
@@ -517,7 +517,7 @@ fn decrypt_payload<'local>(
         .map_err(|err| system_error("failed to convert plaintext byte array", err))?;
 
     String::from_utf8(plaintext_bytes)
-        .map_err(|err| SecretError::System(format!("decrypted payload is not valid UTF-8: {err}")))
+        .map_err(|err| SecretError::Platform(format!("decrypted payload is not valid UTF-8: {err}")))
 }
 
 #[allow(clippy::unused_async)]

@@ -227,9 +227,9 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         #[cfg(feature = "system")]
         {
             log::info!("Testing waterkit-system...");
-            let conn = waterkit_content::system::get_connectivity_info();
+            let conn = waterkit_content::system::connectivity();
             log::info!("System connectivity: {:?}", conn.connection_type);
-            let thermal = waterkit_content::system::get_thermal_state();
+            let thermal = waterkit_content::system::thermal_state();
             log::info!("System thermal: {thermal:?}");
         }
 

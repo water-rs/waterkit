@@ -1,7 +1,12 @@
 //! System information and status.
 //!
-//! This crate provides a unified API for retrieving system information
-//! such as connectivity, thermal state, and system load across different platforms.
+//! Snapshot APIs ([`connectivity`], [`thermal_state`], [`load`]) return
+//! the current value at the moment of the call. A future revision will
+//! pair each with a `Subscribed<T>`-returning variant once platform
+//! change-listeners are wired in.
+
+#![warn(missing_docs)]
+#![warn(missing_debug_implementations)]
 
 mod sys;
 
@@ -111,20 +116,20 @@ impl SystemLoad {
     }
 }
 
-/// Get the current network connectivity information.
+/// Snapshot of the current network connectivity.
 #[must_use]
-pub fn get_connectivity_info() -> ConnectivityInfo {
+pub fn connectivity() -> ConnectivityInfo {
     sys::get_connectivity_info()
 }
 
-/// Get the current thermal state of the device.
+/// Snapshot of the current thermal state.
 #[must_use]
-pub fn get_thermal_state() -> ThermalState {
+pub fn thermal_state() -> ThermalState {
     sys::get_thermal_state()
 }
 
-/// Get the current system load information.
+/// Snapshot of the current CPU / memory load.
 #[must_use]
-pub fn get_system_load() -> SystemLoad {
+pub fn load() -> SystemLoad {
     sys::get_system_load()
 }

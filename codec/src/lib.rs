@@ -187,7 +187,7 @@ impl std::fmt::Debug for DecodeIntoStream {
 
 /// Streaming iterator over encoded packets.
 ///
-/// Created by [`Encoder::encode`]. Yields encoded data packets one at a time.
+/// Created by [`Encoder::encode_nv12`] or [`Encoder::encode_iosurface`]. Yields encoded data packets one at a time.
 pub struct EncodeStream {
     inner: EncodeStreamInner,
 }

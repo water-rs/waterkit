@@ -14,7 +14,7 @@
 //! ## Android
 //!
 //! On Android, the async APIs automatically use `ndk-context` for `Context` lookup.
-//! The [`android`] module still exposes explicit JNI entry points for advanced integration.
+//! The `android` module still exposes explicit JNI entry points for advanced integration.
 
 #![warn(missing_docs)]
 

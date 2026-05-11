@@ -393,9 +393,13 @@ impl MediaSession {
         self.inner.clear()
     }
 
-    // Media commands from system controls are consumed via
-    // `AudioPlayer::commands()`'s push-based stream — there is
-    // intentionally no manual `poll_command` on the session.
+    /// Poll the next media command from system controls.
+    ///
+    /// Returns `None` when no pending command is available.
+    #[must_use]
+    pub fn poll_command(&self) -> Option<MediaCommand> {
+        self.inner.poll_command()
+    }
 }
 
 #[cfg(test)]

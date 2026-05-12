@@ -3,6 +3,8 @@ Cargo.lock
 /target
 .gradle/
 **/build/
+!utils/build/
+!utils/build/**
 **/.build/
 **/DerivedData/
 tests/android/app/src/main/jniLibs/

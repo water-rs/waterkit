@@ -74,6 +74,9 @@ async fn main() {
             out.log("  ✗ Location access restricted by system policy\n");
             return;
         }
+        unexpected => {
+            panic!("waterkit-location-test: unsupported permission status {unexpected:?}");
+        }
     }
 
     // Get location

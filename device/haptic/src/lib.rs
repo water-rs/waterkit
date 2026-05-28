@@ -35,28 +35,35 @@
 mod sys;
 
 use std::time::Duration;
-use waterkit_core::Capabilities;
+use waterkit_core::{Capabilities, OutOfRange};
 
 /// Haptic feedback intensity.
 ///
-/// Internal value is clamped to `0.0..=1.0`.
+/// Internal value is guaranteed to be in `0.0..=1.0`.
+///
+/// # Errors
+///
+/// [`Intensity::new`] returns [`OutOfRange`] if the input is `NaN` or outside
+/// `0.0..=1.0`.
 ///
 /// # Example
 ///
 /// ```
 /// use waterkit_haptic::Intensity;
 ///
+/// # fn main() -> Result<(), waterkit_core::OutOfRange> {
 /// // Use predefined levels
-/// let low = Intensity::LOW;
-/// let medium = Intensity::MEDIUM;
+/// let _low = Intensity::LOW;
+/// let _medium = Intensity::MEDIUM;
 ///
 /// // Or create custom intensity
-/// let custom = Intensity::new(0.7);
+/// let custom = Intensity::new(0.7)?;
 /// assert_eq!(custom.value(), 0.7);
 ///
-/// // Values are clamped
-/// let clamped = Intensity::new(1.5);
-/// assert_eq!(clamped.value(), 1.0);
+/// // Invalid values are rejected
+/// assert!(Intensity::new(1.5).is_err());
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Intensity(f32);
@@ -76,18 +83,25 @@ impl Intensity {
 
     /// Create a custom intensity value.
     ///
-    /// The value is clamped to `0.0..=1.0`.
+    /// # Errors
+    ///
+    /// Returns [`OutOfRange`] if `value` is `NaN` or outside `0.0..=1.0`.
+    pub fn new(value: f32) -> Result<Self, OutOfRange> {
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err(OutOfRange {
+                value: f64::from(value),
+                range: "0.0..=1.0",
+            });
+        }
+        Ok(Self(value))
+    }
+
+    /// Constructs without validation.
+    ///
+    /// The caller must ensure `value` lies within `0.0..=1.0`.
     #[must_use]
-    pub const fn new(value: f32) -> Self {
-        // Manual clamping since f32::clamp is not const fn
-        let v = if value < 0.0 {
-            0.0
-        } else if value > 1.0 {
-            1.0
-        } else {
-            value
-        };
-        Self(v)
+    pub const fn new_unchecked(value: f32) -> Self {
+        Self(value)
     }
 
     /// Get the raw intensity value (`0.0..=1.0`).
@@ -100,6 +114,26 @@ impl Intensity {
 impl Default for Intensity {
     fn default() -> Self {
         Self::MEDIUM
+    }
+}
+
+#[cfg(test)]
+mod intensity_tests {
+    use super::Intensity;
+
+    #[test]
+    fn new_accepts_boundaries() {
+        assert_eq!(Intensity::new(0.0).expect("valid intensity").value(), 0.0);
+        assert_eq!(Intensity::new(1.0).expect("valid intensity").value(), 1.0);
+        assert_eq!(Intensity::new(0.7).expect("valid intensity").value(), 0.7);
+    }
+
+    #[test]
+    fn new_rejects_nan_and_out_of_range() {
+        assert!(Intensity::new(f32::NAN).is_err());
+        assert!(Intensity::new(f32::INFINITY).is_err());
+        assert!(Intensity::new(-0.1).is_err());
+        assert!(Intensity::new(1.1).is_err());
     }
 }
 

@@ -13,7 +13,9 @@ mod windows;
 #[cfg(target_os = "linux")]
 mod linux;
 
-// Re-export platform implementations
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod desktop;
+
 // Re-export platform implementations
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 pub use apple::{check, request};

@@ -14,8 +14,12 @@
 //! use waterkit::location;
 //!
 //! async fn get_coords() {
-//!     if let Ok(pos) = location::get_current_position().await {
-//!         println!("Latitude: {}, Longitude: {}", pos.latitude, pos.longitude);
+//!     if let Ok(pos) = location::Location::get().await {
+//!         log::info!(
+//!             "Latitude: {}, Longitude: {}",
+//!             pos.latitude().get(),
+//!             pos.longitude().get()
+//!         );
 //!     }
 //! }
 //! ```

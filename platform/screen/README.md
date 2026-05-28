@@ -60,7 +60,7 @@ fn main() {
 
     // Get primary display
     let displays = screens().unwrap();
-    let primary = displays.iter().find(|d| d.is_primary).unwrap();
+    let primary = displays.iter().find(|d| d.is_primary()).unwrap();
 
     // Start capture stream
     let config = StreamConfig { target_fps: 60, show_cursor: true };

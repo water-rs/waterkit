@@ -124,7 +124,7 @@ fn capture_thread(
     let displays = screens().expect("No screens");
     let primary = displays
         .iter()
-        .find(|d| d.is_primary)
+        .find(|d| d.is_primary())
         .unwrap_or(&displays[0]);
 
     let config = StreamConfig {
@@ -195,11 +195,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let displays = screens()?;
     let primary = displays
         .iter()
-        .find(|d| d.is_primary)
+        .find(|d| d.is_primary())
         .unwrap_or(&displays[0]);
-    let width = primary.width;
-    let height = primary.height;
-    println!("Screen: {} ({}x{})", primary.name, width, height);
+    let width = primary.width();
+    let height = primary.height();
+    println!("Screen: {} ({}x{})", primary.name(), width, height);
 
     // Create encoder
     println!("Creating H.265 encoder...");

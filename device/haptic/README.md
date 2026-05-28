@@ -32,7 +32,7 @@ waterkit-haptic = "0.1"
 use waterkit_haptic::{Haptic, HapticPattern, Intensity};
 use std::time::Duration;
 
-fn main() -> Result<(), waterkit_haptic::HapticError> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Check availability
     if !Haptic::is_available() {
         return Ok(());
@@ -46,8 +46,8 @@ fn main() -> Result<(), waterkit_haptic::HapticError> {
     Haptic::impact(Intensity::HIGH)?;
     Haptic::impact(Intensity::MAX)?;
 
-    // Or custom intensity (0.0-1.0)
-    Haptic::impact(Intensity::new(0.7))?;
+    // Or custom validated intensity (0.0-1.0)
+    Haptic::impact(Intensity::new(0.7)?)?;
 
     // Selection feedback (light tap)
     Haptic::selection()?;

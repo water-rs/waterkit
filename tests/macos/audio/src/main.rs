@@ -103,9 +103,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         println!("\nNow Playing (Metadata):");
-        println!("  Title:  {:?}", p.metadata().title);
-        println!("  Artist: {:?}", p.metadata().artist);
-        println!("  Album:  {:?}", p.metadata().album);
+        println!("  Title:  {:?}", p.metadata().title());
+        println!("  Artist: {:?}", p.metadata().artist());
+        println!("  Album:  {:?}", p.metadata().album());
         println!();
 
         println!("Starting playback...");
@@ -144,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     && player_ref.position().as_secs() > 0
                     && player_ref
                         .metadata()
-                        .duration
+                        .duration()
                         .is_some_and(|d| player_ref.position() >= d)
                 {
                     break;

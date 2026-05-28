@@ -30,14 +30,10 @@ waterkit-dialog = "0.1"
 ### Simple Alert
 
 ```rust
-use waterkit_dialog::{Alert, Button};
+use waterkit_dialog::Dialog;
 
-async fn show_alert() {
-    Alert::new("Welcome")
-        .message("Hello from Rust!")
-        .button(Button::default("OK"))
-        .show()
-        .await;
+async fn show_alert() -> Result<(), waterkit_dialog::DialogError> {
+    Dialog::new("Welcome", "Hello from Rust!").show().await
 }
 ```
 
@@ -46,14 +42,16 @@ async fn show_alert() {
 ```rust
 use waterkit_dialog::FileDialog;
 
-async fn pick_file() {
+async fn pick_file() -> Result<(), waterkit_dialog::DialogError> {
     let file = FileDialog::new()
-        .add_filter("Images", &["png", "jpg"])
-        .pick_file()
-        .await;
+        .with_filter("Images", &["png", "jpg"])
+        .pick_single()
+        .await?;
     
     if let Some(path) = file {
-        println!("Selected: {:?}", path);
+        tracing::debug!(?path, "selected file");
     }
+
+    Ok(())
 }
 ```

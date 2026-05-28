@@ -39,7 +39,7 @@ pub async fn get_location() -> Result<Location, LocationError> {
             let timestamp = Timestamp::from_millisecond(data.timestamp_ms)
                 .map_err(|e| LocationError::Platform(e.to_string()))?;
 
-            let mut location = Location::new(data.latitude, data.longitude, timestamp);
+            let mut location = Location::from_degrees(data.latitude, data.longitude, timestamp)?;
 
             if !data.altitude.is_nan() {
                 location = location.with_altitude(data.altitude);

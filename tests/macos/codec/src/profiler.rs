@@ -21,11 +21,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let displays = screens()?;
     let primary = displays
         .iter()
-        .find(|d| d.is_primary)
+        .find(|d| d.is_primary())
         .unwrap_or(&displays[0]);
     println!(
         "Screen: {} ({}x{})\n",
-        primary.name, primary.width, primary.height
+        primary.name(),
+        primary.width(),
+        primary.height()
     );
 
     // Test 1: Screenshot capture (PNG encoding)

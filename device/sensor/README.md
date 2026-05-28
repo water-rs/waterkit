@@ -25,15 +25,18 @@ waterkit-sensor = "0.1"
 ## Usage
 
 ```rust
-use waterkit_sensor::{Accelerometer, SensorData};
+use futures::StreamExt;
+use waterkit_sensor::Accelerometer;
 
-async fn read_motion() {
-    if Accelerometer::is_available().await {
-        let subscription = Accelerometer::listen().await;
-        
+async fn read_motion() -> Result<(), waterkit_sensor::SensorError> {
+    if Accelerometer::capabilities().available {
+        let mut subscription = Accelerometer::watch(100)?;
+
         while let Some(data) = subscription.next().await {
-             println!("X: {}, Y: {}, Z: {}", data.x, data.y, data.z);
+            tracing::debug!(x = data.x(), y = data.y(), z = data.z(), "accelerometer sample");
         }
     }
+
+    Ok(())
 }
 ```

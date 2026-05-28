@@ -7,13 +7,13 @@ pub async fn run() {
 
     // Show Info
     let _ = Dialog::new("Demo", "Hello from shared crate!")
-        .with_type(DialogType::Info)
+        .kind(DialogType::Info)
         .show()
         .await;
 
     // Show Confirm
     let result = Dialog::new("Confirm", "Do you accept?")
-        .with_type(DialogType::Warning)
+        .kind(DialogType::Warning)
         .show_confirm()
         .await
         .unwrap_or(false);
@@ -22,7 +22,7 @@ pub async fn run() {
         let _ = Dialog::new("Result", "Accepted!").show().await;
     } else {
         let _ = Dialog::new("Result", "Declined!")
-            .with_type(DialogType::Error)
+            .kind(DialogType::Error)
             .show()
             .await;
     }
@@ -48,7 +48,7 @@ pub async fn run() {
                 Err(e) => {
                     let msg = format!("Load Error: {e}");
                     let _ = Dialog::new("Error", &msg)
-                        .with_type(DialogType::Error)
+                        .kind(DialogType::Error)
                         .show()
                         .await;
                 }
@@ -60,7 +60,7 @@ pub async fn run() {
         Err(e) => {
             let msg = format!("Error: {e}");
             let _ = Dialog::new("Picker Error", &msg)
-                .with_type(DialogType::Error)
+                .kind(DialogType::Error)
                 .show()
                 .await;
         }

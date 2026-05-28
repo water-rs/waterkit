@@ -49,7 +49,7 @@ pub async fn get_location() -> Result<Location, LocationError> {
     let accuracy = coord.Accuracy().ok();
 
     let mut location =
-        Location::new(pos.Latitude, pos.Longitude, timestamp).with_altitude(pos.Altitude);
+        Location::from_degrees(pos.Latitude, pos.Longitude, timestamp)?.with_altitude(pos.Altitude);
 
     if let Some(acc) = accuracy {
         location = location.with_horizontal_accuracy(acc);

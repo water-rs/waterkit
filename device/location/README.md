@@ -20,22 +20,18 @@ waterkit-location = "0.1"
 | Platform | Backend |
 | :--- | :--- |
 | **macOS/iOS** | `CoreLocation` |
-| **Android** | `LocationManager` |
+| **Android** | Android location services |
 | **Windows** | `Windows.Devices.Geolocation` |
-| **Linux** | *Geoclue (Planned)* |
+| **Linux** | `GeoClue2` |
 
 ## Usage
 
 ```rust
-use waterkit_location::LocationManager;
+use waterkit_location::{Location, LocationError};
 
-async fn where_am_i() {
-    let manager = LocationManager::new().await.unwrap();
-    
-    match manager.get_current_location().await {
-        Ok(loc) => println!("Lat: {}, Long: {}", loc.latitude, loc.longitude),
-        Err(e) => eprintln!("Error: {}", e),
-    }
+async fn where_am_i() -> Result<(f64, f64), LocationError> {
+    let loc = Location::get().await?;
+    Ok((loc.latitude().get(), loc.longitude().get()))
 }
 ```
 

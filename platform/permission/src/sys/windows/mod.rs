@@ -2,16 +2,15 @@
 
 use crate::{Permission, PermissionError, PermissionStatus};
 
+use super::desktop::has_implicit_desktop_grant;
+
 pub async fn check(permission: Permission) -> PermissionStatus {
     match permission {
         Permission::Location | Permission::LocationWhenInUse | Permission::LocationAlways => {
             check_location().await
         }
-        // Most other permissions are implicit on classic Windows desktop;
-        // capability crates that need a stricter gate (Bluetooth runtime
-        // capability, etc.) will refine this match in their own dedicated
-        // platform code.
-        _ => PermissionStatus::Granted,
+        permission if has_implicit_desktop_grant(permission) => PermissionStatus::Granted,
+        _ => PermissionStatus::NotDetermined,
     }
 }
 
@@ -20,7 +19,8 @@ pub async fn request(permission: Permission) -> Result<PermissionStatus, Permiss
         Permission::Location | Permission::LocationWhenInUse | Permission::LocationAlways => {
             request_location().await
         }
-        _ => Ok(PermissionStatus::Granted),
+        permission if has_implicit_desktop_grant(permission) => Ok(PermissionStatus::Granted),
+        _ => Err(PermissionError::Unsupported),
     }
 }
 

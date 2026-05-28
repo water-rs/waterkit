@@ -180,7 +180,7 @@ pub fn get_location_with_context(
     let timestamp = Timestamp::from_millisecond(timestamp_ms)
         .map_err(|e| LocationError::Platform(e.to_string()))?;
 
-    Ok(Location::new(buf[1], buf[2], timestamp)
+    Ok(Location::from_degrees(buf[1], buf[2], timestamp)?
         .with_altitude(buf[3])
         .with_horizontal_accuracy(buf[4]))
 }

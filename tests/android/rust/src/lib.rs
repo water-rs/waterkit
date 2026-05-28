@@ -62,9 +62,9 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
                 match waterkit_content::sensor::Accelerometer::read().await {
                     Ok(data) => log::info!(
                         "Accelerometer Read: x={:.2} y={:.2} z={:.2}",
-                        data.x,
-                        data.y,
-                        data.z
+                        data.x(),
+                        data.y(),
+                        data.z()
                     ),
                     Err(e) => log::error!("Accelerometer Read Error: {e}"),
                 }
@@ -77,7 +77,11 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
         {
             log::info!("Testing waterkit-biometric...");
             let caps = waterkit_content::biometric::capabilities().await;
-            log::info!("Biometric available: {} kind: {:?}", caps.available, caps.kind);
+            log::info!(
+                "Biometric available: {} kind: {:?}",
+                caps.available,
+                caps.kind
+            );
             match waterkit_content::biometric::android::authenticate_with_context(
                 &mut env,
                 activity,

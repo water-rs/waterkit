@@ -7,7 +7,7 @@ async fn get_location_property(
     connection: &Connection,
     location_path: &str,
     prop: &str,
-) -> Result<f64, zbus::Error> {
+) -> Result<f64, LocationError> {
     let reply: zbus::zvariant::OwnedValue = connection
         .call_method(
             Some("org.freedesktop.GeoClue2"),
@@ -16,10 +16,14 @@ async fn get_location_property(
             "Get",
             &("org.freedesktop.GeoClue2.Location", prop),
         )
-        .await?
+        .await
+        .map_err(|e| LocationError::Platform(format!("Failed to get {prop}: {e}")))?
         .body()
-        .deserialize()?;
-    Ok(f64::try_from(reply).unwrap_or_default())
+        .deserialize()
+        .map_err(|e| LocationError::Platform(format!("Failed to parse {prop}: {e}")))?;
+
+    f64::try_from(reply)
+        .map_err(|e| LocationError::Platform(format!("GeoClue2 {prop} was not a number: {e}")))
 }
 
 pub async fn get_location() -> Result<Location, LocationError> {
@@ -94,12 +98,8 @@ pub async fn get_location() -> Result<Location, LocationError> {
         .map_err(|_| LocationError::NotAvailable)?;
 
     // Get latitude and longitude from the location object
-    let latitude = get_location_property(&connection, location_path.as_str(), "Latitude")
-        .await
-        .map_err(|e| LocationError::Platform(format!("Failed to get latitude: {e}")))?;
-    let longitude = get_location_property(&connection, location_path.as_str(), "Longitude")
-        .await
-        .map_err(|e| LocationError::Platform(format!("Failed to get longitude: {e}")))?;
+    let latitude = get_location_property(&connection, location_path.as_str(), "Latitude").await?;
+    let longitude = get_location_property(&connection, location_path.as_str(), "Longitude").await?;
     let altitude = get_location_property(&connection, location_path.as_str(), "Altitude")
         .await
         .ok();
@@ -120,7 +120,7 @@ pub async fn get_location() -> Result<Location, LocationError> {
 
     let timestamp = Timestamp::now();
 
-    let mut location = Location::new(latitude, longitude, timestamp);
+    let mut location = Location::from_degrees(latitude, longitude, timestamp)?;
 
     if let Some(alt) = altitude {
         location = location.with_altitude(alt);

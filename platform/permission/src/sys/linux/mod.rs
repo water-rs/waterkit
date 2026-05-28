@@ -9,14 +9,20 @@
 
 use crate::{Permission, PermissionError, PermissionStatus};
 
-pub async fn check(_permission: Permission) -> PermissionStatus {
-    // Linux permissions are generally handled at the OS/container level
-    // Applications typically have access unless sandboxed
-    PermissionStatus::Granted
+use super::desktop::has_implicit_desktop_grant;
+
+pub async fn check(permission: Permission) -> PermissionStatus {
+    if has_implicit_desktop_grant(permission) {
+        PermissionStatus::Granted
+    } else {
+        PermissionStatus::NotDetermined
+    }
 }
 
-pub async fn request(_permission: Permission) -> Result<PermissionStatus, PermissionError> {
-    // No runtime permission prompts on traditional Linux
-    // Sandboxed apps (Flatpak/Snap) use portals which handle this differently
-    Ok(PermissionStatus::Granted)
+pub async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
+    if has_implicit_desktop_grant(permission) {
+        Ok(PermissionStatus::Granted)
+    } else {
+        Err(PermissionError::Unsupported)
+    }
 }

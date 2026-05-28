@@ -15,8 +15,8 @@
 //! # async fn example() -> Result<(), waterkit_location::LocationError> {
 //! let _ = request(Permission::Location).await;
 //! let location = Location::get().await?;
-//! println!("Latitude: {}", location.latitude());
-//! println!("Longitude: {}", location.longitude());
+//! let _latitude = location.latitude().get();
+//! let _longitude = location.longitude().get();
 //! # Ok(())
 //! # }
 //! ```
@@ -25,6 +25,7 @@
 #![warn(missing_debug_implementations)]
 
 pub use jiff::Timestamp;
+pub use waterkit_core::{Latitude, Longitude, OutOfRange};
 
 mod sys;
 
@@ -45,8 +46,8 @@ pub mod android {
 /// Use the accessor methods to retrieve location data.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Location {
-    latitude: f64,
-    longitude: f64,
+    latitude: Latitude,
+    longitude: Longitude,
     altitude: Option<f64>,
     horizontal_accuracy: Option<f64>,
     vertical_accuracy: Option<f64>,
@@ -54,15 +55,15 @@ pub struct Location {
 }
 
 impl Location {
-    /// Creates a new `Location` with the given coordinates.
+    /// Creates a new `Location` with validated coordinates.
     ///
     /// # Arguments
     ///
-    /// * `latitude` - Latitude in degrees (-90 to 90)
-    /// * `longitude` - Longitude in degrees (-180 to 180)
+    /// * `latitude` - Latitude in degrees (-90 to 90).
+    /// * `longitude` - Longitude in degrees (-180 to 180).
     /// * `timestamp` - When this location was recorded
     #[must_use]
-    pub const fn new(latitude: f64, longitude: f64, timestamp: Timestamp) -> Self {
+    pub const fn new(latitude: Latitude, longitude: Longitude, timestamp: Timestamp) -> Self {
         Self {
             latitude,
             longitude,
@@ -71,6 +72,24 @@ impl Location {
             vertical_accuracy: None,
             timestamp,
         }
+    }
+
+    /// Creates a new `Location` from raw coordinate degrees.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocationError::InvalidCoordinate`] if either coordinate is
+    /// `NaN` or outside its valid range.
+    pub fn from_degrees(
+        latitude: f64,
+        longitude: f64,
+        timestamp: Timestamp,
+    ) -> Result<Self, LocationError> {
+        Ok(Self::new(
+            Latitude::new(latitude)?,
+            Longitude::new(longitude)?,
+            timestamp,
+        ))
     }
 
     /// Returns the current device location.
@@ -83,8 +102,9 @@ impl Location {
     ///
     /// Returns [`LocationError::PermissionDenied`] when access is denied,
     /// [`LocationError::ServiceDisabled`] when location services are off,
-    /// [`LocationError::Timeout`] when the request times out, or
-    /// [`LocationError::Platform`] for other OS failures.
+    /// [`LocationError::Timeout`] when the request times out,
+    /// [`LocationError::InvalidCoordinate`] when the OS returns invalid
+    /// coordinates, or [`LocationError::Platform`] for other OS failures.
     pub async fn get() -> Result<Self, LocationError> {
         sys::get_location().await
     }
@@ -117,13 +137,13 @@ impl Location {
 
     /// Returns the latitude in degrees (-90 to 90).
     #[must_use]
-    pub const fn latitude(&self) -> f64 {
+    pub const fn latitude(&self) -> Latitude {
         self.latitude
     }
 
     /// Returns the longitude in degrees (-180 to 180).
     #[must_use]
-    pub const fn longitude(&self) -> f64 {
+    pub const fn longitude(&self) -> Longitude {
         self.longitude
     }
 
@@ -172,7 +192,39 @@ pub enum LocationError {
     /// Location is not available.
     #[error("location not available")]
     NotAvailable,
+    /// Location coordinates were outside their valid geographic ranges.
+    #[error("invalid location coordinate: {0}")]
+    InvalidCoordinate(#[from] OutOfRange),
     /// Platform-level failure with a message.
     #[error("platform error: {0}")]
     Platform(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Latitude, Location, LocationError, Longitude, Timestamp};
+
+    #[test]
+    fn new_stores_validated_coordinates() {
+        let location = Location::new(
+            Latitude::new(35.0).expect("valid latitude"),
+            Longitude::new(139.0).expect("valid longitude"),
+            Timestamp::from_second(0).expect("valid timestamp"),
+        );
+
+        assert_eq!(location.latitude().get(), 35.0);
+        assert_eq!(location.longitude().get(), 139.0);
+    }
+
+    #[test]
+    fn from_degrees_rejects_invalid_coordinates() {
+        let err = Location::from_degrees(
+            91.0,
+            139.0,
+            Timestamp::from_second(0).expect("valid timestamp"),
+        )
+        .expect_err("latitude should be rejected");
+
+        assert!(matches!(err, LocationError::InvalidCoordinate(_)));
+    }
 }

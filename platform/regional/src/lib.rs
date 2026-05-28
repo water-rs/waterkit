@@ -14,8 +14,7 @@
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -232,20 +231,23 @@ impl RegionalContext {
         } else {
             interval
         };
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_handle = Arc::clone(&stop);
+        let (stop, stop_rx) = mpsc::channel();
         let sink = self.sink.clone();
         let override_state = Arc::clone(&self.override_state);
-        let join = thread::spawn(move || loop {
-            thread::sleep(interval);
-            if stop_handle.load(Ordering::Acquire) {
-                break;
+        let join = thread::spawn(move || {
+            loop {
+                match stop_rx.recv_timeout(interval) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        let next = override_snapshot(&override_state)
+                            .unwrap_or_else(detect_system_context);
+                        sink.set(next);
+                    }
+                }
             }
-            let next = override_snapshot(&override_state).unwrap_or_else(detect_system_context);
-            sink.set(next);
         });
         AutoRefreshGuard {
-            stop,
+            stop: Some(stop),
             join: Some(join),
         }
     }
@@ -269,16 +271,16 @@ impl Default for RegionalContext {
 /// Drop guard for [`RegionalContext::auto_refresh`].
 #[derive(Debug)]
 pub struct AutoRefreshGuard {
-    stop: Arc<AtomicBool>,
+    stop: Option<mpsc::Sender<()>>,
     join: Option<JoinHandle<()>>,
 }
 
 impl Drop for AutoRefreshGuard {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
         if let Some(handle) = self.join.take() {
-            // Best effort — drop blocks briefly until the thread sleep
-            // wakes up and observes the stop flag.
             let _ = handle.join();
         }
     }

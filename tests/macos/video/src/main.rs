@@ -35,11 +35,11 @@ fn record_screen(output_path: &str, duration_secs: u64) {
     let displays = screens().expect("Failed to get screens");
     let primary = displays
         .iter()
-        .find(|d| d.is_primary)
+        .find(|d| d.is_primary())
         .unwrap_or(&displays[0]);
-    let width = primary.width;
-    let height = primary.height;
-    println!("Screen: {} ({}x{})", primary.name, width, height);
+    let width = primary.width();
+    let height = primary.height();
+    println!("Screen: {} ({}x{})", primary.name(), width, height);
 
     // Create wgpu device for screen capture
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -320,7 +320,7 @@ impl PlayerState {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("video_pipeline_layout"),
             bind_group_layouts: &[&bind_group_layout],
-            immediate_size: 0,
+            push_constant_ranges: &[],
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -345,7 +345,7 @@ impl PlayerState {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
+            multiview: None,
             cache: None,
         });
 
@@ -458,7 +458,6 @@ impl PlayerState {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
-                    multiview_mask: None,
                 });
 
                 pass.set_pipeline(&self.pipeline);

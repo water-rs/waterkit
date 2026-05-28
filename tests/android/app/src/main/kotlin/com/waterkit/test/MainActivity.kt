@@ -10,6 +10,7 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import java.io.File
 
 /**
  * Reusable test activity for waterkit crates.
@@ -35,6 +36,7 @@ class MainActivity : AppCompatActivity() {
     
     // Generic runner
     private external fun runTest(activity: AppCompatActivity)
+    private external fun runTestReport(activity: AppCompatActivity): String
     
     // ===== End JNI declarations =====
     
@@ -74,8 +76,9 @@ class MainActivity : AppCompatActivity() {
         layout.addView(testButton("Run Generic Native Test") {
             log("Running native test...")
             Thread {
-                runTest(this)
-                runOnUiThread { log("Native test trigger complete (Check Logcat for details)") }
+                val report = runTestReport(this)
+                writeReport(report)
+                runOnUiThread { log("Native test report written") }
             }.start()
         })
 
@@ -153,10 +156,17 @@ class MainActivity : AppCompatActivity() {
             log("Auto-running native test...")
             android.util.Log.i("waterkit", "Auto-running native test triggered from intent")
             Thread {
-                runTest(this)
-                runOnUiThread { log("Native test trigger complete") }
+                val report = runTestReport(this)
+                writeReport(report)
+                runOnUiThread { log("Native test report written") }
             }.start()
         }
+    }
+
+    private fun writeReport(report: String) {
+        val reportFile = File(filesDir, "waterkit-test-report.json")
+        reportFile.writeText(report)
+        android.util.Log.i("waterkit-report", report)
     }
     
     private fun sectionHeader(title: String) = TextView(this).apply {

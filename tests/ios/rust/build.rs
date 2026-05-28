@@ -30,32 +30,32 @@ fn apple_build() {
 
     // Add biometric bridge if feature enabled via env var (set by cargo feature)
     if std::env::var("CARGO_FEATURE_BIOMETRIC").is_ok() {
-        bridges.push("../../../biometric/src/sys/apple/mod.rs".to_string());
+        bridges.push("../../../identity/biometric/src/sys/apple/mod.rs".to_string());
     }
 
     // Add sensor bridge if feature enabled
     if std::env::var("CARGO_FEATURE_SENSOR").is_ok() {
-        bridges.push("../../../sensor/src/sys/apple/mod.rs".to_string());
+        bridges.push("../../../device/sensor/src/sys/apple/mod.rs".to_string());
     }
 
     // Add camera bridge if feature enabled
     if std::env::var("CARGO_FEATURE_CAMERA").is_ok() {
-        bridges.push("../../../camera/src/sys/apple/mod.rs".to_string());
+        bridges.push("../../../device/camera/src/sys/apple/mod.rs".to_string());
     }
 
     // Add location bridge if feature enabled
     if std::env::var("CARGO_FEATURE_LOCATION").is_ok() {
-        bridges.push("../../../location/src/sys/apple/mod.rs".to_string());
+        bridges.push("../../../device/location/src/sys/apple/mod.rs".to_string());
     }
 
     // Add permission bridge if feature enabled
     if std::env::var("CARGO_FEATURE_PERMISSION").is_ok() {
-        bridges.push("../../../permission/src/sys/apple/mod.rs".to_string());
+        bridges.push("../../../platform/permission/src/sys/apple/mod.rs".to_string());
     }
 
     // Add notification bridge if feature enabled
     if std::env::var("CARGO_FEATURE_NOTIFICATION").is_ok() {
-        bridges.push("../../../notification/src/sys/apple/mod.rs".to_string());
+        bridges.push("../../../sharing/notification/src/sys/apple/mod.rs".to_string());
     }
 
     // Add other crates as needed...

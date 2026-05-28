@@ -370,7 +370,11 @@ fn extract_region(locale_tag: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_region, normalize_locale_tag};
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use super::{AutoRefreshGuard, extract_region, normalize_locale_tag};
 
     #[test]
     fn normalize_locale_tag_handles_separator_and_casing() {
@@ -385,5 +389,32 @@ mod tests {
         assert_eq!(extract_region("es-419"), Some("419".to_string()));
         assert_eq!(extract_region("zh-Hant"), None);
         assert_eq!(extract_region("en-US-u-hc-h23"), Some("US".to_string()));
+    }
+
+    #[test]
+    fn auto_refresh_guard_drop_signals_worker_before_joining() {
+        let (stop, stop_rx) = mpsc::channel();
+        let (started_tx, started_rx) = mpsc::channel();
+        let join = thread::spawn(move || {
+            started_tx
+                .send(())
+                .expect("test worker should signal startup");
+            let _ = stop_rx.recv_timeout(Duration::from_secs(60));
+        });
+
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("test worker should start");
+
+        let started = Instant::now();
+        drop(AutoRefreshGuard {
+            stop: Some(stop),
+            join: Some(join),
+        });
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "AutoRefreshGuard drop should wake the worker instead of waiting for the interval"
+        );
     }
 }

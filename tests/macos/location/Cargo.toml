@@ -12,4 +12,5 @@ path = "src/main.rs"
 [dependencies]
 waterkit-location.workspace = true
 waterkit-permission.workspace = true
+waterkit-test-report.workspace = true
 tokio.workspace = true

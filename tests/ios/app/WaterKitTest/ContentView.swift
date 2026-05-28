@@ -1,4 +1,6 @@
 import SwiftUI
+import Foundation
+import Darwin
 
 struct LogEntry: Identifiable {
     let id = UUID()
@@ -18,6 +20,7 @@ class LogModel: ObservableObject {
 
 struct ContentView: View {
     @StateObject private var logger = LogModel()
+    @State private var autoRunStarted = false
     
     var body: some View {
         NavigationView {
@@ -44,15 +47,45 @@ struct ContentView: View {
                 List {
                     Section(header: Text("Tests")) {
                         Button("Run All Tests") {
-                            logger.log("Executing run_tests()...")
-                            run_tests()
-                            logger.log("✓ Finalized execution")
+                            runAndPersistTests(shouldExit: false)
                         }
                     }
                 }
             }
             .padding()
             .navigationTitle("WaterKit Test")
+        }
+        .onAppear {
+            guard !autoRunStarted else {
+                return
+            }
+            autoRunStarted = true
+
+            if CommandLine.arguments.contains("--waterkit-run-test") {
+                runAndPersistTests(shouldExit: true)
+            }
+        }
+    }
+
+    private func runAndPersistTests(shouldExit: Bool) {
+        logger.log("Executing run_tests_json()...")
+        DispatchQueue.global(qos: .userInitiated).async {
+            let report = run_tests_json().toString()
+
+            do {
+                let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                let reportURL = documents.appendingPathComponent("waterkit-test-report.json")
+                try report.write(to: reportURL, atomically: true, encoding: .utf8)
+                logger.log("✓ Wrote structured report")
+                if shouldExit {
+                    Darwin.exit(0)
+                }
+            } catch {
+                logger.log("✗ Failed to write structured report: \(error)")
+                if shouldExit {
+                    Darwin.exit(1)
+                }
+            }
         }
     }
 }

@@ -13,6 +13,7 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 android_logger = "0.15"
 log.workspace = true
 waterkit_content = { path = "../../..", package = "waterkit", default-features = false }
+waterkit-test-report.workspace = true
 
 [features]
 sensor = ["waterkit_content/sensor"]

@@ -13,7 +13,7 @@ mod windows;
 #[cfg(target_os = "linux")]
 mod linux;
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod desktop;
 
 // Re-export platform implementations

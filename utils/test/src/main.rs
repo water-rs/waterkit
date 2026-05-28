@@ -2,8 +2,12 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use owo_colors::OwoColorize;
 use std::path::{Path, PathBuf};
+use std::process::Output;
+use std::thread;
+use std::time::{Duration, Instant};
 use toml_edit::DocumentMut;
 use tracing::{info, warn};
+use waterkit_test_report::{TestReport, from_json, parse_report_block};
 
 #[derive(Parser)]
 #[command(name = "waterkit-test")]
@@ -85,6 +89,8 @@ fn run_android(crate_path: &Path) -> Result<()> {
         "ndk",
         "-t",
         "arm64-v8a",
+        "-t",
+        "x86_64",
         "-o",
         "tests/android/app/src/main/jniLibs",
         "build",
@@ -104,10 +110,14 @@ fn run_android(crate_path: &Path) -> Result<()> {
         anyhow::bail!("Android build failed");
     }
 
-    // 5. (Optional) Install/Run via adb/gradle could go here
-    // For now we just build.
     info!("{}", "Android libraries built successfully.".green().bold());
-    warn!("Install and launch are not automated in this command yet.");
+
+    build_android_apk(&root_dir)?;
+    install_android_apk(&root_dir)?;
+    grant_android_permissions_for_feature(feature)?;
+    launch_android_test()?;
+    let report = wait_for_android_report(Duration::from_secs(60))?;
+    ensure_report_success(&report)?;
 
     Ok(())
 }
@@ -147,26 +157,29 @@ fn run_macos(crate_path: &Path) -> Result<()> {
     }
 
     let info_plist_path = crate_path.join("Info.plist");
-    if info_plist_path.exists() {
+    let log_path = root_dir
+        .join("target/debug")
+        .join(format!("{}.log", metadata.bin_name));
+    if log_path.exists() {
+        std::fs::remove_file(&log_path)
+            .with_context(|| format!("Failed to remove stale {}", log_path.display()))?;
+    }
+
+    let output = if info_plist_path.exists() {
         run_macos_app_bundle(
             &root_dir,
             &metadata.bin_name,
             &binary_path,
             &info_plist_path,
         )?;
+        std::fs::read_to_string(&log_path)
+            .with_context(|| format!("macOS app did not write {}", log_path.display()))?
     } else {
-        run_macos_cli_binary(&root_dir, &manifest_path, &metadata.bin_name)?;
-    }
+        run_macos_cli_binary(&root_dir, &binary_path, &metadata.bin_name)?
+    };
 
-    let log_path = root_dir
-        .join("target/debug")
-        .join(format!("{}.log", metadata.bin_name));
-    if log_path.exists() {
-        info!("{}", "Captured test log:".green().bold());
-        let log_text = std::fs::read_to_string(&log_path)
-            .with_context(|| format!("Failed to read {}", log_path.display()))?;
-        info!("{log_text}");
-    }
+    let report = parse_process_report("macOS", &metadata.package_name, &output)?;
+    ensure_report_success(&report)?;
 
     Ok(())
 }
@@ -342,6 +355,12 @@ fn run_ios(crate_path: &Path) -> Result<()> {
         anyhow::bail!("Installation failed (ensure a simulator is booted)");
     }
 
+    let report_path = ios_report_path(simulator_id)?;
+    if report_path.exists() {
+        std::fs::remove_file(&report_path)
+            .with_context(|| format!("Failed to remove stale {}", report_path.display()))?;
+    }
+
     info!("{}", "Launching app...".green().bold());
     let status = std::process::Command::new("xcrun")
         .args([
@@ -350,6 +369,7 @@ fn run_ios(crate_path: &Path) -> Result<()> {
             "--console",
             simulator_id,
             "com.waterkit.test",
+            "--waterkit-run-test",
         ])
         .current_dir(&root_dir)
         .status()
@@ -358,6 +378,12 @@ fn run_ios(crate_path: &Path) -> Result<()> {
     if !status.success() {
         anyhow::bail!("Launch failed");
     }
+
+    let report_json = std::fs::read_to_string(&report_path)
+        .with_context(|| format!("iOS app did not write {}", report_path.display()))?;
+    let report = from_json(&report_json)
+        .with_context(|| format!("Failed to parse {}", report_path.display()))?;
+    ensure_report_success(&report)?;
 
     Ok(())
 }
@@ -413,27 +439,24 @@ fn select_primary_bin_name(manifest: &DocumentMut, package_name: &str) -> Result
     Ok(name.to_owned())
 }
 
-fn run_macos_cli_binary(root_dir: &Path, manifest_path: &Path, bin_name: &str) -> Result<()> {
+fn run_macos_cli_binary(root_dir: &Path, binary_path: &Path, bin_name: &str) -> Result<String> {
     info!(
         "{}",
-        "No Info.plist found; running binary directly via cargo run."
+        "No Info.plist found; running binary directly."
             .yellow()
             .bold()
     );
 
-    let status = std::process::Command::new("cargo")
+    let output = std::process::Command::new(binary_path)
         .current_dir(root_dir)
-        .args(["run", "--manifest-path"])
-        .arg(manifest_path)
-        .args(["--bin", bin_name])
-        .status()
-        .context("Failed to run cargo run for macOS test crate")?;
+        .output()
+        .with_context(|| format!("Failed to run macOS test binary {bin_name}"))?;
 
-    if !status.success() {
+    if !output.status.success() {
         anyhow::bail!("macOS CLI run failed for binary {}", bin_name);
     }
 
-    Ok(())
+    Ok(output_text(&output))
 }
 
 fn run_macos_app_bundle(
@@ -513,6 +536,190 @@ fn run_macos_app_bundle(
     }
 
     Ok(())
+}
+
+fn build_android_apk(root_dir: &Path) -> Result<()> {
+    info!("{}", "Building Android APK...".yellow().bold());
+    let android_dir = root_dir.join("tests/android");
+    let gradlew = android_dir.join("gradlew");
+    let status = std::process::Command::new(&gradlew)
+        .current_dir(&android_dir)
+        .arg(":app:assembleDebug")
+        .status()
+        .context("Failed to run Android Gradle build")?;
+
+    if !status.success() {
+        anyhow::bail!("Android APK build failed");
+    }
+
+    Ok(())
+}
+
+fn install_android_apk(root_dir: &Path) -> Result<()> {
+    info!("{}", "Installing Android APK...".yellow().bold());
+    let apk = root_dir.join("tests/android/app/build/outputs/apk/debug/app-debug.apk");
+    if !apk.exists() {
+        anyhow::bail!("Android APK not found at {}", apk.display());
+    }
+
+    let status = std::process::Command::new("adb")
+        .arg("install")
+        .arg("-r")
+        .arg(&apk)
+        .status()
+        .context("Failed to install Android APK with adb")?;
+
+    if !status.success() {
+        anyhow::bail!("Android APK installation failed");
+    }
+
+    Ok(())
+}
+
+fn grant_android_permissions_for_feature(feature: &str) -> Result<()> {
+    let permissions: &[&str] = match feature {
+        "location" | "permission" => &[
+            "android.permission.ACCESS_FINE_LOCATION",
+            "android.permission.ACCESS_COARSE_LOCATION",
+        ],
+        "camera" => &["android.permission.CAMERA"],
+        "audio" | "speech" => &["android.permission.RECORD_AUDIO"],
+        "contacts" => &["android.permission.READ_CONTACTS"],
+        "calendar" => &["android.permission.READ_CALENDAR"],
+        _ => &[],
+    };
+
+    for permission in permissions {
+        run_adb(["shell", "pm", "grant", "com.waterkit.test", permission])?;
+    }
+
+    Ok(())
+}
+
+fn launch_android_test() -> Result<()> {
+    run_adb(["shell", "am", "force-stop", "com.waterkit.test"])?;
+    run_adb([
+        "shell",
+        "run-as",
+        "com.waterkit.test",
+        "rm",
+        "-f",
+        "files/waterkit-test-report.json",
+    ])?;
+    run_adb([
+        "shell",
+        "am",
+        "start",
+        "-n",
+        "com.waterkit.test/.MainActivity",
+        "--ez",
+        "run_test",
+        "true",
+    ])
+}
+
+fn wait_for_android_report(timeout: Duration) -> Result<TestReport> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        let output = std::process::Command::new("adb")
+            .args([
+                "exec-out",
+                "run-as",
+                "com.waterkit.test",
+                "cat",
+                "files/waterkit-test-report.json",
+            ])
+            .output()
+            .context("Failed to read Android test report with adb")?;
+
+        if output.status.success() && !output.stdout.is_empty() {
+            let json = String::from_utf8(output.stdout)
+                .context("Android test report was not valid UTF-8")?;
+            return from_json(&json).context("Failed to parse Android test report JSON");
+        }
+
+        if Instant::now() >= deadline {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "Timed out waiting for Android test report; last adb stderr: {}",
+                stderr.trim()
+            );
+        }
+
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn run_adb<const N: usize>(args: [&str; N]) -> Result<()> {
+    let status = std::process::Command::new("adb")
+        .args(args)
+        .status()
+        .context("Failed to run adb")?;
+
+    if !status.success() {
+        anyhow::bail!("adb command failed");
+    }
+
+    Ok(())
+}
+
+fn ios_report_path(simulator_id: &str) -> Result<PathBuf> {
+    let output = std::process::Command::new("xcrun")
+        .args([
+            "simctl",
+            "get_app_container",
+            simulator_id,
+            "com.waterkit.test",
+            "data",
+        ])
+        .output()
+        .context("Failed to query iOS app data container")?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to query iOS app data container");
+    }
+
+    let container = String::from_utf8(output.stdout)
+        .context("iOS app data container path was not valid UTF-8")?;
+    Ok(PathBuf::from(container.trim()).join("Documents/waterkit-test-report.json"))
+}
+
+fn parse_process_report(platform: &str, package_name: &str, output: &str) -> Result<TestReport> {
+    let report = parse_report_block(output)
+        .context("Failed to parse structured test report")?
+        .ok_or_else(|| {
+            anyhow::anyhow!("{platform} test {package_name} did not emit a structured test report")
+        })?;
+
+    if report.cases.is_empty() {
+        anyhow::bail!("{platform} test {package_name} emitted an empty report");
+    }
+
+    Ok(report)
+}
+
+fn ensure_report_success(report: &TestReport) -> Result<()> {
+    info!(
+        "Structured report: platform={} crate={} passed={} skipped={} failed={}",
+        report.platform,
+        report.crate_name,
+        report.passed_count(),
+        report.skipped_count(),
+        report.failed_count()
+    );
+
+    if report.has_failures() {
+        anyhow::bail!("WaterKit test failures: {}", report.failure_summary());
+    }
+
+    Ok(())
+}
+
+fn output_text(output: &Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    format!("{stdout}\n{stderr}")
 }
 
 fn add_swift_rpath_if_exists(binary_path: &Path, rpath: &Path) -> Result<()> {

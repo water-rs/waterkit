@@ -63,4 +63,64 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: test-${{ matrix.os }}
+      - run: cargo test --verbose --workspace --all-targets --no-run
       - run: cargo test --verbose --all-features
+      - name: Run macOS sensor integration harness
+        if: runner.os == 'macOS'
+        run: cargo run -p waterkit-test -- macos tests/macos/sensor
+      - name: Run macOS location integration harness
+        if: runner.os == 'macOS'
+        run: cargo run -p waterkit-test -- macos tests/macos/location
+
+  android-device-e2e:
+    name: Android device E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          add-to-path: true
+      - name: Set Android NDK environment
+        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: android-device-e2e
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+      - name: Run Android sensor harness on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          script: cargo run -p waterkit-test -- android device/sensor
+
+  ios-device-e2e:
+    name: iOS device E2E
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ios-device-e2e
+      - name: Boot an available iPhone simulator
+        run: |
+          read SIMULATOR_ID SIMULATOR_STATE < <(xcrun simctl list devices available -j | ruby -rjson -e 'devices = JSON.parse($stdin.read)["devices"].values.flatten; device = devices.find { |candidate| candidate["isAvailable"] && candidate["name"].include?("iPhone") && candidate["state"] == "Shutdown" } || devices.find { |candidate| candidate["isAvailable"] && candidate["name"].include?("iPhone") }; abort("no available iPhone simulator") unless device; puts "#{device["udid"]} #{device["state"]}"')
+          if [ "$SIMULATOR_STATE" != "Booted" ]; then
+            xcrun simctl boot "$SIMULATOR_ID"
+          fi
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b
+      - name: Run iOS sensor harness on simulator
+        run: cargo run -p waterkit-test -- ios device/sensor

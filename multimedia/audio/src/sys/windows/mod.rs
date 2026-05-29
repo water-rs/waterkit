@@ -1,8 +1,6 @@
 //! Windows media control implementation using `SystemMediaTransportControls`.
 
-use crate::{
-    MediaCommand, MediaCommandHandler, MediaError, MediaMetadata, PlaybackState, PlaybackStatus,
-};
+use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
 use std::sync::RwLock;
 use windows::Foundation::TypedEventHandler;
 use windows::Media::Playback::MediaPlayer;
@@ -10,9 +8,6 @@ use windows::Media::{
     MediaPlaybackStatus, MediaPlaybackType, SystemMediaTransportControls,
     SystemMediaTransportControlsButton, SystemMediaTransportControlsButtonPressedEventArgs,
 };
-
-/// Global command handler
-static COMMAND_HANDLER: RwLock<Option<Box<dyn MediaCommandHandler>>> = RwLock::new(None);
 
 /// Pending commands queue
 static PENDING_COMMANDS: RwLock<Vec<MediaCommand>> = RwLock::new(Vec::new());
@@ -126,11 +121,6 @@ fn setup_button_handler(controls: &SystemMediaTransportControls) -> Result<(), M
             };
 
             if let Some(cmd) = cmd {
-                if let Ok(guard) = COMMAND_HANDLER.read()
-                    && let Some(handler) = guard.as_ref()
-                {
-                    handler.on_command(cmd.clone());
-                }
                 if let Ok(mut guard) = PENDING_COMMANDS.write() {
                     guard.push(cmd);
                 }
@@ -165,6 +155,7 @@ pub struct MediaSessionInner {
 impl MediaSessionInner {
     pub fn new() -> Result<Self, MediaError> {
         let (media_player, controls) = create_controls()?;
+        setup_button_handler(&controls)?;
         Ok(Self {
             media_player,
             controls,
@@ -177,19 +168,6 @@ impl MediaSessionInner {
 
     pub fn set_playback_state(&self, state: &PlaybackState) -> Result<(), MediaError> {
         set_playback_status_inner(&self.controls, state)
-    }
-
-    pub fn set_command_handler(
-        &self,
-        handler: Box<dyn MediaCommandHandler>,
-    ) -> Result<(), MediaError> {
-        {
-            let mut guard = COMMAND_HANDLER
-                .write()
-                .map_err(|e| MediaError::Unknown(format!("Lock poisoned: {e}")))?;
-            *guard = Some(handler);
-        }
-        setup_button_handler(&self.controls)
     }
 
     pub fn request_audio_focus(&self) -> Result<(), MediaError> {
@@ -227,7 +205,7 @@ pub struct MediaCenterInner {
 impl MediaCenterInner {
     pub fn new() -> Result<Self, MediaError> {
         let (media_player, controls) = create_controls()?;
-        let _ = setup_button_handler(&controls);
+        setup_button_handler(&controls)?;
         Ok(Self {
             media_player,
             controls,

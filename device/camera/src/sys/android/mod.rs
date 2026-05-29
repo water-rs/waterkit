@@ -1217,12 +1217,13 @@ impl CameraInner {
             let Some((min, max)) = self.capabilities.zoom_range else {
                 return Err(CameraError::ControlUnsupported("zoom".into()));
             };
-            if zoom < min || zoom > max {
+            let zoom_value = zoom.get();
+            if zoom_value < min || zoom_value > max {
                 return Err(CameraError::ValueOutOfRange(format!(
                     "zoom {zoom} not in range [{min}, {max}]"
                 )));
             }
-            self.bridge.set_zoom(zoom)?;
+            self.bridge.set_zoom(zoom_value)?;
             self.controls.zoom = Some(zoom);
         }
 

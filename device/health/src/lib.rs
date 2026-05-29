@@ -132,6 +132,13 @@ impl Capabilities for HealthCapabilities {
 
 /// Probes the health subsystem.
 #[must_use]
+#[cfg_attr(
+    any(target_os = "windows", target_os = "linux"),
+    expect(
+        clippy::missing_const_for_fn,
+        reason = "capabilities must stay non-const on Apple and Android where availability is runtime"
+    )
+)]
 pub fn capabilities() -> HealthCapabilities {
     HealthCapabilities {
         available: sys::is_available(),

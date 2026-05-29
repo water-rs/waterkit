@@ -120,10 +120,10 @@ fn setup_button_handler(controls: &SystemMediaTransportControls) -> Result<(), M
                 _ => None,
             };
 
-            if let Some(cmd) = cmd {
-                if let Ok(mut guard) = PENDING_COMMANDS.write() {
-                    guard.push(cmd);
-                }
+            if let Some(cmd) = cmd
+                && let Ok(mut guard) = PENDING_COMMANDS.write()
+            {
+                guard.push(cmd);
             }
         }
         Ok(())

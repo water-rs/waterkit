@@ -624,7 +624,7 @@ async fn resolve_rfcomm_service(
 ) -> Result<windows::Devices::Bluetooth::Rfcomm::RfcommDeviceService, BluetoothError> {
     let guid = windows::core::GUID::try_from(service_uuid)
         .map_err(|_| connection_failed("invalid SPP UUID"))?;
-    let service_id = RfcommServiceId::FromUuid::new(guid).map_err(|error| {
+    let service_id = RfcommServiceId::FromUuid(guid).map_err(|error| {
         connection_failed_with_context("create RFCOMM service id failed", error)
     })?;
 

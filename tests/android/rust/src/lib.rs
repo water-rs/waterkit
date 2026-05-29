@@ -14,6 +14,8 @@ const PERMISSION_RESTRICTED: i32 = 1;
 const PERMISSION_DENIED: i32 = 2;
 #[cfg(feature = "permission")]
 const PERMISSION_GRANTED: i32 = 3;
+#[cfg(feature = "sensor")]
+const ANDROID_SENSOR_TYPE_ACCELEROMETER: i32 = 1;
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
@@ -62,6 +64,7 @@ fn init_logger() {
 fn run_native_report(_env: &mut JNIEnv<'_>, _activity: &JObject<'_>) -> TestReport {
     let mut report = TestReport::new("android", "waterkit-test-android");
     #[cfg(any(
+        feature = "sensor",
         feature = "location",
         feature = "permission",
         feature = "fs",
@@ -78,6 +81,7 @@ fn run_native_report(_env: &mut JNIEnv<'_>, _activity: &JObject<'_>) -> TestRepo
         }
     };
     #[cfg(any(
+        feature = "sensor",
         feature = "location",
         feature = "permission",
         feature = "fs",
@@ -101,6 +105,7 @@ fn run_native_report(_env: &mut JNIEnv<'_>, _activity: &JObject<'_>) -> TestRepo
 
     rt.block_on(async {
         #[cfg(any(
+            feature = "sensor",
             feature = "location",
             feature = "permission",
             feature = "fs",
@@ -117,6 +122,7 @@ fn run_native_report(_env: &mut JNIEnv<'_>, _activity: &JObject<'_>) -> TestRepo
             }
         };
         #[cfg(any(
+            feature = "sensor",
             feature = "location",
             feature = "permission",
             feature = "fs",
@@ -125,7 +131,7 @@ fn run_native_report(_env: &mut JNIEnv<'_>, _activity: &JObject<'_>) -> TestRepo
         let activity = activity_global.as_obj();
 
         #[cfg(feature = "sensor")]
-        record_android_sensor(&mut report).await;
+        record_android_sensor(&mut report, &mut env, activity);
 
         #[cfg(feature = "location")]
         record_android_location(&mut report, &mut env, activity);
@@ -278,16 +284,34 @@ fn log_report(report: &TestReport) {
 }
 
 #[cfg(feature = "sensor")]
-async fn record_android_sensor(report: &mut TestReport) {
-    if !waterkit_content::sensor::Accelerometer::capabilities().available {
-        report.push(TestCase::skipped(
-            "sensor.accelerometer",
-            "accelerometer is unavailable on this device",
-        ));
-        return;
+fn record_android_sensor(report: &mut TestReport, env: &mut JNIEnv<'_>, activity: &JObject<'_>) {
+    match waterkit_content::sensor::android::is_sensor_available_with_context(
+        env,
+        activity,
+        ANDROID_SENSOR_TYPE_ACCELEROMETER,
+    ) {
+        Ok(true) => {}
+        Ok(false) => {
+            report.push(TestCase::skipped(
+                "sensor.accelerometer",
+                "accelerometer is unavailable on this device",
+            ));
+            return;
+        }
+        Err(error) => {
+            report.push(TestCase::failed(
+                "sensor.accelerometer",
+                format!("accelerometer availability check failed: {error}"),
+            ));
+            return;
+        }
     }
 
-    match waterkit_content::sensor::Accelerometer::read().await {
+    match waterkit_content::sensor::android::read_sensor_with_context(
+        env,
+        activity,
+        ANDROID_SENSOR_TYPE_ACCELEROMETER,
+    ) {
         Ok(data) if data.x().is_finite() && data.y().is_finite() && data.z().is_finite() => {
             report.push(TestCase::passed_with_message(
                 "sensor.accelerometer",

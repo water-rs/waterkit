@@ -11,6 +11,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * Reusable test activity for waterkit crates.
@@ -21,6 +23,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logText: TextView
     
     companion object {
+        private const val REPORT_FILE_NAME = "waterkit-test-report.json"
+        private const val REPORT_TEMP_FILE_NAME = "waterkit-test-report.json.tmp"
+
         init {
             System.loadLibrary("waterkit_test_android")
         }
@@ -164,8 +169,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun writeReport(report: String) {
-        val reportFile = File(filesDir, "waterkit-test-report.json")
-        reportFile.writeText(report)
+        val reportFile = File(filesDir, REPORT_FILE_NAME)
+        val tempReportFile = File(filesDir, REPORT_TEMP_FILE_NAME)
+        tempReportFile.writeText(report)
+        Files.move(
+            tempReportFile.toPath(),
+            reportFile.toPath(),
+            StandardCopyOption.REPLACE_EXISTING,
+            StandardCopyOption.ATOMIC_MOVE,
+        )
         android.util.Log.i("waterkit-report", report)
     }
     

@@ -1,4 +1,4 @@
-//! Structured WaterKit integration test reports.
+//! Structured `WaterKit` integration test reports.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -81,7 +81,7 @@ impl TestCase {
     }
 }
 
-/// Structured report produced by a WaterKit integration harness.
+/// Structured report produced by a `WaterKit` integration harness.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestReport {
     /// Report schema version.
@@ -157,9 +157,11 @@ impl TestReport {
         self.cases
             .iter()
             .filter(|case| case.status == TestStatus::Failed)
-            .map(|case| match &case.message {
-                Some(message) => format!("{}: {}", case.name, message),
-                None => case.name.clone(),
+            .map(|case| {
+                case.message.as_ref().map_or_else(
+                    || case.name.clone(),
+                    |message| format!("{}: {}", case.name, message),
+                )
             })
             .collect::<Vec<_>>()
             .join("; ")

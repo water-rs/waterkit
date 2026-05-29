@@ -627,8 +627,9 @@ fn wait_for_android_report(timeout: Duration) -> Result<TestReport> {
                 "exec-out",
                 "run-as",
                 "com.waterkit.test",
-                "cat",
-                "files/waterkit-test-report.json",
+                "sh",
+                "-c",
+                "test -s files/waterkit-test-report.json && cat files/waterkit-test-report.json",
             ])
             .output()
             .context("Failed to read Android test report with adb")?;

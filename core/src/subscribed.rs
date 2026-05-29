@@ -198,10 +198,7 @@ pub fn subscribed<T: Clone + Send + 'static>(initial: T) -> (Subscribed<T>, Subs
 /// Useful for tests or for crates that need to run the mailbox worker on
 /// a non-default executor (rare; consult the nami docs).
 #[must_use]
-pub fn subscribed_with_executor<T, E>(
-    initial: T,
-    executor: E,
-) -> (Subscribed<T>, SubscribedSink<T>)
+pub fn subscribed_with_executor<T, E>(initial: T, executor: E) -> (Subscribed<T>, SubscribedSink<T>)
 where
     T: Clone + Send + 'static,
     E: LocalExecutor,

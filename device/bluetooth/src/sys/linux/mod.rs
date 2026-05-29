@@ -714,7 +714,12 @@ impl ClassicBluetoothInner {
     ) -> Result<SppStreamInner, BluetoothError> {
         let (command_tx, command_rx) = async_channel::unbounded();
         let (connect_tx, connect_rx) = oneshot::channel::<Result<(), BluetoothError>>();
-        let worker = spawn_spp_worker(device_id.as_str().to_string(), uuid.as_str().to_string(), command_rx, connect_tx)?;
+        let worker = spawn_spp_worker(
+            device_id.as_str().to_string(),
+            uuid.as_str().to_string(),
+            command_rx,
+            connect_tx,
+        )?;
 
         match connect_rx.await.map_err(|error| {
             BluetoothError::ConnectionFailed(format!("SPP connect callback dropped: {error}"))

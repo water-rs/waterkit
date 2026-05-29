@@ -7,10 +7,7 @@ pub async fn list_calendars() -> Result<Vec<Calendar>, CalendarError> {
 }
 
 #[allow(clippy::unused_async)]
-pub async fn fetch_events(
-    _start: Timestamp,
-    _end: Timestamp,
-) -> Result<Vec<Event>, CalendarError> {
+pub async fn fetch_events(_start: Timestamp, _end: Timestamp) -> Result<Vec<Event>, CalendarError> {
     Err(CalendarError::Unsupported)
 }
 

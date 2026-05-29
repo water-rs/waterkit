@@ -31,9 +31,7 @@ pub async fn open_url(url: &str) -> Result<(), DeepLinkError> {
             if success {
                 let _ = tx.send(Ok(()));
             } else {
-                let _ = tx.send(Err(DeepLinkError::Platform(
-                    "failed to open URL".into(),
-                )));
+                let _ = tx.send(Err(DeepLinkError::Platform("failed to open URL".into())));
             }
         }),
     );

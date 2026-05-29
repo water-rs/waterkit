@@ -18,7 +18,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             screen.width(),
             screen.height(),
             screen.scale_factor(),
-            if screen.is_primary() { " [primary]" } else { "" }
+            if screen.is_primary() {
+                " [primary]"
+            } else {
+                ""
+            }
         );
     }
 

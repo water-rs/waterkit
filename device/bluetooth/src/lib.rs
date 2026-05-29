@@ -198,8 +198,7 @@ impl BleScanner {
     pub fn start_scan(
         &self,
         filter: &ScanFilter,
-    ) -> Result<impl futures_core::Stream<Item = ScanResult> + Send + 'static, BluetoothError>
-    {
+    ) -> Result<impl futures_core::Stream<Item = ScanResult> + Send + 'static, BluetoothError> {
         self.inner.start_scan(filter)
     }
 

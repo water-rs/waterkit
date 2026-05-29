@@ -64,9 +64,10 @@ pub async fn create(data: ContactData) -> Result<Contact, ContactsError> {
         let path = store_path()?;
         let mut store = load_store(&path)?;
         let id = format!("desktop-{}", store.next_id);
-        store.next_id = store.next_id.checked_add(1).ok_or_else(|| {
-            ContactsError::Platform("desktop contact id overflow".to_string())
-        })?;
+        store.next_id = store
+            .next_id
+            .checked_add(1)
+            .ok_or_else(|| ContactsError::Platform("desktop contact id overflow".to_string()))?;
         let contact = Contact {
             id,
             given_name: data.given_name,
@@ -124,9 +125,8 @@ fn field_contains(value: Option<&str>, query: &str) -> bool {
 }
 
 fn store_path() -> Result<PathBuf, ContactsError> {
-    WaterFs::data_local_path(Path::new("waterkit").join("contacts").join(STORE_FILE_NAME)).map_err(
-        |error| ContactsError::Platform(format!("resolve contacts store path: {error}")),
-    )
+    WaterFs::data_local_path(Path::new("waterkit").join("contacts").join(STORE_FILE_NAME))
+        .map_err(|error| ContactsError::Platform(format!("resolve contacts store path: {error}")))
 }
 
 fn load_store(path: &Path) -> Result<ContactsStore, ContactsError> {

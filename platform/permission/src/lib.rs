@@ -21,7 +21,9 @@
 mod sys;
 
 #[doc(no_inline)]
-pub use waterkit_core::permission::{HealthDataKind, Permission, PermissionError, PermissionStatus};
+pub use waterkit_core::permission::{
+    HealthDataKind, Permission, PermissionError, PermissionStatus,
+};
 use waterkit_core::{Subscribed, subscribed};
 
 /// Android-specific JNI helpers for permission handling.

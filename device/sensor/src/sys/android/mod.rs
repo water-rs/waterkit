@@ -213,9 +213,8 @@ fn timestamp_from_jni_double(value: f64) -> Result<Timestamp, SensorError> {
             "invalid Android sensor timestamp: {value}"
         )));
     }
-    Timestamp::from_millisecond(value as i64).map_err(|e| {
-        SensorError::Platform(format!("Android sensor timestamp out of range: {e}"))
-    })
+    Timestamp::from_millisecond(value as i64)
+        .map_err(|e| SensorError::Platform(format!("Android sensor timestamp out of range: {e}")))
 }
 
 /// Check sensor availability with an explicit Android `Context`.

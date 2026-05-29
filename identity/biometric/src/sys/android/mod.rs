@@ -85,9 +85,8 @@ pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), BiometricError> {
             .map_err(|e| BiometricError::Platform(format!("metadata DEX failed: {e}")))?
             .permissions();
         perms.set_mode(0o444); // Read-only
-        std::fs::set_permissions(&dex_path, perms).map_err(|e| {
-            BiometricError::Platform(format!("set_permissions DEX failed: {e}"))
-        })?;
+        std::fs::set_permissions(&dex_path, perms)
+            .map_err(|e| BiometricError::Platform(format!("set_permissions DEX failed: {e}")))?;
     }
 
     let dex_path_jstring = env

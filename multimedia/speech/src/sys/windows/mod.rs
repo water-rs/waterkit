@@ -21,15 +21,14 @@ pub struct TtsInner {
 impl TtsInner {
     #[allow(clippy::unused_async)]
     pub async fn new() -> Result<Self, SpeechError> {
-        let synth =
-            SpeechSynthesizer::new().map_err(|e| SpeechError::Platform(e.to_string()))?;
+        let synth = SpeechSynthesizer::new().map_err(|e| SpeechError::Platform(e.to_string()))?;
         Ok(Self { synth })
     }
 
     pub fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
         let _ = self;
-        let voices = SpeechSynthesizer::AllVoices()
-            .map_err(|e| SpeechError::Platform(e.to_string()))?;
+        let voices =
+            SpeechSynthesizer::AllVoices().map_err(|e| SpeechError::Platform(e.to_string()))?;
         let mut result = Vec::new();
         for voice in &voices {
             let id = voice.Id().map_or_else(|_| String::new(), |s| s.to_string());
@@ -88,8 +87,8 @@ impl SpeechRecognizerInner {
     ) -> Result<(Self, async_channel::Receiver<RecognitionResult>), SpeechError> {
         let recognizer = if let Some(language_tag) = config.language.as_deref() {
             let tag: windows::core::HSTRING = language_tag.into();
-            let language = Language::CreateLanguage(&tag)
-                .map_err(|e| SpeechError::Platform(e.to_string()))?;
+            let language =
+                Language::CreateLanguage(&tag).map_err(|e| SpeechError::Platform(e.to_string()))?;
             WinSpeechRecognizer::Create(&language).map_err(|e| {
                 SpeechError::Platform(format!(
                     "create recognizer for language {language_tag}: {e}"
@@ -111,9 +110,9 @@ impl SpeechRecognizerInner {
             return Err(SpeechError::NotAvailable);
         }
 
-        let session = recognizer.ContinuousRecognitionSession().map_err(|e| {
-            SpeechError::Platform(format!("ContinuousRecognitionSession: {e}"))
-        })?;
+        let session = recognizer
+            .ContinuousRecognitionSession()
+            .map_err(|e| SpeechError::Platform(format!("ContinuousRecognitionSession: {e}")))?;
 
         let (tx, rx) = async_channel::bounded(32);
         let tx_for_results = tx.clone();
@@ -172,9 +171,7 @@ impl SpeechRecognizerInner {
             .StartWithModeAsync(mode)
             .map_err(|error| SpeechError::Platform(format!("StartWithModeAsync: {error}")))?
             .await
-            .map_err(|error| {
-                SpeechError::Platform(format!("StartWithModeAsync await: {error}"))
-            })
+            .map_err(|error| SpeechError::Platform(format!("StartWithModeAsync await: {error}")))
         {
             let _ = session.RemoveResultGenerated(result_cookie);
             let _ = session.RemoveCompleted(completed_cookie);

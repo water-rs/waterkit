@@ -420,9 +420,9 @@ pub mod jni_api {
             return Ok(None);
         }
 
-        let tag_extra_key = env.new_string(EXTRA_TAG_KEY).map_err(|e| {
-            NfcError::Platform(format!("new_string EXTRA_TAG_KEY failed: {e}"))
-        })?;
+        let tag_extra_key = env
+            .new_string(EXTRA_TAG_KEY)
+            .map_err(|e| NfcError::Platform(format!("new_string EXTRA_TAG_KEY failed: {e}")))?;
         let tag = env
             .call_method(
                 &intent,
@@ -431,9 +431,7 @@ pub mod jni_api {
                 &[JValue::Object(&tag_extra_key)],
             )
             .and_then(jni::objects::JValueGen::l)
-            .map_err(|e| {
-                NfcError::Platform(format!("Intent.getParcelableExtra failed: {e}"))
-            })?;
+            .map_err(|e| NfcError::Platform(format!("Intent.getParcelableExtra failed: {e}")))?;
         if tag.is_null() {
             return Ok(None);
         }
@@ -485,9 +483,7 @@ pub mod jni_api {
         } else {
             Some(
                 env.get_string(&JString::from(records))
-                    .map_err(|e| {
-                        NfcError::Platform(format!("decode NDEF records failed: {e}"))
-                    })?
+                    .map_err(|e| NfcError::Platform(format!("decode NDEF records failed: {e}")))?
                     .into(),
             )
         };

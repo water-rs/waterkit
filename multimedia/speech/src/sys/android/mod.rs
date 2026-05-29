@@ -50,9 +50,7 @@ fn get_vm() -> Result<Arc<JavaVM>, SpeechError> {
     }
 
     VM.get().cloned().ok_or_else(|| {
-        SpeechError::Platform(
-            "Android speech runtime initialization failed: VM missing".into(),
-        )
+        SpeechError::Platform("Android speech runtime initialization failed: VM missing".into())
     })
 }
 
@@ -519,9 +517,7 @@ impl SpeechRecognizerInner {
             recognition_sessions()
                 .lock()
                 .map_err(|e| {
-                    SpeechError::Platform(format!(
-                        "recognition session map lock poisoned: {e}"
-                    ))
+                    SpeechError::Platform(format!("recognition session map lock poisoned: {e}"))
                 })?
                 .remove(&session_id);
             return Err(SpeechError::NotAvailable);

@@ -220,10 +220,7 @@ impl BootstrapConfig {
     ///
     /// # Errors
     /// Returns an error on duplicate registration.
-    pub fn app_refresh(
-        mut self,
-        identifier: TaskIdentifier,
-    ) -> Result<Self, BackgroundError> {
+    pub fn app_refresh(mut self, identifier: TaskIdentifier) -> Result<Self, BackgroundError> {
         if self.app_refresh_identifiers.contains(&identifier) {
             return Err(BackgroundError::ConfigurationMissing(format!(
                 "duplicate app refresh identifier `{identifier}`"
@@ -237,10 +234,7 @@ impl BootstrapConfig {
     ///
     /// # Errors
     /// Returns an error on duplicate registration.
-    pub fn processing(
-        mut self,
-        identifier: TaskIdentifier,
-    ) -> Result<Self, BackgroundError> {
+    pub fn processing(mut self, identifier: TaskIdentifier) -> Result<Self, BackgroundError> {
         if self.processing_identifiers.contains(&identifier) {
             return Err(BackgroundError::ConfigurationMissing(format!(
                 "duplicate processing identifier `{identifier}`"

@@ -59,7 +59,12 @@ fn ts_from_ms(ms: u64) -> Timestamp {
 }
 
 fn convert_reading(reading: &ffi::SensorReading) -> SensorData {
-    SensorData::new(reading.x, reading.y, reading.z, ts_from_ms(reading.timestamp_ms))
+    SensorData::new(
+        reading.x,
+        reading.y,
+        reading.z,
+        ts_from_ms(reading.timestamp_ms),
+    )
 }
 
 fn convert_scalar(reading: &ffi::ScalarReading) -> ScalarData {

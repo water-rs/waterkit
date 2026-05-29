@@ -159,9 +159,9 @@ fn parse_tag(path: &str, objects: &ManagedObjects) -> Option<NfcTag> {
 }
 
 fn dbus_string_value(value: &str) -> Result<OwnedValue, NfcError> {
-    Value::from(value).try_into().map_err(|error| {
-        NfcError::Platform(format!("encode D-Bus string value failed: {error}"))
-    })
+    Value::from(value)
+        .try_into()
+        .map_err(|error| NfcError::Platform(format!("encode D-Bus string value failed: {error}")))
 }
 
 fn encode_neard_records(
@@ -220,9 +220,7 @@ async fn first_adapter_path(conn: &Connection) -> Result<String, NfcError> {
         .destination(NEARD_SERVICE)
         .map_err(|error| NfcError::Platform(format!("set destination failed: {error}")))?
         .path(OBJECT_MANAGER_PATH)
-        .map_err(|error| {
-            NfcError::Platform(format!("set object manager path failed: {error}"))
-        })?
+        .map_err(|error| NfcError::Platform(format!("set object manager path failed: {error}")))?
         .build()
         .await
         .map_err(|error| {
@@ -231,9 +229,7 @@ async fn first_adapter_path(conn: &Connection) -> Result<String, NfcError> {
     let objects = object_manager
         .get_managed_objects()
         .await
-        .map_err(|error| {
-            NfcError::Platform(format!("list managed objects failed: {error}"))
-        })?;
+        .map_err(|error| NfcError::Platform(format!("list managed objects failed: {error}")))?;
     for (path, ifaces) in objects {
         if ifaces.contains_key(ADAPTER_IFACE) {
             return Ok(path.to_string());
@@ -416,9 +412,7 @@ impl NfcReaderInner {
         let tag_path = self
             .latest_tag_path
             .lock()
-            .map_err(|error| {
-                NfcError::Platform(format!("latest tag mutex poisoned: {error}"))
-            })?
+            .map_err(|error| NfcError::Platform(format!("latest tag mutex poisoned: {error}")))?
             .clone()
             .ok_or_else(|| NfcError::WriteFailed("no NFC tag discovered yet".into()))?;
 

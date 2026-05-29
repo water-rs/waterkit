@@ -534,7 +534,12 @@ impl ClassicBluetoothInner {
             let stream_ctx = (&raw const *stream_ctx_token) as usize as u64;
             let (tx, rx) = oneshot::channel::<Result<(), BluetoothError>>();
             let connect_ctx = Box::into_raw(Box::new(tx)) as usize as u64;
-            ffi::bluetooth_classic_connect_spp(device_id.as_str(), uuid.as_str(), stream_ctx, connect_ctx);
+            ffi::bluetooth_classic_connect_spp(
+                device_id.as_str(),
+                uuid.as_str(),
+                stream_ctx,
+                connect_ctx,
+            );
             rx.await.map_err(|_| {
                 BluetoothError::ConnectionFailed("classic SPP connect callback dropped".into())
             })??;

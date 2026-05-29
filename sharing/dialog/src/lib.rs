@@ -115,7 +115,10 @@ impl Dialog {
     /// # Errors
     ///
     /// Returns [`DialogError`] if the native dialog cannot be shown.
-    pub async fn alert(title: impl Into<String>, message: impl Into<String>) -> Result<(), DialogError> {
+    pub async fn alert(
+        title: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Result<(), DialogError> {
         Self::new(title, message).show().await
     }
 
@@ -124,7 +127,10 @@ impl Dialog {
     /// # Errors
     ///
     /// Returns [`DialogError`] if the native dialog cannot be shown.
-    pub async fn confirm(title: impl Into<String>, message: impl Into<String>) -> Result<bool, DialogError> {
+    pub async fn confirm(
+        title: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Result<bool, DialogError> {
         Self::new(title, message).show_confirm().await
     }
 
@@ -149,7 +155,6 @@ impl Dialog {
         sys::show_confirm(self).await
     }
 }
-
 
 /// A native file open dialog.
 #[derive(Debug, Clone)]
@@ -225,9 +230,7 @@ impl FileDialog {
     /// # Errors
     ///
     /// Returns [`DialogError`] if the dialog cannot be displayed.
-    pub async fn pick_multiple(
-        self,
-    ) -> Result<Option<Vec<std::path::PathBuf>>, DialogError> {
+    pub async fn pick_multiple(self) -> Result<Option<Vec<std::path::PathBuf>>, DialogError> {
         sys::show_open_multiple_files(self).await
     }
 }

@@ -17,9 +17,9 @@ where
     let android_context = ndk_context::android_context();
     let vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) }
         .map_err(|error| HealthError::Platform(format!("JavaVM::from_raw failed: {error}")))?;
-    let mut env = vm.attach_current_thread().map_err(|error| {
-        HealthError::Platform(format!("attach_current_thread failed: {error}"))
-    })?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|error| HealthError::Platform(format!("attach_current_thread failed: {error}")))?;
 
     let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
     assert!(
@@ -38,16 +38,12 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), HealthError> {
     let cache_dir = env
         .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|error| {
-            HealthError::Platform(format!("Context.getCacheDir failed: {error}"))
-        })?;
+        .map_err(|error| HealthError::Platform(format!("Context.getCacheDir failed: {error}")))?;
 
     let cache_path = env
         .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|error| {
-            HealthError::Platform(format!("File.getAbsolutePath failed: {error}"))
-        })?;
+        .map_err(|error| HealthError::Platform(format!("File.getAbsolutePath failed: {error}")))?;
 
     let cache_path_string: String = env
         .get_string(&JString::from(cache_path))
@@ -72,12 +68,12 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), HealthError> {
         })?;
     }
 
-    let dex_path_java = env.new_string(dex_path).map_err(|error| {
-        HealthError::Platform(format!("new dex path string failed: {error}"))
-    })?;
-    let cache_path_java = env.new_string(cache_path_string).map_err(|error| {
-        HealthError::Platform(format!("new cache path string failed: {error}"))
-    })?;
+    let dex_path_java = env
+        .new_string(dex_path)
+        .map_err(|error| HealthError::Platform(format!("new dex path string failed: {error}")))?;
+    let cache_path_java = env
+        .new_string(cache_path_string)
+        .map_err(|error| HealthError::Platform(format!("new cache path string failed: {error}")))?;
 
     let parent_loader = env
         .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
@@ -88,9 +84,7 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), HealthError> {
 
     let dex_loader_class = env
         .find_class("dalvik/system/DexClassLoader")
-        .map_err(|error| {
-            HealthError::Platform(format!("find DexClassLoader failed: {error}"))
-        })?;
+        .map_err(|error| HealthError::Platform(format!("find DexClassLoader failed: {error}")))?;
 
     let class_loader = env
         .new_object(
@@ -103,9 +97,7 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), HealthError> {
                 JValue::Object(&parent_loader),
             ],
         )
-        .map_err(|error| {
-            HealthError::Platform(format!("new DexClassLoader failed: {error}"))
-        })?;
+        .map_err(|error| HealthError::Platform(format!("new DexClassLoader failed: {error}")))?;
 
     let class_loader_global = env
         .new_global_ref(class_loader)
@@ -138,9 +130,7 @@ fn get_helper_class<'local>(env: &mut JNIEnv<'local>) -> Result<JClass<'local>, 
             &[JValue::Object(&helper_name)],
         )
         .and_then(jni::objects::JValueGen::l)
-        .map_err(|error| {
-            HealthError::Platform(format!("ClassLoader.loadClass failed: {error}"))
-        })?;
+        .map_err(|error| HealthError::Platform(format!("ClassLoader.loadClass failed: {error}")))?;
 
     Ok(helper_class.into())
 }

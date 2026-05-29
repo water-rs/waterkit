@@ -284,9 +284,7 @@ fn parse_contact_line(line: &str) -> Result<Contact, ContactsError> {
     let parts: Vec<&str> = line.split('\t').collect();
     let id = parts.first().copied().unwrap_or_default().to_string();
     if id.is_empty() {
-        return Err(ContactsError::Platform(
-            "contact payload missing id".into(),
-        ));
+        return Err(ContactsError::Platform("contact payload missing id".into()));
     }
 
     Ok(Contact {

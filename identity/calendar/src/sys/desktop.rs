@@ -72,9 +72,7 @@ pub async fn create_event(data: EventData) -> Result<Event, CalendarError> {
             .calendars
             .iter()
             .find(|calendar| calendar.id == calendar_id.as_str())
-            .ok_or_else(|| {
-                CalendarError::Platform(format!("calendar not found: {calendar_id}"))
-            })?;
+            .ok_or_else(|| CalendarError::Platform(format!("calendar not found: {calendar_id}")))?;
         if calendar.is_read_only {
             return Err(CalendarError::ReadOnly);
         }
@@ -119,9 +117,8 @@ pub async fn delete_event(id: &str) -> Result<(), CalendarError> {
 }
 
 fn store_path() -> Result<PathBuf, CalendarError> {
-    WaterFs::data_local_path(Path::new("waterkit").join("calendar").join(STORE_FILE_NAME)).map_err(
-        |error| CalendarError::Platform(format!("resolve calendar store path: {error}")),
-    )
+    WaterFs::data_local_path(Path::new("waterkit").join("calendar").join(STORE_FILE_NAME))
+        .map_err(|error| CalendarError::Platform(format!("resolve calendar store path: {error}")))
 }
 
 fn load_store(path: &Path) -> Result<CalendarStore, CalendarError> {

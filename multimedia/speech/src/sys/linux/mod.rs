@@ -138,9 +138,7 @@ impl SpeechRecognizerInner {
                 }
                 tx.close();
             })
-            .map_err(|e| {
-                SpeechError::Platform(format!("spawn recognizer reader thread: {e}"))
-            })?;
+            .map_err(|e| SpeechError::Platform(format!("spawn recognizer reader thread: {e}")))?;
 
         Ok((
             Self {

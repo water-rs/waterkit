@@ -4,7 +4,9 @@
 //!
 //! Run: `cargo run --example demo`
 
-use waterkit_screen::{Brightness, ImageFormat, brightness, screens, screenshot_primary, set_brightness};
+use waterkit_screen::{
+    Brightness, ImageFormat, brightness, screens, screenshot_primary, set_brightness,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -19,7 +21,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             screen.width(),
             screen.height(),
             screen.scale_factor(),
-            if screen.is_primary() { " [primary]" } else { "" }
+            if screen.is_primary() {
+                " [primary]"
+            } else {
+                ""
+            }
         );
     }
 

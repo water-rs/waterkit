@@ -516,8 +516,9 @@ fn decrypt_payload<'local>(
         .convert_byte_array(&plaintext)
         .map_err(|err| system_error("failed to convert plaintext byte array", err))?;
 
-    String::from_utf8(plaintext_bytes)
-        .map_err(|err| SecretError::Platform(format!("decrypted payload is not valid UTF-8: {err}")))
+    String::from_utf8(plaintext_bytes).map_err(|err| {
+        SecretError::Platform(format!("decrypted payload is not valid UTF-8: {err}"))
+    })
 }
 
 #[allow(clippy::unused_async)]

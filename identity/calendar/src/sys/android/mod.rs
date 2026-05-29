@@ -16,9 +16,8 @@ where
     F: for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<T, CalendarError>,
 {
     let android_context = ndk_context::android_context();
-    let vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) }.map_err(|error| {
-        CalendarError::Platform(format!("JavaVM::from_raw failed: {error}"))
-    })?;
+    let vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) }
+        .map_err(|error| CalendarError::Platform(format!("JavaVM::from_raw failed: {error}")))?;
     let mut env = vm.attach_current_thread().map_err(|error| {
         CalendarError::Platform(format!("attach_current_thread failed: {error}"))
     })?;
@@ -49,9 +48,7 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), CalendarError> {
 
     let cache_path_string: String = env
         .get_string(&JString::from(cache_path))
-        .map_err(|error| {
-            CalendarError::Platform(format!("cache path decode failed: {error}"))
-        })?
+        .map_err(|error| CalendarError::Platform(format!("cache path decode failed: {error}")))?
         .into();
 
     let dex_path = format!("{cache_path_string}/waterkit_calendar.dex");
@@ -72,9 +69,9 @@ fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), CalendarError> {
         })?;
     }
 
-    let dex_path_java = env.new_string(dex_path).map_err(|error| {
-        CalendarError::Platform(format!("new dex path string failed: {error}"))
-    })?;
+    let dex_path_java = env
+        .new_string(dex_path)
+        .map_err(|error| CalendarError::Platform(format!("new dex path string failed: {error}")))?;
     let cache_path_java = env.new_string(cache_path_string).map_err(|error| {
         CalendarError::Platform(format!("new cache path string failed: {error}"))
     })?;
@@ -198,9 +195,7 @@ fn read_string_array(
         let decoded: String = env
             .get_string(&JString::from(value))
             .map_err(|error| {
-                CalendarError::Platform(format!(
-                    "{op_name}: get_string({index}) failed: {error}"
-                ))
+                CalendarError::Platform(format!("{op_name}: get_string({index}) failed: {error}"))
             })?
             .into();
         rows.push(decoded);
@@ -300,9 +295,9 @@ fn fetch_events_with_context(
     let helper_class = get_helper_class(env)?;
     let start_str = start.to_string();
     let end_str = end.to_string();
-    let start_java = env.new_string(&start_str).map_err(|error| {
-        CalendarError::Platform(format!("new start string failed: {error}"))
-    })?;
+    let start_java = env
+        .new_string(&start_str)
+        .map_err(|error| CalendarError::Platform(format!("new start string failed: {error}")))?;
     let end_java = env
         .new_string(&end_str)
         .map_err(|error| CalendarError::Platform(format!("new end string failed: {error}")))?;
@@ -339,27 +334,23 @@ fn create_event_with_context(
     ensure_calendar_permission(env, context, true)?;
 
     let helper_class = get_helper_class(env)?;
-    let title_java = env.new_string(&data.title).map_err(|error| {
-        CalendarError::Platform(format!("new title string failed: {error}"))
-    })?;
+    let title_java = env
+        .new_string(&data.title)
+        .map_err(|error| CalendarError::Platform(format!("new title string failed: {error}")))?;
     let notes_java = env
         .new_string(data.notes.as_deref().unwrap_or(""))
-        .map_err(|error| {
-            CalendarError::Platform(format!("new notes string failed: {error}"))
-        })?;
+        .map_err(|error| CalendarError::Platform(format!("new notes string failed: {error}")))?;
     let location_java = env
         .new_string(data.location.as_deref().unwrap_or(""))
-        .map_err(|error| {
-            CalendarError::Platform(format!("new location string failed: {error}"))
-        })?;
+        .map_err(|error| CalendarError::Platform(format!("new location string failed: {error}")))?;
     let start_str = data.start.to_string();
     let end_str = data.end.to_string();
     let start_java = env.new_string(&start_str).map_err(|error| {
         CalendarError::Platform(format!("new start date string failed: {error}"))
     })?;
-    let end_java = env.new_string(&end_str).map_err(|error| {
-        CalendarError::Platform(format!("new end date string failed: {error}"))
-    })?;
+    let end_java = env
+        .new_string(&end_str)
+        .map_err(|error| CalendarError::Platform(format!("new end date string failed: {error}")))?;
     let calendar_id_java = env
         .new_string(data.calendar_id.as_deref().unwrap_or(""))
         .map_err(|error| {

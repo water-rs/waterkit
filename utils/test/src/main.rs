@@ -9,6 +9,8 @@ use toml_edit::DocumentMut;
 use tracing::{info, warn};
 use waterkit_test_report::{TestReport, from_json, parse_report_block};
 
+const MACOS_HEADERPAD_RUSTFLAGS: &str = "-C link-arg=-Wl,-headerpad_max_install_names";
+
 #[derive(Parser)]
 #[command(name = "waterkit-test")]
 #[command(about = "CLI runner for WaterKit integration tests", long_about = None)]
@@ -138,10 +140,13 @@ fn run_macos(crate_path: &Path) -> Result<()> {
     info!("Primary binary: {}", metadata.bin_name);
 
     info!("{}", "Building macOS test binary...".yellow().bold());
-    let build_status = std::process::Command::new("cargo")
+    let mut build_command = std::process::Command::new("cargo");
+    build_command
         .current_dir(&root_dir)
         .args(["build", "--manifest-path"])
-        .arg(&manifest_path)
+        .arg(&manifest_path);
+    install_macos_headerpad_rustflags(&mut build_command);
+    let build_status = build_command
         .status()
         .context("Failed to run cargo build for macOS test crate")?;
     if !build_status.success() {
@@ -721,6 +726,19 @@ fn output_text(output: &Output) -> String {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     format!("{stdout}\n{stderr}")
+}
+
+fn install_macos_headerpad_rustflags(command: &mut std::process::Command) {
+    command.env("RUSTFLAGS", macos_headerpad_rustflags());
+}
+
+fn macos_headerpad_rustflags() -> String {
+    match std::env::var("RUSTFLAGS") {
+        Ok(flags) if flags.contains("headerpad_max_install_names") => flags,
+        Ok(flags) if flags.trim().is_empty() => MACOS_HEADERPAD_RUSTFLAGS.to_owned(),
+        Ok(flags) => format!("{flags} {MACOS_HEADERPAD_RUSTFLAGS}"),
+        Err(_) => MACOS_HEADERPAD_RUSTFLAGS.to_owned(),
+    }
 }
 
 fn add_swift_rpath_if_exists(binary_path: &Path, rpath: &Path) -> Result<()> {

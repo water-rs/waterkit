@@ -15,7 +15,6 @@ workspace = true
 
 [dependencies]
 waterkit-core = { workspace = true }
-thiserror = { workspace = true }
 
 [build-dependencies]
 waterkit-build.workspace = true

@@ -14,12 +14,11 @@ categories = ["os"]
 workspace = true
 
 [dependencies]
-waterkit-core = { workspace = true }
+waterkit-core = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
 futures = { workspace = true }
 blocking = { workspace = true }
 serde = { workspace = true }
-jiff = { workspace = true, features = ["serde"] }
 waterkit-fs = { workspace = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]

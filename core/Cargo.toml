@@ -15,13 +15,10 @@ workspace = true
 
 [dependencies]
 nami = { workspace = true }
-nami-core = { workspace = true }
 executor-core = { workspace = true }
-futures-core = "0.3"
 thiserror = { workspace = true }
 jiff = { workspace = true }
 uuid = { version = "1", default-features = false, features = ["std"] }
-tracing = { workspace = true }
 
 [dev-dependencies]
 futures = { workspace = true }
@@ -29,9 +26,4 @@ async-channel = { workspace = true }
 
 [features]
 default = []
-serde = ["dep:serde", "uuid/serde", "jiff/serde"]
-
-[dependencies.serde]
-version = "1"
-features = ["derive"]
-optional = true
+serde = ["uuid/serde", "jiff/serde"]

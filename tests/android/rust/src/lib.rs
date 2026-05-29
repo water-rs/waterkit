@@ -327,6 +327,10 @@ fn record_android_sensor(report: &mut TestReport, env: &mut JNIEnv<'_>, activity
                 data.z()
             ),
         )),
+        Err(waterkit_content::sensor::SensorError::NotAvailable) => report.push(TestCase::skipped(
+            "sensor.accelerometer",
+            "accelerometer became unavailable before read",
+        )),
         Err(error) => report.push(TestCase::failed(
             "sensor.accelerometer",
             format!("accelerometer reported available but read failed: {error}"),

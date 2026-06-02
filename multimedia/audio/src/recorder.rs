@@ -22,6 +22,12 @@ impl Default for AudioFormat {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct AudioFormatRequest {
+    pub(crate) sample_rate: Option<u32>,
+    pub(crate) channels: Option<u16>,
+}
+
 /// Information about an audio input device.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InputDevice {
@@ -178,11 +184,13 @@ impl AudioRecorderBuilder {
     ///
     /// Returns an error if the device cannot be opened.
     pub fn build(self) -> Result<AudioRecorder, RecordError> {
-        let format = AudioFormat {
-            sample_rate: self.sample_rate.unwrap_or(44100),
-            channels: self.channels.unwrap_or(1),
-        };
-        AudioRecorder::new_internal(self.device_id, format)
+        AudioRecorder::new_internal(
+            self.device_id,
+            AudioFormatRequest {
+                sample_rate: self.sample_rate,
+                channels: self.channels,
+            },
+        )
     }
 }
 
@@ -203,7 +211,7 @@ impl AudioRecorderBuilder {
 ///
 ///     // Read audio buffers
 ///     let buffer = recorder.read().await?;
-///     println!("Captured {} samples", buffer.len());
+///     tracing::debug!("Captured {} samples", buffer.len());
 ///
 ///     recorder.stop().await?;
 ///     Ok(())
@@ -243,11 +251,13 @@ impl AudioRecorder {
         crate::sys::AudioRecorderInner::list_devices()
     }
 
-    fn new_internal(device_id: Option<String>, format: AudioFormat) -> Result<Self, RecordError> {
-        Ok(Self {
-            inner: crate::sys::AudioRecorderInner::new(device_id, format)?,
-            format,
-        })
+    fn new_internal(
+        device_id: Option<String>,
+        format: AudioFormatRequest,
+    ) -> Result<Self, RecordError> {
+        let inner = crate::sys::AudioRecorderInner::new(device_id, format)?;
+        let format = inner.format();
+        Ok(Self { inner, format })
     }
 
     /// # Errors

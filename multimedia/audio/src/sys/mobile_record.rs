@@ -1,6 +1,6 @@
 //! Mobile audio recording placeholder.
 
-use crate::recorder::{AudioBuffer, AudioFormat, InputDevice, RecordError};
+use crate::recorder::{AudioBuffer, AudioFormat, AudioFormatRequest, InputDevice, RecordError};
 
 /// Mobile audio recorder inner.
 pub struct AudioRecorderInner;
@@ -12,7 +12,10 @@ impl AudioRecorderInner {
     }
 
     /// Create a new audio recorder.
-    pub fn new(_device_id: Option<String>, _format: AudioFormat) -> Result<Self, RecordError> {
+    pub fn new(
+        _device_id: Option<String>,
+        _format: AudioFormatRequest,
+    ) -> Result<Self, RecordError> {
         Err(RecordError::Unsupported)
     }
 
@@ -54,5 +57,12 @@ impl AudioRecorderInner {
     pub fn receiver(&self) -> async_channel::Receiver<AudioBuffer> {
         let (_, receiver) = async_channel::unbounded();
         receiver
+    }
+
+    pub const fn format(&self) -> AudioFormat {
+        AudioFormat {
+            sample_rate: 44100,
+            channels: 1,
+        }
     }
 }

@@ -32,6 +32,7 @@ waterkit-build.workspace = true
 rodio = { workspace = true }
 # Cross-platform audio I/O (for recording)
 cpal = { workspace = true }
+tracing.workspace = true
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
@@ -58,4 +59,3 @@ futures.workspace = true
 mpris-server = "0.9"
 zenwave = "0.3"
 smol = "2"
-tracing.workspace = true

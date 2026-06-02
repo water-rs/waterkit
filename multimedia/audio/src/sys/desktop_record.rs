@@ -2,7 +2,7 @@
 //!
 //! Works on macOS, Windows, and Linux.
 
-use crate::recorder::{AudioBuffer, AudioFormat, InputDevice, RecordError};
+use crate::recorder::{AudioBuffer, AudioFormat, AudioFormatRequest, InputDevice, RecordError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{
     Arc,
@@ -43,7 +43,7 @@ impl AudioRecorderInner {
 
     /// Create a new audio recorder.
     #[allow(deprecated)]
-    pub fn new(device_id: Option<String>, format: AudioFormat) -> Result<Self, RecordError> {
+    pub fn new(device_id: Option<String>, format: AudioFormatRequest) -> Result<Self, RecordError> {
         let host = cpal::default_host();
 
         let device = if let Some(id) = device_id {
@@ -59,6 +59,8 @@ impl AudioRecorderInner {
             host.default_input_device()
                 .ok_or_else(|| RecordError::DeviceNotFound("no default device".into()))?
         };
+
+        let format = resolve_format(&device, format)?;
 
         // Create unbound channel for audio data
         let (sender, receiver) = async_channel::unbounded();
@@ -112,7 +114,7 @@ impl AudioRecorderInner {
                     }
                 },
                 |err| {
-                    eprintln!("Audio input error: {err}");
+                    tracing::error!("Audio input error: {err}");
                 },
                 None,
             )
@@ -154,4 +156,40 @@ impl AudioRecorderInner {
     pub fn receiver(&self) -> async_channel::Receiver<AudioBuffer> {
         self.receiver.clone()
     }
+
+    pub const fn format(&self) -> AudioFormat {
+        self.format
+    }
+}
+
+fn resolve_format(
+    device: &cpal::Device,
+    request: AudioFormatRequest,
+) -> Result<AudioFormat, RecordError> {
+    let default = device
+        .default_input_config()
+        .map_err(|e| RecordError::OpenFailed(e.to_string()))?;
+
+    let sample_rate = request.sample_rate.unwrap_or(default.sample_rate().0);
+    let channels = request.channels.unwrap_or(default.channels());
+
+    let supported = device
+        .supported_input_configs()
+        .map_err(|e| RecordError::EnumerationFailed(e.to_string()))?
+        .any(|range| {
+            range.channels() == channels
+                && range.min_sample_rate().0 <= sample_rate
+                && sample_rate <= range.max_sample_rate().0
+        });
+
+    if !supported {
+        return Err(RecordError::OpenFailed(format!(
+            "input device does not support {sample_rate} Hz with {channels} channel(s)"
+        )));
+    }
+
+    Ok(AudioFormat {
+        sample_rate,
+        channels,
+    })
 }

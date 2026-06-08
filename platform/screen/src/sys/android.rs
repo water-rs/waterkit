@@ -13,9 +13,13 @@ use crate::stream::StreamConfig;
 use crate::{Error, ScreenInfo};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JClass, JObject, JValue};
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use wgpu::{Device, Queue};
+
+const NANOS_PER_SECOND: u64 = 1_000_000_000;
 
 /// Embedded DEX bytecode containing `ScreenHelper` class.
 /// Generated at build time by kotlinc + D8.
@@ -346,9 +350,10 @@ impl ScreenStreamInner {
         display: &ScreenInfo,
         device: Arc<Device>,
         queue: Arc<Queue>,
-        _config: &StreamConfig,
+        config: &StreamConfig,
     ) -> Result<Self, Error> {
         ensure_dex_loaded()?;
+        let frame_interval = frame_interval(config.target_fps)?;
 
         let (vm, _context) = get_vm_and_context();
         let mut env = vm
@@ -433,7 +438,7 @@ impl ScreenStreamInner {
                     }
                 }
 
-                std::thread::sleep(std::time::Duration::from_millis(16)); // ~60fps
+                std::thread::sleep(frame_interval);
             }
 
             // Stop capture when done
@@ -512,6 +517,18 @@ impl ScreenStreamInner {
     pub const fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
     }
+}
+
+fn frame_interval(target_fps: u32) -> Result<Duration, Error> {
+    if target_fps == 0 {
+        return Err(Error::Platform(
+            "target_fps must be greater than zero".into(),
+        ));
+    }
+
+    NonZeroU64::new(NANOS_PER_SECOND / u64::from(target_fps))
+        .map(Duration::from_nanos)
+        .ok_or_else(|| Error::Platform(format!("target_fps is too high: {target_fps}")))
 }
 
 impl Drop for ScreenStreamInner {

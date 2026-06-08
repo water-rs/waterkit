@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- *(screen)* GPU-first zero-copy screen capture with wgpu texture output
+- *(screen)* Screen capture with wgpu texture output
 - introduce AI guidance document and refactor audio player shutdown mechanism
 - Make platform modules private, adopt `thiserror`, and simplify camera API by removing frame structs.
 - add waterkit-build crate for shared build utilities

@@ -310,6 +310,41 @@ fn should_link_swift_import(module: &str) -> bool {
     !matches!(module, "Foundation" | "OSLog" | "ObjectiveC")
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn swift_runtime_lib_dir(swift_runtime_dir: &str) -> PathBuf {
+    use std::process::Command;
+
+    let swiftc_path = String::from_utf8(
+        Command::new("xcrun")
+            .args(["--find", "swiftc"])
+            .output()
+            .expect("xcrun --find swiftc failed")
+            .stdout,
+    )
+    .expect("xcrun --find swiftc output must be UTF-8");
+
+    PathBuf::from(swiftc_path.trim())
+        .parent()
+        .unwrap_or_else(|| panic!("swiftc path has no parent: {swiftc_path}"))
+        .parent()
+        .unwrap_or_else(|| panic!("swiftc bin path has no toolchain parent: {swiftc_path}"))
+        .join(format!("lib/swift/{swift_runtime_dir}"))
+}
+
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn link_swift_runtime(swift_runtime_dir: &str) {
+    let toolchain_lib = swift_runtime_lib_dir(swift_runtime_dir);
+    println!("cargo:rustc-link-search=native={}", toolchain_lib.display());
+    println!(
+        "cargo:rustc-link-arg=-Wl,-rpath,{}",
+        toolchain_lib.display()
+    );
+
+    if swift_runtime_dir == "macosx" {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
+    }
+}
+
 /// Generate Swift bridge code from bridge modules.
 ///
 /// This is for crates that only need bridge generation, not full Swift compilation.
@@ -509,21 +544,7 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
     println!("cargo:rustc-link-lib=static={}", config.lib_name);
 
     // Link Swift runtime
-    let toolchain_dir = String::from_utf8(
-        Command::new("xcrun")
-            .args(["--find", "swiftc"])
-            .output()
-            .expect("xcrun --find swiftc failed")
-            .stdout,
-    )
-    .unwrap();
-    let toolchain_lib = PathBuf::from(toolchain_dir.trim())
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join(format!("lib/swift/{swift_runtime_dir}"));
-    println!("cargo:rustc-link-search=native={}", toolchain_lib.display());
+    link_swift_runtime(swift_runtime_dir);
 
     // Link required frameworks
     for framework in &config.frameworks {
@@ -719,21 +740,7 @@ pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = Swif
     println!("cargo:rustc-link-lib=static={lib_name}");
 
     // Link Swift runtime
-    let toolchain_dir = String::from_utf8(
-        Command::new("xcrun")
-            .args(["--find", "swiftc"])
-            .output()
-            .expect("xcrun --find swiftc failed")
-            .stdout,
-    )
-    .unwrap();
-    let toolchain_lib = PathBuf::from(toolchain_dir.trim())
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join(format!("lib/swift/{swift_runtime_dir}"));
-    println!("cargo:rustc-link-search=native={}", toolchain_lib.display());
+    link_swift_runtime(swift_runtime_dir);
 
     // Collect and deduplicate frameworks, always include Foundation
     use std::collections::HashSet;

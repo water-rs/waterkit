@@ -23,7 +23,7 @@ impl Default for AudioFormat {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct AudioFormatRequest {
+pub struct AudioFormatRequest {
     pub(crate) sample_rate: Option<u32>,
     pub(crate) channels: Option<u16>,
 }
@@ -199,7 +199,8 @@ impl AudioRecorderBuilder {
 /// # Example
 ///
 /// ```no_run
-/// use waterkit_audio::{AudioRecorder, AudioBuffer};
+/// use futures::StreamExt;
+/// use waterkit_audio::AudioRecorder;
 ///
 /// async fn record() -> Result<(), waterkit_audio::RecordError> {
 ///     let mut recorder = AudioRecorder::new()
@@ -210,8 +211,11 @@ impl AudioRecorderBuilder {
 ///     recorder.start().await?;
 ///
 ///     // Read audio buffers
-///     let buffer = recorder.read().await?;
-///     tracing::debug!("Captured {} samples", buffer.len());
+///     let stream = recorder.stream();
+///     futures::pin_mut!(stream);
+///     if let Some(buffer) = stream.next().await {
+///         tracing::debug!("Captured {} samples", buffer.len());
+///     }
 ///
 ///     recorder.stop().await?;
 ///     Ok(())
@@ -284,7 +288,7 @@ impl AudioRecorder {
     /// `stream().try_next()` (non-blocking peek), or
     /// `futures::executor::block_on(stream().next())` (sync) at the call
     /// site instead.
-    pub fn stream(&self) -> impl futures::Stream<Item = AudioBuffer> {
+    pub fn stream(&self) -> impl futures::Stream<Item = AudioBuffer> + use<> {
         self.inner.receiver()
     }
 

@@ -118,7 +118,7 @@ fn build_report() -> TestReport {
         #[cfg(feature = "health")]
         report.push(TestCase::passed_with_message(
             "health.availability",
-            format!("available={}", waterkit::health::is_available()),
+            format!("available={}", waterkit::health::capabilities().available),
         ));
 
         #[cfg(feature = "deeplink")]
@@ -308,7 +308,7 @@ fn record_notification(report: &mut TestReport) {
         .body("iOS notification is working")
         .show()
     {
-        Ok(()) => report.push(TestCase::passed("notification.show")),
+        Ok(_handle) => report.push(TestCase::passed("notification.show")),
         Err(error) => report.push(TestCase::failed(
             "notification.show",
             format!("notification show failed: {error}"),

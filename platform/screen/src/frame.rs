@@ -6,7 +6,7 @@ use wgpu::{Texture, TextureFormat, TextureView, TextureViewDescriptor};
 /// GPU-backed screen capture frame.
 ///
 /// The frame data lives in GPU memory and can be used directly for rendering
-/// without any CPU copies.
+/// through [`wgpu::Texture`] views.
 #[derive(Debug)]
 pub struct ScreenFrame {
     texture: Arc<Texture>,

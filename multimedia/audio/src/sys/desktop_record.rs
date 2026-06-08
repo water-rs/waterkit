@@ -170,8 +170,10 @@ fn resolve_format(
         .default_input_config()
         .map_err(|e| RecordError::OpenFailed(e.to_string()))?;
 
-    let sample_rate = request.sample_rate.unwrap_or(default.sample_rate().0);
-    let channels = request.channels.unwrap_or(default.channels());
+    let sample_rate = request
+        .sample_rate
+        .unwrap_or_else(|| default.sample_rate().0);
+    let channels = request.channels.unwrap_or_else(|| default.channels());
 
     let supported = device
         .supported_input_configs()

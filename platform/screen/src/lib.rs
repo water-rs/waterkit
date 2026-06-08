@@ -1,9 +1,9 @@
-//! GPU-first zero-copy screen capture with wgpu texture output.
+//! GPU texture output for screen capture.
 //!
 //! This crate provides two capture modes:
 //!
 //! 1. **Simple Screenshot** - No GPU device required, returns encoded image data (PNG/AVIF/HEIF)
-//! 2. **GPU Streaming** - Zero-copy screen capture with wgpu texture output for real-time processing
+//! 2. **GPU Streaming** - Screen capture frames uploaded to wgpu textures for real-time processing
 //!
 //! # Simple Screenshot
 //!

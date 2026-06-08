@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 readme.workspace = true
 repository.workspace = true
-description = "GPU-first zero-copy screen capture with wgpu texture output"
+description = "Screen capture with wgpu texture output"
 keywords = ["screen", "display", "capture", "gpu", "wgpu"]
 categories = ["os", "gui", "multimedia"]
 

@@ -16,9 +16,8 @@ public func capture_screenshot(format: UInt8) -> RustVec<UInt8> {
 
     if #available(macOS 12.3, *) {
         SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { content, error in
-            defer { sem.signal() }
-
             guard let content = content, let display = content.displays.first else {
+                sem.signal()
                 return
             }
 
@@ -35,10 +34,12 @@ public func capture_screenshot(format: UInt8) -> RustVec<UInt8> {
                     if let cgImage = image {
                         resultData = encodeImage(cgImage, format: format)
                     }
+                    sem.signal()
                 }
             } else {
                 // Fallback for older macOS - use stream with single frame
                 resultData = captureWithStream(filter: filter, config: config, format: format)
+                sem.signal()
             }
         }
     } else {
@@ -336,7 +337,7 @@ public func stop_screen_stream() {
     frameLock.unlock()
 }
 
-/// Get IOSurface pointer for zero-copy GPU access
+/// Get IOSurface pointer for the latest captured frame
 public func get_iosurface_ptr() -> UInt64 {
     frameLock.lock()
     defer { frameLock.unlock() }

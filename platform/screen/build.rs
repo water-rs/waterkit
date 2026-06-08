@@ -28,12 +28,6 @@ fn main() {
         }
 
         waterkit_build::compile_swift("src/sys/apple/mod.rs", &config);
-
-        // Swift runtime for async/await
-        if target_os == "macos" {
-            println!("cargo:rustc-link-arg=-rpath");
-            println!("cargo:rustc-link-arg=/usr/lib/swift");
-        }
     }
 
     if target_os == "android" {

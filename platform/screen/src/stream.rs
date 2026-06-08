@@ -25,7 +25,7 @@ impl Default for StreamConfig {
 /// Continuous GPU screen capture stream.
 ///
 /// Provides streaming screen capture with GPU texture output.
-/// Frames are delivered as [`ScreenFrame`] with zero-copy on supported platforms.
+/// Frames are delivered as [`ScreenFrame`] values backed by `wgpu` textures.
 pub struct ScreenStream {
     inner: sys::ScreenStreamInner,
 }

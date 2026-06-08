@@ -1,11 +1,11 @@
 # Waterkit Screen
 
-GPU-first zero-copy screen capture with wgpu texture output.
+Screen capture with wgpu texture output.
 
 ## Features
 
 - **Simple Screenshot**: Device-free capture with PNG/HEIF/AVIF encoding
-- **GPU Streaming**: Zero-copy screen capture with wgpu texture output
+- **GPU Streaming**: Screen capture frames uploaded to wgpu textures
 - **Screen Info**: Resolution, scaling factor, and display enumeration
 - **Brightness Control**: Get/set screen brightness (platform-dependent)
 

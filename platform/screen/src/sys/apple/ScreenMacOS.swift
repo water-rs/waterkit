@@ -43,10 +43,9 @@ public func capture_screenshot(format: UInt8) -> RustVec<UInt8> {
             }
         }
     } else {
-        // Fallback: CGWindowListCreateImage
-        if let cgImage = CGWindowListCreateImage(.null, .optionOnScreenOnly, kCGNullWindowID, .bestResolution) {
-            resultData = encodeImage(cgImage, format: format)
-        }
+        // Screen capture requires ScreenCaptureKit (macOS 12.3+). Earlier systems
+        // are unsupported: the legacy CGWindowListCreateImage API was obsoleted in
+        // macOS 15 and no longer compiles against current SDKs.
         sem.signal()
     }
 

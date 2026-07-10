@@ -56,6 +56,24 @@ private func runOnMain<T>(_ body: () -> T) -> T {
     }
 }
 
+/// Runs a result-less bridge operation on the main thread without blocking the
+/// caller. State pushes (host registration, controller sync, teardown) need
+/// main-thread execution and in-order delivery — the serial main queue gives
+/// both — but nothing waits on them, so a synchronous hop is a deadlock hazard:
+/// a caller off the main thread blocks forever whenever the main thread is not
+/// draining its queue (Rust's libtest parks it while a test drops a
+/// `VideoRenderer`, which pushes the PiP clear from the test thread).
+private func runOnMainAsync(_ body: @escaping () -> Void) {
+    if Thread.isMainThread {
+        body()
+        return
+    }
+
+    DispatchQueue.main.async {
+        body()
+    }
+}
+
 private final class PictureInPictureHostRegistration {
     let hostId: UInt64
     let userData: UnsafeMutableRawPointer?
@@ -568,7 +586,7 @@ func waterkit_video_apple_pip_bridge_register_host(
     _ renderFrame: @escaping RenderFrameFn,
     _ setExternalRendering: @escaping SetExternalRenderingFn
 ) {
-    runOnMain {
+    runOnMainAsync {
         if #available(iOS 15.0, macOS 12.0, *) {
             PictureInPictureManager.shared.registerHost(
                 hostId: hostId,
@@ -582,7 +600,7 @@ func waterkit_video_apple_pip_bridge_register_host(
 
 @_cdecl("waterkit_video_apple_pip_bridge_unregister_host")
 func waterkit_video_apple_pip_bridge_unregister_host(_ hostId: UInt64) {
-    runOnMain {
+    runOnMainAsync {
         if #available(iOS 15.0, macOS 12.0, *) {
             PictureInPictureManager.shared.unregisterHost(hostId: hostId)
         }
@@ -597,7 +615,7 @@ func waterkit_video_apple_pip_bridge_sync_host_state(
     _ aspectWidth: UInt32,
     _ aspectHeight: UInt32
 ) {
-    runOnMain {
+    runOnMainAsync {
         if #available(iOS 15.0, macOS 12.0, *) {
             PictureInPictureManager.shared.syncHostState(
                 hostId: hostId,

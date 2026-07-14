@@ -5,7 +5,7 @@ use objc2_core_media::{
     CMSampleBuffer, CMSampleTimingInfo, CMTime, kCMVideoCodecType_H264, kCMVideoCodecType_HEVC,
 };
 
-use crate::CodecError;
+use crate::{CodecError, DecodedPixelLayout};
 use objc2_core_foundation::CFRetained;
 use objc2_core_video::{
     CVPixelBuffer, CVPixelBufferCreate, CVPixelBufferLockBaseAddress,
@@ -854,6 +854,7 @@ impl AppleEncoder {
 
 struct DecoderContext {
     decoded_surfaces: Mutex<Vec<IOSurfaceFrame>>,
+    output_layout: DecodedPixelLayout,
 }
 
 /// Apple `VideoToolbox` hardware decoder.
@@ -872,17 +873,21 @@ impl fmt::Debug for AppleDecoder {
     }
 }
 
-/// Zero-copy decoded frame backed by `IOSurface` (NV12 format).
+/// Zero-copy decoded frame backed by an `IOSurface` in NV12 or P010 format.
 #[derive(Clone)]
 pub struct IOSurfaceFrame {
     /// The underlying `IOSurface`.
     pub surface: CFRetained<IOSurfaceRef>,
+    /// Retained Core Video buffer used for Metal texture-cache interop.
+    pub pixel_buffer: CFRetained<CVPixelBuffer>,
     /// Frame width in pixels.
     pub width: u32,
     /// Frame height in pixels.
     pub height: u32,
     /// Presentation timestamp in nanoseconds.
     pub timestamp_ns: u64,
+    /// Native pixel layout retained by VideoToolbox.
+    pub layout: DecodedPixelLayout,
 }
 
 #[allow(clippy::non_send_fields_in_send_ty)]
@@ -923,11 +928,14 @@ unsafe extern "C-unwind" fn decode_callback(
         let surface_raw = CVPixelBufferGetIOSurface(image_buffer_ref);
         if !surface_raw.is_null() {
             let surface = CFRetained::retain(NonNull::new_unchecked(surface_raw.cast_mut()));
+            let pixel_buffer = CFRetained::retain(NonNull::new_unchecked(image_buffer));
             let frame = IOSurfaceFrame {
                 surface,
+                pixel_buffer,
                 width,
                 height,
                 timestamp_ns: 0,
+                layout: context.output_layout,
             };
             if let Ok(mut frames) = context.decoded_surfaces.lock() {
                 frames.push(frame);
@@ -968,8 +976,18 @@ impl AppleDecoder {
             }
         }
 
+        let output_layout = if codec == CodecType::H265
+            && final_config
+                .get(1)
+                .is_some_and(|profile| profile & 0x1f == 2)
+        {
+            DecodedPixelLayout::P010
+        } else {
+            DecodedPixelLayout::Nv12
+        };
         let context = Arc::new(DecoderContext {
             decoded_surfaces: Mutex::new(Vec::new()),
+            output_layout,
         });
 
         unsafe {
@@ -1046,12 +1064,14 @@ impl AppleDecoder {
                 decompressionOutputRefCon: Arc::as_ptr(&context) as *mut c_void,
             };
 
-            // Request NV12 output (420v)
-            let pixel_format_nv12: u32 = 0x3432_3076; // '420v'
+            let pixel_format: u32 = match output_layout {
+                DecodedPixelLayout::Nv12 => 0x3432_3076, // '420v'
+                DecodedPixelLayout::P010 => 0x7834_3230, // 'x420'
+            };
             let pixel_format_number = CFNumberCreate(
                 kCFAllocatorDefault,
                 3,
-                ptr::from_ref(&pixel_format_nv12).cast::<c_void>(),
+                ptr::from_ref(&pixel_format).cast::<c_void>(),
             );
 
             let pixel_format_key: *const c_void =

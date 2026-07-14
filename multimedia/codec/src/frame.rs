@@ -10,7 +10,13 @@ use wgpu::{
 };
 
 #[cfg(target_vendor = "apple")]
-use {objc2_core_foundation::CFRetained, objc2_io_surface::IOSurfaceRef, std::ptr};
+use {
+    objc2_core_foundation::CFRetained, objc2_core_video::CVPixelBuffer,
+    objc2_io_surface::IOSurfaceRef, std::ptr,
+};
+
+#[cfg(target_vendor = "apple")]
+mod apple_gpu;
 
 /// Decoded frame - opaque type hiding platform details.
 ///
@@ -20,15 +26,119 @@ pub struct DecodedFrame {
     inner: DecodedFrameInner,
 }
 
+/// Reusable decoded-frame uploader that retains GPU plane textures across frames.
+#[derive(Debug, Default)]
+pub struct DecodedFrameUploader {
+    cached: Option<GpuFrame>,
+}
+
+impl DecodedFrameUploader {
+    /// Creates an uploader with no allocated textures.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { cached: None }
+    }
+
+    /// Uploads a decoded frame, reusing textures while dimensions and layout remain stable.
+    #[must_use]
+    pub fn upload(&mut self, decoded: DecodedFrame, device: &Device, queue: &Queue) -> GpuFrame {
+        let width = decoded.width();
+        let height = decoded.height();
+        let layout = decoded.pixel_layout();
+        let replace = self.cached.as_ref().is_none_or(|cached| {
+            cached.width != width || cached.height != height || cached.layout != layout
+        });
+        if replace {
+            self.cached = Some(GpuFrame::initialized(device, queue, width, height, layout));
+        }
+        let cached = self
+            .cached
+            .as_mut()
+            .expect("decoded frame uploader must allocate its texture planes");
+        let timestamp_ns = match decoded.inner {
+            #[cfg(target_vendor = "apple")]
+            DecodedFrameInner::Hardware {
+                pixel_buffer,
+                timestamp_ns,
+                ..
+            } => {
+                apple_gpu::copy_surface_planes(
+                    queue,
+                    &pixel_buffer,
+                    &cached.y_texture,
+                    &cached.uv_texture,
+                    width,
+                    height,
+                    layout,
+                );
+                timestamp_ns
+            }
+            #[cfg(any(
+                not(target_vendor = "apple"),
+                all(
+                    target_vendor = "apple",
+                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
+                )
+            ))]
+            DecodedFrameInner::Software {
+                data, timestamp_ns, ..
+            } => {
+                cached.write_biplanar(queue, &data);
+                timestamp_ns
+            }
+        };
+        cached.timestamp_ns = timestamp_ns;
+        cached.clone()
+    }
+}
+
+// SAFETY: Apple IOSurfaces are explicitly cross-thread shareable allocations and
+// the retained CF ownership keeps their storage alive until the frame is dropped.
+#[cfg(target_vendor = "apple")]
+#[allow(clippy::non_send_fields_in_send_ty)]
+unsafe impl Send for DecodedFrame {}
+
+/// Native decoded YUV storage layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodedPixelLayout {
+    /// 8-bit bi-planar 4:2:0 video-range YUV (`420v`).
+    Nv12,
+    /// 10-bit bi-planar 4:2:0 video-range YUV in 16-bit lanes (`x420`).
+    P010,
+}
+
+impl DecodedPixelLayout {
+    /// Number of bytes required for a tightly packed frame.
+    #[must_use]
+    pub const fn packed_len(self, width: u32, height: u32) -> usize {
+        let samples = (width as usize) * (height as usize) * 3 / 2;
+        match self {
+            Self::Nv12 => samples,
+            Self::P010 => samples * 2,
+        }
+    }
+
+    /// Number of bytes in one luma or interleaved chroma row.
+    #[must_use]
+    pub const fn bytes_per_row(self, width: u32) -> usize {
+        match self {
+            Self::Nv12 => width as usize,
+            Self::P010 => width as usize * 2,
+        }
+    }
+}
+
 /// Private enum holding platform-specific frame data.
 enum DecodedFrameInner {
     /// Hardware-decoded frame backed by `IOSurface` (Apple only).
     #[cfg(target_vendor = "apple")]
     Hardware {
         surface: CFRetained<IOSurfaceRef>,
+        pixel_buffer: CFRetained<CVPixelBuffer>,
         width: u32,
         height: u32,
         timestamp_ns: u64,
+        layout: DecodedPixelLayout,
     },
     /// Software-decoded frame with NV12 data.
     /// Available on non-Apple platforms, or desktop Apple platforms with software-fallback.
@@ -44,6 +154,7 @@ enum DecodedFrameInner {
         width: u32,
         height: u32,
         timestamp_ns: u64,
+        layout: DecodedPixelLayout,
     },
 }
 
@@ -62,16 +173,20 @@ impl DecodedFrame {
     #[cfg(target_vendor = "apple")]
     pub(crate) const fn from_iosurface(
         surface: CFRetained<IOSurfaceRef>,
+        pixel_buffer: CFRetained<CVPixelBuffer>,
         width: u32,
         height: u32,
         timestamp_ns: u64,
+        layout: DecodedPixelLayout,
     ) -> Self {
         Self {
             inner: DecodedFrameInner::Hardware {
                 surface,
+                pixel_buffer,
                 width,
                 height,
                 timestamp_ns,
+                layout,
             },
         }
     }
@@ -96,7 +211,25 @@ impl DecodedFrame {
                 width,
                 height,
                 timestamp_ns,
+                layout: DecodedPixelLayout::Nv12,
             },
+        }
+    }
+
+    /// Returns the native decoded pixel layout.
+    #[must_use]
+    pub const fn pixel_layout(&self) -> DecodedPixelLayout {
+        match &self.inner {
+            #[cfg(target_vendor = "apple")]
+            DecodedFrameInner::Hardware { layout, .. } => *layout,
+            #[cfg(any(
+                not(target_vendor = "apple"),
+                all(
+                    target_vendor = "apple",
+                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
+                )
+            ))]
+            DecodedFrameInner::Software { layout, .. } => *layout,
         }
     }
 
@@ -157,38 +290,13 @@ impl DecodedFrame {
     /// This consumes the decoded frame and creates GPU textures on the provided device.
     #[must_use]
     pub fn to_gpu_frame(self, device: &Device, queue: &Queue) -> GpuFrame {
-        match self.inner {
-            #[cfg(target_vendor = "apple")]
-            DecodedFrameInner::Hardware {
-                surface,
-                width,
-                height,
-                timestamp_ns,
-            } => {
-                // Copy IOSurface to NV12, then upload to GPU
-                let nv12_data = Self::iosurface_to_nv12(&surface, width, height);
-                GpuFrame::from_nv12(device, queue, &nv12_data, width, height, timestamp_ns)
-            }
-            #[cfg(any(
-                not(target_vendor = "apple"),
-                all(
-                    target_vendor = "apple",
-                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-                )
-            ))]
-            DecodedFrameInner::Software {
-                data,
-                width,
-                height,
-                timestamp_ns,
-            } => GpuFrame::from_nv12(device, queue, &data, width, height, timestamp_ns),
-        }
+        DecodedFrameUploader::new().upload(self, device, queue)
     }
 
-    /// Copy NV12 data to a provided buffer slice.
+    /// Copy the native bi-planar data to a provided buffer slice.
     ///
-    /// Returns the number of bytes written. The buffer must be large enough
-    /// to hold the NV12 data (width * height * 3 / 2 bytes).
+    /// Returns the number of bytes written. The buffer must be large enough for
+    /// [`DecodedPixelLayout::packed_len`] bytes at this frame's dimensions.
     ///
     /// # Panics
     ///
@@ -196,7 +304,7 @@ impl DecodedFrame {
     pub fn copy_to_buffer(&self, output: &mut [u8]) -> usize {
         let width = self.width();
         let height = self.height();
-        let required_size = (width * height * 3 / 2) as usize;
+        let required_size = self.pixel_layout().packed_len(width, height);
         assert!(
             output.len() >= required_size,
             "buffer too small: need {required_size}, got {}",
@@ -205,8 +313,10 @@ impl DecodedFrame {
 
         match &self.inner {
             #[cfg(target_vendor = "apple")]
-            DecodedFrameInner::Hardware { surface, .. } => {
-                Self::copy_iosurface_to_buffer(surface, width, height, output);
+            DecodedFrameInner::Hardware {
+                surface, layout, ..
+            } => {
+                Self::copy_iosurface_to_buffer(surface, width, height, *layout, output);
             }
             #[cfg(any(
                 not(target_vendor = "apple"),
@@ -223,28 +333,19 @@ impl DecodedFrame {
         required_size
     }
 
-    /// Copy `IOSurface` data to NV12 format.
-    #[cfg(target_vendor = "apple")]
-    fn iosurface_to_nv12(surface: &CFRetained<IOSurfaceRef>, width: u32, height: u32) -> Vec<u8> {
-        let y_size = (width * height) as usize;
-        let uv_size = y_size / 2;
-        let mut nv12_data = vec![0u8; y_size + uv_size];
-
-        Self::copy_iosurface_to_buffer(surface, width, height, &mut nv12_data);
-        nv12_data
-    }
-
     /// Copy `IOSurface` data to a buffer.
     #[cfg(target_vendor = "apple")]
     fn copy_iosurface_to_buffer(
         surface: &CFRetained<IOSurfaceRef>,
         width: u32,
         height: u32,
+        layout: DecodedPixelLayout,
         output: &mut [u8],
     ) {
         use objc2_io_surface::IOSurfaceLockOptions;
 
-        let y_size = (width * height) as usize;
+        let row_bytes = layout.bytes_per_row(width);
+        let y_size = row_bytes * height as usize;
 
         unsafe {
             let surface_ref = CFRetained::as_ptr(surface).as_ref();
@@ -258,8 +359,8 @@ impl DecodedFrame {
             for row in 0..height as usize {
                 ptr::copy_nonoverlapping(
                     y_base.add(row * y_stride),
-                    output.as_mut_ptr().add(row * width as usize),
-                    width as usize,
+                    output.as_mut_ptr().add(row * row_bytes),
+                    row_bytes,
                 );
             }
 
@@ -270,8 +371,8 @@ impl DecodedFrame {
             for row in 0..uv_height {
                 ptr::copy_nonoverlapping(
                     uv_base.add(row * uv_stride),
-                    output.as_mut_ptr().add(y_size + row * width as usize),
-                    width as usize,
+                    output.as_mut_ptr().add(y_size + row * row_bytes),
+                    row_bytes,
                 );
             }
 
@@ -282,7 +383,7 @@ impl DecodedFrame {
 
 /// A decoded video frame backed by YUV textures on GPU.
 ///
-/// The frame is stored in NV12 format (Y plane + interleaved UV plane).
+/// The frame is stored in its native bi-planar NV12 or P010 layout.
 /// Use [`to_rgba`](Self::to_rgba) to convert to RGBA via compute shader.
 #[derive(Clone)]
 pub struct GpuFrame {
@@ -291,6 +392,7 @@ pub struct GpuFrame {
     width: u32,
     height: u32,
     timestamp_ns: u64,
+    layout: DecodedPixelLayout,
 }
 
 impl std::fmt::Debug for GpuFrame {
@@ -304,96 +406,101 @@ impl std::fmt::Debug for GpuFrame {
 }
 
 impl GpuFrame {
-    /// Create a GPU frame from NV12 data (Y plane followed by interleaved UV).
-    pub(crate) fn from_nv12(
+    fn initialized(
         device: &Device,
         queue: &Queue,
-        data: &[u8],
         width: u32,
         height: u32,
-        timestamp_ns: u64,
+        layout: DecodedPixelLayout,
     ) -> Self {
-        let y_size = (width * height) as usize;
-
-        let y_texture = device.create_texture(&TextureDescriptor {
-            label: Some("GpuFrame Y"),
-            size: Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: TextureFormat::R8Unorm,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        let uv_texture = device.create_texture(&TextureDescriptor {
-            label: Some("GpuFrame UV"),
-            size: Extent3d {
-                width: width / 2,
-                height: height / 2,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: TextureFormat::Rg8Unorm,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        // Upload Y plane
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &y_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &data[..y_size],
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width),
-                rows_per_image: Some(height),
-            },
-            Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        // Upload UV plane
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &uv_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &data[y_size..],
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width), // UV is interleaved, so same width in bytes
-                rows_per_image: Some(height / 2),
-            },
-            Extent3d {
-                width: width / 2,
-                height: height / 2,
-                depth_or_array_layers: 1,
-            },
-        );
-
+        let (y_texture, uv_texture) = Self::create_biplanar_textures(device, width, height, layout);
+        let zero_pixel = match layout {
+            DecodedPixelLayout::Nv12 => &[0_u8; 2][..],
+            DecodedPixelLayout::P010 => &[0_u8; 4][..],
+        };
+        for texture in [&y_texture, &uv_texture] {
+            queue.write_texture(
+                texture.as_image_copy(),
+                zero_pixel,
+                wgpu::TexelCopyBufferLayout::default(),
+                Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        queue.submit([]);
         Self {
             y_texture: Arc::new(y_texture),
             uv_texture: Arc::new(uv_texture),
             width,
             height,
-            timestamp_ns,
+            timestamp_ns: 0,
+            layout,
         }
+    }
+
+    fn create_biplanar_textures(
+        device: &Device,
+        width: u32,
+        height: u32,
+        layout: DecodedPixelLayout,
+    ) -> (Texture, Texture) {
+        let (y_format, uv_format) = match layout {
+            DecodedPixelLayout::Nv12 => (TextureFormat::R8Unorm, TextureFormat::Rg8Unorm),
+            DecodedPixelLayout::P010 => (TextureFormat::R16Unorm, TextureFormat::Rg16Unorm),
+        };
+        let texture = |label, texture_width, texture_height, format| {
+            device.create_texture(&TextureDescriptor {
+                label: Some(label),
+                size: Extent3d {
+                    width: texture_width,
+                    height: texture_height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
+        };
+        (
+            texture("GpuFrame Y", width, height, y_format),
+            texture(
+                "GpuFrame UV",
+                (width / 2).max(1),
+                (height / 2).max(1),
+                uv_format,
+            ),
+        )
+    }
+
+    fn write_biplanar(&self, queue: &Queue, data: &[u8]) {
+        let row_bytes = self.layout.bytes_per_row(self.width);
+        let y_size = row_bytes * self.height as usize;
+        queue.write_texture(
+            self.y_texture.as_image_copy(),
+            &data[..y_size],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(u32::try_from(row_bytes).expect("row bytes must fit in u32")),
+                rows_per_image: Some(self.height),
+            },
+            self.y_texture.size(),
+        );
+        queue.write_texture(
+            self.uv_texture.as_image_copy(),
+            &data[y_size..],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(u32::try_from(row_bytes).expect("row bytes must fit in u32")),
+                rows_per_image: Some((self.height / 2).max(1)),
+            },
+            self.uv_texture.size(),
+        );
     }
 
     /// Create a GPU frame wrapping existing YUV textures (zero-copy).
@@ -404,6 +511,7 @@ impl GpuFrame {
         width: u32,
         height: u32,
         timestamp_ns: u64,
+        layout: DecodedPixelLayout,
     ) -> Self {
         Self {
             y_texture: Arc::new(y_texture),
@@ -411,6 +519,7 @@ impl GpuFrame {
             width,
             height,
             timestamp_ns,
+            layout,
         }
     }
 
@@ -442,6 +551,12 @@ impl GpuFrame {
     #[must_use]
     pub const fn timestamp(&self) -> std::time::Duration {
         std::time::Duration::from_nanos(self.timestamp_ns)
+    }
+
+    /// Returns the decoded pixel layout represented by the textures.
+    #[must_use]
+    pub const fn pixel_layout(&self) -> DecodedPixelLayout {
+        self.layout
     }
 
     /// Convert YUV to RGBA using a compute shader.

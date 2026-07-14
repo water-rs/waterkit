@@ -122,6 +122,7 @@ pub struct VideoReader {
     codec_config: Option<Vec<u8>>,
     current_index: usize,
     timescale: u32,
+    has_audio: bool,
 }
 
 impl VideoReader {
@@ -153,12 +154,15 @@ impl VideoReader {
         let mut sample_count = 0u32;
         let mut codec_config: Option<Vec<u8>> = None;
         let mut timescale = 0u32;
+        let mut has_audio = false;
 
         for track in reader.tracks().values() {
             let track_type = track
                 .track_type()
                 .map_err(|e| VideoError::Container(e.to_string()))?;
-            if track_type == mp4::TrackType::Video {
+            if track_type == mp4::TrackType::Audio {
+                has_audio = true;
+            } else if video_track_id == 0 && track_type == mp4::TrackType::Video {
                 video_track_id = track.track_id();
                 width = u32::from(track.width());
                 height = u32::from(track.height());
@@ -179,7 +183,6 @@ impl VideoReader {
                     // Extract hvcC atom directly from file for decoder initialization.
                     codec_config = extract_box_from_file(path_ref, *b"hvcC")?;
                 }
-                break;
             }
         }
 
@@ -203,6 +206,7 @@ impl VideoReader {
             codec_config,
             current_index: 0,
             timescale,
+            has_audio,
         })
     }
 
@@ -216,6 +220,12 @@ impl VideoReader {
     #[must_use]
     pub const fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// Returns whether the container declares at least one audio track.
+    #[must_use]
+    pub const fn has_audio(&self) -> bool {
+        self.has_audio
     }
 
     /// Get total sample count.

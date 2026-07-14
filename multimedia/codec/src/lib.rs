@@ -54,7 +54,7 @@ mod image_apple;
 mod software;
 mod sys;
 
-pub use frame::{DecodedFrame, GpuFrame, YuvConverter};
+pub use frame::{DecodedFrame, DecodedFrameUploader, DecodedPixelLayout, GpuFrame, YuvConverter};
 pub use image::{DecodedImage, DecodedPixelFormat, decode_image, decode_image_platform};
 
 use std::vec::IntoIter;
@@ -390,9 +390,11 @@ impl Decoder {
                 for surface in surfaces {
                     let frame = DecodedFrame::from_iosurface(
                         surface.surface,
+                        surface.pixel_buffer,
                         surface.width,
                         surface.height,
                         surface.timestamp_ns,
+                        surface.layout,
                     );
                     frames.push(frame);
                 }
@@ -499,9 +501,8 @@ impl Decoder {
                 for surface in &surfaces {
                     let width = surface.width;
                     let height = surface.height;
-                    let y_size = (width * height) as usize;
-                    let uv_size = y_size / 2;
-                    let total_bytes = y_size + uv_size;
+                    let y_size = surface.layout.bytes_per_row(width) * height as usize;
+                    let total_bytes = surface.layout.packed_len(width, height);
 
                     if offset + total_bytes > output.len() {
                         return Err(CodecError::DecodingFailed(format!(
@@ -512,9 +513,11 @@ impl Decoder {
                     // Copy IOSurface to buffer using DecodedFrame helper
                     let frame = DecodedFrame::from_iosurface(
                         surface.surface.clone(),
+                        surface.pixel_buffer.clone(),
                         width,
                         height,
                         surface.timestamp_ns,
+                        surface.layout,
                     );
                     frame.copy_to_buffer(&mut output[offset..offset + total_bytes]);
 

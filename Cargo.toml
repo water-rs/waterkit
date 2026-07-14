@@ -167,6 +167,8 @@ async-io = "2"
 async-process = "2"
 wgpu = "27"
 metal = "0.33"
+metal-wgpu = { package = "metal", version = "0.32" }
+wgpu-hal = { version = "27", features = ["metal"] }
 
 # Common
 log = "0.4"

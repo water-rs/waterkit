@@ -36,6 +36,8 @@ objc2-core-foundation.workspace = true
 objc2-foundation.workspace = true
 objc2-io-surface.workspace = true
 metal.workspace = true
+metal-wgpu.workspace = true
+wgpu-hal.workspace = true
 swift-bridge.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]

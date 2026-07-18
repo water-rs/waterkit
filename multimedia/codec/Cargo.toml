@@ -16,10 +16,12 @@ wgpu.workspace = true
 image.workspace = true
 half = "2"
 waterkit-video-core.workspace = true
+shaderloom.workspace = true
 tracing.workspace = true
 
 [build-dependencies]
 waterkit-build.workspace = true
+shaderloom = { workspace = true, features = ["build"] }
 
 # Software fallback codecs (private, not exposed in public API)
 # Only enabled on desktop platforms - mobile and wasm use their native decode paths
@@ -33,12 +35,11 @@ yuv = { version = "0.8.11", optional = true }
 objc2.workspace = true
 objc2-video-toolbox.workspace = true
 objc2-core-media.workspace = true
-objc2-core-video.workspace = true
+objc2-core-video = { workspace = true, features = ["CVMetalTexture", "CVMetalTextureCache"] }
 objc2-core-foundation.workspace = true
 objc2-foundation.workspace = true
 objc2-io-surface.workspace = true
-metal.workspace = true
-metal-wgpu.workspace = true
+objc2-metal = { workspace = true, features = ["MTLBlitCommandEncoder", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLDevice", "MTLPixelFormat", "MTLTexture", "MTLTypes"] }
 wgpu-hal.workspace = true
 swift-bridge.workspace = true
 

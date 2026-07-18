@@ -1,6 +1,9 @@
 //! Build script for waterkit-camera.
 
 fn main() {
+    #[cfg(feature = "preview-example")]
+    shaderloom::build::compile_wgsl_shader("examples/preview.wgsl", "camera_preview");
+
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
 
     if target_os == "ios" || target_os == "macos" {

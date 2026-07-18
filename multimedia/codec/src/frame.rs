@@ -11,7 +11,8 @@ use wgpu::{
     TextureViewDimension,
 };
 
-use crate::{ColorOutputTarget, YUV_COLOR_SHADER_WGSL, video_color_uniform};
+use crate::{ColorOutputTarget, YUV_COLOR_SHADER, video_color_uniform};
+use shaderloom::ShaderStage;
 
 #[cfg(target_vendor = "apple")]
 use {
@@ -86,13 +87,7 @@ impl DecodedFrameUploader {
                     );
                 timestamp_ns
             }
-            #[cfg(any(
-                not(target_vendor = "apple"),
-                all(
-                    target_vendor = "apple",
-                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-                )
-            ))]
+            #[cfg(waterkit_software_frames)]
             DecodedFrameInner::Software {
                 data, timestamp_ns, ..
             } => {
@@ -161,13 +156,7 @@ enum DecodedFrameInner {
     },
     /// Software-decoded frame with NV12 data.
     /// Available on non-Apple platforms, or desktop Apple platforms with software-fallback.
-    #[cfg(any(
-        not(target_vendor = "apple"),
-        all(
-            target_vendor = "apple",
-            not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-        )
-    ))]
+    #[cfg(waterkit_software_frames)]
     Software {
         data: Vec<u8>,
         width: u32,
@@ -211,13 +200,7 @@ impl DecodedFrame {
     }
 
     /// Create a decoded frame from tightly packed bi-planar software output.
-    #[cfg(any(
-        not(target_vendor = "apple"),
-        all(
-            target_vendor = "apple",
-            not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-        )
-    ))]
+    #[cfg(waterkit_software_frames)]
     pub(crate) const fn from_biplanar_data(
         data: Vec<u8>,
         width: u32,
@@ -242,13 +225,7 @@ impl DecodedFrame {
         match &self.inner {
             #[cfg(target_vendor = "apple")]
             DecodedFrameInner::Hardware { layout, .. } => *layout,
-            #[cfg(any(
-                not(target_vendor = "apple"),
-                all(
-                    target_vendor = "apple",
-                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-                )
-            ))]
+            #[cfg(waterkit_software_frames)]
             DecodedFrameInner::Software { layout, .. } => *layout,
         }
     }
@@ -259,13 +236,7 @@ impl DecodedFrame {
         match &self.inner {
             #[cfg(target_vendor = "apple")]
             DecodedFrameInner::Hardware { width, .. } => *width,
-            #[cfg(any(
-                not(target_vendor = "apple"),
-                all(
-                    target_vendor = "apple",
-                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-                )
-            ))]
+            #[cfg(waterkit_software_frames)]
             DecodedFrameInner::Software { width, .. } => *width,
         }
     }
@@ -276,13 +247,7 @@ impl DecodedFrame {
         match &self.inner {
             #[cfg(target_vendor = "apple")]
             DecodedFrameInner::Hardware { height, .. } => *height,
-            #[cfg(any(
-                not(target_vendor = "apple"),
-                all(
-                    target_vendor = "apple",
-                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-                )
-            ))]
+            #[cfg(waterkit_software_frames)]
             DecodedFrameInner::Software { height, .. } => *height,
         }
     }
@@ -293,13 +258,7 @@ impl DecodedFrame {
         let ns = match &self.inner {
             #[cfg(target_vendor = "apple")]
             DecodedFrameInner::Hardware { timestamp_ns, .. } => *timestamp_ns,
-            #[cfg(any(
-                not(target_vendor = "apple"),
-                all(
-                    target_vendor = "apple",
-                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-                )
-            ))]
+            #[cfg(waterkit_software_frames)]
             DecodedFrameInner::Software { timestamp_ns, .. } => *timestamp_ns,
         };
         std::time::Duration::from_nanos(ns)
@@ -338,13 +297,7 @@ impl DecodedFrame {
             } => {
                 Self::copy_iosurface_to_buffer(surface, width, height, *layout, output);
             }
-            #[cfg(any(
-                not(target_vendor = "apple"),
-                all(
-                    target_vendor = "apple",
-                    not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-                )
-            ))]
+            #[cfg(waterkit_software_frames)]
             DecodedFrameInner::Software { data, .. } => {
                 output[..data.len()].copy_from_slice(data);
             }
@@ -498,13 +451,7 @@ impl GpuFrame {
         )
     }
 
-    #[cfg(any(
-        not(target_vendor = "apple"),
-        all(
-            target_vendor = "apple",
-            not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-        )
-    ))]
+    #[cfg(waterkit_software_frames)]
     fn write_biplanar(&self, queue: &Queue, data: &[u8]) {
         let row_bytes = self.layout.bytes_per_row(self.width);
         let y_size = row_bytes * self.height as usize;
@@ -597,10 +544,11 @@ impl LinearRgbaConverter {
     /// Creates a reusable linear RGBA16F converter.
     #[must_use]
     pub fn new(device: &Device) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("WaterKit YUV color shader"),
-            source: wgpu::ShaderSource::Wgsl(YUV_COLOR_SHADER_WGSL.into()),
-        });
+        let shader = YUV_COLOR_SHADER.create_entry_point(
+            device,
+            ShaderStage::Compute,
+            "convert_to_linear_rgba",
+        );
 
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("YUV converter bind group layout"),
@@ -650,15 +598,15 @@ impl LinearRgbaConverter {
 
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("YUV converter pipeline layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[Some(&bind_group_layout)],
             ..Default::default()
         });
 
         let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
             label: Some("YUV to RGBA pipeline"),
             layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: Some("convert_to_linear_rgba"),
+            module: shader.module(),
+            entry_point: Some(shader.entry_point()),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });

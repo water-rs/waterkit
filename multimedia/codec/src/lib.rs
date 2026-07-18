@@ -77,6 +77,10 @@ pub use frame::{
 };
 pub use image::{DecodedImage, DecodedPixelFormat, decode_image, decode_image_platform};
 
+use shaderloom::CompiledShader;
+
+const YUV_COLOR_SHADER: CompiledShader = include!(concat!(env!("OUT_DIR"), "/yuv_color.rs"));
+
 use std::{time::Duration, vec::IntoIter};
 use thiserror::Error;
 
@@ -737,13 +741,7 @@ impl Decoder {
 }
 
 /// Helper to copy decoded frames to an output buffer.
-#[cfg(any(
-    not(target_vendor = "apple"),
-    all(
-        target_vendor = "apple",
-        not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
-    )
-))]
+#[cfg(waterkit_software_frames)]
 fn copy_frames_to_buffer(
     frames: impl Iterator<Item = (Vec<u8>, u32, u32, u64, DecodedPixelLayout)>,
     output: &mut [u8],

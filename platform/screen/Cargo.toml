@@ -36,7 +36,6 @@ brightness = { version = "0.8", default-features = false }
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 swift-bridge.workspace = true
-metal.workspace = true
 core-foundation.workspace = true
 objc2.workspace = true
 objc2-foundation = { workspace = true, features = ["NSObject"] }

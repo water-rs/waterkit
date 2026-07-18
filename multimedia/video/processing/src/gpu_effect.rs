@@ -2,7 +2,6 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use filtrate::{
     Effect, EffectContext, EffectFrameTiming, EffectInput, EffectOutput, EffectRedrawCallback,
-    ShaderCache,
 };
 use waterkit_video_core::{Error, FrameTiming};
 
@@ -225,15 +224,12 @@ impl<E: Effect> GpuEffectProcessor<E> {
         if let Some(callback) = redraw_callback {
             effect.set_redraw_callback(callback);
         }
-        let shader_cache = ShaderCache::new();
         effect
             .setup(&EffectContext {
                 device: &device,
                 queue: &queue,
                 input_format,
                 output_format,
-                pipeline_cache: None,
-                shader_cache: &shader_cache,
             })
             .await
             .map_err(|message| Error::Processing(message.to_owned()))?;
@@ -364,7 +360,8 @@ mod tests {
     #[test]
     fn gpu_effect_processor_preserves_frame_dimensions_and_timing() {
         futures_lite::future::block_on(async {
-            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
                     power_preference: wgpu::PowerPreference::HighPerformance,

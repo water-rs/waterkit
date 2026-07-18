@@ -7,6 +7,7 @@ use futures::StreamExt;
 use std::sync::Arc;
 use std::time::Instant;
 use waterkit_camera::{Camera, CameraConfig, CameraInfo, Frame};
+use shaderloom::CompiledShader;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -14,6 +15,8 @@ use winit::{
     keyboard::{Key, NamedKey},
     window::{Window, WindowId},
 };
+
+const CAMERA_TEST_SHADER: CompiledShader = include!(concat!(env!("OUT_DIR"), "/camera_test.rs"));
 
 fn main() {
     env_logger::init();
@@ -147,7 +150,7 @@ impl State {
     async fn new(window: Arc<Window>, camera_id: &str) -> Result<Self, String> {
         let size = window.inner_size();
 
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 
         let surface = instance
             .create_surface(window.clone())
@@ -231,29 +234,27 @@ impl State {
         });
 
         // Create shader and pipeline
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-        });
+        let (vertex_shader, fragment_shader) =
+            CAMERA_TEST_SHADER.create_render_stages(&device, "vs_main", "fs_main");
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pipeline_layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render_pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
+                module: vertex_shader.module(),
+                entry_point: Some(vertex_shader.entry_point()),
                 buffers: &[],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
+                module: fragment_shader.module(),
+                entry_point: Some(fragment_shader.entry_point()),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(wgpu::BlendState::REPLACE),
@@ -264,7 +265,7 @@ impl State {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -304,8 +305,15 @@ impl State {
 
         // Render
         let output = match self.surface.get_current_texture() {
-            Ok(t) => t,
-            Err(_) => return,
+            wgpu::CurrentSurfaceTexture::Success(output)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Occluded
+            | wgpu::CurrentSurfaceTexture::Outdated
+            | wgpu::CurrentSurfaceTexture::Lost => return,
+            wgpu::CurrentSurfaceTexture::Validation => {
+                panic!("camera test surface acquisition failed validation")
+            }
         };
 
         let view = output
@@ -331,6 +339,7 @@ impl State {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             pass.set_pipeline(&self.pipeline);

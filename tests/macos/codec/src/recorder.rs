@@ -111,7 +111,7 @@ fn capture_thread(
     duration: Duration,
 ) {
     // Create wgpu device for this thread
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .expect("No GPU adapter");

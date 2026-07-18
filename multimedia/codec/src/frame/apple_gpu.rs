@@ -1,42 +1,20 @@
 //! Apple IOSurface-to-wgpu interop without CPU readback.
 
 use super::DecodedPixelLayout;
-use metal_wgpu::{
-    MTLOrigin, MTLPixelFormat, MTLSize, Texture,
-    foreign_types::{ForeignType, ForeignTypeRef},
-};
+use objc2::runtime::ProtocolObject;
 use objc2_core_foundation::CFRetained;
-use objc2_core_video::CVPixelBuffer;
-use std::ffi::c_void;
+use objc2_core_video::{
+    CVMetalTexture, CVMetalTextureCache, CVMetalTextureGetTexture, CVPixelBuffer, kCVReturnSuccess,
+};
+use objc2_metal::{
+    MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLOrigin,
+    MTLPixelFormat, MTLSize, MTLTexture,
+};
 use std::ptr::{self, NonNull};
 use wgpu_hal::api::Metal;
 
-unsafe extern "C" {
-    fn CVMetalTextureCacheCreate(
-        allocator: *const c_void,
-        cache_attributes: *const c_void,
-        metal_device: *mut c_void,
-        texture_attributes: *const c_void,
-        cache_out: *mut *mut c_void,
-    ) -> i32;
-    fn CVMetalTextureCacheCreateTextureFromImage(
-        allocator: *const c_void,
-        texture_cache: *mut c_void,
-        source_image: *const c_void,
-        texture_attributes: *const c_void,
-        pixel_format: u64,
-        width: usize,
-        height: usize,
-        plane: usize,
-        texture_out: *mut *mut c_void,
-    ) -> i32;
-    fn CVMetalTextureGetTexture(image: *mut c_void) -> *mut metal_wgpu::MTLTexture;
-    fn CFRelease(value: *const c_void);
-    fn objc_retain(value: *mut c_void) -> *mut c_void;
-}
-
 pub(super) struct AppleFrameUploader {
-    texture_cache: NonNull<c_void>,
+    texture_cache: CFRetained<CVMetalTextureCache>,
 }
 
 #[derive(Clone, Copy)]
@@ -61,18 +39,22 @@ impl AppleFrameUploader {
             .expect("Apple decoded frames require the wgpu Metal backend");
         let mut texture_cache = ptr::null_mut();
         let cache_status = unsafe {
-            let command_queue = hal_queue.as_raw().lock();
-            CVMetalTextureCacheCreate(
-                ptr::null(),
-                ptr::null(),
-                command_queue.device().as_ptr().cast(),
-                ptr::null(),
-                &raw mut texture_cache,
+            let metal_device = hal_queue.as_raw().device();
+            CVMetalTextureCache::create(
+                None,
+                None,
+                &metal_device,
+                None,
+                NonNull::from(&mut texture_cache),
             )
         };
-        assert_eq!(cache_status, 0, "CVMetalTextureCacheCreate failed");
+        assert_eq!(
+            cache_status, kCVReturnSuccess,
+            "CVMetalTextureCacheCreate failed"
+        );
         let texture_cache =
             NonNull::new(texture_cache).expect("Core Video returned a null Metal texture cache");
+        let texture_cache = unsafe { CFRetained::from_raw(texture_cache) };
         Self { texture_cache }
     }
 
@@ -85,7 +67,7 @@ impl AppleFrameUploader {
         let hal_queue = unsafe { queue.as_hal::<Metal>() }
             .expect("Apple decoded frames require the wgpu Metal backend");
         let y_source = create_pixel_buffer_plane_texture(
-            self.texture_cache.as_ptr(),
+            &self.texture_cache,
             copy.pixel_buffer,
             0,
             copy.width,
@@ -95,7 +77,7 @@ impl AppleFrameUploader {
         let uv_width = (copy.width / 2).max(1);
         let uv_height = (copy.height / 2).max(1);
         let uv_source = create_pixel_buffer_plane_texture(
-            self.texture_cache.as_ptr(),
+            &self.texture_cache,
             copy.pixel_buffer,
             1,
             uv_width,
@@ -103,106 +85,91 @@ impl AppleFrameUploader {
             uv_format,
         );
 
-        let y_destination = {
-            let hal = unsafe { copy.y_target.as_hal::<Metal>() }
-                .expect("Apple decoded frame target must use the wgpu Metal backend");
-            unsafe { hal.raw_handle() }.to_owned()
-        };
-        let uv_destination = {
-            let hal = unsafe { copy.uv_target.as_hal::<Metal>() }
-                .expect("Apple decoded frame target must use the wgpu Metal backend");
-            unsafe { hal.raw_handle() }.to_owned()
-        };
+        let y_destination = unsafe { copy.y_target.as_hal::<Metal>() }
+            .expect("Apple decoded frame target must use the wgpu Metal backend");
+        let uv_destination = unsafe { copy.uv_target.as_hal::<Metal>() }
+            .expect("Apple decoded frame target must use the wgpu Metal backend");
 
-        let command_buffer = {
-            let command_queue = hal_queue.as_raw().lock();
-            command_queue.new_command_buffer().to_owned()
-        };
-        let encoder = command_buffer.new_blit_command_encoder();
+        let command_buffer = hal_queue
+            .as_raw()
+            .commandBuffer()
+            .expect("Metal command queue failed to create a command buffer");
+        let encoder = command_buffer
+            .blitCommandEncoder()
+            .expect("Metal command buffer failed to create a blit encoder");
         copy_plane(
-            encoder,
+            &encoder,
             &y_source,
-            &y_destination,
+            y_destination.raw_handle(),
             copy.width.into(),
             copy.height.into(),
         );
         copy_plane(
-            encoder,
+            &encoder,
             &uv_source,
-            &uv_destination,
+            uv_destination.raw_handle(),
             uv_width.into(),
             uv_height.into(),
         );
-        encoder.end_encoding();
+        encoder.endEncoding();
         command_buffer.commit();
     }
 }
 
-impl Drop for AppleFrameUploader {
-    fn drop(&mut self) {
-        unsafe { CFRelease(self.texture_cache.as_ptr()) };
-    }
-}
-
 fn create_pixel_buffer_plane_texture(
-    texture_cache: *mut c_void,
+    texture_cache: &CVMetalTextureCache,
     pixel_buffer: &CFRetained<CVPixelBuffer>,
     plane: usize,
     width: u32,
     height: u32,
     format: MTLPixelFormat,
-) -> Texture {
+) -> objc2::rc::Retained<ProtocolObject<dyn MTLTexture>> {
     let mut cv_texture = ptr::null_mut();
     let status = unsafe {
-        CVMetalTextureCacheCreateTextureFromImage(
-            ptr::null(),
+        CVMetalTextureCache::create_texture_from_image(
+            None,
             texture_cache,
-            CFRetained::as_ptr(pixel_buffer).as_ptr().cast(),
-            ptr::null(),
-            format as u64,
+            pixel_buffer,
+            None,
+            format,
             width as usize,
             height as usize,
             plane,
-            &raw mut cv_texture,
+            NonNull::from(&mut cv_texture),
         )
     };
     assert_eq!(
-        status, 0,
+        status, kCVReturnSuccess,
         "Core Video could not map the decoded pixel-buffer plane"
     );
-    assert!(
-        !cv_texture.is_null(),
-        "Core Video returned a null Metal texture"
-    );
-    let raw = unsafe { CVMetalTextureGetTexture(cv_texture) };
-    assert!(!raw.is_null(), "Metal rejected the decoded IOSurface plane");
-    unsafe {
-        objc_retain(raw.cast());
-        CFRelease(cv_texture);
-    }
-    unsafe { Texture::from_ptr(raw) }
+    let cv_texture = NonNull::<CVMetalTexture>::new(cv_texture)
+        .expect("Core Video returned a null Metal texture");
+    let cv_texture = unsafe { CFRetained::from_raw(cv_texture) };
+    CVMetalTextureGetTexture(&cv_texture).expect("Metal rejected the decoded IOSurface plane")
 }
 
 fn copy_plane(
-    encoder: &metal_wgpu::BlitCommandEncoderRef,
-    source: &metal_wgpu::TextureRef,
-    destination: &metal_wgpu::TextureRef,
+    encoder: &ProtocolObject<dyn MTLBlitCommandEncoder>,
+    source: &ProtocolObject<dyn MTLTexture>,
+    destination: &ProtocolObject<dyn MTLTexture>,
     width: u64,
     height: u64,
 ) {
-    encoder.copy_from_texture(
+    unsafe {
+        encoder.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
         source,
         0,
         0,
         MTLOrigin { x: 0, y: 0, z: 0 },
         MTLSize {
-            width,
-            height,
+            width: usize::try_from(width).expect("Metal plane width must fit usize"),
+            height: usize::try_from(height).expect("Metal plane height must fit usize"),
             depth: 1,
         },
         destination,
         0,
         0,
         MTLOrigin { x: 0, y: 0, z: 0 },
-    );
+        );
+    }
 }

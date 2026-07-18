@@ -6,10 +6,14 @@ use futures::StreamExt;
 use std::pin::pin;
 use std::sync::Arc;
 use waterkit_camera::Camera;
+use shaderloom::CompiledShader;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
+
+const CAMERA_PREVIEW_SHADER: CompiledShader =
+    include!(concat!(env!("OUT_DIR"), "/camera_preview.rs"));
 
 struct App {
     window: Option<Arc<Window>>,
@@ -47,10 +51,8 @@ impl App {
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,
     ) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout, wgpu::Sampler) {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Camera Preview Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("preview.wgsl").into()),
-        });
+        let (vertex_shader, fragment_shader) =
+            CAMERA_PREVIEW_SHADER.create_render_stages(device, "vs_main", "fs_main");
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Camera Bind Group Layout"),
@@ -76,7 +78,7 @@ impl App {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Camera Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[Some(&bind_group_layout)],
             ..Default::default()
         });
 
@@ -84,14 +86,14 @@ impl App {
             label: Some("Camera Render Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
+                module: vertex_shader.module(),
+                entry_point: Some(vertex_shader.entry_point()),
                 buffers: &[],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
+                module: fragment_shader.module(),
+                entry_point: Some(fragment_shader.entry_point()),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
                     blend: Some(wgpu::BlendState::REPLACE),
@@ -110,7 +112,7 @@ impl App {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -120,7 +122,7 @@ impl App {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -164,20 +166,17 @@ impl App {
         };
 
         let output = match surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Lost) => {
+            wgpu::CurrentSurfaceTexture::Success(output)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 if let Some(config) = &self.surface_config {
                     surface.configure(device, config);
                 }
                 return;
             }
-            Err(wgpu::SurfaceError::OutOfMemory) => {
-                eprintln!("Out of memory");
-                return;
-            }
-            Err(e) => {
-                eprintln!("Surface error: {e:?}");
-                return;
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return,
+            wgpu::CurrentSurfaceTexture::Validation => {
+                panic!("camera preview surface acquisition failed validation")
             }
         };
 
@@ -204,6 +203,7 @@ impl App {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             render_pass.set_pipeline(pipeline);
@@ -226,7 +226,7 @@ impl ApplicationHandler for App {
         self.window = Some(window.clone());
 
         // Initialize wgpu
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let surface = instance.create_surface(window.clone()).unwrap();
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {

@@ -7,14 +7,15 @@ use std::{
     time::{Duration, Instant},
 };
 
+use bytes::Bytes;
 use url::Url;
 use waterkit_video_core::Error;
 use zenwave::{
-    Method,
+    Method, ResponseExt as _,
     header::{HeaderMap, HeaderName, HeaderValue},
 };
 
-use crate::transport::{TransportRequest, collect_bounded_body, send};
+use crate::transport::{TransportRequest, send};
 
 /// One platform-CDM license challenge and its bounded network policy.
 #[derive(Debug, Clone)]
@@ -122,7 +123,7 @@ impl LicenseRequest {
 #[derive(Debug, Clone)]
 pub struct LicenseResponse {
     effective_url: Url,
-    bytes: Vec<u8>,
+    bytes: Bytes,
     elapsed: Duration,
 }
 
@@ -132,7 +133,12 @@ impl LicenseResponse {
     /// # Errors
     ///
     /// Returns an error when `bytes` is empty.
-    pub fn new(effective_url: Url, bytes: Vec<u8>, elapsed: Duration) -> Result<Self, Error> {
+    pub fn new(
+        effective_url: Url,
+        bytes: impl Into<Bytes>,
+        elapsed: Duration,
+    ) -> Result<Self, Error> {
+        let bytes = bytes.into();
         if bytes.is_empty() {
             return Err(Error::Streaming(String::from(
                 "license server returned an empty response",
@@ -159,7 +165,7 @@ impl LicenseResponse {
 
     /// Consumes this response and returns the opaque license bytes.
     #[must_use]
-    pub fn into_bytes(self) -> Vec<u8> {
+    pub fn into_bytes(self) -> Bytes {
         self.bytes
     }
 
@@ -242,7 +248,8 @@ impl LicenseServer for ZenwaveLicenseServer {
         })
         .await?;
         let status = response.status();
-        let bytes = collect_bounded_body(response, request.maximum_response_bytes)
+        let bytes = response
+            .into_bytes_with_limit(request.maximum_response_bytes.get())
             .await
             .map_err(|error| Error::Streaming(format!("license response failed: {error}")))?;
         if !status.is_success() {

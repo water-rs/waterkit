@@ -82,7 +82,7 @@ rodio = { workspace = true, optional = true }
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 swift-bridge = { workspace = true, optional = true }
-zenwave = { version = "0.4", default-features = false, features = ["hyper-native-tls", "ws"], optional = true }
+zenwave = { version = "0.5.0", default-features = false, features = ["hyper-native-tls", "ws"], optional = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
 
@@ -92,18 +92,18 @@ jni = { workspace = true, optional = true }
 ndk-context = { workspace = true, optional = true }
 ndk = { version = "0.9", features = ["media", "api-level-29"], optional = true }
 ndk-sys = { version = "0.6", optional = true }
-zenwave = { version = "0.4", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
+zenwave = { version = "0.5.0", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
 
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = ["Media_Playback", "Media_Control", "Foundation", "Storage_Streams", "Win32_Media_MediaFoundation", "Win32_System_Com"], optional = true }
-zenwave = { version = "0.4", default-features = false, features = ["hyper-native-tls", "ws"], optional = true }
+zenwave = { version = "0.5.0", default-features = false, features = ["hyper-native-tls", "ws"], optional = true }
 
 # Linux
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { workspace = true, optional = true }
 mpris-server = { version = "0.9", optional = true }
-zenwave = { version = "0.4", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
+zenwave = { version = "0.5.0", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
 smol = { version = "2", optional = true }
 tempfile = { version = "3", optional = true }
 url = { version = "2", optional = true }

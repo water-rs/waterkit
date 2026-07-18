@@ -1,5 +1,3 @@
-use futures::StreamExt as _;
-use std::num::NonZeroUsize;
 use url::Url;
 use waterkit_video_core::Error;
 use zenwave::{
@@ -89,27 +87,6 @@ pub async fn send(request: TransportRequest<'_>) -> Result<(Url, zenwave::Respon
         effective_url = redirected_url;
         redirects = redirects.saturating_add(1);
     }
-}
-
-pub async fn collect_bounded_body(
-    response: zenwave::Response,
-    maximum_response_bytes: NonZeroUsize,
-) -> Result<Vec<u8>, Error> {
-    let mut body = response.into_body();
-    let mut bytes = Vec::new();
-    while let Some(chunk) = body.next().await {
-        let chunk = chunk.map_err(|error| Error::Streaming(error.to_string()))?;
-        let next_len = bytes.len().checked_add(chunk.len()).ok_or_else(|| {
-            Error::Streaming(String::from("response body length overflowed usize"))
-        })?;
-        if next_len > maximum_response_bytes.get() {
-            return Err(Error::Streaming(format!(
-                "response body exceeded the {maximum_response_bytes}-byte limit"
-            )));
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    Ok(bytes)
 }
 
 fn redirect_method(status: StatusCode, current: &Method) -> Method {

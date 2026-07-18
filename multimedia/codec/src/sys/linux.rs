@@ -2,7 +2,7 @@
 //!
 //! This backend uses pure VA-API via `cros-codecs`.
 
-use crate::CodecError;
+use crate::{CodecError, DecodePacket, DecodedPixelLayout, bitstream::NalStreamConverter};
 use cros_codecs::decoder::stateless::h264::H264;
 use cros_codecs::decoder::stateless::h265::H265;
 use cros_codecs::decoder::stateless::{
@@ -15,18 +15,31 @@ use cros_codecs::encoder::{FrameMetadata, VideoEncoder};
 use cros_codecs::video_frame::VideoFrame;
 use cros_codecs::video_frame::gbm_video_frame::{GbmDevice, GbmUsage, GbmVideoFrame};
 use cros_codecs::video_frame::generic_dma_video_frame::GenericDmaVideoFrame;
-use cros_codecs::{BlockingMode, Fourcc, FrameLayout, Resolution};
+use cros_codecs::{BlockingMode, DecodedFormat, Fourcc, FrameLayout, Resolution};
 use std::fmt;
+use std::rc::Rc;
 use std::sync::Arc;
-
-const RENDER_NODE_PATH: &str = "/dev/dri/renderD128";
-const START_CODE: [u8; 4] = [0, 0, 0, 1];
 
 /// Internal codec type for Linux implementations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodecType {
     H264,
     H265,
+}
+
+fn open_vaapi_device() -> Result<(Rc<cros_codecs::libva::Display>, Arc<GbmDevice>), CodecError> {
+    for path in cros_codecs::libva::DrmDeviceIterator::default() {
+        let Ok(display) = cros_codecs::libva::Display::open_drm_display(&path) else {
+            continue;
+        };
+        let Ok(gbm_device) = GbmDevice::open(&path) else {
+            continue;
+        };
+        return Ok((display, gbm_device));
+    }
+    Err(CodecError::InitializationFailed(
+        "no DRM render node supports both VA-API and GBM".into(),
+    ))
 }
 
 /// Decoded frame from Linux VA-API (`NV12` format).
@@ -40,6 +53,8 @@ pub struct LinuxFrame {
     pub height: u32,
     /// Presentation timestamp in nanoseconds.
     pub timestamp_ns: u64,
+    /// Native bi-planar pixel layout.
+    pub layout: DecodedPixelLayout,
 }
 
 impl fmt::Debug for LinuxFrame {
@@ -52,34 +67,6 @@ impl fmt::Debug for LinuxFrame {
     }
 }
 
-enum InputBitstream {
-    AnnexB,
-    LengthPrefixed(LengthPrefixedAnnexB),
-}
-
-struct LengthPrefixedAnnexB {
-    nal_length_size: usize,
-    prefix_nalus: Vec<u8>,
-    sent_prefix: bool,
-}
-
-impl LengthPrefixedAnnexB {
-    fn convert_sample(&mut self, sample: &[u8]) -> Result<Vec<u8>, CodecError> {
-        let mut annex_b = length_prefixed_to_annex_b(sample, self.nal_length_size)?;
-        if !self.sent_prefix {
-            self.sent_prefix = true;
-            if self.prefix_nalus.is_empty() {
-                return Ok(annex_b);
-            }
-            let mut prefixed = Vec::with_capacity(self.prefix_nalus.len() + annex_b.len());
-            prefixed.extend_from_slice(&self.prefix_nalus);
-            prefixed.append(&mut annex_b);
-            return Ok(prefixed);
-        }
-        Ok(annex_b)
-    }
-}
-
 /// Linux VA-API decoder.
 pub struct LinuxDecoder {
     decoder: DynStatelessVideoDecoder<GenericDmaVideoFrame>,
@@ -87,8 +74,8 @@ pub struct LinuxDecoder {
     codec_type: CodecType,
     coded_resolution: Resolution,
     display_resolution: Resolution,
-    next_timestamp: u64,
-    input_bitstream: InputBitstream,
+    input_bitstream: NalStreamConverter,
+    output_format: DecodedFormat,
 }
 
 impl fmt::Debug for LinuxDecoder {
@@ -109,9 +96,7 @@ impl LinuxDecoder {
         width: u32,
         height: u32,
     ) -> Result<Self, CodecError> {
-        let display = cros_codecs::libva::Display::open().ok_or_else(|| {
-            CodecError::InitializationFailed("failed to open VA-API display".to_string())
-        })?;
+        let (display, gbm_device) = open_vaapi_device()?;
 
         let decoder: DynStatelessVideoDecoder<GenericDmaVideoFrame> = match codec_type {
             CodecType::H264 => {
@@ -134,46 +119,46 @@ impl LinuxDecoder {
             }
         };
 
-        let input_bitstream = decode_bitstream_mode(codec_type, config)?;
-        let gbm_device = GbmDevice::open(RENDER_NODE_PATH).map_err(|e| {
-            CodecError::InitializationFailed(format!("failed to open GBM render node: {e}"))
-        })?;
-
+        let input_bitstream = NalStreamConverter::new(codec_type == CodecType::H265, config)?;
         Ok(Self {
             decoder,
             gbm_device,
             codec_type,
             coded_resolution: Resolution { width, height },
             display_resolution: Resolution { width, height },
-            next_timestamp: 0,
             input_bitstream,
+            output_format: DecodedFormat::NV12,
         })
     }
 
     /// Decode compressed video data.
-    pub fn decode(&mut self, data: &[u8]) -> Result<Vec<LinuxFrame>, CodecError> {
-        let packet = self.prepare_annex_b_packet(data)?;
-        if packet.is_empty() {
+    pub fn decode(&mut self, packet: DecodePacket<'_>) -> Result<Vec<LinuxFrame>, CodecError> {
+        let timestamp_ns = u64::try_from(packet.presentation_time().as_nanos())
+            .map_err(|_| CodecError::DecodingFailed("presentation timestamp exceeds u64".into()))?;
+        let annex_b = self.prepare_annex_b_packet(packet.data())?;
+        if annex_b.is_empty() {
             return Ok(Vec::new());
         }
 
         let mut frames = Vec::new();
         let mut offset = 0;
 
-        while offset < packet.len() {
+        while offset < annex_b.len() {
             let gbm_device = Arc::clone(&self.gbm_device);
             let display_resolution = self.display_resolution;
             let coded_resolution = self.coded_resolution;
+            let output_format = self.output_format;
             let mut allocate_frame = || {
                 Some(Self::allocate_decode_frame(
                     &gbm_device,
                     display_resolution,
                     coded_resolution,
+                    output_format,
                 ))
             };
             match self
                 .decoder
-                .decode(self.next_timestamp, &packet[offset..], &mut allocate_frame)
+                .decode(timestamp_ns, &annex_b[offset..], &mut allocate_frame)
             {
                 Ok(consumed) => {
                     if consumed == 0 {
@@ -182,7 +167,6 @@ impl LinuxDecoder {
                         ));
                     }
                     offset += consumed;
-                    self.next_timestamp += 1;
                     self.collect_decoder_events(&mut frames)?;
                 }
                 Err(DecodeError::NotEnoughOutputBuffers(_) | DecodeError::CheckEvents) => {
@@ -201,21 +185,35 @@ impl LinuxDecoder {
         Ok(frames)
     }
 
+    /// Flushes every delayed VA-API output frame.
+    pub fn drain(&mut self) -> Result<Vec<LinuxFrame>, CodecError> {
+        self.decoder.flush().map_err(|error| {
+            CodecError::DecodingFailed(format!("failed to flush VA-API decoder: {error}"))
+        })?;
+        let mut frames = Vec::new();
+        self.collect_decoder_events(&mut frames)?;
+        Ok(frames)
+    }
+
     fn prepare_annex_b_packet(&mut self, data: &[u8]) -> Result<Vec<u8>, CodecError> {
-        match &mut self.input_bitstream {
-            InputBitstream::AnnexB => Ok(data.to_vec()),
-            InputBitstream::LengthPrefixed(state) => state.convert_sample(data),
-        }
+        self.input_bitstream
+            .convert_sample_with_parameter_sets(data)
     }
 
     fn allocate_decode_frame(
         gbm_device: &Arc<GbmDevice>,
         display_resolution: Resolution,
         coded_resolution: Resolution,
+        output_format: DecodedFormat,
     ) -> GenericDmaVideoFrame {
+        let fourcc = match output_format {
+            DecodedFormat::NV12 => Fourcc::from(b"NV12"),
+            DecodedFormat::I010 => Fourcc::from(b"P010"),
+            unsupported => panic!("unsupported VA-API decoded format: {unsupported:?}"),
+        };
         Arc::clone(gbm_device)
             .new_frame(
-                Fourcc::from(b"NV12"),
+                fourcc,
                 display_resolution,
                 coded_resolution,
                 GbmUsage::Decode,
@@ -235,6 +233,7 @@ impl LinuxDecoder {
                     })?;
                     self.coded_resolution = stream_info.coded_resolution;
                     self.display_resolution = stream_info.display_resolution;
+                    self.output_format = stream_info.format;
                 }
                 Some(DecoderEvent::FrameReady(handle)) => {
                     handle.sync().map_err(|e| {
@@ -247,13 +246,23 @@ impl LinuxDecoder {
                     let timestamp_ns = handle.timestamp();
 
                     let frame = handle.video_frame();
-                    let data = copy_nv12_from_frame(frame.as_ref(), width, height)?;
+                    let layout = match self.output_format {
+                        DecodedFormat::NV12 => DecodedPixelLayout::Nv12,
+                        DecodedFormat::I010 => DecodedPixelLayout::P010,
+                        unsupported => {
+                            return Err(CodecError::Unsupported(format!(
+                                "VA-API returned unsupported decoded format {unsupported:?}"
+                            )));
+                        }
+                    };
+                    let data = copy_biplanar_from_frame(frame.as_ref(), width, height, layout)?;
 
                     frames.push(LinuxFrame {
                         data,
                         width,
                         height,
                         timestamp_ns,
+                        layout,
                     });
                 }
                 None => return Ok(()),
@@ -301,9 +310,7 @@ impl LinuxEncoder {
 
         let h264 = match codec_type {
             CodecType::H264 => {
-                let display = cros_codecs::libva::Display::open().ok_or_else(|| {
-                    CodecError::InitializationFailed("failed to open VA-API display".to_string())
-                })?;
+                let (display, gbm_device) = open_vaapi_device()?;
 
                 let encoder = h264::StatelessEncoder::<GenericDmaVideoFrame, _>::new_vaapi(
                     display,
@@ -320,10 +327,6 @@ impl LinuxEncoder {
                     CodecError::InitializationFailed(format!(
                         "failed to create VA-API H264 encoder: {e}"
                     ))
-                })?;
-
-                let gbm_device = GbmDevice::open(RENDER_NODE_PATH).map_err(|e| {
-                    CodecError::InitializationFailed(format!("failed to open GBM render node: {e}"))
                 })?;
 
                 Some(LinuxH264Encoder {
@@ -416,214 +419,16 @@ impl LinuxEncoder {
     }
 }
 
-fn decode_bitstream_mode(
-    codec: CodecType,
-    config: Option<&[u8]>,
-) -> Result<InputBitstream, CodecError> {
-    let Some(config) = config else {
-        return Ok(InputBitstream::AnnexB);
-    };
-
-    match codec {
-        CodecType::H264 => {
-            let Some(payload) = avcc_payload(config) else {
-                return Ok(InputBitstream::AnnexB);
-            };
-            let (nal_length_size, prefix_nalus) = parse_h264_avcc(payload)?;
-            Ok(InputBitstream::LengthPrefixed(LengthPrefixedAnnexB {
-                nal_length_size,
-                prefix_nalus,
-                sent_prefix: false,
-            }))
-        }
-        CodecType::H265 => {
-            let Some(payload) = hvcc_payload(config) else {
-                return Ok(InputBitstream::AnnexB);
-            };
-            let (nal_length_size, prefix_nalus) = parse_h265_hvcc(payload)?;
-            Ok(InputBitstream::LengthPrefixed(LengthPrefixedAnnexB {
-                nal_length_size,
-                prefix_nalus,
-                sent_prefix: false,
-            }))
-        }
-    }
-}
-
-fn avcc_payload(config: &[u8]) -> Option<&[u8]> {
-    if config.len() >= 8 && &config[4..8] == b"avcC" {
-        return Some(&config[8..]);
-    }
-    if config.len() >= 7 && config[0] == 1 {
-        return Some(config);
-    }
-    None
-}
-
-fn hvcc_payload(config: &[u8]) -> Option<&[u8]> {
-    if config.len() >= 8 && &config[4..8] == b"hvcC" {
-        return Some(&config[8..]);
-    }
-    if config.len() >= 23 && config[0] == 1 {
-        return Some(config);
-    }
-    None
-}
-
-fn parse_h264_avcc(payload: &[u8]) -> Result<(usize, Vec<u8>), CodecError> {
-    if payload.len() < 7 {
-        return Err(CodecError::InitializationFailed(
-            "invalid avcC payload: too short".to_string(),
-        ));
-    }
-
-    let nal_length_size = ((payload[4] & 0x03) + 1) as usize;
-    if !(1..=4).contains(&nal_length_size) {
-        return Err(CodecError::InitializationFailed(format!(
-            "invalid avcC NAL length size: {nal_length_size}"
-        )));
-    }
-
-    let mut cursor = 6;
-    let num_sps = (payload[5] & 0x1f) as usize;
-    let mut prefix_nalus = Vec::new();
-
-    for _ in 0..num_sps {
-        let nal = read_u16_len_nal(payload, &mut cursor, "SPS")?;
-        prefix_nalus.extend_from_slice(&START_CODE);
-        prefix_nalus.extend_from_slice(nal);
-    }
-
-    if cursor >= payload.len() {
-        return Err(CodecError::InitializationFailed(
-            "invalid avcC payload: missing PPS count".to_string(),
-        ));
-    }
-
-    let pps_count = payload[cursor] as usize;
-    cursor += 1;
-    for _ in 0..pps_count {
-        let nal = read_u16_len_nal(payload, &mut cursor, "PPS")?;
-        prefix_nalus.extend_from_slice(&START_CODE);
-        prefix_nalus.extend_from_slice(nal);
-    }
-
-    Ok((nal_length_size, prefix_nalus))
-}
-
-fn parse_h265_hvcc(payload: &[u8]) -> Result<(usize, Vec<u8>), CodecError> {
-    if payload.len() < 23 {
-        return Err(CodecError::InitializationFailed(
-            "invalid hvcC payload: too short".to_string(),
-        ));
-    }
-
-    let nal_length_size = ((payload[21] & 0x03) + 1) as usize;
-    if !(1..=4).contains(&nal_length_size) {
-        return Err(CodecError::InitializationFailed(format!(
-            "invalid hvcC NAL length size: {nal_length_size}"
-        )));
-    }
-
-    let mut cursor = 23;
-    let num_arrays = payload[22] as usize;
-    let mut prefix_nalus = Vec::new();
-
-    for _ in 0..num_arrays {
-        if cursor + 3 > payload.len() {
-            return Err(CodecError::InitializationFailed(
-                "invalid hvcC payload: truncated NAL array header".to_string(),
-            ));
-        }
-        cursor += 1;
-        let num_nalus = u16::from_be_bytes([payload[cursor], payload[cursor + 1]]) as usize;
-        cursor += 2;
-
-        for _ in 0..num_nalus {
-            let nal = read_u16_len_nal(payload, &mut cursor, "HEVC NAL")?;
-            prefix_nalus.extend_from_slice(&START_CODE);
-            prefix_nalus.extend_from_slice(nal);
-        }
-    }
-
-    Ok((nal_length_size, prefix_nalus))
-}
-
-fn read_u16_len_nal<'a>(
-    data: &'a [u8],
-    cursor: &mut usize,
-    label: &str,
-) -> Result<&'a [u8], CodecError> {
-    if *cursor + 2 > data.len() {
-        return Err(CodecError::InitializationFailed(format!(
-            "invalid config payload: missing {label} length"
-        )));
-    }
-    let len = u16::from_be_bytes([data[*cursor], data[*cursor + 1]]) as usize;
-    *cursor += 2;
-    if *cursor + len > data.len() {
-        return Err(CodecError::InitializationFailed(format!(
-            "invalid config payload: truncated {label}"
-        )));
-    }
-    let nal = &data[*cursor..*cursor + len];
-    *cursor += len;
-    Ok(nal)
-}
-
-fn length_prefixed_to_annex_b(
-    sample: &[u8],
-    nal_length_size: usize,
-) -> Result<Vec<u8>, CodecError> {
-    let mut offset = 0;
-    let mut out = Vec::with_capacity(sample.len() + 64);
-
-    while offset + nal_length_size <= sample.len() {
-        let nal_len = read_length_field(&sample[offset..offset + nal_length_size]);
-        offset += nal_length_size;
-
-        if nal_len == 0 {
-            continue;
-        }
-        if offset + nal_len > sample.len() {
-            return Err(CodecError::DecodingFailed(
-                "length-prefixed sample has truncated NAL unit".to_string(),
-            ));
-        }
-
-        out.extend_from_slice(&START_CODE);
-        out.extend_from_slice(&sample[offset..offset + nal_len]);
-        offset += nal_len;
-    }
-
-    if offset != sample.len() {
-        return Err(CodecError::DecodingFailed(
-            "length-prefixed sample has trailing bytes".to_string(),
-        ));
-    }
-
-    Ok(out)
-}
-
-fn read_length_field(bytes: &[u8]) -> usize {
-    match bytes.len() {
-        1 => bytes[0] as usize,
-        2 => u16::from_be_bytes([bytes[0], bytes[1]]) as usize,
-        3 => ((bytes[0] as usize) << 16) | ((bytes[1] as usize) << 8) | (bytes[2] as usize),
-        4 => u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize,
-        _ => panic!("invalid NAL length field size: {}", bytes.len()),
-    }
-}
-
-fn copy_nv12_from_frame(
+fn copy_biplanar_from_frame(
     frame: &GenericDmaVideoFrame,
     width: u32,
     height: u32,
+    layout: DecodedPixelLayout,
 ) -> Result<Vec<u8>, CodecError> {
     let pitches = frame.get_plane_pitch();
     if pitches.len() < 2 {
         return Err(CodecError::DecodingFailed(
-            "decoded frame does not have NV12 pitches".to_string(),
+            "decoded frame does not have bi-planar pitches".to_string(),
         ));
     }
 
@@ -633,31 +438,25 @@ fn copy_nv12_from_frame(
     let planes = mapping.get();
     if planes.len() < 2 {
         return Err(CodecError::DecodingFailed(
-            "decoded frame does not have NV12 planes".to_string(),
+            "decoded frame does not have bi-planar planes".to_string(),
         ));
     }
 
-    let y_size = (width as usize) * (height as usize);
+    let row_bytes = layout.bytes_per_row(width);
+    let y_size = row_bytes * (height as usize);
     let uv_height = (height as usize) / 2;
-    let uv_size = (width as usize) * uv_height;
+    let uv_size = row_bytes * uv_height;
     let mut out = Vec::with_capacity(y_size + uv_size);
 
     copy_plane_rows(
         planes[0],
         pitches[0],
-        width as usize,
+        row_bytes,
         height as usize,
         &mut out,
         "Y",
     )?;
-    copy_plane_rows(
-        planes[1],
-        pitches[1],
-        width as usize,
-        uv_height,
-        &mut out,
-        "UV",
-    )?;
+    copy_plane_rows(planes[1], pitches[1], row_bytes, uv_height, &mut out, "UV")?;
 
     Ok(out)
 }

@@ -1,6 +1,6 @@
 //! AV1 software encoding (rav1e) and decoding (rav1d).
 
-use crate::CodecError;
+use crate::{CodecError, DecodePacket, DecodedPixelLayout};
 use rav1d::include::dav1d::data::Dav1dData;
 use rav1d::include::dav1d::dav1d::{Dav1dContext, Dav1dSettings};
 use rav1d::include::dav1d::headers::DAV1D_PIXEL_LAYOUT_I420;
@@ -15,11 +15,12 @@ use std::{ptr, slice};
 
 /// CPU-side frame data for software codec output (NV12 format).
 pub struct CpuFrame {
-    /// NV12 data: Y plane followed by interleaved UV plane.
+    /// Bi-planar data: Y plane followed by interleaved UV plane.
     pub data: Vec<u8>,
     pub width: u32,
     pub height: u32,
     pub timestamp_ns: u64,
+    pub layout: DecodedPixelLayout,
 }
 
 /// AV1 software encoder using rav1e.
@@ -28,9 +29,6 @@ pub struct Av1Encoder {
     width: usize,
     height: usize,
 }
-
-unsafe impl Send for Av1Encoder {}
-unsafe impl Sync for Av1Encoder {}
 
 impl fmt::Debug for Av1Encoder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -135,9 +133,6 @@ pub struct Av1Decoder {
     ctx: Option<Dav1dContext>,
 }
 
-unsafe impl Send for Av1Decoder {}
-unsafe impl Sync for Av1Decoder {}
-
 impl fmt::Debug for Av1Decoder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Av1Decoder").finish()
@@ -183,8 +178,9 @@ impl Av1Decoder {
         Ok(Self { ctx })
     }
 
-    /// Decode AV1 data to NV12 frames.
-    pub fn decode(&mut self, data: &[u8]) -> Result<Vec<CpuFrame>, CodecError> {
+    /// Decode AV1 data to NV12 or P010 frames without discarding source precision.
+    pub fn decode(&mut self, packet: DecodePacket<'_>) -> Result<Vec<CpuFrame>, CodecError> {
+        let data = packet.data();
         let mut input = Dav1dData::default();
         let input_ptr =
             unsafe { rav1d_lib::dav1d_data_create(Some(NonNull::from(&mut input)), data.len()) };
@@ -196,6 +192,8 @@ impl Av1Decoder {
         unsafe {
             ptr::copy_nonoverlapping(data.as_ptr(), input_ptr, data.len());
         }
+        input.m.timestamp = i64::try_from(packet.presentation_time().as_nanos())
+            .map_err(|_| CodecError::DecodingFailed("presentation timestamp exceeds i64".into()))?;
         let send_status =
             unsafe { rav1d_lib::dav1d_send_data(self.ctx, Some(NonNull::from(&mut input))) };
         if send_status.0 != 0 {
@@ -206,6 +204,15 @@ impl Av1Decoder {
             )));
         }
 
+        self.collect_pictures()
+    }
+
+    /// Returns every delayed rav1d output frame.
+    pub fn drain(&mut self) -> Result<Vec<CpuFrame>, CodecError> {
+        self.collect_pictures()
+    }
+
+    fn collect_pictures(&mut self) -> Result<Vec<CpuFrame>, CodecError> {
         let mut frames = Vec::new();
         let mut saw_would_block_once = false;
         loop {
@@ -246,19 +253,34 @@ impl Av1Decoder {
         let u_ptr = Self::plane_ptr(picture, 1, "U")?;
         let v_ptr = Self::plane_ptr(picture, 2, "V")?;
 
-        let mut nv12 = Vec::with_capacity(layout.y_size + layout.uv_size);
+        let pixel_layout = match layout.bit_depth {
+            8 => DecodedPixelLayout::Nv12,
+            10 => DecodedPixelLayout::P010,
+            bit_depth => {
+                return Err(CodecError::Unsupported(format!(
+                    "AV1 {bit_depth}-bit output has no supported bi-planar GPU layout"
+                )));
+            }
+        };
+        let mut biplanar = Vec::with_capacity(layout.y_size + layout.uv_size);
 
         if layout.bit_depth == 8 {
-            Self::copy_8_bit_i420_to_nv12(&layout, y_ptr, u_ptr, v_ptr, &mut nv12);
+            Self::copy_8_bit_i420_to_nv12(&layout, y_ptr, u_ptr, v_ptr, &mut biplanar);
         } else {
-            Self::copy_high_bit_depth_i420_to_nv12(&layout, y_ptr, u_ptr, v_ptr, &mut nv12)?;
+            Self::copy_10_bit_i420_to_p010(&layout, y_ptr, u_ptr, v_ptr, &mut biplanar);
         }
 
         Ok(CpuFrame {
-            data: nv12,
+            data: biplanar,
             width: layout.width_u32,
             height: layout.height_u32,
-            timestamp_ns: 0,
+            timestamp_ns: u64::try_from(picture.m.timestamp).map_err(|_| {
+                CodecError::DecodingFailed(format!(
+                    "rav1d returned invalid timestamp {}",
+                    picture.m.timestamp
+                ))
+            })?,
+            layout: pixel_layout,
         })
     }
 
@@ -287,7 +309,7 @@ impl Av1Decoder {
                 picture.p.bpc
             ))
         })?;
-        if !(8..=16).contains(&bit_depth) {
+        if !matches!(bit_depth, 8 | 10 | 12) {
             return Err(CodecError::DecodingFailed(format!(
                 "rav1d returned unsupported bit depth {}",
                 picture.p.bpc
@@ -309,8 +331,8 @@ impl Av1Decoder {
         let sample_bytes = if bit_depth <= 8 { 1 } else { 2 };
         let uv_width = width.div_ceil(2);
         let uv_height = height.div_ceil(2);
-        let y_size = width * height;
-        let uv_size = uv_width * uv_height * 2; // Interleaved UV
+        let y_size = width * height * sample_bytes;
+        let uv_size = uv_width * uv_height * 2 * sample_bytes;
         let y_min_stride = width
             .checked_mul(sample_bytes)
             .ok_or_else(|| CodecError::DecodingFailed("rav1d Y stride overflow".to_string()))?;
@@ -371,21 +393,20 @@ impl Av1Decoder {
         }
     }
 
-    fn copy_high_bit_depth_i420_to_nv12(
+    fn copy_10_bit_i420_to_p010(
         layout: &PictureLayout,
         y_ptr: *const u8,
         u_ptr: *const u8,
         v_ptr: *const u8,
-        nv12: &mut Vec<u8>,
-    ) -> Result<(), CodecError> {
-        let shift = layout.bit_depth - 8;
+        p010: &mut Vec<u8>,
+    ) {
         for row in 0..layout.height {
             let src = unsafe { y_ptr.add(row * layout.y_stride) };
             let row_bytes = unsafe { slice::from_raw_parts(src, layout.y_min_stride) };
             for col in 0..layout.width {
                 let i = col * 2;
                 let value = u16::from_ne_bytes([row_bytes[i], row_bytes[i + 1]]);
-                nv12.push(Self::downshift_sample(value, shift, "Y")?);
+                p010.extend_from_slice(&(value << 6).to_le_bytes());
             }
         }
         for row in 0..layout.uv_height {
@@ -399,20 +420,10 @@ impl Av1Decoder {
                 let i = col * 2;
                 let u = u16::from_ne_bytes([u_row[i], u_row[i + 1]]);
                 let v = u16::from_ne_bytes([v_row[i], v_row[i + 1]]);
-                nv12.push(Self::downshift_sample(u, shift, "U")?);
-                nv12.push(Self::downshift_sample(v, shift, "V")?);
+                p010.extend_from_slice(&(u << 6).to_le_bytes());
+                p010.extend_from_slice(&(v << 6).to_le_bytes());
             }
         }
-        Ok(())
-    }
-
-    fn downshift_sample(value: u16, shift: usize, plane: &'static str) -> Result<u8, CodecError> {
-        let shifted = value >> shift;
-        u8::try_from(shifted).map_err(|_| {
-            CodecError::DecodingFailed(format!(
-                "rav1d {plane} sample {shifted} out of range after downshift"
-            ))
-        })
     }
 
     fn plane_ptr(

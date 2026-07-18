@@ -1,36 +1,316 @@
-// YUV (NV12) to RGBA compute shader
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn vs_main(
+    @location(0) position: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+) -> VertexOutput {
+    var output: VertexOutput;
+    output.position = vec4<f32>(position, 0.0, 1.0);
+    output.uv = uv;
+    return output;
+}
 
 @group(0) @binding(0) var y_texture: texture_2d<f32>;
 @group(0) @binding(1) var uv_texture: texture_2d<f32>;
-@group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(2) var video_sampler: sampler;
 
-// BT.601 YUV to RGB conversion matrix
-fn yuv_to_rgb(y: f32, u: f32, v: f32) -> vec3<f32> {
-    let y_norm = y - 0.0625;  // 16/256
-    let u_norm = u - 0.5;
-    let v_norm = v - 0.5;
+struct ColorParams {
+    matrix_mode: u32,
+    range_mode: u32,
+    primaries_mode: u32,
+    transfer_mode: u32,
+    target_mode: u32,
+    sample_mode: u32,
+    max_content_light_nits: f32,
+    _padding1: u32,
+}
 
-    let r = 1.164 * y_norm + 1.596 * v_norm;
-    let g = 1.164 * y_norm - 0.392 * u_norm - 0.813 * v_norm;
-    let b = 1.164 * y_norm + 2.017 * u_norm;
+@group(0) @binding(3) var<uniform> color_params: ColorParams;
+@group(0) @binding(4) var linear_rgba_output: texture_storage_2d<rgba16float, write>;
 
-    return clamp(vec3(r, g, b), vec3(0.0), vec3(1.0));
+const MATRIX_BT709: u32 = 0u;
+const MATRIX_BT601: u32 = 1u;
+const MATRIX_BT2020: u32 = 2u;
+const MATRIX_BT2020_CONSTANT_LUMINANCE: u32 = 3u;
+
+const RANGE_LIMITED: u32 = 0u;
+const SAMPLE_NV12: u32 = 0u;
+const SAMPLE_P010: u32 = 1u;
+
+const PRIMARIES_BT709: u32 = 0u;
+const PRIMARIES_BT601: u32 = 1u;
+const PRIMARIES_DISPLAY_P3: u32 = 2u;
+const PRIMARIES_BT2020: u32 = 3u;
+
+const TRANSFER_SDR: u32 = 0u;
+const TRANSFER_PQ: u32 = 1u;
+const TRANSFER_HLG: u32 = 2u;
+
+const TARGET_GAMMA_SDR: u32 = 0u;
+const TARGET_LINEAR_SDR: u32 = 1u;
+const TARGET_LINEAR_HDR: u32 = 2u;
+
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        return c / 12.92;
+    }
+    return pow((c + 0.055) / 1.055, 2.4);
+}
+
+fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.0031308 {
+        return c * 12.92;
+    }
+    return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+
+fn bt709_to_linear(c: f32) -> f32 {
+    if c < 0.081 {
+        return c / 4.5;
+    }
+    return pow((c + 0.099) / 1.099, 1.0 / 0.45);
+}
+
+fn linear_to_bt709(c: f32) -> f32 {
+    if c < 0.018 {
+        return c * 4.5;
+    }
+    return 1.099 * pow(c, 0.45) - 0.099;
+}
+
+fn pq_to_linear(value: f32) -> f32 {
+    let m1 = 2610.0 / 16384.0;
+    let m2 = 2523.0 / 32.0;
+    let c1 = 3424.0 / 4096.0;
+    let c2 = 2413.0 / 128.0;
+    let c3 = 2392.0 / 128.0;
+
+    let v = clamp(value, 0.0, 1.0);
+    let v_pow = pow(v, 1.0 / m2);
+    let numerator = max(v_pow - c1, 0.0);
+    let denominator = max(c2 - c3 * v_pow, 1e-6);
+    let absolute_nits = 10000.0 * pow(numerator / denominator, 1.0 / m1);
+
+    // Normalize to an SDR reference white of 100 nits.
+    return absolute_nits / 100.0;
+}
+
+fn hlg_to_linear(value: f32) -> f32 {
+    let a = 0.17883277;
+    let b = 0.28466892;
+    let c = 0.55991073;
+    let e = clamp(value, 0.0, 1.0);
+    var scene_linear = 0.0;
+    if e <= 0.5 {
+        scene_linear = (e * e) / 3.0;
+    } else {
+        scene_linear = (exp((e - c) / a) + b) / 12.0;
+    }
+
+    // Keep typical HLG highlights above SDR white.
+    return scene_linear * 12.0;
+}
+
+fn decode_transfer_to_linear(rgb: vec3<f32>, transfer_mode: u32) -> vec3<f32> {
+    if transfer_mode == TRANSFER_PQ {
+        return vec3<f32>(
+            pq_to_linear(rgb.r),
+            pq_to_linear(rgb.g),
+            pq_to_linear(rgb.b),
+        );
+    }
+    if transfer_mode == TRANSFER_HLG {
+        return vec3<f32>(
+            hlg_to_linear(rgb.r),
+            hlg_to_linear(rgb.g),
+            hlg_to_linear(rgb.b),
+        );
+    }
+    return vec3<f32>(
+        bt709_to_linear(rgb.r),
+        bt709_to_linear(rgb.g),
+        bt709_to_linear(rgb.b),
+    );
+}
+
+fn decode_transfer_scalar(value: f32, transfer_mode: u32) -> f32 {
+    if transfer_mode == TRANSFER_PQ {
+        return pq_to_linear(value);
+    }
+    if transfer_mode == TRANSFER_HLG {
+        return hlg_to_linear(value);
+    }
+    return bt709_to_linear(value);
+}
+
+fn convert_primaries_to_srgb(linear_rgb: vec3<f32>, primaries_mode: u32) -> vec3<f32> {
+    if primaries_mode == PRIMARIES_BT2020 {
+        return vec3<f32>(
+            1.6605 * linear_rgb.r - 0.5876 * linear_rgb.g - 0.0728 * linear_rgb.b,
+            -0.1246 * linear_rgb.r + 1.1329 * linear_rgb.g - 0.0083 * linear_rgb.b,
+            -0.0182 * linear_rgb.r - 0.1006 * linear_rgb.g + 1.1188 * linear_rgb.b,
+        );
+    }
+
+    if primaries_mode == PRIMARIES_DISPLAY_P3 {
+        return vec3<f32>(
+            1.2249 * linear_rgb.r - 0.2247 * linear_rgb.g - 0.0002 * linear_rgb.b,
+            -0.0420 * linear_rgb.r + 1.0419 * linear_rgb.g + 0.0001 * linear_rgb.b,
+            -0.0197 * linear_rgb.r - 0.0786 * linear_rgb.g + 1.0983 * linear_rgb.b,
+        );
+    }
+
+    return linear_rgb;
+}
+
+fn tone_map_hdr_to_sdr(linear_rgb: vec3<f32>) -> vec3<f32> {
+    let safe = max(linear_rgb, vec3<f32>(0.0));
+    let source_peak = max(color_params.max_content_light_nits / 100.0, 1.0);
+    let knee = 0.75;
+    let shoulder = max((source_peak - knee) / 4.0, 0.25);
+    let compressed = vec3<f32>(
+        knee + (1.0 - knee) * (1.0 - exp(-(safe.r - knee) / shoulder)),
+        knee + (1.0 - knee) * (1.0 - exp(-(safe.g - knee) / shoulder)),
+        knee + (1.0 - knee) * (1.0 - exp(-(safe.b - knee) / shoulder)),
+    );
+    return select(safe, compressed, safe > vec3<f32>(knee));
+}
+
+fn normalize_yuv(y_sample: f32, uv_sample: vec2<f32>) -> vec3<f32> {
+    var y = y_sample;
+    var u = uv_sample.x;
+    var v = uv_sample.y;
+
+    if color_params.range_mode == RANGE_LIMITED {
+        if color_params.sample_mode == SAMPLE_P010 {
+            y = (y - (64.0 / 1023.0)) * (1023.0 / 876.0);
+            u = (u - (512.0 / 1023.0)) * (1023.0 / 896.0);
+            v = (v - (512.0 / 1023.0)) * (1023.0 / 896.0);
+        } else {
+            y = (y - (16.0 / 255.0)) * (255.0 / 219.0);
+            u = (u - (128.0 / 255.0)) * (255.0 / 224.0);
+            v = (v - (128.0 / 255.0)) * (255.0 / 224.0);
+        }
+    } else if color_params.sample_mode == SAMPLE_P010 {
+        u = u - (512.0 / 1023.0);
+        v = v - (512.0 / 1023.0);
+    } else {
+        u = u - (128.0 / 255.0);
+        v = v - (128.0 / 255.0);
+    }
+
+    return vec3<f32>(y, u, v);
+}
+
+fn yuv_to_gamma_rgb(yuv: vec3<f32>) -> vec3<f32> {
+    let y = yuv.x;
+    let u = yuv.y;
+    let v = yuv.z;
+
+    var r = 0.0;
+    var g = 0.0;
+    var b = 0.0;
+
+    if color_params.matrix_mode == MATRIX_BT601 {
+        r = y + 1.402 * v;
+        g = y - 0.344136 * u - 0.714136 * v;
+        b = y + 1.772 * u;
+    } else if color_params.matrix_mode == MATRIX_BT2020 {
+        r = y + 1.4746 * v;
+        g = y - 0.164553 * u - 0.571353 * v;
+        b = y + 1.8814 * u;
+    } else {
+        // BT.709
+        r = y + 1.5748 * v;
+        g = y - 0.187324 * u - 0.468124 * v;
+        b = y + 1.8556 * u;
+    }
+
+    return max(vec3<f32>(r, g, b), vec3<f32>(0.0));
+}
+
+fn bt2020_constant_luminance_to_linear(yuv: vec3<f32>) -> vec3<f32> {
+    let y_gamma = yuv.x;
+    let b_gamma = y_gamma + yuv.y * select(1.5816, 1.9404, yuv.y <= 0.0);
+    let r_gamma = y_gamma + yuv.z * select(0.9936, 1.7184, yuv.z <= 0.0);
+    let y_linear = decode_transfer_scalar(y_gamma, color_params.transfer_mode);
+    let r_linear = decode_transfer_scalar(r_gamma, color_params.transfer_mode);
+    let b_linear = decode_transfer_scalar(b_gamma, color_params.transfer_mode);
+    let g_linear =
+        (y_linear - 0.2627 * r_linear - 0.0593 * b_linear) / 0.6780;
+    return max(
+        vec3<f32>(r_linear, g_linear, b_linear),
+        vec3<f32>(0.0),
+    );
+}
+
+fn decode_yuv_to_linear(y: f32, uv: vec2<f32>) -> vec3<f32> {
+    let yuv = normalize_yuv(y, uv);
+    var linear_rgb = vec3<f32>(0.0);
+    if color_params.matrix_mode == MATRIX_BT2020_CONSTANT_LUMINANCE {
+        linear_rgb = bt2020_constant_luminance_to_linear(yuv);
+    } else {
+        let gamma_rgb = yuv_to_gamma_rgb(yuv);
+        linear_rgb = decode_transfer_to_linear(gamma_rgb, color_params.transfer_mode);
+    }
+    return convert_primaries_to_srgb(linear_rgb, color_params.primaries_mode);
+}
+
+fn render_yuv_sample(sample_coordinates: vec2<f32>) -> vec4<f32> {
+    let y = textureSample(y_texture, video_sampler, sample_coordinates).r;
+    let uv = textureSample(uv_texture, video_sampler, sample_coordinates).rg;
+    var linear_rgb = decode_yuv_to_linear(y, uv);
+
+    if color_params.target_mode == TARGET_LINEAR_HDR {
+        return vec4<f32>(max(linear_rgb, vec3<f32>(0.0)), 1.0);
+    }
+
+    if color_params.transfer_mode != TRANSFER_SDR {
+        linear_rgb = tone_map_hdr_to_sdr(linear_rgb);
+    }
+
+    let clamped_linear = clamp(linear_rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+
+    if color_params.target_mode == TARGET_LINEAR_SDR {
+        return vec4<f32>(clamped_linear, 1.0);
+    }
+
+    let gamma_sdr = vec3<f32>(
+        linear_to_bt709(clamped_linear.r),
+        linear_to_bt709(clamped_linear.g),
+        linear_to_bt709(clamped_linear.b),
+    );
+    if color_params.target_mode == TARGET_GAMMA_SDR {
+        return vec4<f32>(gamma_sdr, 1.0);
+    }
+
+    return vec4<f32>(clamped_linear, 1.0);
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    return render_yuv_sample(input.uv);
 }
 
 @compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let dims = textureDimensions(output);
-    if global_id.x >= dims.x || global_id.y >= dims.y {
+fn convert_to_linear_rgba(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let dimensions = textureDimensions(linear_rgba_output);
+    if global_id.x >= dimensions.x || global_id.y >= dimensions.y {
         return;
     }
 
-    let coords = vec2<i32>(global_id.xy);
-    let uv_coords = vec2<i32>(global_id.xy / 2u);
-
-    let y = textureLoad(y_texture, coords, 0).r;
-    let uv = textureLoad(uv_texture, uv_coords, 0).rg;
-
-    let rgb = yuv_to_rgb(y, uv.r, uv.g);
-
-    textureStore(output, coords, vec4(rgb, 1.0));
+    let y_coordinates = vec2<i32>(global_id.xy);
+    let uv_coordinates = vec2<i32>(global_id.xy / 2u);
+    let y = textureLoad(y_texture, y_coordinates, 0).r;
+    let uv = textureLoad(uv_texture, uv_coordinates, 0).rg;
+    let linear_rgb = decode_yuv_to_linear(y, uv);
+    textureStore(
+        linear_rgba_output,
+        y_coordinates,
+        vec4<f32>(max(linear_rgb, vec3<f32>(0.0)), 1.0),
+    );
 }

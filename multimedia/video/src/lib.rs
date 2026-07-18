@@ -1,72 +1,74 @@
-//! Cross-platform video muxing, demuxing, and playback.
+//! Modular, UI-independent video framework for Rust.
 //!
-//! This crate provides:
-//! - **Muxing**: Write H.264/H.265 video to MP4/MOV containers
-//! - **Demuxing**: Read video samples from containers
-//! - **Hardware Decode**: Uses `waterkit-codec` for hardware-accelerated decode
-//! - **wgpu Integration**: Render decoded frames to GPU textures
-//!
-//! # Video Playback Example
-//!
-//! ```ignore
-//! use waterkit_video::{VideoPlayer};
-//! use std::sync::Arc;
-//!
-//! let player = VideoPlayer::open("video.mp4", device.clone(), queue.clone())?;
-//!
-//! while let Some(frame) = player.next_frame()? {
-//!     // Use frame.gpu_frame for rendering
-//!     let y_texture = frame.gpu_frame.y_texture();
-//!     let uv_texture = frame.gpu_frame.uv_texture();
-//! }
-//! ```
+//! `waterkit-video` is an umbrella: applications enable only the reusable
+//! layers they need. Containers, Zenwave networking, frame processing, and the
+//! playback engine remain separate crates so tools and libraries do not inherit
+//! an unrelated graphics or UI dependency graph.
 
 #![warn(missing_docs)]
 
-mod demuxer;
-mod muxer;
-mod picture_in_picture;
-mod player;
-
-pub use demuxer::{
-    EmbeddedSubtitleCodec, EmbeddedSubtitleCue, EmbeddedSubtitleTrack, VideoFrame, VideoReader,
-    embedded_subtitle_tracks, read_embedded_subtitle_cues,
+pub use waterkit_video_core as core;
+pub use waterkit_video_core::{
+    ColorPrimaries, ColorRange, CommonEncryptionScheme, ContentLightLevel, EncryptionSubsample,
+    Error as VideoError, FrameRate, FrameSize, FrameTiming, MatrixCoefficients, ProtectionInitData,
+    SampleEncryption, TrackProtection, TransferFunction, VideoColorInfo,
 };
-pub use muxer::{CodecType as MuxerCodecType, VideoFormat, VideoWriter};
-pub use picture_in_picture::{
-    PictureInPictureCommand, PictureInPictureControllerState, PictureInPictureHostId,
-    enter_picture_in_picture, is_picture_in_picture_active, poll_picture_in_picture_command,
-    sync_picture_in_picture_controller,
+
+#[cfg(feature = "container")]
+pub use waterkit_video_container as container;
+#[cfg(feature = "container")]
+pub use waterkit_video_container::{
+    EmbeddedSubtitleCodec, EmbeddedSubtitleCue, EmbeddedSubtitleTrack, MuxerCodecType, SubtitleCue,
+    TimedMetadata, VideoFormat, VideoReader, VideoWriter, active_subtitle_text,
+    decode_cmaf_subtitle_sample, embedded_subtitle_tracks, parse_hls_webvtt_segment,
+    parse_subrip_document, parse_subtitles_from_path, parse_ttml_document, parse_webvtt_document,
+    probe_mp4_color_info, read_embedded_subtitle_cues,
 };
-pub use player::{PlayerFrame, VideoPlayer};
 
-/// Re-export wgpu for texture integration.
-pub use wgpu;
+#[cfg(feature = "streaming")]
+pub use waterkit_video_streaming as streaming;
 
-/// Re-export codec crate for access to decoder.
-pub use waterkit_codec as codec;
+#[cfg(feature = "processing")]
+pub use waterkit_video_processing as processing;
 
-/// Errors that can occur with video operations.
-/// Errors that can occur with video operations.
-#[derive(Debug, thiserror::Error)]
-pub enum VideoError {
-    /// IO error during file operations.
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+#[cfg(feature = "player")]
+pub use waterkit_video_player as player;
+#[cfg(feature = "player")]
+pub use waterkit_video_player::{
+    AudioTrackDecoder, DecodedAudioFrame, DecodedVideoFrame, LivePlaybackRateRange, LiveWindow,
+    PictureInPictureCommand, PictureInPictureCommandStream, PictureInPictureController,
+    PictureInPictureControllerState, PictureInPictureHostId, SelectableAudioTrack,
+    SelectableSubtitleTrack, SelectableVideoTrack, VideoPlayer, VideoTrackDecoder,
+    detect_codec_type,
+};
 
-    /// MP4 container error.
-    #[error(transparent)]
-    Mp4(#[from] mp4::Error),
+#[cfg(all(target_os = "android", feature = "streaming"))]
+pub use waterkit_video_player::{
+    AndroidAudioDecoderTarget, AndroidAudioDrmBootstrap, AndroidDrmBootstrap, AndroidDrmContext,
+    AndroidKeyDuration, AndroidKeyRequestType, AndroidKeyStatus, AndroidLicenseChallenge,
+    AndroidOfflineKeySet, AndroidOfflineLicenseAcquisition,
+    AndroidOfflineLicenseAcquisitionBootstrap, AndroidOfflineLicenseBootstrap,
+    AndroidOfflineLicenseProvisioning, AndroidOfflineLicenseRelease,
+    AndroidOfflineLicenseReleaseBootstrap, AndroidOfflineLicenseRenewal,
+    AndroidOfflineLicenseRenewalBootstrap, AndroidPendingAudioDecoder, AndroidPendingDecoder,
+    AndroidPendingOfflineLicense, AndroidPendingVideoDecoder, AndroidProtectedAudioDecoder,
+    AndroidProtectedSurface, AndroidProtectedVideoDecoder, AndroidProtectedVideoOutput,
+    AndroidProvisionRequest, AndroidProvisioningAudioDecoder, AndroidProvisioningVideoDecoder,
+    AndroidReadyAudioDecoder, AndroidReadyDecoder, AndroidReadyVideoDecoder,
+    AndroidVideoDecoderTarget,
+};
 
-    /// Container format error.
-    #[error("Container error: {0}")]
-    Container(String),
+#[cfg(all(target_os = "android", feature = "player"))]
+pub use waterkit_video_player::{
+    AndroidOffloadAudioController, AndroidOffloadAudioPlayback, AndroidPlaybackContext,
+    AndroidTunneledPlayback, AndroidVideoSurface,
+};
 
-    /// Codec error during encode/decode.
-    #[error("Codec error: {0}")]
-    Codec(String),
-
-    /// Format not supported.
-    #[error("Format not supported: {0}")]
-    Unsupported(String),
-}
+#[cfg(all(feature = "player", feature = "streaming"))]
+pub use waterkit_video_player::{
+    AnyLicenseServer, AudioTrackSelection, DashPlaybackSession, DashSegmentPoll,
+    DashStreamedSegment, DashStreamedSubtitleSegment, HlsPlaybackSession, HlsSegmentPoll,
+    LicenseRequest, LicenseResponse, LicenseServer, SegmentedPlaybackOptions, StreamedSegment,
+    StreamedSubtitleSegment, SubtitleTrackSelection, VideoTrackSelection, ZenwaveLicenseServer,
+    acquire_license,
+};

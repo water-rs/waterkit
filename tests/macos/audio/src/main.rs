@@ -9,7 +9,7 @@
 //!   `--artwork <path>`     Set artwork image path
 
 use std::time::Duration;
-use waterkit_audio::AudioPlayer;
+use waterkit_audio::{AudioPlayer, MediaArtwork};
 
 struct Args {
     audio_file: Option<String>,
@@ -97,8 +97,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if let Some(art) = args.artwork {
             let expanded = expand_path(&art);
-            let url = format!("file://{}", expanded);
-            p = p.artwork_url(url);
+            let encoded = std::fs::read(&expanded)?;
+            p = p.artwork(MediaArtwork::new(encoded));
             println!("Artwork: {}", expanded);
         }
 

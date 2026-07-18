@@ -18,7 +18,7 @@ use crate::image_apple;
     feature = "software-fallback",
     not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
 ))]
-use crate::software::av1::Av1Decoder;
+use crate::software::av1::{Av1Decoder, CpuFrame};
 
 /// Pixel formats currently emitted by `decode_image`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -313,12 +313,7 @@ fn decode_avif_software(data: &[u8]) -> Result<DecodedImage, CodecError> {
         )));
     }
 
-    let mut primary_decoder = Av1Decoder::new()?;
-    let primary_frame = primary_decoder
-        .decode(&avif.primary_item)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| CodecError::DecodingFailed("AVIF primary item produced no frame".into()))?;
+    let primary_frame = decode_av1_item(&avif.primary_item, "primary")?;
 
     let width = primary_frame.width;
     let height = primary_frame.height;
@@ -360,30 +355,7 @@ fn decode_avif_software(data: &[u8]) -> Result<DecodedImage, CodecError> {
     .map_err(|err| CodecError::DecodingFailed(format!("NV12 to RGBA conversion failed: {err}")))?;
 
     if let Some(alpha_item) = avif.alpha_item.as_deref() {
-        let mut alpha_decoder = Av1Decoder::new()?;
-        let alpha_frame = alpha_decoder
-            .decode(alpha_item)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| {
-                CodecError::DecodingFailed("AVIF alpha item produced no frame".into())
-            })?;
-        if alpha_frame.width != width || alpha_frame.height != height {
-            return Err(CodecError::DecodingFailed(format!(
-                "AVIF alpha frame dimensions mismatch: alpha={}x{}, primary={}x{}",
-                alpha_frame.width, alpha_frame.height, width, height
-            )));
-        }
-        if alpha_frame.data.len() < y_size {
-            return Err(CodecError::DecodingFailed(format!(
-                "AVIF alpha frame Y plane too small: got {}, need at least {}",
-                alpha_frame.data.len(),
-                y_size
-            )));
-        }
-        for (idx, alpha) in alpha_frame.data[..y_size].iter().enumerate() {
-            rgba[idx * 4 + 3] = *alpha;
-        }
+        apply_avif_alpha(&mut rgba, alpha_item, width, height)?;
     }
 
     if metadata.bit_depth > 8 {
@@ -406,6 +378,61 @@ fn decode_avif_software(data: &[u8]) -> Result<DecodedImage, CodecError> {
         false,
         false,
     ))
+}
+
+#[cfg(all(
+    feature = "software-fallback",
+    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+))]
+fn decode_av1_item(data: &[u8], item_name: &str) -> Result<CpuFrame, CodecError> {
+    let mut decoder = Av1Decoder::new()?;
+    decoder
+        .decode(crate::DecodePacket::new(data, std::time::Duration::ZERO))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            CodecError::DecodingFailed(format!("AVIF {item_name} item produced no frame"))
+        })
+}
+
+#[cfg(all(
+    feature = "software-fallback",
+    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+))]
+fn apply_avif_alpha(
+    rgba: &mut [u8],
+    alpha_item: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<(), CodecError> {
+    let alpha_frame = decode_av1_item(alpha_item, "alpha")?;
+    if alpha_frame.width != width || alpha_frame.height != height {
+        return Err(CodecError::DecodingFailed(format!(
+            "AVIF alpha frame dimensions mismatch: alpha={}x{}, primary={width}x{height}",
+            alpha_frame.width, alpha_frame.height
+        )));
+    }
+    let pixel_count = usize::try_from(width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .ok_or_else(|| CodecError::DecodingFailed("AVIF dimensions overflow usize".into()))?;
+    if alpha_frame.data.len() < pixel_count {
+        return Err(CodecError::DecodingFailed(format!(
+            "AVIF alpha frame Y plane too small: got {}, need at least {pixel_count}",
+            alpha_frame.data.len()
+        )));
+    }
+    for (pixel, alpha) in rgba
+        .chunks_exact_mut(4)
+        .zip(&alpha_frame.data[..pixel_count])
+    {
+        pixel[3] = *alpha;
+    }
+    Ok(())
 }
 
 #[cfg(all(

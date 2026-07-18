@@ -1,7 +1,10 @@
 //! iOS native audio player backend.
 
 use crate::shutdown::ShutdownHandle;
-use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
+use crate::{
+    AudioDevice, AudioOutput, AudioStreamFormat, MediaArtwork, MediaCommand, MediaMetadata,
+    MediaSession, PlaybackState, PlaybackStatus, PlayerError,
+};
 use futures::Stream;
 use lofty::prelude::*;
 use std::path::Path;
@@ -9,70 +12,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
-
-/// Audio stream format information.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AudioStreamFormat {
-    /// Number of interleaved channels.
-    pub channels: u16,
-    /// Sample rate in Hz.
-    pub sample_rate_hz: u32,
-}
-
-/// Audio output device.
-#[derive(Debug, Clone)]
-pub struct AudioDevice {
-    name: String,
-}
-
-impl AudioDevice {
-    /// Get the device name.
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-impl std::fmt::Display for AudioDevice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)
-    }
-}
-
-/// Errors that can occur during audio playback.
-#[derive(Debug, thiserror::Error, Clone)]
-pub enum PlayerError {
-    /// Failed to initialize audio output.
-    #[error("failed to init audio output: {0}")]
-    OutputInitFailed(String),
-    /// Failed to load the audio source.
-    #[error("failed to load audio: {0}")]
-    LoadFailed(String),
-    /// Playback operation failed.
-    #[error("playback failed: {0}")]
-    PlaybackFailed(String),
-    /// The audio format is not supported.
-    #[error("unsupported format: {0}")]
-    UnsupportedFormat(String),
-    /// No audio device available.
-    #[error("no audio device available")]
-    NoDevice,
-    /// Spatial controls require a spatially configured player.
-    #[error("spatial controls are not enabled for this player")]
-    SpatialNotEnabled,
-    /// Spatial configuration is invalid.
-    #[error("invalid spatial configuration: {0}")]
-    InvalidSpatialConfiguration(String),
-    /// An unknown error occurred.
-    #[error("unknown error: {0}")]
-    Unknown(String),
-}
-
-impl From<MediaError> for PlayerError {
-    fn from(err: MediaError) -> Self {
-        Self::Unknown(err.to_string())
-    }
-}
 
 /// Playback mode for audio output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -277,7 +216,7 @@ const fn clamp_playback_rate(rate: f32) -> f32 {
 
 struct RuntimeHandles {
     player: crate::sys::NativeAudioPlayerInner,
-    media_center: Arc<crate::sys::MediaCenterIntegration>,
+    media_session: Arc<MediaSession>,
     shutdown_handle: ShutdownHandle,
     background_thread: JoinHandle<()>,
     command_receiver: async_channel::Receiver<MediaCommand>,
@@ -289,7 +228,7 @@ pub struct AudioPlayer {
     metadata: MediaMetadata,
     source_format: Option<AudioStreamFormat>,
     output_format: Option<AudioStreamFormat>,
-    media_center: Arc<crate::sys::MediaCenterIntegration>,
+    media_session: Arc<MediaSession>,
     metadata_dirty: AtomicBool,
     playback_rate_bits: AtomicU32,
     preserve_pitch: AtomicBool,
@@ -312,30 +251,17 @@ impl std::fmt::Debug for AudioPlayer {
 impl AudioPlayer {
     fn initialize_runtime() -> Result<RuntimeHandles, PlayerError> {
         let player = crate::sys::NativeAudioPlayerInner::new()?;
-        let media_center = Arc::new(
-            crate::sys::MediaCenterIntegration::new()
-                .map_err(|e| PlayerError::Unknown(format!("media center init failed: {e}")))?,
-        );
+        let media_session = Arc::new(MediaSession::new()?);
         let (shutdown_handle, shutdown_rx) = ShutdownHandle::new();
-        let (cmd_tx, cmd_rx) = async_channel::unbounded();
-        let background_thread = {
-            let mc = Arc::clone(&media_center);
-            std::thread::spawn(move || {
-                while !shutdown_rx.is_shutdown() {
-                    mc.run_loop(Duration::from_millis(50));
-                    if let Some(cmd) = mc.poll_command() {
-                        let _ = cmd_tx.send_blocking(cmd);
-                    }
-                }
-            })
-        };
+        let command_receiver = media_session.command_receiver();
+        let background_thread = std::thread::spawn(move || shutdown_rx.wait_blocking());
 
         Ok(RuntimeHandles {
             player,
-            media_center,
+            media_session,
             shutdown_handle,
             background_thread,
-            command_receiver: cmd_rx,
+            command_receiver,
         })
     }
 
@@ -419,8 +345,16 @@ impl AudioPlayer {
     }
 
     fn update_now_playing(&self) {
-        self.media_center
-            .update(&self.metadata, &self.playback_state());
+        self.media_session
+            .set_metadata(&self.metadata)
+            .unwrap_or_else(|error| {
+                panic!("waterkit-audio: failed to update system media metadata: {error}")
+            });
+        self.media_session
+            .set_playback_state(&self.playback_state())
+            .unwrap_or_else(|error| {
+                panic!("waterkit-audio: failed to update system playback state: {error}")
+            });
     }
 
     fn apply_playback_preferences(&self) -> Result<(), PlayerError> {
@@ -438,6 +372,29 @@ impl AudioPlayer {
     ///
     /// Panics if the supplied path is not valid UTF-8.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, PlayerError> {
+        Self::open_with_output(path, &AudioOutput::system_default())
+    }
+
+    /// Open audio from a file path using the requested output policy.
+    ///
+    /// iOS accepts only [`AudioOutput::system_default`]; apps select external
+    /// routes through the system route picker.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an explicit device was requested, the file cannot be
+    /// opened, or the native player fails to load it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the supplied path is not valid UTF-8.
+    pub fn open_with_output(
+        path: impl AsRef<Path>,
+        output: &AudioOutput,
+    ) -> Result<Self, PlayerError> {
+        if output.selected_device().is_some() {
+            return Err(PlayerError::OutputDeviceSelectionUnavailable);
+        }
         let path = path.as_ref();
         let runtime = Self::initialize_runtime()?;
         let path_str = path
@@ -456,7 +413,7 @@ impl AudioPlayer {
             metadata,
             source_format: None,
             output_format: None,
-            media_center: runtime.media_center,
+            media_session: runtime.media_session,
             metadata_dirty: AtomicBool::new(false),
             playback_rate_bits: AtomicU32::new(1.0f32.to_bits()),
             preserve_pitch: AtomicBool::new(true),
@@ -481,6 +438,24 @@ impl AudioPlayer {
         Err(PlayerError::SpatialNotEnabled)
     }
 
+    /// Open spatial audio from a file using the requested output policy.
+    ///
+    /// # Errors
+    ///
+    /// Always returns [`PlayerError::SpatialNotEnabled`] for the system route,
+    /// or [`PlayerError::OutputDeviceSelectionUnavailable`] for an explicit device.
+    pub fn open_spatial_with_output(
+        _path: impl AsRef<Path>,
+        _scene: SpatialScene,
+        output: &AudioOutput,
+    ) -> Result<Self, PlayerError> {
+        if output.selected_device().is_some() {
+            Err(PlayerError::OutputDeviceSelectionUnavailable)
+        } else {
+            Err(PlayerError::SpatialNotEnabled)
+        }
+    }
+
     /// Open audio from a URL (async).
     ///
     /// # Errors
@@ -492,6 +467,27 @@ impl AudioPlayer {
         reason = "the cross-platform URL player API is async even when the iOS native call completes synchronously"
     )]
     pub async fn open_url(url: &str) -> Result<Self, PlayerError> {
+        Self::open_url_with_output(url, &AudioOutput::system_default()).await
+    }
+
+    /// Open audio from a URL using the requested output policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an explicit output was requested or the URL cannot
+    /// be loaded by the native player.
+    #[allow(
+        clippy::future_not_send,
+        clippy::unused_async,
+        reason = "the cross-platform URL player API is async even when the iOS native call completes synchronously"
+    )]
+    pub async fn open_url_with_output(
+        url: &str,
+        output: &AudioOutput,
+    ) -> Result<Self, PlayerError> {
+        if output.selected_device().is_some() {
+            return Err(PlayerError::OutputDeviceSelectionUnavailable);
+        }
         let runtime = Self::initialize_runtime()?;
         runtime.player.load_url(url)?;
 
@@ -506,7 +502,7 @@ impl AudioPlayer {
             metadata,
             source_format: None,
             output_format: None,
-            media_center: runtime.media_center,
+            media_session: runtime.media_session,
             metadata_dirty: AtomicBool::new(false),
             playback_rate_bits: AtomicU32::new(1.0f32.to_bits()),
             preserve_pitch: AtomicBool::new(true),
@@ -531,6 +527,29 @@ impl AudioPlayer {
     )]
     pub async fn open_url_spatial(_url: &str, _scene: SpatialScene) -> Result<Self, PlayerError> {
         Err(PlayerError::SpatialNotEnabled)
+    }
+
+    /// Open spatial audio from a URL using the requested output policy.
+    ///
+    /// # Errors
+    ///
+    /// Always returns [`PlayerError::SpatialNotEnabled`] for the system route,
+    /// or [`PlayerError::OutputDeviceSelectionUnavailable`] for an explicit device.
+    #[allow(
+        clippy::future_not_send,
+        clippy::unused_async,
+        reason = "the cross-platform URL player API is async even when iOS rejects spatial URL playback synchronously"
+    )]
+    pub async fn open_url_spatial_with_output(
+        _url: &str,
+        _scene: SpatialScene,
+        output: &AudioOutput,
+    ) -> Result<Self, PlayerError> {
+        if output.selected_device().is_some() {
+            Err(PlayerError::OutputDeviceSelectionUnavailable)
+        } else {
+            Err(PlayerError::SpatialNotEnabled)
+        }
     }
 
     /// Get the active playback mode.
@@ -631,17 +650,26 @@ impl AudioPlayer {
         self
     }
 
-    /// Set the artwork URL.
+    /// Set encoded artwork.
     #[must_use]
-    pub fn artwork_url(mut self, url: impl Into<String>) -> Self {
-        self.metadata = std::mem::take(&mut self.metadata).with_artwork_url(url);
+    pub fn artwork(mut self, artwork: MediaArtwork) -> Self {
+        self.metadata = std::mem::take(&mut self.metadata).with_artwork(artwork);
         self.metadata_dirty.store(true, Ordering::Release);
         self
     }
 
     /// Start playback.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the platform refuses audio focus or system media state cannot be updated.
     pub fn play(&self) {
         self.flush_metadata();
+        self.media_session
+            .request_audio_focus()
+            .unwrap_or_else(|error| {
+                panic!("waterkit-audio: failed to acquire audio focus before playback: {error}")
+            });
         if self.player.play().is_ok() {
             self.update_now_playing();
         }
@@ -666,10 +694,21 @@ impl AudioPlayer {
     }
 
     /// Stop playback.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the platform media session cannot be cleared or audio focus cannot be released.
     pub fn stop(&self) {
         self.flush_metadata();
         if self.player.stop().is_ok() {
-            self.media_center.clear();
+            self.media_session.clear().unwrap_or_else(|error| {
+                panic!("waterkit-audio: failed to clear media session after stop: {error}")
+            });
+            self.media_session
+                .abandon_audio_focus()
+                .unwrap_or_else(|error| {
+                    panic!("waterkit-audio: failed to abandon audio focus after stop: {error}")
+                });
             self.update_now_playing();
         }
     }
@@ -776,10 +815,8 @@ impl AudioPlayer {
     /// # Errors
     ///
     /// Always returns an error on iOS because explicit output device selection is unavailable.
-    pub fn list_devices() -> Result<Vec<AudioDevice>, PlayerError> {
-        Err(PlayerError::Unknown(
-            "audio device enumeration is unavailable on iOS".into(),
-        ))
+    pub const fn list_devices() -> Result<Vec<AudioDevice>, PlayerError> {
+        AudioDevice::list()
     }
 }
 
@@ -790,6 +827,8 @@ impl Drop for AudioPlayer {
         if let Some(handle) = self.background_thread.take() {
             let _ = handle.join();
         }
-        self.media_center.clear();
+        if let Err(error) = self.media_session.clear() {
+            tracing::error!(%error, "failed to clear system media session during audio player teardown");
+        }
     }
 }

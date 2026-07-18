@@ -12,18 +12,17 @@ use async_channel::{Receiver, Sender};
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// use waterkit_audio::ShutdownHandle;
+///
 /// let (handle, receiver) = ShutdownHandle::new();
 ///
-/// std::thread::spawn(move || {
-///     while !receiver.is_shutdown() {
-///         // Do work...
-///         std::thread::sleep(Duration::from_millis(50));
-///     }
+/// let worker = std::thread::spawn(move || {
+///     receiver.wait_blocking();
 /// });
 ///
-/// // When handle is dropped, the background thread exits
-/// drop(handle);
+/// handle.shutdown();
+/// worker.join().expect("shutdown worker must exit cleanly");
 /// ```
 #[derive(Debug)]
 pub struct ShutdownHandle {

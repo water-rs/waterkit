@@ -1,11 +1,20 @@
 //! Android `MediaCodec` hardware encoding and decoding.
 
-use crate::CodecError;
+use crate::{
+    CodecError, DecodePacket, DecodedPixelLayout, bitstream::NalStreamConverter,
+    config::decoded_pixel_layout,
+};
 use ndk::media::media_codec::{MediaCodec, MediaCodecDirection};
 use ndk::media::media_format::MediaFormat;
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::time::Duration;
+
+const COLOR_FORMAT_YUV420_SEMIPLANAR: i32 = 0x15;
+const COLOR_FORMAT_YUV_P010: i32 = 0x36;
+const BUFFER_FLAG_END_OF_STREAM: u32 = 4;
+const CODEC_INPUT_TIMEOUT: Duration = Duration::from_secs(1);
+const CODEC_OUTPUT_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Internal codec type for Android implementations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +38,10 @@ pub struct AndroidDecoder {
     codec_type: CodecType,
     width: u32,
     height: u32,
+    output_layout: DecodedPixelLayout,
+    input_bitstream: NalStreamConverter,
+    last_presentation_time_us: u64,
+    ended: bool,
 }
 
 impl fmt::Debug for AndroidDecoder {
@@ -45,9 +58,8 @@ impl fmt::Debug for AndroidDecoder {
 // and we ensure no concurrent mutable access through &self/&mut self.
 #[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for AndroidDecoder {}
-unsafe impl Sync for AndroidDecoder {}
 
-/// Decoded frame from Android `MediaCodec` (NV12 format).
+/// Decoded frame from Android `MediaCodec`.
 #[derive(Clone)]
 pub struct AndroidFrame {
     /// NV12 data: Y plane followed by interleaved UV plane.
@@ -58,6 +70,8 @@ pub struct AndroidFrame {
     pub height: u32,
     /// Presentation timestamp in nanoseconds.
     pub timestamp_ns: u64,
+    /// Native bi-planar pixel layout.
+    pub layout: DecodedPixelLayout,
 }
 
 impl fmt::Debug for AndroidFrame {
@@ -96,26 +110,20 @@ impl AndroidDecoder {
         format.set_str("mime", mime_type);
         format.set_i32("width", width as i32);
         format.set_i32("height", height as i32);
-        format.set_i32("color-format", 0x15); // COLOR_FormatYUV420SemiPlanar (NV12)
+        let output_layout = decoded_pixel_layout(codec_type == CodecType::H265, config)?;
+        let color_format = match output_layout {
+            DecodedPixelLayout::Nv12 => COLOR_FORMAT_YUV420_SEMIPLANAR,
+            DecodedPixelLayout::P010 => COLOR_FORMAT_YUV_P010,
+        };
+        format.set_i32("color-format", color_format);
 
-        // Set codec-specific data (csd-0) if provided
-        if let Some(config_data) = config {
-            // Parse and set parameter sets
-            match codec_type {
-                CodecType::H264 => {
-                    // avcC format - extract SPS/PPS
-                    if let Some((sps, pps)) = parse_avcc(config_data) {
-                        format.set_buffer("csd-0", &sps);
-                        format.set_buffer("csd-1", &pps);
-                    }
-                }
-                CodecType::H265 => {
-                    // hvcC format - extract VPS/SPS/PPS
-                    if let Some(csd) = parse_hvcc(config_data) {
-                        format.set_buffer("csd-0", &csd);
-                    }
-                }
-            }
+        let input_bitstream = NalStreamConverter::new(codec_type == CodecType::H265, config)?;
+        let (primary_csd, secondary_csd) = input_bitstream.codec_specific_data();
+        if let Some(primary_csd) = primary_csd {
+            format.set_buffer("csd-0", primary_csd);
+        }
+        if let Some(secondary_csd) = secondary_csd {
+            format.set_buffer("csd-1", secondary_csd);
         }
 
         // Configure the codec
@@ -137,36 +145,59 @@ impl AndroidDecoder {
             codec_type,
             width,
             height,
+            output_layout,
+            input_bitstream,
+            last_presentation_time_us: 0,
+            ended: false,
         })
     }
 
     /// Decode compressed video data.
-    #[allow(clippy::similar_names)] // y_size, uv_size are intentionally similar
-    #[allow(clippy::cast_sign_loss)] // MediaCodec API uses signed integers
-    pub fn decode(&self, data: &[u8]) -> Result<Vec<AndroidFrame>, CodecError> {
+    pub fn decode(&mut self, packet: DecodePacket<'_>) -> Result<Vec<AndroidFrame>, CodecError> {
         use ndk::media::media_codec::{DequeuedInputBufferResult, DequeuedOutputBufferInfoResult};
+
+        if self.ended {
+            return Err(CodecError::DecodingFailed(
+                "cannot submit compressed data after end of stream".into(),
+            ));
+        }
+        let data = self.input_bitstream.convert_sample(packet.data())?;
 
         // Get input buffer
         let input_result = self
             .codec
-            .dequeue_input_buffer(Duration::from_millis(100))
+            .dequeue_input_buffer(CODEC_INPUT_TIMEOUT)
             .map_err(|e| CodecError::DecodingFailed(format!("dequeue_input_buffer: {e}")))?;
 
         let mut input_buffer = match input_result {
             DequeuedInputBufferResult::Buffer(buf) => buf,
-            DequeuedInputBufferResult::TryAgainLater => return Ok(Vec::new()),
+            DequeuedInputBufferResult::TryAgainLater => {
+                return Err(CodecError::DecodingFailed(
+                    "MediaCodec did not provide an input buffer before the input timeout".into(),
+                ));
+            }
         };
 
         let buffer_slice = input_buffer.buffer_mut();
-        let copy_len = data.len().min(buffer_slice.len());
+        if data.len() > buffer_slice.len() {
+            return Err(CodecError::DecodingFailed(format!(
+                "compressed access unit is {} bytes but MediaCodec input capacity is {} bytes",
+                data.len(),
+                buffer_slice.len()
+            )));
+        }
+        let copy_len = data.len();
         // SAFETY: We're writing valid data into the buffer
         for (i, byte) in data[..copy_len].iter().enumerate() {
             buffer_slice[i] = MaybeUninit::new(*byte);
         }
 
         // Queue the input buffer
+        let presentation_time_us = u64::try_from(packet.presentation_time().as_micros())
+            .map_err(|_| CodecError::DecodingFailed("presentation timestamp exceeds u64".into()))?;
+        self.last_presentation_time_us = presentation_time_us;
         self.codec
-            .queue_input_buffer(input_buffer, 0, copy_len, 0, 0)
+            .queue_input_buffer(input_buffer, 0, copy_len, presentation_time_us, 0)
             .map_err(|e| CodecError::DecodingFailed(format!("queue_input_buffer: {e}")))?;
 
         // Collect output frames
@@ -175,52 +206,233 @@ impl AndroidDecoder {
         loop {
             let output_result = self
                 .codec
-                .dequeue_output_buffer(Duration::from_millis(10))
+                .dequeue_output_buffer(Duration::ZERO)
                 .map_err(|e| CodecError::DecodingFailed(format!("dequeue_output_buffer: {e}")))?;
 
             match output_result {
                 DequeuedOutputBufferInfoResult::Buffer(output_buffer) => {
-                    let info = output_buffer.info();
-                    let buffer_data = output_buffer.buffer();
-
-                    // Extract NV12 data
-                    let y_size = (self.width * self.height) as usize;
-                    let uv_size = y_size / 2;
-                    let frame_size = y_size + uv_size;
-
-                    let offset = info.offset() as usize;
-                    let size = info.size() as usize;
-                    let end = (offset + size).min(buffer_data.len());
-                    let actual_size = end - offset;
-
-                    let mut nv12_data = vec![0u8; frame_size];
-                    let copy_size = actual_size.min(frame_size);
-                    nv12_data[..copy_size]
-                        .copy_from_slice(&buffer_data[offset..offset + copy_size]);
-
-                    let frame = AndroidFrame {
-                        data: nv12_data,
-                        width: self.width,
-                        height: self.height,
-                        timestamp_ns: info.presentation_time_us() as u64 * 1000,
-                    };
-
-                    frames.push(frame);
-
-                    // Release the output buffer
+                    let frame = self.copy_output_frame(&output_buffer);
                     self.codec
                         .release_output_buffer(output_buffer, false)
-                        .map_err(|e| {
-                            CodecError::DecodingFailed(format!("release_output_buffer: {e}"))
+                        .map_err(|error| {
+                            CodecError::DecodingFailed(format!("release_output_buffer: {error}"))
                         })?;
+                    frames.push(frame?);
                 }
                 DequeuedOutputBufferInfoResult::TryAgainLater
-                | DequeuedOutputBufferInfoResult::OutputFormatChanged
                 | DequeuedOutputBufferInfoResult::OutputBuffersChanged => break,
+                DequeuedOutputBufferInfoResult::OutputFormatChanged => {}
             }
         }
 
         Ok(frames)
+    }
+
+    /// Signals end of stream and returns every delayed output frame.
+    pub fn drain(&mut self) -> Result<Vec<AndroidFrame>, CodecError> {
+        use ndk::media::media_codec::{DequeuedInputBufferResult, DequeuedOutputBufferInfoResult};
+
+        if self.ended {
+            return Ok(Vec::new());
+        }
+        let input_buffer = match self
+            .codec
+            .dequeue_input_buffer(CODEC_INPUT_TIMEOUT)
+            .map_err(|error| CodecError::DecodingFailed(format!("dequeue EOS input: {error}")))?
+        {
+            DequeuedInputBufferResult::Buffer(buffer) => buffer,
+            DequeuedInputBufferResult::TryAgainLater => {
+                return Err(CodecError::DecodingFailed(
+                    "MediaCodec did not provide an EOS input buffer before the input timeout"
+                        .into(),
+                ));
+            }
+        };
+        self.codec
+            .queue_input_buffer(
+                input_buffer,
+                0,
+                0,
+                self.last_presentation_time_us,
+                BUFFER_FLAG_END_OF_STREAM,
+            )
+            .map_err(|error| CodecError::DecodingFailed(format!("queue EOS input: {error}")))?;
+        self.ended = true;
+
+        let mut frames = Vec::new();
+        loop {
+            match self
+                .codec
+                .dequeue_output_buffer(CODEC_OUTPUT_TIMEOUT)
+                .map_err(|error| {
+                    CodecError::DecodingFailed(format!("dequeue EOS output: {error}"))
+                })? {
+                DequeuedOutputBufferInfoResult::Buffer(output_buffer) => {
+                    let end_of_stream =
+                        output_buffer.info().flags() & BUFFER_FLAG_END_OF_STREAM != 0;
+                    let frame = (output_buffer.info().size() > 0)
+                        .then(|| self.copy_output_frame(&output_buffer));
+                    self.codec
+                        .release_output_buffer(output_buffer, false)
+                        .map_err(|error| {
+                            CodecError::DecodingFailed(format!("release EOS output: {error}"))
+                        })?;
+                    if let Some(frame) = frame {
+                        frames.push(frame?);
+                    }
+                    if end_of_stream {
+                        return Ok(frames);
+                    }
+                }
+                DequeuedOutputBufferInfoResult::OutputFormatChanged
+                | DequeuedOutputBufferInfoResult::OutputBuffersChanged => {}
+                DequeuedOutputBufferInfoResult::TryAgainLater => {
+                    return Err(CodecError::DecodingFailed(
+                        "MediaCodec did not emit EOS before the output timeout".into(),
+                    ));
+                }
+            }
+        }
+    }
+
+    fn copy_output_frame(
+        &self,
+        output_buffer: &ndk::media::media_codec::OutputBuffer<'_>,
+    ) -> Result<AndroidFrame, CodecError> {
+        let info = output_buffer.info();
+        let buffer_data = output_buffer.buffer();
+        let format = output_buffer.format();
+        let color_format = format.i32("color-format").ok_or_else(|| {
+            CodecError::DecodingFailed("MediaCodec output has no color-format".into())
+        })?;
+        let expected_color_format = match self.output_layout {
+            DecodedPixelLayout::Nv12 => COLOR_FORMAT_YUV420_SEMIPLANAR,
+            DecodedPixelLayout::P010 => COLOR_FORMAT_YUV_P010,
+        };
+        if color_format != expected_color_format {
+            return Err(CodecError::Unsupported(format!(
+                "MediaCodec returned color format {color_format:#x}; expected {expected_color_format:#x}"
+            )));
+        }
+
+        let coded_width = positive_format_size(&format, "width", self.width)?;
+        let coded_height = positive_format_size(&format, "height", self.height)?;
+        let stride = positive_format_size(&format, "stride", coded_width)?;
+        let slice_height = positive_format_size(&format, "slice-height", coded_height)?;
+        let crop_left = non_negative_format_size(&format, "crop-left", 0)?;
+        let crop_top = non_negative_format_size(&format, "crop-top", 0)?;
+        let crop_right = non_negative_format_size(&format, "crop-right", coded_width - 1)?;
+        let crop_bottom = non_negative_format_size(&format, "crop-bottom", coded_height - 1)?;
+        if crop_left > crop_right
+            || crop_top > crop_bottom
+            || crop_right >= stride
+            || crop_bottom >= slice_height
+        {
+            return Err(CodecError::DecodingFailed(format!(
+                "invalid MediaCodec crop [{crop_left},{crop_top}]..=[{crop_right},{crop_bottom}] for stride {stride} and slice height {slice_height}"
+            )));
+        }
+        if crop_left % 2 != 0 || crop_top % 2 != 0 {
+            return Err(CodecError::Unsupported(format!(
+                "4:2:0 output requires an even crop origin, got ({crop_left}, {crop_top})"
+            )));
+        }
+        let width = crop_right - crop_left + 1;
+        let height = crop_bottom - crop_top + 1;
+        let bytes_per_sample = match self.output_layout {
+            DecodedPixelLayout::Nv12 => 1,
+            DecodedPixelLayout::P010 => 2,
+        };
+        let source_row_bytes = stride as usize * bytes_per_sample;
+        let source_y_bytes = source_row_bytes * slice_height as usize;
+        let offset = usize::try_from(info.offset()).map_err(|_| {
+            CodecError::DecodingFailed("MediaCodec returned a negative output offset".into())
+        })?;
+        let size = usize::try_from(info.size()).map_err(|_| {
+            CodecError::DecodingFailed("MediaCodec returned a negative output size".into())
+        })?;
+        let end = offset.checked_add(size).ok_or_else(|| {
+            CodecError::DecodingFailed("MediaCodec output range overflowed usize".into())
+        })?;
+        let source = buffer_data.get(offset..end).ok_or_else(|| {
+            CodecError::DecodingFailed(format!(
+                "MediaCodec output range {offset}..{end} exceeds buffer length {}",
+                buffer_data.len()
+            ))
+        })?;
+        let required_source_bytes = source_y_bytes + source_row_bytes * (slice_height as usize / 2);
+        if source.len() < required_source_bytes {
+            return Err(CodecError::DecodingFailed(format!(
+                "MediaCodec output has {} bytes but its declared layout requires {required_source_bytes}",
+                source.len()
+            )));
+        }
+
+        let output_row_bytes = width as usize * bytes_per_sample;
+        let mut data = Vec::with_capacity(self.output_layout.packed_len(width, height));
+        copy_cropped_rows(
+            source,
+            source_row_bytes,
+            crop_top as usize,
+            height as usize,
+            crop_left as usize * bytes_per_sample,
+            output_row_bytes,
+            &mut data,
+        );
+        copy_cropped_rows(
+            &source[source_y_bytes..],
+            source_row_bytes,
+            crop_top as usize / 2,
+            height as usize / 2,
+            crop_left as usize * bytes_per_sample,
+            output_row_bytes,
+            &mut data,
+        );
+
+        Ok(AndroidFrame {
+            data,
+            width,
+            height,
+            timestamp_ns: u64::try_from(info.presentation_time_us())
+                .map_err(|_| {
+                    CodecError::DecodingFailed("MediaCodec returned a negative PTS".into())
+                })?
+                .saturating_mul(1_000),
+            layout: self.output_layout,
+        })
+    }
+}
+
+fn positive_format_size(format: &MediaFormat, key: &str, default: u32) -> Result<u32, CodecError> {
+    let value = format.i32(key).unwrap_or_else(|| default.cast_signed());
+    u32::try_from(value)
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| CodecError::DecodingFailed(format!("MediaCodec output {key} is {value}")))
+}
+
+fn non_negative_format_size(
+    format: &MediaFormat,
+    key: &str,
+    default: u32,
+) -> Result<u32, CodecError> {
+    let value = format.i32(key).unwrap_or_else(|| default.cast_signed());
+    u32::try_from(value)
+        .map_err(|_| CodecError::DecodingFailed(format!("MediaCodec output {key} is {value}")))
+}
+
+fn copy_cropped_rows(
+    source: &[u8],
+    source_row_bytes: usize,
+    first_row: usize,
+    row_count: usize,
+    first_byte: usize,
+    output_row_bytes: usize,
+    output: &mut Vec<u8>,
+) {
+    for row in first_row..first_row + row_count {
+        let start = row * source_row_bytes + first_byte;
+        output.extend_from_slice(&source[start..start + output_row_bytes]);
     }
 }
 
@@ -405,136 +617,4 @@ impl Drop for AndroidEncoder {
     fn drop(&mut self) {
         let _ = self.codec.stop();
     }
-}
-
-/// Parse avcC (H.264 codec configuration) to extract SPS and PPS as Annex B format.
-#[allow(clippy::similar_names)] // num_sps, num_pps are intentionally similar
-fn parse_avcc(data: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    if data.len() < 8 {
-        return None;
-    }
-
-    // Check if it starts with a box header containing "avcC"
-    let offset = if data.len() > 8 && &data[4..8] == b"avcC" {
-        8
-    } else {
-        0
-    };
-
-    let data = &data[offset..];
-    if data.len() < 7 {
-        return None;
-    }
-
-    // avcC structure:
-    // - 1 byte: version
-    // - 1 byte: profile
-    // - 1 byte: profile compatibility
-    // - 1 byte: level
-    // - 1 byte: NALU length size - 1 (masked with 0x03)
-    // - 1 byte: number of SPS (masked with 0x1F)
-    // - SPS entries: 2 byte length + data
-    // - 1 byte: number of PPS
-    // - PPS entries: 2 byte length + data
-
-    let num_sps = (data[5] & 0x1F) as usize;
-    let mut pos = 6;
-
-    let mut sps = Vec::new();
-    for _ in 0..num_sps {
-        if pos + 2 > data.len() {
-            return None;
-        }
-        let sps_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
-        pos += 2;
-        if pos + sps_len > data.len() {
-            return None;
-        }
-        // Add Annex B start code
-        sps.extend_from_slice(&[0, 0, 0, 1]);
-        sps.extend_from_slice(&data[pos..pos + sps_len]);
-        pos += sps_len;
-    }
-
-    if pos >= data.len() {
-        return None;
-    }
-    let num_pps = data[pos] as usize;
-    pos += 1;
-
-    let mut pps = Vec::new();
-    for _ in 0..num_pps {
-        if pos + 2 > data.len() {
-            return None;
-        }
-        let pps_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
-        pos += 2;
-        if pos + pps_len > data.len() {
-            return None;
-        }
-        // Add Annex B start code
-        pps.extend_from_slice(&[0, 0, 0, 1]);
-        pps.extend_from_slice(&data[pos..pos + pps_len]);
-        pos += pps_len;
-    }
-
-    Some((sps, pps))
-}
-
-/// Parse hvcC (H.265 codec configuration) to extract VPS/SPS/PPS as Annex B format.
-fn parse_hvcc(data: &[u8]) -> Option<Vec<u8>> {
-    if data.len() < 23 {
-        return None;
-    }
-
-    // Check if it starts with a box header containing "hvcC"
-    let offset = if data.len() > 8 && &data[4..8] == b"hvcC" {
-        8
-    } else {
-        0
-    };
-
-    let data = &data[offset..];
-    if data.len() < 23 {
-        return None;
-    }
-
-    // hvcC structure:
-    // - 1 byte: version
-    // - 12 bytes: profile_tier_level
-    // - ... (configuration fields)
-    // - 1 byte: numOfArrays at offset 22
-
-    let num_arrays = data[22] as usize;
-    let mut pos = 23;
-    let mut csd = Vec::new();
-
-    for _ in 0..num_arrays {
-        if pos + 3 > data.len() {
-            break;
-        }
-
-        // Skip array completeness and NAL type
-        pos += 1;
-
-        let num_nalus = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
-        pos += 2;
-
-        for _ in 0..num_nalus {
-            if pos + 2 > data.len() {
-                break;
-            }
-            let nalu_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
-            pos += 2;
-            if pos + nalu_len > data.len() {
-                break;
-            }
-            // Add Annex B start code
-            csd.extend_from_slice(&[0, 0, 0, 1]);
-            csd.extend_from_slice(&data[pos..pos + nalu_len]);
-            pos += nalu_len;
-        }
-    }
-
-    if csd.is_empty() { None } else { Some(csd) }
 }

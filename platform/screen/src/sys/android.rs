@@ -527,7 +527,7 @@ fn frame_interval(target_fps: u32) -> Result<Duration, Error> {
     }
 
     NonZeroU64::new(NANOS_PER_SECOND / u64::from(target_fps))
-        .map(Duration::from_nanos)
+        .map(|nanos| Duration::from_nanos(nanos.get()))
         .ok_or_else(|| Error::Platform(format!("target_fps is too high: {target_fps}")))
 }
 

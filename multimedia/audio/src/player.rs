@@ -3,88 +3,30 @@
 //! Uses `rodio` for audio playback on all platforms, with platform-specific
 //! media center integrations (`MPNowPlayingInfoCenter`, SMTC, MPRIS, `MediaSession`).
 
+use crate::playback_rate::{
+    AdaptivePlaybackSource, PlaybackParams, clamp_playback_rate, duration_div_rate,
+    duration_mul_rate, sink_speed_for_playback,
+};
+#[cfg(test)]
+use crate::playback_rate::{PitchStretchEngine, should_use_pitch_stretch};
 use crate::shutdown::ShutdownHandle;
-use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState};
+use crate::{
+    AudioDevice, AudioOutput, AudioStreamFormat, MediaArtwork, MediaCommand, MediaMetadata,
+    MediaSession, PlaybackState, PlayerError,
+};
 use futures::Stream;
 use lofty::prelude::*;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source, SpatialSink};
-use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
-use timestretch::{QualityMode, StreamProcessor, StretchParams};
 
 // Re-export rodio for advanced users
 pub use rodio;
-
-/// Audio stream format information.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AudioStreamFormat {
-    /// Number of interleaved channels.
-    pub channels: u16,
-    /// Sample rate in Hz.
-    pub sample_rate_hz: u32,
-}
-
-/// Audio output device.
-#[derive(Debug, Clone)]
-pub struct AudioDevice {
-    name: String,
-    // Device handle is not Clone, so we store the name and recreate when needed
-}
-
-impl AudioDevice {
-    /// Get the device name.
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-impl std::fmt::Display for AudioDevice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)
-    }
-}
-
-/// Errors that can occur during audio playback.
-#[derive(Debug, thiserror::Error, Clone)]
-pub enum PlayerError {
-    /// Failed to initialize audio output.
-    #[error("failed to init audio output: {0}")]
-    OutputInitFailed(String),
-    /// Failed to load the audio source.
-    #[error("failed to load audio: {0}")]
-    LoadFailed(String),
-    /// Playback operation failed.
-    #[error("playback failed: {0}")]
-    PlaybackFailed(String),
-    /// The audio format is not supported.
-    #[error("unsupported format: {0}")]
-    UnsupportedFormat(String),
-    /// No audio device available.
-    #[error("no audio device available")]
-    NoDevice,
-    /// Spatial controls require a spatially configured player.
-    #[error("spatial controls are not enabled for this player")]
-    SpatialNotEnabled,
-    /// Spatial configuration is invalid.
-    #[error("invalid spatial configuration: {0}")]
-    InvalidSpatialConfiguration(String),
-    /// An unknown error occurred.
-    #[error("unknown error: {0}")]
-    Unknown(String),
-}
-
-impl From<MediaError> for PlayerError {
-    fn from(err: MediaError) -> Self {
-        Self::Unknown(err.to_string())
-    }
-}
 
 /// Playback mode for audio output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -438,458 +380,6 @@ impl SinkBackend {
     }
 }
 
-const fn clamp_playback_rate(rate: f32) -> f32 {
-    if rate.is_finite() {
-        if rate < 0.25 {
-            0.25
-        } else if rate > 4.0 {
-            4.0
-        } else {
-            rate
-        }
-    } else {
-        1.0
-    }
-}
-
-const PRESERVE_PITCH_RATE_EPSILON: f32 = 0.001;
-const STRETCH_CHUNK_FRAMES: usize = 2048;
-
-fn should_use_pitch_stretch(rate: f32, preserve_pitch: bool) -> bool {
-    preserve_pitch && (rate - 1.0).abs() > PRESERVE_PITCH_RATE_EPSILON
-}
-
-fn sink_speed_for_playback(rate: f32, preserve_pitch: bool) -> f32 {
-    if should_use_pitch_stretch(rate, preserve_pitch) {
-        1.0
-    } else {
-        rate
-    }
-}
-
-fn duration_mul_rate(duration: Duration, rate: f32) -> Duration {
-    duration.mul_f64(f64::from(rate))
-}
-
-fn duration_div_rate(duration: Duration, rate: f32) -> Duration {
-    duration.mul_f64(1.0 / f64::from(rate))
-}
-
-#[derive(Debug)]
-struct PlaybackParams {
-    rate_bits: AtomicU32,
-    preserve_pitch: AtomicBool,
-}
-
-impl PlaybackParams {
-    const fn new() -> Self {
-        Self {
-            rate_bits: AtomicU32::new(1.0f32.to_bits()),
-            preserve_pitch: AtomicBool::new(true),
-        }
-    }
-
-    fn rate(&self) -> f32 {
-        let encoded = f32::from_bits(self.rate_bits.load(Ordering::Acquire));
-        clamp_playback_rate(encoded)
-    }
-
-    fn set_rate(&self, rate: f32) {
-        let clamped = clamp_playback_rate(rate);
-        self.rate_bits.store(clamped.to_bits(), Ordering::Release);
-    }
-
-    fn preserve_pitch(&self) -> bool {
-        self.preserve_pitch.load(Ordering::Acquire)
-    }
-
-    fn set_preserve_pitch(&self, preserve_pitch: bool) {
-        self.preserve_pitch.store(preserve_pitch, Ordering::Release);
-    }
-}
-
-#[derive(Debug)]
-enum StretchCore {
-    Interleaved(Box<StreamProcessor>),
-    PerChannel {
-        processors: Vec<StreamProcessor>,
-        pending: Vec<VecDeque<f32>>,
-    },
-}
-
-#[derive(Debug)]
-struct PitchStretchEngine {
-    channels: usize,
-    sample_rate: u32,
-    core: StretchCore,
-    input_channels: Vec<Vec<f32>>,
-    output_channels: Vec<Vec<f32>>,
-}
-
-impl PitchStretchEngine {
-    fn new(channels: usize, sample_rate: u32, ratio: f32) -> Self {
-        let clamped_ratio = f64::from(ratio.clamp(0.25, 4.0));
-        if channels <= 2 {
-            let channels_u32 =
-                u32::try_from(channels).expect("audio channel count must fit in u32");
-            let params = StretchParams::new(clamped_ratio)
-                .with_sample_rate(sample_rate)
-                .with_channels(channels_u32)
-                .with_quality_mode(QualityMode::Balanced);
-            return Self {
-                channels,
-                sample_rate,
-                core: StretchCore::Interleaved(Box::new(StreamProcessor::new(params))),
-                input_channels: Vec::new(),
-                output_channels: Vec::new(),
-            };
-        }
-
-        let mut processors = Vec::with_capacity(channels);
-        let mut pending = Vec::with_capacity(channels);
-        for _ in 0..channels {
-            let params = StretchParams::new(clamped_ratio)
-                .with_sample_rate(sample_rate)
-                .with_channels(1)
-                .with_quality_mode(QualityMode::Balanced);
-            processors.push(StreamProcessor::new(params));
-            pending.push(VecDeque::new());
-        }
-        let input_channels = (0..channels)
-            .map(|_| Vec::with_capacity(STRETCH_CHUNK_FRAMES))
-            .collect();
-        let output_channels = (0..channels)
-            .map(|_| Vec::with_capacity(STRETCH_CHUNK_FRAMES * 2))
-            .collect();
-
-        Self {
-            channels,
-            sample_rate,
-            core: StretchCore::PerChannel {
-                processors,
-                pending,
-            },
-            input_channels,
-            output_channels,
-        }
-    }
-
-    fn set_ratio(&mut self, ratio: f32) {
-        let clamped_ratio = f64::from(ratio.clamp(0.25, 4.0));
-        match &mut self.core {
-            StretchCore::Interleaved(processor) => processor.set_stretch_ratio(clamped_ratio),
-            StretchCore::PerChannel { processors, .. } => {
-                for processor in processors {
-                    processor.set_stretch_ratio(clamped_ratio);
-                }
-            }
-        }
-    }
-
-    fn process(&mut self, interleaved: &[f32]) -> Vec<f32> {
-        assert!(
-            interleaved.len().is_multiple_of(self.channels),
-            "pitch stretcher received channel-misaligned input: channels={} samples={}",
-            self.channels,
-            interleaved.len()
-        );
-
-        match &mut self.core {
-            StretchCore::Interleaved(processor) => {
-                let mut output = Vec::with_capacity(interleaved.len());
-                processor
-                    .process_into(interleaved, &mut output)
-                    .expect("pitch-preserving processor failed during streaming");
-                output
-            }
-            StretchCore::PerChannel {
-                processors,
-                pending,
-            } => {
-                for channel_input in &mut self.input_channels {
-                    channel_input.clear();
-                }
-                for frame in interleaved.chunks_exact(self.channels) {
-                    for (index, sample) in frame.iter().enumerate() {
-                        self.input_channels[index].push(*sample);
-                    }
-                }
-
-                for (index, processor) in processors.iter_mut().enumerate() {
-                    let input = &self.input_channels[index];
-                    let output = &mut self.output_channels[index];
-                    output.clear();
-                    processor
-                        .process_into(input, output)
-                        .expect("pitch-preserving processor failed during multichannel streaming");
-                    pending[index].extend(output.iter().copied());
-                }
-
-                Self::drain_interleaved_pending(pending)
-            }
-        }
-    }
-
-    fn flush(&mut self) -> Vec<f32> {
-        match &mut self.core {
-            StretchCore::Interleaved(processor) => {
-                let mut output = Vec::new();
-                processor
-                    .flush_into(&mut output)
-                    .expect("pitch-preserving processor flush failed");
-                output
-            }
-            StretchCore::PerChannel {
-                processors,
-                pending,
-            } => {
-                for (index, processor) in processors.iter_mut().enumerate() {
-                    let output = &mut self.output_channels[index];
-                    output.clear();
-                    processor
-                        .flush_into(output)
-                        .expect("pitch-preserving processor flush failed for multichannel input");
-                    pending[index].extend(output.iter().copied());
-                }
-                Self::drain_interleaved_pending(pending)
-            }
-        }
-    }
-
-    fn reset(&mut self) {
-        match &mut self.core {
-            StretchCore::Interleaved(processor) => processor.reset(),
-            StretchCore::PerChannel {
-                processors,
-                pending,
-            } => {
-                for processor in processors {
-                    processor.reset();
-                }
-                for channel_pending in pending {
-                    channel_pending.clear();
-                }
-            }
-        }
-    }
-
-    fn drain_interleaved_pending(pending: &mut [VecDeque<f32>]) -> Vec<f32> {
-        if pending.is_empty() {
-            return Vec::new();
-        }
-
-        let mut output = Vec::new();
-        while pending.iter().all(|channel| !channel.is_empty()) {
-            for channel in pending.iter_mut() {
-                let sample = channel
-                    .pop_front()
-                    .expect("pending channel queue must contain a sample");
-                output.push(sample);
-            }
-        }
-        output
-    }
-}
-
-#[derive(Debug)]
-struct AdaptivePlaybackSource<S>
-where
-    S: Source<Item = f32>,
-{
-    inner: S,
-    params: Arc<PlaybackParams>,
-    channels: u16,
-    sample_rate: u32,
-    chunk_buffer: Vec<f32>,
-    output_buffer: VecDeque<f32>,
-    stretch_engine: Option<PitchStretchEngine>,
-    last_stretch_active: bool,
-    input_finished: bool,
-}
-
-impl<S> AdaptivePlaybackSource<S>
-where
-    S: Source<Item = f32>,
-{
-    fn new(inner: S, params: Arc<PlaybackParams>) -> Self {
-        let channels = inner.channels();
-        assert!(
-            channels > 0,
-            "audio source must report at least one channel"
-        );
-        let sample_rate = inner.sample_rate();
-        assert!(
-            sample_rate > 0,
-            "audio source must report a non-zero sample rate"
-        );
-
-        Self {
-            inner,
-            params,
-            channels,
-            sample_rate,
-            chunk_buffer: Vec::with_capacity(STRETCH_CHUNK_FRAMES * usize::from(channels)),
-            output_buffer: VecDeque::with_capacity(STRETCH_CHUNK_FRAMES * usize::from(channels)),
-            stretch_engine: None,
-            last_stretch_active: false,
-            input_finished: false,
-        }
-    }
-
-    fn current_rate(&self) -> f32 {
-        self.params.rate()
-    }
-
-    fn stretch_active(&self) -> bool {
-        should_use_pitch_stretch(self.current_rate(), self.params.preserve_pitch())
-    }
-
-    fn ensure_stretch_engine(&mut self, rate: f32) -> &mut PitchStretchEngine {
-        let expected_channels = usize::from(self.channels);
-        let stretch_ratio = 1.0 / rate;
-        if self.stretch_engine.as_ref().is_none_or(|engine| {
-            engine.channels != expected_channels || engine.sample_rate != self.sample_rate
-        }) {
-            self.stretch_engine = Some(PitchStretchEngine::new(
-                expected_channels,
-                self.sample_rate,
-                stretch_ratio,
-            ));
-        }
-        let engine = self
-            .stretch_engine
-            .as_mut()
-            .expect("stretch engine must be initialized");
-        engine.set_ratio(stretch_ratio);
-        engine
-    }
-
-    fn read_chunk(&mut self) {
-        self.chunk_buffer.clear();
-        let target_samples = STRETCH_CHUNK_FRAMES.saturating_mul(usize::from(self.channels));
-        while self.chunk_buffer.len() < target_samples {
-            if let Some(sample) = self.inner.next() {
-                self.chunk_buffer.push(sample);
-            } else {
-                self.input_finished = true;
-                break;
-            }
-        }
-
-        assert!(
-            self.chunk_buffer.is_empty()
-                || self
-                    .chunk_buffer
-                    .len()
-                    .is_multiple_of(usize::from(self.channels)),
-            "audio source emitted channel-misaligned sample count: channels={} samples={}",
-            self.channels,
-            self.chunk_buffer.len()
-        );
-    }
-
-    fn on_mode_switch(&mut self, stretch_active: bool) {
-        if self.last_stretch_active == stretch_active {
-            return;
-        }
-        self.output_buffer.clear();
-        if let Some(engine) = self.stretch_engine.as_mut() {
-            engine.reset();
-        }
-        self.last_stretch_active = stretch_active;
-    }
-
-    fn refill_output(&mut self) {
-        let stretch_active = self.stretch_active();
-        self.on_mode_switch(stretch_active);
-
-        if stretch_active {
-            let rate = self.current_rate();
-            self.read_chunk();
-            let mut input_chunk = std::mem::take(&mut self.chunk_buffer);
-            let output = {
-                let input_finished = self.input_finished;
-                let engine = self.ensure_stretch_engine(rate);
-                if input_chunk.is_empty() {
-                    if input_finished {
-                        engine.flush()
-                    } else {
-                        Vec::new()
-                    }
-                } else {
-                    engine.process(&input_chunk)
-                }
-            };
-            self.output_buffer.extend(output);
-            input_chunk.clear();
-            self.chunk_buffer = input_chunk;
-            return;
-        }
-
-        self.read_chunk();
-        self.output_buffer.extend(self.chunk_buffer.iter().copied());
-    }
-}
-
-impl<S> Iterator for AdaptivePlaybackSource<S>
-where
-    S: Source<Item = f32>,
-{
-    type Item = f32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(sample) = self.output_buffer.pop_front() {
-                return Some(sample);
-            }
-
-            if self.input_finished {
-                self.refill_output();
-                return self.output_buffer.pop_front();
-            }
-
-            self.refill_output();
-        }
-    }
-}
-
-impl<S> Source for AdaptivePlaybackSource<S>
-where
-    S: Source<Item = f32>,
-{
-    fn current_frame_len(&self) -> Option<usize> {
-        None
-    }
-
-    fn channels(&self) -> u16 {
-        self.channels
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
-    fn total_duration(&self) -> Option<Duration> {
-        self.inner.total_duration()
-    }
-
-    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
-        let seek_source_position = if self.stretch_active() {
-            duration_mul_rate(pos, self.current_rate())
-        } else {
-            pos
-        };
-
-        self.inner.try_seek(seek_source_position)?;
-        self.output_buffer.clear();
-        if let Some(engine) = self.stretch_engine.as_mut() {
-            engine.reset();
-        }
-        self.input_finished = false;
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 struct PlaybackClock {
     rate: f32,
@@ -954,7 +444,7 @@ impl PlaybackClock {
 
 struct RuntimeHandles {
     stream_handle: OutputStreamHandle,
-    media_center: Arc<crate::sys::MediaCenterIntegration>,
+    media_session: Arc<MediaSession>,
     shutdown_handle: ShutdownHandle,
     background_thread: JoinHandle<()>,
     command_receiver: async_channel::Receiver<MediaCommand>,
@@ -989,7 +479,7 @@ pub struct AudioPlayer {
     output_format: Option<AudioStreamFormat>,
     playback_params: Arc<PlaybackParams>,
     playback_clock: RwLock<PlaybackClock>,
-    media_center: Arc<crate::sys::MediaCenterIntegration>,
+    media_session: Arc<MediaSession>,
 
     // Deferred metadata updates: builder methods set this flag,
     // first action (play/pause/seek) flushes to media center
@@ -1013,22 +503,21 @@ impl std::fmt::Debug for AudioPlayer {
 }
 
 impl AudioPlayer {
-    fn initialize_runtime() -> Result<RuntimeHandles, PlayerError> {
+    fn initialize_runtime(output: &AudioOutput) -> Result<RuntimeHandles, PlayerError> {
         let (handle_tx, handle_rx) = std::sync::mpsc::channel();
         let (shutdown_handle, shutdown_rx) = ShutdownHandle::new();
+        let selected_device = output.selected_device().cloned();
 
-        let media_center = Arc::new(
-            crate::sys::MediaCenterIntegration::new()
-                .map_err(|e| PlayerError::Unknown(format!("media center init failed: {e}")))?,
-        );
+        let media_session = Arc::new(MediaSession::new()?);
 
-        let (cmd_tx, cmd_rx) = async_channel::unbounded();
+        let command_receiver = media_session.command_receiver();
 
         let background_thread = {
-            let mc = Arc::clone(&media_center);
-
             std::thread::spawn(move || {
-                let (_stream, stream_handle) = match OutputStream::try_default() {
+                let stream = selected_device.map_or_else(OutputStream::try_default, |device| {
+                    OutputStream::try_from_device(&device.handle)
+                });
+                let (_stream, stream_handle) = match stream {
                     Ok(pair) => pair,
                     Err(e) => {
                         let _ = handle_tx.send(Err(PlayerError::OutputInitFailed(e.to_string())));
@@ -1040,12 +529,7 @@ impl AudioPlayer {
                     return;
                 }
 
-                while !shutdown_rx.is_shutdown() {
-                    mc.run_loop(Duration::from_millis(50));
-                    if let Some(cmd) = mc.poll_command() {
-                        let _ = cmd_tx.send_blocking(cmd);
-                    }
-                }
+                shutdown_rx.wait_blocking();
             })
         };
 
@@ -1055,16 +539,20 @@ impl AudioPlayer {
 
         Ok(RuntimeHandles {
             stream_handle,
-            media_center,
+            media_session,
             shutdown_handle,
             background_thread,
-            command_receiver: cmd_rx,
+            command_receiver,
         })
     }
 
-    fn open_with_sink(path: impl AsRef<Path>, sink_init: SinkInit) -> Result<Self, PlayerError> {
+    fn open_with_sink(
+        path: impl AsRef<Path>,
+        sink_init: SinkInit,
+        output: &AudioOutput,
+    ) -> Result<Self, PlayerError> {
         let path = path.as_ref();
-        let runtime = Self::initialize_runtime()?;
+        let runtime = Self::initialize_runtime(output)?;
         let sink = SinkBackend::new(&runtime.stream_handle, sink_init)?;
 
         let file = File::open(path)
@@ -1113,9 +601,10 @@ impl AudioPlayer {
         sink.append(playback_source);
         sink.pause();
 
+        runtime.media_session.set_metadata(&metadata)?;
         runtime
-            .media_center
-            .update(&metadata, &PlaybackState::paused(Duration::ZERO));
+            .media_session
+            .set_playback_state(&PlaybackState::paused(Duration::ZERO))?;
 
         Ok(Self {
             stream_handle: runtime.stream_handle,
@@ -1125,7 +614,7 @@ impl AudioPlayer {
             output_format: source_format,
             playback_params,
             playback_clock: RwLock::new(PlaybackClock::at_start(1.0)),
-            media_center: runtime.media_center,
+            media_session: runtime.media_session,
             metadata_dirty: AtomicBool::new(false),
             shutdown_handle: runtime.shutdown_handle,
             background_thread: Some(runtime.background_thread),
@@ -1134,7 +623,11 @@ impl AudioPlayer {
     }
 
     #[allow(clippy::future_not_send)]
-    async fn open_url_with_sink(url: &str, sink_init: SinkInit) -> Result<Self, PlayerError> {
+    async fn open_url_with_sink(
+        url: &str,
+        sink_init: SinkInit,
+        output: &AudioOutput,
+    ) -> Result<Self, PlayerError> {
         let response = zenwave::get(url)
             .await
             .map_err(|e| PlayerError::LoadFailed(format!("HTTP request failed: {e}")))?;
@@ -1144,7 +637,7 @@ impl AudioPlayer {
                 PlayerError::LoadFailed(format!("Failed to read response body: {e}"))
             })?;
 
-        let runtime = Self::initialize_runtime()?;
+        let runtime = Self::initialize_runtime(output)?;
         let sink = SinkBackend::new(&runtime.stream_handle, sink_init)?;
 
         let source = Decoder::new(std::io::Cursor::new(bytes))
@@ -1169,9 +662,10 @@ impl AudioPlayer {
         sink.append(playback_source);
         sink.pause();
 
+        runtime.media_session.set_metadata(&metadata)?;
         runtime
-            .media_center
-            .update(&metadata, &PlaybackState::paused(Duration::ZERO));
+            .media_session
+            .set_playback_state(&PlaybackState::paused(Duration::ZERO))?;
 
         Ok(Self {
             stream_handle: runtime.stream_handle,
@@ -1181,7 +675,7 @@ impl AudioPlayer {
             output_format: source_format,
             playback_params,
             playback_clock: RwLock::new(PlaybackClock::at_start(1.0)),
-            media_center: runtime.media_center,
+            media_session: runtime.media_session,
             metadata_dirty: AtomicBool::new(false),
             shutdown_handle: runtime.shutdown_handle,
             background_thread: Some(runtime.background_thread),
@@ -1211,7 +705,18 @@ impl AudioPlayer {
     /// # Errors
     /// Returns an error if the file cannot be opened or the audio output fails.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, PlayerError> {
-        Self::open_with_sink(path, SinkInit::Standard)
+        Self::open_with_sink(path, SinkInit::Standard, &AudioOutput::system_default())
+    }
+
+    /// Open audio from a file path on the selected output.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be opened or the selected audio output fails.
+    pub fn open_with_output(
+        path: impl AsRef<Path>,
+        output: &AudioOutput,
+    ) -> Result<Self, PlayerError> {
+        Self::open_with_sink(path, SinkInit::Standard, output)
     }
 
     /// Open audio from a file path with spatial rendering enabled.
@@ -1220,7 +725,24 @@ impl AudioPlayer {
     /// Returns an error if the file cannot be opened, audio output fails,
     /// or the spatial scene is invalid.
     pub fn open_spatial(path: impl AsRef<Path>, scene: SpatialScene) -> Result<Self, PlayerError> {
-        Self::open_with_sink(path, SinkInit::Spatial(scene))
+        Self::open_with_sink(
+            path,
+            SinkInit::Spatial(scene),
+            &AudioOutput::system_default(),
+        )
+    }
+
+    /// Open audio from a file path with spatial rendering on the selected output.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be opened, the selected audio output fails,
+    /// or the spatial scene is invalid.
+    pub fn open_spatial_with_output(
+        path: impl AsRef<Path>,
+        scene: SpatialScene,
+        output: &AudioOutput,
+    ) -> Result<Self, PlayerError> {
+        Self::open_with_sink(path, SinkInit::Spatial(scene), output)
     }
 
     /// Open audio from a URL (async).
@@ -1233,7 +755,21 @@ impl AudioPlayer {
     /// Returns an error if the URL cannot be fetched or the audio format is unsupported.
     #[allow(clippy::future_not_send)]
     pub async fn open_url(url: &str) -> Result<Self, PlayerError> {
-        Self::open_url_with_sink(url, SinkInit::Standard).await
+        Self::open_url_with_sink(url, SinkInit::Standard, &AudioOutput::system_default()).await
+    }
+
+    /// Open audio from a URL on the selected output.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the URL cannot be fetched, its format is unsupported,
+    /// or the selected audio output fails.
+    #[allow(clippy::future_not_send)]
+    pub async fn open_url_with_output(
+        url: &str,
+        output: &AudioOutput,
+    ) -> Result<Self, PlayerError> {
+        Self::open_url_with_sink(url, SinkInit::Standard, output).await
     }
 
     /// Open audio from a URL (async) with spatial rendering enabled.
@@ -1244,7 +780,27 @@ impl AudioPlayer {
     /// or the spatial scene is invalid.
     #[allow(clippy::future_not_send)]
     pub async fn open_url_spatial(url: &str, scene: SpatialScene) -> Result<Self, PlayerError> {
-        Self::open_url_with_sink(url, SinkInit::Spatial(scene)).await
+        Self::open_url_with_sink(
+            url,
+            SinkInit::Spatial(scene),
+            &AudioOutput::system_default(),
+        )
+        .await
+    }
+
+    /// Open audio from a URL with spatial rendering on the selected output.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the URL cannot be fetched, its format is unsupported,
+    /// the selected output fails, or the spatial scene is invalid.
+    #[allow(clippy::future_not_send)]
+    pub async fn open_url_spatial_with_output(
+        url: &str,
+        scene: SpatialScene,
+        output: &AudioOutput,
+    ) -> Result<Self, PlayerError> {
+        Self::open_url_with_sink(url, SinkInit::Spatial(scene), output).await
     }
 
     /// Get the active playback mode.
@@ -1352,10 +908,10 @@ impl AudioPlayer {
         self
     }
 
-    /// Set the artwork URL.
+    /// Set encoded artwork.
     #[must_use]
-    pub fn artwork_url(mut self, url: impl Into<String>) -> Self {
-        self.metadata = std::mem::take(&mut self.metadata).with_artwork_url(url);
+    pub fn artwork(mut self, artwork: MediaArtwork) -> Self {
+        self.metadata = std::mem::take(&mut self.metadata).with_artwork(artwork);
         self.metadata_dirty.store(true, Ordering::Release);
         self
     }
@@ -1372,8 +928,17 @@ impl AudioPlayer {
     }
 
     /// Start playback.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the platform refuses audio focus or system media state cannot be updated.
     pub fn play(&self) {
         self.flush_metadata();
+        self.media_session
+            .request_audio_focus()
+            .unwrap_or_else(|error| {
+                panic!("waterkit-audio: failed to acquire audio focus before playback: {error}")
+            });
         self.sink.play();
         self.update_now_playing();
     }
@@ -1396,6 +961,10 @@ impl AudioPlayer {
     }
 
     /// Stop playback.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the platform media session cannot be cleared or audio focus cannot be released.
     pub fn stop(&self) {
         self.flush_metadata();
         self.sink.stop();
@@ -1403,7 +972,14 @@ impl AudioPlayer {
         if let Ok(mut clock) = self.playback_clock.write() {
             *clock = PlaybackClock::at_start(current_rate);
         }
-        self.media_center.clear();
+        self.media_session.clear().unwrap_or_else(|error| {
+            panic!("waterkit-audio: failed to clear media session after stop: {error}")
+        });
+        self.media_session
+            .abandon_audio_focus()
+            .unwrap_or_else(|error| {
+                panic!("waterkit-audio: failed to abandon audio focus after stop: {error}")
+            });
         self.update_now_playing();
     }
 
@@ -1547,7 +1123,16 @@ impl AudioPlayer {
             .map_or(1.0_f64, |clock| f64::from(clock.rate));
         let state = base_state.with_rate(rate);
 
-        self.media_center.update(&self.metadata, &state);
+        self.media_session
+            .set_metadata(&self.metadata)
+            .unwrap_or_else(|error| {
+                panic!("waterkit-audio: failed to update system media metadata: {error}")
+            });
+        self.media_session
+            .set_playback_state(&state)
+            .unwrap_or_else(|error| {
+                panic!("waterkit-audio: failed to update system playback state: {error}")
+            });
     }
 
     /// List available audio output devices.
@@ -1555,16 +1140,7 @@ impl AudioPlayer {
     /// # Errors
     /// Returns an error if the audio host cannot enumerate output devices.
     pub fn list_devices() -> Result<Vec<AudioDevice>, PlayerError> {
-        use rodio::cpal::traits::{DeviceTrait, HostTrait};
-
-        let host = rodio::cpal::default_host();
-        let devices: Vec<AudioDevice> = host
-            .output_devices()
-            .map_err(|e| PlayerError::Unknown(format!("failed to list devices: {e}")))?
-            .filter_map(|d| d.name().ok().map(|name| AudioDevice { name }))
-            .collect();
-
-        Ok(devices)
+        AudioDevice::list()
     }
 }
 
@@ -1579,7 +1155,9 @@ impl Drop for AudioPlayer {
             let _ = handle.join();
         }
 
-        self.media_center.clear();
+        if let Err(error) = self.media_session.clear() {
+            tracing::error!(%error, "failed to clear system media session during audio player teardown");
+        }
     }
 }
 

@@ -1,35 +1,152 @@
-//! Linux media control implementation using MPRIS D-Bus.
+//! Linux media control implementation using an instance-owned MPRIS D-Bus service.
 
 use crate::{
     MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus, QueueNavigationControls,
 };
-use std::collections::HashMap;
-use std::fmt::Display;
-use std::sync::{LazyLock, RwLock};
-use std::time::Duration;
-use zbus::zvariant::{ObjectPath, Value};
-use zbus::{Connection, connection::Builder as ConnectionBuilder, interface};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    io::Write,
+    sync::{Arc, RwLock},
+    thread::JoinHandle,
+    time::Duration,
+};
+use zbus::{
+    Connection,
+    connection::Builder as ConnectionBuilder,
+    interface,
+    zvariant::{ObjectPath, Value},
+};
 
-/// Pending commands for polling-based media session integration.
-static PENDING_COMMANDS: LazyLock<RwLock<Vec<MediaCommand>>> =
-    LazyLock::new(|| RwLock::new(Vec::new()));
+#[derive(Debug)]
+struct MprisState {
+    metadata: RwLock<HashMap<String, Value<'static>>>,
+    artwork_file: RwLock<Option<tempfile::NamedTempFile>>,
+    status: RwLock<PlaybackStatus>,
+    position_micros: RwLock<i64>,
+    queue_navigation: RwLock<QueueNavigationControls>,
+    command_sender: async_channel::Sender<MediaCommand>,
+}
 
-/// Current metadata for MPRIS properties
-static CURRENT_METADATA: LazyLock<RwLock<HashMap<String, Value<'static>>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
+impl MprisState {
+    fn new(command_sender: async_channel::Sender<MediaCommand>) -> Self {
+        Self {
+            metadata: RwLock::new(HashMap::new()),
+            artwork_file: RwLock::new(None),
+            status: RwLock::new(PlaybackStatus::Stopped),
+            position_micros: RwLock::new(0),
+            queue_navigation: RwLock::new(QueueNavigationControls::default()),
+            command_sender,
+        }
+    }
 
-/// Current playback status
-static CURRENT_STATUS: LazyLock<RwLock<PlaybackStatus>> =
-    LazyLock::new(|| RwLock::new(PlaybackStatus::Stopped));
+    fn send(&self, command: MediaCommand) {
+        if let Err(error) = self.command_sender.try_send(command) {
+            tracing::warn!(%error, "failed to deliver MPRIS media command");
+        }
+    }
 
-/// Current position in microseconds
-static CURRENT_POSITION: LazyLock<RwLock<i64>> = LazyLock::new(|| RwLock::new(0));
+    fn set_metadata(&self, metadata: &MediaMetadata) -> Result<(), MediaError> {
+        let mut values = HashMap::new();
+        values.insert(
+            String::from("mpris:trackid"),
+            Value::new(
+                ObjectPath::try_from("/org/waterkit/media/track")
+                    .expect("the WaterKit MPRIS track path must be valid"),
+            ),
+        );
+        if let Some(title) = metadata.title() {
+            values.insert(String::from("xesam:title"), Value::new(title.to_owned()));
+        }
+        if let Some(artist) = metadata.artist() {
+            values.insert(
+                String::from("xesam:artist"),
+                Value::new(vec![artist.to_owned()]),
+            );
+        }
+        if let Some(album) = metadata.album() {
+            values.insert(String::from("xesam:album"), Value::new(album.to_owned()));
+        }
+        let artwork_file = if let Some(artwork) = metadata.artwork() {
+            let mut file = tempfile::NamedTempFile::new().map_err(|error| {
+                MediaError::UpdateFailed(format!("failed to create MPRIS artwork file: {error}"))
+            })?;
+            file.write_all(artwork.encoded()).map_err(|error| {
+                MediaError::UpdateFailed(format!("failed to write MPRIS artwork: {error}"))
+            })?;
+            file.flush().map_err(|error| {
+                MediaError::UpdateFailed(format!("failed to flush MPRIS artwork: {error}"))
+            })?;
+            let url = url::Url::from_file_path(file.path()).map_err(|()| {
+                MediaError::UpdateFailed(format!(
+                    "failed to convert MPRIS artwork path to URL: {}",
+                    file.path().display()
+                ))
+            })?;
+            values.insert(String::from("mpris:artUrl"), Value::new(String::from(url)));
+            Some(file)
+        } else {
+            None
+        };
+        if let Some(duration) = metadata.duration() {
+            values.insert(
+                String::from("mpris:length"),
+                Value::new(duration_micros_i64(duration)?),
+            );
+        }
+        *self
+            .metadata
+            .write()
+            .map_err(|error| poisoned_lock("metadata", error))? = values;
+        *self
+            .artwork_file
+            .write()
+            .map_err(|error| poisoned_lock("artwork file", error))? = artwork_file;
+        Ok(())
+    }
 
-/// Current queue navigation capabilities.
-static CURRENT_QUEUE_NAVIGATION: LazyLock<RwLock<QueueNavigationControls>> =
-    LazyLock::new(|| RwLock::new(QueueNavigationControls::default()));
+    fn set_playback_state(&self, state: &PlaybackState) -> Result<(), MediaError> {
+        *self
+            .status
+            .write()
+            .map_err(|error| poisoned_lock("playback status", error))? = state.status();
+        if let Some(position) = state.position() {
+            *self
+                .position_micros
+                .write()
+                .map_err(|error| poisoned_lock("position", error))? =
+                duration_micros_i64(position)?;
+        }
+        *self
+            .queue_navigation
+            .write()
+            .map_err(|error| poisoned_lock("queue navigation", error))? =
+            state.queue_navigation_controls();
+        Ok(())
+    }
 
-/// MPRIS `MediaPlayer2` interface implementation
+    fn clear(&self) -> Result<(), MediaError> {
+        self.metadata
+            .write()
+            .map_err(|error| poisoned_lock("metadata", error))?
+            .clear();
+        self.artwork_file
+            .write()
+            .map_err(|error| poisoned_lock("artwork file", error))?
+            .take();
+        *self
+            .status
+            .write()
+            .map_err(|error| poisoned_lock("playback status", error))? = PlaybackStatus::Stopped;
+        *self
+            .queue_navigation
+            .write()
+            .map_err(|error| poisoned_lock("queue navigation", error))? =
+            QueueNavigationControls::default();
+        Ok(())
+    }
+}
+
 struct MediaPlayer2;
 
 #[allow(
@@ -56,30 +173,40 @@ impl MediaPlayer2 {
 
     #[zbus(property)]
     fn identity(&self) -> String {
-        "WaterKit Media".to_string()
+        String::from("WaterKit Media")
     }
 
     #[zbus(property)]
     fn desktop_entry(&self) -> String {
-        "waterkit".to_string()
+        String::from("waterkit")
     }
 
     #[zbus(property)]
     fn supported_uri_schemes(&self) -> Vec<String> {
-        vec![]
+        Vec::new()
     }
 
     #[zbus(property)]
     fn supported_mime_types(&self) -> Vec<String> {
-        vec![]
+        Vec::new()
     }
 
-    fn raise(&self) {}
-    fn quit(&self) {}
+    fn raise(&self) -> zbus::fdo::Result<()> {
+        Err(zbus::fdo::Error::NotSupported(String::from(
+            "WaterKit does not own an application window to raise",
+        )))
+    }
+
+    fn quit(&self) -> zbus::fdo::Result<()> {
+        Err(zbus::fdo::Error::NotSupported(String::from(
+            "WaterKit does not own the host application lifecycle",
+        )))
+    }
 }
 
-/// MPRIS Player interface implementation
-struct MprisPlayer;
+struct MprisPlayer {
+    state: Arc<MprisState>,
+}
 
 #[allow(
     clippy::missing_const_for_fn,
@@ -90,26 +217,34 @@ struct MprisPlayer;
 impl MprisPlayer {
     #[zbus(property)]
     fn playback_status(&self) -> String {
-        let status = CURRENT_STATUS
+        match *self
+            .state
+            .status
             .read()
-            .map_or(PlaybackStatus::Stopped, |s| *s);
-        match status {
-            PlaybackStatus::Playing => "Playing".to_string(),
-            PlaybackStatus::Paused => "Paused".to_string(),
-            PlaybackStatus::Stopped => "Stopped".to_string(),
+            .expect("MPRIS playback status lock must not be poisoned")
+        {
+            PlaybackStatus::Playing => String::from("Playing"),
+            PlaybackStatus::Paused => String::from("Paused"),
+            PlaybackStatus::Stopped => String::from("Stopped"),
         }
     }
 
     #[zbus(property)]
     fn metadata(&self) -> HashMap<String, Value<'static>> {
-        CURRENT_METADATA
+        self.state
+            .metadata
             .read()
-            .map_or_else(|_| HashMap::new(), |m| m.clone())
+            .expect("MPRIS metadata lock must not be poisoned")
+            .clone()
     }
 
     #[zbus(property)]
     fn position(&self) -> i64 {
-        CURRENT_POSITION.read().map_or(0, |p| *p)
+        self.state
+            .position_micros
+            .read()
+            .map(|position| *position)
+            .expect("MPRIS position lock must not be poisoned")
     }
 
     #[zbus(property)]
@@ -129,16 +264,20 @@ impl MprisPlayer {
 
     #[zbus(property)]
     fn can_go_next(&self) -> bool {
-        CURRENT_QUEUE_NAVIGATION
+        self.state
+            .queue_navigation
             .read()
-            .is_ok_and(|controls| controls.next_enabled())
+            .expect("MPRIS queue-navigation lock must not be poisoned")
+            .next_enabled()
     }
 
     #[zbus(property)]
     fn can_go_previous(&self) -> bool {
-        CURRENT_QUEUE_NAVIGATION
+        self.state
+            .queue_navigation
             .read()
-            .is_ok_and(|controls| controls.previous_enabled())
+            .expect("MPRIS queue-navigation lock must not be poisoned")
+            .previous_enabled()
     }
 
     #[zbus(property)]
@@ -162,36 +301,36 @@ impl MprisPlayer {
     }
 
     fn next(&self) {
-        dispatch_command(MediaCommand::Next);
+        self.state.send(MediaCommand::Next);
     }
 
     fn previous(&self) {
-        dispatch_command(MediaCommand::Previous);
+        self.state.send(MediaCommand::Previous);
     }
 
     fn pause(&self) {
-        dispatch_command(MediaCommand::Pause);
+        self.state.send(MediaCommand::Pause);
     }
 
     fn play_pause(&self) {
-        dispatch_command(MediaCommand::PlayPause);
+        self.state.send(MediaCommand::PlayPause);
     }
 
     fn stop(&self) {
-        dispatch_command(MediaCommand::Stop);
+        self.state.send(MediaCommand::Stop);
     }
 
     fn play(&self) {
-        dispatch_command(MediaCommand::Play);
+        self.state.send(MediaCommand::Play);
     }
 
     fn seek(&self, offset: i64) {
         let duration = Duration::from_micros(offset.unsigned_abs());
-        if offset >= 0 {
-            dispatch_command(MediaCommand::SeekForward(duration));
+        self.state.send(if offset >= 0 {
+            MediaCommand::SeekForward(duration)
         } else {
-            dispatch_command(MediaCommand::SeekBackward(duration));
-        }
+            MediaCommand::SeekBackward(duration)
+        });
     }
 
     #[allow(
@@ -204,134 +343,82 @@ impl MprisPlayer {
                 "MPRIS SetPosition for {track_id} received a negative position: {position}"
             ))
         })?);
-        dispatch_command(MediaCommand::Seek(duration));
+        self.state.send(MediaCommand::Seek(duration));
         Ok(())
     }
 
-    fn open_uri(&self, uri: String) {
-        drop(uri);
-        // Not implemented
-    }
-}
-
-fn dispatch_command(cmd: MediaCommand) {
-    if let Ok(mut queue) = PENDING_COMMANDS.write() {
-        queue.push(cmd);
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "zbus owns D-Bus method arguments when generating #[interface] dispatch glue"
+    )]
+    fn open_uri(&self, uri: String) -> zbus::fdo::Result<()> {
+        Err(zbus::fdo::Error::NotSupported(format!(
+            "WaterKit's player instance does not accept MPRIS OpenUri requests: {uri}"
+        )))
     }
 }
 
 #[derive(Debug)]
-pub struct MediaSessionInner;
+pub struct MediaSessionInner {
+    state: Arc<MprisState>,
+    command_receiver: async_channel::Receiver<MediaCommand>,
+    stop: async_channel::Sender<()>,
+    service_thread: Option<JoinHandle<()>>,
+}
 
 impl MediaSessionInner {
-    #[allow(
-        clippy::unnecessary_wraps,
-        reason = "MediaSessionInner::new has a cross-platform fallible constructor shape; Linux reports D-Bus startup failures asynchronously."
-    )]
     pub fn new() -> Result<Self, MediaError> {
-        // Start the D-Bus service in a background thread
-        std::thread::spawn(move || {
-            smol::block_on(async {
-                match start_dbus_service().await {
-                    Ok(_connection) => {
-                        // Keep the connection alive
-                        std::future::pending::<()>().await;
+        let (command_sender, command_receiver) = async_channel::unbounded();
+        let state = Arc::new(MprisState::new(command_sender));
+        let (stop, stop_receiver) = async_channel::bounded(1);
+        let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
+        let service_state = Arc::clone(&state);
+        let service_thread = std::thread::spawn(move || {
+            smol::block_on(async move {
+                match start_dbus_service(service_state).await {
+                    Ok(connection) => {
+                        if started_sender.send(Ok(())).is_ok() {
+                            let _ = stop_receiver.recv().await;
+                        }
+                        drop(connection);
                     }
-                    Err(e) => {
-                        tracing::error!(%e, "failed to start MPRIS service");
+                    Err(error) => {
+                        let _ = started_sender.send(Err(error.to_string()));
                     }
                 }
             });
         });
-
-        Ok(Self)
+        started_receiver
+            .recv()
+            .map_err(|_| {
+                MediaError::InitializationFailed(String::from(
+                    "MPRIS service thread ended before reporting readiness",
+                ))
+            })?
+            .map_err(MediaError::InitializationFailed)?;
+        Ok(Self {
+            state,
+            command_receiver,
+            stop,
+            service_thread: Some(service_thread),
+        })
     }
 
-    #[allow(
-        clippy::unused_self,
-        reason = "Linux MPRIS state is process-global because D-Bus exposes a single well-known media-player name."
-    )]
     pub fn set_metadata(&self, metadata: &MediaMetadata) -> Result<(), MediaError> {
-        let mut mpris_metadata: HashMap<String, Value<'static>> = HashMap::new();
-
-        // Track ID is required
-        mpris_metadata.insert(
-            "mpris:trackid".to_string(),
-            Value::new(ObjectPath::try_from("/org/waterkit/media/track").unwrap()),
-        );
-
-        if let Some(title) = metadata.title() {
-            mpris_metadata.insert("xesam:title".to_string(), Value::new(title.to_owned()));
-        }
-
-        if let Some(artist) = metadata.artist() {
-            mpris_metadata.insert(
-                "xesam:artist".to_string(),
-                Value::new(vec![artist.to_owned()]),
-            );
-        }
-
-        if let Some(album) = metadata.album() {
-            mpris_metadata.insert("xesam:album".to_string(), Value::new(album.to_owned()));
-        }
-
-        if let Some(url) = metadata.artwork_url() {
-            mpris_metadata.insert("mpris:artUrl".to_string(), Value::new(url.to_owned()));
-        }
-
-        if let Some(duration) = metadata.duration() {
-            mpris_metadata.insert(
-                "mpris:length".to_string(),
-                Value::new(duration_micros_i64(duration)?),
-            );
-        }
-
-        {
-            let mut guard = CURRENT_METADATA
-                .write()
-                .map_err(|error| poisoned_lock("metadata", error))?;
-            *guard = mpris_metadata;
-        }
-
-        Ok(())
+        self.state.set_metadata(metadata)
     }
 
-    #[allow(
-        clippy::unused_self,
-        reason = "Linux MPRIS state is process-global because D-Bus exposes a single well-known media-player name."
-    )]
     pub fn set_playback_state(&self, state: &PlaybackState) -> Result<(), MediaError> {
-        let mut status = CURRENT_STATUS
-            .write()
-            .map_err(|error| poisoned_lock("playback status", error))?;
-        *status = state.status();
-        drop(status);
-
-        if let Some(position) = state.position() {
-            let mut guard = CURRENT_POSITION
-                .write()
-                .map_err(|error| poisoned_lock("position", error))?;
-            *guard = duration_micros_i64(position)?;
-        }
-
-        {
-            let mut queue_navigation = CURRENT_QUEUE_NAVIGATION
-                .write()
-                .map_err(|error| poisoned_lock("queue navigation", error))?;
-            *queue_navigation = state.queue_navigation_controls();
-        }
-
-        Ok(())
+        self.state.set_playback_state(state)
     }
 
     #[allow(
         clippy::missing_const_for_fn,
         clippy::unnecessary_wraps,
         clippy::unused_self,
-        reason = "Linux has no centralized audio-focus API, but MediaSession keeps the cross-platform fallible API shape."
+        reason = "Linux has no centralized audio-focus service."
     )]
     pub fn request_audio_focus(&self) -> Result<(), MediaError> {
-        // Linux doesn't have a centralized audio focus system
         Ok(())
     }
 
@@ -339,131 +426,32 @@ impl MediaSessionInner {
         clippy::missing_const_for_fn,
         clippy::unnecessary_wraps,
         clippy::unused_self,
-        reason = "Linux has no centralized audio-focus API, but MediaSession keeps the cross-platform fallible API shape."
+        reason = "Linux has no centralized audio-focus service."
     )]
     pub fn abandon_audio_focus(&self) -> Result<(), MediaError> {
         Ok(())
     }
 
-    #[allow(
-        clippy::unused_self,
-        reason = "Linux MPRIS state is process-global because D-Bus exposes a single well-known media-player name."
-    )]
     pub fn clear(&self) -> Result<(), MediaError> {
-        CURRENT_METADATA
-            .write()
-            .map_err(|error| poisoned_lock("metadata", error))?
-            .clear();
-        *CURRENT_STATUS
-            .write()
-            .map_err(|error| poisoned_lock("playback status", error))? = PlaybackStatus::Stopped;
-        *CURRENT_QUEUE_NAVIGATION
-            .write()
-            .map_err(|error| poisoned_lock("queue navigation", error))? =
-            QueueNavigationControls::default();
-        Ok(())
+        self.state.clear()
     }
 
-    #[allow(
-        clippy::unused_self,
-        reason = "Linux MPRIS commands are queued from the process-global D-Bus interface."
-    )]
-    pub fn poll_command(&self) -> Option<crate::MediaCommand> {
-        PENDING_COMMANDS.write().ok()?.pop()
+    pub fn command_receiver(&self) -> async_channel::Receiver<MediaCommand> {
+        self.command_receiver.clone()
     }
 }
 
-/// Media center integration for Linux platforms.
-/// Uses MPRIS D-Bus interface.
-pub struct MediaCenterInner;
-
-impl MediaCenterInner {
-    #[allow(
-        clippy::missing_const_for_fn,
-        clippy::unnecessary_wraps,
-        reason = "MediaCenterInner::new has a cross-platform fallible constructor shape."
-    )]
-    pub fn new() -> Result<Self, crate::MediaError> {
-        Ok(Self)
-    }
-
-    #[allow(
-        clippy::unused_self,
-        reason = "Linux MPRIS media-center updates target the process-global D-Bus state."
-    )]
-    pub fn update(&self, metadata: &crate::MediaMetadata, state: &crate::PlaybackState) {
-        if let Ok(mut guard) = CURRENT_METADATA.write() {
-            let mut mpris_metadata = std::collections::HashMap::new();
-            mpris_metadata.insert(
-                "mpris:trackid".to_string(),
-                zbus::zvariant::Value::new(
-                    zbus::zvariant::ObjectPath::try_from("/org/waterkit/media/track").unwrap(),
-                ),
-            );
-            if let Some(title) = metadata.title() {
-                mpris_metadata.insert(
-                    "xesam:title".to_string(),
-                    zbus::zvariant::Value::new(title.to_owned()),
-                );
-            }
-            if let Some(artist) = metadata.artist() {
-                mpris_metadata.insert(
-                    "xesam:artist".to_string(),
-                    zbus::zvariant::Value::new(vec![artist.to_owned()]),
-                );
-            }
-            if let Some(album) = metadata.album() {
-                mpris_metadata.insert(
-                    "xesam:album".to_string(),
-                    zbus::zvariant::Value::new(album.to_owned()),
-                );
-            }
-            *guard = mpris_metadata;
+impl Drop for MediaSessionInner {
+    fn drop(&mut self) {
+        if let Err(error) = self.clear() {
+            tracing::error!(%error, "failed to clear MPRIS media session during shutdown");
         }
-        if let Ok(mut guard) = CURRENT_STATUS.write() {
-            *guard = state.status();
+        self.stop.close();
+        if let Some(service_thread) = self.service_thread.take() {
+            service_thread
+                .join()
+                .expect("MPRIS service thread must not panic during shutdown");
         }
-        if let Some(pos) = state.position()
-            && let Ok(mut guard) = CURRENT_POSITION.write()
-        {
-            match duration_micros_i64(pos) {
-                Ok(position) => *guard = position,
-                Err(error) => tracing::error!(%error, "failed to update MPRIS position"),
-            }
-        }
-        if let Ok(mut guard) = CURRENT_QUEUE_NAVIGATION.write() {
-            *guard = state.queue_navigation_controls();
-        }
-    }
-
-    #[allow(
-        clippy::unused_self,
-        reason = "Linux MPRIS media-center updates target the process-global D-Bus state."
-    )]
-    pub fn clear(&self) {
-        if let Ok(mut guard) = CURRENT_METADATA.write() {
-            guard.clear();
-        }
-        if let Ok(mut guard) = CURRENT_STATUS.write() {
-            *guard = crate::PlaybackStatus::Stopped;
-        }
-    }
-
-    #[allow(
-        clippy::unused_self,
-        reason = "The cross-platform player loop delegates timing to the platform media-center object."
-    )]
-    pub fn run_loop(&self, duration: std::time::Duration) {
-        std::thread::sleep(duration);
-    }
-
-    #[allow(
-        clippy::missing_const_for_fn,
-        clippy::unused_self,
-        reason = "Linux player command delivery is owned by the MPRIS session queue."
-    )]
-    pub fn poll_command(&self) -> Option<crate::MediaCommand> {
-        None
     }
 }
 
@@ -479,13 +467,11 @@ fn poisoned_lock(context: &str, error: impl Display) -> MediaError {
     MediaError::Unknown(format!("{context} lock poisoned: {error}"))
 }
 
-async fn start_dbus_service() -> Result<Connection, zbus::Error> {
-    let connection = ConnectionBuilder::session()?
+async fn start_dbus_service(state: Arc<MprisState>) -> Result<Connection, zbus::Error> {
+    ConnectionBuilder::session()?
         .name("org.mpris.MediaPlayer2.waterkit")?
         .serve_at("/org/mpris/MediaPlayer2", MediaPlayer2)?
-        .serve_at("/org/mpris/MediaPlayer2", MprisPlayer)?
+        .serve_at("/org/mpris/MediaPlayer2", MprisPlayer { state })?
         .build()
-        .await?;
-
-    Ok(connection)
+        .await
 }

@@ -5,7 +5,10 @@ use objc2_core_media::{
     CMSampleBuffer, CMSampleTimingInfo, CMTime, kCMVideoCodecType_H264, kCMVideoCodecType_HEVC,
 };
 
-use crate::{CodecError, DecodedPixelLayout};
+use crate::{
+    CodecError, DecodePacket, DecodedPixelLayout,
+    config::{decoded_pixel_layout, strip_box_header},
+};
 use objc2_core_foundation::CFRetained;
 use objc2_core_video::{
     CVPixelBuffer, CVPixelBufferCreate, CVPixelBufferLockBaseAddress,
@@ -96,6 +99,7 @@ unsafe extern "C" {
     ) -> i32;
 
     fn VTDecompressionSessionWaitForAsynchronousFrames(session: *mut c_void) -> i32;
+    fn VTDecompressionSessionFinishDelayedFrames(session: *mut c_void) -> i32;
     fn VTDecompressionSessionInvalidate(session: *mut c_void);
 
     fn CMSampleBufferCreate(
@@ -191,7 +195,6 @@ struct EncoderContext {
 }
 
 // C-callback for VideoToolbox - receives encoded data
-// C-callback for VideoToolbox - receives encoded data
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::collapsible_if)]
 unsafe extern "C-unwind" fn encode_callback(
@@ -202,7 +205,7 @@ unsafe extern "C-unwind" fn encode_callback(
     sample_buffer: *mut CMSampleBuffer,
 ) {
     if status != 0 {
-        eprintln!("VTCompressionSession callback error: {status}");
+        tracing::error!(status, "VTCompressionSession callback failed");
         return;
     }
 
@@ -238,14 +241,6 @@ unsafe extern "C-unwind" fn encode_callback(
         if need_config {
             fn construct_hevc_config(format_desc: *const c_void) -> Option<Vec<u8>> {
                 unsafe {
-                    // Get count first (index 0, pointers null)
-                    // Get count first (index 0, pointers null)
-                    // Actually GetHEVCParameterSetAtIndex(..., ptr::null_mut(), ...) doesn't return count of ALL sets usually,
-                    // it returns info for specific index.
-                    // But we can verify existence by looping until error.
-                    // Or we can query index 0?
-                    // Docs imply we just loop.
-
                     let mut vps_list = Vec::new();
                     let mut sps_list = Vec::new();
                     let mut pps_list = Vec::new();
@@ -266,26 +261,10 @@ unsafe extern "C-unwind" fn encode_callback(
                         );
 
                         if status != 0 {
-                            eprintln!(
-                                "GetHEVCParameterSetAtIndex failed at index {index}: {status}"
-                            );
                             break;
                         }
 
                         let data = std::slice::from_raw_parts(ptr, size).to_vec();
-                        eprintln!(
-                            "Found HEVC NAL at index {}: len={}, type={}",
-                            index,
-                            size,
-                            (data[0] >> 1) & 0x3F
-                        );
-
-                        // Parse NAL type
-                        // HEVC NAL header is 2 bytes.
-                        // Type is bits 1-6 of first byte. (Forbidden bit 0, Type 6 bits, LayerId 6 bits, TemporalId 3 bits)
-                        // Byte 0: F(1) Type(6) LayerId_high(1)
-                        // Byte 1: LayerId_low(5) TemporalId(3)
-                        // Type = (data[0] >> 1) & 0x3F.
                         if data.len() > 2 {
                             let nal_type = (data[0] >> 1) & 0x3F;
                             match nal_type {
@@ -471,12 +450,7 @@ unsafe extern "C-unwind" fn encode_callback(
                 let mut found_config = false;
 
                 if !atoms.is_null() {
-                    // ... existing atomic extraction code ...
-                    // create "hvcC" string
                     let hvc_c_str = b"hvcC\0";
-                    // We should know codec type from somewhere, but here we can try both or check specific
-                    // Ideally we check codec info.
-                    // For now, let's focus on hvcC replacement logic.
 
                     let key_str = CFStringCreateWithCString(
                         kCFAllocatorDefault,
@@ -494,14 +468,11 @@ unsafe extern "C-unwind" fn encode_callback(
                                 let config_bytes =
                                     std::slice::from_raw_parts(ptr, len.cast_unsigned()).to_vec();
                                 if let Ok(mut lock) = context.codec_config.lock() {
-                                    eprintln!(
-                                        "Found atomic hvcC extension with size {len}: {config_bytes:02X?}"
-                                    );
                                     *lock = Some(config_bytes);
                                     found_config = true;
                                 }
                             } else {
-                                eprintln!("Ignored atomic hvcC extension with size {len}");
+                                tracing::debug!(len, "ignored invalid atomic hvcC extension");
                             }
                         }
                         CFRelease(key_str);
@@ -509,13 +480,11 @@ unsafe extern "C-unwind" fn encode_callback(
                 }
 
                 if !found_config {
-                    eprintln!("Attempting manual properties extraction...");
                     // Try manual construction
                     let manual_config = construct_hevc_config(format_desc);
                     if let Some(config) = manual_config {
                         if let Ok(mut lock) = context.codec_config.lock() {
                             *lock = Some(config);
-                            // println!("Constructed Manual HEVC Config: {} bytes", lock.as_ref().unwrap().len());
                         }
                     } else {
                         // Try AVC
@@ -886,7 +855,7 @@ pub struct IOSurfaceFrame {
     pub height: u32,
     /// Presentation timestamp in nanoseconds.
     pub timestamp_ns: u64,
-    /// Native pixel layout retained by VideoToolbox.
+    /// Native pixel layout retained by `VideoToolbox`.
     pub layout: DecodedPixelLayout,
 }
 
@@ -909,7 +878,7 @@ unsafe extern "C-unwind" fn decode_callback(
     status: i32,
     _info_flags: VTDecodeInfoFlags,
     image_buffer: *mut CVPixelBuffer,
-    _presentation_time_stamp: CMTime,
+    presentation_time_stamp: CMTime,
     _presentation_duration: CMTime,
 ) {
     if status != 0 || image_buffer.is_null() {
@@ -929,19 +898,33 @@ unsafe extern "C-unwind" fn decode_callback(
         if !surface_raw.is_null() {
             let surface = CFRetained::retain(NonNull::new_unchecked(surface_raw.cast_mut()));
             let pixel_buffer = CFRetained::retain(NonNull::new_unchecked(image_buffer));
+            let timestamp_ns = cm_time_to_timestamp_ns(presentation_time_stamp)
+                .expect("VideoToolbox returned a decoded frame without a valid non-negative PTS");
             let frame = IOSurfaceFrame {
                 surface,
                 pixel_buffer,
                 width,
                 height,
-                timestamp_ns: 0,
+                timestamp_ns,
                 layout: context.output_layout,
             };
-            if let Ok(mut frames) = context.decoded_surfaces.lock() {
-                frames.push(frame);
-            }
+            context
+                .decoded_surfaces
+                .lock()
+                .expect("VideoToolbox decoded-frame queue is poisoned")
+                .push(frame);
         }
     }
+}
+
+fn cm_time_to_timestamp_ns(time: CMTime) -> Option<u64> {
+    let value = u128::try_from(time.value).ok()?;
+    let timescale = u128::try_from(time.timescale).ok()?;
+    if timescale == 0 {
+        return None;
+    }
+    let nanoseconds = value.checked_mul(1_000_000_000)? / timescale;
+    u64::try_from(nanoseconds).ok()
 }
 
 impl AppleDecoder {
@@ -964,27 +947,12 @@ impl AppleDecoder {
             CodecType::H265 => kCMVideoCodecType_HEVC,
         };
 
-        let mut final_config = config_bytes;
-        // Strip Box Header if present
-        if final_config.len() > 8 {
-            let atom_key = match codec {
-                CodecType::H264 => b"avcC",
-                CodecType::H265 => b"hvcC",
-            };
-            if &final_config[4..8] == atom_key {
-                final_config = &final_config[8..];
-            }
-        }
-
-        let output_layout = if codec == CodecType::H265
-            && final_config
-                .get(1)
-                .is_some_and(|profile| profile & 0x1f == 2)
-        {
-            DecodedPixelLayout::P010
-        } else {
-            DecodedPixelLayout::Nv12
+        let atom_key = match codec {
+            CodecType::H264 => *b"avcC",
+            CodecType::H265 => *b"hvcC",
         };
+        let final_config = strip_box_header(config_bytes, atom_key);
+        let output_layout = decoded_pixel_layout(codec == CodecType::H265, Some(config_bytes))?;
         let context = Arc::new(DecoderContext {
             decoded_surfaces: Mutex::new(Vec::new()),
             output_layout,
@@ -1135,7 +1103,11 @@ impl Drop for AppleDecoder {
 impl AppleDecoder {
     /// Decode compressed video data to `IOSurface` frames.
     #[allow(clippy::too_many_lines)]
-    pub fn decode_to_iosurface(&mut self, data: &[u8]) -> Result<Vec<IOSurfaceFrame>, CodecError> {
+    pub fn decode_to_iosurface(
+        &mut self,
+        packet: DecodePacket<'_>,
+    ) -> Result<Vec<IOSurfaceFrame>, CodecError> {
+        let data = packet.data();
         if data.len() < 4 {
             return Err(CodecError::DecodingFailed("Data too short".into()));
         }
@@ -1182,9 +1154,19 @@ impl AppleDecoder {
                 epoch: 0,
             };
 
+            let presentation_value =
+                i64::try_from(packet.presentation_time().as_nanos()).map_err(|_| {
+                    CodecError::DecodingFailed("presentation timestamp exceeds CMTime".into())
+                })?;
+            let presentation_time = CMTime {
+                value: presentation_value,
+                timescale: 1_000_000_000,
+                flags: objc2_core_media::CMTimeFlags::Valid,
+                epoch: 0,
+            };
             let timing_info = CMSampleTimingInfo {
                 duration: invalid_time,
-                presentationTimeStamp: invalid_time,
+                presentationTimeStamp: presentation_time,
                 decodeTimeStamp: invalid_time,
             };
 
@@ -1236,11 +1218,36 @@ impl AppleDecoder {
             }
         }
 
-        let mut frames = Vec::new();
-        if let Ok(mut lock) = self.context.decoded_surfaces.lock() {
-            frames.append(&mut lock);
+        Ok(self.take_decoded_surfaces())
+    }
+
+    /// Finishes delayed `VideoToolbox` frames at end of stream.
+    pub fn drain(&mut self) -> Result<Vec<IOSurfaceFrame>, CodecError> {
+        unsafe {
+            let finish_status = VTDecompressionSessionFinishDelayedFrames(self.session);
+            if finish_status != 0 {
+                return Err(CodecError::DecodingFailed(format!(
+                    "finish delayed frames failed: {finish_status}"
+                )));
+            }
+            let wait_status = VTDecompressionSessionWaitForAsynchronousFrames(self.session);
+            if wait_status != 0 {
+                return Err(CodecError::DecodingFailed(format!(
+                    "wait for delayed frames failed: {wait_status}"
+                )));
+            }
         }
-        Ok(frames)
+        Ok(self.take_decoded_surfaces())
+    }
+
+    fn take_decoded_surfaces(&self) -> Vec<IOSurfaceFrame> {
+        std::mem::take(
+            &mut *self
+                .context
+                .decoded_surfaces
+                .lock()
+                .expect("VideoToolbox decoded-frame queue is poisoned"),
+        )
     }
 }
 

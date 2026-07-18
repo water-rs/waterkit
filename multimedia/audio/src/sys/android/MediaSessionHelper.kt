@@ -12,16 +12,14 @@ import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
 import android.graphics.BitmapFactory
-import java.net.URL
-import java.util.concurrent.ConcurrentLinkedQueue
-import kotlin.concurrent.thread
+import java.util.concurrent.LinkedBlockingQueue
 
-object MediaSessionHelper {
+class MediaSessionHelper(ctx: Context) {
+    private val applicationContext = ctx.applicationContext
+    private val audioManager = applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var mediaSession: MediaSession? = null
-    private var applicationContext: Context? = null
-    private var audioManager: AudioManager? = null
     private var audioFocusRequest: AudioFocusRequest? = null
-    private val commandQueue = ConcurrentLinkedQueue<String>()
+    private val commandQueue = LinkedBlockingQueue<String>()
     private var noisyReceiver: BroadcastReceiver? = null
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         when (focusChange) {
@@ -32,14 +30,10 @@ object MediaSessionHelper {
         }
     }
     
-    @JvmStatic
-    fun createSession(ctx: Context) {
-        val appContext = ctx.applicationContext
-        applicationContext = appContext
-        audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        registerNoisyReceiver(appContext)
-        
-        mediaSession = MediaSession(ctx, "WaterKitMedia").apply {
+    init {
+        registerNoisyReceiver(applicationContext)
+
+        mediaSession = MediaSession(applicationContext, "WaterKitMedia").apply {
             setCallback(object : MediaSession.Callback() {
                 override fun onPlay() {
                     commandQueue.add("play")
@@ -69,8 +63,7 @@ object MediaSessionHelper {
         }
     }
     
-    @JvmStatic
-    fun setMetadata(title: String, artist: String, album: String, artworkUrl: String, durationMs: Long) {
+    fun setMetadata(title: String, artist: String, album: String, artwork: ByteArray, durationMs: Long) {
         val builder = MediaMetadata.Builder()
         
         if (title.isNotEmpty()) {
@@ -86,33 +79,20 @@ object MediaSessionHelper {
             builder.putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs)
         }
         
-        // Load artwork from URL in background
-        if (artworkUrl.isNotEmpty()) {
-            thread {
-                try {
-                    val url = URL(artworkUrl)
-                    val bitmap = BitmapFactory.decodeStream(url.openStream())
-                    if (bitmap != null) {
-                        val updatedMetadata = MediaMetadata.Builder(mediaSession?.controller?.metadata)
-                            .putBitmap(MediaMetadata.METADATA_KEY_ART, bitmap)
-                            .build()
-                        mediaSession?.setMetadata(updatedMetadata)
-                    }
-                } catch (e: Exception) {
-                    // Ignore artwork loading errors
-                }
+        if (artwork.isNotEmpty()) {
+            val bitmap = requireNotNull(BitmapFactory.decodeByteArray(artwork, 0, artwork.size)) {
+                "Android media session received invalid encoded artwork"
             }
+            builder.putBitmap(MediaMetadata.METADATA_KEY_ART, bitmap)
         }
         
         mediaSession?.setMetadata(builder.build())
     }
     
-    @JvmStatic
     fun setPlaybackState(status: Int, positionMs: Long, speed: Float) {
         setPlaybackState(status, positionMs, speed, true, true)
     }
 
-    @JvmStatic
     fun setPlaybackState(
         status: Int,
         positionMs: Long,
@@ -143,10 +123,7 @@ object MediaSessionHelper {
         mediaSession?.setPlaybackState(playbackState)
     }
     
-    @JvmStatic
     fun requestAudioFocus(): Boolean {
-        val am = audioManager ?: return false
-        
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                 .setAudioAttributes(
@@ -158,10 +135,10 @@ object MediaSessionHelper {
                 .setOnAudioFocusChangeListener(audioFocusChangeListener)
                 .build()
             audioFocusRequest = focusRequest
-            am.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         } else {
             @Suppress("DEPRECATION")
-            am.requestAudioFocus(
+            audioManager.requestAudioFocus(
                 audioFocusChangeListener,
                 AudioManager.STREAM_MUSIC,
                 AudioManager.AUDIOFOCUS_GAIN
@@ -169,32 +146,27 @@ object MediaSessionHelper {
         }
     }
     
-    @JvmStatic
     fun abandonAudioFocus() {
-        val am = audioManager ?: return
-        
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+            audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
         } else {
             @Suppress("DEPRECATION")
-            am.abandonAudioFocus(audioFocusChangeListener)
+            audioManager.abandonAudioFocus(audioFocusChangeListener)
         }
     }
     
-    @JvmStatic
     fun clearSession() {
         abandonAudioFocus()
         mediaSession?.isActive = false
         mediaSession?.release()
         mediaSession = null
         unregisterNoisyReceiver()
-        applicationContext = null
         commandQueue.clear()
+        commandQueue.offer("shutdown")
     }
 
-    @JvmStatic
-    fun pollCommand(): String? {
-        return commandQueue.poll()
+    fun takeCommand(): String {
+        return commandQueue.take()
     }
 
     private fun registerNoisyReceiver(context: Context) {
@@ -221,8 +193,7 @@ object MediaSessionHelper {
 
     private fun unregisterNoisyReceiver() {
         val receiver = noisyReceiver ?: return
-        val context = applicationContext ?: return
-        context.unregisterReceiver(receiver)
+        applicationContext.unregisterReceiver(receiver)
         noisyReceiver = null
     }
 }

@@ -1,4 +1,4 @@
-//! GPU-first zero-copy video codec with streaming API.
+//! Hardware-aware video codec with deterministic timing and GPU texture output.
 //!
 //! This crate provides hardware-accelerated video encoding and decoding with
 //! lazy GPU texture creation. Decoded frames are returned as an iterator of
@@ -11,7 +11,8 @@
 //! let mut decoder = Decoder::new(CodecType::H265, config, 1920, 1080)?;
 //!
 //! // Decode returns a streaming iterator (no GPU allocation yet)
-//! for frame in decoder.decode(compressed_data) {
+//! let packet = DecodePacket::new(compressed_data, presentation_time);
+//! for frame in decoder.decode(packet) {
 //!     let frame = frame?;
 //!     let gpu_frame = frame.to_gpu_frame(&my_device, &my_queue);
 //!
@@ -20,14 +21,14 @@
 //!     let uv = gpu_frame.uv_texture();
 //!
 //!     // Or convert to RGBA on GPU
-//!     let rgba = gpu_frame.to_rgba(&my_device, &my_queue);
+//!     let rgba = gpu_frame.to_linear_rgba(&my_device, &my_queue, color_info);
 //! }
 //! ```
 //!
-//! # Mapped Buffer Path (Zero-Copy)
+//! # Mapped Buffer Path
 //!
-//! For true zero-copy on unified memory systems (Apple Silicon, integrated GPUs),
-//! use [`Decoder::decode_into`] to decode directly into a mapped GPU buffer:
+//! Use [`Decoder::decode_into`] when a caller needs tightly packed decoded planes
+//! in a mapped buffer. This path performs a copy from native decoder storage.
 //!
 //! ```ignore
 //! let buffer = device.create_buffer(&BufferDescriptor {
@@ -47,6 +48,15 @@
 
 #![warn(missing_docs)]
 
+#[cfg(any(
+    test,
+    target_os = "android",
+    target_os = "linux",
+    target_os = "windows"
+))]
+mod bitstream;
+mod color;
+mod config;
 mod frame;
 mod image;
 #[cfg(target_vendor = "apple")]
@@ -54,10 +64,20 @@ mod image_apple;
 mod software;
 mod sys;
 
-pub use frame::{DecodedFrame, DecodedFrameUploader, DecodedPixelLayout, GpuFrame, YuvConverter};
+#[cfg(any(
+    test,
+    target_os = "android",
+    target_os = "linux",
+    target_os = "windows"
+))]
+pub use bitstream::{ConvertedProtectedSample, NalStreamConverter};
+pub use color::{ColorOutputTarget, VideoColorUniform, YUV_COLOR_SHADER_WGSL, video_color_uniform};
+pub use frame::{
+    DecodedFrame, DecodedFrameUploader, DecodedPixelLayout, GpuFrame, LinearRgbaConverter,
+};
 pub use image::{DecodedImage, DecodedPixelFormat, decode_image, decode_image_platform};
 
-use std::vec::IntoIter;
+use std::{time::Duration, vec::IntoIter};
 use thiserror::Error;
 
 /// Codec error type.
@@ -88,9 +108,42 @@ pub enum CodecType {
     Av1,
 }
 
+/// One compressed access unit and its presentation timestamp.
+///
+/// Keeping timing attached to the bytes prevents platform decoders from
+/// silently inventing timestamps, which breaks B-frame reordering and A/V sync.
+#[derive(Debug, Clone, Copy)]
+pub struct DecodePacket<'a> {
+    data: &'a [u8],
+    presentation_time: Duration,
+}
+
+impl<'a> DecodePacket<'a> {
+    /// Creates a compressed access unit with deterministic media timing.
+    #[must_use]
+    pub const fn new(data: &'a [u8], presentation_time: Duration) -> Self {
+        Self {
+            data,
+            presentation_time,
+        }
+    }
+
+    /// Returns the compressed access-unit bytes.
+    #[must_use]
+    pub const fn data(self) -> &'a [u8] {
+        self.data
+    }
+
+    /// Returns the intended presentation timestamp.
+    #[must_use]
+    pub const fn presentation_time(self) -> Duration {
+        self.presentation_time
+    }
+}
+
 /// Frame info returned when decoding into a mapped buffer.
 ///
-/// Use this with [`Decoder::decode_into`] for zero-copy on unified memory systems.
+/// Use this with [`Decoder::decode_into`] to locate copied planes in a caller buffer.
 #[derive(Debug, Clone, Copy)]
 pub struct FrameInfo {
     /// Frame width in pixels.
@@ -369,8 +422,8 @@ impl Decoder {
     ///
     /// Returns a streaming iterator yielding decoded frames as opaque [`DecodedFrame`] types.
     /// Use [`DecodedFrame::to_gpu_frame`] to convert to GPU textures on your device.
-    pub fn decode(&mut self, data: &[u8]) -> DecodeStream {
-        let result = self.decode_inner(data);
+    pub fn decode(&mut self, packet: DecodePacket<'_>) -> DecodeStream {
+        let result = self.decode_inner(packet);
         match result {
             Ok(frames) => DecodeStream {
                 inner: DecodeStreamInner::Frames(frames.into_iter()),
@@ -381,11 +434,11 @@ impl Decoder {
         }
     }
 
-    fn decode_inner(&mut self, data: &[u8]) -> Result<Vec<DecodedFrame>, CodecError> {
+    fn decode_inner(&mut self, packet: DecodePacket<'_>) -> Result<Vec<DecodedFrame>, CodecError> {
         match &mut self.inner {
             #[cfg(target_vendor = "apple")]
             DecoderInner::Apple(dec) => {
-                let surfaces = dec.decode_to_iosurface(data)?;
+                let surfaces = dec.decode_to_iosurface(packet)?;
                 let mut frames = Vec::with_capacity(surfaces.len());
                 for surface in surfaces {
                     let frame = DecodedFrame::from_iosurface(
@@ -403,14 +456,15 @@ impl Decoder {
 
             #[cfg(target_os = "android")]
             DecoderInner::Android(dec) => {
-                let android_frames = dec.decode(data)?;
+                let android_frames = dec.decode(packet)?;
                 let mut frames = Vec::with_capacity(android_frames.len());
                 for android_frame in android_frames {
-                    let frame = DecodedFrame::from_nv12_data(
+                    let frame = DecodedFrame::from_biplanar_data(
                         android_frame.data,
                         android_frame.width,
                         android_frame.height,
                         android_frame.timestamp_ns,
+                        android_frame.layout,
                     );
                     frames.push(frame);
                 }
@@ -419,14 +473,15 @@ impl Decoder {
 
             #[cfg(target_os = "windows")]
             DecoderInner::Windows(dec) => {
-                let windows_frames = dec.decode(data)?;
+                let windows_frames = dec.decode(packet)?;
                 let mut frames = Vec::with_capacity(windows_frames.len());
                 for windows_frame in windows_frames {
-                    let frame = DecodedFrame::from_nv12_data(
+                    let frame = DecodedFrame::from_biplanar_data(
                         windows_frame.data,
                         windows_frame.width,
                         windows_frame.height,
                         windows_frame.timestamp_ns,
+                        windows_frame.layout,
                     );
                     frames.push(frame);
                 }
@@ -435,14 +490,15 @@ impl Decoder {
 
             #[cfg(target_os = "linux")]
             DecoderInner::Linux(dec) => {
-                let linux_frames = dec.decode(data)?;
+                let linux_frames = dec.decode(packet)?;
                 let mut frames = Vec::with_capacity(linux_frames.len());
                 for linux_frame in linux_frames {
-                    let frame = DecodedFrame::from_nv12_data(
+                    let frame = DecodedFrame::from_biplanar_data(
                         linux_frame.data,
                         linux_frame.width,
                         linux_frame.height,
                         linux_frame.timestamp_ns,
+                        linux_frame.layout,
                     );
                     frames.push(frame);
                 }
@@ -454,14 +510,15 @@ impl Decoder {
                 not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
             ))]
             DecoderInner::Av1(dec) => {
-                let cpu_frames = dec.decode(data)?;
+                let cpu_frames = dec.decode(packet)?;
                 let mut frames = Vec::with_capacity(cpu_frames.len());
                 for cpu_frame in cpu_frames {
-                    let frame = DecodedFrame::from_nv12_data(
+                    let frame = DecodedFrame::from_biplanar_data(
                         cpu_frame.data,
                         cpu_frame.width,
                         cpu_frame.height,
                         cpu_frame.timestamp_ns,
+                        cpu_frame.layout,
                     );
                     frames.push(frame);
                 }
@@ -470,12 +527,105 @@ impl Decoder {
         }
     }
 
+    /// Signals end of stream and yields every delayed decoder output frame.
+    ///
+    /// A decoder must be rebuilt before submitting more packets after this call.
+    pub fn drain(&mut self) -> DecodeStream {
+        match self.drain_inner() {
+            Ok(frames) => DecodeStream {
+                inner: DecodeStreamInner::Frames(frames.into_iter()),
+            },
+            Err(error) => DecodeStream {
+                inner: DecodeStreamInner::Error(Some(error)),
+            },
+        }
+    }
+
+    fn drain_inner(&mut self) -> Result<Vec<DecodedFrame>, CodecError> {
+        match &mut self.inner {
+            #[cfg(target_vendor = "apple")]
+            DecoderInner::Apple(decoder) => Ok(decoder
+                .drain()?
+                .into_iter()
+                .map(|surface| {
+                    DecodedFrame::from_iosurface(
+                        surface.surface,
+                        surface.pixel_buffer,
+                        surface.width,
+                        surface.height,
+                        surface.timestamp_ns,
+                        surface.layout,
+                    )
+                })
+                .collect()),
+            #[cfg(target_os = "android")]
+            DecoderInner::Android(decoder) => Ok(decoder
+                .drain()?
+                .into_iter()
+                .map(|frame| {
+                    DecodedFrame::from_biplanar_data(
+                        frame.data,
+                        frame.width,
+                        frame.height,
+                        frame.timestamp_ns,
+                        frame.layout,
+                    )
+                })
+                .collect()),
+            #[cfg(target_os = "windows")]
+            DecoderInner::Windows(decoder) => Ok(decoder
+                .drain()?
+                .into_iter()
+                .map(|frame| {
+                    DecodedFrame::from_biplanar_data(
+                        frame.data,
+                        frame.width,
+                        frame.height,
+                        frame.timestamp_ns,
+                        frame.layout,
+                    )
+                })
+                .collect()),
+            #[cfg(target_os = "linux")]
+            DecoderInner::Linux(decoder) => Ok(decoder
+                .drain()?
+                .into_iter()
+                .map(|frame| {
+                    DecodedFrame::from_biplanar_data(
+                        frame.data,
+                        frame.width,
+                        frame.height,
+                        frame.timestamp_ns,
+                        frame.layout,
+                    )
+                })
+                .collect()),
+            #[cfg(all(
+                feature = "software-fallback",
+                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+            ))]
+            DecoderInner::Av1(decoder) => Ok(decoder
+                .drain()?
+                .into_iter()
+                .map(|frame| {
+                    DecodedFrame::from_biplanar_data(
+                        frame.data,
+                        frame.width,
+                        frame.height,
+                        frame.timestamp_ns,
+                        frame.layout,
+                    )
+                })
+                .collect()),
+        }
+    }
+
     /// Decode compressed video data directly into a provided buffer.
     ///
-    /// This is the zero-copy path for unified memory systems (Apple Silicon, integrated GPUs).
-    /// The buffer should be a mapped wgpu buffer slice. Returns a streaming iterator of frame info.
-    pub fn decode_into(&mut self, data: &[u8], output: &mut [u8]) -> DecodeIntoStream {
-        let result = self.decode_into_inner(data, output);
+    /// The buffer may be a mapped wgpu buffer slice. Native decoder storage is
+    /// copied into it, and the returned frame info locates each plane.
+    pub fn decode_into(&mut self, packet: DecodePacket<'_>, output: &mut [u8]) -> DecodeIntoStream {
+        let result = self.decode_into_inner(packet, output);
         match result {
             Ok(infos) => DecodeIntoStream {
                 inner: DecodeIntoStreamInner::Infos(infos.into_iter()),
@@ -488,13 +638,13 @@ impl Decoder {
 
     fn decode_into_inner(
         &mut self,
-        data: &[u8],
+        packet: DecodePacket<'_>,
         output: &mut [u8],
     ) -> Result<Vec<FrameInfo>, CodecError> {
         match &mut self.inner {
             #[cfg(target_vendor = "apple")]
             DecoderInner::Apple(dec) => {
-                let surfaces = dec.decode_to_iosurface(data)?;
+                let surfaces = dec.decode_to_iosurface(packet)?;
                 let mut infos = Vec::with_capacity(surfaces.len());
                 let mut offset = 0;
 
@@ -538,33 +688,33 @@ impl Decoder {
 
             #[cfg(target_os = "android")]
             DecoderInner::Android(dec) => {
-                let android_frames = dec.decode(data)?;
+                let android_frames = dec.decode(packet)?;
                 copy_frames_to_buffer(
                     android_frames
                         .into_iter()
-                        .map(|f| (f.data, f.width, f.height, f.timestamp_ns)),
+                        .map(|f| (f.data, f.width, f.height, f.timestamp_ns, f.layout)),
                     output,
                 )
             }
 
             #[cfg(target_os = "windows")]
             DecoderInner::Windows(dec) => {
-                let windows_frames = dec.decode(data)?;
+                let windows_frames = dec.decode(packet)?;
                 copy_frames_to_buffer(
                     windows_frames
                         .into_iter()
-                        .map(|f| (f.data, f.width, f.height, f.timestamp_ns)),
+                        .map(|f| (f.data, f.width, f.height, f.timestamp_ns, f.layout)),
                     output,
                 )
             }
 
             #[cfg(target_os = "linux")]
             DecoderInner::Linux(dec) => {
-                let linux_frames = dec.decode(data)?;
+                let linux_frames = dec.decode(packet)?;
                 copy_frames_to_buffer(
                     linux_frames
                         .into_iter()
-                        .map(|f| (f.data, f.width, f.height, f.timestamp_ns)),
+                        .map(|f| (f.data, f.width, f.height, f.timestamp_ns, f.layout)),
                     output,
                 )
             }
@@ -574,11 +724,11 @@ impl Decoder {
                 not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
             ))]
             DecoderInner::Av1(dec) => {
-                let cpu_frames = dec.decode(data)?;
+                let cpu_frames = dec.decode(packet)?;
                 copy_frames_to_buffer(
                     cpu_frames
                         .into_iter()
-                        .map(|f| (f.data, f.width, f.height, f.timestamp_ns)),
+                        .map(|f| (f.data, f.width, f.height, f.timestamp_ns, f.layout)),
                     output,
                 )
             }
@@ -595,14 +745,14 @@ impl Decoder {
     )
 ))]
 fn copy_frames_to_buffer(
-    frames: impl Iterator<Item = (Vec<u8>, u32, u32, u64)>,
+    frames: impl Iterator<Item = (Vec<u8>, u32, u32, u64, DecodedPixelLayout)>,
     output: &mut [u8],
 ) -> Result<Vec<FrameInfo>, CodecError> {
     let mut infos = Vec::new();
     let mut offset = 0;
 
-    for (data, width, height, timestamp_ns) in frames {
-        let y_size = (width * height) as usize;
+    for (data, width, height, timestamp_ns, layout) in frames {
+        let y_size = layout.bytes_per_row(width) * height as usize;
         let total_bytes = data.len();
 
         if offset + total_bytes > output.len() {

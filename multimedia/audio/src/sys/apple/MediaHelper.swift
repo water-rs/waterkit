@@ -3,10 +3,149 @@ import MediaPlayer
 import AVFoundation
 import OSLog
 
-// MARK: - Media Session State
-
-private var commandHandlerRegistered = false
 private let logger = Logger(subsystem: "dev.waterui", category: "WaterKitMedia")
+
+private enum MediaCommandKind: UInt8 {
+    case none = 0
+    case play = 1
+    case pause = 2
+    case playPause = 3
+    case stop = 4
+    case next = 5
+    case previous = 6
+    case seek = 7
+    case seekForward = 8
+    case seekBackward = 9
+    case audioFocusGained = 10
+    case audioFocusLost = 11
+    case audioFocusLostTransient = 12
+    case audioFocusLostDuck = 13
+    case audioBecomingNoisy = 14
+}
+
+private struct MediaCommandRecord {
+    let kind: MediaCommandKind
+    let valueSeconds: Double
+}
+
+private final class MediaCommandChannel {
+    private let condition = NSCondition()
+    private var commands: [MediaCommandRecord] = []
+    private var closed = false
+
+    func send(_ command: MediaCommandRecord) {
+        condition.lock()
+        guard !closed else {
+            condition.unlock()
+            return
+        }
+        commands.append(command)
+        condition.signal()
+        condition.unlock()
+    }
+
+    func receive() -> MediaCommandRecord? {
+        condition.lock()
+        while commands.isEmpty && !closed {
+            condition.wait()
+        }
+        let command = commands.isEmpty ? nil : commands.removeFirst()
+        condition.unlock()
+        return command
+    }
+
+    func close() {
+        condition.lock()
+        closed = true
+        condition.broadcast()
+        condition.unlock()
+    }
+}
+
+private final class MediaSessionRegistry {
+    static let shared = MediaSessionRegistry()
+
+    private let lock = NSLock()
+    private var nextSessionId: UInt64 = 1
+    private var channels: [UInt64: MediaCommandChannel] = [:]
+    private var sessionOrder: [UInt64] = []
+    private var activeSessionId: UInt64?
+    private var commandHandlerRegistered = false
+
+    func createSession() -> UInt64 {
+        lock.lock()
+        let sessionId = nextSessionId
+        nextSessionId = nextSessionId.addingReportingOverflow(1).partialValue
+        precondition(nextSessionId != 0, "Apple media session identifier space exhausted")
+        channels[sessionId] = MediaCommandChannel()
+        sessionOrder.append(sessionId)
+        activeSessionId = sessionId
+        lock.unlock()
+        return sessionId
+    }
+
+    func activate(_ sessionId: UInt64) -> Bool {
+        lock.lock()
+        let exists = channels[sessionId] != nil
+        if exists && activeSessionId != sessionId {
+            sessionOrder.removeAll { $0 == sessionId }
+            sessionOrder.append(sessionId)
+            activeSessionId = sessionId
+        }
+        lock.unlock()
+        return exists
+    }
+
+    func isActive(_ sessionId: UInt64) -> Bool {
+        lock.lock()
+        let active = activeSessionId == sessionId
+        lock.unlock()
+        return active
+    }
+
+    func waitForCommand(sessionId: UInt64) -> MediaCommandRecord? {
+        lock.lock()
+        let channel = channels[sessionId]
+        lock.unlock()
+        return channel?.receive()
+    }
+
+    func sendToActive(_ kind: MediaCommandKind, valueSeconds: Double = 0) {
+        lock.lock()
+        let channel = activeSessionId.flatMap { channels[$0] }
+        lock.unlock()
+        channel?.send(MediaCommandRecord(kind: kind, valueSeconds: valueSeconds))
+    }
+
+    func closeSession(_ sessionId: UInt64) -> Bool {
+        lock.lock()
+        let channel = channels.removeValue(forKey: sessionId)
+        sessionOrder.removeAll { $0 == sessionId }
+        if activeSessionId == sessionId {
+            activeSessionId = sessionOrder.last
+        }
+        lock.unlock()
+        channel?.close()
+        return channel != nil
+    }
+
+    func hasSessions() -> Bool {
+        lock.lock()
+        let result = !channels.isEmpty
+        lock.unlock()
+        return result
+    }
+
+    func registerCommandHandlerIfNeeded() {
+        lock.lock()
+        let shouldRegister = !commandHandlerRegistered
+        commandHandlerRegistered = true
+        lock.unlock()
+        if shouldRegister {
+            registerMediaCommandHandlers()
+        }
+    }
+}
 
 #if os(iOS)
 private var systemEventObserverTokens: [NSObjectProtocol] = []
@@ -20,17 +159,18 @@ private let silentPlayerDelegate = SilentPlayerDelegate()
 
 // MARK: - FFI Functions
 
-func media_session_init() -> MediaResultFFI {
+func media_session_init() -> MediaSessionHandleFFI {
     // On macOS, we need to briefly "play" something to activate the audio session
     // so that MPNowPlayingInfoCenter shows up in Control Center
     #if os(macOS)
     activateAudioSessionWithSilence()
     #endif
-    media_session_register_command_handler()
+    let sessionId = MediaSessionRegistry.shared.createSession()
+    MediaSessionRegistry.shared.registerCommandHandlerIfNeeded()
     #if os(iOS)
     registerSystemEventObservers()
     #endif
-    return .Success
+    return MediaSessionHandleFFI(result: .Success, session_id: sessionId)
 }
 
 #if os(macOS)
@@ -115,7 +255,10 @@ private func createWAVData(from pcmData: Data, sampleRate: Int, channels: Int) -
 }
 #endif
 
-func media_session_set_metadata(metadata: MediaMetadataFFI) -> MediaResultFFI {
+func media_session_set_metadata(session_id: UInt64, metadata: MediaMetadataFFI) -> MediaResultFFI {
+    guard MediaSessionRegistry.shared.activate(session_id) else {
+        return .UpdateFailed
+    }
     var nowPlayingInfo: [String: Any] = [:]
     
     let title = metadata.title.toString()
@@ -135,28 +278,32 @@ func media_session_set_metadata(metadata: MediaMetadataFFI) -> MediaResultFFI {
         nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = metadata.duration_secs
     }
     
-    // Load artwork from URL if provided
-    let artworkUrlString = metadata.artwork_url.toString()
-    if !artworkUrlString.isEmpty, let url = URL(string: artworkUrlString) {
-        loadArtwork(from: url) { image in
-            if let image = image {
-                var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
-                #if os(iOS)
-                let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-                #else
-                let artwork = MPMediaItemArtwork(boundsSize: NSSize(width: image.size.width, height: image.size.height)) { _ in image }
-                #endif
-                info[MPMediaItemPropertyArtwork] = artwork
-                MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-            }
+    if !metadata.artwork.isEmpty {
+        var encoded = Data(capacity: Int(metadata.artwork.len()))
+        for byte in metadata.artwork {
+            encoded.append(byte)
         }
+        guard let image = PlatformImage(data: encoded) else {
+            preconditionFailure("Apple media session received invalid encoded artwork")
+        }
+        #if os(iOS)
+        let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        #else
+        let artwork = MPMediaItemArtwork(
+            boundsSize: NSSize(width: image.size.width, height: image.size.height)
+        ) { _ in image }
+        #endif
+        nowPlayingInfo[MPMediaItemPropertyArtwork] = artwork
     }
     
     MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
     return .Success
 }
 
-func media_session_set_playback_state(state: PlaybackStateFFI) -> MediaResultFFI {
+func media_session_set_playback_state(session_id: UInt64, state: PlaybackStateFFI) -> MediaResultFFI {
+    guard MediaSessionRegistry.shared.activate(session_id) else {
+        return .UpdateFailed
+    }
     var nowPlayingInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
     let commandCenter = MPRemoteCommandCenter.shared()
     
@@ -188,53 +335,50 @@ func media_session_set_playback_state(state: PlaybackStateFFI) -> MediaResultFFI
     return .Success
 }
 
-func media_session_register_command_handler() {
-    guard !commandHandlerRegistered else { return }
-    commandHandlerRegistered = true
-    
+private func registerMediaCommandHandlers() {
     let commandCenter = MPRemoteCommandCenter.shared()
     
     // IMPORTANT: On macOS, we must explicitly enable commands for Now Playing to appear
     commandCenter.playCommand.isEnabled = true
     commandCenter.playCommand.addTarget { _ in
-        rust_on_play()
+        MediaSessionRegistry.shared.sendToActive(.play)
         return .success
     }
     
     commandCenter.pauseCommand.isEnabled = true
     commandCenter.pauseCommand.addTarget { _ in
-        rust_on_pause()
+        MediaSessionRegistry.shared.sendToActive(.pause)
         return .success
     }
     
     commandCenter.togglePlayPauseCommand.isEnabled = true
     commandCenter.togglePlayPauseCommand.addTarget { _ in
-        rust_on_play_pause()
+        MediaSessionRegistry.shared.sendToActive(.playPause)
         return .success
     }
     
     commandCenter.stopCommand.isEnabled = true
     commandCenter.stopCommand.addTarget { _ in
-        rust_on_stop()
+        MediaSessionRegistry.shared.sendToActive(.stop)
         return .success
     }
     
     commandCenter.nextTrackCommand.isEnabled = true
     commandCenter.nextTrackCommand.addTarget { _ in
-        rust_on_next()
+        MediaSessionRegistry.shared.sendToActive(.next)
         return .success
     }
     
     commandCenter.previousTrackCommand.isEnabled = true
     commandCenter.previousTrackCommand.addTarget { _ in
-        rust_on_previous()
+        MediaSessionRegistry.shared.sendToActive(.previous)
         return .success
     }
     
     commandCenter.changePlaybackPositionCommand.isEnabled = true
     commandCenter.changePlaybackPositionCommand.addTarget { event in
         if let positionEvent = event as? MPChangePlaybackPositionCommandEvent {
-            rust_on_seek_to(positionEvent.positionTime)
+            MediaSessionRegistry.shared.sendToActive(.seek, valueSeconds: positionEvent.positionTime)
         }
         return .success
     }
@@ -243,7 +387,7 @@ func media_session_register_command_handler() {
     commandCenter.skipForwardCommand.preferredIntervals = [15]
     commandCenter.skipForwardCommand.addTarget { event in
         if let skipEvent = event as? MPSkipIntervalCommandEvent {
-            rust_on_seek_forward(skipEvent.interval)
+            MediaSessionRegistry.shared.sendToActive(.seekForward, valueSeconds: skipEvent.interval)
         }
         return .success
     }
@@ -252,13 +396,16 @@ func media_session_register_command_handler() {
     commandCenter.skipBackwardCommand.preferredIntervals = [15]
     commandCenter.skipBackwardCommand.addTarget { event in
         if let skipEvent = event as? MPSkipIntervalCommandEvent {
-            rust_on_seek_backward(skipEvent.interval)
+            MediaSessionRegistry.shared.sendToActive(.seekBackward, valueSeconds: skipEvent.interval)
         }
         return .success
     }
 }
 
-func media_session_request_audio_focus() -> MediaResultFFI {
+func media_session_request_audio_focus(session_id: UInt64) -> MediaResultFFI {
+    guard MediaSessionRegistry.shared.activate(session_id) else {
+        return .UpdateFailed
+    }
     #if os(iOS)
     do {
         try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
@@ -273,7 +420,10 @@ func media_session_request_audio_focus() -> MediaResultFFI {
     #endif
 }
 
-func media_session_abandon_audio_focus() -> MediaResultFFI {
+func media_session_abandon_audio_focus(session_id: UInt64) -> MediaResultFFI {
+    guard MediaSessionRegistry.shared.activate(session_id) else {
+        return .UpdateFailed
+    }
     #if os(iOS)
     do {
         try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -339,14 +489,14 @@ private func handleAudioSessionInterruption(_ notification: Notification) {
 
     switch type {
     case .began:
-        rust_on_audio_focus_lost_transient()
+        MediaSessionRegistry.shared.sendToActive(.audioFocusLostTransient)
     case .ended:
         let rawOptions = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
         let options = AVAudioSession.InterruptionOptions(rawValue: rawOptions)
         if options.contains(.shouldResume) {
-            rust_on_audio_focus_gained()
+            MediaSessionRegistry.shared.sendToActive(.audioFocusGained)
         } else {
-            rust_on_audio_focus_lost()
+            MediaSessionRegistry.shared.sendToActive(.audioFocusLost)
         }
     @unknown default:
         fatalError("Unsupported AVAudioSession interruption type")
@@ -363,7 +513,7 @@ private func handleAudioSessionRouteChange(_ notification: Notification) {
 
     switch reason {
     case .oldDeviceUnavailable:
-        rust_on_audio_becoming_noisy()
+        MediaSessionRegistry.shared.sendToActive(.audioBecomingNoisy)
     case .newDeviceAvailable,
          .categoryChange,
          .override,
@@ -387,27 +537,31 @@ private func handleAudioSessionSilenceSecondaryAudioHint(_ notification: Notific
 
     switch type {
     case .begin:
-        rust_on_audio_focus_lost_duck()
+        MediaSessionRegistry.shared.sendToActive(.audioFocusLostDuck)
     case .end:
-        rust_on_audio_focus_gained()
+        MediaSessionRegistry.shared.sendToActive(.audioFocusGained)
     @unknown default:
         fatalError("Unsupported AVAudioSession silence secondary audio hint type")
     }
 }
 #endif
 
-/// Run the macOS run loop for the specified duration.
-/// This is required for MPRemoteCommandCenter to receive events in CLI apps.
-func media_session_run_loop(duration_secs: Double) {
-    // Use CFRunLoop to process events for the specified duration
-    // This allows MPRemoteCommandCenter to receive and dispatch events
-    CFRunLoopRunInMode(.defaultMode, duration_secs, false)
+func media_session_wait_command(session_id: UInt64) -> MediaCommandFFI {
+    guard let command = MediaSessionRegistry.shared.waitForCommand(sessionId: session_id) else {
+        return MediaCommandFFI(kind: MediaCommandKind.none.rawValue, value_secs: 0)
+    }
+    return MediaCommandFFI(kind: command.kind.rawValue, value_secs: command.valueSeconds)
 }
 
-func media_session_clear() -> MediaResultFFI {
+func media_session_clear(session_id: UInt64) -> MediaResultFFI {
+    guard MediaSessionRegistry.shared.closeSession(session_id) else {
+        return .Success
+    }
     MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     #if os(iOS)
-    unregisterSystemEventObservers()
+    if !MediaSessionRegistry.shared.hasSessions() {
+        unregisterSystemEventObservers()
+    }
     #endif
     return .Success
 }
@@ -422,14 +576,3 @@ typealias PlatformImage = UIImage
 import AppKit
 typealias PlatformImage = NSImage
 #endif
-
-private func loadArtwork(from url: URL, completion: @escaping (PlatformImage?) -> Void) {
-    URLSession.shared.dataTask(with: url) { data, _, _ in
-        guard let data = data else {
-            DispatchQueue.main.async { completion(nil) }
-            return
-        }
-        let image = PlatformImage(data: data)
-        DispatchQueue.main.async { completion(image) }
-    }.resume()
-}

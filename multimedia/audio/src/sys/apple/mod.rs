@@ -3,8 +3,9 @@
 #[cfg(target_os = "ios")]
 use crate::PlayerError;
 use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
-use std::{sync::RwLock, time::Duration};
+use std::{thread::JoinHandle, time::Duration};
 
+#[cfg(feature = "apple-artwork")]
 mod host_bridge;
 
 #[swift_bridge::bridge]
@@ -14,7 +15,7 @@ mod ffi {
         title: String,
         artist: String,
         album: String,
-        artwork_url: String,
+        artwork: Vec<u8>,
         duration_secs: f64,
     }
 
@@ -34,6 +35,18 @@ mod ffi {
         AudioFocusDenied,
     }
 
+    #[swift_bridge(swift_repr = "struct")]
+    struct MediaSessionHandleFFI {
+        result: MediaResultFFI,
+        session_id: u64,
+    }
+
+    #[swift_bridge(swift_repr = "struct")]
+    struct MediaCommandFFI {
+        kind: u8,
+        value_secs: f64,
+    }
+
     enum PlayerResultFFI {
         Success,
         LoadFailed,
@@ -50,14 +63,19 @@ mod ffi {
 
     extern "Swift" {
         // Media session functions
-        fn media_session_init() -> MediaResultFFI;
-        fn media_session_set_metadata(metadata: MediaMetadataFFI) -> MediaResultFFI;
-        fn media_session_set_playback_state(state: PlaybackStateFFI) -> MediaResultFFI;
-        fn media_session_request_audio_focus() -> MediaResultFFI;
-        fn media_session_abandon_audio_focus() -> MediaResultFFI;
-        fn media_session_clear() -> MediaResultFFI;
-        fn media_session_register_command_handler();
-        fn media_session_run_loop(duration_secs: f64);
+        fn media_session_init() -> MediaSessionHandleFFI;
+        fn media_session_set_metadata(
+            session_id: u64,
+            metadata: MediaMetadataFFI,
+        ) -> MediaResultFFI;
+        fn media_session_set_playback_state(
+            session_id: u64,
+            state: PlaybackStateFFI,
+        ) -> MediaResultFFI;
+        fn media_session_request_audio_focus(session_id: u64) -> MediaResultFFI;
+        fn media_session_abandon_audio_focus(session_id: u64) -> MediaResultFFI;
+        fn media_session_clear(session_id: u64) -> MediaResultFFI;
+        fn media_session_wait_command(session_id: u64) -> MediaCommandFFI;
 
         // Audio player functions
         fn audio_player_init() -> PlayerResultFFI;
@@ -72,98 +90,6 @@ mod ffi {
         fn audio_player_set_preserve_pitch(preserve_pitch: bool) -> PlayerResultFFI;
         fn audio_player_get_state() -> PlayerStateFFI;
     }
-
-    extern "Rust" {
-        fn rust_on_play();
-        fn rust_on_pause();
-        fn rust_on_play_pause();
-        fn rust_on_stop();
-        fn rust_on_next();
-        fn rust_on_previous();
-        fn rust_on_seek_to(position_secs: f64);
-        fn rust_on_seek_forward(secs: f64);
-        fn rust_on_seek_backward(secs: f64);
-        fn rust_on_audio_focus_gained();
-        fn rust_on_audio_focus_lost();
-        fn rust_on_audio_focus_lost_transient();
-        fn rust_on_audio_focus_lost_duck();
-        fn rust_on_audio_becoming_noisy();
-    }
-}
-
-/// Global command queue for polling
-static COMMAND_QUEUE: RwLock<Vec<MediaCommand>> = RwLock::new(Vec::new());
-
-fn dispatch_command(cmd: MediaCommand) {
-    if let Ok(mut queue) = COMMAND_QUEUE.write() {
-        queue.push(cmd);
-    }
-}
-
-fn rust_on_play() {
-    dispatch_command(MediaCommand::Play);
-}
-
-fn rust_on_pause() {
-    dispatch_command(MediaCommand::Pause);
-}
-
-fn rust_on_play_pause() {
-    dispatch_command(MediaCommand::PlayPause);
-}
-
-fn rust_on_stop() {
-    dispatch_command(MediaCommand::Stop);
-}
-
-fn rust_on_next() {
-    dispatch_command(MediaCommand::Next);
-}
-
-fn rust_on_previous() {
-    dispatch_command(MediaCommand::Previous);
-}
-
-fn rust_on_seek_to(position_secs: f64) {
-    dispatch_command(MediaCommand::Seek(Duration::from_secs_f64(position_secs)));
-}
-
-fn rust_on_seek_forward(secs: f64) {
-    dispatch_command(MediaCommand::SeekForward(Duration::from_secs_f64(secs)));
-}
-
-fn rust_on_seek_backward(secs: f64) {
-    dispatch_command(MediaCommand::SeekBackward(Duration::from_secs_f64(secs)));
-}
-
-fn rust_on_audio_focus_gained() {
-    dispatch_command(MediaCommand::AudioFocusGained);
-}
-
-fn rust_on_audio_focus_lost() {
-    dispatch_command(MediaCommand::AudioFocusLost);
-}
-
-fn rust_on_audio_focus_lost_transient() {
-    dispatch_command(MediaCommand::AudioFocusLostTransient);
-}
-
-fn rust_on_audio_focus_lost_duck() {
-    dispatch_command(MediaCommand::AudioFocusLostDuck);
-}
-
-fn rust_on_audio_becoming_noisy() {
-    dispatch_command(MediaCommand::AudioBecomingNoisy);
-}
-
-fn poll_next_command() -> Option<MediaCommand> {
-    COMMAND_QUEUE.write().ok().and_then(|mut queue| {
-        if queue.is_empty() {
-            None
-        } else {
-            Some(queue.remove(0))
-        }
-    })
 }
 
 fn convert_result(result: ffi::MediaResultFFI) -> Result<(), MediaError> {
@@ -176,6 +102,41 @@ fn convert_result(result: ffi::MediaResultFFI) -> Result<(), MediaError> {
             "Failed to update media state".into(),
         )),
         ffi::MediaResultFFI::AudioFocusDenied => Err(MediaError::AudioFocusDenied),
+    }
+}
+
+fn media_command_from_ffi(
+    command: &ffi::MediaCommandFFI,
+) -> Result<Option<MediaCommand>, MediaError> {
+    let duration = || {
+        if command.value_secs.is_finite() && command.value_secs >= 0.0 {
+            Ok(Duration::from_secs_f64(command.value_secs))
+        } else {
+            Err(MediaError::Unknown(format!(
+                "Apple media command {} has invalid duration {}",
+                command.kind, command.value_secs
+            )))
+        }
+    };
+    match command.kind {
+        0 => Ok(None),
+        1 => Ok(Some(MediaCommand::Play)),
+        2 => Ok(Some(MediaCommand::Pause)),
+        3 => Ok(Some(MediaCommand::PlayPause)),
+        4 => Ok(Some(MediaCommand::Stop)),
+        5 => Ok(Some(MediaCommand::Next)),
+        6 => Ok(Some(MediaCommand::Previous)),
+        7 => duration().map(MediaCommand::Seek).map(Some),
+        8 => duration().map(MediaCommand::SeekForward).map(Some),
+        9 => duration().map(MediaCommand::SeekBackward).map(Some),
+        10 => Ok(Some(MediaCommand::AudioFocusGained)),
+        11 => Ok(Some(MediaCommand::AudioFocusLost)),
+        12 => Ok(Some(MediaCommand::AudioFocusLostTransient)),
+        13 => Ok(Some(MediaCommand::AudioFocusLostDuck)),
+        14 => Ok(Some(MediaCommand::AudioBecomingNoisy)),
+        kind => Err(MediaError::Unknown(format!(
+            "Apple media session emitted unknown command kind {kind}"
+        ))),
     }
 }
 
@@ -218,7 +179,9 @@ fn metadata_to_ffi(metadata: &MediaMetadata) -> ffi::MediaMetadataFFI {
         title: metadata.title().unwrap_or_default().to_owned(),
         artist: metadata.artist().unwrap_or_default().to_owned(),
         album: metadata.album().unwrap_or_default().to_owned(),
-        artwork_url: metadata.artwork_url().unwrap_or_default().to_owned(),
+        artwork: metadata
+            .artwork()
+            .map_or_else(Vec::new, |artwork| artwork.encoded().to_vec()),
         duration_secs: metadata
             .duration()
             .map_or(-1.0, |duration| duration.as_secs_f64()),
@@ -243,80 +206,96 @@ fn playback_state_to_ffi(state: &PlaybackState) -> ffi::PlaybackStateFFI {
     }
 }
 
-#[derive(Debug)]
-pub struct MediaSessionInner;
+pub struct MediaSessionInner {
+    session_id: u64,
+    command_receiver: async_channel::Receiver<MediaCommand>,
+    command_worker: Option<JoinHandle<()>>,
+}
+
+impl std::fmt::Debug for MediaSessionInner {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MediaSessionInner")
+            .field("session_id", &self.session_id)
+            .finish_non_exhaustive()
+    }
+}
 
 impl MediaSessionInner {
     pub fn new() -> Result<Self, MediaError> {
-        convert_result(ffi::media_session_init())?;
-        ffi::media_session_register_command_handler();
-        Ok(Self)
+        let handle = ffi::media_session_init();
+        convert_result(handle.result)?;
+        if handle.session_id == 0 {
+            return Err(MediaError::InitializationFailed(String::from(
+                "Apple media session returned reserved identifier zero",
+            )));
+        }
+        let (command_sender, command_receiver) = async_channel::unbounded();
+        let session_id = handle.session_id;
+        let command_worker = std::thread::spawn(move || {
+            loop {
+                match media_command_from_ffi(&ffi::media_session_wait_command(session_id)) {
+                    Ok(Some(command)) => {
+                        if command_sender.send_blocking(command).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        tracing::error!(%error, session_id, "invalid Apple media command");
+                        break;
+                    }
+                }
+            }
+        });
+        Ok(Self {
+            session_id,
+            command_receiver,
+            command_worker: Some(command_worker),
+        })
     }
 
-    #[allow(clippy::unused_self)]
     pub fn set_metadata(&self, metadata: &MediaMetadata) -> Result<(), MediaError> {
-        convert_result(ffi::media_session_set_metadata(metadata_to_ffi(metadata)))
+        convert_result(ffi::media_session_set_metadata(
+            self.session_id,
+            metadata_to_ffi(metadata),
+        ))
     }
 
-    #[allow(clippy::unused_self)]
     pub fn set_playback_state(&self, state: &PlaybackState) -> Result<(), MediaError> {
         convert_result(ffi::media_session_set_playback_state(
+            self.session_id,
             playback_state_to_ffi(state),
         ))
     }
 
-    #[allow(clippy::unused_self)]
     pub fn request_audio_focus(&self) -> Result<(), MediaError> {
-        convert_result(ffi::media_session_request_audio_focus())
+        convert_result(ffi::media_session_request_audio_focus(self.session_id))
     }
 
-    #[allow(clippy::unused_self)]
     pub fn abandon_audio_focus(&self) -> Result<(), MediaError> {
-        convert_result(ffi::media_session_abandon_audio_focus())
+        convert_result(ffi::media_session_abandon_audio_focus(self.session_id))
     }
 
-    #[allow(clippy::unused_self)]
     pub fn clear(&self) -> Result<(), MediaError> {
-        convert_result(ffi::media_session_clear())
+        convert_result(ffi::media_session_clear(self.session_id))
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn poll_command(&self) -> Option<crate::MediaCommand> {
-        poll_next_command()
+    pub fn command_receiver(&self) -> async_channel::Receiver<MediaCommand> {
+        self.command_receiver.clone()
     }
 }
 
-/// Media center integration for Apple platforms.
-/// Uses `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter`.
-pub struct MediaCenterInner;
-
-impl MediaCenterInner {
-    pub fn new() -> Result<Self, MediaError> {
-        MediaSessionInner::new()?;
-        Ok(Self {})
-    }
-
-    #[allow(clippy::unused_self)]
-    pub fn update(&self, metadata: &MediaMetadata, state: &PlaybackState) {
-        let _ = ffi::media_session_set_metadata(metadata_to_ffi(metadata));
-        let _ = ffi::media_session_set_playback_state(playback_state_to_ffi(state));
-    }
-
-    #[allow(clippy::unused_self)]
-    pub fn clear(&self) {
-        let _ = ffi::media_session_clear();
-    }
-
-    #[allow(clippy::unused_self)]
-    pub fn run_loop(&self, duration: std::time::Duration) {
-        // Register command handler to populate the queue
-        ffi::media_session_register_command_handler();
-        ffi::media_session_run_loop(duration.as_secs_f64());
-    }
-
-    #[allow(clippy::unused_self)]
-    pub fn poll_command(&self) -> Option<crate::MediaCommand> {
-        poll_next_command()
+impl Drop for MediaSessionInner {
+    fn drop(&mut self) {
+        if let Err(error) = self.clear() {
+            tracing::error!(%error, "failed to clear Apple media session during shutdown");
+        }
+        if let Some(worker) = self.command_worker.take() {
+            worker
+                .join()
+                .expect("Apple media command worker must not panic during shutdown");
+        }
     }
 }
 

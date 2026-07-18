@@ -59,6 +59,10 @@ impl AudioRecorderInner {
         receiver
     }
 
+    #[allow(
+        clippy::unused_self,
+        reason = "the cross-platform recorder exposes negotiated format through an instance"
+    )]
     pub const fn format(&self) -> AudioFormat {
         AudioFormat {
             sample_rate: 44100,

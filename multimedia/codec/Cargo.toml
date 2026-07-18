@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 readme = "README.md"
 repository.workspace = true
-description = "GPU-first zero-copy video codec with wgpu texture output"
+description = "Hardware-aware video codec with deterministic timing and wgpu texture output"
 keywords = ["codec", "video", "wgpu", "gpu", "h264", "h265", "av1"]
 categories = ["multimedia::video", "graphics"]
 
@@ -15,6 +15,8 @@ thiserror.workspace = true
 wgpu.workspace = true
 image.workspace = true
 half = "2"
+waterkit-video-core.workspace = true
+tracing.workspace = true
 
 [build-dependencies]
 waterkit-build.workspace = true

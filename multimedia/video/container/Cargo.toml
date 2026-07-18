@@ -1,0 +1,27 @@
+[package]
+name = "waterkit-video-container"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+description = "Container demuxing and muxing for WaterKit video"
+keywords = ["video", "mp4", "mov", "demuxer", "muxer"]
+categories = ["multimedia::video", "parser-implementations"]
+
+[dependencies]
+waterkit-video-core.workspace = true
+byteorder.workspace = true
+mp4.workspace = true
+bytes.workspace = true
+broadcast-common.workspace = true
+transmux.workspace = true
+quick-xml.workspace = true
+subtp.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

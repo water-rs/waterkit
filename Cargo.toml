@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tests/macos/passkey", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "identity/*", "sharing/*", "utils/build"]
+members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/notification", "tests/macos/passkey", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "multimedia/video/core", "multimedia/video/container", "multimedia/video/streaming", "multimedia/video/processing", "multimedia/video/player", "multimedia/video/cli", "identity/*", "sharing/*", "utils/build"]
 
 
 [workspace.package]
@@ -32,7 +32,7 @@ all-features = true
 [dependencies]
 waterkit-permission = { workspace = true, optional = true }
 waterkit-location = { workspace = true, optional = true }
-waterkit-audio = { workspace = true, optional = true }
+waterkit-audio = { workspace = true, optional = true, features = ["playback", "recording", "streaming", "media-session", "apple-artwork"] }
 waterkit-haptic = { workspace = true, optional = true }
 waterkit-notification = { workspace = true, optional = true }
 waterkit-dialog = { workspace = true, optional = true }
@@ -122,6 +122,8 @@ passkey = ["dep:waterkit-passkey"]
 
 
 [workspace.dependencies]
+aes = "0.9.1"
+cbc = "0.2.1"
 tracing = "0.1.44"
 # Reactive primitive used by waterkit-core.
 nami = "0.10.1"
@@ -132,7 +134,7 @@ waterkit-core = { path = "core", version = "0.1.0" }
 # Functional Crates
 waterkit-permission = { path = "platform/permission", version = "0.1.0" }
 waterkit-location = { path = "device/location", version = "0.1.0" }
-waterkit-audio = { path = "multimedia/audio", version = "0.1.0" }
+waterkit-audio = { path = "multimedia/audio", version = "0.1.0", default-features = false }
 waterkit-haptic = { path = "device/haptic", version = "0.1.0" }
 waterkit-notification = { path = "sharing/notification", version = "0.1.0" }
 waterkit-dialog = { path = "sharing/dialog", version = "0.1.0" }
@@ -146,6 +148,11 @@ waterkit-codec = { path = "multimedia/codec", version = "0.1.0" }
 waterkit-screen = { path = "platform/screen", version = "0.1.0" }
 waterkit-system = { path = "platform/system", version = "0.1.0" }
 waterkit-video = { path = "multimedia/video", version = "0.1.0" }
+waterkit-video-core = { path = "multimedia/video/core", version = "0.1.0" }
+waterkit-video-container = { path = "multimedia/video/container", version = "0.1.0" }
+waterkit-video-streaming = { path = "multimedia/video/streaming", version = "0.1.0" }
+waterkit-video-processing = { path = "multimedia/video/processing", version = "0.1.0" }
+waterkit-video-player = { path = "multimedia/video/player", version = "0.1.0" }
 waterkit-regional = { path = "platform/regional", version = "0.1.0" }
 waterkit-bluetooth = { path = "device/bluetooth", version = "0.1.0" }
 waterkit-nfc = { path = "device/nfc", version = "0.1.0" }
@@ -161,7 +168,9 @@ waterkit-passkey = { path = "identity/passkey", version = "0.1.0" }
 # Cross-platform
 futures = "0.3"
 async-channel = "2.3"
+async-fs = "2"
 thiserror = "2"
+num-traits = "0.2"
 blocking = "1"
 async-io = "2"
 async-process = "2"
@@ -216,10 +225,18 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 
 # Audio/Video
-rodio = "0.19"
+rodio = { version = "0.19", default-features = false }
 cpal = "0.15"
+symphonia-core = "0.5.5"
+symphonia-codec-aac = "0.5.5"
+symphonia-adapter-fdk-aac = "0.1.0"
 mp4 = "0.14"
 byteorder = "1.5"
+bytes = "1.10"
+broadcast-common = { version = "8.4", default-features = false, features = ["std"] }
+transmux = { version = "0.16", default-features = false, features = ["std"] }
+quick-xml = "0.41"
+subtp = "0.2"
 winit = "0.30"
 pollster = "0.4"
 nokhwa = { version = "0.10", features = ["input-native", "output-wgpu"] }
@@ -234,6 +251,7 @@ jiff = "0.2"
 # URL encoding
 percent-encoding = "2.3"
 url = "2.5"
+zenwave = { version = "0.4.0", default-features = false, features = ["hyper-backend"] }
 
 # System/OS
 sysinfo = "0.37"

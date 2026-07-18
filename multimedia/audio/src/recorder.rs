@@ -24,7 +24,21 @@ impl Default for AudioFormat {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AudioFormatRequest {
+    #[cfg_attr(
+        any(target_os = "android", target_os = "ios"),
+        allow(
+            dead_code,
+            reason = "mobile recording is rejected before format negotiation"
+        )
+    )]
     pub(crate) sample_rate: Option<u32>,
+    #[cfg_attr(
+        any(target_os = "android", target_os = "ios"),
+        allow(
+            dead_code,
+            reason = "mobile recording is rejected before format negotiation"
+        )
+    )]
     pub(crate) channels: Option<u16>,
 }
 

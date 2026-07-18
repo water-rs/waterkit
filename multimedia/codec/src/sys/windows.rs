@@ -1,19 +1,27 @@
 //! Windows Media Foundation hardware encoding and decoding.
 
-use crate::CodecError;
+use crate::{
+    CodecError, DecodePacket, DecodedPixelLayout, bitstream::NalStreamConverter,
+    config::decoded_pixel_layout,
+};
+use std::ffi::c_void;
 use std::fmt;
 use std::ptr;
 use windows::Win32::Media::MediaFoundation::{
-    IMFMediaType, IMFSample, IMFTransform, MF_E_TRANSFORM_NEED_MORE_INPUT, MF_MT_FRAME_RATE,
-    MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_VERSION,
-    MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFSTARTUP_NOSOCKET, MFStartup,
-    MFT_CATEGORY_VIDEO_DECODER, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE,
-    MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
-    MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_INFO, MFTEnumEx,
-    MFVideoInterlace_Progressive,
+    IMF2DBuffer, IMFMediaType, IMFSample, IMFTransform, MF_E_NO_MORE_TYPES,
+    MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE, MF_MT_FRAME_RATE,
+    MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MPEG_SEQUENCE_HEADER,
+    MF_MT_SUBTYPE, MF_VERSION, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
+    MFSTARTUP_NOSOCKET, MFShutdown, MFStartup, MFT_CATEGORY_VIDEO_DECODER,
+    MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER,
+    MFT_ENUM_FLAG_SYNCMFT, MFT_MESSAGE_COMMAND_DRAIN, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+    MFT_MESSAGE_NOTIFY_END_OF_STREAM, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
+    MFT_OUTPUT_STREAM_INFO, MFTEnumEx, MFVideoFormat_P010, MFVideoInterlace_Progressive,
 };
-use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
-use windows::core::GUID;
+use windows::Win32::System::Com::{
+    COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize,
+};
+use windows::core::{GUID, Interface};
 
 // Media Foundation GUIDs
 const MF_MT_AVG_BITRATE: GUID = GUID::from_u128(0x20332624_fb0d_4d9e_bd0d_cbf6786c102e);
@@ -46,14 +54,36 @@ impl CodecType {
     }
 }
 
-/// Initialize Media Foundation (call once at startup).
-fn init_mf() -> Result<(), CodecError> {
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)
-            .map_err(|e| CodecError::InitializationFailed(format!("MFStartup failed: {e}")))?;
+struct MediaFoundationSession;
+
+impl MediaFoundationSession {
+    fn new() -> Result<Self, CodecError> {
+        unsafe {
+            CoInitializeEx(None, COINIT_MULTITHREADED)
+                .ok()
+                .map_err(|error| {
+                    CodecError::InitializationFailed(format!("CoInitializeEx failed: {error}"))
+                })?;
+            if let Err(error) = MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET) {
+                CoUninitialize();
+                return Err(CodecError::InitializationFailed(format!(
+                    "MFStartup failed: {error}"
+                )));
+            }
+        }
+        Ok(Self)
     }
-    Ok(())
+}
+
+impl Drop for MediaFoundationSession {
+    fn drop(&mut self) {
+        unsafe {
+            if let Err(error) = MFShutdown() {
+                tracing::error!(%error, "MFShutdown failed");
+            }
+            CoUninitialize();
+        }
+    }
 }
 
 /// Decoded frame from Windows Media Foundation (NV12 format).
@@ -67,6 +97,8 @@ pub struct WindowsFrame {
     pub height: u32,
     /// Presentation timestamp in nanoseconds.
     pub timestamp_ns: u64,
+    /// Native bi-planar pixel layout.
+    pub layout: DecodedPixelLayout,
 }
 
 impl fmt::Debug for WindowsFrame {
@@ -87,6 +119,9 @@ pub struct WindowsDecoder {
     width: u32,
     height: u32,
     output_stream_info: MFT_OUTPUT_STREAM_INFO,
+    output_layout: DecodedPixelLayout,
+    input_bitstream: NalStreamConverter,
+    _media_foundation: MediaFoundationSession,
 }
 
 impl fmt::Debug for WindowsDecoder {
@@ -99,50 +134,44 @@ impl fmt::Debug for WindowsDecoder {
     }
 }
 
-unsafe impl Send for WindowsDecoder {}
-unsafe impl Sync for WindowsDecoder {}
-
 impl WindowsDecoder {
     /// Create a new Windows hardware decoder.
     pub fn new(
         codec_type: CodecType,
-        _config: Option<&[u8]>,
+        config: Option<&[u8]>,
         width: u32,
         height: u32,
     ) -> Result<Self, CodecError> {
-        init_mf()?;
+        let media_foundation = MediaFoundationSession::new()?;
 
         unsafe {
+            let input_bitstream = NalStreamConverter::new(codec_type == CodecType::H265, config)?;
             let input_type = create_video_type(codec_type.subtype(), width, height)?;
-            let output_type = create_video_type(MFVideoFormat_NV12, width, height)?;
-
-            let mut count = 0u32;
-            let mut activates = ptr::null_mut();
-
-            MFTEnumEx(
-                MFT_CATEGORY_VIDEO_DECODER,
-                MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER | MFT_ENUM_FLAG_SYNCMFT,
-                Some(&create_register_type_info(codec_type.subtype())),
-                Some(&create_register_type_info(MFVideoFormat_NV12)),
-                &raw mut activates,
-                &raw mut count,
-            )
-            .map_err(|e| {
-                CodecError::InitializationFailed(format!("MFTEnumEx decoder failed: {e}"))
-            })?;
-
-            if count == 0 || activates.is_null() {
-                return Err(CodecError::Unsupported(
-                    "No hardware decoder available".into(),
-                ));
+            if !input_bitstream.parameter_sets().is_empty() {
+                input_type
+                    .SetBlob(
+                        &MF_MT_MPEG_SEQUENCE_HEADER,
+                        input_bitstream.parameter_sets(),
+                    )
+                    .map_err(|error| {
+                        CodecError::InitializationFailed(format!(
+                            "SetBlob codec configuration failed: {error}"
+                        ))
+                    })?;
             }
+            let output_layout = decoded_pixel_layout(codec_type == CodecType::H265, config)?;
+            let output_subtype = match output_layout {
+                DecodedPixelLayout::Nv12 => MFVideoFormat_NV12,
+                DecodedPixelLayout::P010 => MFVideoFormat_P010,
+            };
+            let output_type = create_video_type(output_subtype, width, height)?;
 
-            let activate = (&*activates)
-                .as_ref()
-                .ok_or_else(|| CodecError::InitializationFailed("No decoder found".into()))?;
-            let transform: IMFTransform = activate
-                .ActivateObject()
-                .map_err(|e| CodecError::InitializationFailed(format!("ActivateObject: {e}")))?;
+            let transform = activate_hardware_transform(
+                MFT_CATEGORY_VIDEO_DECODER,
+                create_register_type_info(codec_type.subtype()),
+                create_register_type_info(output_subtype),
+                "decoder",
+            )?;
 
             transform.SetInputType(0, &input_type, 0).map_err(|e| {
                 CodecError::InitializationFailed(format!("SetInputType failed: {e}"))
@@ -169,60 +198,153 @@ impl WindowsDecoder {
                 width,
                 height,
                 output_stream_info,
+                output_layout,
+                input_bitstream,
+                _media_foundation: media_foundation,
             })
         }
     }
 
     /// Decode compressed video data.
-    pub fn decode(&mut self, data: &[u8]) -> Result<Vec<WindowsFrame>, CodecError> {
+    pub fn decode(&mut self, packet: DecodePacket<'_>) -> Result<Vec<WindowsFrame>, CodecError> {
         unsafe {
-            let input_sample = create_sample(data)?;
+            let annex_b = self.input_bitstream.convert_sample(packet.data())?;
+            let input_sample = create_sample(&annex_b)?;
+            let time_100ns =
+                i64::try_from(packet.presentation_time().as_nanos() / 100).map_err(|_| {
+                    CodecError::DecodingFailed("presentation timestamp exceeds i64".into())
+                })?;
+            input_sample.SetSampleTime(time_100ns).map_err(|error| {
+                CodecError::DecodingFailed(format!("SetSampleTime failed: {error}"))
+            })?;
 
             self.transform
                 .ProcessInput(0, &input_sample, 0)
                 .map_err(|e| CodecError::DecodingFailed(format!("ProcessInput: {e}")))?;
 
-            let mut frames = Vec::new();
+            self.collect_output()
+        }
+    }
 
-            loop {
-                let output_sample = if self.output_stream_info.dwFlags & 0x100 != 0 {
-                    None
-                } else {
-                    let y_size = self.width as usize * self.height as usize;
-                    let uv_size = y_size / 2;
-                    Some(create_empty_sample(y_size + uv_size)?)
-                };
+    /// Drains every delayed Media Foundation output frame.
+    pub fn drain(&mut self) -> Result<Vec<WindowsFrame>, CodecError> {
+        unsafe {
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)
+                .map_err(|error| {
+                    CodecError::DecodingFailed(format!("notify end of stream failed: {error}"))
+                })?;
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)
+                .map_err(|error| {
+                    CodecError::DecodingFailed(format!("start decoder drain failed: {error}"))
+                })?;
+            self.collect_output()
+        }
+    }
 
-                let mut output_buffer = MFT_OUTPUT_DATA_BUFFER {
-                    dwStreamID: 0,
-                    pSample: std::mem::ManuallyDrop::new(output_sample),
-                    dwStatus: 0,
-                    pEvents: std::mem::ManuallyDrop::new(None),
-                };
+    unsafe fn collect_output(&mut self) -> Result<Vec<WindowsFrame>, CodecError> {
+        let mut frames = Vec::new();
+        loop {
+            let output_sample = if self.output_stream_info.dwFlags & 0x100 != 0 {
+                None
+            } else {
+                let packed_len = self.output_layout.packed_len(self.width, self.height);
+                Some(create_empty_sample(
+                    (self.output_stream_info.cbSize as usize).max(packed_len),
+                )?)
+            };
 
-                let mut status = 0u32;
-                let result = self.transform.ProcessOutput(
+            let mut output_buffer = MFT_OUTPUT_DATA_BUFFER {
+                dwStreamID: 0,
+                pSample: std::mem::ManuallyDrop::new(output_sample),
+                dwStatus: 0,
+                pEvents: std::mem::ManuallyDrop::new(None),
+            };
+
+            let mut status = 0u32;
+            let result = unsafe {
+                self.transform.ProcessOutput(
                     0,
                     std::slice::from_mut(&mut output_buffer),
                     &raw mut status,
-                );
+                )
+            };
+            let output_sample = take_output_sample(&mut output_buffer);
 
-                match result {
-                    Ok(()) => {
-                        if let Some(sample) = &*output_buffer.pSample
-                            && let Ok(frame) = extract_nv12_frame(sample, self.width, self.height)
-                        {
-                            frames.push(frame);
-                        }
-                    }
-                    Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => break,
-                    Err(e) => {
-                        return Err(CodecError::DecodingFailed(format!("ProcessOutput: {e}")));
+            match result {
+                Ok(()) => {
+                    if let Some(sample) = output_sample.as_ref() {
+                        frames.push(extract_biplanar_frame(
+                            sample,
+                            self.width,
+                            self.height,
+                            self.output_layout,
+                        )?);
                     }
                 }
+                Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => return Ok(frames),
+                Err(error) if error.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
+                    self.renegotiate_output_type()?;
+                }
+                Err(error) => {
+                    return Err(CodecError::DecodingFailed(format!(
+                        "ProcessOutput: {error}"
+                    )));
+                }
             }
+        }
+    }
 
-            Ok(frames)
+    fn renegotiate_output_type(&mut self) -> Result<(), CodecError> {
+        let expected_subtype = output_subtype(self.output_layout);
+        let mut index = 0;
+        loop {
+            let media_type = match unsafe { self.transform.GetOutputAvailableType(0, index) } {
+                Ok(media_type) => media_type,
+                Err(error) if error.code() == MF_E_NO_MORE_TYPES => {
+                    return Err(CodecError::Unsupported(format!(
+                        "Media Foundation stream change has no {expected_subtype:?} output type"
+                    )));
+                }
+                Err(error) => {
+                    return Err(CodecError::DecodingFailed(format!(
+                        "GetOutputAvailableType failed during stream change: {error}"
+                    )));
+                }
+            };
+            index += 1;
+            let subtype = unsafe { media_type.GetGUID(&MF_MT_SUBTYPE) }.map_err(|error| {
+                CodecError::DecodingFailed(format!(
+                    "stream-change output type has no subtype: {error}"
+                ))
+            })?;
+            if subtype != expected_subtype {
+                continue;
+            }
+            let frame_size =
+                unsafe { media_type.GetUINT64(&MF_MT_FRAME_SIZE) }.map_err(|error| {
+                    CodecError::DecodingFailed(format!(
+                        "stream-change output type has no frame size: {error}"
+                    ))
+                })?;
+            let width = u32::try_from(frame_size >> 32).expect("frame width is stored as u32");
+            let height = u32::try_from(frame_size & u64::from(u32::MAX))
+                .expect("frame height is stored as u32");
+            unsafe { self.transform.SetOutputType(0, &media_type, 0) }.map_err(|error| {
+                CodecError::DecodingFailed(format!(
+                    "SetOutputType failed during stream change: {error}"
+                ))
+            })?;
+            self.width = width;
+            self.height = height;
+            self.output_stream_info =
+                unsafe { self.transform.GetOutputStreamInfo(0) }.map_err(|error| {
+                    CodecError::DecodingFailed(format!(
+                        "GetOutputStreamInfo failed after stream change: {error}"
+                    ))
+                })?;
+            return Ok(());
         }
     }
 }
@@ -237,6 +359,7 @@ pub struct WindowsEncoder {
     frame_count: i64,
     output_stream_info: MFT_OUTPUT_STREAM_INFO,
     codec_config: Option<Vec<u8>>,
+    _media_foundation: MediaFoundationSession,
 }
 
 impl fmt::Debug for WindowsEncoder {
@@ -250,42 +373,18 @@ impl fmt::Debug for WindowsEncoder {
     }
 }
 
-unsafe impl Send for WindowsEncoder {}
-unsafe impl Sync for WindowsEncoder {}
-
 impl WindowsEncoder {
     /// Create a new Windows hardware encoder.
     pub fn new(codec_type: CodecType, width: u32, height: u32) -> Result<Self, CodecError> {
-        init_mf()?;
+        let media_foundation = MediaFoundationSession::new()?;
 
         unsafe {
-            let mut count = 0u32;
-            let mut activates = ptr::null_mut();
-
-            MFTEnumEx(
+            let transform = activate_hardware_transform(
                 MFT_CATEGORY_VIDEO_ENCODER,
-                MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER | MFT_ENUM_FLAG_SYNCMFT,
-                Some(&create_register_type_info(MFVideoFormat_NV12)),
-                Some(&create_register_type_info(codec_type.subtype())),
-                &raw mut activates,
-                &raw mut count,
-            )
-            .map_err(|e| {
-                CodecError::InitializationFailed(format!("MFTEnumEx encoder failed: {e}"))
-            })?;
-
-            if count == 0 || activates.is_null() {
-                return Err(CodecError::Unsupported(
-                    "No hardware encoder available".into(),
-                ));
-            }
-
-            let activate = (&*activates)
-                .as_ref()
-                .ok_or_else(|| CodecError::InitializationFailed("No encoder found".into()))?;
-            let transform: IMFTransform = activate
-                .ActivateObject()
-                .map_err(|e| CodecError::InitializationFailed(format!("ActivateObject: {e}")))?;
+                create_register_type_info(MFVideoFormat_NV12),
+                create_register_type_info(codec_type.subtype()),
+                "encoder",
+            )?;
 
             let output_type = create_video_type(codec_type.subtype(), width, height)?;
             output_type.SetUINT32(&MF_MT_AVG_BITRATE, 4_000_000).ok();
@@ -318,6 +417,7 @@ impl WindowsEncoder {
                 frame_count: 0,
                 output_stream_info,
                 codec_config: None,
+                _media_foundation: media_foundation,
             })
         }
     }
@@ -373,10 +473,11 @@ impl WindowsEncoder {
                     std::slice::from_mut(&mut output_buffer),
                     &raw mut status,
                 );
+                let output_sample = take_output_sample(&mut output_buffer);
 
                 match result {
                     Ok(()) => {
-                        if let Some(sample) = &*output_buffer.pSample
+                        if let Some(sample) = output_sample.as_ref()
                             && let Ok(data) = extract_sample_data(sample)
                         {
                             encoded_data.extend_from_slice(&data);
@@ -442,6 +543,74 @@ const fn create_register_type_info(
     }
 }
 
+const fn output_subtype(layout: DecodedPixelLayout) -> GUID {
+    match layout {
+        DecodedPixelLayout::Nv12 => MFVideoFormat_NV12,
+        DecodedPixelLayout::P010 => MFVideoFormat_P010,
+    }
+}
+
+fn activate_hardware_transform(
+    category: GUID,
+    input_type: windows::Win32::Media::MediaFoundation::MFT_REGISTER_TYPE_INFO,
+    output_type: windows::Win32::Media::MediaFoundation::MFT_REGISTER_TYPE_INFO,
+    kind: &str,
+) -> Result<IMFTransform, CodecError> {
+    unsafe {
+        let mut count = 0u32;
+        let mut activates = ptr::null_mut();
+        MFTEnumEx(
+            category,
+            MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER | MFT_ENUM_FLAG_SYNCMFT,
+            Some(&raw const input_type),
+            Some(&raw const output_type),
+            &raw mut activates,
+            &raw mut count,
+        )
+        .map_err(|error| {
+            CodecError::InitializationFailed(format!("MFTEnumEx {kind} discovery failed: {error}"))
+        })?;
+
+        if count == 0 {
+            if !activates.is_null() {
+                CoTaskMemFree(Some(activates.cast::<c_void>()));
+            }
+            return Err(CodecError::Unsupported(format!(
+                "no hardware {kind} is available for the requested formats"
+            )));
+        }
+        if activates.is_null() {
+            return Err(CodecError::InitializationFailed(format!(
+                "MFTEnumEx returned {count} {kind} activations through a null array"
+            )));
+        }
+
+        let slots = std::slice::from_raw_parts_mut(activates, count as usize);
+        let activation_objects = slots
+            .iter_mut()
+            .filter_map(Option::take)
+            .collect::<Vec<_>>();
+        CoTaskMemFree(Some(activates.cast::<c_void>()));
+
+        let activate = activation_objects.into_iter().next().ok_or_else(|| {
+            CodecError::InitializationFailed(format!(
+                "MFTEnumEx returned no usable {kind} activation"
+            ))
+        })?;
+        activate.ActivateObject().map_err(|error| {
+            CodecError::InitializationFailed(format!("hardware {kind} activation failed: {error}"))
+        })
+    }
+}
+
+fn take_output_sample(output: &mut MFT_OUTPUT_DATA_BUFFER) -> Option<IMFSample> {
+    unsafe {
+        let sample = std::mem::ManuallyDrop::take(&mut output.pSample);
+        drop(std::mem::ManuallyDrop::take(&mut output.pEvents));
+        sample
+    }
+}
+
 fn create_sample(data: &[u8]) -> Result<IMFSample, CodecError> {
     unsafe {
         let sample: IMFSample = MFCreateSample()
@@ -496,43 +665,119 @@ fn create_empty_sample(size: usize) -> Result<IMFSample, CodecError> {
 }
 
 #[allow(clippy::cast_sign_loss)]
-fn extract_nv12_frame(
+fn extract_biplanar_frame(
     sample: &IMFSample,
     width: u32,
     height: u32,
+    layout: DecodedPixelLayout,
 ) -> Result<WindowsFrame, CodecError> {
     unsafe {
         let buffer = sample
             .GetBufferByIndex(0)
             .map_err(|e| CodecError::DecodingFailed(format!("GetBufferByIndex: {e}")))?;
 
-        let mut buffer_ptr = ptr::null_mut();
-        let mut current_len = 0u32;
+        let expected_size = layout.packed_len(width, height);
+        let data = if let Ok(buffer_2d) = buffer.cast::<IMF2DBuffer>() {
+            copy_2d_biplanar_buffer(&buffer_2d, width, height, layout)?
+        } else {
+            let mut buffer_ptr = ptr::null_mut();
+            let mut current_len = 0u32;
+            buffer
+                .Lock(&raw mut buffer_ptr, None, Some(&raw mut current_len))
+                .map_err(|error| CodecError::DecodingFailed(format!("Lock: {error}")))?;
+            let current_len = current_len as usize;
+            if current_len != expected_size {
+                buffer.Unlock().map_err(|error| {
+                    CodecError::DecodingFailed(format!("Unlock after size mismatch: {error}"))
+                })?;
+                return Err(CodecError::DecodingFailed(format!(
+                    "Media Foundation output has {current_len} bytes; expected {expected_size} for {width}x{height} {layout:?}"
+                )));
+            }
+            let mut data = vec![0_u8; expected_size];
+            ptr::copy_nonoverlapping(buffer_ptr, data.as_mut_ptr(), expected_size);
+            buffer
+                .Unlock()
+                .map_err(|error| CodecError::DecodingFailed(format!("Unlock: {error}")))?;
+            data
+        };
 
-        buffer
-            .Lock(&raw mut buffer_ptr, None, Some(&raw mut current_len))
-            .map_err(|e| CodecError::DecodingFailed(format!("Lock: {e}")))?;
-
-        let y_size = width as usize * height as usize;
-        let uv_size = y_size / 2;
-        let frame_size = y_size + uv_size;
-
-        let mut data = vec![0u8; frame_size];
-        let copy_size = (current_len as usize).min(frame_size);
-        ptr::copy_nonoverlapping(buffer_ptr, data.as_mut_ptr(), copy_size);
-
-        buffer
-            .Unlock()
-            .map_err(|e| CodecError::DecodingFailed(format!("Unlock: {e}")))?;
-
-        let timestamp_ns = sample.GetSampleTime().unwrap_or(0) as u64 * 100;
+        let sample_time = sample.GetSampleTime().map_err(|error| {
+            CodecError::DecodingFailed(format!("decoded sample has no PTS: {error}"))
+        })?;
+        let timestamp_ns = u64::try_from(sample_time)
+            .map_err(|_| {
+                CodecError::DecodingFailed("decoded sample returned a negative PTS".into())
+            })?
+            .saturating_mul(100);
 
         Ok(WindowsFrame {
             data,
             width,
             height,
             timestamp_ns,
+            layout,
         })
+    }
+}
+
+fn copy_2d_biplanar_buffer(
+    buffer: &IMF2DBuffer,
+    width: u32,
+    height: u32,
+    layout: DecodedPixelLayout,
+) -> Result<Vec<u8>, CodecError> {
+    unsafe {
+        let mut scanline = ptr::null_mut();
+        let mut pitch = 0_i32;
+        buffer
+            .Lock2D(&raw mut scanline, &raw mut pitch)
+            .map_err(|error| CodecError::DecodingFailed(format!("Lock2D failed: {error}")))?;
+
+        let result = (|| {
+            if scanline.is_null() {
+                return Err(CodecError::DecodingFailed(
+                    "Lock2D returned a null scanline".into(),
+                ));
+            }
+            let pitch = usize::try_from(pitch).map_err(|_| {
+                CodecError::DecodingFailed(format!(
+                    "Media Foundation returned negative YUV pitch {pitch}"
+                ))
+            })?;
+            let row_bytes = layout.bytes_per_row(width);
+            if pitch < row_bytes {
+                return Err(CodecError::DecodingFailed(format!(
+                    "Media Foundation YUV pitch {pitch} is smaller than row size {row_bytes}"
+                )));
+            }
+
+            let y_rows = height as usize;
+            let uv_rows = y_rows / 2;
+            let y_size = row_bytes * y_rows;
+            let mut data = vec![0_u8; layout.packed_len(width, height)];
+            for row in 0..y_rows {
+                ptr::copy_nonoverlapping(
+                    scanline.add(row * pitch),
+                    data.as_mut_ptr().add(row * row_bytes),
+                    row_bytes,
+                );
+            }
+            let uv_scanline = scanline.add(pitch * y_rows);
+            for row in 0..uv_rows {
+                ptr::copy_nonoverlapping(
+                    uv_scanline.add(row * pitch),
+                    data.as_mut_ptr().add(y_size + row * row_bytes),
+                    row_bytes,
+                );
+            }
+            Ok(data)
+        })();
+
+        buffer
+            .Unlock2D()
+            .map_err(|error| CodecError::DecodingFailed(format!("Unlock2D failed: {error}")))?;
+        result
     }
 }
 

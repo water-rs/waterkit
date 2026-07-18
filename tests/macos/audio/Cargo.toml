@@ -15,7 +15,6 @@ name = "audio-recorder-test"
 path = "src/bin/audio_recorder_test.rs"
 
 [dependencies]
-waterkit-audio.workspace = true
+waterkit-audio = { workspace = true, features = ["playback", "recording", "streaming", "media-session", "apple-artwork"] }
 futures-timer = "3.0"
 futures = { workspace = true }
-

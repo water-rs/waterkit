@@ -1,13 +1,17 @@
 //! GPU-backed video frame with YUV texture representation.
 
 use std::sync::Arc;
+use waterkit_video_core::VideoColorInfo;
 use wgpu::{
     BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, ComputePipeline, ComputePipelineDescriptor,
-    Device, Extent3d, PipelineLayoutDescriptor, Queue, ShaderStages, StorageTextureAccess, Texture,
+    BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferBindingType,
+    BufferDescriptor, BufferUsages, ComputePipeline, ComputePipelineDescriptor, Device, Extent3d,
+    PipelineLayoutDescriptor, Queue, ShaderStages, StorageTextureAccess, Texture,
     TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
     TextureViewDimension,
 };
+
+use crate::{ColorOutputTarget, YUV_COLOR_SHADER_WGSL, video_color_uniform};
 
 #[cfg(target_vendor = "apple")]
 use {
@@ -27,16 +31,22 @@ pub struct DecodedFrame {
 }
 
 /// Reusable decoded-frame uploader that retains GPU plane textures across frames.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DecodedFrameUploader {
     cached: Option<GpuFrame>,
+    #[cfg(target_vendor = "apple")]
+    apple: Option<apple_gpu::AppleFrameUploader>,
 }
 
 impl DecodedFrameUploader {
     /// Creates an uploader with no allocated textures.
     #[must_use]
     pub const fn new() -> Self {
-        Self { cached: None }
+        Self {
+            cached: None,
+            #[cfg(target_vendor = "apple")]
+            apple: None,
+        }
     }
 
     /// Uploads a decoded frame, reusing textures while dimensions and layout remain stable.
@@ -45,16 +55,15 @@ impl DecodedFrameUploader {
         let width = decoded.width();
         let height = decoded.height();
         let layout = decoded.pixel_layout();
-        let replace = self.cached.as_ref().is_none_or(|cached| {
+        let replace = self.cached.as_ref().is_some_and(|cached| {
             cached.width != width || cached.height != height || cached.layout != layout
         });
         if replace {
-            self.cached = Some(GpuFrame::initialized(device, queue, width, height, layout));
+            self.cached = None;
         }
         let cached = self
             .cached
-            .as_mut()
-            .expect("decoded frame uploader must allocate its texture planes");
+            .get_or_insert_with(|| GpuFrame::initialized(device, queue, width, height, layout));
         let timestamp_ns = match decoded.inner {
             #[cfg(target_vendor = "apple")]
             DecodedFrameInner::Hardware {
@@ -62,15 +71,19 @@ impl DecodedFrameUploader {
                 timestamp_ns,
                 ..
             } => {
-                apple_gpu::copy_surface_planes(
-                    queue,
-                    &pixel_buffer,
-                    &cached.y_texture,
-                    &cached.uv_texture,
-                    width,
-                    height,
-                    layout,
-                );
+                self.apple
+                    .get_or_insert_with(|| apple_gpu::AppleFrameUploader::new(queue))
+                    .copy_surface_planes(
+                        queue,
+                        apple_gpu::SurfacePlaneCopy {
+                            pixel_buffer: &pixel_buffer,
+                            y_target: &cached.y_texture,
+                            uv_target: &cached.uv_texture,
+                            width,
+                            height,
+                            layout,
+                        },
+                    );
                 timestamp_ns
             }
             #[cfg(any(
@@ -89,6 +102,12 @@ impl DecodedFrameUploader {
         };
         cached.timestamp_ns = timestamp_ns;
         cached.clone()
+    }
+}
+
+impl Default for DecodedFrameUploader {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -191,7 +210,7 @@ impl DecodedFrame {
         }
     }
 
-    /// Create a decoded frame from NV12 software decode output.
+    /// Create a decoded frame from tightly packed bi-planar software output.
     #[cfg(any(
         not(target_vendor = "apple"),
         all(
@@ -199,11 +218,12 @@ impl DecodedFrame {
             not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
         )
     ))]
-    pub(crate) const fn from_nv12_data(
+    pub(crate) const fn from_biplanar_data(
         data: Vec<u8>,
         width: u32,
         height: u32,
         timestamp_ns: u64,
+        layout: DecodedPixelLayout,
     ) -> Self {
         Self {
             inner: DecodedFrameInner::Software {
@@ -211,7 +231,7 @@ impl DecodedFrame {
                 width,
                 height,
                 timestamp_ns,
-                layout: DecodedPixelLayout::Nv12,
+                layout,
             },
         }
     }
@@ -478,6 +498,13 @@ impl GpuFrame {
         )
     }
 
+    #[cfg(any(
+        not(target_vendor = "apple"),
+        all(
+            target_vendor = "apple",
+            not(any(target_os = "ios", target_os = "tvos", target_os = "watchos"))
+        )
+    ))]
     fn write_biplanar(&self, queue: &Queue, data: &[u8]) {
         let row_bytes = self.layout.bytes_per_row(self.width);
         let y_size = row_bytes * self.height as usize;
@@ -501,26 +528,6 @@ impl GpuFrame {
             },
             self.uv_texture.size(),
         );
-    }
-
-    /// Create a GPU frame wrapping existing YUV textures (zero-copy).
-    #[allow(dead_code)]
-    pub(crate) fn from_yuv_textures(
-        y_texture: Texture,
-        uv_texture: Texture,
-        width: u32,
-        height: u32,
-        timestamp_ns: u64,
-        layout: DecodedPixelLayout,
-    ) -> Self {
-        Self {
-            y_texture: Arc::new(y_texture),
-            uv_texture: Arc::new(uv_texture),
-            width,
-            height,
-            timestamp_ns,
-            layout,
-        }
     }
 
     /// Get the Y plane texture.
@@ -559,38 +566,40 @@ impl GpuFrame {
         self.layout
     }
 
-    /// Convert YUV to RGBA using a compute shader.
+    /// Converts native YUV into linear extended-range RGBA16F on the GPU.
     ///
-    /// Returns a new RGBA texture. Use [`YuvConverter`] for batch conversions
-    /// to avoid recreating the pipeline each time.
+    /// Use [`LinearRgbaConverter`] for repeated conversions so the compute
+    /// pipeline is created once.
     #[must_use]
-    pub fn to_rgba(&self, device: &Device, queue: &Queue) -> Texture {
-        let converter = YuvConverter::new(device);
-        converter.convert(device, queue, self)
+    pub fn to_linear_rgba(&self, device: &Device, queue: &Queue, color: VideoColorInfo) -> Texture {
+        let converter = LinearRgbaConverter::new(device);
+        converter.convert(device, queue, self, color)
     }
 }
 
-/// Reusable YUV to RGBA converter pipeline.
+/// Reusable native-YUV to linear RGBA16F converter pipeline.
 ///
-/// Create once and reuse for multiple frames to avoid pipeline recreation overhead.
-pub struct YuvConverter {
+/// The output uses sRGB/BT.709 primaries and linear light relative to a
+/// 100-nit reference white. HDR values intentionally remain above `1.0`.
+pub struct LinearRgbaConverter {
     pipeline: ComputePipeline,
     bind_group_layout: BindGroupLayout,
 }
 
-impl std::fmt::Debug for YuvConverter {
+impl std::fmt::Debug for LinearRgbaConverter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("YuvConverter").finish_non_exhaustive()
+        f.debug_struct("LinearRgbaConverter")
+            .finish_non_exhaustive()
     }
 }
 
-impl YuvConverter {
-    /// Create a new YUV to RGBA converter.
+impl LinearRgbaConverter {
+    /// Creates a reusable linear RGBA16F converter.
     #[must_use]
     pub fn new(device: &Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("YUV to RGBA shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("yuv_to_rgba.wgsl").into()),
+            label: Some("WaterKit YUV color shader"),
+            source: wgpu::ShaderSource::Wgsl(YUV_COLOR_SHADER_WGSL.into()),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -617,11 +626,21 @@ impl YuvConverter {
                     count: None,
                 },
                 BindGroupLayoutEntry {
-                    binding: 2,
+                    binding: 3,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(std::num::NonZeroU64::MIN.saturating_add(31)),
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 4,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
                         access: StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::Rgba8Unorm,
+                        format: TextureFormat::Rgba16Float,
                         view_dimension: TextureViewDimension::D2,
                     },
                     count: None,
@@ -639,7 +658,7 @@ impl YuvConverter {
             label: Some("YUV to RGBA pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
-            entry_point: Some("main"),
+            entry_point: Some("convert_to_linear_rgba"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
@@ -650,11 +669,17 @@ impl YuvConverter {
         }
     }
 
-    /// Convert a YUV frame to RGBA.
+    /// Converts one YUV frame to linear RGBA16F while preserving HDR range.
     #[must_use]
-    pub fn convert(&self, device: &Device, queue: &Queue, frame: &GpuFrame) -> Texture {
+    pub fn convert(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        frame: &GpuFrame,
+        color: VideoColorInfo,
+    ) -> Texture {
         let output = device.create_texture(&TextureDescriptor {
-            label: Some("RGBA output"),
+            label: Some("Linear RGBA16F video frame"),
             size: Extent3d {
                 width: frame.width,
                 height: frame.height,
@@ -663,7 +688,7 @@ impl YuvConverter {
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba8Unorm,
+            format: TextureFormat::Rgba16Float,
             usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -675,6 +700,7 @@ impl YuvConverter {
             .uv_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+        let uniform = create_video_color_uniform_buffer(device, frame.layout, color);
 
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("YUV converter bind group"),
@@ -689,7 +715,11 @@ impl YuvConverter {
                     resource: BindingResource::TextureView(&uv_view),
                 },
                 BindGroupEntry {
-                    binding: 2,
+                    binding: 3,
+                    resource: uniform.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 4,
                     resource: BindingResource::TextureView(&output_view),
                 },
             ],
@@ -706,4 +736,25 @@ impl YuvConverter {
 
         output
     }
+}
+
+fn create_video_color_uniform_buffer(
+    device: &Device,
+    layout: DecodedPixelLayout,
+    color: VideoColorInfo,
+) -> Buffer {
+    let uniform = video_color_uniform(color, layout, ColorOutputTarget::LinearHdr);
+    let bytes = uniform.to_bytes();
+    let buffer = device.create_buffer(&BufferDescriptor {
+        label: Some("WaterKit video color uniform"),
+        size: 32,
+        usage: BufferUsages::UNIFORM,
+        mapped_at_creation: true,
+    });
+    {
+        let mut mapped = buffer.slice(..).get_mapped_range_mut();
+        mapped.copy_from_slice(&bytes);
+    }
+    buffer.unmap();
+    buffer
 }

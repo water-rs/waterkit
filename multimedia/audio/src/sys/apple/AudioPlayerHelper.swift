@@ -22,7 +22,6 @@ func audio_player_init() -> PlayerResultFFI {
     }
     #endif
 
-    media_session_register_command_handler()
     return .Success
 }
 

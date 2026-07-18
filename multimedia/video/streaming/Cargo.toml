@@ -1,0 +1,50 @@
+[package]
+name = "waterkit-video-streaming"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+description = "Zenwave-based network delivery and cache primitives for WaterKit video"
+keywords = ["video", "streaming", "http", "cache"]
+categories = ["multimedia::video", "network-programming"]
+
+[dependencies]
+waterkit-video-core.workspace = true
+async-fs.workspace = true
+blocking.workspace = true
+futures.workspace = true
+url.workspace = true
+blake3 = "1"
+uuid = { version = "1.21", features = ["v4"] }
+quick-m3u8 = "0.8"
+hex = "0.4"
+dash-mpd = { version = "0.20.3", default-features = false }
+base64 = "0.22"
+bytes.workspace = true
+num-traits.workspace = true
+async-channel = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+zenwave = { workspace = true, features = ["native-tls"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+zenwave = { workspace = true, features = ["rustls"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = ["Win32_Storage_FileSystem"] }
+zenwave = { workspace = true, features = ["native-tls"] }
+blake3 = { version = "1", features = ["pure"] }
+
+[target.'cfg(not(any(target_vendor = "apple", target_os = "android", target_os = "windows")))'.dependencies]
+zenwave = { workspace = true, features = ["rustls"] }
+
+[features]
+default = []
+offline = ["dep:async-channel", "dep:serde", "dep:serde_json", "uuid/serde"]
+
+[lints]
+workspace = true

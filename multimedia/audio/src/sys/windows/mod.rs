@@ -1,16 +1,15 @@
 //! Windows media control implementation using `SystemMediaTransportControls`.
 
 use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
-use std::sync::RwLock;
 use windows::Foundation::TypedEventHandler;
 use windows::Media::Playback::MediaPlayer;
 use windows::Media::{
     MediaPlaybackStatus, MediaPlaybackType, SystemMediaTransportControls,
     SystemMediaTransportControlsButton, SystemMediaTransportControlsButtonPressedEventArgs,
 };
-
-/// Pending commands queue
-static PENDING_COMMANDS: RwLock<Vec<MediaCommand>> = RwLock::new(Vec::new());
+use windows::Storage::Streams::{
+    DataWriter, InMemoryRandomAccessStream, RandomAccessStreamReference,
+};
 
 #[allow(clippy::needless_pass_by_value)]
 fn win_err_update(e: windows::core::Error) -> MediaError {
@@ -52,12 +51,21 @@ fn set_metadata_inner(
             .map_err(win_err_update)?;
     }
 
-    if let Some(url) = metadata.artwork_url()
-        && let Ok(uri) = windows::Foundation::Uri::CreateUri(&windows::core::HSTRING::from(url))
-        && let Ok(stream) =
-            windows::Storage::Streams::RandomAccessStreamReference::CreateFromUri(&uri)
-    {
-        let _ = updater.SetThumbnail(&stream);
+    if let Some(artwork) = metadata.artwork() {
+        let stream = InMemoryRandomAccessStream::new().map_err(win_err_update)?;
+        let writer = DataWriter::CreateDataWriter(&stream).map_err(win_err_update)?;
+        writer
+            .WriteBytes(artwork.encoded())
+            .map_err(win_err_update)?;
+        let store = writer.StoreAsync().map_err(win_err_update)?;
+        futures::executor::block_on(async move { store.await }).map_err(win_err_update)?;
+        writer.DetachStream().map_err(win_err_update)?;
+        stream.Seek(0).map_err(win_err_update)?;
+        let stream_reference =
+            RandomAccessStreamReference::CreateFromStream(&stream).map_err(win_err_update)?;
+        updater
+            .SetThumbnail(&stream_reference)
+            .map_err(win_err_update)?;
     }
 
     updater.Update().map_err(win_err_update)?;
@@ -103,11 +111,14 @@ fn create_controls() -> Result<(MediaPlayer, SystemMediaTransportControls), Medi
     Ok((media_player, controls))
 }
 
-fn setup_button_handler(controls: &SystemMediaTransportControls) -> Result<(), MediaError> {
+fn setup_button_handler(
+    controls: &SystemMediaTransportControls,
+    command_sender: async_channel::Sender<MediaCommand>,
+) -> Result<i64, MediaError> {
     let handler = TypedEventHandler::<
         SystemMediaTransportControls,
         SystemMediaTransportControlsButtonPressedEventArgs,
-    >::new(|_sender, args| {
+    >::new(move |_sender, args| {
         if let Some(args) = args.as_ref()
             && let Ok(button) = args.Button()
         {
@@ -120,10 +131,10 @@ fn setup_button_handler(controls: &SystemMediaTransportControls) -> Result<(), M
                 _ => None,
             };
 
-            if let Some(cmd) = cmd
-                && let Ok(mut guard) = PENDING_COMMANDS.write()
-            {
-                guard.push(cmd);
+            if let Some(command) = cmd {
+                if let Err(error) = command_sender.try_send(command) {
+                    tracing::warn!(%error, "failed to deliver Windows media command");
+                }
             }
         }
         Ok(())
@@ -131,34 +142,27 @@ fn setup_button_handler(controls: &SystemMediaTransportControls) -> Result<(), M
 
     controls
         .ButtonPressed(&handler)
-        .map_err(|e| MediaError::Unknown(format!("{e}")))?;
-
-    Ok(())
+        .map_err(|e| MediaError::Unknown(format!("{e}")))
 }
-
-// -- MediaSessionInner: legacy API used by MediaSession --
 
 #[derive(Debug)]
 pub struct MediaSessionInner {
-    #[allow(dead_code)]
-    media_player: MediaPlayer,
+    _media_player: MediaPlayer,
     controls: SystemMediaTransportControls,
+    button_handler: i64,
+    command_receiver: async_channel::Receiver<MediaCommand>,
 }
 
-#[allow(
-    dead_code,
-    clippy::needless_pass_by_value,
-    clippy::unused_self,
-    clippy::missing_const_for_fn,
-    clippy::unnecessary_wraps
-)]
 impl MediaSessionInner {
     pub fn new() -> Result<Self, MediaError> {
         let (media_player, controls) = create_controls()?;
-        setup_button_handler(&controls)?;
+        let (command_sender, command_receiver) = async_channel::unbounded();
+        let button_handler = setup_button_handler(&controls, command_sender)?;
         Ok(Self {
-            media_player,
+            _media_player: media_player,
             controls,
+            button_handler,
+            command_receiver,
         })
     }
 
@@ -171,11 +175,17 @@ impl MediaSessionInner {
     }
 
     pub fn request_audio_focus(&self) -> Result<(), MediaError> {
-        Ok(())
+        self.controls
+            .IsEnabled()
+            .map(|_| ())
+            .map_err(win_err_update)
     }
 
     pub fn abandon_audio_focus(&self) -> Result<(), MediaError> {
-        Ok(())
+        self.controls
+            .IsEnabled()
+            .map(|_| ())
+            .map_err(win_err_update)
     }
 
     pub fn clear(&self) -> Result<(), MediaError> {
@@ -187,50 +197,18 @@ impl MediaSessionInner {
         Ok(())
     }
 
-    #[allow(clippy::unused_self)]
-    pub fn poll_command(&self) -> Option<MediaCommand> {
-        PENDING_COMMANDS.write().ok()?.pop()
+    pub fn command_receiver(&self) -> async_channel::Receiver<MediaCommand> {
+        self.command_receiver.clone()
     }
 }
 
-// -- MediaCenterInner: simplified API used by MediaCenterIntegration --
-
-#[derive(Debug)]
-pub struct MediaCenterInner {
-    #[allow(dead_code)]
-    media_player: MediaPlayer,
-    controls: SystemMediaTransportControls,
-}
-
-impl MediaCenterInner {
-    pub fn new() -> Result<Self, MediaError> {
-        let (media_player, controls) = create_controls()?;
-        setup_button_handler(&controls)?;
-        Ok(Self {
-            media_player,
-            controls,
-        })
-    }
-
-    pub fn update(&self, metadata: &MediaMetadata, state: &PlaybackState) {
-        let _ = set_metadata_inner(&self.controls, metadata);
-        let _ = set_playback_status_inner(&self.controls, state);
-    }
-
-    pub fn clear(&self) {
-        if let Ok(updater) = self.controls.DisplayUpdater() {
-            let _ = updater.ClearAll();
+impl Drop for MediaSessionInner {
+    fn drop(&mut self) {
+        if let Err(error) = self.controls.RemoveButtonPressed(self.button_handler) {
+            tracing::error!(%error, "failed to remove Windows media command handler");
         }
-        let _ = self.controls.SetPlaybackStatus(MediaPlaybackStatus::Closed);
-    }
-
-    #[allow(clippy::unused_self)]
-    pub fn run_loop(&self, duration: std::time::Duration) {
-        std::thread::sleep(duration);
-    }
-
-    #[allow(clippy::unused_self)]
-    pub fn poll_command(&self) -> Option<MediaCommand> {
-        PENDING_COMMANDS.write().ok()?.pop()
+        if let Err(error) = self.clear() {
+            tracing::error!(%error, "failed to clear Windows media session during shutdown");
+        }
     }
 }

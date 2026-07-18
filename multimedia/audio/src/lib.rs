@@ -8,25 +8,81 @@
 
 #![warn(missing_docs)]
 
-#[cfg(target_os = "ios")]
+#[cfg(any(feature = "playback", feature = "streaming"))]
+mod output;
+#[cfg(any(feature = "playback", feature = "streaming"))]
+mod playback_rate;
+#[cfg(all(feature = "playback", target_os = "ios"))]
 #[path = "player_ios.rs"]
 mod player;
-#[cfg(not(target_os = "ios"))]
+#[cfg(all(feature = "playback", not(target_os = "ios")))]
 mod player;
+#[cfg(feature = "recording")]
 mod recorder;
+#[cfg(feature = "playback")]
 mod shutdown;
+#[cfg(feature = "streaming")]
+mod stream;
+#[cfg(feature = "streaming")]
+mod stream_output;
+#[cfg(any(feature = "media-session", feature = "recording"))]
 mod sys;
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(any(feature = "playback", feature = "streaming"))]
+pub use output::{AudioDevice, AudioOutput, AudioStreamFormat, PlayerError};
+#[cfg(all(feature = "playback", not(target_os = "ios")))]
 pub use player::rodio;
-pub use player::{
-    AudioDevice, AudioPlayer, AudioStreamFormat, ListenerPose, PlaybackMode, PlayerError,
-    SpatialPosition, SpatialScene,
-};
+#[cfg(feature = "playback")]
+pub use player::{AudioPlayer, ListenerPose, PlaybackMode, SpatialPosition, SpatialScene};
+#[cfg(feature = "recording")]
 pub use recorder::{AudioBuffer, AudioFormat, AudioRecorder, AudioRecorderBuilder, RecordError};
+#[cfg(feature = "playback")]
 pub use shutdown::{ShutdownHandle, ShutdownReceiver};
+#[cfg(feature = "streaming")]
+pub use stream::{
+    AacDecoderConfig, AacPacketDecoder, DecodedAudioFrame, EncodedAudioPacket, PacketAudioDecoder,
+    PacketAudioError, PcmFrameError,
+};
+#[cfg(feature = "streaming")]
+pub use stream_output::{
+    SilenceSkipping, StreamingAudioControl, StreamingAudioPlayer, StreamingAudioProducer,
+};
 
+use std::sync::Arc;
 use std::time::Duration;
+
+/// Encoded artwork supplied to platform media controls.
+#[derive(Clone, PartialEq, Eq)]
+pub struct MediaArtwork(Arc<[u8]>);
+
+impl MediaArtwork {
+    /// Create artwork from encoded image bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `encoded` is empty.
+    #[must_use]
+    pub fn new(encoded: impl Into<Vec<u8>>) -> Self {
+        let encoded = encoded.into();
+        assert!(!encoded.is_empty(), "media artwork must not be empty");
+        Self(encoded.into())
+    }
+
+    /// Return the encoded image bytes.
+    #[must_use]
+    pub fn encoded(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for MediaArtwork {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MediaArtwork")
+            .field("encoded_len", &self.0.len())
+            .finish()
+    }
+}
 
 /// Metadata about the currently playing media.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -35,7 +91,7 @@ pub struct MediaMetadata {
     title: Option<String>,
     artist: Option<String>,
     album: Option<String>,
-    artwork_url: Option<String>,
+    artwork: Option<MediaArtwork>,
     duration: Option<Duration>,
 }
 
@@ -68,10 +124,10 @@ impl MediaMetadata {
         self
     }
 
-    /// Set the artwork URL.
+    /// Set encoded artwork.
     #[must_use]
-    pub fn with_artwork_url(mut self, url: impl Into<String>) -> Self {
-        self.artwork_url = Some(url.into());
+    pub fn with_artwork(mut self, artwork: MediaArtwork) -> Self {
+        self.artwork = Some(artwork);
         self
     }
 
@@ -100,10 +156,10 @@ impl MediaMetadata {
         self.album.as_deref()
     }
 
-    /// Get the artwork URL.
+    /// Get encoded artwork.
     #[must_use]
-    pub fn artwork_url(&self) -> Option<&str> {
-        self.artwork_url.as_deref()
+    pub const fn artwork(&self) -> Option<&MediaArtwork> {
+        self.artwork.as_ref()
     }
 
     /// Get the duration.
@@ -328,11 +384,13 @@ pub enum MediaError {
 }
 
 /// Manager for media control and "Now Playing" information.
+#[cfg(feature = "media-session")]
 #[derive(Debug)]
 pub struct MediaSession {
     inner: sys::MediaSessionInner,
 }
 
+#[cfg(feature = "media-session")]
 impl MediaSession {
     /// Create a new media session.
     ///
@@ -393,12 +451,13 @@ impl MediaSession {
         self.inner.clear()
     }
 
-    /// Poll the next media command from system controls.
+    /// Returns the event-driven stream of commands from system media controls.
     ///
-    /// Returns `None` when no pending command is available.
+    /// Cloned receivers distribute commands among consumers; one player should
+    /// therefore designate exactly one command handler.
     #[must_use]
-    pub fn poll_command(&self) -> Option<MediaCommand> {
-        self.inner.poll_command()
+    pub fn command_receiver(&self) -> async_channel::Receiver<MediaCommand> {
+        self.inner.command_receiver()
     }
 }
 

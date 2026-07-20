@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use rodio::buffer::SamplesBuffer;
-use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
+use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 
 use crate::playback_rate::{
     PitchStretchEngine, PlaybackParams, clamp_playback_rate, should_use_pitch_stretch,
@@ -18,13 +18,13 @@ use crate::playback_rate::{
 use crate::{AudioOutput, DecodedAudioFrame, PlayerError};
 
 struct PresentationClockSource {
-    samples: SamplesBuffer<f32>,
+    samples: SamplesBuffer,
     presentation_start_nanos: u64,
     presentation_end_nanos: u64,
     sample_index: u64,
     total_frames: u64,
-    channels: u16,
-    sample_rate: u32,
+    channels: NonZeroU16,
+    sample_rate: NonZeroU32,
     generation: u64,
     active_generation: Arc<AtomicU64>,
     position_nanos: Arc<AtomicU64>,
@@ -93,13 +93,13 @@ impl PresentationClockSource {
             "audio clock jump must advance presentation time"
         );
         Ok(Self {
-            samples: SamplesBuffer::new(1, 1, Vec::new()),
+            samples: SamplesBuffer::new(NonZeroU16::MIN, NonZeroU32::MIN, Vec::new()),
             presentation_start_nanos: duration_to_nanos(presentation_start)?,
             presentation_end_nanos: duration_to_nanos(presentation_end)?,
             sample_index: 0,
             total_frames: 0,
-            channels: 1,
-            sample_rate: 1,
+            channels: NonZeroU16::MIN,
+            sample_rate: NonZeroU32::MIN,
             generation,
             active_generation,
             position_nanos,
@@ -120,18 +120,16 @@ impl PresentationClockSource {
         position_nanos: Arc<AtomicU64>,
         buffer_progress: async_channel::Sender<()>,
     ) -> Result<Self, PlayerError> {
-        let channels = channels.get();
         assert!(
             !samples.is_empty(),
             "presentation clock source requires at least one PCM frame"
         );
         assert!(
-            samples.len().is_multiple_of(usize::from(channels)),
+            samples.len().is_multiple_of(usize::from(channels.get())),
             "presentation clock source received channel-misaligned PCM"
         );
-        let total_frames = u64::try_from(samples.len() / usize::from(channels))
+        let total_frames = u64::try_from(samples.len() / usize::from(channels.get()))
             .expect("PCM frame count must fit u64");
-        let sample_rate = sample_rate.get();
         let samples = SamplesBuffer::new(channels, sample_rate, samples);
         Ok(Self {
             samples,
@@ -158,7 +156,7 @@ impl PresentationClockSource {
     }
 
     fn update_clock(&self) {
-        let consumed_frames = self.sample_index / u64::from(self.channels);
+        let consumed_frames = self.sample_index / u64::from(self.channels.get());
         let presentation_span = self
             .presentation_end_nanos
             .saturating_sub(self.presentation_start_nanos);
@@ -211,15 +209,15 @@ impl Iterator for PresentationClockSource {
 }
 
 impl Source for PresentationClockSource {
-    fn current_frame_len(&self) -> Option<usize> {
-        self.samples.current_frame_len()
+    fn current_span_len(&self) -> Option<usize> {
+        self.samples.current_span_len()
     }
 
-    fn channels(&self) -> u16 {
+    fn channels(&self) -> NonZeroU16 {
         self.channels
     }
 
-    fn sample_rate(&self) -> u32 {
+    fn sample_rate(&self) -> NonZeroU32 {
         self.sample_rate
     }
 
@@ -606,7 +604,7 @@ enum OutputCommand {
 }
 
 struct OutputState {
-    sink: Sink,
+    sink: Player,
     params: PlaybackParams,
     rate_processor: StreamingRateProcessor,
     silence_skipper: SilenceSkippingProcessor,
@@ -617,15 +615,14 @@ struct OutputState {
 
 impl OutputState {
     fn new(
-        handle: &OutputStreamHandle,
+        mixer: &rodio::mixer::Mixer,
         generation: Arc<AtomicU64>,
         position_nanos: Arc<AtomicU64>,
         buffer_progress: async_channel::Sender<()>,
-    ) -> Result<Self, PlayerError> {
-        let sink = Sink::try_new(handle)
-            .map_err(|error| PlayerError::OutputInitFailed(error.to_string()))?;
+    ) -> Self {
+        let sink = Player::connect_new(mixer);
         sink.pause();
-        Ok(Self {
+        Self {
             sink,
             params: PlaybackParams::new(),
             rate_processor: StreamingRateProcessor::new(),
@@ -633,7 +630,7 @@ impl OutputState {
             generation,
             position_nanos,
             buffer_progress,
-        })
+        }
     }
 
     fn handle(&mut self, command: OutputCommand) -> Result<bool, PlayerError> {
@@ -840,13 +837,13 @@ impl StreamingAudioPlayer {
         let output_thread = std::thread::Builder::new()
             .name(String::from("waterkit-pcm-output"))
             .spawn(move || {
-                let output = open_stream(&output).and_then(|(stream, handle)| {
+                let output = open_stream(&output).and_then(|stream| {
                     let mut state = OutputState::new(
-                        &handle,
+                        stream.mixer(),
                         Arc::clone(&output_generation),
                         Arc::clone(&output_position),
                         buffer_progress_sender,
-                    )?;
+                    );
                     initialization_tx.send(Ok(())).map_err(|_| {
                         PlayerError::OutputInitFailed(String::from(
                             "PCM output owner was dropped during initialization",
@@ -857,7 +854,6 @@ impl StreamingAudioPlayer {
                             break;
                         }
                     }
-                    drop(stream);
                     Ok(())
                 });
                 if let Err(error) = output {
@@ -1196,7 +1192,7 @@ impl Drop for StreamingAudioPlayer {
     }
 }
 
-fn open_stream(output: &AudioOutput) -> Result<(OutputStream, OutputStreamHandle), PlayerError> {
+fn open_stream(output: &AudioOutput) -> Result<MixerDeviceSink, PlayerError> {
     #[cfg(target_os = "ios")]
     if output.selected_device().is_some() {
         return Err(PlayerError::OutputDeviceSelectionUnavailable);
@@ -1204,11 +1200,13 @@ fn open_stream(output: &AudioOutput) -> Result<(OutputStream, OutputStreamHandle
 
     #[cfg(not(target_os = "ios"))]
     if let Some(device) = output.selected_device() {
-        return OutputStream::try_from_device(&device.handle)
+        return DeviceSinkBuilder::from_device(device.handle.clone())
+            .and_then(DeviceSinkBuilder::open_stream)
             .map_err(|error| PlayerError::OutputInitFailed(error.to_string()));
     }
 
-    OutputStream::try_default().map_err(|error| PlayerError::OutputInitFailed(error.to_string()))
+    DeviceSinkBuilder::open_default_sink()
+        .map_err(|error| PlayerError::OutputInitFailed(error.to_string()))
 }
 
 fn timeline_overflow_error(label: &str) -> PlayerError {

@@ -4,10 +4,10 @@
 //! The camera API returns GPU textures directly for zero-copy rendering.
 
 use futures::StreamExt;
+use shaderloom::CompiledShader;
 use std::sync::Arc;
 use std::time::Instant;
 use waterkit_camera::{Camera, CameraConfig, CameraInfo, Frame};
-use shaderloom::CompiledShader;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -57,16 +57,16 @@ impl App {
     fn new(rt: tokio::runtime::Runtime) -> Self {
         let cameras = Camera::list().unwrap_or_default();
 
-        println!("\n=== Camera Preview ===\n");
+        log::info!("Camera Preview");
         if cameras.is_empty() {
-            println!("No cameras found!");
+            log::info!("No cameras found");
         } else {
-            println!("Available cameras:");
+            log::info!("Available cameras:");
             for (i, cam) in cameras.iter().enumerate() {
-                println!("  [{}] {} ({})", i, cam.name, cam.id);
+                log::info!("[{i}] {} ({})", cam.name, cam.id);
             }
-            println!("\nPress number keys to switch cameras");
-            println!("Press ESC to exit\n");
+            log::info!("Press number keys to switch cameras");
+            log::info!("Press ESC to exit");
         }
 
         Self {
@@ -101,7 +101,7 @@ impl ApplicationHandler for App {
 
         match state {
             Ok(s) => self.state = Some(s),
-            Err(e) => eprintln!("Failed to initialize: {}", e),
+            Err(error) => log::error!("Failed to initialize: {error}"),
         }
     }
 
@@ -110,22 +110,19 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
-            WindowEvent::KeyboardInput { event, .. } => {
-                if event.state.is_pressed() {
-                    match event.logical_key {
-                        Key::Named(NamedKey::Escape) => event_loop.exit(),
-                        Key::Character(ref c) => {
-                            if let Ok(num) = c.parse::<usize>()
-                                && num < self.cameras.len()
-                            {
-                                println!(
-                                    "Switching to camera {} not implemented in streaming mode",
-                                    num
-                                );
-                            }
+            WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() => {
+                match event.logical_key {
+                    Key::Named(NamedKey::Escape) => event_loop.exit(),
+                    Key::Character(ref c) => {
+                        if let Ok(num) = c.parse::<usize>()
+                            && num < self.cameras.len()
+                        {
+                            log::info!(
+                                "Switching to camera {num} is not implemented in streaming mode"
+                            );
                         }
-                        _ => {}
                     }
+                    _ => {}
                 }
             }
             WindowEvent::Resized(new_size) => {
@@ -194,7 +191,7 @@ impl State {
             .map_err(|e| format!("Camera: {}", e))?;
 
         let res = camera.resolution();
-        println!("Camera resolution: {}x{}", res.width, res.height);
+        log::info!("Camera resolution: {}x{}", res.width, res.height);
 
         // Create channel for frames
         let (frame_tx, frame_rx) = async_channel::bounded::<Frame>(2);

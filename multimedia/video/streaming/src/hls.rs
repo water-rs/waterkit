@@ -297,11 +297,12 @@ fn parse_master(base_url: &Url, input: &str) -> Result<HlsMasterPlaylist, Error>
         match line {
             HlsLine::KnownTag(KnownTag::Hls(tag)) => match tag {
                 quick_hls::Tag::StreamInf(stream) => {
-                    if pending_variant.replace(stream).is_some() {
+                    if pending_variant.is_some() {
                         return Err(Error::Streaming(String::from(
                             "HLS variant metadata is missing its URI",
                         )));
                     }
+                    pending_variant = Some(stream);
                 }
                 quick_hls::Tag::IFrameStreamInf(stream) => {
                     i_frame_variants.push(stream_variant(

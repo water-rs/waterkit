@@ -28,8 +28,8 @@ shaderloom = { workspace = true, features = ["build"] }
 [target.'cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))'.dependencies]
 rav1e = { workspace = true, optional = true }
 rav1d = { workspace = true, optional = true }
-avif-parse = { version = "1.4", optional = true }
-yuv = { version = "0.8.11", optional = true }
+avif-parse = { version = "2.1", optional = true }
+yuv = { version = "0.8.16", optional = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2.workspace = true

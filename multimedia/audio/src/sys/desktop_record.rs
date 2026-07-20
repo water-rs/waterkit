@@ -22,7 +22,6 @@ pub struct AudioRecorderInner {
 
 impl AudioRecorderInner {
     /// List available input devices.
-    #[allow(deprecated)]
     pub fn list_devices() -> Result<Vec<InputDevice>, RecordError> {
         let host = cpal::default_host();
         let devices = host
@@ -31,7 +30,8 @@ impl AudioRecorderInner {
 
         let mut result = Vec::new();
         for device in devices {
-            if let Ok(name) = device.name() {
+            if let Ok(description) = device.description() {
+                let name = description.name().to_owned();
                 result.push(InputDevice {
                     id: name.clone(),
                     name,
@@ -42,7 +42,6 @@ impl AudioRecorderInner {
     }
 
     /// Create a new audio recorder.
-    #[allow(deprecated)]
     pub fn new(device_id: Option<String>, format: AudioFormatRequest) -> Result<Self, RecordError> {
         let host = cpal::default_host();
 
@@ -53,7 +52,11 @@ impl AudioRecorderInner {
 
             devices
                 .into_iter()
-                .find(|d| d.name().is_ok_and(|n| n == id))
+                .find(|device| {
+                    device
+                        .description()
+                        .is_ok_and(|description| description.name() == id)
+                })
                 .ok_or(RecordError::DeviceNotFound(id))?
         } else {
             host.default_input_device()
@@ -84,7 +87,7 @@ impl AudioRecorderInner {
 
         let config = cpal::StreamConfig {
             channels: self.format.channels,
-            sample_rate: cpal::SampleRate(self.format.sample_rate),
+            sample_rate: self.format.sample_rate,
             buffer_size: cpal::BufferSize::Default,
         };
 
@@ -104,7 +107,7 @@ impl AudioRecorderInner {
         let stream = self
             .device
             .build_input_stream(
-                &config,
+                config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     if recording.load(Ordering::Relaxed) {
                         let samples = data.to_vec();
@@ -170,9 +173,7 @@ fn resolve_format(
         .default_input_config()
         .map_err(|e| RecordError::OpenFailed(e.to_string()))?;
 
-    let sample_rate = request
-        .sample_rate
-        .unwrap_or_else(|| default.sample_rate().0);
+    let sample_rate = request.sample_rate.unwrap_or_else(|| default.sample_rate());
     let channels = request.channels.unwrap_or_else(|| default.channels());
 
     let supported = device
@@ -180,8 +181,8 @@ fn resolve_format(
         .map_err(|e| RecordError::EnumerationFailed(e.to_string()))?
         .any(|range| {
             range.channels() == channels
-                && range.min_sample_rate().0 <= sample_rate
-                && sample_rate <= range.max_sample_rate().0
+                && range.min_sample_rate() <= sample_rate
+                && sample_rate <= range.max_sample_rate()
         });
 
     if !supported {

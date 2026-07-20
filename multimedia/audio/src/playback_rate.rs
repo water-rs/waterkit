@@ -2,14 +2,19 @@
 
 use std::collections::VecDeque;
 #[cfg(all(feature = "playback", not(target_os = "ios")))]
+use std::num::{NonZeroU16, NonZeroU32};
+#[cfg(all(feature = "playback", not(target_os = "ios")))]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 #[cfg(all(feature = "playback", not(target_os = "ios")))]
 use std::time::Duration;
 
+use num_traits::ToPrimitive;
 #[cfg(all(feature = "playback", not(target_os = "ios")))]
 use rodio::Source;
-use timestretch::{QualityMode, StreamProcessor, StretchParams};
+use timestretch::engine::{
+    Engine, EngineConfig, EngineController, EngineProcessor, EngineProfile, SourceProducer,
+};
 
 const PRESERVE_PITCH_RATE_EPSILON: f32 = 0.001;
 const STRETCH_CHUNK_FRAMES: usize = 2048;
@@ -86,13 +91,210 @@ impl PlaybackParams {
 #[derive(Debug)]
 enum StretchCore {
     Interleaved {
-        processor: Box<StreamProcessor>,
-        pending: VecDeque<f32>,
+        processor: Box<RealtimeStretch>,
     },
     PerChannel {
-        processors: Vec<StreamProcessor>,
+        processors: Vec<RealtimeStretch>,
         pending: Vec<VecDeque<f32>>,
     },
+}
+
+#[derive(Debug)]
+struct RealtimeStretch {
+    controller: EngineController,
+    processor: EngineProcessor,
+    source: SourceProducer,
+    channels: usize,
+    stretch_ratio: f64,
+    expected_output_frames: f64,
+    rendered_output_frames: u64,
+    pipeline_latency_frames: usize,
+    latency_remaining_frames: usize,
+    finished: bool,
+}
+
+impl RealtimeStretch {
+    fn new(channels: usize, sample_rate: u32, stretch_ratio: f64) -> Self {
+        let handles = Engine::build(EngineConfig {
+            sample_rate,
+            channels,
+            profile: EngineProfile::Keylock,
+            initial_tempo_rate: 1.0 / stretch_ratio,
+            max_block_frames: STRETCH_CHUNK_FRAMES,
+            ..EngineConfig::default()
+        })
+        .expect("pitch-preserving engine configuration must be valid");
+        let pipeline_latency_frames = handles.processor.pipeline_latency_frames();
+        Self {
+            controller: handles.controller,
+            processor: handles.processor,
+            source: handles.source,
+            channels,
+            stretch_ratio,
+            expected_output_frames: 0.0,
+            rendered_output_frames: 0,
+            pipeline_latency_frames,
+            latency_remaining_frames: pipeline_latency_frames,
+            finished: false,
+        }
+    }
+
+    #[cfg(all(feature = "playback", not(target_os = "ios")))]
+    fn set_stretch_ratio(&mut self, stretch_ratio: f64) {
+        self.stretch_ratio = stretch_ratio;
+        self.controller.set_tempo_rate(1.0 / stretch_ratio);
+    }
+
+    fn process(&mut self, interleaved: &[f32]) -> Vec<f32> {
+        assert!(!self.finished, "finished pitch stretcher cannot accept PCM");
+        assert!(
+            interleaved.len().is_multiple_of(self.channels),
+            "real-time pitch stretcher received channel-misaligned PCM"
+        );
+
+        let mut output = Vec::new();
+        let mut offset = 0;
+        while offset < interleaved.len() {
+            if self.source.free_frames() == 0 {
+                let before = output.len();
+                self.drain_available(&mut output);
+                assert!(
+                    output.len() > before,
+                    "pitch stretcher source capacity exhausted before output became available"
+                );
+            }
+
+            let remaining_frames = (interleaved.len() - offset) / self.channels;
+            let pushed_frames = remaining_frames.min(self.source.free_frames());
+            let pushed_samples = pushed_frames * self.channels;
+            let accepted = self
+                .source
+                .push(&interleaved[offset..offset + pushed_samples]);
+            assert_eq!(
+                accepted, pushed_frames,
+                "pitch stretcher must accept the advertised source capacity"
+            );
+            offset += pushed_samples;
+            self.expected_output_frames += pushed_frames
+                .to_f64()
+                .expect("pitch stretcher input frame count must fit f64")
+                * self.stretch_ratio;
+            self.drain_available(&mut output);
+        }
+        output
+    }
+
+    fn flush(&mut self) -> Vec<f32> {
+        if self.finished {
+            return Vec::new();
+        }
+        self.finished = true;
+
+        let expected_frames = self
+            .expected_output_frames
+            .round()
+            .to_u64()
+            .expect("pitch stretcher output frame count must fit u64");
+        let target_rendered = expected_frames
+            .checked_add(
+                u64::try_from(self.pipeline_latency_frames)
+                    .expect("pitch stretcher latency must fit u64"),
+            )
+            .expect("pitch stretcher output length must fit u64");
+        let mut output = Vec::new();
+        while self.rendered_output_frames < target_rendered {
+            let remaining = usize::try_from(target_rendered - self.rendered_output_frames)
+                .unwrap_or(usize::MAX);
+            let output_frames = remaining.min(STRETCH_CHUNK_FRAMES);
+            self.pad_source_for(output_frames);
+            self.render(output_frames, &mut output);
+        }
+
+        let emitted_before_flush = self
+            .rendered_output_frames
+            .saturating_sub(u64::try_from(output.len() / self.channels).expect("fit u64"))
+            .saturating_sub(
+                u64::try_from(self.pipeline_latency_frames - self.latency_remaining_frames)
+                    .expect("fit u64"),
+            );
+        let remaining_expected = expected_frames.saturating_sub(emitted_before_flush);
+        let remaining_samples = usize::try_from(remaining_expected)
+            .expect("remaining stretched frame count must fit usize")
+            .saturating_mul(self.channels);
+        output.truncate(remaining_samples);
+        output
+    }
+
+    #[cfg(all(feature = "playback", not(target_os = "ios")))]
+    fn reset(&mut self) {
+        self.processor.reset();
+        self.expected_output_frames = 0.0;
+        self.rendered_output_frames = 0;
+        self.latency_remaining_frames = self.pipeline_latency_frames;
+        self.finished = false;
+    }
+
+    fn drain_available(&mut self, output: &mut Vec<f32>) {
+        let target = self
+            .expected_output_frames
+            .floor()
+            .to_u64()
+            .expect("pitch stretcher output frame count must fit u64");
+        let remaining = target.saturating_sub(self.rendered_output_frames);
+        let remaining = usize::try_from(remaining).unwrap_or(usize::MAX);
+        let available = self.available_output_frames(remaining);
+        if available > 0 {
+            self.render(available, output);
+        }
+    }
+
+    fn available_output_frames(&self, requested: usize) -> usize {
+        let occupied = self.source.occupied_frames();
+        let tempo = self.controller.tempo_rate_target();
+        let mut low = 0;
+        let mut high = requested;
+        while low < high {
+            let middle = low + (high - low).div_ceil(2);
+            if self.source.demand_hint(middle, tempo) <= occupied {
+                low = middle;
+            } else {
+                high = middle - 1;
+            }
+        }
+        low
+    }
+
+    fn pad_source_for(&mut self, output_frames: usize) {
+        let required = self
+            .source
+            .demand_hint(output_frames, self.controller.tempo_rate_target());
+        while self.source.occupied_frames() < required {
+            let missing = required - self.source.occupied_frames();
+            let frames = missing.min(self.source.free_frames());
+            assert!(
+                frames > 0,
+                "pitch stretcher flush padding exceeds source capacity"
+            );
+            let padding = vec![0.0; frames * self.channels];
+            let accepted = self.source.push(&padding);
+            assert_eq!(
+                accepted, frames,
+                "pitch stretcher must accept flush padding"
+            );
+        }
+    }
+
+    fn render(&mut self, output_frames: usize, output: &mut Vec<f32>) {
+        let mut rendered = vec![0.0; output_frames * self.channels];
+        self.processor.process(&mut rendered);
+        self.rendered_output_frames = self
+            .rendered_output_frames
+            .checked_add(u64::try_from(output_frames).expect("output frame count must fit u64"))
+            .expect("rendered pitch stretcher frame count must fit u64");
+        let skipped_frames = output_frames.min(self.latency_remaining_frames);
+        self.latency_remaining_frames -= skipped_frames;
+        output.extend_from_slice(&rendered[skipped_frames * self.channels..]);
+    }
 }
 
 #[derive(Debug)]
@@ -105,18 +307,11 @@ pub struct PitchStretchEngine {
 impl PitchStretchEngine {
     pub fn new(channels: usize, sample_rate: u32, ratio: f32) -> Self {
         let clamped_ratio = f64::from(ratio.clamp(0.25, 4.0));
-        if channels <= 2 {
-            let channels_u32 =
-                u32::try_from(channels).expect("audio channel count must fit in u32");
-            let params = StretchParams::new(clamped_ratio)
-                .with_sample_rate(sample_rate)
-                .with_channels(channels_u32)
-                .with_quality_mode(QualityMode::Balanced);
+        if channels <= 8 {
             return Self {
                 channels,
                 core: StretchCore::Interleaved {
-                    processor: Box::new(StreamProcessor::new(params)),
-                    pending: VecDeque::new(),
+                    processor: Box::new(RealtimeStretch::new(channels, sample_rate, clamped_ratio)),
                 },
                 input_channels: Vec::new(),
             };
@@ -125,11 +320,7 @@ impl PitchStretchEngine {
         let mut processors = Vec::with_capacity(channels);
         let mut pending = Vec::with_capacity(channels);
         for _ in 0..channels {
-            let params = StretchParams::new(clamped_ratio)
-                .with_sample_rate(sample_rate)
-                .with_channels(1)
-                .with_quality_mode(QualityMode::Balanced);
-            processors.push(StreamProcessor::new(params));
+            processors.push(RealtimeStretch::new(1, sample_rate, clamped_ratio));
             pending.push(VecDeque::new());
         }
         let input_channels = (0..channels)
@@ -149,7 +340,7 @@ impl PitchStretchEngine {
     fn set_ratio(&mut self, ratio: f32) {
         let clamped_ratio = f64::from(ratio.clamp(0.25, 4.0));
         match &mut self.core {
-            StretchCore::Interleaved { processor, .. } => {
+            StretchCore::Interleaved { processor } => {
                 processor.set_stretch_ratio(clamped_ratio);
             }
             StretchCore::PerChannel { processors, .. } => {
@@ -169,13 +360,7 @@ impl PitchStretchEngine {
         );
 
         match &mut self.core {
-            StretchCore::Interleaved { processor, pending } => {
-                let output = processor
-                    .process(interleaved)
-                    .expect("pitch-preserving processor failed during streaming");
-                pending.extend(output);
-                Self::drain_complete_interleaved_frames(pending, self.channels)
-            }
+            StretchCore::Interleaved { processor } => processor.process(interleaved),
             StretchCore::PerChannel {
                 processors,
                 pending,
@@ -191,9 +376,7 @@ impl PitchStretchEngine {
 
                 for (index, processor) in processors.iter_mut().enumerate() {
                     let input = &self.input_channels[index];
-                    let output = processor
-                        .process(input)
-                        .expect("pitch-preserving processor failed during multichannel streaming");
+                    let output = processor.process(input);
                     pending[index].extend(output.iter().copied());
                 }
 
@@ -204,24 +387,13 @@ impl PitchStretchEngine {
 
     pub fn flush(&mut self) -> Vec<f32> {
         match &mut self.core {
-            StretchCore::Interleaved { processor, pending } => {
-                let output = processor
-                    .flush()
-                    .expect("pitch-preserving processor flush failed");
-                pending.extend(output);
-                let missing_channels =
-                    (self.channels - pending.len() % self.channels) % self.channels;
-                pending.extend(std::iter::repeat_n(0.0, missing_channels));
-                Self::drain_complete_interleaved_frames(pending, self.channels)
-            }
+            StretchCore::Interleaved { processor } => processor.flush(),
             StretchCore::PerChannel {
                 processors,
                 pending,
             } => {
                 for (index, processor) in processors.iter_mut().enumerate() {
-                    let output = processor
-                        .flush()
-                        .expect("pitch-preserving processor flush failed for multichannel input");
+                    let output = processor.flush();
                     pending[index].extend(output.iter().copied());
                 }
                 Self::drain_interleaved_pending(pending)
@@ -232,9 +404,8 @@ impl PitchStretchEngine {
     #[cfg(all(feature = "playback", not(target_os = "ios")))]
     fn reset(&mut self) {
         match &mut self.core {
-            StretchCore::Interleaved { processor, pending } => {
+            StretchCore::Interleaved { processor } => {
                 processor.reset();
-                pending.clear();
             }
             StretchCore::PerChannel {
                 processors,
@@ -267,11 +438,6 @@ impl PitchStretchEngine {
         }
         output
     }
-
-    fn drain_complete_interleaved_frames(pending: &mut VecDeque<f32>, channels: usize) -> Vec<f32> {
-        let sample_count = pending.len() / channels * channels;
-        pending.drain(..sample_count).collect()
-    }
 }
 
 #[cfg(all(feature = "playback", not(target_os = "ios")))]
@@ -282,8 +448,8 @@ where
 {
     inner: S,
     params: Arc<PlaybackParams>,
-    channels: u16,
-    sample_rate: u32,
+    channels: NonZeroU16,
+    sample_rate: NonZeroU32,
     chunk_buffer: Vec<f32>,
     output_buffer: VecDeque<f32>,
     stretch_engine: Option<PitchStretchEngine>,
@@ -298,23 +464,17 @@ where
 {
     pub fn new(inner: S, params: Arc<PlaybackParams>) -> Self {
         let channels = inner.channels();
-        assert!(
-            channels > 0,
-            "audio source must report at least one channel"
-        );
         let sample_rate = inner.sample_rate();
-        assert!(
-            sample_rate > 0,
-            "audio source must report a non-zero sample rate"
-        );
 
         Self {
             inner,
             params,
             channels,
             sample_rate,
-            chunk_buffer: Vec::with_capacity(STRETCH_CHUNK_FRAMES * usize::from(channels)),
-            output_buffer: VecDeque::with_capacity(STRETCH_CHUNK_FRAMES * usize::from(channels)),
+            chunk_buffer: Vec::with_capacity(STRETCH_CHUNK_FRAMES * usize::from(channels.get())),
+            output_buffer: VecDeque::with_capacity(
+                STRETCH_CHUNK_FRAMES * usize::from(channels.get()),
+            ),
             stretch_engine: None,
             last_stretch_active: false,
             input_finished: false,
@@ -330,7 +490,7 @@ where
     }
 
     fn ensure_stretch_engine(&mut self, rate: f32) -> &mut PitchStretchEngine {
-        let expected_channels = usize::from(self.channels);
+        let expected_channels = usize::from(self.channels.get());
         let stretch_ratio = 1.0 / rate;
         if self
             .stretch_engine
@@ -339,7 +499,7 @@ where
         {
             self.stretch_engine = Some(PitchStretchEngine::new(
                 expected_channels,
-                self.sample_rate,
+                self.sample_rate.get(),
                 stretch_ratio,
             ));
         }
@@ -353,7 +513,7 @@ where
 
     fn read_chunk(&mut self) {
         self.chunk_buffer.clear();
-        let target_samples = STRETCH_CHUNK_FRAMES.saturating_mul(usize::from(self.channels));
+        let target_samples = STRETCH_CHUNK_FRAMES.saturating_mul(usize::from(self.channels.get()));
         while self.chunk_buffer.len() < target_samples {
             if let Some(sample) = self.inner.next() {
                 self.chunk_buffer.push(sample);
@@ -368,7 +528,7 @@ where
                 || self
                     .chunk_buffer
                     .len()
-                    .is_multiple_of(usize::from(self.channels)),
+                    .is_multiple_of(usize::from(self.channels.get())),
             "audio source emitted channel-misaligned sample count: channels={} samples={}",
             self.channels,
             self.chunk_buffer.len()
@@ -446,15 +606,15 @@ impl<S> Source for AdaptivePlaybackSource<S>
 where
     S: Source<Item = f32>,
 {
-    fn current_frame_len(&self) -> Option<usize> {
+    fn current_span_len(&self) -> Option<usize> {
         None
     }
 
-    fn channels(&self) -> u16 {
+    fn channels(&self) -> NonZeroU16 {
         self.channels
     }
 
-    fn sample_rate(&self) -> u32 {
+    fn sample_rate(&self) -> NonZeroU32 {
         self.sample_rate
     }
 

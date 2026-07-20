@@ -399,7 +399,7 @@ mod tests {
             started_tx
                 .send(())
                 .expect("test worker should signal startup");
-            let _ = stop_rx.recv_timeout(Duration::from_secs(60));
+            let _ = stop_rx.recv_timeout(Duration::from_mins(1));
         });
 
         started_rx

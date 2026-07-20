@@ -123,9 +123,27 @@ mod intensity_tests {
 
     #[test]
     fn new_accepts_boundaries() {
-        assert_eq!(Intensity::new(0.0).expect("valid intensity").value(), 0.0);
-        assert_eq!(Intensity::new(1.0).expect("valid intensity").value(), 1.0);
-        assert_eq!(Intensity::new(0.7).expect("valid intensity").value(), 0.7);
+        assert_eq!(
+            Intensity::new(0.0)
+                .expect("valid intensity")
+                .value()
+                .to_bits(),
+            0.0_f32.to_bits()
+        );
+        assert_eq!(
+            Intensity::new(1.0)
+                .expect("valid intensity")
+                .value()
+                .to_bits(),
+            1.0_f32.to_bits()
+        );
+        assert_eq!(
+            Intensity::new(0.7)
+                .expect("valid intensity")
+                .value()
+                .to_bits(),
+            0.7_f32.to_bits()
+        );
     }
 
     #[test]

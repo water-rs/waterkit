@@ -48,5 +48,5 @@ ndk-context.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
-pollster = "0.4"
+pollster = "1.0"
 winit = "0.30"

@@ -1,3 +1,5 @@
+//! Windows compile-time smoke test for the `WaterKit` platform surface.
+
 #[cfg(target_os = "windows")]
 use waterkit_permission::Permission;
 

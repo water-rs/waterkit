@@ -212,8 +212,8 @@ mod tests {
             Timestamp::from_second(0).expect("valid timestamp"),
         );
 
-        assert_eq!(location.latitude().get(), 35.0);
-        assert_eq!(location.longitude().get(), 139.0);
+        assert!((location.latitude().get() - 35.0).abs() < f64::EPSILON);
+        assert!((location.longitude().get() - 139.0).abs() < f64::EPSILON);
     }
 
     #[test]

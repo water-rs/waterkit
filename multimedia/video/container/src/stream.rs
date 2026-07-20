@@ -888,22 +888,17 @@ fn parse_track_protection(
 
 fn parse_protection_init_data(data: &[u8]) -> Result<Vec<ProtectionInitData>, Error> {
     let top_level = parse_top_level_boxes(data)?;
-    let mut boxes = top_level
+    let movie_children = top_level
+        .iter()
+        .find(|item| item.kind == *b"moov")
+        .map(|movie| child_boxes(data, movie))
+        .transpose()?
+        .unwrap_or_default();
+    top_level
         .iter()
         .filter(|item| item.kind == *b"pssh")
-        .cloned()
-        .collect::<Vec<_>>();
-    if let Some(movie) = top_level.iter().find(|item| item.kind == *b"moov") {
-        let movie_children = child_boxes(data, movie)?;
-        boxes.extend(
-            movie_children
-                .into_iter()
-                .filter(|item| item.kind == *b"pssh"),
-        );
-    }
-    boxes
-        .into_iter()
-        .map(|item| parse_pssh_init_data(&data[item.range]))
+        .chain(movie_children.iter().filter(|item| item.kind == *b"pssh"))
+        .map(|item| parse_pssh_init_data(&data[item.range.start..item.range.end]))
         .collect()
 }
 

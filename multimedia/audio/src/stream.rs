@@ -19,18 +19,20 @@ use symphonia_adapter_fdk_aac::AacDecoder as FdkAacDecoder;
 ))]
 use symphonia_codec_aac::AacDecoder;
 #[cfg(not(any(target_os = "android", target_os = "windows")))]
-use symphonia_core::audio::SampleBuffer;
+use symphonia_core::codecs::audio::well_known::CODEC_ID_AAC;
 #[cfg(not(any(target_os = "android", target_os = "windows")))]
-use symphonia_core::codecs::{CODEC_TYPE_AAC, CodecParameters, Decoder, DecoderOptions};
+use symphonia_core::codecs::audio::{AudioCodecParameters, AudioDecoder, AudioDecoderOptions};
 #[cfg(not(any(target_os = "android", target_os = "windows")))]
-use symphonia_core::formats::Packet;
+use symphonia_core::packet::Packet;
+#[cfg(not(any(target_os = "android", target_os = "windows")))]
+use symphonia_core::units::{Duration as SymphoniaDuration, Timestamp};
 
 #[cfg(target_os = "android")]
 type SelectedAacDecoder = android::AndroidAacDecoder;
 #[cfg(target_os = "windows")]
 type SelectedAacDecoder = windows::WindowsAacDecoder;
 #[cfg(not(any(target_os = "android", target_os = "windows")))]
-type SelectedAacDecoder = Box<dyn Decoder>;
+type SelectedAacDecoder = Box<dyn AudioDecoder>;
 
 /// Errors raised by packet-oriented audio decoding.
 #[derive(Debug, thiserror::Error)]
@@ -343,9 +345,9 @@ impl AacPacketDecoder {
 
 #[cfg(not(any(target_os = "android", target_os = "windows")))]
 fn create_aac_decoder(config: AacDecoderConfig) -> Result<SelectedAacDecoder, String> {
-    let mut parameters = CodecParameters::new();
+    let mut parameters = AudioCodecParameters::new();
     parameters
-        .for_codec(CODEC_TYPE_AAC)
+        .for_codec(CODEC_ID_AAC)
         .with_sample_rate(config.sample_rate.get())
         .with_extra_data(config.audio_specific_config);
     create_symphonia_aac_decoder(&parameters).map_err(|error| error.to_string())
@@ -366,10 +368,10 @@ fn create_aac_decoder(config: AacDecoderConfig) -> Result<SelectedAacDecoder, St
     not(feature = "he-aac")
 ))]
 fn create_symphonia_aac_decoder(
-    parameters: &CodecParameters,
+    parameters: &AudioCodecParameters,
 ) -> symphonia_core::errors::Result<SelectedAacDecoder> {
-    AacDecoder::try_new(parameters, &DecoderOptions::default())
-        .map(|decoder| Box::new(decoder) as Box<dyn Decoder>)
+    AacDecoder::try_new(parameters, &AudioDecoderOptions::default())
+        .map(|decoder| Box::new(decoder) as Box<dyn AudioDecoder>)
 }
 
 #[cfg(all(
@@ -377,13 +379,13 @@ fn create_symphonia_aac_decoder(
     feature = "he-aac"
 ))]
 fn create_symphonia_aac_decoder(
-    parameters: &CodecParameters,
+    parameters: &AudioCodecParameters,
 ) -> symphonia_core::errors::Result<SelectedAacDecoder> {
-    use symphonia_core::codecs::CodecRegistry;
+    use symphonia_core::codecs::registry::CodecRegistry;
 
     let mut codecs = CodecRegistry::new();
-    codecs.register_all::<FdkAacDecoder>();
-    codecs.make(parameters, &DecoderOptions::default())
+    codecs.register_audio_decoder::<FdkAacDecoder>();
+    codecs.make_audio_decoder(parameters, &AudioDecoderOptions::default())
 }
 
 #[cfg(not(any(target_os = "android", target_os = "windows")))]
@@ -397,7 +399,7 @@ impl PacketAudioDecoder for AacPacketDecoder {
         }
 
         let presentation_time = packet.presentation_time;
-        let encoded = Packet::new_from_boxed_slice(0, 0, 0, packet.data);
+        let encoded = Packet::new(0, Timestamp::ZERO, SymphoniaDuration::ZERO, packet.data);
         let decoded = self
             .decoder
             .decode(&encoded)
@@ -407,9 +409,10 @@ impl PacketAudioDecoder for AacPacketDecoder {
                 message: error.to_string(),
             })?;
 
-        let actual_channels = u16::try_from(decoded.spec().channels.count())
-            .map_err(|_| PacketAudioError::ChannelCountOverflow(decoded.spec().channels.count()))?;
-        let actual_sample_rate = decoded.spec().rate;
+        let actual_channel_count = decoded.spec().channels().count();
+        let actual_channels = u16::try_from(actual_channel_count)
+            .map_err(|_| PacketAudioError::ChannelCountOverflow(actual_channel_count))?;
+        let actual_sample_rate = decoded.spec().rate();
         if actual_channels != self.channels.get() || actual_sample_rate != self.sample_rate.get() {
             return Err(PacketAudioError::UnexpectedFormatChange {
                 expected_channels: self.channels.get(),
@@ -420,18 +423,15 @@ impl PacketAudioDecoder for AacPacketDecoder {
         }
 
         let frame_count = decoded.frames();
-        let mut samples = SampleBuffer::<f32>::new(
-            u64::try_from(decoded.capacity()).expect("audio buffer capacity must fit in u64"),
-            *decoded.spec(),
-        );
-        samples.copy_interleaved_ref(decoded);
+        let mut samples = Vec::with_capacity(decoded.samples_interleaved());
+        decoded.copy_to_vec_interleaved::<f32>(&mut samples);
 
         Ok(vec![DecodedAudioFrame {
             presentation_time,
             duration: pcm_duration(frame_count, self.sample_rate),
             channels: self.channels,
             sample_rate: self.sample_rate,
-            samples: samples.samples().into(),
+            samples: samples.into_boxed_slice(),
         }])
     }
 

@@ -19,7 +19,7 @@ pub struct AudioStreamFormat {
 pub struct AudioDevice {
     name: String,
     #[cfg(not(target_os = "ios"))]
-    pub(crate) handle: rodio::cpal::Device,
+    pub(crate) handle: rodio::Device,
 }
 
 impl AudioDevice {
@@ -50,9 +50,11 @@ impl AudioDevice {
             .output_devices()
             .map_err(|error| PlayerError::OutputDeviceEnumerationFailed(error.to_string()))?
             .map(|handle| {
-                let name = handle.name().map_err(|error| {
-                    PlayerError::OutputDeviceEnumerationFailed(error.to_string())
-                })?;
+                let name = handle
+                    .description()
+                    .map_err(|error| PlayerError::OutputDeviceEnumerationFailed(error.to_string()))?
+                    .name()
+                    .to_owned();
                 Ok(Self { name, handle })
             })
             .collect()

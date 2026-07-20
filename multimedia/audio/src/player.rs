@@ -16,7 +16,7 @@ use crate::{
 };
 use futures::Stream;
 use lofty::prelude::*;
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source, SpatialSink};
+use rodio::{Decoder, DeviceSinkBuilder, Player, Source, SpatialPlayer};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -233,30 +233,25 @@ enum SinkInit {
 }
 
 enum SinkBackend {
-    Standard(Arc<Sink>),
+    Standard(Arc<Player>),
     Spatial {
-        sink: Arc<SpatialSink>,
+        sink: Arc<SpatialPlayer>,
         scene: Arc<RwLock<SpatialScene>>,
     },
 }
 
 impl SinkBackend {
-    fn new(stream_handle: &OutputStreamHandle, init: SinkInit) -> Result<Self, PlayerError> {
+    fn new(mixer: &rodio::mixer::Mixer, init: SinkInit) -> Result<Self, PlayerError> {
         match init {
-            SinkInit::Standard => {
-                let sink = Sink::try_new(stream_handle)
-                    .map_err(|e| PlayerError::OutputInitFailed(e.to_string()))?;
-                Ok(Self::Standard(Arc::new(sink)))
-            }
+            SinkInit::Standard => Ok(Self::Standard(Arc::new(Player::connect_new(mixer)))),
             SinkInit::Spatial(scene) => {
                 scene.validate()?;
-                let sink = SpatialSink::try_new(
-                    stream_handle,
+                let sink = SpatialPlayer::connect_new(
+                    mixer,
                     scene.emitter().as_array(),
                     scene.listener().left_ear().as_array(),
                     scene.listener().right_ear().as_array(),
-                )
-                .map_err(|e| PlayerError::OutputInitFailed(e.to_string()))?;
+                );
                 Ok(Self::Spatial {
                     sink: Arc::new(sink),
                     scene: Arc::new(RwLock::new(scene)),
@@ -274,9 +269,7 @@ impl SinkBackend {
 
     fn append<S>(&self, source: S)
     where
-        S: Source + Send + 'static,
-        f32: rodio::cpal::FromSample<S::Item>,
-        S::Item: rodio::Sample + Send,
+        S: Source<Item = f32> + Send + 'static,
     {
         match self {
             Self::Standard(sink) => sink.append(source),
@@ -443,7 +436,7 @@ impl PlaybackClock {
 }
 
 struct RuntimeHandles {
-    stream_handle: OutputStreamHandle,
+    mixer: rodio::mixer::Mixer,
     media_session: Arc<MediaSession>,
     shutdown_handle: ShutdownHandle,
     background_thread: JoinHandle<()>,
@@ -467,10 +460,6 @@ struct RuntimeHandles {
 ///     .artist("Custom Artist");
 /// ```
 pub struct AudioPlayer {
-    // Keep internal stream handle alive via sink, but we don't hold OutputStream directly
-    // (it lives in the background thread)
-    #[allow(dead_code)]
-    stream_handle: OutputStreamHandle,
     sink: SinkBackend,
 
     // State
@@ -514,18 +503,20 @@ impl AudioPlayer {
 
         let background_thread = {
             std::thread::spawn(move || {
-                let stream = selected_device.map_or_else(OutputStream::try_default, |device| {
-                    OutputStream::try_from_device(&device.handle)
-                });
-                let (_stream, stream_handle) = match stream {
-                    Ok(pair) => pair,
+                let stream =
+                    selected_device.map_or_else(DeviceSinkBuilder::open_default_sink, |device| {
+                        DeviceSinkBuilder::from_device(device.handle)
+                            .and_then(DeviceSinkBuilder::open_stream)
+                    });
+                let stream = match stream {
+                    Ok(stream) => stream,
                     Err(e) => {
                         let _ = handle_tx.send(Err(PlayerError::OutputInitFailed(e.to_string())));
                         return;
                     }
                 };
 
-                if handle_tx.send(Ok(stream_handle)).is_err() {
+                if handle_tx.send(Ok(stream.mixer().clone())).is_err() {
                     return;
                 }
 
@@ -533,12 +524,12 @@ impl AudioPlayer {
             })
         };
 
-        let stream_handle = handle_rx
+        let mixer = handle_rx
             .recv()
             .map_err(|_| PlayerError::OutputInitFailed("audio thread failed to start".into()))??;
 
         Ok(RuntimeHandles {
-            stream_handle,
+            mixer,
             media_session,
             shutdown_handle,
             background_thread,
@@ -553,7 +544,7 @@ impl AudioPlayer {
     ) -> Result<Self, PlayerError> {
         let path = path.as_ref();
         let runtime = Self::initialize_runtime(output)?;
-        let sink = SinkBackend::new(&runtime.stream_handle, sink_init)?;
+        let sink = SinkBackend::new(&runtime.mixer, sink_init)?;
 
         let file = File::open(path)
             .map_err(|e| PlayerError::LoadFailed(format!("{}: {e}", path.display())))?;
@@ -562,8 +553,8 @@ impl AudioPlayer {
         let source =
             Decoder::new(reader).map_err(|e| PlayerError::UnsupportedFormat(e.to_string()))?;
         let source_format = Some(AudioStreamFormat {
-            channels: source.channels(),
-            sample_rate_hz: source.sample_rate(),
+            channels: source.channels().get(),
+            sample_rate_hz: source.sample_rate().get(),
         });
 
         let mut metadata = MediaMetadata::default();
@@ -593,10 +584,7 @@ impl AudioPlayer {
         }
 
         let playback_params = Arc::new(PlaybackParams::new());
-        let playback_source = AdaptivePlaybackSource::new(
-            source.convert_samples::<f32>(),
-            Arc::clone(&playback_params),
-        );
+        let playback_source = AdaptivePlaybackSource::new(source, Arc::clone(&playback_params));
 
         sink.append(playback_source);
         sink.pause();
@@ -607,7 +595,6 @@ impl AudioPlayer {
             .set_playback_state(&PlaybackState::paused(Duration::ZERO))?;
 
         Ok(Self {
-            stream_handle: runtime.stream_handle,
             sink,
             metadata,
             source_format,
@@ -638,13 +625,13 @@ impl AudioPlayer {
             })?;
 
         let runtime = Self::initialize_runtime(output)?;
-        let sink = SinkBackend::new(&runtime.stream_handle, sink_init)?;
+        let sink = SinkBackend::new(&runtime.mixer, sink_init)?;
 
         let source = Decoder::new(std::io::Cursor::new(bytes))
             .map_err(|e| PlayerError::UnsupportedFormat(e.to_string()))?;
         let source_format = Some(AudioStreamFormat {
-            channels: source.channels(),
-            sample_rate_hz: source.sample_rate(),
+            channels: source.channels().get(),
+            sample_rate_hz: source.sample_rate().get(),
         });
 
         let mut metadata = MediaMetadata::default();
@@ -654,10 +641,7 @@ impl AudioPlayer {
         metadata = metadata.with_title(Self::title_from_url(url));
 
         let playback_params = Arc::new(PlaybackParams::new());
-        let playback_source = AdaptivePlaybackSource::new(
-            source.convert_samples::<f32>(),
-            Arc::clone(&playback_params),
-        );
+        let playback_source = AdaptivePlaybackSource::new(source, Arc::clone(&playback_params));
 
         sink.append(playback_source);
         sink.pause();
@@ -668,7 +652,6 @@ impl AudioPlayer {
             .set_playback_state(&PlaybackState::paused(Duration::ZERO))?;
 
         Ok(Self {
-            stream_handle: runtime.stream_handle,
             sink,
             metadata,
             source_format,
@@ -1237,16 +1220,18 @@ mod tests {
     }
 
     impl Source for TrackingSource {
-        fn current_frame_len(&self) -> Option<usize> {
+        fn current_span_len(&self) -> Option<usize> {
             None
         }
 
-        fn channels(&self) -> u16 {
-            self.channels
+        fn channels(&self) -> std::num::NonZeroU16 {
+            std::num::NonZeroU16::new(self.channels)
+                .expect("tracking source channels must be non-zero")
         }
 
-        fn sample_rate(&self) -> u32 {
-            self.sample_rate
+        fn sample_rate(&self) -> std::num::NonZeroU32 {
+            std::num::NonZeroU32::new(self.sample_rate)
+                .expect("tracking source sample rate must be non-zero")
         }
 
         fn total_duration(&self) -> Option<Duration> {

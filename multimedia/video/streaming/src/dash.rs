@@ -2004,12 +2004,12 @@ mod tests {
             }),
         };
         let segments = representation
-            .plan_segments_in_window(Duration::from_secs(86_400), Duration::from_secs(86_406))
+            .plan_segments_in_window(Duration::from_hours(24), Duration::from_secs(86_406))
             .expect("live window must plan");
 
         assert_eq!(segments.len(), 3);
         assert_eq!(segments[0].number, 43_201);
-        assert_eq!(segments[0].start, Duration::from_secs(86_400));
+        assert_eq!(segments[0].start, Duration::from_hours(24));
         assert!(
             segments[0].resource.urls[0]
                 .path()

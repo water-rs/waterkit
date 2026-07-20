@@ -41,7 +41,7 @@ required-features = ["preview-example"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-pollster = "0.4"
+pollster = "1.0"
 winit.workspace = true
 
 # Desktop platforms (Windows, macOS, Linux) - use nokhwa

@@ -483,8 +483,9 @@ fn offload_writer_loop(
     let mut finish_pending = false;
     let mut finished = false;
     loop {
-        let control = Box::pin(controls.recv());
-        let packet = Box::pin(packets.recv());
+        let control = controls.recv();
+        let packet = packets.recv();
+        futures::pin_mut!(control, packet);
         match futures::executor::block_on(select(control, packet)) {
             Either::Left((Ok(OffloadControl::Shutdown) | Err(_), _))
             | Either::Right((Err(_), _)) => return Ok(()),

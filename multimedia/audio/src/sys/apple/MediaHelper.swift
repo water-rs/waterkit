@@ -199,29 +199,26 @@ private func activateAudioSessionWithSilence() {
     let numSamples = Int(sampleRate * duration)
     
     // Create silent PCM data (16-bit stereo)
-    var audioData = Data()
-    let silence = [UInt8](repeating: 0, count: numSamples * 4) // 2 channels * 2 bytes per sample
-    audioData.append(contentsOf: silence)
+    let audioData = Data(count: numSamples * 4) // 2 channels * 2 bytes per sample
     
     // Create a WAV file in memory
-    if let wavData = createWAVData(from: audioData, sampleRate: Int(sampleRate), channels: 2) {
-        do {
-            silentPlayer = try AVAudioPlayer(data: wavData)
-            silentPlayer?.volume = 0
-            silentPlayer?.delegate = silentPlayerDelegate
-            silentPlayer?.prepareToPlay()
-            if silentPlayer?.play() == false {
-                silentPlayer = nil
-                logger.warning("Silent audio activation pulse did not start playback")
-            }
-        } catch {
-            logger.warning("Failed to create silent audio player: \(error.localizedDescription)")
+    let wavData = createWAVData(from: audioData, sampleRate: Int(sampleRate), channels: 2)
+    do {
+        silentPlayer = try AVAudioPlayer(data: wavData)
+        silentPlayer?.volume = 0
+        silentPlayer?.delegate = silentPlayerDelegate
+        silentPlayer?.prepareToPlay()
+        if silentPlayer?.play() == false {
+            silentPlayer = nil
+            logger.warning("Silent audio activation pulse did not start playback")
         }
+    } catch {
+        logger.warning("Failed to create silent audio player: \(error.localizedDescription)")
     }
 }
 
 /// Creates a WAV file data from raw PCM data
-private func createWAVData(from pcmData: Data, sampleRate: Int, channels: Int) -> Data? {
+private func createWAVData(from pcmData: Data, sampleRate: Int, channels: Int) -> Data {
     let bitsPerSample = 16
     let bytesPerSample = bitsPerSample / 8
     let byteRate = sampleRate * channels * bytesPerSample
@@ -229,29 +226,36 @@ private func createWAVData(from pcmData: Data, sampleRate: Int, channels: Int) -
     let dataSize = pcmData.count
     let fileSize = 36 + dataSize
     
-    var wavData = Data()
+    var wavData = Data(capacity: 44 + dataSize)
     
     // RIFF header
     wavData.append(contentsOf: "RIFF".utf8)
-    wavData.append(contentsOf: withUnsafeBytes(of: UInt32(fileSize).littleEndian) { Array($0) })
+    appendLittleEndian(UInt32(fileSize), to: &wavData)
     wavData.append(contentsOf: "WAVE".utf8)
     
     // fmt chunk
     wavData.append(contentsOf: "fmt ".utf8)
-    wavData.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian) { Array($0) }) // chunk size
-    wavData.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) }) // PCM format
-    wavData.append(contentsOf: withUnsafeBytes(of: UInt16(channels).littleEndian) { Array($0) })
-    wavData.append(contentsOf: withUnsafeBytes(of: UInt32(sampleRate).littleEndian) { Array($0) })
-    wavData.append(contentsOf: withUnsafeBytes(of: UInt32(byteRate).littleEndian) { Array($0) })
-    wavData.append(contentsOf: withUnsafeBytes(of: UInt16(blockAlign).littleEndian) { Array($0) })
-    wavData.append(contentsOf: withUnsafeBytes(of: UInt16(bitsPerSample).littleEndian) { Array($0) })
+    appendLittleEndian(UInt32(16), to: &wavData) // chunk size
+    appendLittleEndian(UInt16(1), to: &wavData) // PCM format
+    appendLittleEndian(UInt16(channels), to: &wavData)
+    appendLittleEndian(UInt32(sampleRate), to: &wavData)
+    appendLittleEndian(UInt32(byteRate), to: &wavData)
+    appendLittleEndian(UInt16(blockAlign), to: &wavData)
+    appendLittleEndian(UInt16(bitsPerSample), to: &wavData)
     
     // data chunk
     wavData.append(contentsOf: "data".utf8)
-    wavData.append(contentsOf: withUnsafeBytes(of: UInt32(dataSize).littleEndian) { Array($0) })
+    appendLittleEndian(UInt32(dataSize), to: &wavData)
     wavData.append(pcmData)
     
     return wavData
+}
+
+private func appendLittleEndian<T: FixedWidthInteger>(_ value: T, to data: inout Data) {
+    var encoded = value.littleEndian
+    withUnsafeBytes(of: &encoded) { bytes in
+        data.append(contentsOf: bytes)
+    }
 }
 #endif
 

@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use rodio::buffer::SamplesBuffer;
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source};
+use smallvec::SmallVec;
 
 use crate::playback_rate::{
     PitchStretchEngine, PlaybackParams, clamp_playback_rate, should_use_pitch_stretch,
@@ -451,7 +452,7 @@ impl StreamingRateProcessor {
         &mut self,
         frame: DecodedAudioFrame,
         params: &PlaybackParams,
-    ) -> Result<Vec<ProcessedAudioFrame>, PlayerError> {
+    ) -> Result<SmallVec<[ProcessedAudioFrame; 2]>, PlayerError> {
         let mode = RateMode {
             rate: params.rate(),
             preserve_pitch: params.preserve_pitch(),
@@ -463,7 +464,7 @@ impl StreamingRateProcessor {
                 .sample_rate
                 .is_some_and(|current| current != sample_rate);
         let mode_changed = self.mode.is_some_and(|current| current != mode);
-        let mut output = Vec::with_capacity(2);
+        let mut output = SmallVec::new();
         if format_changed || mode_changed {
             if let Some(flushed) = self.flush()? {
                 output.push(flushed);

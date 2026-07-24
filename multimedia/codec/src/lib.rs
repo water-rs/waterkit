@@ -250,8 +250,8 @@ pub struct EncodeStream {
 }
 
 enum EncodeStreamInner {
-    /// Successful encode - yields packets from the iterator.
-    Packets(IntoIter<Vec<u8>>),
+    /// Successful encode - yields the packet once.
+    Packet(Option<Vec<u8>>),
     /// Encode error - yields the error once, then empty.
     Error(Option<CodecError>),
 }
@@ -261,16 +261,15 @@ impl Iterator for EncodeStream {
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.inner {
-            EncodeStreamInner::Packets(iter) => iter.next().map(Ok),
+            EncodeStreamInner::Packet(packet) => packet.take().map(Ok),
             EncodeStreamInner::Error(err) => err.take().map(Err),
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         match &self.inner {
-            EncodeStreamInner::Packets(iter) => iter.size_hint(),
-            EncodeStreamInner::Error(Some(_)) => (1, Some(1)),
-            EncodeStreamInner::Error(None) => (0, Some(0)),
+            EncodeStreamInner::Packet(Some(_)) | EncodeStreamInner::Error(Some(_)) => (1, Some(1)),
+            EncodeStreamInner::Packet(None) | EncodeStreamInner::Error(None) => (0, Some(0)),
         }
     }
 }
@@ -905,7 +904,7 @@ impl Encoder {
         let result = self.encode_nv12_inner(data);
         match result {
             Ok(packet) => EncodeStream {
-                inner: EncodeStreamInner::Packets(vec![packet].into_iter()),
+                inner: EncodeStreamInner::Packet(Some(packet)),
             },
             Err(e) => EncodeStream {
                 inner: EncodeStreamInner::Error(Some(e)),
@@ -943,7 +942,7 @@ impl Encoder {
         let result = self.encode_iosurface_inner(iosurface_ptr);
         match result {
             Ok(packet) => EncodeStream {
-                inner: EncodeStreamInner::Packets(vec![packet].into_iter()),
+                inner: EncodeStreamInner::Packet(Some(packet)),
             },
             Err(e) => EncodeStream {
                 inner: EncodeStreamInner::Error(Some(e)),

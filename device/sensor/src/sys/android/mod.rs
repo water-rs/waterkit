@@ -1,6 +1,5 @@
 //! Android sensor implementation using JNI.
 
-use crate::sys::SensorStream;
 use crate::{ScalarData, SensorData, SensorError};
 use futures::stream;
 use jni::JNIEnv;
@@ -420,15 +419,17 @@ pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
     read_sensor_internal(1)
 }
 
-pub fn accelerometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+pub fn accelerometer_watch(
+    interval_ms: u32,
+) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
     if !accelerometer_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(Box::pin(stream::unfold((), move |()| async move {
+    Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         (accelerometer_read().await).map_or(None, |data| Some((data, ())))
-    })))
+    }))
 }
 
 pub fn gyroscope_available() -> bool {
@@ -440,15 +441,17 @@ pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
     read_sensor_internal(4)
 }
 
-pub fn gyroscope_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+pub fn gyroscope_watch(
+    interval_ms: u32,
+) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
     if !gyroscope_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(Box::pin(stream::unfold((), move |()| async move {
+    Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         (gyroscope_read().await).map_or(None, |data| Some((data, ())))
-    })))
+    }))
 }
 
 pub fn magnetometer_available() -> bool {
@@ -460,15 +463,17 @@ pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
     read_sensor_internal(2)
 }
 
-pub fn magnetometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+pub fn magnetometer_watch(
+    interval_ms: u32,
+) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
     if !magnetometer_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(Box::pin(stream::unfold((), move |()| async move {
+    Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         (magnetometer_read().await).map_or(None, |data| Some((data, ())))
-    })))
+    }))
 }
 
 pub fn barometer_available() -> bool {
@@ -480,15 +485,17 @@ pub async fn barometer_read() -> Result<ScalarData, SensorError> {
     read_pressure_internal()
 }
 
-pub fn barometer_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
+pub fn barometer_watch(
+    interval_ms: u32,
+) -> Result<impl futures_core::Stream<Item = ScalarData> + Send, SensorError> {
     if !barometer_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(Box::pin(stream::unfold((), move |()| async move {
+    Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         (barometer_read().await).map_or(None, |data| Some((data, ())))
-    })))
+    }))
 }
 
 pub fn ambient_light_available() -> bool {
@@ -500,13 +507,15 @@ pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
     read_light_internal()
 }
 
-pub fn ambient_light_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
+pub fn ambient_light_watch(
+    interval_ms: u32,
+) -> Result<impl futures_core::Stream<Item = ScalarData> + Send, SensorError> {
     if !ambient_light_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(Box::pin(stream::unfold((), move |()| async move {
+    Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         (ambient_light_read().await).map_or(None, |data| Some((data, ())))
-    })))
+    }))
 }

@@ -110,6 +110,7 @@ struct RealtimeStretch {
     rendered_output_frames: u64,
     pipeline_latency_frames: usize,
     latency_remaining_frames: usize,
+    padding: Vec<f32>,
     finished: bool,
 }
 
@@ -135,6 +136,7 @@ impl RealtimeStretch {
             rendered_output_frames: 0,
             pipeline_latency_frames,
             latency_remaining_frames: pipeline_latency_frames,
+            padding: Vec::new(),
             finished: false,
         }
     }
@@ -275,8 +277,9 @@ impl RealtimeStretch {
                 frames > 0,
                 "pitch stretcher flush padding exceeds source capacity"
             );
-            let padding = vec![0.0; frames * self.channels];
-            let accepted = self.source.push(&padding);
+            let samples = frames * self.channels;
+            self.padding.resize(samples, 0.0);
+            let accepted = self.source.push(&self.padding[..samples]);
             assert_eq!(
                 accepted, frames,
                 "pitch stretcher must accept flush padding"
@@ -285,15 +288,24 @@ impl RealtimeStretch {
     }
 
     fn render(&mut self, output_frames: usize, output: &mut Vec<f32>) {
-        let mut rendered = vec![0.0; output_frames * self.channels];
-        self.processor.process(&mut rendered);
+        let output_start = output.len();
+        let rendered_samples = output_frames * self.channels;
+        output.resize(output_start + rendered_samples, 0.0);
+        self.processor.process(&mut output[output_start..]);
         self.rendered_output_frames = self
             .rendered_output_frames
             .checked_add(u64::try_from(output_frames).expect("output frame count must fit u64"))
             .expect("rendered pitch stretcher frame count must fit u64");
         let skipped_frames = output_frames.min(self.latency_remaining_frames);
         self.latency_remaining_frames -= skipped_frames;
-        output.extend_from_slice(&rendered[skipped_frames * self.channels..]);
+        let skipped_samples = skipped_frames * self.channels;
+        if skipped_samples != 0 {
+            output.copy_within(
+                output_start + skipped_samples..output_start + rendered_samples,
+                output_start,
+            );
+            output.truncate(output.len() - skipped_samples);
+        }
     }
 }
 

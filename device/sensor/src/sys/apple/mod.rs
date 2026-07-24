@@ -1,6 +1,5 @@
 //! Apple platform (iOS/macOS) sensor implementation using swift-bridge.
 
-use crate::sys::SensorStream;
 use crate::{ScalarData, SensorData, SensorError};
 use futures::stream;
 use waterkit_core::Timestamp;
@@ -99,18 +98,20 @@ pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
     convert_result(ffi::read_accelerometer())
 }
 
-pub fn accelerometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+pub fn accelerometer_watch(
+    interval_ms: u32,
+) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
     if !accelerometer_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(Box::pin(stream::unfold((), move |()| async move {
+    Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         match ffi::read_accelerometer() {
             ffi::SensorResult::Success(r) => Some((convert_reading(&r), ())),
             _ => None,
         }
-    })))
+    }))
 }
 
 // Gyroscope
@@ -123,18 +124,20 @@ pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
     convert_result(ffi::read_gyroscope())
 }
 
-pub fn gyroscope_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+pub fn gyroscope_watch(
+    interval_ms: u32,
+) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
     if !gyroscope_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(Box::pin(stream::unfold((), move |()| async move {
+    Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         match ffi::read_gyroscope() {
             ffi::SensorResult::Success(r) => Some((convert_reading(&r), ())),
             _ => None,
         }
-    })))
+    }))
 }
 
 // Magnetometer
@@ -147,18 +150,20 @@ pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
     convert_result(ffi::read_magnetometer())
 }
 
-pub fn magnetometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+pub fn magnetometer_watch(
+    interval_ms: u32,
+) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
     if !magnetometer_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(Box::pin(stream::unfold((), move |()| async move {
+    Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         match ffi::read_magnetometer() {
             ffi::SensorResult::Success(r) => Some((convert_reading(&r), ())),
             _ => None,
         }
-    })))
+    }))
 }
 
 // Barometer
@@ -171,18 +176,20 @@ pub async fn barometer_read() -> Result<ScalarData, SensorError> {
     convert_scalar_result(ffi::read_barometer())
 }
 
-pub fn barometer_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
+pub fn barometer_watch(
+    interval_ms: u32,
+) -> Result<impl futures_core::Stream<Item = ScalarData> + Send, SensorError> {
     if !barometer_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(Box::pin(stream::unfold((), move |()| async move {
+    Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         match ffi::read_barometer() {
             ffi::ScalarResult::Success(r) => Some((convert_scalar(&r), ())),
             _ => None,
         }
-    })))
+    }))
 }
 
 // Ambient Light
@@ -195,16 +202,18 @@ pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
     convert_scalar_result(ffi::read_ambient_light())
 }
 
-pub fn ambient_light_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
+pub fn ambient_light_watch(
+    interval_ms: u32,
+) -> Result<impl futures_core::Stream<Item = ScalarData> + Send, SensorError> {
     if !ambient_light_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(Box::pin(stream::unfold((), move |()| async move {
+    Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         match ffi::read_ambient_light() {
             ffi::ScalarResult::Success(r) => Some((convert_scalar(&r), ())),
             _ => None,
         }
-    })))
+    }))
 }

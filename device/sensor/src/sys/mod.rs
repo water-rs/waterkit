@@ -1,12 +1,7 @@
 //! Platform-specific sensor implementations.
 //!
-//! `SensorStream<T>` is a crate-private alias that platform code returns
-//! to satisfy the `impl Stream<Item = T>` bound in the public API.
-
-use core::pin::Pin;
-use futures_core::Stream;
-
-pub type SensorStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
+//! Each platform returns its concrete stream type so subscription does not
+//! require an otherwise unnecessary stream box.
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple;
@@ -43,8 +38,8 @@ pub use linux::*;
     target_os = "linux"
 )))]
 mod fallback {
-    use super::SensorStream;
     use crate::{ScalarData, SensorData, SensorError};
+    use futures::stream;
 
     pub fn accelerometer_available() -> bool {
         false
@@ -52,7 +47,9 @@ mod fallback {
     pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
         Err(SensorError::NotAvailable)
     }
-    pub fn accelerometer_watch(_interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+    pub fn accelerometer_watch(
+        _interval_ms: u32,
+    ) -> Result<stream::Empty<SensorData>, SensorError> {
         Err(SensorError::NotAvailable)
     }
 
@@ -62,7 +59,7 @@ mod fallback {
     pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
         Err(SensorError::NotAvailable)
     }
-    pub fn gyroscope_watch(_interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+    pub fn gyroscope_watch(_interval_ms: u32) -> Result<stream::Empty<SensorData>, SensorError> {
         Err(SensorError::NotAvailable)
     }
 
@@ -72,7 +69,7 @@ mod fallback {
     pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
         Err(SensorError::NotAvailable)
     }
-    pub fn magnetometer_watch(_interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+    pub fn magnetometer_watch(_interval_ms: u32) -> Result<stream::Empty<SensorData>, SensorError> {
         Err(SensorError::NotAvailable)
     }
 
@@ -82,7 +79,7 @@ mod fallback {
     pub async fn barometer_read() -> Result<ScalarData, SensorError> {
         Err(SensorError::NotAvailable)
     }
-    pub fn barometer_watch(_interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
+    pub fn barometer_watch(_interval_ms: u32) -> Result<stream::Empty<ScalarData>, SensorError> {
         Err(SensorError::NotAvailable)
     }
 
@@ -92,7 +89,9 @@ mod fallback {
     pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
         Err(SensorError::NotAvailable)
     }
-    pub fn ambient_light_watch(_interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
+    pub fn ambient_light_watch(
+        _interval_ms: u32,
+    ) -> Result<stream::Empty<ScalarData>, SensorError> {
         Err(SensorError::NotAvailable)
     }
 }

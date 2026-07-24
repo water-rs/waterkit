@@ -4,7 +4,6 @@
 //! (like `ThinkPads`, Surface devices) have accelerometers accessible
 //! via the `iio-sensor-proxy` service.
 
-use crate::sys::SensorStream;
 use crate::{ScalarData, SensorData, SensorError};
 use futures::stream;
 use waterkit_core::Timestamp;
@@ -78,15 +77,17 @@ pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
     Ok(SensorData::new(x, y, z, timestamp_now()))
 }
 
-pub fn accelerometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+pub fn accelerometer_watch(
+    interval_ms: u32,
+) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
     if !accelerometer_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(Box::pin(stream::unfold((), move |()| async move {
+    Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         accelerometer_read().await.ok().map(|data| (data, ()))
-    })))
+    }))
 }
 
 // Gyroscope (not typically available on Linux laptops)
@@ -99,7 +100,7 @@ pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
     Err(SensorError::NotAvailable)
 }
 
-pub fn gyroscope_watch(_interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+pub fn gyroscope_watch(_interval_ms: u32) -> Result<stream::Empty<SensorData>, SensorError> {
     Err(SensorError::NotAvailable)
 }
 
@@ -130,15 +131,17 @@ pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
     Ok(SensorData::new(rad.sin(), rad.cos(), 0.0, timestamp_now()))
 }
 
-pub fn magnetometer_watch(interval_ms: u32) -> Result<SensorStream<SensorData>, SensorError> {
+pub fn magnetometer_watch(
+    interval_ms: u32,
+) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
     if !magnetometer_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(Box::pin(stream::unfold((), move |()| async move {
+    Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         magnetometer_read().await.ok().map(|data| (data, ()))
-    })))
+    }))
 }
 
 // Barometer (not typically available on Linux laptops)
@@ -151,7 +154,7 @@ pub async fn barometer_read() -> Result<ScalarData, SensorError> {
     Err(SensorError::NotAvailable)
 }
 
-pub fn barometer_watch(_interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
+pub fn barometer_watch(_interval_ms: u32) -> Result<stream::Empty<ScalarData>, SensorError> {
     Err(SensorError::NotAvailable)
 }
 
@@ -179,13 +182,15 @@ pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
     Ok(ScalarData::new(level, timestamp_now()))
 }
 
-pub fn ambient_light_watch(interval_ms: u32) -> Result<SensorStream<ScalarData>, SensorError> {
+pub fn ambient_light_watch(
+    interval_ms: u32,
+) -> Result<impl futures_core::Stream<Item = ScalarData> + Send, SensorError> {
     if !ambient_light_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(Box::pin(stream::unfold((), move |()| async move {
+    Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
         ambient_light_read().await.ok().map(|data| (data, ()))
-    })))
+    }))
 }

@@ -1,7 +1,7 @@
 //! Apple IOSurface-to-wgpu interop without CPU readback.
 
 use super::DecodedPixelLayout;
-use objc2::runtime::ProtocolObject;
+use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_core_foundation::CFRetained;
 use objc2_core_video::{
     CVMetalTexture, CVMetalTextureCache, CVMetalTextureGetTexture, CVPixelBuffer, kCVReturnSuccess,
@@ -85,10 +85,8 @@ impl AppleFrameUploader {
             uv_format,
         );
 
-        let y_destination = unsafe { copy.y_target.as_hal::<Metal>() }
-            .expect("Apple decoded frame target must use the wgpu Metal backend");
-        let uv_destination = unsafe { copy.uv_target.as_hal::<Metal>() }
-            .expect("Apple decoded frame target must use the wgpu Metal backend");
+        let y_destination = retain_metal_texture(copy.y_target);
+        let uv_destination = retain_metal_texture(copy.uv_target);
 
         let command_buffer = hal_queue
             .as_raw()
@@ -100,20 +98,30 @@ impl AppleFrameUploader {
         copy_plane(
             &encoder,
             &y_source,
-            y_destination.raw_handle(),
+            &y_destination,
             copy.width.into(),
             copy.height.into(),
         );
         copy_plane(
             &encoder,
             &uv_source,
-            uv_destination.raw_handle(),
+            &uv_destination,
             uv_width.into(),
             uv_height.into(),
         );
         encoder.endEncoding();
         command_buffer.commit();
     }
+}
+
+fn retain_metal_texture(texture: &wgpu::Texture) -> Retained<ProtocolObject<dyn MTLTexture>> {
+    // Keep each HAL guard scoped to one texture; wgpu forbids recursively
+    // acquiring the internal texture lock while another guard is alive.
+    let texture = unsafe { texture.as_hal::<Metal>() }
+        .expect("Apple decoded frame target must use the wgpu Metal backend");
+    let raw = texture.raw_handle();
+    let raw = std::ptr::from_ref(raw).cast_mut();
+    unsafe { Retained::retain(raw) }.expect("wgpu returned a null Metal texture")
 }
 
 fn create_pixel_buffer_plane_texture(
@@ -123,7 +131,7 @@ fn create_pixel_buffer_plane_texture(
     width: u32,
     height: u32,
     format: MTLPixelFormat,
-) -> objc2::rc::Retained<ProtocolObject<dyn MTLTexture>> {
+) -> Retained<ProtocolObject<dyn MTLTexture>> {
     let mut cv_texture = ptr::null_mut();
     let status = unsafe {
         CVMetalTextureCache::create_texture_from_image(

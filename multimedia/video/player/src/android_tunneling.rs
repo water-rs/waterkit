@@ -3,8 +3,9 @@
 use std::time::Duration;
 
 use jni::{
-    JNIEnv,
-    objects::{GlobalRef, JObject, JValue},
+    Env, jni_sig, jni_str,
+    objects::{Global, JObject, JValue},
+    strings::JNIStr,
 };
 use waterkit_codec::NalStreamConverter;
 use waterkit_video_container::{Codec, EncodedSample, TrackInfo, TrackKind};
@@ -12,8 +13,10 @@ use waterkit_video_core::Error;
 
 use crate::{
     AndroidOffloadAudioController, AndroidOffloadAudioPlayback, AndroidVideoSurface,
-    android_surface::jni_error,
+    android_surface::{jni_error, with_attached_env},
 };
+
+type GlobalObjectRef = Global<JObject<'static>>;
 
 const MEDIA_CODEC_LIST_ALL_CODECS: i32 = 1;
 const MEDIA_CODEC_INFO_TRY_AGAIN_LATER: i32 = -1;
@@ -121,7 +124,7 @@ impl AndroidTunneledPlayback {
 
 struct AndroidTunneledVideoDecoder {
     surface: AndroidVideoSurface,
-    codec: GlobalRef,
+    codec: GlobalObjectRef,
     track: TrackInfo,
     converter: Option<NalStreamConverter>,
     input_finished: bool,
@@ -163,26 +166,22 @@ impl AndroidTunneledVideoDecoder {
                 )
             },
         );
-        let mut env = surface
-            .context
-            .vm
-            .attach_current_thread()
-            .map_err(|error| Error::Platform(format!("attach tunnel setup to JVM: {error}")))?;
-        let format = create_tunneled_video_format(
-            &mut env,
-            mime,
-            width,
-            height,
-            audio_session_id,
-            &primary_csd,
-            &secondary_csd,
-        )?;
-        let codec = create_tunneled_media_codec(&mut env, mime, &format, surface.surface.as_obj())?;
-        let retained_codec = env.new_global_ref(&codec).map_err(|error| {
-            release_codec(&mut env, &codec, false);
-            jni_error(&mut env, "retain tunneled MediaCodec", error)
+        let retained_codec = with_attached_env(&surface.context.vm, |env| {
+            let format = create_tunneled_video_format(
+                env,
+                mime,
+                width,
+                height,
+                audio_session_id,
+                &primary_csd,
+                &secondary_csd,
+            )?;
+            let codec = create_tunneled_media_codec(env, mime, &format, surface.surface.as_obj())?;
+            env.new_global_ref(&codec).map_err(|error| {
+                release_codec(env, &codec, false);
+                jni_error(env, "retain tunneled MediaCodec", error)
+            })
         })?;
-        drop(env);
         Ok(Self {
             surface,
             codec: retained_codec,
@@ -260,7 +259,7 @@ impl AndroidTunneledVideoDecoder {
 
     fn flush(&mut self) -> Result<(), Error> {
         self.with_env(|env, codec| {
-            env.call_method(codec, "flush", "()V", &[])
+            env.call_method(codec, jni_str!("flush"), jni_sig!("()V"), &[])
                 .map_err(|error| jni_error(env, "flush tunneled MediaCodec", error))?;
             Ok(())
         })?;
@@ -283,31 +282,22 @@ impl AndroidTunneledVideoDecoder {
         timeout_micros: i64,
     ) -> Result<Option<TunneledVideoOutput>, Error> {
         self.with_env(|env, codec| {
-            let info = env
-                .new_object("android/media/MediaCodec$BufferInfo", "()V", &[])
+            let info = env.new_object(jni_str!("android/media/MediaCodec$BufferInfo"), jni_sig!("()V"), &[])
                 .map_err(|error| jni_error(env, "create tunneled BufferInfo", error))?;
             loop {
-                let index = env
-                    .call_method(
-                        codec,
-                        "dequeueOutputBuffer",
-                        "(Landroid/media/MediaCodec$BufferInfo;J)I",
-                        &[JValue::Object(&info), JValue::Long(timeout_micros)],
-                    )
-                    .and_then(jni::objects::JValueGen::i)
+                let index = env.call_method(codec, jni_str!("dequeueOutputBuffer"), jni_sig!("(Landroid/media/MediaCodec$BufferInfo;J)I"), &[JValue::Object(&info), JValue::Long(timeout_micros)])
+                    .and_then(jni::objects::JValueOwned::i)
                     .map_err(|error| jni_error(env, "dequeue tunneled output", error))?;
                 match index {
                     MEDIA_CODEC_INFO_TRY_AGAIN_LATER => return Ok(None),
                     MEDIA_CODEC_INFO_OUTPUT_FORMAT_CHANGED
                     | MEDIA_CODEC_INFO_OUTPUT_BUFFERS_CHANGED => {}
                     index if index >= 0 => {
-                        let flags = env
-                            .get_field(&info, "flags", "I")
-                            .and_then(jni::objects::JValueGen::i)
+                        let flags = env.get_field(&info, jni_str!("flags"), jni_sig!("I"))
+                            .and_then(jni::objects::JValueOwned::i)
                             .map_err(|error| jni_error(env, "read tunneled output flags", error))?;
-                        let presentation_time_micros = env
-                            .get_field(&info, "presentationTimeUs", "J")
-                            .and_then(jni::objects::JValueGen::j)
+                        let presentation_time_micros = env.get_field(&info, jni_str!("presentationTimeUs"), jni_sig!("J"))
+                            .and_then(jni::objects::JValueOwned::j)
                             .map_err(|error| jni_error(env, "read tunneled output PTS", error))?;
                         let presentation_time_micros =
                             u64::try_from(presentation_time_micros).map_err(|_| {
@@ -315,12 +305,7 @@ impl AndroidTunneledVideoDecoder {
                                     "MediaCodec returned negative tunneled output PTS {presentation_time_micros}"
                                 ))
                             })?;
-                        env.call_method(
-                            codec,
-                            "releaseOutputBuffer",
-                            "(IZ)V",
-                            &[JValue::Int(index), JValue::Bool(1)],
-                        )
+                        env.call_method(codec, jni_str!("releaseOutputBuffer"), jni_sig!("(IZ)V"), &[JValue::Int(index), JValue::Bool(true)])
                         .map_err(|error| jni_error(env, "release tunneled output", error))?;
                         return Ok(Some(TunneledVideoOutput {
                             presentation_time: Duration::from_micros(presentation_time_micros),
@@ -339,17 +324,11 @@ impl AndroidTunneledVideoDecoder {
 
     fn with_env<T>(
         &self,
-        operation: impl FnOnce(&mut JNIEnv<'_>, &JObject<'_>) -> Result<T, Error>,
+        operation: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        let mut env = self
-            .surface
-            .context
-            .vm
-            .attach_current_thread()
-            .map_err(|error| {
-                Error::Platform(format!("attach tunneled decoder thread to JVM: {error}"))
-            })?;
-        operation(&mut env, self.codec.as_obj())
+        with_attached_env(&self.surface.context.vm, |env| {
+            operation(env, self.codec.as_obj())
+        })
     }
 }
 
@@ -360,11 +339,12 @@ struct TunneledVideoOutput {
 
 impl Drop for AndroidTunneledVideoDecoder {
     fn drop(&mut self) {
-        let Ok(mut env) = self.surface.context.vm.attach_current_thread() else {
-            tracing::error!("failed to attach JVM while releasing tunneled MediaCodec");
-            return;
-        };
-        release_codec(&mut env, self.codec.as_obj(), true);
+        if let Err(error) = with_attached_env(&self.surface.context.vm, |env| {
+            release_codec(env, self.codec.as_obj(), true);
+            Ok(())
+        }) {
+            tracing::error!(%error, "failed to attach JVM while releasing tunneled MediaCodec");
+        }
     }
 }
 
@@ -411,7 +391,7 @@ fn video_codec_description(
 }
 
 fn create_tunneled_video_format<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     mime: &str,
     width: i32,
     height: i32,
@@ -424,16 +404,16 @@ fn create_tunneled_video_format<'local>(
         .map_err(|error| jni_error(env, "create tunneled video MIME", error))?;
     let format = env
         .call_static_method(
-            "android/media/MediaFormat",
-            "createVideoFormat",
-            "(Ljava/lang/String;II)Landroid/media/MediaFormat;",
+            jni_str!("android/media/MediaFormat"),
+            jni_str!("createVideoFormat"),
+            jni_sig!("(Ljava/lang/String;II)Landroid/media/MediaFormat;"),
             &[
                 JValue::Object(&mime),
                 JValue::Int(width),
                 JValue::Int(height),
             ],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| jni_error(env, "create tunneled video format", error))?;
     set_media_format_integer(env, &format, "audio-session-id", audio_session_id)?;
     set_codec_specific_data(env, &format, "csd-0", primary_csd)?;
@@ -443,35 +423,35 @@ fn create_tunneled_video_format<'local>(
         .map_err(|error| jni_error(env, "create tunneled-playback feature", error))?;
     env.call_method(
         &format,
-        "setFeatureEnabled",
-        "(Ljava/lang/String;Z)V",
-        &[JValue::Object(&feature), JValue::Bool(1)],
+        jni_str!("setFeatureEnabled"),
+        jni_sig!("(Ljava/lang/String;Z)V"),
+        &[JValue::Object(&feature), JValue::Bool(true)],
     )
     .map_err(|error| jni_error(env, "require tunneled-playback feature", error))?;
     Ok(format)
 }
 
 fn create_tunneled_media_codec<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     mime: &str,
     format: &JObject<'_>,
     surface: &JObject<'_>,
 ) -> Result<JObject<'local>, Error> {
     let codec_list = env
         .new_object(
-            "android/media/MediaCodecList",
-            "(I)V",
+            jni_str!("android/media/MediaCodecList"),
+            jni_sig!("(I)V"),
             &[JValue::Int(MEDIA_CODEC_LIST_ALL_CODECS)],
         )
         .map_err(|error| jni_error(env, "create tunneled MediaCodecList", error))?;
     let decoder_name = env
         .call_method(
             &codec_list,
-            "findDecoderForFormat",
-            "(Landroid/media/MediaFormat;)Ljava/lang/String;",
+            jni_str!("findDecoderForFormat"),
+            jni_sig!("(Landroid/media/MediaFormat;)Ljava/lang/String;"),
             &[JValue::Object(format)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| jni_error(env, "select tunneled decoder", error))?;
     if decoder_name.is_null() {
         return Err(Error::Unsupported(format!(
@@ -480,18 +460,20 @@ fn create_tunneled_media_codec<'local>(
     }
     let codec = env
         .call_static_method(
-            "android/media/MediaCodec",
-            "createByCodecName",
-            "(Ljava/lang/String;)Landroid/media/MediaCodec;",
+            jni_str!("android/media/MediaCodec"),
+            jni_str!("createByCodecName"),
+            jni_sig!("(Ljava/lang/String;)Landroid/media/MediaCodec;"),
             &[JValue::Object(&decoder_name)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| jni_error(env, "create tunneled MediaCodec", error))?;
     let null_crypto = JObject::null();
     if let Err(error) = env.call_method(
         &codec,
-        "configure",
-        "(Landroid/media/MediaFormat;Landroid/view/Surface;Landroid/media/MediaCrypto;I)V",
+        jni_str!("configure"),
+        jni_sig!(
+            "(Landroid/media/MediaFormat;Landroid/view/Surface;Landroid/media/MediaCrypto;I)V"
+        ),
         &[
             JValue::Object(format),
             JValue::Object(surface),
@@ -502,7 +484,7 @@ fn create_tunneled_media_codec<'local>(
         release_codec(env, &codec, false);
         return Err(jni_error(env, "configure tunneled MediaCodec", error));
     }
-    if let Err(error) = env.call_method(&codec, "start", "()V", &[]) {
+    if let Err(error) = env.call_method(&codec, jni_str!("start"), jni_sig!("()V"), &[]) {
         release_codec(env, &codec, false);
         return Err(jni_error(env, "start tunneled MediaCodec", error));
     }
@@ -510,7 +492,7 @@ fn create_tunneled_media_codec<'local>(
 }
 
 fn queue_clear_codec_input(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     codec: &JObject<'_>,
     data: &[u8],
     presentation_time: Duration,
@@ -519,11 +501,11 @@ fn queue_clear_codec_input(
     let index = env
         .call_method(
             codec,
-            "dequeueInputBuffer",
-            "(J)I",
+            jni_str!("dequeueInputBuffer"),
+            jni_sig!("(J)I"),
             &[JValue::Long(INPUT_WAIT_FOREVER_MICROS)],
         )
-        .and_then(jni::objects::JValueGen::i)
+        .and_then(jni::objects::JValueOwned::i)
         .map_err(|error| jni_error(env, "dequeue tunneled input", error))?;
     if index < 0 {
         return Err(Error::Platform(format!(
@@ -539,8 +521,8 @@ fn queue_clear_codec_input(
         .map_err(|_| Error::Codec(String::from("tunneled video PTS exceeds Android jlong")))?;
     env.call_method(
         codec,
-        "queueInputBuffer",
-        "(IIIJI)V",
+        jni_str!("queueInputBuffer"),
+        jni_sig!("(IIIJI)V"),
         &[
             JValue::Int(index),
             JValue::Int(0),
@@ -554,7 +536,7 @@ fn queue_clear_codec_input(
 }
 
 fn write_codec_input(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     codec: &JObject<'_>,
     index: i32,
     data: &[u8],
@@ -562,22 +544,27 @@ fn write_codec_input(
     let buffer = env
         .call_method(
             codec,
-            "getInputBuffer",
-            "(I)Ljava/nio/ByteBuffer;",
+            jni_str!("getInputBuffer"),
+            jni_sig!("(I)Ljava/nio/ByteBuffer;"),
             &[JValue::Int(index)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| jni_error(env, "get tunneled input buffer", error))?;
     if buffer.is_null() {
         return Err(Error::Platform(format!(
             "MediaCodec tunneled input buffer {index} is null"
         )));
     }
-    env.call_method(&buffer, "clear", "()Ljava/nio/Buffer;", &[])
-        .map_err(|error| jni_error(env, "clear tunneled input buffer", error))?;
+    env.call_method(
+        &buffer,
+        jni_str!("clear"),
+        jni_sig!("()Ljava/nio/Buffer;"),
+        &[],
+    )
+    .map_err(|error| jni_error(env, "clear tunneled input buffer", error))?;
     let capacity = env
-        .call_method(&buffer, "remaining", "()I", &[])
-        .and_then(jni::objects::JValueGen::i)
+        .call_method(&buffer, jni_str!("remaining"), jni_sig!("()I"), &[])
+        .and_then(jni::objects::JValueOwned::i)
         .map_err(|error| jni_error(env, "read tunneled input capacity", error))?;
     let data_len = i32::try_from(data.len())
         .map_err(|_| Error::Codec(String::from("tunneled access unit exceeds Android jint")))?;
@@ -591,8 +578,8 @@ fn write_codec_input(
         .map_err(|error| jni_error(env, "create tunneled input bytes", error))?;
     env.call_method(
         &buffer,
-        "put",
-        "([B)Ljava/nio/ByteBuffer;",
+        jni_str!("put"),
+        jni_sig!("([B)Ljava/nio/ByteBuffer;"),
         &[JValue::Object(&data)],
     )
     .map_err(|error| jni_error(env, "write tunneled input buffer", error))?;
@@ -600,7 +587,7 @@ fn write_codec_input(
 }
 
 fn set_media_format_integer(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     format: &JObject<'_>,
     key: &str,
     value: i32,
@@ -610,8 +597,8 @@ fn set_media_format_integer(
         .map_err(|error| jni_error(env, "create tunneled MediaFormat key", error))?;
     env.call_method(
         format,
-        "setInteger",
-        "(Ljava/lang/String;I)V",
+        jni_str!("setInteger"),
+        jni_sig!("(Ljava/lang/String;I)V"),
         &[JValue::Object(&key), JValue::Int(value)],
     )
     .map_err(|error| jni_error(env, "set tunneled MediaFormat integer", error))?;
@@ -619,7 +606,7 @@ fn set_media_format_integer(
 }
 
 fn set_codec_specific_data(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     format: &JObject<'_>,
     key: &str,
     data: &[u8],
@@ -635,32 +622,32 @@ fn set_codec_specific_data(
         .map_err(|error| jni_error(env, "create tunneled codec data", error))?;
     let buffer = env
         .call_static_method(
-            "java/nio/ByteBuffer",
-            "wrap",
-            "([B)Ljava/nio/ByteBuffer;",
+            jni_str!("java/nio/ByteBuffer"),
+            jni_str!("wrap"),
+            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
             &[JValue::Object(&data)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| jni_error(env, "wrap tunneled codec data", error))?;
     env.call_method(
         format,
-        "setByteBuffer",
-        "(Ljava/lang/String;Ljava/nio/ByteBuffer;)V",
+        jni_str!("setByteBuffer"),
+        jni_sig!("(Ljava/lang/String;Ljava/nio/ByteBuffer;)V"),
         &[JValue::Object(&key), JValue::Object(&buffer)],
     )
     .map_err(|error| jni_error(env, "install tunneled codec data", error))?;
     Ok(())
 }
 
-fn release_codec(env: &mut JNIEnv<'_>, codec: &JObject<'_>, stop: bool) {
-    let methods: &[&str] = if stop {
-        &["stop", "release"]
+fn release_codec(env: &mut Env<'_>, codec: &JObject<'_>, stop: bool) {
+    let methods: &[(&JNIStr, &str)] = if stop {
+        &[(jni_str!("stop"), "stop"), (jni_str!("release"), "release")]
     } else {
-        &["release"]
+        &[(jni_str!("release"), "release")]
     };
-    for method in methods {
-        if let Err(error) = env.call_method(codec, method, "()V", &[]) {
-            tracing::error!(%error, %method, "failed to release Android tunneled MediaCodec");
+    for &(method, label) in methods {
+        if let Err(error) = env.call_method(codec, method, jni_sig!("()V"), &[]) {
+            tracing::error!(%error, method = label, "failed to release Android tunneled MediaCodec");
             let _ = env.exception_clear();
         }
     }

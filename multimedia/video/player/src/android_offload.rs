@@ -13,13 +13,19 @@ use std::{
 use async_channel::{Receiver, Sender};
 use futures::future::{Either, select};
 use jni::{
-    JNIEnv,
-    objects::{GlobalRef, JObject, JValue},
+    Env, jni_sig, jni_str,
+    objects::{Global, JObject, JValue},
+    signature::MethodSignature,
+    strings::JNIStr,
 };
 use waterkit_video_container::{Codec, EncodedSample, TrackInfo, TrackKind};
 use waterkit_video_core::Error;
 
-use crate::android_surface::{AndroidPlaybackContext, android_api_level, jni_error};
+use crate::android_surface::{
+    AndroidPlaybackContext, android_api_level, jni_error, with_attached_env,
+};
+
+type GlobalObjectRef = Global<JObject<'static>>;
 
 const ANDROID_OFFLOAD_MINIMUM_API: i32 = 29;
 const AUDIO_TRACK_INITIALIZED: i32 = 1;
@@ -55,7 +61,7 @@ impl AndroidOffloadAudioController {
     /// Returns a platform error when Android rejects the state transition.
     pub fn play(&self) -> Result<(), Error> {
         self.shared
-            .call_void("play", "start offloaded AudioTrack")?;
+            .call_void(jni_str!("play"), "start offloaded AudioTrack")?;
         self.shared.playing.store(true, Ordering::Release);
         self.controls
             .try_send(OffloadControl::PlaybackStarted)
@@ -69,7 +75,7 @@ impl AndroidOffloadAudioController {
     /// Returns a platform error when Android rejects the state transition.
     pub fn pause(&self) -> Result<(), Error> {
         self.shared
-            .call_void("pause", "pause offloaded AudioTrack")?;
+            .call_void(jni_str!("pause"), "pause offloaded AudioTrack")?;
         self.shared.playing.store(false, Ordering::Release);
         Ok(())
     }
@@ -87,8 +93,13 @@ impl AndroidOffloadAudioController {
         }
         self.shared.with_env(|env, track| {
             let result = env
-                .call_method(track, "setVolume", "(F)I", &[JValue::Float(volume)])
-                .and_then(jni::objects::JValueGen::i)
+                .call_method(
+                    track,
+                    jni_str!("setVolume"),
+                    jni_sig!("(F)I"),
+                    &[JValue::Float(volume)],
+                )
+                .and_then(jni::objects::JValueOwned::i)
                 .map_err(|error| jni_error(env, "set offloaded AudioTrack volume", error))?;
             if result != 0 {
                 return Err(Error::Platform(format!(
@@ -173,41 +184,45 @@ impl AndroidOffloadAudioPlayback {
         hardware_av_sync: bool,
     ) -> Result<Self, Error> {
         let layout = validate_audio_track(&track)?;
-        let mut env = context
-            .vm
-            .attach_current_thread()
-            .map_err(|error| Error::Platform(format!("attach offload setup to JVM: {error}")))?;
-        let api_level = android_api_level(&mut env)?;
-        if api_level < ANDROID_OFFLOAD_MINIMUM_API {
-            return Err(Error::Unsupported(format!(
-                "Android audio offload requires API {ANDROID_OFFLOAD_MINIMUM_API} or newer, got {api_level}"
-            )));
-        }
-        let encoding = android_audio_encoding(&mut env, &track)?;
-        let format = create_audio_format(&mut env, encoding, layout.sample_rate, layout.channels)?;
-        let attributes = create_audio_attributes(&mut env, hardware_av_sync)?;
-        if !supports_offload(&mut env, &format, &attributes)? {
-            return Err(Error::Unsupported(format!(
-                "Android output route does not support hardware offload for {:?} {}ch/{}Hz",
-                track.codec(),
-                layout.channels,
-                layout.sample_rate
-            )));
-        }
-        let audio_track = create_offload_audio_track(&mut env, &format, &attributes)?;
-        let audio_session_id = env
-            .call_method(&audio_track, "getAudioSessionId", "()I", &[])
-            .and_then(jni::objects::JValueGen::i)
-            .map_err(|error| jni_error(&mut env, "read offloaded audio session id", error))?;
-        if audio_session_id <= 0 {
-            release_audio_track(&mut env, &audio_track);
-            return Err(Error::Platform(format!(
-                "Android returned invalid offload audio session id {audio_session_id}"
-            )));
-        }
-        let retained_track = env.new_global_ref(&audio_track).map_err(|error| {
-            release_audio_track(&mut env, &audio_track);
-            jni_error(&mut env, "retain offloaded AudioTrack", error)
+        let (retained_track, audio_session_id) = with_attached_env(&context.vm, |env| {
+            let api_level = android_api_level(env)?;
+            if api_level < ANDROID_OFFLOAD_MINIMUM_API {
+                return Err(Error::Unsupported(format!(
+                    "Android audio offload requires API {ANDROID_OFFLOAD_MINIMUM_API} or newer, got {api_level}"
+                )));
+            }
+            let encoding = android_audio_encoding(env, &track)?;
+            let format = create_audio_format(env, encoding, layout.sample_rate, layout.channels)?;
+            let attributes = create_audio_attributes(env, hardware_av_sync)?;
+            if !supports_offload(env, &format, &attributes)? {
+                return Err(Error::Unsupported(format!(
+                    "Android output route does not support hardware offload for {:?} {}ch/{}Hz",
+                    track.codec(),
+                    layout.channels,
+                    layout.sample_rate
+                )));
+            }
+            let audio_track = create_offload_audio_track(env, &format, &attributes)?;
+            let audio_session_id = env
+                .call_method(
+                    &audio_track,
+                    jni_str!("getAudioSessionId"),
+                    jni_sig!("()I"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::i)
+                .map_err(|error| jni_error(env, "read offloaded audio session id", error))?;
+            if audio_session_id <= 0 {
+                release_audio_track(env, &audio_track);
+                return Err(Error::Platform(format!(
+                    "Android returned invalid offload audio session id {audio_session_id}"
+                )));
+            }
+            let retained_track = env.new_global_ref(&audio_track).map_err(|error| {
+                release_audio_track(env, &audio_track);
+                jni_error(env, "retain offloaded AudioTrack", error)
+            })?;
+            Ok((retained_track, audio_session_id))
         })?;
         let generation = Arc::new(AtomicU64::new(0));
         let shared = Arc::new(OffloadAudioShared {
@@ -310,7 +325,7 @@ impl AndroidOffloadAudioPlayback {
         }
         self.controller
             .shared
-            .call_void("flush", "flush offloaded AudioTrack")?;
+            .call_void(jni_str!("flush"), "flush offloaded AudioTrack")?;
         let position_nanos = duration_nanos(position)?;
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         self.controller
@@ -361,7 +376,7 @@ impl Drop for AndroidOffloadAudioPlayback {
 
 struct OffloadAudioShared {
     context: AndroidPlaybackContext,
-    audio_track: GlobalRef,
+    audio_track: GlobalObjectRef,
     audio_session_id: i32,
     sample_rate: NonZeroU32,
     timeline_origin_nanos: AtomicU64,
@@ -372,19 +387,16 @@ struct OffloadAudioShared {
 impl OffloadAudioShared {
     fn with_env<T>(
         &self,
-        operation: impl FnOnce(&mut JNIEnv<'_>, &JObject<'_>) -> Result<T, Error>,
+        operation: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        let mut env = self.context.vm.attach_current_thread().map_err(|error| {
-            Error::Platform(format!(
-                "attach offloaded AudioTrack thread to JVM: {error}"
-            ))
-        })?;
-        operation(&mut env, self.audio_track.as_obj())
+        with_attached_env(&self.context.vm, |env| {
+            operation(env, self.audio_track.as_obj())
+        })
     }
 
-    fn call_void(&self, method: &str, operation: &str) -> Result<(), Error> {
+    fn call_void(&self, method: &JNIStr, operation: &str) -> Result<(), Error> {
         self.with_env(|env, track| {
-            env.call_method(track, method, "()V", &[])
+            env.call_method(track, method, jni_sig!("()V"), &[])
                 .map_err(|error| jni_error(env, operation, error))?;
             Ok(())
         })
@@ -393,21 +405,25 @@ impl OffloadAudioShared {
     fn position(&self) -> Result<Duration, Error> {
         let frames = self.with_env(|env, track| {
             let timestamp = env
-                .new_object("android/media/AudioTimestamp", "()V", &[])
+                .new_object(
+                    jni_str!("android/media/AudioTimestamp"),
+                    jni_sig!("()V"),
+                    &[],
+                )
                 .map_err(|error| jni_error(env, "create offload AudioTimestamp", error))?;
             let available = env
                 .call_method(
                     track,
-                    "getTimestamp",
-                    "(Landroid/media/AudioTimestamp;)Z",
+                    jni_str!("getTimestamp"),
+                    jni_sig!("(Landroid/media/AudioTimestamp;)Z"),
                     &[JValue::Object(&timestamp)],
                 )
-                .and_then(jni::objects::JValueGen::z)
+                .and_then(jni::objects::JValueOwned::z)
                 .map_err(|error| jni_error(env, "read offload AudioTimestamp", error))?;
             if available {
                 let frames = env
-                    .get_field(&timestamp, "framePosition", "J")
-                    .and_then(jni::objects::JValueGen::j)
+                    .get_field(&timestamp, jni_str!("framePosition"), jni_sig!("J"))
+                    .and_then(jni::objects::JValueOwned::j)
                     .map_err(|error| jni_error(env, "read offload frame position", error))?;
                 return u64::try_from(frames).map_err(|_| {
                     Error::Platform(format!(
@@ -416,8 +432,13 @@ impl OffloadAudioShared {
                 });
             }
             let head = env
-                .call_method(track, "getPlaybackHeadPosition", "()I", &[])
-                .and_then(jni::objects::JValueGen::i)
+                .call_method(
+                    track,
+                    jni_str!("getPlaybackHeadPosition"),
+                    jni_sig!("()I"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::i)
                 .map_err(|error| jni_error(env, "read offload playback head", error))?;
             Ok(u64::from(u32::from_ne_bytes(head.to_ne_bytes())))
         })?;
@@ -438,11 +459,12 @@ impl OffloadAudioShared {
 
 impl Drop for OffloadAudioShared {
     fn drop(&mut self) {
-        let Ok(mut env) = self.context.vm.attach_current_thread() else {
-            tracing::error!("failed to attach JVM while releasing offloaded AudioTrack");
-            return;
-        };
-        release_audio_track(&mut env, self.audio_track.as_obj());
+        if let Err(error) = with_attached_env(&self.context.vm, |env| {
+            release_audio_track(env, self.audio_track.as_obj());
+            Ok(())
+        }) {
+            tracing::error!(%error, "failed to attach JVM while releasing offloaded AudioTrack");
+        }
     }
 }
 
@@ -552,12 +574,12 @@ fn write_offload_packet(
             .map_err(|error| jni_error(env, "create offload access unit", error))?;
         let buffer = env
             .call_static_method(
-                "java/nio/ByteBuffer",
-                "wrap",
-                "([B)Ljava/nio/ByteBuffer;",
+                jni_str!("java/nio/ByteBuffer"),
+                jni_str!("wrap"),
+                jni_sig!("([B)Ljava/nio/ByteBuffer;"),
                 &[JValue::Object(&data)],
             )
-            .and_then(jni::objects::JValueGen::l)
+            .and_then(jni::objects::JValueOwned::l)
             .map_err(|error| jni_error(env, "wrap offload access unit", error))?;
         let size = i32::try_from(packet.data.len())
             .map_err(|_| Error::Codec(String::from("offload access unit exceeds Android jint")))?;
@@ -567,8 +589,8 @@ fn write_offload_packet(
             })?;
             env.call_method(
                 track,
-                "write",
-                "(Ljava/nio/ByteBuffer;IIJ)I",
+                jni_str!("write"),
+                jni_sig!("(Ljava/nio/ByteBuffer;IIJ)I"),
                 &[
                     JValue::Object(&buffer),
                     JValue::Int(size),
@@ -579,8 +601,8 @@ fn write_offload_packet(
         } else {
             env.call_method(
                 track,
-                "write",
-                "(Ljava/nio/ByteBuffer;II)I",
+                jni_str!("write"),
+                jni_sig!("(Ljava/nio/ByteBuffer;II)I"),
                 &[
                     JValue::Object(&buffer),
                     JValue::Int(size),
@@ -589,7 +611,7 @@ fn write_offload_packet(
             )
         };
         let written = result
-            .and_then(jni::objects::JValueGen::i)
+            .and_then(jni::objects::JValueOwned::i)
             .map_err(|error| jni_error(env, "write offload access unit", error))?;
         if written != size {
             return Err(Error::Platform(format!(
@@ -603,16 +625,21 @@ fn write_offload_packet(
 fn set_offload_end_of_stream(shared: &OffloadAudioShared) -> Result<(), Error> {
     shared.with_env(|env, track| {
         let play_state = env
-            .call_method(track, "getPlayState", "()I", &[])
-            .and_then(jni::objects::JValueGen::i)
+            .call_method(track, jni_str!("getPlayState"), jni_sig!("()I"), &[])
+            .and_then(jni::objects::JValueOwned::i)
             .map_err(|error| jni_error(env, "read offload play state", error))?;
         if play_state != AUDIO_TRACK_PLAYING {
             return Err(Error::Platform(format!(
                 "offload end-of-stream requires PLAYSTATE_PLAYING, got {play_state}"
             )));
         }
-        env.call_method(track, "setOffloadEndOfStream", "()V", &[])
-            .map_err(|error| jni_error(env, "set offload end-of-stream", error))?;
+        env.call_method(
+            track,
+            jni_str!("setOffloadEndOfStream"),
+            jni_sig!("()V"),
+            &[],
+        )
+        .map_err(|error| jni_error(env, "set offload end-of-stream", error))?;
         Ok(())
     })
 }
@@ -638,35 +665,35 @@ fn validate_audio_track(track: &TrackInfo) -> Result<waterkit_video_container::A
     })
 }
 
-fn android_audio_encoding(env: &mut JNIEnv<'_>, track: &TrackInfo) -> Result<i32, Error> {
-    let field = match track.codec() {
+fn android_audio_encoding(env: &mut Env<'_>, track: &TrackInfo) -> Result<i32, Error> {
+    let (field, field_label) = match track.codec() {
         Codec::Aac => aac_encoding_field(track.decoder_configuration())?,
-        Codec::Ac3 => "ENCODING_AC3",
-        Codec::Eac3 => "ENCODING_E_AC3",
-        Codec::Ac4 => "ENCODING_AC4",
-        Codec::Opus => "ENCODING_OPUS",
-        Codec::Flac => "ENCODING_FLAC",
+        Codec::Ac3 => (jni_str!("ENCODING_AC3"), "ENCODING_AC3"),
+        Codec::Eac3 => (jni_str!("ENCODING_E_AC3"), "ENCODING_E_AC3"),
+        Codec::Ac4 => (jni_str!("ENCODING_AC4"), "ENCODING_AC4"),
+        Codec::Opus => (jni_str!("ENCODING_OPUS"), "ENCODING_OPUS"),
+        Codec::Flac => (jni_str!("ENCODING_FLAC"), "ENCODING_FLAC"),
         codec => {
             return Err(Error::Unsupported(format!(
                 "Android offload requires an unambiguous AudioFormat encoding; {codec:?} is not mapped"
             )));
         }
     };
-    env.get_static_field("android/media/AudioFormat", field, "I")
-        .and_then(jni::objects::JValueGen::i)
-        .map_err(|error| jni_error(env, &format!("read AudioFormat.{field}"), error))
+    env.get_static_field(jni_str!("android/media/AudioFormat"), field, jni_sig!("I"))
+        .and_then(jni::objects::JValueOwned::i)
+        .map_err(|error| jni_error(env, &format!("read AudioFormat.{field_label}"), error))
 }
 
-fn aac_encoding_field(config: &[u8]) -> Result<&'static str, Error> {
+fn aac_encoding_field(config: &[u8]) -> Result<(&'static JNIStr, &'static str), Error> {
     match aac_audio_object_type(config)? {
-        1 => Ok("ENCODING_AAC_MAIN"),
-        2 => Ok("ENCODING_AAC_LC"),
-        3 => Ok("ENCODING_AAC_SSR"),
-        4 => Ok("ENCODING_AAC_LTP"),
-        5 => Ok("ENCODING_AAC_HE_V1"),
-        29 => Ok("ENCODING_AAC_HE_V2"),
-        39 => Ok("ENCODING_AAC_ELD"),
-        42 => Ok("ENCODING_AAC_XHE"),
+        1 => Ok((jni_str!("ENCODING_AAC_MAIN"), "ENCODING_AAC_MAIN")),
+        2 => Ok((jni_str!("ENCODING_AAC_LC"), "ENCODING_AAC_LC")),
+        3 => Ok((jni_str!("ENCODING_AAC_SSR"), "ENCODING_AAC_SSR")),
+        4 => Ok((jni_str!("ENCODING_AAC_LTP"), "ENCODING_AAC_LTP")),
+        5 => Ok((jni_str!("ENCODING_AAC_HE_V1"), "ENCODING_AAC_HE_V1")),
+        29 => Ok((jni_str!("ENCODING_AAC_HE_V2"), "ENCODING_AAC_HE_V2")),
+        39 => Ok((jni_str!("ENCODING_AAC_ELD"), "ENCODING_AAC_ELD")),
+        42 => Ok((jni_str!("ENCODING_AAC_XHE"), "ENCODING_AAC_XHE")),
         other => Err(Error::Unsupported(format!(
             "Android offload has no AudioFormat encoding for AAC object type {other}"
         ))),
@@ -690,7 +717,7 @@ fn aac_audio_object_type(config: &[u8]) -> Result<u8, Error> {
 }
 
 fn create_audio_format<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     encoding: i32,
     sample_rate: NonZeroU32,
     channels: NonZeroU32,
@@ -705,41 +732,71 @@ fn create_audio_format<'local>(
     let index_mask = i32::try_from((1_u32 << channels.get()) - 1)
         .expect("validated channel-index mask must fit Android jint");
     let builder = env
-        .new_object("android/media/AudioFormat$Builder", "()V", &[])
+        .new_object(
+            jni_str!("android/media/AudioFormat$Builder"),
+            jni_sig!("()V"),
+            &[],
+        )
         .map_err(|error| jni_error(env, "create AudioFormat.Builder", error))?;
-    call_builder_int(env, &builder, "AudioFormat", "setEncoding", encoding)?;
-    call_builder_int(env, &builder, "AudioFormat", "setSampleRate", sample_rate)?;
     call_builder_int(
         env,
         &builder,
         "AudioFormat",
-        "setChannelIndexMask",
+        jni_str!("setEncoding"),
+        jni_sig!("(I)Landroid/media/AudioFormat$Builder;"),
+        encoding,
+    )?;
+    call_builder_int(
+        env,
+        &builder,
+        "AudioFormat",
+        jni_str!("setSampleRate"),
+        jni_sig!("(I)Landroid/media/AudioFormat$Builder;"),
+        sample_rate,
+    )?;
+    call_builder_int(
+        env,
+        &builder,
+        "AudioFormat",
+        jni_str!("setChannelIndexMask"),
+        jni_sig!("(I)Landroid/media/AudioFormat$Builder;"),
         index_mask,
     )?;
-    env.call_method(&builder, "build", "()Landroid/media/AudioFormat;", &[])
-        .and_then(jni::objects::JValueGen::l)
-        .map_err(|error| jni_error(env, "build AudioFormat", error))
+    env.call_method(
+        &builder,
+        jni_str!("build"),
+        jni_sig!("()Landroid/media/AudioFormat;"),
+        &[],
+    )
+    .and_then(jni::objects::JValueOwned::l)
+    .map_err(|error| jni_error(env, "build AudioFormat", error))
 }
 
 fn create_audio_attributes<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     hardware_av_sync: bool,
 ) -> Result<JObject<'local>, Error> {
     let builder = env
-        .new_object("android/media/AudioAttributes$Builder", "()V", &[])
+        .new_object(
+            jni_str!("android/media/AudioAttributes$Builder"),
+            jni_sig!("()V"),
+            &[],
+        )
         .map_err(|error| jni_error(env, "create AudioAttributes.Builder", error))?;
     call_builder_int(
         env,
         &builder,
         "AudioAttributes",
-        "setUsage",
+        jni_str!("setUsage"),
+        jni_sig!("(I)Landroid/media/AudioAttributes$Builder;"),
         AUDIO_ATTRIBUTES_USAGE_MEDIA,
     )?;
     call_builder_int(
         env,
         &builder,
         "AudioAttributes",
-        "setContentType",
+        jni_str!("setContentType"),
+        jni_sig!("(I)Landroid/media/AudioAttributes$Builder;"),
         AUDIO_ATTRIBUTES_CONTENT_TYPE_MOVIE,
     )?;
     if hardware_av_sync {
@@ -747,73 +804,89 @@ fn create_audio_attributes<'local>(
             env,
             &builder,
             "AudioAttributes",
-            "setFlags",
+            jni_str!("setFlags"),
+            jni_sig!("(I)Landroid/media/AudioAttributes$Builder;"),
             AUDIO_ATTRIBUTES_FLAG_HW_AV_SYNC,
         )?;
     }
-    env.call_method(&builder, "build", "()Landroid/media/AudioAttributes;", &[])
-        .and_then(jni::objects::JValueGen::l)
-        .map_err(|error| jni_error(env, "build AudioAttributes", error))
+    env.call_method(
+        &builder,
+        jni_str!("build"),
+        jni_sig!("()Landroid/media/AudioAttributes;"),
+        &[],
+    )
+    .and_then(jni::objects::JValueOwned::l)
+    .map_err(|error| jni_error(env, "build AudioAttributes", error))
 }
 
 fn supports_offload(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     format: &JObject<'_>,
     attributes: &JObject<'_>,
 ) -> Result<bool, Error> {
     env.call_static_method(
-        "android/media/AudioManager",
-        "isOffloadedPlaybackSupported",
-        "(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)Z",
+        jni_str!("android/media/AudioManager"),
+        jni_str!("isOffloadedPlaybackSupported"),
+        jni_sig!("(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)Z"),
         &[JValue::Object(format), JValue::Object(attributes)],
     )
-    .and_then(jni::objects::JValueGen::z)
+    .and_then(jni::objects::JValueOwned::z)
     .map_err(|error| jni_error(env, "query Android audio offload support", error))
 }
 
 fn create_offload_audio_track<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     format: &JObject<'_>,
     attributes: &JObject<'_>,
 ) -> Result<JObject<'local>, Error> {
     let builder = env
-        .new_object("android/media/AudioTrack$Builder", "()V", &[])
+        .new_object(
+            jni_str!("android/media/AudioTrack$Builder"),
+            jni_sig!("()V"),
+            &[],
+        )
         .map_err(|error| jni_error(env, "create AudioTrack.Builder", error))?;
     call_audio_track_builder_object(
         env,
         &builder,
-        "setAudioFormat",
-        "android/media/AudioFormat",
+        jni_str!("setAudioFormat"),
+        jni_sig!("(Landroid/media/AudioFormat;)Landroid/media/AudioTrack$Builder;"),
         format,
     )?;
     call_audio_track_builder_object(
         env,
         &builder,
-        "setAudioAttributes",
-        "android/media/AudioAttributes",
+        jni_str!("setAudioAttributes"),
+        jni_sig!("(Landroid/media/AudioAttributes;)Landroid/media/AudioTrack$Builder;"),
         attributes,
     )?;
     call_builder_int(
         env,
         &builder,
         "AudioTrack",
-        "setTransferMode",
+        jni_str!("setTransferMode"),
+        jni_sig!("(I)Landroid/media/AudioTrack$Builder;"),
         AUDIO_TRACK_MODE_STREAM,
     )?;
     env.call_method(
         &builder,
-        "setOffloadedPlayback",
-        "(Z)Landroid/media/AudioTrack$Builder;",
-        &[JValue::Bool(1)],
+        jni_str!("setOffloadedPlayback"),
+        jni_sig!("(Z)Landroid/media/AudioTrack$Builder;"),
+        &[JValue::Bool(true)],
     )
     .map_err(|error| jni_error(env, "require AudioTrack offload", error))?;
     let track = env
-        .call_method(&builder, "build", "()Landroid/media/AudioTrack;", &[])
-        .and_then(jni::objects::JValueGen::l)
+        .call_method(
+            &builder,
+            jni_str!("build"),
+            jni_sig!("()Landroid/media/AudioTrack;"),
+            &[],
+        )
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| jni_error(env, "build offloaded AudioTrack", error))?;
     let state = env
-        .call_method(&track, "getState", "()I", &[])
-        .and_then(jni::objects::JValueGen::i)
+        .call_method(&track, jni_str!("getState"), jni_sig!("()I"), &[])
+        .and_then(jni::objects::JValueOwned::i)
         .map_err(|error| jni_error(env, "read offloaded AudioTrack state", error))?;
     if state != AUDIO_TRACK_INITIALIZED {
         release_audio_track(env, &track);
@@ -825,33 +898,32 @@ fn create_offload_audio_track<'local>(
 }
 
 fn call_builder_int(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     builder: &JObject<'_>,
     class: &str,
-    method: &str,
+    method: &JNIStr,
+    signature: MethodSignature<'_, '_>,
     value: i32,
 ) -> Result<(), Error> {
-    let signature = format!("(I)Landroid/media/{class}$Builder;");
-    env.call_method(builder, method, &signature, &[JValue::Int(value)])
-        .map_err(|error| jni_error(env, &format!("{class}.{method}"), error))?;
+    env.call_method(builder, method, signature, &[JValue::Int(value)])
+        .map_err(|error| jni_error(env, &format!("{class} builder method"), error))?;
     Ok(())
 }
 
 fn call_audio_track_builder_object(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     builder: &JObject<'_>,
-    method: &str,
-    parameter_class: &str,
+    method: &JNIStr,
+    signature: MethodSignature<'_, '_>,
     value: &JObject<'_>,
 ) -> Result<(), Error> {
-    let signature = format!("(L{parameter_class};)Landroid/media/AudioTrack$Builder;");
-    env.call_method(builder, method, &signature, &[JValue::Object(value)])
-        .map_err(|error| jni_error(env, &format!("AudioTrack.{method}"), error))?;
+    env.call_method(builder, method, signature, &[JValue::Object(value)])
+        .map_err(|error| jni_error(env, "AudioTrack builder method", error))?;
     Ok(())
 }
 
-fn release_audio_track(env: &mut JNIEnv<'_>, track: &JObject<'_>) {
-    if let Err(error) = env.call_method(track, "release", "()V", &[]) {
+fn release_audio_track(env: &mut Env<'_>, track: &JObject<'_>) {
+    if let Err(error) = env.call_method(track, jni_str!("release"), jni_sig!("()V"), &[]) {
         tracing::error!(%error, "failed to release Android offloaded AudioTrack");
         let _ = env.exception_clear();
     }

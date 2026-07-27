@@ -3,12 +3,39 @@
 use std::sync::Arc;
 
 use jni::{
-    JNIEnv, JavaVM,
-    objects::{GlobalRef, JObject},
+    Env, JavaVM, jni_sig, jni_str,
+    objects::{Global, JObject},
 };
 use waterkit_video_core::Error;
 
 const ANDROID_MINIMUM_VIDEO_API: i32 = 24;
+
+type GlobalObjectRef = Global<JObject<'static>>;
+
+#[derive(Debug)]
+struct AttachedVideoError(Error);
+
+impl std::fmt::Display for AttachedVideoError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl std::error::Error for AttachedVideoError {}
+
+impl From<jni::errors::Error> for AttachedVideoError {
+    fn from(error: jni::errors::Error) -> Self {
+        Self(Error::Platform(error.to_string()))
+    }
+}
+
+pub(crate) fn with_attached_env<T>(
+    vm: &JavaVM,
+    operation: impl FnOnce(&mut Env<'_>) -> Result<T, Error>,
+) -> Result<T, Error> {
+    vm.attach_current_thread(|env| operation(env).map_err(AttachedVideoError))
+        .map_err(|error| error.0)
+}
 
 /// Android `Surface` retained together with the JVM that owns it.
 ///
@@ -18,7 +45,7 @@ const ANDROID_MINIMUM_VIDEO_API: i32 = 24;
 #[derive(Clone)]
 pub struct AndroidVideoSurface {
     pub(crate) context: AndroidPlaybackContext,
-    pub(crate) surface: GlobalRef,
+    pub(crate) surface: Arc<GlobalObjectRef>,
 }
 
 /// Instance-scoped Android media context.
@@ -37,7 +64,7 @@ impl AndroidPlaybackContext {
     /// # Errors
     ///
     /// Returns an error when Android is below API 24 or the JVM cannot be retained.
-    pub unsafe fn from_jni(env: &mut JNIEnv<'_>) -> Result<Self, Error> {
+    pub unsafe fn from_jni(env: &mut Env<'_>) -> Result<Self, Error> {
         let api_level = android_api_level(env)?;
         if api_level < ANDROID_MINIMUM_VIDEO_API {
             return Err(Error::Unsupported(format!(
@@ -71,10 +98,10 @@ impl AndroidVideoSurface {
     ///
     /// Returns an error when Android is below API 24, the object is not a
     /// `Surface`, or the JVM/global reference cannot be retained.
-    pub unsafe fn from_jni(env: &mut JNIEnv<'_>, surface: &JObject<'_>) -> Result<Self, Error> {
+    pub unsafe fn from_jni(env: &mut Env<'_>, surface: &JObject<'_>) -> Result<Self, Error> {
         let context = unsafe { AndroidPlaybackContext::from_jni(env) }?;
         if !env
-            .is_instance_of(surface, "android/view/Surface")
+            .is_instance_of(surface, jni_str!("android/view/Surface"))
             .map_err(|error| jni_error(env, "validate Android video Surface", error))?
         {
             return Err(Error::Platform(String::from(
@@ -84,7 +111,10 @@ impl AndroidVideoSurface {
         let surface = env
             .new_global_ref(surface)
             .map_err(|error| jni_error(env, "retain Android video Surface", error))?;
-        Ok(Self { context, surface })
+        Ok(Self {
+            context,
+            surface: Arc::new(surface),
+        })
     }
 
     /// Returns the media context that owns this surface.
@@ -102,35 +132,41 @@ impl std::fmt::Debug for AndroidVideoSurface {
     }
 }
 
-pub fn android_api_level(env: &mut JNIEnv<'_>) -> Result<i32, Error> {
-    env.get_static_field("android/os/Build$VERSION", "SDK_INT", "I")
-        .and_then(jni::objects::JValueGen::i)
-        .map_err(|error| jni_error(env, "read Android API level", error))
+pub fn android_api_level(env: &mut Env<'_>) -> Result<i32, Error> {
+    env.get_static_field(
+        jni_str!("android/os/Build$VERSION"),
+        jni_str!("SDK_INT"),
+        jni_sig!("I"),
+    )
+    .and_then(jni::objects::JValueOwned::i)
+    .map_err(|error| jni_error(env, "read Android API level", error))
 }
 
 #[expect(
     clippy::needless_pass_by_value,
     reason = "this adapter is passed directly to JNI map_err closures"
 )]
-pub fn jni_error(env: &mut JNIEnv<'_>, operation: &str, error: jni::errors::Error) -> Error {
-    let exception = env
-        .exception_occurred()
-        .ok()
-        .filter(|value| !value.is_null());
+pub fn jni_error(env: &mut Env<'_>, operation: &str, error: jni::errors::Error) -> Error {
+    let exception = env.exception_occurred();
     if exception.is_some() {
-        let _ = env.exception_clear();
+        env.exception_clear();
     }
     let detail = exception
         .and_then(|exception| {
-            env.call_method(&exception, "toString", "()Ljava/lang/String;", &[])
-                .ok()
-                .and_then(|value| value.l().ok())
-                .and_then(|value| (!value.is_null()).then_some(value))
-                .and_then(|value| {
-                    env.get_string(&jni::objects::JString::from(value))
-                        .ok()
-                        .map(Into::into)
-                })
+            env.call_method(
+                &exception,
+                jni_str!("toString"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )
+            .ok()
+            .and_then(|value| value.l().ok())
+            .and_then(|value| (!value.is_null()).then_some(value))
+            .and_then(|value| {
+                env.as_cast::<jni::objects::JString>(&value)
+                    .ok()
+                    .and_then(|value| value.try_to_string(env).ok())
+            })
         })
         .unwrap_or_else(|| error.to_string());
     Error::Platform(format!("{operation}: {detail}"))

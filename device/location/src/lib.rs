@@ -37,7 +37,7 @@ pub use waterkit_permission::{Permission, PermissionStatus};
 /// permission/location flows require an app-owned JNI context.
 #[cfg(target_os = "android")]
 pub mod android {
-    pub use crate::sys::android::{get_location_with_context, init};
+    pub use crate::sys::android::get_location_with_context;
 }
 
 /// A geographic location with coordinates and metadata.

@@ -1,10 +1,8 @@
 //! Android media control implementation using JNI and `MediaSession`.
 
 use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
-use jni::JNIEnv;
-use jni::JavaVM;
-use jni::objects::{GlobalRef, JObject, JValue};
-use std::mem::ManuallyDrop;
+use jni::objects::{Global, JClass, JObject, JString, JValue};
+use jni::{Env, JavaVM, jni_sig, jni_str};
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -16,21 +14,21 @@ const DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex")
 struct DexArtifact(PathBuf);
 
 impl DexArtifact {
-    fn create(env: &mut JNIEnv, cache_dir: &JObject) -> Result<Self, MediaError> {
+    fn create(env: &mut Env<'_>, cache_dir: &JObject) -> Result<Self, MediaError> {
         let prefix = env.new_string("waterkit-media-").map_err(|error| {
             MediaError::InitializationFailed(format!("DEX prefix string failed: {error}"))
         })?;
         let suffix = env.new_string(".dex").map_err(|error| {
             MediaError::InitializationFailed(format!("DEX suffix string failed: {error}"))
         })?;
-        let file_class = env.find_class("java/io/File").map_err(|error| {
+        let file_class = env.find_class(jni_str!("java/io/File")).map_err(|error| {
             MediaError::InitializationFailed(format!("java.io.File lookup failed: {error}"))
         })?;
         let file = env
             .call_static_method(
                 file_class,
-                "createTempFile",
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/io/File;)Ljava/io/File;",
+                jni_str!("createTempFile"),
+                jni_sig!("(Ljava/lang/String;Ljava/lang/String;Ljava/io/File;)Ljava/io/File;"),
                 &[
                     JValue::Object(&prefix),
                     JValue::Object(&suffix),
@@ -47,7 +45,12 @@ impl DexArtifact {
                 ))
             })?;
         let absolute_path = env
-            .call_method(&file, "getAbsolutePath", "()Ljava/lang/String;", &[])
+            .call_method(
+                &file,
+                jni_str!("getAbsolutePath"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )
             .map_err(|error| {
                 MediaError::InitializationFailed(format!(
                     "temporary DEX absolute path failed: {error}"
@@ -59,14 +62,14 @@ impl DexArtifact {
                     "temporary DEX absolute path result failed: {error}"
                 ))
             })?;
-        let path: String = env
-            .get_string((&absolute_path).into())
+        let path = env
+            .as_cast::<JString>(&absolute_path)
+            .and_then(|path| path.try_to_string(env))
             .map_err(|error| {
                 MediaError::InitializationFailed(format!(
                     "temporary DEX path string failed: {error}"
                 ))
-            })?
-            .into();
+            })?;
         let artifact = Self(PathBuf::from(path));
         std::fs::write(artifact.path(), DEX_BYTES).map_err(|error| {
             MediaError::InitializationFailed(format!("temporary DEX write failed: {error}"))
@@ -93,18 +96,28 @@ impl Drop for DexArtifact {
 ///
 /// The `context` must be a valid Android Context `JObject`.
 fn create_class_loader(
-    env: &mut JNIEnv,
+    env: &mut Env<'_>,
     context: &JObject,
-) -> Result<(GlobalRef, DexArtifact), MediaError> {
+) -> Result<(Global<JObject<'static>>, DexArtifact), MediaError> {
     // Write DEX to cache directory
     let cache_dir = env
-        .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
+        .call_method(
+            context,
+            jni_str!("getCacheDir"),
+            jni_sig!("()Ljava/io/File;"),
+            &[],
+        )
         .map_err(|e| MediaError::InitializationFailed(format!("getCacheDir failed: {e}")))?
         .l()
         .map_err(|e| MediaError::InitializationFailed(format!("getCacheDir result: {e}")))?;
 
     let cache_path = env
-        .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
+        .call_method(
+            &cache_dir,
+            jni_str!("getAbsolutePath"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )
         .map_err(|e| MediaError::InitializationFailed(format!("getAbsolutePath failed: {e}")))?
         .l()
         .map_err(|e| MediaError::InitializationFailed(format!("getAbsolutePath result: {e}")))?;
@@ -117,19 +130,26 @@ fn create_class_loader(
         .map_err(|e| MediaError::InitializationFailed(format!("new_string failed: {e}")))?;
 
     let parent_loader = env
-        .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .call_method(
+            context,
+            jni_str!("getClassLoader"),
+            jni_sig!("()Ljava/lang/ClassLoader;"),
+            &[],
+        )
         .map_err(|e| MediaError::InitializationFailed(format!("getClassLoader failed: {e}")))?
         .l()
         .map_err(|e| MediaError::InitializationFailed(format!("getClassLoader result: {e}")))?;
 
     let dex_class_loader_class = env
-        .find_class("dalvik/system/DexClassLoader")
+        .find_class(jni_str!("dalvik/system/DexClassLoader"))
         .map_err(|e| MediaError::InitializationFailed(format!("find DexClassLoader: {e}")))?;
 
     let class_loader = env
         .new_object(
             dex_class_loader_class,
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V",
+            jni_sig!(
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V"
+            ),
             &[
                 JValue::Object(&dex_path_jstring),
                 JValue::Object(&cache_path),
@@ -145,13 +165,11 @@ fn create_class_loader(
     Ok((class_loader, artifact))
 }
 
-use jni::objects::JClass;
-
 /// Get the `MediaSessionHelper` class.
-fn get_helper_class<'a>(
-    env: &mut JNIEnv<'a>,
-    class_loader: &GlobalRef,
-) -> Result<JClass<'a>, MediaError> {
+fn get_helper_class<'local>(
+    env: &mut Env<'local>,
+    class_loader: &Global<JObject<'static>>,
+) -> Result<JClass<'local>, MediaError> {
     let helper_class_name = env
         .new_string("waterkit.media.MediaSessionHelper")
         .map_err(|e| MediaError::Unknown(format!("new_string: {e}")))?;
@@ -159,30 +177,29 @@ fn get_helper_class<'a>(
     let helper_class = env
         .call_method(
             class_loader.as_obj(),
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
+            jni_str!("loadClass"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
             &[JValue::Object(&helper_class_name)],
         )
         .map_err(|e| MediaError::Unknown(format!("loadClass: {e}")))?
         .l()
         .map_err(|e| MediaError::Unknown(format!("loadClass result: {e}")))?;
 
-    // helper_class is a JObject representing a Class. Convert to JClass.
-    // Ensure we import JClass.
-    Ok(helper_class.into())
+    env.cast_local::<JClass>(helper_class)
+        .map_err(MediaError::from)
 }
 
 /// Create an instance-owned media session helper using the Context.
 fn create_session_with_context(
-    env: &mut JNIEnv,
+    env: &mut Env<'_>,
     context: &JObject,
-) -> Result<(GlobalRef, DexArtifact), MediaError> {
+) -> Result<(Global<JObject<'static>>, DexArtifact), MediaError> {
     let (class_loader, artifact) = create_class_loader(env, context)?;
     let helper_class = get_helper_class(env, &class_loader)?;
     let helper = env
         .new_object(
             helper_class,
-            "(Landroid/content/Context;)V",
+            jni_sig!("(Landroid/content/Context;)V"),
             &[JValue::Object(context)],
         )
         .map_err(|e| MediaError::InitializationFailed(format!("create MediaSessionHelper: {e}")))?;
@@ -195,8 +212,8 @@ fn create_session_with_context(
 
 /// Set metadata on the media session helper.
 pub fn set_metadata_with_context(
-    env: &mut JNIEnv,
-    helper: &GlobalRef,
+    env: &mut Env<'_>,
+    helper: &Global<JObject<'static>>,
     metadata: &MediaMetadata,
 ) -> Result<(), MediaError> {
     let title = env
@@ -221,8 +238,8 @@ pub fn set_metadata_with_context(
 
     env.call_method(
         helper.as_obj(),
-        "setMetadata",
-        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[BJ)V",
+        jni_str!("setMetadata"),
+        jni_sig!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[BJ)V"),
         &[
             JValue::Object(&title),
             JValue::Object(&artist),
@@ -238,8 +255,8 @@ pub fn set_metadata_with_context(
 
 /// Set playback state.
 pub fn set_playback_state_with_context(
-    env: &mut JNIEnv,
-    helper: &GlobalRef,
+    env: &mut Env<'_>,
+    helper: &Global<JObject<'static>>,
     state: &PlaybackState,
 ) -> Result<(), MediaError> {
     let status = match state.status() {
@@ -253,17 +270,15 @@ pub fn set_playback_state_with_context(
 
     env.call_method(
         helper.as_obj(),
-        "setPlaybackState",
-        "(IJFZZ)V",
+        jni_str!("setPlaybackState"),
+        jni_sig!("(IJFZZ)V"),
         &[
             JValue::Int(status),
             JValue::Long(position_ms),
             #[allow(clippy::cast_possible_truncation)]
             JValue::Float(state.rate() as f32),
-            JValue::Bool(u8::from(state.queue_navigation_controls().next_enabled())),
-            JValue::Bool(u8::from(
-                state.queue_navigation_controls().previous_enabled(),
-            )),
+            JValue::Bool(state.queue_navigation_controls().next_enabled()),
+            JValue::Bool(state.queue_navigation_controls().previous_enabled()),
         ],
     )
     .map_err(|e| MediaError::UpdateFailed(format!("setPlaybackState: {e}")))?;
@@ -273,11 +288,16 @@ pub fn set_playback_state_with_context(
 
 /// Request audio focus.
 pub fn request_audio_focus_with_context(
-    env: &mut JNIEnv,
-    helper: &GlobalRef,
+    env: &mut Env<'_>,
+    helper: &Global<JObject<'static>>,
 ) -> Result<(), MediaError> {
     let result = env
-        .call_method(helper.as_obj(), "requestAudioFocus", "()Z", &[])
+        .call_method(
+            helper.as_obj(),
+            jni_str!("requestAudioFocus"),
+            jni_sig!("()Z"),
+            &[],
+        )
         .map_err(|e| MediaError::Unknown(format!("requestAudioFocus: {e}")))?
         .z()
         .map_err(|e| MediaError::Unknown(format!("requestAudioFocus result: {e}")))?;
@@ -291,19 +311,32 @@ pub fn request_audio_focus_with_context(
 
 /// Abandon audio focus.
 pub fn abandon_audio_focus_with_context(
-    env: &mut JNIEnv,
-    helper: &GlobalRef,
+    env: &mut Env<'_>,
+    helper: &Global<JObject<'static>>,
 ) -> Result<(), MediaError> {
-    env.call_method(helper.as_obj(), "abandonAudioFocus", "()V", &[])
-        .map_err(|e| MediaError::Unknown(format!("abandonAudioFocus: {e}")))?;
+    env.call_method(
+        helper.as_obj(),
+        jni_str!("abandonAudioFocus"),
+        jni_sig!("()V"),
+        &[],
+    )
+    .map_err(|e| MediaError::Unknown(format!("abandonAudioFocus: {e}")))?;
 
     Ok(())
 }
 
 /// Clear the media session.
-pub fn clear_session(env: &mut JNIEnv, helper: &GlobalRef) -> Result<(), MediaError> {
-    env.call_method(helper.as_obj(), "clearSession", "()V", &[])
-        .map_err(|e| MediaError::Unknown(format!("clearSession: {e}")))?;
+pub fn clear_session(
+    env: &mut Env<'_>,
+    helper: &Global<JObject<'static>>,
+) -> Result<(), MediaError> {
+    env.call_method(
+        helper.as_obj(),
+        jni_str!("clearSession"),
+        jni_sig!("()V"),
+        &[],
+    )
+    .map_err(|e| MediaError::Unknown(format!("clearSession: {e}")))?;
 
     Ok(())
 }
@@ -359,19 +392,24 @@ fn parse_media_command(raw: &str) -> Result<MediaCommand, MediaError> {
 }
 
 fn take_command_with_context(
-    env: &mut JNIEnv,
-    helper: &GlobalRef,
+    env: &mut Env<'_>,
+    helper: &Global<JObject<'static>>,
 ) -> Result<Option<MediaCommand>, MediaError> {
     let command_obj = env
-        .call_method(helper.as_obj(), "takeCommand", "()Ljava/lang/String;", &[])
+        .call_method(
+            helper.as_obj(),
+            jni_str!("takeCommand"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )
         .map_err(|e| MediaError::Unknown(format!("takeCommand: {e}")))?
         .l()
         .map_err(|e| MediaError::Unknown(format!("takeCommand result: {e}")))?;
 
-    let command: String = env
-        .get_string((&command_obj).into())
-        .map_err(|e| MediaError::Unknown(format!("takeCommand get_string: {e}")))?
-        .into();
+    let command = env
+        .as_cast::<JString>(&command_obj)
+        .and_then(|command| command.try_to_string(env))
+        .map_err(|e| MediaError::Unknown(format!("takeCommand decode string: {e}")))?;
     if command == "shutdown" {
         Ok(None)
     } else {
@@ -381,8 +419,8 @@ fn take_command_with_context(
 
 pub struct MediaSessionInner {
     vm: JavaVM,
-    context: GlobalRef,
-    helper: GlobalRef,
+    context: Global<JObject<'static>>,
+    helper: Global<JObject<'static>>,
     dex_artifact: DexArtifact,
     command_receiver: async_channel::Receiver<MediaCommand>,
     command_worker: Option<JoinHandle<()>>,
@@ -399,66 +437,64 @@ impl core::fmt::Debug for MediaSessionInner {
 impl MediaSessionInner {
     fn with_attached_env<T>(
         &self,
-        op: impl FnOnce(&mut JNIEnv, &JObject) -> Result<T, MediaError>,
+        op: impl FnOnce(&mut Env<'_>, &JObject) -> Result<T, MediaError>,
     ) -> Result<T, MediaError> {
-        let mut env = self
-            .vm
-            .attach_current_thread()
-            .map_err(|e| MediaError::Unknown(format!("attach_current_thread failed: {e}")))?;
-        op(&mut env, self.context.as_obj())
+        self.vm
+            .attach_current_thread(|env| op(env, self.context.as_obj()))
     }
 
     pub fn new() -> Result<Self, MediaError> {
         let android_context = ndk_context::android_context();
+        let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
+        let raw_context: jni::sys::jobject = android_context.context().cast();
+        assert!(
+            !raw_vm.is_null(),
+            "waterkit-audio: ndk_context returned null JavaVM"
+        );
+        assert!(
+            !raw_context.is_null(),
+            "waterkit-audio: ndk_context returned null Android Context"
+        );
+        let vm = unsafe { JavaVM::from_raw(raw_vm) };
 
-        let vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) }.map_err(|e| {
-            MediaError::InitializationFailed(format!("JavaVM::from_raw failed: {e}"))
-        })?;
+        let (context, helper, dex_artifact) =
+            vm.attach_current_thread(|env| -> Result<_, MediaError> {
+                let context_ref = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
+                let context = env.new_global_ref(&*context_ref).map_err(|e| {
+                    MediaError::InitializationFailed(format!("new_global_ref context failed: {e}"))
+                })?;
 
-        let (context, helper, dex_artifact) = {
-            let mut env = vm.attach_current_thread().map_err(|e| {
-                MediaError::InitializationFailed(format!("attach_current_thread failed: {e}"))
+                let (helper, dex_artifact) = create_session_with_context(env, context.as_obj())?;
+                Ok((context, helper, dex_artifact))
             })?;
-
-            let context_local =
-                ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
-            assert!(
-                !context_local.is_null(),
-                "waterkit-audio: ndk_context returned null Android Context"
-            );
-            let context = env.new_global_ref(&*context_local).map_err(|e| {
-                MediaError::InitializationFailed(format!("new_global_ref context failed: {e}"))
-            })?;
-
-            let (helper, dex_artifact) = create_session_with_context(&mut env, context.as_obj())?;
-            (context, helper, dex_artifact)
-        };
-        let command_vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) }.map_err(|e| {
-            MediaError::InitializationFailed(format!("command JavaVM::from_raw failed: {e}"))
+        let command_vm = vm.clone();
+        let command_helper = vm.attach_current_thread(|env| -> Result<_, MediaError> {
+            env.new_global_ref(helper.as_obj()).map_err(|error| {
+                MediaError::InitializationFailed(format!(
+                    "new_global_ref command helper failed: {error}"
+                ))
+            })
         })?;
-        let command_helper = helper.clone();
         let (command_sender, command_receiver) = async_channel::unbounded();
         let command_worker = std::thread::spawn(move || {
-            let mut env = match command_vm.attach_current_thread() {
-                Ok(env) => env,
-                Err(error) => {
-                    tracing::error!(%error, "Android media command thread could not attach to JVM");
-                    return;
-                }
-            };
-            loop {
-                match take_command_with_context(&mut env, &command_helper) {
-                    Ok(Some(command)) => {
-                        if command_sender.send_blocking(command).is_err() {
-                            break;
+            let result = command_vm.attach_current_thread(|env| -> Result<(), MediaError> {
+                loop {
+                    match take_command_with_context(env, &command_helper) {
+                        Ok(Some(command)) => {
+                            if command_sender.send_blocking(command).is_err() {
+                                return Ok(());
+                            }
+                        }
+                        Ok(None) => return Ok(()),
+                        Err(error) => {
+                            tracing::error!(%error, "Android media command delivery failed");
+                            return Err(error);
                         }
                     }
-                    Ok(None) => break,
-                    Err(error) => {
-                        tracing::error!(%error, "Android media command delivery failed");
-                        break;
-                    }
                 }
+            });
+            if let Err(error) = result {
+                tracing::error!(%error, "Android media command thread failed");
             }
         });
 

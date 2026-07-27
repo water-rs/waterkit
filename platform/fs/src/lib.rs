@@ -77,7 +77,7 @@ impl WaterFs {
     /// path.
     #[cfg(target_os = "android")]
     pub fn documents_dir_with_context(
-        env: &mut jni::JNIEnv,
+        env: &mut jni::Env<'_>,
         context: &jni::objects::JObject,
     ) -> Result<PathBuf> {
         sys::documents_dir_with_context(env, context).ok_or(FsError::NoDocumentsDir)
@@ -90,7 +90,7 @@ impl WaterFs {
     /// Returns [`FsError::NoCacheDir`] when the JNI call returns no path.
     #[cfg(target_os = "android")]
     pub fn cache_dir_with_context(
-        env: &mut jni::JNIEnv,
+        env: &mut jni::Env<'_>,
         context: &jni::objects::JObject,
     ) -> Result<PathBuf> {
         sys::cache_dir_with_context(env, context).ok_or(FsError::NoCacheDir)

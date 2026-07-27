@@ -1,35 +1,42 @@
 //! Android filesystem implementation using JNI.
 
-use jni::JNIEnv;
-use jni::objects::{JObject, JValue};
+use jni::objects::{JObject, JString, JValue};
+use jni::signature::MethodSignature;
+use jni::strings::JNIStr;
+use jni::{Env, jni_sig, jni_str};
 use std::path::PathBuf;
 
+const GET_ABSOLUTE_PATH: MethodSignature<'static, 'static> = jni_sig!(() -> JString);
+const GET_EXTERNAL_FILES_DIR: MethodSignature<'static, 'static> =
+    jni_sig!((JString) -> java.io.File);
+const GET_CACHE_DIR: MethodSignature<'static, 'static> = jni_sig!(() -> java.io.File);
+
 fn string_object_to_path(
-    env: &mut JNIEnv,
+    env: &mut Env<'_>,
     value: &JObject,
 ) -> jni::errors::Result<Option<PathBuf>> {
     if value.is_null() {
         return Ok(None);
     }
-    let path: String = env.get_string(value.into())?.into();
+    let path = env.as_cast::<JString>(value)?.try_to_string(env)?;
     Ok(Some(PathBuf::from(path)))
 }
 
-fn file_object_to_path(env: &mut JNIEnv, file: &JObject) -> jni::errors::Result<Option<PathBuf>> {
+fn file_object_to_path(env: &mut Env<'_>, file: &JObject) -> jni::errors::Result<Option<PathBuf>> {
     if file.is_null() {
         return Ok(None);
     }
     let absolute_path = env
-        .call_method(file, "getAbsolutePath", "()Ljava/lang/String;", &[])?
+        .call_method(file, jni_str!("getAbsolutePath"), &GET_ABSOLUTE_PATH, &[])?
         .l()?;
     string_object_to_path(env, &absolute_path)
 }
 
-fn call_context_file_method(
-    env: &mut JNIEnv,
+fn call_context_file_method<'sig, 'args>(
+    env: &mut Env<'_>,
     context: &JObject,
-    method_name: &str,
-    signature: &str,
+    method_name: &JNIStr,
+    signature: &MethodSignature<'sig, 'args>,
     args: &[JValue],
 ) -> jni::errors::Result<Option<PathBuf>> {
     let file = env
@@ -39,11 +46,11 @@ fn call_context_file_method(
 }
 
 /// Gets the application's documents directory using an Android `Context`.
-pub fn documents_dir_with_context(env: &mut JNIEnv, context: &JObject) -> Option<PathBuf> {
+pub fn documents_dir_with_context(env: &mut Env<'_>, context: &JObject) -> Option<PathBuf> {
     let documents_value = env.get_static_field(
-        "android/os/Environment",
-        "DIRECTORY_DOCUMENTS",
-        "Ljava/lang/String;",
+        jni_str!("android/os/Environment"),
+        jni_str!("DIRECTORY_DOCUMENTS"),
+        jni_sig!(JString),
     );
     let documents_kind = match documents_value {
         Ok(value) => match value.l() {
@@ -64,8 +71,8 @@ pub fn documents_dir_with_context(env: &mut JNIEnv, context: &JObject) -> Option
     call_context_file_method(
         env,
         context,
-        "getExternalFilesDir",
-        "(Ljava/lang/String;)Ljava/io/File;",
+        jni_str!("getExternalFilesDir"),
+        &GET_EXTERNAL_FILES_DIR,
         &[JValue::Object(&documents_kind)],
     )
     .unwrap_or_else(|error| {
@@ -75,13 +82,12 @@ pub fn documents_dir_with_context(env: &mut JNIEnv, context: &JObject) -> Option
 }
 
 /// Gets the application's cache directory using an Android `Context`.
-pub fn cache_dir_with_context(env: &mut JNIEnv, context: &JObject) -> Option<PathBuf> {
-    call_context_file_method(env, context, "getCacheDir", "()Ljava/io/File;", &[]).unwrap_or_else(
-        |error| {
+pub fn cache_dir_with_context(env: &mut Env<'_>, context: &JObject) -> Option<PathBuf> {
+    call_context_file_method(env, context, jni_str!("getCacheDir"), &GET_CACHE_DIR, &[])
+        .unwrap_or_else(|error| {
             tracing::error!("waterkit-fs: failed to resolve Android cache dir: {error}");
             None
-        },
-    )
+        })
 }
 
 pub fn documents_dir() -> Option<PathBuf> {

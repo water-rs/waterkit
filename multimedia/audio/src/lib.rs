@@ -383,6 +383,13 @@ pub enum MediaError {
     Unknown(String),
 }
 
+#[cfg(target_os = "android")]
+impl From<jni::errors::Error> for MediaError {
+    fn from(error: jni::errors::Error) -> Self {
+        Self::Unknown(error.to_string())
+    }
+}
+
 /// Manager for media control and "Now Playing" information.
 #[cfg(feature = "media-session")]
 #[derive(Debug)]

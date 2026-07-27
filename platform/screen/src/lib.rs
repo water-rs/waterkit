@@ -82,6 +82,13 @@ pub enum Error {
     Encoding(String),
 }
 
+#[cfg(target_os = "android")]
+impl From<jni::errors::Error> for Error {
+    fn from(error: jni::errors::Error) -> Self {
+        Self::Platform(error.to_string())
+    }
+}
+
 /// Information about a display/screen.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -198,6 +205,6 @@ pub async fn set_brightness(value: Brightness) -> Result<(), Error> {
 ///
 /// Returns `Error::Platform` if initialization fails or if called more than once.
 #[cfg(target_os = "android")]
-pub fn init(env: &mut jni::JNIEnv, context: &jni::objects::JObject) -> Result<(), Error> {
+pub fn init(env: &mut jni::Env<'_>, context: &jni::objects::JObject) -> Result<(), Error> {
     sys::android::init(env, context)
 }

@@ -3,9 +3,11 @@
 use std::{marker::PhantomData, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use jni::{
-    JNIEnv, JavaVM,
+    Env, JavaVM,
     errors::Error as JniError,
-    objects::{GlobalRef, JByteArray, JIntArray, JObject, JString, JThrowable, JValue},
+    jni_sig, jni_str,
+    objects::{Global, JByteArray, JIntArray, JObject, JString, JThrowable, JValue},
+    strings::JNIStr,
 };
 use waterkit_audio::DecodedAudioFrame;
 use waterkit_codec::NalStreamConverter;
@@ -13,7 +15,9 @@ use waterkit_video_container::{Codec, EncodedSample, TrackInfo, TrackKind};
 use waterkit_video_core::{CommonEncryptionScheme, Error, ProtectionInitData, TrackProtection};
 use waterkit_video_streaming::{LicenseRequest, LicenseResponse, LicenseServer, Url};
 
-use crate::AndroidVideoSurface;
+use crate::{AndroidVideoSurface, android_surface::with_attached_env};
+
+type GlobalObjectRef = Global<JObject<'static>>;
 
 const ANDROID_MINIMUM_API: i32 = 24;
 const MEDIA_DRM_KEY_TYPE_STREAMING: i32 = 1;
@@ -149,7 +153,7 @@ impl AndroidDrmContext {
     /// # Errors
     ///
     /// Returns an error when Android is too old or the `JavaVM` cannot be retained.
-    pub unsafe fn from_jni(env: &mut JNIEnv<'_>) -> Result<Self, Error> {
+    pub unsafe fn from_jni(env: &mut Env<'_>) -> Result<Self, Error> {
         let api_level = android_api_level(env)?;
         if api_level < ANDROID_MINIMUM_API {
             return Err(Error::Unsupported(format!(
@@ -168,18 +172,17 @@ impl AndroidDrmContext {
     ///
     /// Returns a platform error when the JVM query fails.
     pub fn supports_system_id(&self, system_id: &[u8; 16]) -> Result<bool, Error> {
-        let mut env = self.vm.attach_current_thread().map_err(|error| {
-            Error::Platform(format!("attach DRM capability query to JVM: {error}"))
-        })?;
-        let uuid = create_java_uuid(&mut env, *system_id)?;
-        env.call_static_method(
-            "android/media/MediaDrm",
-            "isCryptoSchemeSupported",
-            "(Ljava/util/UUID;)Z",
-            &[JValue::Object(&uuid)],
-        )
-        .and_then(jni::objects::JValueGen::z)
-        .map_err(|error| platform_jni_error(&mut env, "query Android DRM system support", error))
+        with_attached_env(&self.vm, |env| {
+            let uuid = create_java_uuid(env, *system_id)?;
+            env.call_static_method(
+                jni_str!("android/media/MediaDrm"),
+                jni_str!("isCryptoSchemeSupported"),
+                jni_sig!("(Ljava/util/UUID;)Z"),
+                &[JValue::Object(&uuid)],
+            )
+            .and_then(jni::objects::JValueOwned::z)
+            .map_err(|error| platform_jni_error(env, "query Android DRM system support", error))
+        })
     }
 }
 
@@ -221,7 +224,7 @@ impl AndroidProtectedSurface {
     ///
     /// Returns a platform error when the Android API level is below 24, the
     /// object is not an `android.view.Surface`, or a global reference fails.
-    pub unsafe fn from_jni(env: &mut JNIEnv<'_>, surface: &JObject<'_>) -> Result<Self, Error> {
+    pub unsafe fn from_jni(env: &mut Env<'_>, surface: &JObject<'_>) -> Result<Self, Error> {
         let surface = unsafe { AndroidVideoSurface::from_jni(env, surface) }?;
         Ok(unsafe { Self::from_video_surface(surface) })
     }
@@ -945,24 +948,19 @@ impl AndroidProtectedVideoOutput {
 
 struct AndroidCodecResources {
     drm_session: AndroidDrmSession,
-    media_crypto: GlobalRef,
-    codec: GlobalRef,
+    media_crypto: GlobalObjectRef,
+    codec: GlobalObjectRef,
     offline_key_set: Option<AndroidOfflineKeySet>,
 }
 
 impl AndroidCodecResources {
     fn with_env<T>(
         &self,
-        operation: impl FnOnce(&mut JNIEnv<'_>, &JObject<'_>) -> Result<T, Error>,
+        operation: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        let mut env = self
-            .drm_session
-            .vm
-            .attach_current_thread()
-            .map_err(|error| {
-                Error::Platform(format!("attach protected decoder thread to JVM: {error}"))
-            })?;
-        operation(&mut env, self.codec.as_obj())
+        with_attached_env(&self.drm_session.vm, |env| {
+            operation(env, self.codec.as_obj())
+        })
     }
 
     fn provide_key_response(
@@ -1015,53 +1013,56 @@ impl AndroidCodecResources {
     }
 
     fn discard_output_on_drop(&self, index: i32) {
-        let Ok(mut env) = self.drm_session.vm.attach_current_thread() else {
-            tracing::error!("failed to attach JVM while discarding protected Android output");
-            return;
-        };
-        if let Err(error) = env.call_method(
-            self.codec.as_obj(),
-            "releaseOutputBuffer",
-            "(IZ)V",
-            &[JValue::Int(index), JValue::Bool(0)],
-        ) {
+        if let Err(error) = with_attached_env(&self.drm_session.vm, |env| {
+            env.call_method(
+                self.codec.as_obj(),
+                jni_str!("releaseOutputBuffer"),
+                jni_sig!("(IZ)V"),
+                &[JValue::Int(index), JValue::Bool(false)],
+            )
+            .map_err(|error| platform_jni_error(env, "discard protected Android output", error))?;
+            Ok(())
+        }) {
             tracing::error!(%error, "failed to discard outstanding protected Android output");
-            clear_pending_exception(&env);
         }
     }
 }
 
 impl Drop for AndroidCodecResources {
     fn drop(&mut self) {
-        let Ok(mut env) = self.drm_session.vm.attach_current_thread() else {
-            tracing::error!("failed to attach JVM while releasing protected Android decoder");
-            return;
-        };
-        release_java_object(
-            &mut env,
-            self.codec.as_obj(),
-            "stop",
-            "protected MediaCodec",
-        );
-        release_java_object(
-            &mut env,
-            self.codec.as_obj(),
-            "release",
-            "protected MediaCodec",
-        );
-        release_java_object(
-            &mut env,
-            self.media_crypto.as_obj(),
-            "release",
-            "MediaCrypto",
-        );
+        if let Err(error) = with_attached_env(&self.drm_session.vm, |env| {
+            release_java_object(
+                env,
+                self.codec.as_obj(),
+                jni_str!("stop"),
+                "stop",
+                "protected MediaCodec",
+            );
+            release_java_object(
+                env,
+                self.codec.as_obj(),
+                jni_str!("release"),
+                "release",
+                "protected MediaCodec",
+            );
+            release_java_object(
+                env,
+                self.media_crypto.as_obj(),
+                jni_str!("release"),
+                "release",
+                "MediaCrypto",
+            );
+            Ok(())
+        }) {
+            tracing::error!(%error, "failed to attach JVM while releasing protected Android decoder");
+        }
     }
 }
 
 /// Licensed Android decoder whose pixels remain inside a protected Surface.
 pub struct AndroidProtectedVideoDecoder {
     resources: AndroidCodecResources,
-    _surface: GlobalRef,
+    _surface: Arc<GlobalObjectRef>,
     converter: NalStreamConverter,
     track: TrackInfo,
     init_data: ProtectionInitData,
@@ -1220,21 +1221,14 @@ impl AndroidProtectedVideoDecoder {
             )));
         }
         let result = self.with_env(|env, codec| {
-            let buffer_info = env
-                .new_object("android/media/MediaCodec$BufferInfo", "()V", &[])
+            let buffer_info = env.new_object(jni_str!("android/media/MediaCodec$BufferInfo"), jni_sig!("()V"), &[])
                 .map_err(|error| platform_jni_error(env, "create BufferInfo", error))?;
             loop {
-                let index = env
-                    .call_method(
-                        codec,
-                        "dequeueOutputBuffer",
-                        "(Landroid/media/MediaCodec$BufferInfo;J)I",
-                        &[
-                            JValue::Object(&buffer_info),
-                            JValue::Long(timeout_micros),
-                        ],
-                    )
-                    .and_then(jni::objects::JValueGen::i)
+                let index = env.call_method(codec, jni_str!("dequeueOutputBuffer"), jni_sig!("(Landroid/media/MediaCodec$BufferInfo;J)I"), &[
+                    JValue::Object(&buffer_info),
+                    JValue::Long(timeout_micros),
+                ])
+                    .and_then(jni::objects::JValueOwned::i)
                     .map_err(|error| {
                         platform_jni_error(env, "dequeue protected output", error)
                     })?;
@@ -1243,15 +1237,13 @@ impl AndroidProtectedVideoDecoder {
                     MEDIA_CODEC_INFO_OUTPUT_FORMAT_CHANGED
                     | MEDIA_CODEC_INFO_OUTPUT_BUFFERS_CHANGED => {}
                     index if index >= 0 => {
-                        let presentation_time_micros = env
-                            .get_field(&buffer_info, "presentationTimeUs", "J")
-                            .and_then(jni::objects::JValueGen::j)
+                        let presentation_time_micros = env.get_field(&buffer_info, jni_str!("presentationTimeUs"), jni_sig!("J"))
+                            .and_then(jni::objects::JValueOwned::j)
                             .map_err(|error| {
                                 platform_jni_error(env, "read protected output PTS", error)
                             })?;
-                        let flags = env
-                            .get_field(&buffer_info, "flags", "I")
-                            .and_then(jni::objects::JValueGen::i)
+                        let flags = env.get_field(&buffer_info, jni_str!("flags"), jni_sig!("I"))
+                            .and_then(jni::objects::JValueOwned::i)
                             .map_err(|error| {
                                 platform_jni_error(env, "read protected output flags", error)
                             })?;
@@ -1311,8 +1303,13 @@ impl AndroidProtectedVideoDecoder {
         })?;
         self.with_env(|env, codec| {
             let now = env
-                .call_static_method("java/lang/System", "nanoTime", "()J", &[])
-                .and_then(jni::objects::JValueGen::j)
+                .call_static_method(
+                    jni_str!("java/lang/System"),
+                    jni_str!("nanoTime"),
+                    jni_sig!("()J"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::j)
                 .map_err(|error| platform_jni_error(env, "read Android monotonic time", error))?;
             let render_at = now.checked_add(delay_nanos).ok_or_else(|| {
                 Error::Platform(String::from(
@@ -1321,8 +1318,8 @@ impl AndroidProtectedVideoDecoder {
             })?;
             env.call_method(
                 codec,
-                "releaseOutputBuffer",
-                "(IJ)V",
+                jni_str!("releaseOutputBuffer"),
+                jni_sig!("(IJ)V"),
                 &[JValue::Int(output.index), JValue::Long(render_at)],
             )
             .map_err(|error| platform_jni_error(env, "render protected output", error))?;
@@ -1342,9 +1339,9 @@ impl AndroidProtectedVideoDecoder {
         self.with_env(|env, codec| {
             env.call_method(
                 codec,
-                "releaseOutputBuffer",
-                "(IZ)V",
-                &[JValue::Int(output.index), JValue::Bool(0)],
+                jni_str!("releaseOutputBuffer"),
+                jni_sig!("(IZ)V"),
+                &[JValue::Int(output.index), JValue::Bool(false)],
             )
             .map_err(|error| platform_jni_error(env, "discard protected output", error))?;
             Ok(())
@@ -1376,7 +1373,7 @@ impl AndroidProtectedVideoDecoder {
 
     fn with_env<T>(
         &self,
-        operation: impl FnOnce(&mut JNIEnv<'_>, &JObject<'_>) -> Result<T, Error>,
+        operation: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, Error>,
     ) -> Result<T, Error> {
         self.resources.with_env(operation)
     }
@@ -1604,32 +1601,37 @@ enum AndroidAudioOutput {
 
 struct AndroidDrmSession {
     vm: Arc<JavaVM>,
-    drm: GlobalRef,
+    drm: GlobalObjectRef,
     system_id: [u8; 16],
-    session_id: Option<GlobalRef>,
+    session_id: Option<GlobalObjectRef>,
 }
 
 impl AndroidDrmSession {
-    fn new(vm: Arc<JavaVM>, system_id: [u8; 16]) -> Result<(Self, GlobalRef), Error> {
-        let mut env = vm.attach_current_thread().map_err(|error| {
-            Error::Platform(format!("attach DRM bootstrap thread to JVM: {error}"))
+    fn new(vm: Arc<JavaVM>, system_id: [u8; 16]) -> Result<(Self, GlobalObjectRef), Error> {
+        let (drm, uuid) = with_attached_env(&vm, |env| {
+            let uuid = create_java_uuid(env, system_id)?;
+            let drm = env
+                .new_object(
+                    jni_str!("android/media/MediaDrm"),
+                    jni_sig!("(Ljava/util/UUID;)V"),
+                    &[JValue::Object(&uuid)],
+                )
+                .map_err(|error| platform_jni_error(env, "create MediaDrm", error))?;
+            let drm = env
+                .new_global_ref(drm)
+                .map_err(|error| platform_jni_error(env, "retain MediaDrm", error))?;
+            let uuid = env.new_global_ref(uuid).map_err(|error| {
+                release_java_object(
+                    env,
+                    drm.as_obj(),
+                    jni_str!("release"),
+                    "release",
+                    "MediaDrm",
+                );
+                platform_jni_error(env, "retain DRM UUID", error)
+            })?;
+            Ok((drm, uuid))
         })?;
-        let uuid = create_java_uuid(&mut env, system_id)?;
-        let drm = env
-            .new_object(
-                "android/media/MediaDrm",
-                "(Ljava/util/UUID;)V",
-                &[JValue::Object(&uuid)],
-            )
-            .map_err(|error| platform_jni_error(&mut env, "create MediaDrm", error))?;
-        let drm = env
-            .new_global_ref(drm)
-            .map_err(|error| platform_jni_error(&mut env, "retain MediaDrm", error))?;
-        let uuid = env.new_global_ref(uuid).map_err(|error| {
-            release_java_object(&mut env, drm.as_obj(), "release", "MediaDrm");
-            platform_jni_error(&mut env, "retain DRM UUID", error)
-        })?;
-        drop(env);
         Ok((
             Self {
                 vm,
@@ -1645,36 +1647,42 @@ impl AndroidDrmSession {
         if self.session_id.is_some() {
             return Ok(false);
         }
-        let mut env = self.vm.attach_current_thread().map_err(|error| {
-            Error::Platform(format!("attach MediaDrm request thread to JVM: {error}"))
-        })?;
-        let session = match env.call_method(self.drm.as_obj(), "openSession", "()[B", &[]) {
-            Ok(value) => value
-                .l()
-                .map_err(|error| platform_jni_error(&mut env, "read MediaDrm session", error))?,
-            Err(error) => {
-                if take_not_provisioned(&mut env, error, "open MediaDrm session")? {
-                    return Ok(true);
+        let session = with_attached_env(&self.vm, |env| {
+            let session = match env.call_method(
+                self.drm.as_obj(),
+                jni_str!("openSession"),
+                jni_sig!("()[B"),
+                &[],
+            ) {
+                Ok(value) => value
+                    .l()
+                    .map_err(|error| platform_jni_error(env, "read MediaDrm session", error))?,
+                Err(error) => {
+                    if take_not_provisioned(env, error, "open MediaDrm session")? {
+                        return Ok(None);
+                    }
+                    unreachable!("non-provisioning Java errors return from take_not_provisioned")
                 }
-                unreachable!("non-provisioning Java errors return from take_not_provisioned")
-            }
-        };
-        self.session_id = Some(
+            };
             env.new_global_ref(session)
-                .map_err(|error| platform_jni_error(&mut env, "retain MediaDrm session", error))?,
-        );
-        Ok(false)
+                .map(Some)
+                .map_err(|error| platform_jni_error(env, "retain MediaDrm session", error))
+        })?;
+        self.session_id = session;
+        Ok(self.session_id.is_none())
     }
 
     fn close(&mut self) {
-        let Ok(mut env) = self.vm.attach_current_thread() else {
-            tracing::error!("failed to attach JVM while closing Android MediaDrm session");
-            return;
-        };
-        close_session(&mut env, &self.drm, &mut self.session_id);
+        let vm = Arc::clone(&self.vm);
+        if let Err(error) = with_attached_env(&vm, |env| {
+            close_session(env, &self.drm, &mut self.session_id);
+            Ok(())
+        }) {
+            tracing::error!(%error, "failed to attach JVM while closing Android MediaDrm session");
+        }
     }
 
-    const fn session_id(&self) -> &GlobalRef {
+    const fn session_id(&self) -> &GlobalObjectRef {
         self.session_id
             .as_ref()
             .expect("prepared MediaDrm operation must retain an open session")
@@ -1686,89 +1694,71 @@ impl AndroidDrmSession {
         container_mime: &str,
         key_type: i32,
     ) -> Result<LicensePreparation, Error> {
-        let mut env = self.vm.attach_current_thread().map_err(|error| {
-            Error::Platform(format!(
-                "attach MediaDrm key-request thread to JVM: {error}"
-            ))
-        })?;
-        prepare_key_request(
-            &mut env,
-            self.drm.as_obj(),
-            self.session_id().as_obj(),
-            init_data,
-            container_mime,
-            key_type,
-        )
+        with_attached_env(&self.vm, |env| {
+            prepare_key_request(
+                env,
+                self.drm.as_obj(),
+                self.session_id().as_obj(),
+                init_data,
+                container_mime,
+                key_type,
+            )
+        })
     }
 
     fn prepare_release_request(
         &self,
         key_set: &AndroidOfflineKeySet,
     ) -> Result<LicensePreparation, Error> {
-        let mut env = self.vm.attach_current_thread().map_err(|error| {
-            Error::Platform(format!("attach MediaDrm release thread to JVM: {error}"))
-        })?;
-        let scope = env
-            .byte_array_from_slice(key_set.as_bytes())
-            .map_err(|error| platform_jni_error(&mut env, "create release key-set scope", error))?;
-        let request = match env.call_method(
-            self.drm.as_obj(),
-            "getKeyRequest",
-            "([B[BLjava/lang/String;ILjava/util/HashMap;)Landroid/media/MediaDrm$KeyRequest;",
-            &[
+        with_attached_env(&self.vm, |env| {
+            let scope = env
+                .byte_array_from_slice(key_set.as_bytes())
+                .map_err(|error| platform_jni_error(env, "create release key-set scope", error))?;
+            let request = match env.call_method(self.drm.as_obj(), jni_str!("getKeyRequest"), jni_sig!("([B[BLjava/lang/String;ILjava/util/HashMap;)Landroid/media/MediaDrm$KeyRequest;"), &[
                 JValue::Object(&scope),
                 JValue::Object(&JObject::null()),
                 JValue::Object(&JObject::null()),
                 JValue::Int(MEDIA_DRM_KEY_TYPE_RELEASE),
                 JValue::Object(&JObject::null()),
-            ],
-        ) {
-            Ok(value) => value.l().map_err(|error| {
-                platform_jni_error(&mut env, "read MediaDrm release request", error)
-            })?,
-            Err(error) => {
-                if take_not_provisioned(&mut env, error, "create MediaDrm release request")? {
-                    return Ok(LicensePreparation::ProvisionRequired);
+            ]) {
+                Ok(value) => value.l().map_err(|error| {
+                    platform_jni_error(env, "read MediaDrm release request", error)
+                })?,
+                Err(error) => {
+                    if take_not_provisioned(env, error, "create MediaDrm release request")? {
+                        return Ok(LicensePreparation::ProvisionRequired);
+                    }
+                    unreachable!("non-provisioning Java errors return from take_not_provisioned")
                 }
-                unreachable!("non-provisioning Java errors return from take_not_provisioned")
-            }
-        };
-        read_license_challenge(&mut env, &request, self.system_id)
+            };
+            read_license_challenge(env, &request, self.system_id)
+        })
     }
 
     fn restore_keys(&self, key_set: &AndroidOfflineKeySet) -> Result<bool, Error> {
-        let mut env = self.vm.attach_current_thread().map_err(|error| {
-            Error::Platform(format!("attach MediaDrm restore thread to JVM: {error}"))
-        })?;
-        restore_keys(
-            &mut env,
-            self.drm.as_obj(),
-            self.session_id().as_obj(),
-            key_set,
-        )
+        with_attached_env(&self.vm, |env| {
+            restore_keys(env, self.drm.as_obj(), self.session_id().as_obj(), key_set)
+        })
     }
 
     fn prepare_provision_request(&self) -> Result<AndroidProvisionRequest, Error> {
-        let mut env = self.vm.attach_current_thread().map_err(|error| {
-            Error::Platform(format!(
-                "attach MediaDrm provisioning thread to JVM: {error}"
-            ))
-        })?;
-        let request = env
-            .call_method(
-                self.drm.as_obj(),
-                "getProvisionRequest",
-                "()Landroid/media/MediaDrm$ProvisionRequest;",
-                &[],
-            )
-            .and_then(jni::objects::JValueGen::l)
-            .map_err(|error| {
-                platform_jni_error(&mut env, "create MediaDrm provision request", error)
-            })?;
-        Ok(AndroidProvisionRequest {
-            system_id: self.system_id,
-            data: byte_array_method(&mut env, &request, "getData", "provision request")?,
-            default_url: url_method(&mut env, &request, "provision request")?,
+        with_attached_env(&self.vm, |env| {
+            let request = env
+                .call_method(
+                    self.drm.as_obj(),
+                    jni_str!("getProvisionRequest"),
+                    jni_sig!("()Landroid/media/MediaDrm$ProvisionRequest;"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::l)
+                .map_err(|error| {
+                    platform_jni_error(env, "create MediaDrm provision request", error)
+                })?;
+            Ok(AndroidProvisionRequest {
+                system_id: self.system_id,
+                data: byte_array_method(env, &request, jni_str!("getData"), "provision request")?,
+                default_url: url_method(env, &request, "provision request")?,
+            })
         })
     }
 
@@ -1778,24 +1768,21 @@ impl AndroidDrmSession {
                 "Android MediaDrm provisioning response must not be empty",
             )));
         }
-        let mut env = self.vm.attach_current_thread().map_err(|error| {
-            Error::Platform(format!(
-                "attach MediaDrm provisioning thread to JVM: {error}"
-            ))
-        })?;
-        let response = env.byte_array_from_slice(response).map_err(|error| {
-            platform_jni_error(&mut env, "create MediaDrm provision response", error)
-        })?;
-        env.call_method(
-            self.drm.as_obj(),
-            "provideProvisionResponse",
-            "([B)V",
-            &[JValue::Object(&response)],
-        )
-        .map_err(|error| {
-            platform_jni_error(&mut env, "provide MediaDrm provision response", error)
-        })?;
-        Ok(())
+        with_attached_env(&self.vm, |env| {
+            let response = env.byte_array_from_slice(response).map_err(|error| {
+                platform_jni_error(env, "create MediaDrm provision response", error)
+            })?;
+            env.call_method(
+                self.drm.as_obj(),
+                jni_str!("provideProvisionResponse"),
+                jni_sig!("([B)V"),
+                &[JValue::Object(&response)],
+            )
+            .map_err(|error| {
+                platform_jni_error(env, "provide MediaDrm provision response", error)
+            })?;
+            Ok(())
+        })
     }
 
     fn provide_key_response(&self, response: &[u8]) -> Result<Option<AndroidOfflineKeySet>, Error> {
@@ -1807,36 +1794,42 @@ impl AndroidDrmSession {
         key_set: &AndroidOfflineKeySet,
         response: &[u8],
     ) -> Result<(), Error> {
-        let mut env = self.vm.attach_current_thread().map_err(|error| {
-            Error::Platform(format!("attach MediaDrm release thread to JVM: {error}"))
-        })?;
-        let scope = env
-            .byte_array_from_slice(key_set.as_bytes())
-            .map_err(|error| platform_jni_error(&mut env, "create release key-set scope", error))?;
-        if provide_key_response_in_env(&mut env, self.drm.as_obj(), &scope, response)?.is_some() {
-            return Err(Error::Platform(String::from(
-                "Android offline release unexpectedly returned a key-set identity",
-            )));
-        }
-        Ok(())
+        with_attached_env(&self.vm, |env| {
+            let scope = env
+                .byte_array_from_slice(key_set.as_bytes())
+                .map_err(|error| platform_jni_error(env, "create release key-set scope", error))?;
+            if provide_key_response_in_env(env, self.drm.as_obj(), &scope, response)?.is_some() {
+                return Err(Error::Platform(String::from(
+                    "Android offline release unexpectedly returned a key-set identity",
+                )));
+            }
+            Ok(())
+        })
     }
 
     fn key_status(&self) -> Result<AndroidKeyStatus, Error> {
-        let mut env = self.vm.attach_current_thread().map_err(|error| {
-            Error::Platform(format!("attach MediaDrm status thread to JVM: {error}"))
-        })?;
-        query_key_status(&mut env, self.drm.as_obj(), self.session_id().as_obj())
+        with_attached_env(&self.vm, |env| {
+            query_key_status(env, self.drm.as_obj(), self.session_id().as_obj())
+        })
     }
 }
 
 impl Drop for AndroidDrmSession {
     fn drop(&mut self) {
-        let Ok(mut env) = self.vm.attach_current_thread() else {
-            tracing::error!("failed to attach JVM while releasing Android MediaDrm session");
-            return;
-        };
-        close_session(&mut env, &self.drm, &mut self.session_id);
-        release_java_object(&mut env, self.drm.as_obj(), "release", "MediaDrm");
+        let vm = Arc::clone(&self.vm);
+        if let Err(error) = with_attached_env(&vm, |env| {
+            close_session(env, &self.drm, &mut self.session_id);
+            release_java_object(
+                env,
+                self.drm.as_obj(),
+                jni_str!("release"),
+                "release",
+                "MediaDrm",
+            );
+            Ok(())
+        }) {
+            tracing::error!(%error, "failed to attach JVM while releasing Android MediaDrm session");
+        }
     }
 }
 
@@ -2041,9 +2034,9 @@ fn offline_license_container_mime(
 }
 
 struct AndroidDecoderBootstrap {
-    surface: Option<GlobalRef>,
+    surface: Option<Arc<GlobalObjectRef>>,
     drm_session: AndroidDrmSession,
-    uuid: GlobalRef,
+    uuid: GlobalObjectRef,
     init_data: ProtectionInitData,
     track: TrackInfo,
     converter: Option<NalStreamConverter>,
@@ -2055,7 +2048,7 @@ struct AndroidDecoderBootstrap {
 }
 
 struct AndroidDecoderDescription {
-    surface: Option<GlobalRef>,
+    surface: Option<Arc<GlobalObjectRef>>,
     converter: Option<NalStreamConverter>,
     decoder_mime: &'static str,
     container_mime: &'static str,
@@ -2252,39 +2245,40 @@ impl AndroidDecoderBootstrap {
         let height = i32::try_from(dimensions.height.get()).map_err(|_| {
             Error::Codec(String::from("protected video height exceeds Android jint"))
         })?;
-        let session = self.drm_session.session_id();
-        let mut env = self
-            .drm_session
-            .vm
-            .attach_current_thread()
-            .map_err(|error| {
-                Error::Platform(format!("attach secure decoder thread to JVM: {error}"))
+        let (codec, media_crypto, secure_decoder) =
+            with_attached_env(&self.drm_session.vm, |env| {
+                let config = SecureDecoderConfig {
+                    uuid: self.uuid.as_obj(),
+                    session: self.drm_session.session_id().as_obj(),
+                    surface: self
+                        .surface
+                        .as_ref()
+                        .expect("video decoder bootstrap must retain its secure Surface")
+                        .as_obj(),
+                    mime: self.decoder_mime,
+                    width,
+                    height,
+                    primary_csd: &self.primary_csd,
+                    secondary_csd: &self.secondary_csd,
+                };
+                let media_crypto = create_media_crypto(env, &config)?;
+                let decoder = create_secure_media_codec(env, &config, &media_crypto);
+                let (codec, secure_decoder) = match decoder {
+                    Ok(decoder) => decoder,
+                    Err(error) => {
+                        release_java_object(
+                            env,
+                            &media_crypto,
+                            jni_str!("release"),
+                            "release",
+                            "MediaCrypto",
+                        );
+                        return Err(error);
+                    }
+                };
+                let (codec, media_crypto) = retain_decoder_objects(env, &codec, &media_crypto)?;
+                Ok((codec, media_crypto, secure_decoder))
             })?;
-        let config = SecureDecoderConfig {
-            uuid: self.uuid.as_obj(),
-            session: session.as_obj(),
-            surface: self
-                .surface
-                .as_ref()
-                .expect("video decoder bootstrap must retain its secure Surface")
-                .as_obj(),
-            mime: self.decoder_mime,
-            width,
-            height,
-            primary_csd: &self.primary_csd,
-            secondary_csd: &self.secondary_csd,
-        };
-        let media_crypto = create_media_crypto(&mut env, &config)?;
-        let decoder = create_secure_media_codec(&mut env, &config, &media_crypto);
-        let (codec, secure_decoder) = match decoder {
-            Ok(decoder) => decoder,
-            Err(error) => {
-                release_java_object(&mut env, &media_crypto, "release", "MediaCrypto");
-                return Err(error);
-            }
-        };
-        let (codec, media_crypto) = retain_decoder_objects(&mut env, &codec, &media_crypto)?;
-        drop(env);
         Ok(AndroidProtectedVideoDecoder {
             resources: AndroidCodecResources {
                 drm_session: self.drm_session,
@@ -2294,9 +2288,8 @@ impl AndroidDecoderBootstrap {
             },
             _surface: self
                 .surface
-                .as_ref()
-                .expect("video decoder bootstrap must retain its secure Surface")
-                .clone(),
+                .take()
+                .expect("video decoder bootstrap must retain its secure Surface"),
             converter: self.converter.take().ok_or_else(|| {
                 Error::Codec(String::from(
                     "configured protected decoder lost its NAL converter",
@@ -2334,35 +2327,34 @@ impl AndroidDecoderBootstrap {
                 layout.sample_rate
             ))
         })?;
-        let session = self.drm_session.session_id();
-        let mut env = self
-            .drm_session
-            .vm
-            .attach_current_thread()
-            .map_err(|error| {
-                Error::Platform(format!(
-                    "attach protected audio decoder thread to JVM: {error}"
-                ))
+        let (codec, media_crypto, secure_decoder) =
+            with_attached_env(&self.drm_session.vm, |env| {
+                let config = SecureAudioDecoderConfig {
+                    uuid: self.uuid.as_obj(),
+                    session: self.drm_session.session_id().as_obj(),
+                    mime: self.decoder_mime,
+                    channels: android_channels,
+                    sample_rate: android_sample_rate,
+                    primary_csd: &self.primary_csd,
+                };
+                let media_crypto = create_audio_media_crypto(env, &config)?;
+                let decoder = create_secure_audio_media_codec(env, &config, &media_crypto);
+                let (codec, secure_decoder) = match decoder {
+                    Ok(decoder) => decoder,
+                    Err(error) => {
+                        release_java_object(
+                            env,
+                            &media_crypto,
+                            jni_str!("release"),
+                            "release",
+                            "MediaCrypto",
+                        );
+                        return Err(error);
+                    }
+                };
+                let (codec, media_crypto) = retain_decoder_objects(env, &codec, &media_crypto)?;
+                Ok((codec, media_crypto, secure_decoder))
             })?;
-        let config = SecureAudioDecoderConfig {
-            uuid: self.uuid.as_obj(),
-            session: session.as_obj(),
-            mime: self.decoder_mime,
-            channels: android_channels,
-            sample_rate: android_sample_rate,
-            primary_csd: &self.primary_csd,
-        };
-        let media_crypto = create_audio_media_crypto(&mut env, &config)?;
-        let decoder = create_secure_audio_media_codec(&mut env, &config, &media_crypto);
-        let (codec, secure_decoder) = match decoder {
-            Ok(decoder) => decoder,
-            Err(error) => {
-                release_java_object(&mut env, &media_crypto, "release", "MediaCrypto");
-                return Err(error);
-            }
-        };
-        let (codec, media_crypto) = retain_decoder_objects(&mut env, &codec, &media_crypto)?;
-        drop(env);
         Ok(AndroidProtectedAudioDecoder {
             resources: AndroidCodecResources {
                 drm_session: self.drm_session,
@@ -2394,7 +2386,7 @@ enum KeyPreparation {
 }
 
 fn prepare_key_request(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     drm: &JObject<'_>,
     session: &JObject<'_>,
     init_data: &ProtectionInitData,
@@ -2409,8 +2401,8 @@ fn prepare_key_request(
         .map_err(|error| platform_jni_error(env, "create DRM MIME", error))?;
     let request = match env.call_method(
         drm,
-        "getKeyRequest",
-        "([B[BLjava/lang/String;ILjava/util/HashMap;)Landroid/media/MediaDrm$KeyRequest;",
+        jni_str!("getKeyRequest"),
+        jni_sig!("([B[BLjava/lang/String;ILjava/util/HashMap;)Landroid/media/MediaDrm$KeyRequest;"),
         &[
             JValue::Object(session),
             JValue::Object(&init_data_bytes),
@@ -2433,15 +2425,15 @@ fn prepare_key_request(
 }
 
 fn read_license_challenge(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     request: &JObject<'_>,
     system_id: [u8; 16],
 ) -> Result<LicensePreparation, Error> {
-    let data = byte_array_method(env, request, "getData", "key request")?;
+    let data = byte_array_method(env, request, jni_str!("getData"), "key request")?;
     let default_url = url_method(env, request, "key request")?;
     let request_type = env
-        .call_method(request, "getRequestType", "()I", &[])
-        .and_then(jni::objects::JValueGen::i)
+        .call_method(request, jni_str!("getRequestType"), jni_sig!("()I"), &[])
+        .and_then(jni::objects::JValueOwned::i)
         .map_err(|error| platform_jni_error(env, "read MediaDrm key request type", error))?;
     Ok(LicensePreparation::Ready(AndroidLicenseChallenge {
         system_id,
@@ -2453,18 +2445,17 @@ fn read_license_challenge(
 
 fn provide_key_response(
     vm: &JavaVM,
-    drm: &GlobalRef,
-    session: &GlobalRef,
+    drm: &GlobalObjectRef,
+    session: &GlobalObjectRef,
     response: &[u8],
 ) -> Result<Option<AndroidOfflineKeySet>, Error> {
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|error| Error::Platform(format!("attach MediaDrm key thread to JVM: {error}")))?;
-    provide_key_response_in_env(&mut env, drm.as_obj(), session.as_obj(), response)
+    with_attached_env(vm, |env| {
+        provide_key_response_in_env(env, drm.as_obj(), session.as_obj(), response)
+    })
 }
 
 fn provide_key_response_in_env(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     drm: &JObject<'_>,
     scope: &JObject<'_>,
     response: &[u8],
@@ -2480,17 +2471,20 @@ fn provide_key_response_in_env(
     let key_set = env
         .call_method(
             drm,
-            "provideKeyResponse",
-            "([B[B)[B",
+            jni_str!("provideKeyResponse"),
+            jni_sig!("([B[B)[B"),
             &[JValue::Object(scope), JValue::Object(&response)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| platform_jni_error(env, "provide MediaDrm key response", error))?;
     if key_set.is_null() {
         return Ok(None);
     }
     let key_set = env
-        .convert_byte_array(JByteArray::from(key_set))
+        .cast_local::<JByteArray>(key_set)
+        .map_err(|error| platform_jni_error(env, "cast MediaDrm key-set identity", error))?;
+    let key_set = env
+        .convert_byte_array(&key_set)
         .map_err(|error| platform_jni_error(env, "copy MediaDrm key-set identity", error))?;
     if key_set.is_empty() {
         Ok(None)
@@ -2500,7 +2494,7 @@ fn provide_key_response_in_env(
 }
 
 fn restore_keys(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     drm: &JObject<'_>,
     session: &JObject<'_>,
     key_set: &AndroidOfflineKeySet,
@@ -2510,8 +2504,8 @@ fn restore_keys(
         .map_err(|error| platform_jni_error(env, "create offline key-set identity", error))?;
     match env.call_method(
         drm,
-        "restoreKeys",
-        "([B[B)V",
+        jni_str!("restoreKeys"),
+        jni_sig!("([B[B)V"),
         &[JValue::Object(session), JValue::Object(&key_set)],
     ) {
         Ok(_) => Ok(false),
@@ -2520,18 +2514,18 @@ fn restore_keys(
 }
 
 fn query_key_status(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     drm: &JObject<'_>,
     session: &JObject<'_>,
 ) -> Result<AndroidKeyStatus, Error> {
     let status = env
         .call_method(
             drm,
-            "queryKeyStatus",
-            "([B)Ljava/util/HashMap;",
+            jni_str!("queryKeyStatus"),
+            jni_sig!("([B)Ljava/util/HashMap;"),
             &[JValue::Object(session)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| platform_jni_error(env, "query MediaDrm key status", error))?;
     Ok(AndroidKeyStatus {
         license: key_duration_value(env, &status, "LicenseDurationRemaining")?,
@@ -2540,7 +2534,7 @@ fn query_key_status(
 }
 
 fn key_duration_value(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     status: &JObject<'_>,
     key: &str,
 ) -> Result<AndroidKeyDuration, Error> {
@@ -2550,19 +2544,19 @@ fn key_duration_value(
     let value = env
         .call_method(
             status,
-            "get",
-            "(Ljava/lang/Object;)Ljava/lang/Object;",
+            jni_str!("get"),
+            jni_sig!("(Ljava/lang/Object;)Ljava/lang/Object;"),
             &[JValue::Object(&key)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| platform_jni_error(env, "read MediaDrm key duration", error))?;
     if value.is_null() {
         return Ok(AndroidKeyDuration::Unavailable);
     }
-    let value: String = env
-        .get_string(&JString::from(value))
-        .map_err(|error| platform_jni_error(env, "copy MediaDrm key duration", error))?
-        .into();
+    let value = env
+        .as_cast::<JString>(&value)
+        .and_then(|value| value.try_to_string(env))
+        .map_err(|error| platform_jni_error(env, "copy MediaDrm key duration", error))?;
     if value.eq_ignore_ascii_case("unlimited") {
         return Ok(AndroidKeyDuration::Unlimited);
     }
@@ -2574,14 +2568,18 @@ fn key_duration_value(
     Ok(AndroidKeyDuration::Remaining(Duration::from_secs(seconds)))
 }
 
-fn android_api_level(env: &mut JNIEnv<'_>) -> Result<i32, Error> {
-    env.get_static_field("android/os/Build$VERSION", "SDK_INT", "I")
-        .and_then(jni::objects::JValueGen::i)
-        .map_err(|error| platform_jni_error(env, "read Android API level", error))
+fn android_api_level(env: &mut Env<'_>) -> Result<i32, Error> {
+    env.get_static_field(
+        jni_str!("android/os/Build$VERSION"),
+        jni_str!("SDK_INT"),
+        jni_sig!("I"),
+    )
+    .and_then(jni::objects::JValueOwned::i)
+    .map_err(|error| platform_jni_error(env, "read Android API level", error))
 }
 
 fn create_java_uuid<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     system_id: [u8; 16],
 ) -> Result<JObject<'local>, Error> {
     let most = i64::from_be_bytes(
@@ -2595,21 +2593,25 @@ fn create_java_uuid<'local>(
             .expect("DRM system ID suffix must be eight bytes"),
     );
     env.new_object(
-        "java/util/UUID",
-        "(JJ)V",
+        jni_str!("java/util/UUID"),
+        jni_sig!("(JJ)V"),
         &[JValue::Long(most), JValue::Long(least)],
     )
     .map_err(|error| platform_jni_error(env, "create DRM UUID", error))
 }
 
-fn close_session(env: &mut JNIEnv<'_>, drm: &GlobalRef, session_id: &mut Option<GlobalRef>) {
+fn close_session(
+    env: &mut Env<'_>,
+    drm: &GlobalObjectRef,
+    session_id: &mut Option<GlobalObjectRef>,
+) {
     let Some(session) = session_id.take() else {
         return;
     };
     if let Err(error) = env.call_method(
         drm.as_obj(),
-        "closeSession",
-        "([B)V",
+        jni_str!("closeSession"),
+        jni_sig!("([B)V"),
         &[JValue::Object(session.as_obj())],
     ) {
         tracing::error!(%error, "failed to close unprovisioned MediaDrm session");
@@ -2618,32 +2620,36 @@ fn close_session(env: &mut JNIEnv<'_>, drm: &GlobalRef, session_id: &mut Option<
 }
 
 fn byte_array_method(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     object: &JObject<'_>,
-    method: &str,
+    method: &JNIStr,
     label: &str,
 ) -> Result<Vec<u8>, Error> {
     let array = env
-        .call_method(object, method, "()[B", &[])
-        .and_then(jni::objects::JValueGen::l)
+        .call_method(object, method, jni_sig!("()[B"), &[])
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| platform_jni_error(env, &format!("read {label} data"), error))?;
-    env.convert_byte_array(JByteArray::from(array))
+    let array = env
+        .cast_local::<JByteArray>(array)
+        .map_err(|error| platform_jni_error(env, &format!("cast {label} data"), error))?;
+    env.convert_byte_array(&array)
         .map_err(|error| platform_jni_error(env, &format!("copy {label} data"), error))
 }
 
-fn url_method(
-    env: &mut JNIEnv<'_>,
-    object: &JObject<'_>,
-    label: &str,
-) -> Result<Option<Url>, Error> {
+fn url_method(env: &mut Env<'_>, object: &JObject<'_>, label: &str) -> Result<Option<Url>, Error> {
     let url = env
-        .call_method(object, "getDefaultUrl", "()Ljava/lang/String;", &[])
-        .and_then(jni::objects::JValueGen::l)
+        .call_method(
+            object,
+            jni_str!("getDefaultUrl"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| platform_jni_error(env, &format!("read {label} URL"), error))?;
-    let url: String = env
-        .get_string(&JString::from(url))
-        .map_err(|error| platform_jni_error(env, &format!("copy {label} URL"), error))?
-        .into();
+    let url = env
+        .as_cast::<JString>(&url)
+        .and_then(|url| url.try_to_string(env))
+        .map_err(|error| platform_jni_error(env, &format!("copy {label} URL"), error))?;
     if url.is_empty() {
         Ok(None)
     } else {
@@ -2674,34 +2680,34 @@ struct SecureAudioDecoderConfig<'a> {
 }
 
 fn create_media_crypto<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     config: &SecureDecoderConfig<'_>,
 ) -> Result<JObject<'local>, Error> {
     create_media_crypto_for(env, config.uuid, config.session)
 }
 
 fn create_audio_media_crypto<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     config: &SecureAudioDecoderConfig<'_>,
 ) -> Result<JObject<'local>, Error> {
     create_media_crypto_for(env, config.uuid, config.session)
 }
 
 fn create_media_crypto_for<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     uuid: &JObject<'_>,
     session: &JObject<'_>,
 ) -> Result<JObject<'local>, Error> {
     env.new_object(
-        "android/media/MediaCrypto",
-        "(Ljava/util/UUID;[B)V",
+        jni_str!("android/media/MediaCrypto"),
+        jni_sig!("(Ljava/util/UUID;[B)V"),
         &[JValue::Object(uuid), JValue::Object(session)],
     )
     .map_err(|error| platform_jni_error(env, "create MediaCrypto", error))
 }
 
 fn create_secure_media_codec<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     config: &SecureDecoderConfig<'_>,
     media_crypto: &JObject<'local>,
 ) -> Result<(JObject<'local>, bool), Error> {
@@ -2722,7 +2728,7 @@ fn create_secure_media_codec<'local>(
 }
 
 fn create_secure_audio_media_codec<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     config: &SecureAudioDecoderConfig<'_>,
     media_crypto: &JObject<'local>,
 ) -> Result<(JObject<'local>, bool), Error> {
@@ -2743,38 +2749,38 @@ fn create_secure_audio_media_codec<'local>(
 }
 
 fn requires_secure_decoder(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     media_crypto: &JObject<'_>,
     decoder_mime: &JString<'_>,
 ) -> Result<bool, Error> {
     env.call_method(
         media_crypto,
-        "requiresSecureDecoderComponent",
-        "(Ljava/lang/String;)Z",
+        jni_str!("requiresSecureDecoderComponent"),
+        jni_sig!("(Ljava/lang/String;)Z"),
         &[JValue::Object(decoder_mime)],
     )
-    .and_then(jni::objects::JValueGen::z)
+    .and_then(jni::objects::JValueOwned::z)
     .map_err(|error| platform_jni_error(env, "query secure decoder requirement", error))
 }
 
 fn create_secure_media_format<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     config: &SecureDecoderConfig<'_>,
     decoder_mime: &JString<'local>,
     secure_decoder: bool,
 ) -> Result<JObject<'local>, Error> {
     let format = env
         .call_static_method(
-            "android/media/MediaFormat",
-            "createVideoFormat",
-            "(Ljava/lang/String;II)Landroid/media/MediaFormat;",
+            jni_str!("android/media/MediaFormat"),
+            jni_str!("createVideoFormat"),
+            jni_sig!("(Ljava/lang/String;II)Landroid/media/MediaFormat;"),
             &[
                 JValue::Object(decoder_mime),
                 JValue::Int(config.width),
                 JValue::Int(config.height),
             ],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| platform_jni_error(env, "create secure decoder format", error))?;
     set_codec_specific_data(env, &format, "csd-0", config.primary_csd)?;
     set_codec_specific_data(env, &format, "csd-1", config.secondary_csd)?;
@@ -2783,23 +2789,23 @@ fn create_secure_media_format<'local>(
 }
 
 fn create_secure_audio_media_format<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     config: &SecureAudioDecoderConfig<'_>,
     decoder_mime: &JString<'local>,
     secure_decoder: bool,
 ) -> Result<JObject<'local>, Error> {
     let format = env
         .call_static_method(
-            "android/media/MediaFormat",
-            "createAudioFormat",
-            "(Ljava/lang/String;II)Landroid/media/MediaFormat;",
+            jni_str!("android/media/MediaFormat"),
+            jni_str!("createAudioFormat"),
+            jni_sig!("(Ljava/lang/String;II)Landroid/media/MediaFormat;"),
             &[
                 JValue::Object(decoder_mime),
                 JValue::Int(config.sample_rate),
                 JValue::Int(config.channels),
             ],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| platform_jni_error(env, "create protected audio format", error))?;
     set_media_format_integer(env, &format, "is-adts", 0)?;
     set_media_format_integer(env, &format, "pcm-encoding", MEDIA_CODEC_PCM_FLOAT)?;
@@ -2809,7 +2815,7 @@ fn create_secure_audio_media_format<'local>(
 }
 
 fn enable_secure_playback_if_required(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     format: &JObject<'_>,
     secure_decoder: bool,
 ) -> Result<(), Error> {
@@ -2821,16 +2827,16 @@ fn enable_secure_playback_if_required(
         .map_err(|error| platform_jni_error(env, "create secure feature", error))?;
     env.call_method(
         format,
-        "setFeatureEnabled",
-        "(Ljava/lang/String;Z)V",
-        &[JValue::Object(&secure_feature), JValue::Bool(1)],
+        jni_str!("setFeatureEnabled"),
+        jni_sig!("(Ljava/lang/String;Z)V"),
+        &[JValue::Object(&secure_feature), JValue::Bool(true)],
     )
     .map_err(|error| platform_jni_error(env, "enable secure decoder feature", error))?;
     Ok(())
 }
 
 fn set_media_format_integer(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     format: &JObject<'_>,
     key: &str,
     value: i32,
@@ -2840,8 +2846,8 @@ fn set_media_format_integer(
         .map_err(|error| platform_jni_error(env, "create MediaFormat integer key", error))?;
     env.call_method(
         format,
-        "setInteger",
-        "(Ljava/lang/String;I)V",
+        jni_str!("setInteger"),
+        jni_sig!("(Ljava/lang/String;I)V"),
         &[JValue::Object(&key), JValue::Int(value)],
     )
     .map_err(|error| platform_jni_error(env, "set MediaFormat integer", error))?;
@@ -2849,7 +2855,7 @@ fn set_media_format_integer(
 }
 
 fn create_media_codec<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     mime: &str,
     surface: Option<&JObject<'_>>,
     format: &JObject<'local>,
@@ -2858,19 +2864,19 @@ fn create_media_codec<'local>(
 ) -> Result<JObject<'local>, Error> {
     let codec_list = env
         .new_object(
-            "android/media/MediaCodecList",
-            "(I)V",
+            jni_str!("android/media/MediaCodecList"),
+            jni_sig!("(I)V"),
             &[JValue::Int(MEDIA_CODEC_LIST_ALL_CODECS)],
         )
         .map_err(|error| platform_jni_error(env, "create MediaCodecList", error))?;
     let decoder_name = env
         .call_method(
             &codec_list,
-            "findDecoderForFormat",
-            "(Landroid/media/MediaFormat;)Ljava/lang/String;",
+            jni_str!("findDecoderForFormat"),
+            jni_sig!("(Landroid/media/MediaFormat;)Ljava/lang/String;"),
             &[JValue::Object(format)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| platform_jni_error(env, "select secure decoder", error))?;
     if decoder_name.is_null() {
         return Err(Error::Unsupported(format!(
@@ -2881,22 +2887,28 @@ fn create_media_codec<'local>(
     }
     let codec = env
         .call_static_method(
-            "android/media/MediaCodec",
-            "createByCodecName",
-            "(Ljava/lang/String;)Landroid/media/MediaCodec;",
+            jni_str!("android/media/MediaCodec"),
+            jni_str!("createByCodecName"),
+            jni_sig!("(Ljava/lang/String;)Landroid/media/MediaCodec;"),
             &[JValue::Object(&decoder_name)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| platform_jni_error(env, "create selected secure decoder", error))?;
     if let Err(error) = configure_and_start_codec(env, surface, format, media_crypto, &codec) {
-        release_java_object(env, &codec, "release", "unconfigured MediaCodec");
+        release_java_object(
+            env,
+            &codec,
+            jni_str!("release"),
+            "release",
+            "unconfigured MediaCodec",
+        );
         return Err(error);
     }
     Ok(codec)
 }
 
 fn configure_and_start_codec(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     surface: Option<&JObject<'_>>,
     format: &JObject<'_>,
     media_crypto: &JObject<'_>,
@@ -2906,8 +2918,10 @@ fn configure_and_start_codec(
     let surface = surface.unwrap_or(&null_surface);
     env.call_method(
         codec,
-        "configure",
-        "(Landroid/media/MediaFormat;Landroid/view/Surface;Landroid/media/MediaCrypto;I)V",
+        jni_str!("configure"),
+        jni_sig!(
+            "(Landroid/media/MediaFormat;Landroid/view/Surface;Landroid/media/MediaCrypto;I)V"
+        ),
         &[
             JValue::Object(format),
             JValue::Object(surface),
@@ -2916,29 +2930,41 @@ fn configure_and_start_codec(
         ],
     )
     .map_err(|error| platform_jni_error(env, "configure secure decoder", error))?;
-    env.call_method(codec, "start", "()V", &[])
+    env.call_method(codec, jni_str!("start"), jni_sig!("()V"), &[])
         .map_err(|error| platform_jni_error(env, "start secure decoder", error))?;
     Ok(())
 }
 
 fn retain_decoder_objects(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     codec: &JObject<'_>,
     media_crypto: &JObject<'_>,
-) -> Result<(GlobalRef, GlobalRef), Error> {
+) -> Result<(GlobalObjectRef, GlobalObjectRef), Error> {
     let retained_crypto = match env.new_global_ref(media_crypto) {
         Ok(reference) => reference,
         Err(error) => {
-            release_java_object(env, codec, "release", "MediaCodec");
-            release_java_object(env, media_crypto, "release", "MediaCrypto");
+            release_java_object(env, codec, jni_str!("release"), "release", "MediaCodec");
+            release_java_object(
+                env,
+                media_crypto,
+                jni_str!("release"),
+                "release",
+                "MediaCrypto",
+            );
             return Err(platform_jni_error(env, "retain MediaCrypto", error));
         }
     };
     let retained_codec = match env.new_global_ref(codec) {
         Ok(reference) => reference,
         Err(error) => {
-            release_java_object(env, codec, "release", "MediaCodec");
-            release_java_object(env, media_crypto, "release", "MediaCrypto");
+            release_java_object(env, codec, jni_str!("release"), "release", "MediaCodec");
+            release_java_object(
+                env,
+                media_crypto,
+                jni_str!("release"),
+                "release",
+                "MediaCrypto",
+            );
             return Err(platform_jni_error(env, "retain secure MediaCodec", error));
         }
     };
@@ -2946,7 +2972,7 @@ fn retain_decoder_objects(
 }
 
 fn set_codec_specific_data(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     format: &JObject<'_>,
     key: &str,
     data: &[u8],
@@ -2962,17 +2988,17 @@ fn set_codec_specific_data(
         .map_err(|error| platform_jni_error(env, "create codec data", error))?;
     let buffer = env
         .call_static_method(
-            "java/nio/ByteBuffer",
-            "wrap",
-            "([B)Ljava/nio/ByteBuffer;",
+            jni_str!("java/nio/ByteBuffer"),
+            jni_str!("wrap"),
+            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
             &[JValue::Object(&data)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| platform_jni_error(env, "wrap codec data", error))?;
     env.call_method(
         format,
-        "setByteBuffer",
-        "(Ljava/lang/String;Ljava/nio/ByteBuffer;)V",
+        jni_str!("setByteBuffer"),
+        jni_sig!("(Ljava/lang/String;Ljava/nio/ByteBuffer;)V"),
         &[JValue::Object(&key), JValue::Object(&buffer)],
     )
     .map_err(|error| platform_jni_error(env, "install codec data", error))?;
@@ -2980,7 +3006,7 @@ fn set_codec_specific_data(
 }
 
 fn write_codec_input(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     codec: &JObject<'_>,
     index: i32,
     data: &[u8],
@@ -2988,22 +3014,27 @@ fn write_codec_input(
     let buffer = env
         .call_method(
             codec,
-            "getInputBuffer",
-            "(I)Ljava/nio/ByteBuffer;",
+            jni_str!("getInputBuffer"),
+            jni_sig!("(I)Ljava/nio/ByteBuffer;"),
             &[JValue::Int(index)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| platform_jni_error(env, "get secure input buffer", error))?;
     if buffer.is_null() {
         return Err(Error::Platform(format!(
             "MediaCodec secure input buffer {index} is null"
         )));
     }
-    env.call_method(&buffer, "clear", "()Ljava/nio/Buffer;", &[])
-        .map_err(|error| platform_jni_error(env, "clear secure input buffer", error))?;
+    env.call_method(
+        &buffer,
+        jni_str!("clear"),
+        jni_sig!("()Ljava/nio/Buffer;"),
+        &[],
+    )
+    .map_err(|error| platform_jni_error(env, "clear secure input buffer", error))?;
     let capacity = env
-        .call_method(&buffer, "remaining", "()I", &[])
-        .and_then(jni::objects::JValueGen::i)
+        .call_method(&buffer, jni_str!("remaining"), jni_sig!("()I"), &[])
+        .and_then(jni::objects::JValueOwned::i)
         .map_err(|error| platform_jni_error(env, "read secure input capacity", error))?;
     let data_len = i32::try_from(data.len()).map_err(|_| {
         Error::Codec(String::from(
@@ -3020,8 +3051,8 @@ fn write_codec_input(
         .map_err(|error| platform_jni_error(env, "create secure input bytes", error))?;
     env.call_method(
         &buffer,
-        "put",
-        "([B)Ljava/nio/ByteBuffer;",
+        jni_str!("put"),
+        jni_sig!("([B)Ljava/nio/ByteBuffer;"),
         &[JValue::Object(&data)],
     )
     .map_err(|error| platform_jni_error(env, "write secure input buffer", error))?;
@@ -3066,11 +3097,11 @@ fn queue_secure_sample(
         let input_index = env
             .call_method(
                 codec,
-                "dequeueInputBuffer",
-                "(J)I",
+                jni_str!("dequeueInputBuffer"),
+                jni_sig!("(J)I"),
                 &[JValue::Long(INPUT_WAIT_FOREVER_MICROS)],
             )
-            .and_then(jni::objects::JValueGen::i)
+            .and_then(jni::objects::JValueOwned::i)
             .map_err(|error| platform_jni_error(env, "dequeue secure input", error))?;
         if input_index < 0 {
             return Err(Error::Platform(format!(
@@ -3088,8 +3119,8 @@ fn queue_secure_sample(
         )?;
         env.call_method(
             codec,
-            "queueSecureInputBuffer",
-            "(IILandroid/media/MediaCodec$CryptoInfo;JI)V",
+            jni_str!("queueSecureInputBuffer"),
+            jni_sig!("(IILandroid/media/MediaCodec$CryptoInfo;JI)V"),
             &[
                 JValue::Int(input_index),
                 JValue::Int(0),
@@ -3108,11 +3139,11 @@ fn queue_end_of_stream(resources: &AndroidCodecResources) -> Result<(), Error> {
         let input_index = env
             .call_method(
                 codec,
-                "dequeueInputBuffer",
-                "(J)I",
+                jni_str!("dequeueInputBuffer"),
+                jni_sig!("(J)I"),
                 &[JValue::Long(INPUT_WAIT_FOREVER_MICROS)],
             )
-            .and_then(jni::objects::JValueGen::i)
+            .and_then(jni::objects::JValueOwned::i)
             .map_err(|error| platform_jni_error(env, "dequeue EOS input", error))?;
         if input_index < 0 {
             return Err(Error::Platform(format!(
@@ -3121,8 +3152,8 @@ fn queue_end_of_stream(resources: &AndroidCodecResources) -> Result<(), Error> {
         }
         env.call_method(
             codec,
-            "queueInputBuffer",
-            "(IIIJI)V",
+            jni_str!("queueInputBuffer"),
+            jni_sig!("(IIIJI)V"),
             &[
                 JValue::Int(input_index),
                 JValue::Int(0),
@@ -3138,7 +3169,7 @@ fn queue_end_of_stream(resources: &AndroidCodecResources) -> Result<(), Error> {
 
 fn flush_codec(resources: &AndroidCodecResources) -> Result<(), Error> {
     resources.with_env(|env, codec| {
-        env.call_method(codec, "flush", "()V", &[])
+        env.call_method(codec, jni_str!("flush"), jni_sig!("()V"), &[])
             .map_err(|error| platform_jni_error(env, "flush protected decoder", error))?;
         Ok(())
     })
@@ -3150,17 +3181,21 @@ fn dequeue_audio_output(
 ) -> Result<AndroidAudioOutput, Error> {
     resources.with_env(|env, codec| {
         let buffer_info = env
-            .new_object("android/media/MediaCodec$BufferInfo", "()V", &[])
+            .new_object(
+                jni_str!("android/media/MediaCodec$BufferInfo"),
+                jni_sig!("()V"),
+                &[],
+            )
             .map_err(|error| platform_jni_error(env, "create audio BufferInfo", error))?;
         loop {
             let index = env
                 .call_method(
                     codec,
-                    "dequeueOutputBuffer",
-                    "(Landroid/media/MediaCodec$BufferInfo;J)I",
+                    jni_str!("dequeueOutputBuffer"),
+                    jni_sig!("(Landroid/media/MediaCodec$BufferInfo;J)I"),
                     &[JValue::Object(&buffer_info), JValue::Long(timeout_micros)],
                 )
-                .and_then(jni::objects::JValueGen::i)
+                .and_then(jni::objects::JValueOwned::i)
                 .map_err(|error| {
                     platform_jni_error(env, "dequeue protected audio output", error)
                 })?;
@@ -3184,17 +3219,17 @@ fn dequeue_audio_output(
 }
 
 fn read_audio_output_format(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     codec: &JObject<'_>,
 ) -> Result<AndroidAudioOutput, Error> {
     let format = env
         .call_method(
             codec,
-            "getOutputFormat",
-            "()Landroid/media/MediaFormat;",
+            jni_str!("getOutputFormat"),
+            jni_sig!("()Landroid/media/MediaFormat;"),
             &[],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| platform_jni_error(env, "read protected audio format", error))?;
     let channels = media_format_integer(env, &format, "channel-count")?;
     let sample_rate = media_format_integer(env, &format, "sample-rate")?;
@@ -3223,34 +3258,34 @@ fn read_audio_output_format(
 }
 
 fn read_audio_output_buffer(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     codec: &JObject<'_>,
     info: &JObject<'_>,
     index: i32,
 ) -> Result<AndroidAudioOutput, Error> {
     let offset = env
-        .get_field(info, "offset", "I")
-        .and_then(jni::objects::JValueGen::i)
+        .get_field(info, jni_str!("offset"), jni_sig!("I"))
+        .and_then(jni::objects::JValueOwned::i)
         .map_err(|error| platform_jni_error(env, "read protected audio output offset", error))?;
     let size = env
-        .get_field(info, "size", "I")
-        .and_then(jni::objects::JValueGen::i)
+        .get_field(info, jni_str!("size"), jni_sig!("I"))
+        .and_then(jni::objects::JValueOwned::i)
         .map_err(|error| platform_jni_error(env, "read protected audio output size", error))?;
     let presentation_time_micros = env
-        .get_field(info, "presentationTimeUs", "J")
-        .and_then(jni::objects::JValueGen::j)
+        .get_field(info, jni_str!("presentationTimeUs"), jni_sig!("J"))
+        .and_then(jni::objects::JValueOwned::j)
         .map_err(|error| platform_jni_error(env, "read protected audio output PTS", error))?;
     let flags = env
-        .get_field(info, "flags", "I")
-        .and_then(jni::objects::JValueGen::i)
+        .get_field(info, jni_str!("flags"), jni_sig!("I"))
+        .and_then(jni::objects::JValueOwned::i)
         .map_err(|error| platform_jni_error(env, "read protected audio output flags", error))?;
     let bytes = read_audio_output_bytes(env, codec, index, offset, size);
     let released = env
         .call_method(
             codec,
-            "releaseOutputBuffer",
-            "(IZ)V",
-            &[JValue::Int(index), JValue::Bool(0)],
+            jni_str!("releaseOutputBuffer"),
+            jni_sig!("(IZ)V"),
+            &[JValue::Int(index), JValue::Bool(false)],
         )
         .map_err(|error| platform_jni_error(env, "release protected audio output", error));
     released?;
@@ -3267,7 +3302,7 @@ fn read_audio_output_buffer(
 }
 
 fn read_audio_output_bytes(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     codec: &JObject<'_>,
     index: i32,
     offset: i32,
@@ -3284,14 +3319,16 @@ fn read_audio_output_bytes(
     let end = offset
         .checked_add(size)
         .ok_or_else(|| Error::Codec(String::from("protected audio output range overflow")))?;
+    let byte_count =
+        usize::try_from(size).expect("validated protected audio output size must fit usize");
     let buffer = env
         .call_method(
             codec,
-            "getOutputBuffer",
-            "(I)Ljava/nio/ByteBuffer;",
+            jni_str!("getOutputBuffer"),
+            jni_sig!("(I)Ljava/nio/ByteBuffer;"),
             &[JValue::Int(index)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| platform_jni_error(env, "get protected audio output buffer", error))?;
     if buffer.is_null() {
         return Err(Error::Platform(format!(
@@ -3300,25 +3337,25 @@ fn read_audio_output_bytes(
     }
     env.call_method(
         &buffer,
-        "position",
-        "(I)Ljava/nio/Buffer;",
+        jni_str!("position"),
+        jni_sig!("(I)Ljava/nio/Buffer;"),
         &[JValue::Int(offset)],
     )
     .map_err(|error| platform_jni_error(env, "position protected audio output", error))?;
     env.call_method(
         &buffer,
-        "limit",
-        "(I)Ljava/nio/Buffer;",
+        jni_str!("limit"),
+        jni_sig!("(I)Ljava/nio/Buffer;"),
         &[JValue::Int(end)],
     )
     .map_err(|error| platform_jni_error(env, "limit protected audio output", error))?;
     let bytes = env
-        .new_byte_array(size)
+        .new_byte_array(byte_count)
         .map_err(|error| platform_jni_error(env, "allocate protected audio output", error))?;
     env.call_method(
         &buffer,
-        "get",
-        "([B)Ljava/nio/ByteBuffer;",
+        jni_str!("get"),
+        jni_sig!("([B)Ljava/nio/ByteBuffer;"),
         &[JValue::Object(&bytes)],
     )
     .map_err(|error| platform_jni_error(env, "copy protected audio output", error))?;
@@ -3326,11 +3363,7 @@ fn read_audio_output_bytes(
         .map_err(|error| platform_jni_error(env, "retain protected audio output", error))
 }
 
-fn media_format_integer(
-    env: &mut JNIEnv<'_>,
-    format: &JObject<'_>,
-    key: &str,
-) -> Result<i32, Error> {
+fn media_format_integer(env: &mut Env<'_>, format: &JObject<'_>, key: &str) -> Result<i32, Error> {
     media_format_integer_optional(env, format, key)?.ok_or_else(|| {
         Error::Codec(format!(
             "protected audio output format omitted required key {key}"
@@ -3339,7 +3372,7 @@ fn media_format_integer(
 }
 
 fn media_format_integer_optional(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     format: &JObject<'_>,
     key: &str,
 ) -> Result<Option<i32>, Error> {
@@ -3349,22 +3382,22 @@ fn media_format_integer_optional(
     let contains = env
         .call_method(
             format,
-            "containsKey",
-            "(Ljava/lang/String;)Z",
+            jni_str!("containsKey"),
+            jni_sig!("(Ljava/lang/String;)Z"),
             &[JValue::Object(&key)],
         )
-        .and_then(jni::objects::JValueGen::z)
+        .and_then(jni::objects::JValueOwned::z)
         .map_err(|error| platform_jni_error(env, "query MediaFormat key", error))?;
     if !contains {
         return Ok(None);
     }
     env.call_method(
         format,
-        "getInteger",
-        "(Ljava/lang/String;)I",
+        jni_str!("getInteger"),
+        jni_sig!("(Ljava/lang/String;)I"),
         &[JValue::Object(&key)],
     )
-    .and_then(jni::objects::JValueGen::i)
+    .and_then(jni::objects::JValueOwned::i)
     .map(Some)
     .map_err(|error| platform_jni_error(env, "read MediaFormat integer", error))
 }
@@ -3406,7 +3439,7 @@ fn decode_android_pcm(bytes: &[u8], encoding: i32) -> Result<Vec<f32>, Error> {
 }
 
 fn create_crypto_info<'a>(
-    env: &mut JNIEnv<'a>,
+    env: &mut Env<'a>,
     clear_bytes: &[i32],
     encrypted_bytes: &[i32],
     key_id: &[u8; 16],
@@ -3422,7 +3455,11 @@ fn create_crypto_info<'a>(
         .byte_array_from_slice(initialization_vector)
         .map_err(|error| platform_jni_error(env, "create CENC IV", error))?;
     let crypto_info = env
-        .new_object("android/media/MediaCodec$CryptoInfo", "()V", &[])
+        .new_object(
+            jni_str!("android/media/MediaCodec$CryptoInfo"),
+            jni_sig!("()V"),
+            &[],
+        )
         .map_err(|error| platform_jni_error(env, "create MediaCodec CryptoInfo", error))?;
     let mode = match protection.scheme() {
         CommonEncryptionScheme::Cenc => MEDIA_CODEC_CRYPTO_MODE_AES_CTR,
@@ -3432,8 +3469,8 @@ fn create_crypto_info<'a>(
         .expect("CENC subsample arrays originate from a Java-sized allocation");
     env.call_method(
         &crypto_info,
-        "set",
-        "(I[I[I[B[BI)V",
+        jni_str!("set"),
+        jni_sig!("(I[I[I[B[BI)V"),
         &[
             JValue::Int(subsample_count),
             JValue::Object(&clear_array),
@@ -3449,15 +3486,15 @@ fn create_crypto_info<'a>(
         let clear_blocks = i32::from(protection.skip_byte_block());
         let pattern = env
             .new_object(
-                "android/media/MediaCodec$CryptoInfo$Pattern",
-                "(II)V",
+                jni_str!("android/media/MediaCodec$CryptoInfo$Pattern"),
+                jni_sig!("(II)V"),
                 &[JValue::Int(encrypted_blocks), JValue::Int(clear_blocks)],
             )
             .map_err(|error| platform_jni_error(env, "create cbcs pattern", error))?;
         env.call_method(
             &crypto_info,
-            "setPattern",
-            "(Landroid/media/MediaCodec$CryptoInfo$Pattern;)V",
+            jni_str!("setPattern"),
+            jni_sig!("(Landroid/media/MediaCodec$CryptoInfo$Pattern;)V"),
             &[JValue::Object(&pattern)],
         )
         .map_err(|error| platform_jni_error(env, "install cbcs pattern", error))?;
@@ -3465,17 +3502,12 @@ fn create_crypto_info<'a>(
     Ok(crypto_info)
 }
 
-fn int_array<'a>(
-    env: &mut JNIEnv<'a>,
-    values: &[i32],
-    label: &str,
-) -> Result<JIntArray<'a>, Error> {
-    let length = i32::try_from(values.len())
-        .map_err(|_| Error::Codec(format!("{label} exceed Android jint array length")))?;
+fn int_array<'a>(env: &mut Env<'a>, values: &[i32], label: &str) -> Result<JIntArray<'a>, Error> {
     let array = env
-        .new_int_array(length)
+        .new_int_array(values.len())
         .map_err(|error| platform_jni_error(env, &format!("create {label}"), error))?;
-    env.set_int_array_region(&array, 0, values)
+    array
+        .set_region(env, 0, values)
         .map_err(|error| platform_jni_error(env, &format!("write {label}"), error))?;
     Ok(array)
 }
@@ -3546,7 +3578,7 @@ fn normalized_initialization_vector(
 }
 
 fn take_not_provisioned(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     error: JniError,
     operation: &str,
 ) -> Result<bool, Error> {
@@ -3554,16 +3586,17 @@ fn take_not_provisioned(
         JniError::JavaException => {}
         other => return Err(Error::Platform(format!("{operation}: {other}"))),
     }
-    let throwable = env.exception_occurred().map_err(|nested| {
-        Error::Platform(format!("{operation}: read Java exception failed: {nested}"))
-    })?;
-    env.exception_clear().map_err(|nested| {
+    let throwable = env.exception_occurred().ok_or_else(|| {
         Error::Platform(format!(
-            "{operation}: clear Java exception failed: {nested}"
+            "{operation}: JNI reported JavaException without a pending throwable"
         ))
     })?;
+    env.exception_clear();
     if env
-        .is_instance_of(&throwable, "android/media/NotProvisionedException")
+        .is_instance_of(
+            &throwable,
+            jni_str!("android/media/NotProvisionedException"),
+        )
         .map_err(|nested| {
             Error::Platform(format!(
                 "{operation}: inspect Java exception failed: {nested}"
@@ -3578,49 +3611,60 @@ fn take_not_provisioned(
     )))
 }
 
-fn platform_jni_error(env: &mut JNIEnv<'_>, operation: &str, error: JniError) -> Error {
+fn platform_jni_error(env: &mut Env<'_>, operation: &str, error: JniError) -> Error {
     match error {
         JniError::JavaException => {}
         other => return Error::Platform(format!("{operation}: {other}")),
     }
-    let throwable = match env.exception_occurred() {
-        Ok(throwable) => throwable,
-        Err(nested) => {
-            return Error::Platform(format!(
-                "{operation}: Java exception; reading it failed: {nested}"
-            ));
-        }
-    };
-    if let Err(nested) = env.exception_clear() {
+    let Some(throwable) = env.exception_occurred() else {
         return Error::Platform(format!(
-            "{operation}: Java exception; clearing it failed: {nested}"
+            "{operation}: JNI reported JavaException without a pending throwable"
         ));
-    }
+    };
+    env.exception_clear();
     Error::Platform(format!("{operation}: {}", throwable_text(env, &throwable)))
 }
 
-fn throwable_text(env: &mut JNIEnv<'_>, throwable: &JThrowable<'_>) -> String {
+fn throwable_text(env: &mut Env<'_>, throwable: &JThrowable<'_>) -> String {
     let text = env
-        .call_method(throwable, "toString", "()Ljava/lang/String;", &[])
-        .and_then(jni::objects::JValueGen::l);
+        .call_method(
+            throwable,
+            jni_str!("toString"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )
+        .and_then(jni::objects::JValueOwned::l);
     let Ok(text) = text else {
         return String::from("Java exception with unavailable description");
     };
-    env.get_string(&JString::from(text)).map_or_else(
-        |_| String::from("Java exception with invalid description"),
-        Into::into,
-    )
+    env.as_cast::<JString>(&text)
+        .and_then(|text| text.try_to_string(env))
+        .map_or_else(
+            |_| String::from("Java exception with invalid description"),
+            |text| text,
+        )
 }
 
-fn clear_pending_exception(env: &JNIEnv<'_>) {
-    if env.exception_check().unwrap_or(false) {
-        let _ = env.exception_clear();
+fn clear_pending_exception(env: &Env<'_>) {
+    if env.exception_check() {
+        env.exception_clear();
     }
 }
 
-fn release_java_object(env: &mut JNIEnv<'_>, object: &JObject<'_>, method: &str, label: &str) {
-    if let Err(error) = env.call_method(object, method, "()V", &[]) {
-        tracing::error!(%error, %label, %method, "failed to release Android protected playback object");
+fn release_java_object(
+    env: &mut Env<'_>,
+    object: &JObject<'_>,
+    method: &JNIStr,
+    method_label: &str,
+    object_label: &str,
+) {
+    if let Err(error) = env.call_method(object, method, jni_sig!("()V"), &[]) {
+        tracing::error!(
+            %error,
+            method = method_label,
+            object = object_label,
+            "failed to release Android protected playback object"
+        );
         clear_pending_exception(env);
     }
 }

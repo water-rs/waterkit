@@ -4,9 +4,9 @@
 //! For advanced JNI integration, `*_with_activity` APIs are also available.
 
 use crate::{Permission, PermissionError, PermissionStatus};
-use jni::objects::{GlobalRef, JClass, JObject, JValue};
+use jni::objects::{Global, JClass, JObject, JString, JValue};
 use jni::sys::jint;
-use jni::{JNIEnv, JavaVM};
+use jni::{Env, JavaVM, jni_sig, jni_str};
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode containing `PermissionHelper` class.
@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
 /// Cached class loader for the embedded DEX.
-static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
+static CLASS_LOADER: OnceLock<Global<JObject<'static>>> = OnceLock::new();
 
 /// Permission type constants (must match Kotlin).
 const PERMISSION_LOCATION: jint = 0;
@@ -65,7 +65,7 @@ const fn status_from_jint(status: jint) -> PermissionStatus {
 ///
 /// # Errors
 /// Returns a `PermissionError::Platform` if DEX loading or class loader creation fails.
-pub fn init_with_activity(env: &mut JNIEnv, activity: &JObject) -> Result<(), PermissionError> {
+pub fn init_with_activity(env: &mut Env<'_>, activity: &JObject) -> Result<(), PermissionError> {
     if CLASS_LOADER.get().is_some() {
         return Ok(());
     }
@@ -73,24 +73,32 @@ pub fn init_with_activity(env: &mut JNIEnv, activity: &JObject) -> Result<(), Pe
     // Write DEX to cache directory
     let context = activity;
     let cache_dir = env
-        .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
+        .call_method(
+            context,
+            jni_str!("getCacheDir"),
+            jni_sig!("()Ljava/io/File;"),
+            &[],
+        )
         .map_err(|e| PermissionError::Platform(format!("getCacheDir failed: {e}")))?
         .l()
         .map_err(|e| PermissionError::Platform(format!("getCacheDir result: {e}")))?;
 
     let cache_path = env
-        .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
+        .call_method(
+            &cache_dir,
+            jni_str!("getAbsolutePath"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )
         .map_err(|e| PermissionError::Platform(format!("getAbsolutePath failed: {e}")))?
         .l()
         .map_err(|e| PermissionError::Platform(format!("getAbsolutePath result: {e}")))?;
 
-    let dex_path = format!(
-        "{}/waterkit_permission.dex",
-        env.get_string((&cache_path).into())
-            .map_err(|e| PermissionError::Platform(format!("get_string failed: {e}")))?
-            .to_str()
-            .map_err(|e| PermissionError::Platform(format!("to_str failed: {e}")))?
-    );
+    let cache_path_string = env
+        .as_cast::<JString>(&cache_path)
+        .and_then(|path| path.try_to_string(env))
+        .map_err(|e| PermissionError::Platform(format!("decode cache path failed: {e}")))?;
+    let dex_path = format!("{cache_path_string}/waterkit_permission.dex");
 
     // Remove if exists to handle previous read-only setting
     match std::fs::remove_file(&dex_path) {
@@ -125,19 +133,26 @@ pub fn init_with_activity(env: &mut JNIEnv, activity: &JObject) -> Result<(), Pe
         .map_err(|e| PermissionError::Platform(format!("new_string failed: {e}")))?;
 
     let parent_loader = env
-        .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .call_method(
+            context,
+            jni_str!("getClassLoader"),
+            jni_sig!("()Ljava/lang/ClassLoader;"),
+            &[],
+        )
         .map_err(|e| PermissionError::Platform(format!("getClassLoader failed: {e}")))?
         .l()
         .map_err(|e| PermissionError::Platform(format!("getClassLoader result: {e}")))?;
 
     let dex_class_loader_class = env
-        .find_class("dalvik/system/DexClassLoader")
+        .find_class(jni_str!("dalvik/system/DexClassLoader"))
         .map_err(|e| PermissionError::Platform(format!("find DexClassLoader: {e}")))?;
 
     let class_loader = env
         .new_object(
             dex_class_loader_class,
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V",
+            jni_sig!(
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V"
+            ),
             &[
                 JValue::Object(&dex_path_jstring),
                 JValue::Object(&cache_path),
@@ -160,7 +175,7 @@ pub fn init_with_activity(env: &mut JNIEnv, activity: &JObject) -> Result<(), Pe
     Ok(())
 }
 
-fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, PermissionError> {
+fn get_helper_class<'local>(env: &mut Env<'local>) -> Result<JClass<'local>, PermissionError> {
     let class_loader = CLASS_LOADER
         .get()
         .ok_or_else(|| PermissionError::Platform("Class loader not initialized".into()))?;
@@ -172,39 +187,58 @@ fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, PermissionEr
     let loaded_class = env
         .call_method(
             class_loader.as_obj(),
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
+            jni_str!("loadClass"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
             &[JValue::Object(&helper_class_name)],
         )
         .map_err(|e| PermissionError::Platform(format!("loadClass: {e}")))?
         .l()
         .map_err(|e| PermissionError::Platform(format!("loadClass result: {e}")))?;
 
-    Ok(loaded_class.into())
+    env.cast_local::<JClass>(loaded_class)
+        .map_err(|error| PermissionError::Platform(error.to_string()))
+}
+
+#[derive(Debug)]
+struct AttachedPermissionError(PermissionError);
+
+impl std::fmt::Display for AttachedPermissionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl std::error::Error for AttachedPermissionError {}
+
+impl From<jni::errors::Error> for AttachedPermissionError {
+    fn from(error: jni::errors::Error) -> Self {
+        Self(PermissionError::Platform(error.to_string()))
+    }
 }
 
 fn with_activity<T>(
-    op: impl FnOnce(&mut JNIEnv, &JObject) -> Result<T, PermissionError>,
+    op: impl FnOnce(&mut Env<'_>, &JObject) -> Result<T, PermissionError>,
 ) -> Result<T, PermissionError> {
-    let android_ctx = ndk_context::android_context();
-    let vm = unsafe { JavaVM::from_raw(android_ctx.vm().cast()) }
-        .map_err(|e| PermissionError::Platform(format!("from_raw vm: {e}")))?;
-
-    let activity = unsafe { JObject::from_raw(android_ctx.context().cast()) };
-    if activity.is_null() {
+    let android_context = ndk_context::android_context();
+    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
+    let raw_activity: jni::sys::jobject = android_context.context().cast();
+    if raw_vm.is_null() {
+        return Err(PermissionError::Platform(
+            "Android JavaVM is null from ndk_context".into(),
+        ));
+    }
+    if raw_activity.is_null() {
         return Err(PermissionError::Platform(
             "Android Activity is null from ndk_context".into(),
         ));
     }
 
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|e| PermissionError::Platform(format!("attach_current_thread: {e}")))?;
-    let activity_global = env
-        .new_global_ref(&activity)
-        .map_err(|e| PermissionError::Platform(format!("new_global_ref activity: {e}")))?;
-
-    op(&mut env, activity_global.as_obj())
+    let vm = unsafe { JavaVM::from_raw(raw_vm) };
+    vm.attach_current_thread(|env| -> Result<T, AttachedPermissionError> {
+        let activity = unsafe { env.as_cast_raw::<JObject>(&raw_activity)? };
+        op(env, &activity).map_err(AttachedPermissionError)
+    })
+    .map_err(|error| error.0)
 }
 
 /// Check permission using the Activity context.
@@ -214,7 +248,7 @@ fn with_activity<T>(
 /// Returns [`PermissionError::Unsupported`] if the permission has no
 /// Android mapping; [`PermissionError::Platform`] if a JNI call fails.
 pub fn check_with_activity(
-    env: &mut JNIEnv,
+    env: &mut Env<'_>,
     activity: &JObject,
     permission: Permission,
 ) -> Result<PermissionStatus, PermissionError> {
@@ -226,8 +260,8 @@ pub fn check_with_activity(
     let result = env
         .call_static_method(
             helper_class,
-            "checkPermission",
-            "(Landroid/app/Activity;I)I",
+            jni_str!("checkPermission"),
+            jni_sig!("(Landroid/app/Activity;I)I"),
             &[JValue::Object(activity), JValue::Int(permission_type)],
         )
         .map_err(|e| PermissionError::Platform(format!("checkPermission: {e}")))?
@@ -247,7 +281,7 @@ pub fn check_with_activity(
 /// Returns [`PermissionError::Unsupported`] if the permission has no
 /// Android mapping; [`PermissionError::Platform`] if a JNI call fails.
 pub fn request_with_activity(
-    env: &mut JNIEnv,
+    env: &mut Env<'_>,
     activity: &JObject,
     permission: Permission,
 ) -> Result<(), PermissionError> {
@@ -259,8 +293,8 @@ pub fn request_with_activity(
 
     env.call_static_method(
         helper_class,
-        "requestPermission",
-        "(Landroid/app/Activity;II)V",
+        jni_str!("requestPermission"),
+        jni_sig!("(Landroid/app/Activity;II)V"),
         &[
             JValue::Object(activity),
             JValue::Int(permission_type),

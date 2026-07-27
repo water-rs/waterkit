@@ -1,206 +1,200 @@
 //! Android location implementation using JNI.
 
 use crate::{Location, LocationError, Timestamp};
-use jni::JNIEnv;
-use jni::objects::{GlobalRef, JObject, JValue};
-use std::mem::ManuallyDrop;
-use std::sync::OnceLock;
+use jni::{
+    Env, JavaVM, jni_sig, jni_str,
+    objects::{JClass, JDoubleArray, JObject, JValue},
+};
 
-/// Embedded DEX bytecode containing `LocationHelper` class.
+/// Embedded DEX bytecode containing `LocationHelper`.
 ///
-/// Generated at build time by `kotlinc` + D8.
-static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
+/// Generated at build time by `kotlinc` and D8.
+const DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
+const LOCATION_HELPER_CLASS: &str = "waterkit.location.LocationHelper";
 
-/// Cached class loader for the embedded DEX.
-static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
-
-/// Initialize the DEX class loader. Must be called with a valid Context.
-///
-/// # Safety
-///
-/// The `context` must be a valid Android Context `JObject`.
-///
-/// # Errors
-///
-/// Returns `LocationError::Platform` if JNI calls fail or DEX setup cannot be completed.
-pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), LocationError> {
-    if CLASS_LOADER.get().is_some() {
-        return Ok(());
-    }
-
-    // Write DEX to cache directory
-    let cache_dir = env
-        .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
-        .map_err(|e| LocationError::Platform(format!("getCacheDir failed: {e}")))?
-        .l()
-        .map_err(|e| LocationError::Platform(format!("getCacheDir result: {e}")))?;
-
-    let cache_path = env
-        .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
-        .map_err(|e| LocationError::Platform(format!("getAbsolutePath failed: {e}")))?
-        .l()
-        .map_err(|e| LocationError::Platform(format!("getAbsolutePath result: {e}")))?;
-
-    let dex_path = format!(
-        "{}/waterkit_location.dex",
-        env.get_string((&cache_path).into())
-            .map_err(|e| LocationError::Platform(format!("get_string failed: {e}")))?
-            .to_str()
-            .map_err(|e| LocationError::Platform(format!("to_str failed: {e}")))?
-    );
-
-    // Remove if exists to handle previous read-only setting
-    let _ = std::fs::remove_file(&dex_path);
-
-    // Write DEX bytes to file
-    std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| LocationError::Platform(format!("write DEX failed: {e}")))?;
-
-    // Make DEX read-only as required by modern Android security
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&dex_path)
-            .map_err(|e| LocationError::Platform(format!("metadata DEX failed: {e}")))?
-            .permissions();
-        perms.set_mode(0o444); // Read-only
-        std::fs::set_permissions(&dex_path, perms)
-            .map_err(|e| LocationError::Platform(format!("set_permissions DEX failed: {e}")))?;
-    }
-
-    // Create DexClassLoader
-    let dex_path_jstring = env
-        .new_string(&dex_path)
-        .map_err(|e| LocationError::Platform(format!("new_string failed: {e}")))?;
-
+fn helper_class<'local>(
+    env: &mut Env<'local>,
+    context: &JObject<'_>,
+) -> Result<JClass<'local>, LocationError> {
     let parent_loader = env
-        .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
-        .map_err(|e| LocationError::Platform(format!("getClassLoader failed: {e}")))?
+        .call_method(
+            context,
+            jni_str!("getClassLoader"),
+            jni_sig!("()Ljava/lang/ClassLoader;"),
+            &[],
+        )
+        .map_err(|error| {
+            LocationError::Platform(format!("get Android location class loader failed: {error}"))
+        })?
         .l()
-        .map_err(|e| LocationError::Platform(format!("getClassLoader result: {e}")))?;
+        .map_err(|error| {
+            LocationError::Platform(format!(
+                "get Android location class loader result failed: {error}"
+            ))
+        })?;
 
-    let dex_class_loader_class = env
-        .find_class("dalvik/system/DexClassLoader")
-        .map_err(|e| LocationError::Platform(format!("find DexClassLoader: {e}")))?;
-
+    let dex_bytes = env.byte_array_from_slice(DEX_BYTES).map_err(|error| {
+        LocationError::Platform(format!("create Android location DEX array failed: {error}"))
+    })?;
+    let byte_buffer = env
+        .call_static_method(
+            jni_str!("java/nio/ByteBuffer"),
+            jni_str!("wrap"),
+            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
+            &[JValue::Object(&dex_bytes)],
+        )
+        .map_err(|error| {
+            LocationError::Platform(format!("wrap Android location DEX failed: {error}"))
+        })?
+        .l()
+        .map_err(|error| {
+            LocationError::Platform(format!("wrap Android location DEX result failed: {error}"))
+        })?;
     let class_loader = env
         .new_object(
-            dex_class_loader_class,
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V",
-            &[
-                JValue::Object(&dex_path_jstring),
-                JValue::Object(&cache_path),
-                JValue::Object(&JObject::null()),
-                JValue::Object(&parent_loader),
-            ],
+            jni_str!("dalvik/system/InMemoryDexClassLoader"),
+            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
+            &[JValue::Object(&byte_buffer), JValue::Object(&parent_loader)],
         )
-        .map_err(|e| LocationError::Platform(format!("new DexClassLoader: {e}")))?;
-
-    let global_ref = env
-        .new_global_ref(class_loader)
-        .map_err(|e| LocationError::Platform(format!("new_global_ref: {e}")))?;
-
-    let _ = CLASS_LOADER.set(global_ref);
-    Ok(())
+        .map_err(|error| {
+            LocationError::Platform(format!(
+                "create Android location in-memory class loader failed: {error}"
+            ))
+        })?;
+    let helper_name = env.new_string(LOCATION_HELPER_CLASS).map_err(|error| {
+        LocationError::Platform(format!(
+            "create Android location helper class name failed: {error}"
+        ))
+    })?;
+    let helper = env
+        .call_method(
+            &class_loader,
+            jni_str!("loadClass"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
+            &[JValue::Object(&helper_name)],
+        )
+        .map_err(|error| {
+            LocationError::Platform(format!("load Android location helper failed: {error}"))
+        })?
+        .l()
+        .map_err(|error| {
+            LocationError::Platform(format!(
+                "load Android location helper result failed: {error}"
+            ))
+        })?;
+    env.cast_local::<JClass>(helper).map_err(|error| {
+        LocationError::Platform(format!(
+            "cast Android location helper class failed: {error}"
+        ))
+    })
 }
 
-/// Get location using the Context.
+/// Get the last known location using an Android `Context`.
 ///
 /// # Errors
 ///
-/// Returns:
-/// - `LocationError::NotAvailable` if location services are unavailable.
-/// - `LocationError::Platform` if JNI calls fail or return invalid data.
+/// Returns [`LocationError::NotAvailable`] when Android has no last known
+/// location, or [`LocationError::Platform`] when JNI returns invalid data.
 pub fn get_location_with_context(
-    env: &mut JNIEnv,
-    context: &JObject,
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
 ) -> Result<Location, LocationError> {
-    init(env, context)?;
-
-    let class_loader = CLASS_LOADER
-        .get()
-        .ok_or_else(|| LocationError::Platform("Class loader not initialized".into()))?;
-
-    let helper_class_name = env
-        .new_string("waterkit.location.LocationHelper")
-        .map_err(|e| LocationError::Platform(format!("new_string: {e}")))?;
-
-    let loaded_class = env
-        .call_method(
-            class_loader.as_obj(),
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
-            &[JValue::Object(&helper_class_name)],
-        )
-        .map_err(|e| LocationError::Platform(format!("loadClass: {e}")))?
-        .l()
-        .map_err(|e| LocationError::Platform(format!("loadClass result: {e}")))?;
-
-    let helper_jclass: jni::objects::JClass = loaded_class.into();
+    let helper_class = helper_class(env, context)?;
     let result = env
         .call_static_method(
-            helper_jclass,
-            "getLastKnownLocation",
-            "(Landroid/content/Context;)[D",
+            helper_class,
+            jni_str!("getLastKnownLocation"),
+            jni_sig!("(Landroid/content/Context;)[D"),
             &[JValue::Object(context)],
         )
-        .map_err(|e| LocationError::Platform(format!("getLastKnownLocation: {e}")))?
+        .map_err(|error| {
+            LocationError::Platform(format!("get Android last known location failed: {error}"))
+        })?
         .l()
-        .map_err(|e| LocationError::Platform(format!("getLastKnownLocation result: {e}")))?;
-
-    // Parse double array result
-    let result_array: jni::objects::JDoubleArray = result.into();
-    #[allow(clippy::cast_sign_loss)]
-    let len = env
-        .get_array_length(&result_array)
-        .map_err(|e| LocationError::Platform(format!("get_array_length: {e}")))?
-        as usize;
-
-    if len < 1 {
+        .map_err(|error| {
+            LocationError::Platform(format!(
+                "get Android last known location result failed: {error}"
+            ))
+        })?;
+    let result = env.cast_local::<JDoubleArray>(result).map_err(|error| {
+        LocationError::Platform(format!("cast Android location result failed: {error}"))
+    })?;
+    let len = result.len(env).map_err(|error| {
+        LocationError::Platform(format!(
+            "read Android location result length failed: {error}"
+        ))
+    })?;
+    if len == 0 {
         return Err(LocationError::NotAvailable);
     }
 
-    // Copy array elements to a Rust buffer
-    let mut buf = vec![0.0f64; len];
-    env.get_double_array_region(&result_array, 0, &mut buf)
-        .map_err(|e| LocationError::Platform(format!("get_double_array_region: {e}")))?;
-
-    let success = buf[0];
-    if success < 0.5 {
+    let mut values = vec![0.0_f64; len];
+    result.get_region(env, 0, &mut values).map_err(|error| {
+        LocationError::Platform(format!("read Android location result failed: {error}"))
+    })?;
+    if values[0] < 0.5 {
         return Err(LocationError::NotAvailable);
     }
+    let [
+        _,
+        latitude,
+        longitude,
+        altitude,
+        horizontal_accuracy,
+        timestamp_ms,
+        ..,
+    ] = values.as_slice()
+    else {
+        return Err(LocationError::Platform(String::from(
+            "Android location result omitted required fields",
+        )));
+    };
 
-    if len < 6 {
-        return Err(LocationError::Platform("Invalid result array".into()));
-    }
-
-    // Android returns timestamp as milliseconds since Unix epoch
-    #[allow(clippy::cast_possible_truncation)]
-    let timestamp_ms = buf[5] as i64;
-    let timestamp = Timestamp::from_millisecond(timestamp_ms)
-        .map_err(|e| LocationError::Platform(e.to_string()))?;
-
-    Ok(Location::from_degrees(buf[1], buf[2], timestamp)?
-        .with_altitude(buf[3])
-        .with_horizontal_accuracy(buf[4]))
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Android Location timestamps are represented as integral milliseconds in a double array"
+    )]
+    let timestamp = Timestamp::from_millisecond(*timestamp_ms as i64)
+        .map_err(|error| LocationError::Platform(error.to_string()))?;
+    Ok(Location::from_degrees(*latitude, *longitude, timestamp)?
+        .with_altitude(*altitude)
+        .with_horizontal_accuracy(*horizontal_accuracy))
 }
 
-// Async wrapper for the public API.
+#[derive(Debug)]
+struct AttachedLocationError(LocationError);
+
+impl std::fmt::Display for AttachedLocationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl std::error::Error for AttachedLocationError {}
+
+impl From<jni::errors::Error> for AttachedLocationError {
+    fn from(error: jni::errors::Error) -> Self {
+        Self(LocationError::Platform(error.to_string()))
+    }
+}
+
 pub async fn get_location() -> Result<Location, LocationError> {
-    let android_ctx = ndk_context::android_context();
-
-    let vm = unsafe { jni::JavaVM::from_raw(android_ctx.vm().cast()) }
-        .map_err(|e| LocationError::Platform(format!("JavaVM::from_raw failed: {e}")))?;
-
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|e| LocationError::Platform(format!("attach_current_thread failed: {e}")))?;
-
-    let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_ctx.context().cast()) });
+    let android_context = ndk_context::android_context();
+    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
+    let raw_context: jni::sys::jobject = android_context.context().cast();
     assert!(
-        !context.is_null(),
+        !raw_vm.is_null(),
+        "waterkit-location: ndk_context returned null JavaVM"
+    );
+    assert!(
+        !raw_context.is_null(),
         "waterkit-location: ndk_context returned null Android Context"
     );
 
-    get_location_with_context(&mut env, &context)
+    let vm = unsafe { JavaVM::from_raw(raw_vm) };
+    vm.attach_current_thread(|env| -> Result<Location, AttachedLocationError> {
+        let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
+        get_location_with_context(env, &context).map_err(AttachedLocationError)
+    })
+    .map_err(|error| error.0)
 }

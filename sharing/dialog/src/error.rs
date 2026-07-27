@@ -24,3 +24,10 @@ pub enum DialogError {
     #[error("not supported: {0}")]
     Unsupported(String),
 }
+
+#[cfg(target_os = "android")]
+impl From<jni::errors::Error> for DialogError {
+    fn from(error: jni::errors::Error) -> Self {
+        Self::PlatformError(error.to_string())
+    }
+}

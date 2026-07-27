@@ -316,12 +316,15 @@ pub unsafe extern "C" fn waterkit_video_apple_unregister_gpu_surface_host(host_i
 #[cfg(target_os = "android")]
 mod android {
     use super::PictureInPictureControllerState;
+    use crate::android_surface::with_attached_env;
     use jni::{
-        JNIEnv, JavaVM,
-        objects::{GlobalRef, JClass, JObject, JValue},
+        Env, JavaVM, jni_sig, jni_str,
+        objects::{Global, JClass, JObject, JValue},
     };
-    use std::{convert::TryFrom, mem::ManuallyDrop};
+    use std::convert::TryFrom;
     use waterkit_video_core::Error as VideoError;
+
+    type GlobalObjectRef = Global<JObject<'static>>;
 
     const DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
@@ -334,7 +337,7 @@ mod android {
     const RESULT_ENTER_FAILED: i32 = 5;
 
     pub(super) struct Controller {
-        helper_class: Option<GlobalRef>,
+        helper_class: Option<GlobalObjectRef>,
     }
 
     impl Controller {
@@ -352,12 +355,12 @@ mod android {
 
                 env.call_static_method(
                     helper_class,
-                    "updateControllerState",
-                    "(Landroid/content/Context;ZZII)V",
+                    jni_str!("updateControllerState"),
+                    jni_sig!("(Landroid/content/Context;ZZII)V"),
                     &[
                         JValue::Object(context),
-                        JValue::Bool(u8::from(state.active)),
-                        JValue::Bool(u8::from(state.playing)),
+                        JValue::Bool(state.active),
+                        JValue::Bool(state.playing),
                         JValue::Int(aspect_width),
                         JValue::Int(aspect_height),
                     ],
@@ -380,8 +383,8 @@ mod android {
                 let result = env
                     .call_static_method(
                         helper_class,
-                        "enterPictureInPicture",
-                        "(Landroid/content/Context;II)I",
+                        jni_str!("enterPictureInPicture"),
+                        jni_sig!("(Landroid/content/Context;II)I"),
                         &[
                             JValue::Object(context),
                             JValue::Int(aspect_width),
@@ -429,8 +432,8 @@ mod android {
                 let helper_class = self.helper_class(env, context)?;
                 env.call_static_method(
                     helper_class,
-                    "isPictureInPictureActive",
-                    "(Landroid/content/Context;)Z",
+                    jni_str!("isPictureInPictureActive"),
+                    jni_sig!("(Landroid/content/Context;)Z"),
                     &[JValue::Object(context)],
                 )
                 .map_err(|error| {
@@ -449,7 +452,7 @@ mod android {
 
         fn helper_class<'env>(
             &mut self,
-            env: &mut JNIEnv<'env>,
+            env: &mut Env<'env>,
             context: &JObject<'_>,
         ) -> Result<JClass<'env>, VideoError> {
             if self.helper_class.is_none() {
@@ -464,16 +467,25 @@ mod android {
                     "Android picture in picture helper class local ref failed: {error}"
                 ))
             })?;
-            Ok(local_class.into())
+            env.cast_local::<JClass>(local_class).map_err(|error| {
+                VideoError::Unsupported(format!(
+                    "Android picture in picture helper class cast failed: {error}"
+                ))
+            })
         }
     }
 
     fn load_helper_class(
-        env: &mut JNIEnv<'_>,
+        env: &mut Env<'_>,
         context: &JObject<'_>,
-    ) -> Result<GlobalRef, VideoError> {
+    ) -> Result<GlobalObjectRef, VideoError> {
         let parent_loader = env
-            .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+            .call_method(
+                context,
+                jni_str!("getClassLoader"),
+                jni_sig!("()Ljava/lang/ClassLoader;"),
+                &[],
+            )
             .map_err(|error| {
                 VideoError::Unsupported(format!(
                     "Android picture in picture parent class loader failed: {error}"
@@ -491,16 +503,18 @@ mod android {
                 "Android picture in picture DEX byte array failed: {error}"
             ))
         })?;
-        let byte_buffer_class = env.find_class("java/nio/ByteBuffer").map_err(|error| {
-            VideoError::Unsupported(format!(
-                "Android picture in picture ByteBuffer lookup failed: {error}"
-            ))
-        })?;
+        let byte_buffer_class =
+            env.find_class(jni_str!("java/nio/ByteBuffer"))
+                .map_err(|error| {
+                    VideoError::Unsupported(format!(
+                        "Android picture in picture ByteBuffer lookup failed: {error}"
+                    ))
+                })?;
         let dex_buffer = env
             .call_static_method(
                 byte_buffer_class,
-                "wrap",
-                "([B)Ljava/nio/ByteBuffer;",
+                jni_str!("wrap"),
+                jni_sig!("([B)Ljava/nio/ByteBuffer;"),
                 &[JValue::Object(&dex_bytes)],
             )
             .map_err(|error| {
@@ -516,7 +530,7 @@ mod android {
             })?;
 
         let dex_class_loader_class = env
-            .find_class("dalvik/system/InMemoryDexClassLoader")
+            .find_class(jni_str!("dalvik/system/InMemoryDexClassLoader"))
             .map_err(|error| {
                 VideoError::Unsupported(format!(
                     "picture in picture requires Android 8.0 or newer: {error}"
@@ -526,7 +540,7 @@ mod android {
         let class_loader = env
             .new_object(
                 dex_class_loader_class,
-                "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V",
+                jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
                 &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
             )
             .map_err(|error| {
@@ -545,8 +559,8 @@ mod android {
         let helper_class = env
             .call_method(
                 &class_loader,
-                "loadClass",
-                "(Ljava/lang/String;)Ljava/lang/Class;",
+                jni_str!("loadClass"),
+                jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
                 &[JValue::Object(&class_name)],
             )
             .map_err(|error| {
@@ -579,25 +593,24 @@ mod android {
     }
 
     fn with_android_context<T>(
-        f: impl FnOnce(&mut JNIEnv<'_>, &JObject<'_>) -> Result<T, VideoError>,
+        f: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, VideoError>,
     ) -> Result<T, VideoError> {
         let android_context = ndk_context::android_context();
-        let vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) }.map_err(|error| {
-            VideoError::Unsupported(format!("JavaVM::from_raw failed: {error}"))
-        })?;
-
-        let mut env = vm.attach_current_thread().map_err(|error| {
-            VideoError::Unsupported(format!("attach_current_thread failed: {error}"))
-        })?;
-
-        let context =
-            ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
+        let raw_context: jni::sys::jobject = android_context.context().cast();
         assert!(
-            !context.is_null(),
+            !raw_context.is_null(),
             "waterkit-video: ndk_context returned null Android Context"
         );
+        let vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) };
 
-        f(&mut env, &context)
+        with_attached_env(&vm, |env| {
+            let context = unsafe { env.as_cast_raw::<JObject>(&raw_context) }.map_err(|error| {
+                VideoError::Unsupported(format!(
+                    "Android picture in picture context cast failed: {error}"
+                ))
+            })?;
+            f(env, &context)
+        })
     }
 }
 

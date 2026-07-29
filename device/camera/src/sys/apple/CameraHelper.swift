@@ -26,7 +26,15 @@ private var rawVideoRecordingStartTime: Date?
 private let rawVideoLock = NSLock()
 
 // Frame callback - set from Rust
-private var frameCallback: ((UInt64, UInt32, UInt32, UInt64) -> Void)?
+public typealias CameraFrameCallback = @convention(c) (
+    UnsafeMutableRawPointer?,
+    UInt64,
+    UInt32,
+    UInt32,
+    UInt64
+) -> Void
+private var frameCallback: CameraFrameCallback?
+private var frameCallbackContext: UnsafeMutableRawPointer?
 private let frameQueue = DispatchQueue(label: "waterkit.camera.frame", qos: .userInteractive)
 private let frameLock = NSLock()
 
@@ -70,9 +78,14 @@ class CameraFrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
 
         frameLock.lock()
         let callback = frameCallback
+        let callbackContext = frameCallbackContext
         frameLock.unlock()
 
-        callback?(handle, width, height, timestampNs)
+        if let callback {
+            callback(callbackContext, handle, width, height, timestampNs)
+        } else {
+            unmanaged.release()
+        }
         maybeWriteRawVideoFrame(pixelBuffer: pixelBuffer, timestampNs: timestampNs)
     }
 
@@ -191,6 +204,9 @@ func camera_device_is_front(index: Int32) -> Bool {
 // MARK: - Camera Control
 
 func camera_open(device_id: RustString) -> CameraResultFFI {
+    guard captureSession == nil else {
+        return .AlreadyInUse
+    }
     let deviceId = device_id.toString()
 
     #if os(iOS)
@@ -290,6 +306,16 @@ func camera_stop() -> CameraResultFFI {
     return .Success
 }
 
+func camera_close() -> CameraResultFFI {
+    _ = camera_stop()
+    captureSession = nil
+    videoOutput = nil
+    photoOutput = nil
+    movieOutput = nil
+    currentDevice = nil
+    return .Success
+}
+
 func camera_is_streaming() -> Bool {
     return captureSession?.isRunning ?? false
 }
@@ -297,8 +323,12 @@ func camera_is_streaming() -> Bool {
 // MARK: - Frame Callback
 
 @_cdecl("camera_set_frame_callback")
-public func camera_set_frame_callback(callback: @escaping @convention(c) (UInt64, UInt32, UInt32, UInt64) -> Void) {
+public func camera_set_frame_callback(
+    context: UnsafeMutableRawPointer?,
+    callback: @escaping CameraFrameCallback
+) {
     frameLock.lock()
+    frameCallbackContext = context
     frameCallback = callback
     frameLock.unlock()
 }
@@ -307,7 +337,9 @@ public func camera_set_frame_callback(callback: @escaping @convention(c) (UInt64
 public func camera_clear_frame_callback() {
     frameLock.lock()
     frameCallback = nil
+    frameCallbackContext = nil
     frameLock.unlock()
+    frameQueue.sync {}
 }
 
 @_cdecl("camera_release_pixelbuffer")

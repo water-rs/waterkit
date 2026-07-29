@@ -1,6 +1,6 @@
-//! Desktop audio recording using cpal.
+//! Audio recording using cpal.
 //!
-//! Works on macOS, Windows, and Linux.
+//! Works on every platform supported by cpal.
 
 use crate::recorder::{AudioBuffer, AudioFormat, AudioFormatRequest, InputDevice, RecordError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};

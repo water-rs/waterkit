@@ -11,12 +11,21 @@ class BleScanBridgeCallback : BleScanCallback() {
         serviceUuids: Array<String>
     )
 
+    @Synchronized
     override fun onResult(
         deviceAddress: String,
         deviceName: String?,
         rssi: Int,
         serviceUuids: Array<String>
     ) {
+        if (waterkit_scan_state == 0L) {
+            return
+        }
         onScanResultNative(deviceAddress, deviceName, rssi, serviceUuids)
+    }
+
+    @Synchronized
+    fun releaseNativeState() {
+        waterkit_scan_state = 0
     }
 }

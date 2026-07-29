@@ -12,7 +12,6 @@ use futures::StreamExt;
 use std::num::NonZeroU8;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +46,7 @@ mod ffi {
         fn camera_open(device_id: String) -> CameraResultFFI;
         fn camera_start() -> CameraResultFFI;
         fn camera_stop() -> CameraResultFFI;
+        fn camera_close() -> CameraResultFFI;
         fn camera_is_streaming() -> bool;
 
         // Resolution
@@ -124,7 +124,10 @@ mod ffi {
 
 // External C functions
 unsafe extern "C" {
-    fn camera_set_frame_callback(callback: extern "C" fn(u64, u32, u32, u64));
+    fn camera_set_frame_callback(
+        context: *mut std::ffi::c_void,
+        callback: extern "C" fn(*mut std::ffi::c_void, u64, u32, u32, u64),
+    );
     fn camera_clear_frame_callback();
     fn camera_release_pixelbuffer(handle: u64);
     fn camera_copy_photo_data(buffer: *mut u8, size: u64);
@@ -155,46 +158,56 @@ struct RawFrame {
     timestamp_ns: u64,
 }
 
-// Global channel slot for frame delivery (updated when camera starts/stops)
-static FRAME_SENDER: std::sync::OnceLock<Mutex<Option<async_channel::Sender<RawFrame>>>> =
-    std::sync::OnceLock::new();
-
-fn frame_sender_slot() -> &'static Mutex<Option<async_channel::Sender<RawFrame>>> {
-    FRAME_SENDER.get_or_init(|| Mutex::new(None))
+struct FrameCallbackContext {
+    sender: async_channel::Sender<RawFrame>,
 }
 
-fn frame_sender_lock() -> std::sync::MutexGuard<'static, Option<async_channel::Sender<RawFrame>>> {
-    frame_sender_slot()
-        .lock()
-        .unwrap_or_else(|_| std::process::abort())
+struct OpenCameraGuard {
+    armed: bool,
+}
+
+impl OpenCameraGuard {
+    const fn new() -> Self {
+        Self { armed: true }
+    }
+
+    const fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for OpenCameraGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = ffi::camera_close();
+        }
+    }
 }
 
 /// Callback invoked from Swift for each camera frame.
-extern "C" fn frame_callback(pixelbuffer_handle: u64, width: u32, height: u32, timestamp_ns: u64) {
-    let sender = { frame_sender_lock().clone() };
-
-    if let Some(sender) = sender {
-        let frame = RawFrame {
-            pixelbuffer_handle,
-            width,
-            height,
-            timestamp_ns,
-        };
-        // Non-blocking send. force_send keeps latency low by replacing stale queued frames.
-        match sender.force_send(frame) {
-            Ok(Some(evicted)) => unsafe {
-                camera_release_pixelbuffer(evicted.pixelbuffer_handle);
-            },
-            Ok(None) => {}
-            Err(error) => unsafe {
-                camera_release_pixelbuffer(error.0.pixelbuffer_handle);
-            },
-        }
-    } else {
-        // No receiver, release immediately
-        unsafe {
-            camera_release_pixelbuffer(pixelbuffer_handle);
-        }
+extern "C" fn frame_callback(
+    context: *mut std::ffi::c_void,
+    pixelbuffer_handle: u64,
+    width: u32,
+    height: u32,
+    timestamp_ns: u64,
+) {
+    let context = unsafe { &*context.cast::<FrameCallbackContext>() };
+    let frame = RawFrame {
+        pixelbuffer_handle,
+        width,
+        height,
+        timestamp_ns,
+    };
+    // Non-blocking send. force_send keeps latency low by replacing stale queued frames.
+    match context.sender.force_send(frame) {
+        Ok(Some(evicted)) => unsafe {
+            camera_release_pixelbuffer(evicted.pixelbuffer_handle);
+        },
+        Ok(None) => {}
+        Err(error) => unsafe {
+            camera_release_pixelbuffer(error.0.pixelbuffer_handle);
+        },
     }
 }
 
@@ -355,6 +368,7 @@ pub struct CameraInner {
     controls: CameraControls,
     resolution: Resolution,
     frame_receiver: async_channel::Receiver<RawFrame>,
+    _frame_callback_context: Box<FrameCallbackContext>,
     recording_mode: Option<RecordingMode>,
 }
 
@@ -399,6 +413,7 @@ impl CameraInner {
     ) -> Result<Self, CameraError> {
         std::future::ready(()).await;
         convert_result(ffi::camera_open(camera_id.to_string()), camera_id)?;
+        let mut open_guard = OpenCameraGuard::new();
 
         // Set resolution
         convert_result(
@@ -415,34 +430,25 @@ impl CameraInner {
 
         // Create frame channel (bounded to prevent unbounded memory growth)
         let (sender, receiver) = async_channel::bounded(1);
-
-        // Store sender for callback dispatch.
-        {
-            let mut guard = frame_sender_lock();
-            if guard.is_some() {
-                return Err(CameraError::AlreadyInUse);
-            }
-            *guard = Some(sender);
-        }
+        let mut frame_callback_context = Box::new(FrameCallbackContext { sender });
 
         // Set up frame callback
         unsafe {
-            camera_set_frame_callback(frame_callback);
+            camera_set_frame_callback(
+                (&raw mut *frame_callback_context).cast::<std::ffi::c_void>(),
+                frame_callback,
+            );
         }
 
         // Start streaming immediately (RAII)
         if let Err(error) = convert_result(ffi::camera_start(), "start") {
-            {
-                let mut guard = frame_sender_lock();
-                *guard = None;
-            }
             unsafe {
                 camera_clear_frame_callback();
             }
-            let _ = ffi::camera_stop();
             return Err(error);
         }
 
+        open_guard.disarm();
         Ok(Self {
             device,
             queue,
@@ -453,6 +459,7 @@ impl CameraInner {
                 height: h,
             },
             frame_receiver: receiver,
+            _frame_callback_context: frame_callback_context,
             recording_mode: None,
         })
     }
@@ -997,15 +1004,11 @@ impl Drop for CameraInner {
             }
             None => {}
         }
-        {
-            let mut guard = frame_sender_lock();
-            *guard = None;
-        }
         // Clear the frame callback
         unsafe {
             camera_clear_frame_callback();
         }
         // Stop the camera
-        let _ = ffi::camera_stop();
+        let _ = ffi::camera_close();
     }
 }

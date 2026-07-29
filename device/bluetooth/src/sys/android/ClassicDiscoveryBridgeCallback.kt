@@ -20,12 +20,21 @@ class ClassicDiscoveryBridgeCallback : ClassicDiscoveryCallback() {
         isPaired: Boolean
     )
 
+    @Synchronized
     override fun onDeviceFound(
         deviceAddress: String,
         deviceName: String?,
         majorDeviceClass: Int,
         isPaired: Boolean
     ) {
+        if (waterkit_classic_discovery_state == 0L) {
+            return
+        }
         onDeviceFoundNative(deviceAddress, deviceName, majorDeviceClass, isPaired)
+    }
+
+    @Synchronized
+    fun releaseNativeState() {
+        waterkit_classic_discovery_state = 0
     }
 }

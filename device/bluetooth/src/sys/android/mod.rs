@@ -4,28 +4,26 @@ use crate::{
 };
 use futures::channel::oneshot;
 use futures::future;
-use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JObjectArray, JString, JValue};
-use jni::{JNIEnv, JavaVM};
+use jni::errors::ThrowRuntimeExAndDefault;
+use jni::objects::{Global, JByteArray, JClass, JObject, JObjectArray, JString, JValue};
+use jni::strings::JNIStr;
+use jni::{Env, EnvUnowned, JavaVM, jni_sig, jni_str};
 use std::collections::{BTreeMap, HashMap};
-use std::mem::ManuallyDrop;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
-static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
-static CALLBACK_NATIVES_REGISTERED: OnceLock<()> = OnceLock::new();
-static SCAN_CALLBACKS: OnceLock<Mutex<BTreeMap<i64, ScanCallbackState>>> = OnceLock::new();
-static GATT_CALLBACKS: OnceLock<Mutex<BTreeMap<i64, Arc<GattCallbackState>>>> = OnceLock::new();
-static CLASSIC_DISCOVERY_CALLBACKS: OnceLock<
-    Mutex<BTreeMap<i64, async_channel::Sender<ClassicDevice>>>,
-> = OnceLock::new();
-static NEXT_CALLBACK_STATE_ID: AtomicI64 = AtomicI64::new(1);
+const DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 const HELPER_CLASS_NAME: &str = "waterkit.bluetooth.BluetoothHelper";
 const BOND_BONDED: i32 = 12;
 type GattResultSender<T> = oneshot::Sender<Result<T, BluetoothError>>;
 type CharacteristicKey = (String, String);
 type SubscriptionMap = BTreeMap<CharacteristicKey, async_channel::Sender<Vec<u8>>>;
+
+impl From<jni::errors::Error> for BluetoothError {
+    fn from(error: jni::errors::Error) -> Self {
+        Self::Platform(format!("Android JNI operation failed: {error}"))
+    }
+}
 
 #[derive(Debug, Clone)]
 struct ScanCallbackState {
@@ -35,15 +33,15 @@ struct ScanCallbackState {
 
 #[derive(Debug)]
 struct BleScanSession {
-    scanner: GlobalRef,
-    callback: GlobalRef,
-    callback_state_id: i64,
+    scanner: Global<JObject<'static>>,
+    callback: Global<JObject<'static>>,
+    _callback_state: Arc<ScanCallbackState>,
 }
 
 #[derive(Debug)]
 struct ClassicDiscoverySession {
-    callback: GlobalRef,
-    callback_state_id: i64,
+    callback: Global<JObject<'static>>,
+    _callback_state: Arc<async_channel::Sender<ClassicDevice>>,
 }
 
 enum SppCommand {
@@ -81,210 +79,237 @@ impl GattCallbackState {
     }
 }
 
-fn scan_callbacks() -> &'static Mutex<BTreeMap<i64, ScanCallbackState>> {
-    SCAN_CALLBACKS.get_or_init(|| Mutex::new(BTreeMap::new()))
+fn callback_state_handle<T>(state: &Arc<T>) -> Result<i64, BluetoothError> {
+    i64::try_from(Arc::as_ptr(state).expose_provenance()).map_err(|_| {
+        BluetoothError::Platform("Android callback state pointer exceeds Java long".into())
+    })
 }
 
-fn gatt_callbacks() -> &'static Mutex<BTreeMap<i64, Arc<GattCallbackState>>> {
-    GATT_CALLBACKS.get_or_init(|| Mutex::new(BTreeMap::new()))
-}
-
-fn classic_discovery_callbacks()
--> &'static Mutex<BTreeMap<i64, async_channel::Sender<ClassicDevice>>> {
-    CLASSIC_DISCOVERY_CALLBACKS.get_or_init(|| Mutex::new(BTreeMap::new()))
-}
-
-fn next_callback_state_id() -> Result<i64, BluetoothError> {
-    let id = NEXT_CALLBACK_STATE_ID.fetch_add(1, Ordering::Relaxed);
-    if id <= 0 {
-        return Err(BluetoothError::Platform(format!(
-            "invalid callback state id generated: {id}"
-        )));
+fn callback_state<T>(env: &mut Env<'_>, callback: &JObject, field: &JNIStr) -> Arc<T> {
+    let value = env
+        .get_field(callback, field, jni_sig!("J"))
+        .unwrap_or_else(|error| {
+            panic!("waterkit-bluetooth: read {field} failed in callback: {error}")
+        });
+    let state_handle = value.j().unwrap_or_else(|error| {
+        panic!("waterkit-bluetooth: decode {field} failed in callback: {error}")
+    });
+    let state_address = usize::try_from(state_handle).unwrap_or_else(|_| {
+        panic!("waterkit-bluetooth: invalid callback state pointer in {field}: {state_handle}")
+    });
+    assert_ne!(
+        state_address, 0,
+        "waterkit-bluetooth: null callback state pointer in {field}"
+    );
+    let state = std::ptr::with_exposed_provenance::<T>(state_address);
+    // SAFETY: every callback bridge serializes native invocation with
+    // `releaseNativeState`; the owning Rust session keeps the original Arc
+    // alive until that synchronized release returns.
+    unsafe {
+        Arc::increment_strong_count(state);
+        Arc::from_raw(state)
     }
-    Ok(id)
+}
+
+fn with_callback_env<'caller>(
+    env: &mut EnvUnowned<'caller>,
+    callback: impl FnOnce(&mut Env<'caller>) -> jni::errors::Result<()>,
+) {
+    env.with_env(callback).resolve::<ThrowRuntimeExAndDefault>();
+}
+
+fn release_callback_state(
+    env: &mut Env<'_>,
+    callback: &Global<JObject<'static>>,
+) -> Result<(), BluetoothError> {
+    env.call_method(
+        callback.as_obj(),
+        jni_str!("releaseNativeState"),
+        jni_sig!("()V"),
+        &[],
+    )
+    .map_err(|error| {
+        BluetoothError::Platform(format!("release callback native state failed: {error}"))
+    })?;
+    Ok(())
 }
 
 fn with_android_context<T, F>(f: F) -> Result<T, BluetoothError>
 where
-    F: for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<T, BluetoothError>,
+    F: for<'local> FnOnce(&mut Env<'local>, &JObject<'static>) -> Result<T, BluetoothError>,
 {
     let android_context = ndk_context::android_context();
-    let vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) }
-        .map_err(|e| BluetoothError::Platform(format!("JavaVM::from_raw: {e}")))?;
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|e| BluetoothError::Platform(format!("attach_current_thread: {e}")))?;
-
-    let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
+    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
+    let raw_context: jni::sys::jobject = android_context.context().cast();
     assert!(
-        !context.is_null(),
+        !raw_vm.is_null(),
+        "waterkit-bluetooth: ndk_context returned null JavaVM"
+    );
+    assert!(
+        !raw_context.is_null(),
         "waterkit-bluetooth: ndk_context returned null Android Context"
     );
 
-    f(&mut env, &context)
+    let vm = unsafe { JavaVM::from_raw(raw_vm) };
+    let context = vm.attach_current_thread(|env| {
+        let context = unsafe { env.as_cast_raw::<JObject>(&raw_context) }?;
+        env.new_global_ref(&*context).map_err(BluetoothError::from)
+    })?;
+    vm.attach_current_thread(|env| f(env, context.as_obj()))
 }
 
-fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), BluetoothError> {
-    if CLASS_LOADER.get().is_some() {
-        return Ok(());
-    }
-    let cache_dir = env
-        .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
-        .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| BluetoothError::Platform(format!("getCacheDir: {e}")))?;
-    let cache_path = env
-        .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
-        .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| BluetoothError::Platform(format!("getAbsolutePath: {e}")))?;
-    let dex_path = format!(
-        "{}/waterkit_bluetooth.dex",
-        env.get_string((&cache_path).into())
-            .map_err(|e| BluetoothError::Platform(format!("get_string: {e}")))?
-            .to_str()
-            .map_err(|e| BluetoothError::Platform(format!("to_str: {e}")))?
-    );
-    let _ = std::fs::remove_file(&dex_path);
-    std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| BluetoothError::Platform(format!("write DEX: {e}")))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&dex_path)
-            .map_err(|e| BluetoothError::Platform(format!("metadata DEX: {e}")))?
-            .permissions();
-        perms.set_mode(0o444);
-        std::fs::set_permissions(&dex_path, perms)
-            .map_err(|e| BluetoothError::Platform(format!("set_permissions DEX: {e}")))?;
-    }
-    let dex_path_jstring = env
-        .new_string(&dex_path)
-        .map_err(|e| BluetoothError::Platform(format!("new_string: {e}")))?;
+fn init_dex(
+    env: &mut Env<'_>,
+    context: &JObject,
+) -> Result<Global<JObject<'static>>, BluetoothError> {
+    let dex_bytes = env
+        .byte_array_from_slice(DEX_BYTES)
+        .map_err(|error| BluetoothError::Platform(format!("create DEX byte array: {error}")))?;
+    let dex_bytes = JObject::from(dex_bytes);
+    let byte_buffer_class = env
+        .find_class(jni_str!("java/nio/ByteBuffer"))
+        .map_err(|error| BluetoothError::Platform(format!("find ByteBuffer: {error}")))?;
+    let byte_buffer = env
+        .call_static_method(
+            byte_buffer_class,
+            jni_str!("wrap"),
+            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
+            &[JValue::Object(&dex_bytes)],
+        )
+        .and_then(|value| value.l())
+        .map_err(|error| BluetoothError::Platform(format!("ByteBuffer.wrap DEX: {error}")))?;
     let parent_loader = env
-        .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
-        .and_then(jni::objects::JValueGen::l)
+        .call_method(
+            context,
+            jni_str!("getClassLoader"),
+            jni_sig!("()Ljava/lang/ClassLoader;"),
+            &[],
+        )
+        .and_then(|value| value.l())
         .map_err(|e| BluetoothError::Platform(format!("getClassLoader: {e}")))?;
     let dex_class = env
-        .find_class("dalvik/system/DexClassLoader")
+        .find_class(jni_str!("dalvik/system/InMemoryDexClassLoader"))
         .map_err(|e| BluetoothError::Platform(format!("find_class: {e}")))?;
     let loader = env
         .new_object(
             dex_class,
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V",
-            &[
-                JValue::Object(&dex_path_jstring),
-                JValue::Object(&cache_path),
-                JValue::Object(&JObject::null()),
-                JValue::Object(&parent_loader),
-            ],
+            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
+            &[JValue::Object(&byte_buffer), JValue::Object(&parent_loader)],
         )
         .map_err(|e| BluetoothError::Platform(format!("new_object: {e}")))?;
-    let global = env
-        .new_global_ref(loader)
-        .map_err(|e| BluetoothError::Platform(format!("global_ref: {e}")))?;
-    if CLASS_LOADER.set(global).is_err() {
-        assert!(
-            CLASS_LOADER.get().is_some(),
-            "waterkit-bluetooth: class loader initialization race left loader unset"
-        );
-    }
-    Ok(())
+    env.new_global_ref(loader)
+        .map_err(|e| BluetoothError::Platform(format!("global_ref: {e}")))
 }
 
 fn load_class<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
+    loader: &Global<JObject<'static>>,
     class_name: &str,
 ) -> Result<JClass<'local>, BluetoothError> {
     let class_name = env
         .new_string(class_name)
         .map_err(|e| BluetoothError::Platform(format!("new_string class_name: {e}")))?;
-    let loader = CLASS_LOADER
-        .get()
-        .ok_or_else(|| BluetoothError::Platform("Class loader not initialized".into()))?;
     let class = env
         .call_method(
             loader.as_obj(),
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
+            jni_str!("loadClass"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
             &[JValue::Object(&class_name)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(|value| value.l())
         .map_err(|e| BluetoothError::Platform(format!("loadClass: {e}")))?;
-    Ok(class.into())
+    env.cast_local::<JClass>(class)
+        .map_err(|error| BluetoothError::Platform(format!("cast loaded class: {error}")))
 }
 
-fn register_callback_natives(env: &mut JNIEnv) -> Result<(), BluetoothError> {
-    if CALLBACK_NATIVES_REGISTERED.get().is_some() {
-        return Ok(());
-    }
-
-    let scan_callback_class = load_class(env, "waterkit.bluetooth.BleScanBridgeCallback")?;
-    let scan_natives = [jni::NativeMethod {
-        name: "onScanResultNative".into(),
-        sig: "(Ljava/lang/String;Ljava/lang/String;I[Ljava/lang/String;)V".into(),
-        fn_ptr: Java_waterkit_bluetooth_BleScanBridgeCallback_onScanResultNative as *mut _,
+fn register_callback_natives(
+    env: &mut Env<'_>,
+    loader: &Global<JObject<'static>>,
+) -> Result<(), BluetoothError> {
+    let scan_callback_class = load_class(env, loader, "waterkit.bluetooth.BleScanBridgeCallback")?;
+    let scan_natives = [unsafe {
+        jni::NativeMethod::from_raw_parts(
+            jni_str!("onScanResultNative"),
+            jni_str!("(Ljava/lang/String;Ljava/lang/String;I[Ljava/lang/String;)V"),
+            Java_waterkit_bluetooth_BleScanBridgeCallback_onScanResultNative as *mut _,
+        )
     }];
-    env.register_native_methods(scan_callback_class, &scan_natives)
-        .map_err(|e| {
-            BluetoothError::Platform(format!(
-                "register_native_methods BleScanBridgeCallback failed: {e}"
-            ))
-        })?;
+    // SAFETY: every descriptor above names the exact Kotlin instance method
+    // signature implemented by its corresponding `extern "system"` function.
+    unsafe { env.register_native_methods(scan_callback_class, &scan_natives) }.map_err(|e| {
+        BluetoothError::Platform(format!(
+            "register_native_methods BleScanBridgeCallback failed: {e}"
+        ))
+    })?;
 
-    let gatt_callback_class = load_class(env, "waterkit.bluetooth.BleGattBridgeCallback")?;
+    let gatt_callback_class = load_class(env, loader, "waterkit.bluetooth.BleGattBridgeCallback")?;
     let gatt_natives = [
-        jni::NativeMethod {
-            name: "onConnectionStateNative".into(),
-            sig: "(Ljava/lang/String;ZI)V".into(),
-            fn_ptr: Java_waterkit_bluetooth_BleGattBridgeCallback_onConnectionStateNative as *mut _,
+        unsafe {
+            jni::NativeMethod::from_raw_parts(
+                jni_str!("onConnectionStateNative"),
+                jni_str!("(Ljava/lang/String;ZI)V"),
+                Java_waterkit_bluetooth_BleGattBridgeCallback_onConnectionStateNative as *mut _,
+            )
         },
-        jni::NativeMethod {
-            name: "onServicesDiscoveredNative".into(),
-            sig: "(Ljava/lang/String;Ljava/lang/String;I)V".into(),
-            fn_ptr: Java_waterkit_bluetooth_BleGattBridgeCallback_onServicesDiscoveredNative
-                as *mut _,
+        unsafe {
+            jni::NativeMethod::from_raw_parts(
+                jni_str!("onServicesDiscoveredNative"),
+                jni_str!("(Ljava/lang/String;Ljava/lang/String;I)V"),
+                Java_waterkit_bluetooth_BleGattBridgeCallback_onServicesDiscoveredNative as *mut _,
+            )
         },
-        jni::NativeMethod {
-            name: "onCharacteristicReadNative".into(),
-            sig: "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[BI)V".into(),
-            fn_ptr: Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicReadNative
-                as *mut _,
+        unsafe {
+            jni::NativeMethod::from_raw_parts(
+                jni_str!("onCharacteristicReadNative"),
+                jni_str!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[BI)V"),
+                Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicReadNative as *mut _,
+            )
         },
-        jni::NativeMethod {
-            name: "onCharacteristicWriteNative".into(),
-            sig: "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V".into(),
-            fn_ptr: Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicWriteNative
-                as *mut _,
+        unsafe {
+            jni::NativeMethod::from_raw_parts(
+                jni_str!("onCharacteristicWriteNative"),
+                jni_str!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V"),
+                Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicWriteNative as *mut _,
+            )
         },
-        jni::NativeMethod {
-            name: "onCharacteristicChangedNative".into(),
-            sig: "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)V".into(),
-            fn_ptr: Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicChangedNative
-                as *mut _,
+        unsafe {
+            jni::NativeMethod::from_raw_parts(
+                jni_str!("onCharacteristicChangedNative"),
+                jni_str!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)V"),
+                Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicChangedNative
+                    as *mut _,
+            )
         },
     ];
-    env.register_native_methods(gatt_callback_class, &gatt_natives)
-        .map_err(|e| {
-            BluetoothError::Platform(format!(
-                "register_native_methods BleGattBridgeCallback failed: {e}"
-            ))
-        })?;
+    // SAFETY: each GATT descriptor matches the parameter and return types of
+    // the paired `extern "system"` callback.
+    unsafe { env.register_native_methods(gatt_callback_class, &gatt_natives) }.map_err(|e| {
+        BluetoothError::Platform(format!(
+            "register_native_methods BleGattBridgeCallback failed: {e}"
+        ))
+    })?;
 
-    let classic_callback_class =
-        load_class(env, "waterkit.bluetooth.ClassicDiscoveryBridgeCallback")?;
-    let classic_natives = [jni::NativeMethod {
-        name: "onDeviceFoundNative".into(),
-        sig: "(Ljava/lang/String;Ljava/lang/String;IZ)V".into(),
-        fn_ptr: Java_waterkit_bluetooth_ClassicDiscoveryBridgeCallback_onDeviceFoundNative
-            as *mut _,
+    let classic_callback_class = load_class(
+        env,
+        loader,
+        "waterkit.bluetooth.ClassicDiscoveryBridgeCallback",
+    )?;
+    let classic_natives = [unsafe {
+        jni::NativeMethod::from_raw_parts(
+            jni_str!("onDeviceFoundNative"),
+            jni_str!("(Ljava/lang/String;Ljava/lang/String;IZ)V"),
+            Java_waterkit_bluetooth_ClassicDiscoveryBridgeCallback_onDeviceFoundNative as *mut _,
+        )
     }];
-    env.register_native_methods(classic_callback_class, &classic_natives)
-        .map_err(|e| {
+    // SAFETY: the descriptor matches the Classic discovery callback ABI.
+    unsafe { env.register_native_methods(classic_callback_class, &classic_natives) }.map_err(
+        |e| {
             BluetoothError::Platform(format!(
                 "register_native_methods ClassicDiscoveryBridgeCallback failed: {e}"
             ))
-        })?;
+        },
+    )?;
 
-    let _ = CALLBACK_NATIVES_REGISTERED.set(());
     Ok(())
 }
 
@@ -293,9 +318,10 @@ pub async fn adapter_state() -> Result<AdapterState, BluetoothError> {
 }
 
 fn get_helper_class<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
+    loader: &Global<JObject<'static>>,
 ) -> Result<jni::objects::JClass<'local>, BluetoothError> {
-    load_class(env, HELPER_CLASS_NAME)
+    load_class(env, loader, HELPER_CLASS_NAME)
 }
 
 #[allow(
@@ -303,16 +329,16 @@ fn get_helper_class<'local>(
     reason = "This JNI bridge decodes one Android BluetoothDevice payload end-to-end; splitting it would obscure the field extraction order."
 )]
 fn get_paired_devices_with_context(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     context: &JObject<'_>,
 ) -> Result<Vec<ClassicDevice>, BluetoothError> {
-    init_dex(env, context)?;
-    let helper_class = get_helper_class(env)?;
+    let loader = init_dex(env, context)?;
+    let helper_class = get_helper_class(env, &loader)?;
     let paired_obj = env
         .call_static_method(
             &helper_class,
-            "getPairedDevices",
-            "(Landroid/content/Context;)[Landroid/bluetooth/BluetoothDevice;",
+            jni_str!("getPairedDevices"),
+            jni_sig!("(Landroid/content/Context;)[Landroid/bluetooth/BluetoothDevice;"),
             &[JValue::Object(context)],
         )
         .map_err(|e| BluetoothError::Platform(format!("getPairedDevices: {e}")))?
@@ -325,24 +351,28 @@ fn get_paired_devices_with_context(
         ));
     }
 
-    let paired = JObjectArray::from(paired_obj);
-    let count = env
-        .get_array_length(&paired)
+    let paired = JObjectArray::<JObject>::cast_local(env, paired_obj)
+        .map_err(|error| BluetoothError::Platform(format!("cast paired device array: {error}")))?;
+    let count = paired
+        .len(env)
         .map_err(|e| BluetoothError::Platform(format!("get_array_length: {e}")))?;
-    let mut devices = Vec::with_capacity(usize::try_from(count).map_err(|_| {
-        BluetoothError::Platform(format!("paired device count is negative: {count}"))
-    })?);
+    let mut devices = Vec::with_capacity(count);
 
     for index in 0..count {
-        let device_obj = env
-            .get_object_array_element(&paired, index)
+        let device_obj = paired
+            .get_element(env, index)
             .map_err(|e| BluetoothError::Platform(format!("get_object_array_element: {e}")))?;
         if device_obj.is_null() {
             continue;
         }
 
         let address_obj = env
-            .call_method(&device_obj, "getAddress", "()Ljava/lang/String;", &[])
+            .call_method(
+                &device_obj,
+                jni_str!("getAddress"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )
             .map_err(|e| BluetoothError::Platform(format!("BluetoothDevice.getAddress: {e}")))?
             .l()
             .map_err(|e| {
@@ -353,15 +383,20 @@ fn get_paired_devices_with_context(
                 "BluetoothDevice.getAddress returned null".into(),
             ));
         }
-        let address: String = env
-            .get_string(&JString::from(address_obj))
+        let address = env
+            .as_cast::<JString>(&address_obj)
+            .and_then(|address| address.try_to_string(env))
             .map_err(|e| {
                 BluetoothError::Platform(format!("BluetoothDevice.getAddress get_string: {e}"))
-            })?
-            .into();
+            })?;
 
         let name_obj = env
-            .call_method(&device_obj, "getName", "()Ljava/lang/String;", &[])
+            .call_method(
+                &device_obj,
+                jni_str!("getName"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )
             .map_err(|e| BluetoothError::Platform(format!("BluetoothDevice.getName: {e}")))?
             .l()
             .map_err(|e| {
@@ -370,20 +405,20 @@ fn get_paired_devices_with_context(
         let name = if name_obj.is_null() {
             None
         } else {
-            let value: String = env
-                .get_string(&JString::from(name_obj))
+            let value = env
+                .as_cast::<JString>(&name_obj)
+                .and_then(|name| name.try_to_string(env))
                 .map_err(|e| {
                     BluetoothError::Platform(format!("BluetoothDevice.getName get_string: {e}"))
-                })?
-                .into();
+                })?;
             if value.is_empty() { None } else { Some(value) }
         };
 
         let class_obj = env
             .call_method(
                 &device_obj,
-                "getBluetoothClass",
-                "()Landroid/bluetooth/BluetoothClass;",
+                jni_str!("getBluetoothClass"),
+                jni_sig!("()Landroid/bluetooth/BluetoothClass;"),
                 &[],
             )
             .map_err(|e| {
@@ -398,21 +433,26 @@ fn get_paired_devices_with_context(
         let device_class = if class_obj.is_null() {
             0
         } else {
-            env.call_method(&class_obj, "getMajorDeviceClass", "()I", &[])
-                .map_err(|e| {
-                    BluetoothError::Platform(format!("BluetoothClass.getMajorDeviceClass: {e}"))
-                })?
-                .i()
-                .map_err(|e| {
-                    BluetoothError::Platform(format!(
-                        "BluetoothClass.getMajorDeviceClass return decode: {e}"
-                    ))
-                })?
-                .cast_unsigned()
+            env.call_method(
+                &class_obj,
+                jni_str!("getMajorDeviceClass"),
+                jni_sig!("()I"),
+                &[],
+            )
+            .map_err(|e| {
+                BluetoothError::Platform(format!("BluetoothClass.getMajorDeviceClass: {e}"))
+            })?
+            .i()
+            .map_err(|e| {
+                BluetoothError::Platform(format!(
+                    "BluetoothClass.getMajorDeviceClass return decode: {e}"
+                ))
+            })?
+            .cast_unsigned()
         };
 
         let bond_state = env
-            .call_method(&device_obj, "getBondState", "()I", &[])
+            .call_method(&device_obj, jni_str!("getBondState"), jni_sig!("()I"), &[])
             .map_err(|e| BluetoothError::Platform(format!("BluetoothDevice.getBondState: {e}")))?
             .i()
             .map_err(|e| {
@@ -475,12 +515,12 @@ impl BleScannerInner {
             }
         }
 
-        let callback_state_id = next_callback_state_id()?;
         let (tx, rx) = async_channel::unbounded();
-        let scan_state = ScanCallbackState {
+        let scan_state = Arc::new(ScanCallbackState {
             sender: tx,
             name_prefix: filter.name_prefix.clone(),
-        };
+        });
+        let callback_state_handle = callback_state_handle(&scan_state)?;
         let service_uuids: Vec<String> = filter
             .service_uuids
             .iter()
@@ -488,44 +528,35 @@ impl BleScannerInner {
             .collect();
 
         let session = with_android_context(|env, context| {
-            init_dex(env, context)?;
-            register_callback_natives(env)?;
-            let helper_class = get_helper_class(env)?;
-            let callback_class = load_class(env, "waterkit.bluetooth.BleScanBridgeCallback")?;
+            let loader = init_dex(env, context)?;
+            register_callback_natives(env, &loader)?;
+            let helper_class = get_helper_class(env, &loader)?;
+            let callback_class =
+                load_class(env, &loader, "waterkit.bluetooth.BleScanBridgeCallback")?;
             let callback = env
-                .new_object(callback_class, "()V", &[])
+                .new_object(callback_class, jni_sig!("()V"), &[])
                 .map_err(|error| {
                     BluetoothError::Platform(format!("new BleScanBridgeCallback failed: {error}"))
                 })?;
             env.set_field(
                 &callback,
-                "waterkit_scan_state",
-                "J",
-                JValue::Long(callback_state_id),
+                jni_str!("waterkit_scan_state"),
+                jni_sig!("J"),
+                JValue::Long(callback_state_handle),
             )
             .map_err(|error| {
                 BluetoothError::Platform(format!(
                     "set BleScanBridgeCallback.waterkit_scan_state failed: {error}"
                 ))
             })?;
+            let callback = env.new_global_ref(callback).map_err(|error| {
+                BluetoothError::Platform(format!("new_global_ref callback failed: {error}"))
+            })?;
 
             let service_uuid_array = if service_uuids.is_empty() {
                 JObject::null()
             } else {
-                let string_class = env.find_class("java/lang/String").map_err(|error| {
-                    BluetoothError::Platform(format!("find java/lang/String failed: {error}"))
-                })?;
-                let array = env
-                    .new_object_array(
-                        i32::try_from(service_uuids.len()).map_err(|_| {
-                            BluetoothError::Platform(format!(
-                                "service UUID filter count exceeds i32: {}",
-                                service_uuids.len()
-                            ))
-                        })?,
-                        string_class,
-                        JObject::null(),
-                    )
+                let array = JObjectArray::<JString>::new(env, service_uuids.len(), JString::null())
                     .map_err(|error| {
                         BluetoothError::Platform(format!(
                             "new service UUID object array failed: {error}"
@@ -536,16 +567,7 @@ impl BleScannerInner {
                     let value = env.new_string(uuid).map_err(|error| {
                         BluetoothError::Platform(format!("new_string UUID failed: {error}"))
                     })?;
-                    env.set_object_array_element(
-                        &array,
-                        i32::try_from(index).map_err(|_| {
-                            BluetoothError::Platform(format!(
-                                "service UUID index exceeds i32: {index}"
-                            ))
-                        })?,
-                        &value,
-                    )
-                    .map_err(|error| {
+                    array.set_element(env, index, &value).map_err(|error| {
                         BluetoothError::Platform(format!(
                             "set service UUID array element failed: {error}"
                         ))
@@ -556,13 +578,15 @@ impl BleScannerInner {
 
             let scanner = env
                 .call_static_method(
-                    helper_class,
-                    "startBleScan",
-                    "(Landroid/content/Context;[Ljava/lang/String;Lwaterkit/bluetooth/BleScanCallback;)Landroid/bluetooth/le/BluetoothLeScanner;",
+                    &helper_class,
+                    jni_str!("startBleScan"),
+                    jni_sig!(
+                        "(Landroid/content/Context;[Ljava/lang/String;Lwaterkit/bluetooth/BleScanCallback;)Landroid/bluetooth/le/BluetoothLeScanner;"
+                    ),
                     &[
                         JValue::Object(context),
                         JValue::Object(&service_uuid_array),
-                        JValue::Object(&callback),
+                        JValue::Object(callback.as_obj()),
                     ],
                 )
                 .map_err(|error| {
@@ -578,31 +602,37 @@ impl BleScannerInner {
                 })?;
 
             if scanner.is_null() {
+                release_callback_state(env, &callback)?;
                 return Err(BluetoothError::NotAvailable);
             }
 
-            let scanner = env.new_global_ref(scanner).map_err(|error| {
-                BluetoothError::Platform(format!("new_global_ref scanner failed: {error}"))
-            })?;
-            let callback = env.new_global_ref(callback).map_err(|error| {
-                BluetoothError::Platform(format!("new_global_ref callback failed: {error}"))
-            })?;
+            let scanner = match env.new_global_ref(&scanner) {
+                Ok(scanner) => scanner,
+                Err(error) => {
+                    let _ = env.call_static_method(
+                        &helper_class,
+                        jni_str!("stopBleScan"),
+                        jni_sig!(
+                            "(Landroid/bluetooth/le/BluetoothLeScanner;Landroid/bluetooth/le/ScanCallback;)V"
+                        ),
+                        &[
+                            JValue::Object(&scanner),
+                            JValue::Object(callback.as_obj()),
+                        ],
+                    );
+                    release_callback_state(env, &callback)?;
+                    return Err(BluetoothError::Platform(format!(
+                        "new_global_ref scanner failed: {error}"
+                    )));
+                }
+            };
 
             Ok(BleScanSession {
                 scanner,
                 callback,
-                callback_state_id,
+                _callback_state: Arc::clone(&scan_state),
             })
         })?;
-
-        {
-            let mut callbacks = scan_callbacks().lock().map_err(|error| {
-                BluetoothError::Platform(format!(
-                    "BLE scan callback registry mutex poisoned: {error}"
-                ))
-            })?;
-            callbacks.insert(callback_state_id, scan_state);
-        }
 
         *self.session.lock().map_err(|error| {
             BluetoothError::Platform(format!("BLE scan session mutex poisoned: {error}"))
@@ -620,17 +650,16 @@ impl BleScannerInner {
             return;
         };
 
-        if let Ok(mut callbacks) = scan_callbacks().lock() {
-            callbacks.remove(&session.callback_state_id);
-        }
-
         with_android_context(|env, context| {
-            init_dex(env, context)?;
-            let helper_class = get_helper_class(env)?;
+            release_callback_state(env, &session.callback)?;
+            let loader = init_dex(env, context)?;
+            let helper_class = get_helper_class(env, &loader)?;
             env.call_static_method(
-                helper_class,
-                "stopBleScan",
-                "(Landroid/bluetooth/le/BluetoothLeScanner;Landroid/bluetooth/le/ScanCallback;)V",
+                &helper_class,
+                jni_str!("stopBleScan"),
+                jni_sig!(
+                    "(Landroid/bluetooth/le/BluetoothLeScanner;Landroid/bluetooth/le/ScanCallback;)V"
+                ),
                 &[
                     JValue::Object(session.scanner.as_obj()),
                     JValue::Object(session.callback.as_obj()),
@@ -656,122 +685,87 @@ impl Drop for BleScannerInner {
     clippy::too_many_lines,
     reason = "JNI scan callbacks decode the full Android payload at the native boundary; keeping the decode in one callback preserves ownership and null-check order."
 )]
-pub extern "system" fn Java_waterkit_bluetooth_BleScanBridgeCallback_onScanResultNative(
-    mut env: JNIEnv,
-    callback: JObject,
-    device_address: JString,
-    device_name: JObject,
+pub extern "system" fn Java_waterkit_bluetooth_BleScanBridgeCallback_onScanResultNative<'caller>(
+    mut env: EnvUnowned<'caller>,
+    callback: JObject<'caller>,
+    device_address: JString<'caller>,
+    device_name: JObject<'caller>,
     rssi: jni::sys::jint,
-    service_uuids: JObjectArray,
+    service_uuids: JObjectArray<'caller>,
 ) {
-    let callback_state_id = env
-        .get_field(&callback, "waterkit_scan_state", "J")
-        .unwrap_or_else(|error| {
-            panic!("waterkit-bluetooth: read waterkit_scan_state failed in scan callback: {error}")
-        })
-        .j()
-        .unwrap_or_else(|error| {
-            panic!(
-                "waterkit-bluetooth: decode waterkit_scan_state failed in scan callback: {error}"
-            )
-        });
+    with_callback_env(&mut env, |env| {
+        let state: Arc<ScanCallbackState> =
+            callback_state(env, &callback, jni_str!("waterkit_scan_state"));
 
-    assert!(
-        callback_state_id > 0,
-        "waterkit-bluetooth: invalid waterkit_scan_state in scan callback: {callback_state_id}"
-    );
-
-    let state = {
-        let callbacks = scan_callbacks().lock().unwrap_or_else(|error| {
-            panic!("waterkit-bluetooth: scan callback registry mutex poisoned: {error}")
-        });
-        callbacks.get(&callback_state_id).cloned()
-    };
-    let Some(state) = state else {
-        debug_assert!(
-            false,
-            "waterkit-bluetooth: scan callback state missing for id {callback_state_id}"
-        );
-        return;
-    };
-
-    let device_address: String = env
-        .get_string(&device_address)
-        .unwrap_or_else(|error| {
+        let device_address = device_address.try_to_string(env).unwrap_or_else(|error| {
             panic!("waterkit-bluetooth: decode deviceAddress failed in scan callback: {error}")
-        })
-        .into();
+        });
 
-    let device_name = if device_name.is_null() {
-        None
-    } else {
-        let value: String = env
-            .get_string(&JString::from(device_name))
-            .unwrap_or_else(|error| {
-                panic!("waterkit-bluetooth: decode deviceName failed in scan callback: {error}")
-            })
-            .into();
-        if value.is_empty() { None } else { Some(value) }
-    };
+        let device_name = if device_name.is_null() {
+            None
+        } else {
+            let value = env
+                .as_cast::<JString>(&device_name)
+                .and_then(|value| value.try_to_string(env))
+                .unwrap_or_else(|error| {
+                    panic!("waterkit-bluetooth: decode deviceName failed in scan callback: {error}")
+                });
+            if value.is_empty() { None } else { Some(value) }
+        };
 
-    if let Some(prefix) = state.name_prefix.as_ref()
-        && !device_name
-            .as_deref()
-            .is_some_and(|name| name.starts_with(prefix))
-    {
-        return;
-    }
+        if let Some(prefix) = state.name_prefix.as_ref()
+            && !device_name
+                .as_deref()
+                .is_some_and(|name| name.starts_with(prefix))
+        {
+            return Ok(());
+        }
 
-    let service_uuids_len = env
-        .get_array_length(&service_uuids)
-        .unwrap_or_else(|error| {
+        let service_uuids_len = service_uuids.len(env).unwrap_or_else(|error| {
             panic!(
                 "waterkit-bluetooth: get service UUID array length failed in scan callback: {error}"
             )
         });
-    let mut parsed_uuids =
-        Vec::with_capacity(usize::try_from(service_uuids_len).unwrap_or_else(|_| {
-            panic!(
-                "waterkit-bluetooth: service UUID array length was negative: {service_uuids_len}"
-            )
-        }));
-    for index in 0..service_uuids_len {
-        let value = env
-            .get_object_array_element(&service_uuids, index)
-            .unwrap_or_else(|error| {
-                panic!(
-                    "waterkit-bluetooth: get service UUID array element failed at {index}: {error}"
-                )
-            });
-        if value.is_null() {
-            continue;
+        let mut parsed_uuids = Vec::with_capacity(service_uuids_len);
+        for index in 0..service_uuids_len {
+            let value = service_uuids
+                .get_element(env, index)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "waterkit-bluetooth: get service UUID array element failed at {index}: {error}"
+                    )
+                });
+            if value.is_null() {
+                continue;
+            }
+            let value = env
+                .as_cast::<JString>(&value)
+                .and_then(|value| value.try_to_string(env))
+                .unwrap_or_else(|error| {
+                    panic!("waterkit-bluetooth: decode service UUID failed at {index}: {error}")
+                });
+            if !value.is_empty() {
+                parsed_uuids.push(Uuid::new(value));
+            }
         }
-        let value: String = env
-            .get_string(&JString::from(value))
-            .unwrap_or_else(|error| {
-                panic!("waterkit-bluetooth: decode service UUID failed at {index}: {error}")
-            })
-            .into();
-        if !value.is_empty() {
-            parsed_uuids.push(Uuid::new(value));
-        }
-    }
 
-    if let Err(error) = state.sender.try_send(ScanResult {
-        device: BluetoothDevice {
-            id: DeviceId::new(device_address),
-            name: device_name,
-            rssi: i16::try_from(rssi).ok(),
-            is_connected: false,
-        },
-        service_uuids: parsed_uuids,
-        manufacturer_data: HashMap::new(),
-    }) {
-        debug_assert!(
-            false,
-            "waterkit-bluetooth: dropping scan result because receiver is closed: {error}"
-        );
-    }
+        if let Err(error) = state.sender.try_send(ScanResult {
+            device: BluetoothDevice {
+                id: DeviceId::new(device_address),
+                name: device_name,
+                rssi: i16::try_from(rssi).ok(),
+                is_connected: false,
+            },
+            service_uuids: parsed_uuids,
+            manufacturer_data: HashMap::new(),
+        }) {
+            debug_assert!(
+                false,
+                "waterkit-bluetooth: dropping scan result because receiver is closed: {error}"
+            );
+        }
+        Ok(())
+    });
 }
 
 fn parse_services_payload(payload: &str) -> Result<Vec<GattService>, BluetoothError> {
@@ -818,34 +812,22 @@ fn parse_services_payload(payload: &str) -> Result<Vec<GattService>, BluetoothEr
     Ok(services)
 }
 
-fn callback_state_id(env: &mut JNIEnv, callback: &JObject, field: &str) -> i64 {
-    let value = env.get_field(callback, field, "J").unwrap_or_else(|error| {
-        panic!("waterkit-bluetooth: read {field} failed in callback: {error}")
-    });
-    let state_id = value.j().unwrap_or_else(|error| {
-        panic!("waterkit-bluetooth: decode {field} failed in callback: {error}")
-    });
-    assert!(
-        state_id > 0,
-        "waterkit-bluetooth: invalid callback state id in {field}: {state_id}"
-    );
-    state_id
-}
-
 fn jni_uuid_from_string<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     uuid: &str,
 ) -> Result<JObject<'local>, BluetoothError> {
-    let uuid_class = env.find_class("java/util/UUID").map_err(|error| {
-        BluetoothError::Platform(format!("find java/util/UUID failed: {error}"))
-    })?;
+    let uuid_class = env
+        .find_class(jni_str!("java/util/UUID"))
+        .map_err(|error| {
+            BluetoothError::Platform(format!("find java/util/UUID failed: {error}"))
+        })?;
     let uuid = env
         .new_string(uuid)
         .map_err(|error| BluetoothError::Platform(format!("new_string UUID failed: {error}")))?;
     env.call_static_method(
         uuid_class,
-        "fromString",
-        "(Ljava/lang/String;)Ljava/util/UUID;",
+        jni_str!("fromString"),
+        jni_sig!("(Ljava/lang/String;)Ljava/util/UUID;"),
         &[JValue::Object(&uuid)],
     )
     .map_err(|error| BluetoothError::Platform(format!("UUID.fromString failed: {error}")))?
@@ -854,7 +836,7 @@ fn jni_uuid_from_string<'local>(
 }
 
 fn jni_characteristic<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     gatt: &JObject<'local>,
     service_uuid: &str,
     characteristic_uuid: &str,
@@ -863,8 +845,8 @@ fn jni_characteristic<'local>(
     let service = env
         .call_method(
             gatt,
-            "getService",
-            "(Ljava/util/UUID;)Landroid/bluetooth/BluetoothGattService;",
+            jni_str!("getService"),
+            jni_sig!("(Ljava/util/UUID;)Landroid/bluetooth/BluetoothGattService;"),
             &[JValue::Object(&service_uuid_obj)],
         )
         .map_err(|error| {
@@ -884,8 +866,8 @@ fn jni_characteristic<'local>(
     let characteristic = env
         .call_method(
             &service,
-            "getCharacteristic",
-            "(Ljava/util/UUID;)Landroid/bluetooth/BluetoothGattCharacteristic;",
+            jni_str!("getCharacteristic"),
+            jni_sig!("(Ljava/util/UUID;)Landroid/bluetooth/BluetoothGattCharacteristic;"),
             &[JValue::Object(&characteristic_uuid_obj)],
         )
         .map_err(|error| {
@@ -909,323 +891,265 @@ fn jni_characteristic<'local>(
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_bluetooth_BleGattBridgeCallback_onConnectionStateNative(
-    mut env: JNIEnv,
-    callback: JObject,
-    _device_address: JString,
+pub extern "system" fn Java_waterkit_bluetooth_BleGattBridgeCallback_onConnectionStateNative<
+    'caller,
+>(
+    mut env: EnvUnowned<'caller>,
+    callback: JObject<'caller>,
+    _device_address: JString<'caller>,
     connected: jni::sys::jboolean,
     status: jni::sys::jint,
 ) {
-    let callback_state_id = callback_state_id(&mut env, &callback, "waterkit_gatt_state");
-    let state = {
-        let callbacks = gatt_callbacks().lock().unwrap_or_else(|error| {
-            panic!("waterkit-bluetooth: GATT callback registry mutex poisoned: {error}")
-        });
-        callbacks.get(&callback_state_id).cloned()
-    };
-    let Some(state) = state else {
-        debug_assert!(
-            false,
-            "waterkit-bluetooth: missing GATT callback state for id {callback_state_id}"
-        );
-        return;
-    };
+    with_callback_env(&mut env, |env| {
+        let state: Arc<GattCallbackState> =
+            callback_state(env, &callback, jni_str!("waterkit_gatt_state"));
 
-    let mut connect_slot = state.connect.lock().unwrap_or_else(|error| {
-        panic!("waterkit-bluetooth: GATT connect slot mutex poisoned: {error}")
+        let mut connect_slot = state.connect.lock().unwrap_or_else(|error| {
+            panic!("waterkit-bluetooth: GATT connect slot mutex poisoned: {error}")
+        });
+        if let Some(tx) = connect_slot.take() {
+            let result = if connected && status == 0 {
+                Ok(())
+            } else {
+                Err(BluetoothError::ConnectionFailed(format!(
+                    "onConnectionStateChange failed: connected={connected}, status={status}"
+                )))
+            };
+            let _ = tx.send(result);
+        }
+        Ok(())
     });
-    if let Some(tx) = connect_slot.take() {
-        let result = if connected != 0 && status == 0 {
-            Ok(())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_waterkit_bluetooth_BleGattBridgeCallback_onServicesDiscoveredNative<
+    'caller,
+>(
+    mut env: EnvUnowned<'caller>,
+    callback: JObject<'caller>,
+    _device_address: JString<'caller>,
+    payload: JString<'caller>,
+    status: jni::sys::jint,
+) {
+    with_callback_env(&mut env, |env| {
+        let state: Arc<GattCallbackState> =
+            callback_state(env, &callback, jni_str!("waterkit_gatt_state"));
+
+        let result = if status == 0 {
+            let payload = payload.try_to_string(env).unwrap_or_else(|error| {
+                panic!("waterkit-bluetooth: decode services payload failed in callback: {error}")
+            });
+            parse_services_payload(&payload)
         } else {
-            Err(BluetoothError::ConnectionFailed(format!(
-                "onConnectionStateChange failed: connected={}, status={status}",
-                connected != 0
+            Err(BluetoothError::GattError(format!(
+                "onServicesDiscovered failed with status {status}"
             )))
         };
-        let _ = tx.send(result);
-    }
-}
 
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_bluetooth_BleGattBridgeCallback_onServicesDiscoveredNative(
-    mut env: JNIEnv,
-    callback: JObject,
-    _device_address: JString,
-    payload: JString,
-    status: jni::sys::jint,
-) {
-    let callback_state_id = callback_state_id(&mut env, &callback, "waterkit_gatt_state");
-    let state = {
-        let callbacks = gatt_callbacks().lock().unwrap_or_else(|error| {
-            panic!("waterkit-bluetooth: GATT callback registry mutex poisoned: {error}")
+        let mut discover_slot = state.discover_services.lock().unwrap_or_else(|error| {
+            panic!("waterkit-bluetooth: GATT discover slot mutex poisoned: {error}")
         });
-        callbacks.get(&callback_state_id).cloned()
-    };
-    let Some(state) = state else {
-        debug_assert!(
-            false,
-            "waterkit-bluetooth: missing GATT callback state for id {callback_state_id}"
-        );
-        return;
-    };
-
-    let result = if status == 0 {
-        let payload: String = env
-            .get_string(&payload)
-            .unwrap_or_else(|error| {
-                panic!("waterkit-bluetooth: decode services payload failed in callback: {error}")
-            })
-            .into();
-        parse_services_payload(&payload)
-    } else {
-        Err(BluetoothError::GattError(format!(
-            "onServicesDiscovered failed with status {status}"
-        )))
-    };
-
-    let mut discover_slot = state.discover_services.lock().unwrap_or_else(|error| {
-        panic!("waterkit-bluetooth: GATT discover slot mutex poisoned: {error}")
+        if let Some(tx) = discover_slot.take() {
+            let _ = tx.send(result);
+        } else {
+            debug_assert!(
+                false,
+                "waterkit-bluetooth: discover callback fired without pending receiver"
+            );
+        }
+        Ok(())
     });
-    if let Some(tx) = discover_slot.take() {
-        let _ = tx.send(result);
-    } else {
-        debug_assert!(
-            false,
-            "waterkit-bluetooth: discover callback fired without pending receiver"
-        );
-    }
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicReadNative(
-    mut env: JNIEnv,
-    callback: JObject,
-    _device_address: JString,
-    service_uuid: JString,
-    characteristic_uuid: JString,
-    value: JByteArray,
+pub extern "system" fn Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicReadNative<
+    'caller,
+>(
+    mut env: EnvUnowned<'caller>,
+    callback: JObject<'caller>,
+    _device_address: JString<'caller>,
+    service_uuid: JString<'caller>,
+    characteristic_uuid: JString<'caller>,
+    value: JByteArray<'caller>,
     status: jni::sys::jint,
 ) {
-    let callback_state_id = callback_state_id(&mut env, &callback, "waterkit_gatt_state");
-    let state = {
-        let callbacks = gatt_callbacks().lock().unwrap_or_else(|error| {
-            panic!("waterkit-bluetooth: GATT callback registry mutex poisoned: {error}")
-        });
-        callbacks.get(&callback_state_id).cloned()
-    };
-    let Some(state) = state else {
-        debug_assert!(
-            false,
-            "waterkit-bluetooth: missing GATT callback state for id {callback_state_id}"
-        );
-        return;
-    };
+    with_callback_env(&mut env, |env| {
+        let state: Arc<GattCallbackState> =
+            callback_state(env, &callback, jni_str!("waterkit_gatt_state"));
 
-    let service_uuid: String = env
-        .get_string(&service_uuid)
-        .unwrap_or_else(|error| {
+        let service_uuid = service_uuid.try_to_string(env).unwrap_or_else(|error| {
             panic!("waterkit-bluetooth: decode service UUID failed in read callback: {error}")
-        })
-        .into();
-    let characteristic_uuid: String = env
-        .get_string(&characteristic_uuid)
-        .unwrap_or_else(|error| {
+        });
+        let characteristic_uuid = characteristic_uuid.try_to_string(env).unwrap_or_else(|error| {
             panic!(
                 "waterkit-bluetooth: decode characteristic UUID failed in read callback: {error}"
             )
-        })
-        .into();
-    let key = (service_uuid, characteristic_uuid);
+        });
+        let key = (service_uuid, characteristic_uuid);
 
-    let result = if status == 0 {
-        env.convert_byte_array(value).map_err(|error| {
-            BluetoothError::GattError(format!("decode read value byte array failed: {error}"))
-        })
-    } else {
-        Err(BluetoothError::GattError(format!(
-            "onCharacteristicRead failed with status {status}"
-        )))
-    };
+        let result = if status == 0 {
+            env.convert_byte_array(value).map_err(|error| {
+                BluetoothError::GattError(format!("decode read value byte array failed: {error}"))
+            })
+        } else {
+            Err(BluetoothError::GattError(format!(
+                "onCharacteristicRead failed with status {status}"
+            )))
+        };
 
-    let mut reads = state.reads.lock().unwrap_or_else(|error| {
-        panic!("waterkit-bluetooth: GATT read map mutex poisoned: {error}")
+        let mut reads = state.reads.lock().unwrap_or_else(|error| {
+            panic!("waterkit-bluetooth: GATT read map mutex poisoned: {error}")
+        });
+        if let Some(tx) = reads.remove(&key) {
+            let _ = tx.send(result);
+        } else {
+            debug_assert!(
+                false,
+                "waterkit-bluetooth: read callback fired without pending receiver"
+            );
+        }
+        Ok(())
     });
-    if let Some(tx) = reads.remove(&key) {
-        let _ = tx.send(result);
-    } else {
-        debug_assert!(
-            false,
-            "waterkit-bluetooth: read callback fired without pending receiver"
-        );
-    }
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicWriteNative(
-    mut env: JNIEnv,
-    callback: JObject,
-    _device_address: JString,
-    service_uuid: JString,
-    characteristic_uuid: JString,
+pub extern "system" fn Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicWriteNative<
+    'caller,
+>(
+    mut env: EnvUnowned<'caller>,
+    callback: JObject<'caller>,
+    _device_address: JString<'caller>,
+    service_uuid: JString<'caller>,
+    characteristic_uuid: JString<'caller>,
     status: jni::sys::jint,
 ) {
-    let callback_state_id = callback_state_id(&mut env, &callback, "waterkit_gatt_state");
-    let state = {
-        let callbacks = gatt_callbacks().lock().unwrap_or_else(|error| {
-            panic!("waterkit-bluetooth: GATT callback registry mutex poisoned: {error}")
-        });
-        callbacks.get(&callback_state_id).cloned()
-    };
-    let Some(state) = state else {
-        debug_assert!(
-            false,
-            "waterkit-bluetooth: missing GATT callback state for id {callback_state_id}"
-        );
-        return;
-    };
+    with_callback_env(&mut env, |env| {
+        let state: Arc<GattCallbackState> =
+            callback_state(env, &callback, jni_str!("waterkit_gatt_state"));
 
-    let service_uuid: String = env
-        .get_string(&service_uuid)
-        .unwrap_or_else(|error| {
+        let service_uuid = service_uuid.try_to_string(env).unwrap_or_else(|error| {
             panic!("waterkit-bluetooth: decode service UUID failed in write callback: {error}")
-        })
-        .into();
-    let characteristic_uuid: String = env
-        .get_string(&characteristic_uuid)
-        .unwrap_or_else(|error| {
+        });
+        let characteristic_uuid = characteristic_uuid.try_to_string(env).unwrap_or_else(|error| {
             panic!(
                 "waterkit-bluetooth: decode characteristic UUID failed in write callback: {error}"
             )
-        })
-        .into();
-    let key = (service_uuid, characteristic_uuid);
+        });
+        let key = (service_uuid, characteristic_uuid);
 
-    let result = if status == 0 {
+        let result = if status == 0 {
+            Ok(())
+        } else {
+            Err(BluetoothError::GattError(format!(
+                "onCharacteristicWrite failed with status {status}"
+            )))
+        };
+
+        let mut writes = state.writes.lock().unwrap_or_else(|error| {
+            panic!("waterkit-bluetooth: GATT write map mutex poisoned: {error}")
+        });
+        if let Some(tx) = writes.remove(&key) {
+            let _ = tx.send(result);
+        } else {
+            debug_assert!(
+                false,
+                "waterkit-bluetooth: write callback fired without pending receiver"
+            );
+        }
         Ok(())
-    } else {
-        Err(BluetoothError::GattError(format!(
-            "onCharacteristicWrite failed with status {status}"
-        )))
-    };
-
-    let mut writes = state.writes.lock().unwrap_or_else(|error| {
-        panic!("waterkit-bluetooth: GATT write map mutex poisoned: {error}")
     });
-    if let Some(tx) = writes.remove(&key) {
-        let _ = tx.send(result);
-    } else {
-        debug_assert!(
-            false,
-            "waterkit-bluetooth: write callback fired without pending receiver"
-        );
-    }
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicChangedNative(
-    mut env: JNIEnv,
-    callback: JObject,
-    _device_address: JString,
-    service_uuid: JString,
-    characteristic_uuid: JString,
-    value: JByteArray,
+pub extern "system" fn Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicChangedNative<
+    'caller,
+>(
+    mut env: EnvUnowned<'caller>,
+    callback: JObject<'caller>,
+    _device_address: JString<'caller>,
+    service_uuid: JString<'caller>,
+    characteristic_uuid: JString<'caller>,
+    value: JByteArray<'caller>,
 ) {
-    let callback_state_id = callback_state_id(&mut env, &callback, "waterkit_gatt_state");
-    let state = {
-        let callbacks = gatt_callbacks().lock().unwrap_or_else(|error| {
-            panic!("waterkit-bluetooth: GATT callback registry mutex poisoned: {error}")
-        });
-        callbacks.get(&callback_state_id).cloned()
-    };
-    let Some(state) = state else {
-        debug_assert!(
-            false,
-            "waterkit-bluetooth: missing GATT callback state for id {callback_state_id}"
-        );
-        return;
-    };
+    with_callback_env(&mut env, |env| {
+        let state: Arc<GattCallbackState> =
+            callback_state(env, &callback, jni_str!("waterkit_gatt_state"));
 
-    let service_uuid: String = env
-        .get_string(&service_uuid)
-        .unwrap_or_else(|error| {
+        let service_uuid = service_uuid.try_to_string(env).unwrap_or_else(|error| {
             panic!(
                 "waterkit-bluetooth: decode service UUID failed in notification callback: {error}"
             )
-        })
-        .into();
-    let characteristic_uuid: String = env
-        .get_string(&characteristic_uuid)
-        .unwrap_or_else(|error| {
+        });
+        let characteristic_uuid = characteristic_uuid.try_to_string(env).unwrap_or_else(|error| {
             panic!(
                 "waterkit-bluetooth: decode characteristic UUID failed in notification callback: {error}"
             )
-        })
-        .into();
-    let key = (service_uuid, characteristic_uuid);
-    let payload = env.convert_byte_array(value).unwrap_or_else(|error| {
-        panic!("waterkit-bluetooth: decode notification payload failed: {error}")
-    });
-
-    let sender = {
-        let subscriptions = state.subscriptions.lock().unwrap_or_else(|error| {
-            panic!("waterkit-bluetooth: GATT subscription map mutex poisoned: {error}")
         });
-        subscriptions.get(&key).cloned()
-    };
-    if let Some(sender) = sender {
-        if let Err(error) = sender.try_send(payload) {
+        let key = (service_uuid, characteristic_uuid);
+        let payload = env.convert_byte_array(value).unwrap_or_else(|error| {
+            panic!("waterkit-bluetooth: decode notification payload failed: {error}")
+        });
+
+        let sender = {
+            let subscriptions = state.subscriptions.lock().unwrap_or_else(|error| {
+                panic!("waterkit-bluetooth: GATT subscription map mutex poisoned: {error}")
+            });
+            subscriptions.get(&key).cloned()
+        };
+        if let Some(sender) = sender {
+            if let Err(error) = sender.try_send(payload) {
+                debug_assert!(
+                    false,
+                    "waterkit-bluetooth: dropping notification payload because receiver is closed: {error}"
+                );
+            }
+        } else {
             debug_assert!(
                 false,
-                "waterkit-bluetooth: dropping notification payload because receiver is closed: {error}"
+                "waterkit-bluetooth: notification callback fired without subscriber"
             );
         }
-    } else {
-        debug_assert!(
-            false,
-            "waterkit-bluetooth: notification callback fired without subscriber"
-        );
-    }
+        Ok(())
+    });
 }
 
 pub struct BleConnectionInner {
-    gatt: GlobalRef,
-    callback: GlobalRef,
-    callback_state_id: i64,
+    gatt: Global<JObject<'static>>,
+    callback: Global<JObject<'static>>,
+    callback_state: Arc<GattCallbackState>,
+    closed: bool,
 }
 
 impl std::fmt::Debug for BleConnectionInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BleConnectionInner")
-            .field("callback_state_id", &self.callback_state_id)
+            .field("closed", &self.closed)
             .finish_non_exhaustive()
     }
 }
 
 impl BleConnectionInner {
     fn callback_state(&self) -> Result<Arc<GattCallbackState>, BluetoothError> {
-        gatt_callbacks()
-            .lock()
-            .map_err(|error| {
-                BluetoothError::Platform(format!("GATT callback registry mutex poisoned: {error}"))
-            })?
-            .get(&self.callback_state_id)
-            .cloned()
-            .ok_or_else(|| {
-                BluetoothError::Platform(format!(
-                    "missing GATT callback state for id {}",
-                    self.callback_state_id
-                ))
-            })
+        Ok(Arc::clone(&self.callback_state))
     }
 
-    fn close_gatt(&self) -> Result<(), BluetoothError> {
+    fn close_gatt(&mut self) -> Result<(), BluetoothError> {
+        if self.closed {
+            return Ok(());
+        }
+        with_android_context(|env, _context| release_callback_state(env, &self.callback))?;
+        self.closed = true;
         with_android_context(|env, _context| {
-            env.call_method(self.gatt.as_obj(), "disconnect", "()V", &[])
-                .map_err(|error| {
-                    BluetoothError::Platform(format!("BluetoothGatt.disconnect failed: {error}"))
-                })?;
-            env.call_method(self.gatt.as_obj(), "close", "()V", &[])
+            env.call_method(
+                self.gatt.as_obj(),
+                jni_str!("disconnect"),
+                jni_sig!("()V"),
+                &[],
+            )
+            .map_err(|error| {
+                BluetoothError::Platform(format!("BluetoothGatt.disconnect failed: {error}"))
+            })?;
+            env.call_method(self.gatt.as_obj(), jni_str!("close"), jni_sig!("()V"), &[])
                 .map_err(|error| {
                     BluetoothError::Platform(format!("BluetoothGatt.close failed: {error}"))
                 })?;
@@ -1247,8 +1171,8 @@ impl BleConnectionInner {
             AdapterState::Unauthorized => return Err(BluetoothError::PermissionDenied),
         }
 
-        let callback_state_id = next_callback_state_id()?;
         let callback_state = Arc::new(GattCallbackState::new());
+        let callback_state_handle = callback_state_handle(&callback_state)?;
         let (connect_tx, connect_rx) = oneshot::channel::<Result<(), BluetoothError>>();
         {
             let mut connect_slot = callback_state.connect.lock().map_err(|error| {
@@ -1256,33 +1180,30 @@ impl BleConnectionInner {
             })?;
             *connect_slot = Some(connect_tx);
         }
-        {
-            let mut states = gatt_callbacks().lock().map_err(|error| {
-                BluetoothError::Platform(format!("GATT callback registry mutex poisoned: {error}"))
-            })?;
-            states.insert(callback_state_id, Arc::clone(&callback_state));
-        }
-
         let setup = with_android_context(|env, context| {
-            init_dex(env, context)?;
-            register_callback_natives(env)?;
-            let helper_class = get_helper_class(env)?;
-            let callback_class = load_class(env, "waterkit.bluetooth.BleGattBridgeCallback")?;
+            let loader = init_dex(env, context)?;
+            register_callback_natives(env, &loader)?;
+            let helper_class = get_helper_class(env, &loader)?;
+            let callback_class =
+                load_class(env, &loader, "waterkit.bluetooth.BleGattBridgeCallback")?;
             let callback = env
-                .new_object(callback_class, "()V", &[])
+                .new_object(callback_class, jni_sig!("()V"), &[])
                 .map_err(|error| {
                     BluetoothError::Platform(format!("new BleGattBridgeCallback failed: {error}"))
                 })?;
             env.set_field(
                 &callback,
-                "waterkit_gatt_state",
-                "J",
-                JValue::Long(callback_state_id),
+                jni_str!("waterkit_gatt_state"),
+                jni_sig!("J"),
+                JValue::Long(callback_state_handle),
             )
             .map_err(|error| {
                 BluetoothError::Platform(format!(
                     "set BleGattBridgeCallback.waterkit_gatt_state failed: {error}"
                 ))
+            })?;
+            let callback = env.new_global_ref(callback).map_err(|error| {
+                BluetoothError::Platform(format!("new_global_ref callback failed: {error}"))
             })?;
 
             let address = env.new_string(device_id.as_str()).map_err(|error| {
@@ -1290,13 +1211,15 @@ impl BleConnectionInner {
             })?;
             let gatt = env
                 .call_static_method(
-                    helper_class,
-                    "connectGatt",
-                    "(Landroid/content/Context;Ljava/lang/String;Landroid/bluetooth/BluetoothGattCallback;)Landroid/bluetooth/BluetoothGatt;",
+                    &helper_class,
+                    jni_str!("connectGatt"),
+                    jni_sig!(
+                        "(Landroid/content/Context;Ljava/lang/String;Landroid/bluetooth/BluetoothGattCallback;)Landroid/bluetooth/BluetoothGatt;"
+                    ),
                     &[
                         JValue::Object(context),
                         JValue::Object(&address),
-                        JValue::Object(&callback),
+                        JValue::Object(callback.as_obj()),
                     ],
                 )
                 .map_err(|error| {
@@ -1307,28 +1230,29 @@ impl BleConnectionInner {
                     BluetoothError::Platform(format!("connectGatt return decode failed: {error}"))
                 })?;
             if gatt.is_null() {
+                release_callback_state(env, &callback)?;
                 return Err(BluetoothError::DeviceNotFound(
                     device_id.as_str().to_string(),
                 ));
             }
 
-            let gatt = env.new_global_ref(gatt).map_err(|error| {
-                BluetoothError::Platform(format!("new_global_ref gatt failed: {error}"))
-            })?;
-            let callback = env.new_global_ref(callback).map_err(|error| {
-                BluetoothError::Platform(format!("new_global_ref callback failed: {error}"))
-            })?;
+            let gatt = match env.new_global_ref(&gatt) {
+                Ok(global) => global,
+                Err(error) => {
+                    let _ = env.call_method(&gatt, jni_str!("disconnect"), jni_sig!("()V"), &[]);
+                    let _ = env.call_method(&gatt, jni_str!("close"), jni_sig!("()V"), &[]);
+                    release_callback_state(env, &callback)?;
+                    return Err(BluetoothError::Platform(format!(
+                        "new_global_ref gatt failed: {error}"
+                    )));
+                }
+            };
             Ok((gatt, callback))
         });
 
         let (gatt, callback) = match setup {
             Ok(values) => values,
-            Err(error) => {
-                if let Ok(mut states) = gatt_callbacks().lock() {
-                    states.remove(&callback_state_id);
-                }
-                return Err(error);
-            }
+            Err(error) => return Err(error),
         };
 
         let connect_result = connect_rx.await.map_err(|error| {
@@ -1336,14 +1260,12 @@ impl BleConnectionInner {
         })?;
 
         if let Err(error) = connect_result {
-            let connection = Self {
+            let mut connection = Self {
                 gatt,
                 callback,
-                callback_state_id,
+                callback_state,
+                closed: false,
             };
-            if let Ok(mut states) = gatt_callbacks().lock() {
-                states.remove(&callback_state_id);
-            }
             let _ = connection.close_gatt();
             return Err(error);
         }
@@ -1351,7 +1273,8 @@ impl BleConnectionInner {
         Ok(Self {
             gatt,
             callback,
-            callback_state_id,
+            callback_state,
+            closed: false,
         })
     }
 
@@ -1373,18 +1296,21 @@ impl BleConnectionInner {
         }
 
         let started = with_android_context(|env, _context| {
-            env.call_method(self.gatt.as_obj(), "discoverServices", "()Z", &[])
-                .map_err(|error| {
-                    BluetoothError::Platform(format!(
-                        "BluetoothGatt.discoverServices failed: {error}"
-                    ))
-                })?
-                .z()
-                .map_err(|error| {
-                    BluetoothError::Platform(format!(
-                        "BluetoothGatt.discoverServices return decode failed: {error}"
-                    ))
-                })
+            env.call_method(
+                self.gatt.as_obj(),
+                jni_str!("discoverServices"),
+                jni_sig!("()Z"),
+                &[],
+            )
+            .map_err(|error| {
+                BluetoothError::Platform(format!("BluetoothGatt.discoverServices failed: {error}"))
+            })?
+            .z()
+            .map_err(|error| {
+                BluetoothError::Platform(format!(
+                    "BluetoothGatt.discoverServices return decode failed: {error}"
+                ))
+            })
         })?;
         if !started {
             state
@@ -1431,8 +1357,8 @@ impl BleConnectionInner {
                 jni_characteristic(env, self.gatt.as_obj(), &service.0, &characteristic.0)?;
             env.call_method(
                 self.gatt.as_obj(),
-                "readCharacteristic",
-                "(Landroid/bluetooth/BluetoothGattCharacteristic;)Z",
+                jni_str!("readCharacteristic"),
+                jni_sig!("(Landroid/bluetooth/BluetoothGattCharacteristic;)Z"),
                 &[JValue::Object(&characteristic_obj)],
             )
             .map_err(|error| {
@@ -1496,8 +1422,8 @@ impl BleConnectionInner {
             let set_value = env
                 .call_method(
                     &characteristic_obj,
-                    "setValue",
-                    "([B)Z",
+                    jni_str!("setValue"),
+                    jni_sig!("([B)Z"),
                     &[JValue::Object(&JObject::from(payload))],
                 )
                 .map_err(|error| {
@@ -1516,8 +1442,8 @@ impl BleConnectionInner {
             }
             env.call_method(
                 self.gatt.as_obj(),
-                "writeCharacteristic",
-                "(Landroid/bluetooth/BluetoothGattCharacteristic;)Z",
+                jni_str!("writeCharacteristic"),
+                jni_sig!("(Landroid/bluetooth/BluetoothGattCharacteristic;)Z"),
                 &[JValue::Object(&characteristic_obj)],
             )
             .map_err(|error| {
@@ -1577,9 +1503,9 @@ impl BleConnectionInner {
             let notification_set = env
                 .call_method(
                     self.gatt.as_obj(),
-                    "setCharacteristicNotification",
-                    "(Landroid/bluetooth/BluetoothGattCharacteristic;Z)Z",
-                    &[JValue::Object(&characteristic_obj), JValue::Bool(1)],
+                    jni_str!("setCharacteristicNotification"),
+                    jni_sig!("(Landroid/bluetooth/BluetoothGattCharacteristic;Z)Z"),
+                    &[JValue::Object(&characteristic_obj), JValue::Bool(true)],
                 )
                 .map_err(|error| {
                     BluetoothError::Platform(format!(
@@ -1601,8 +1527,8 @@ impl BleConnectionInner {
             let descriptor = env
                 .call_method(
                     &characteristic_obj,
-                    "getDescriptor",
-                    "(Ljava/util/UUID;)Landroid/bluetooth/BluetoothGattDescriptor;",
+                    jni_str!("getDescriptor"),
+                    jni_sig!("(Ljava/util/UUID;)Landroid/bluetooth/BluetoothGattDescriptor;"),
                     &[JValue::Object(&descriptor_uuid)],
                 )
                 .map_err(|error| {
@@ -1623,14 +1549,18 @@ impl BleConnectionInner {
             }
 
             let descriptor_class = env
-                .find_class("android/bluetooth/BluetoothGattDescriptor")
+                .find_class(jni_str!("android/bluetooth/BluetoothGattDescriptor"))
                 .map_err(|error| {
                     BluetoothError::Platform(format!(
                         "find BluetoothGattDescriptor class failed: {error}"
                     ))
                 })?;
             let enable_value = env
-                .get_static_field(descriptor_class, "ENABLE_NOTIFICATION_VALUE", "[B")
+                .get_static_field(
+                    descriptor_class,
+                    jni_str!("ENABLE_NOTIFICATION_VALUE"),
+                    jni_sig!("[B"),
+                )
                 .map_err(|error| {
                     BluetoothError::Platform(format!(
                         "read ENABLE_NOTIFICATION_VALUE failed: {error}"
@@ -1645,8 +1575,8 @@ impl BleConnectionInner {
             let set_descriptor = env
                 .call_method(
                     &descriptor,
-                    "setValue",
-                    "([B)Z",
+                    jni_str!("setValue"),
+                    jni_sig!("([B)Z"),
                     &[JValue::Object(&enable_value)],
                 )
                 .map_err(|error| {
@@ -1666,8 +1596,8 @@ impl BleConnectionInner {
 
             env.call_method(
                 self.gatt.as_obj(),
-                "writeDescriptor",
-                "(Landroid/bluetooth/BluetoothGattDescriptor;)Z",
+                jni_str!("writeDescriptor"),
+                jni_sig!("(Landroid/bluetooth/BluetoothGattDescriptor;)Z"),
                 &[JValue::Object(&descriptor)],
             )
             .map_err(|error| {
@@ -1703,101 +1633,68 @@ impl BleConnectionInner {
         clippy::unused_async,
         reason = "The public connection API is async across platform backends; Android close is synchronous."
     )]
-    pub async fn disconnect(self) {
+    pub async fn disconnect(mut self) {
         let _ = self.close_gatt();
-        if let Ok(mut states) = gatt_callbacks().lock() {
-            states.remove(&self.callback_state_id);
-        }
-        let _ = &self.callback;
     }
 }
 
 impl Drop for BleConnectionInner {
     fn drop(&mut self) {
-        let _ = with_android_context(|env, _context| {
-            env.call_method(self.gatt.as_obj(), "disconnect", "()V", &[])
-                .map_err(|error| {
-                    BluetoothError::Platform(format!("BluetoothGatt.disconnect failed: {error}"))
-                })?;
-            env.call_method(self.gatt.as_obj(), "close", "()V", &[])
-                .map_err(|error| {
-                    BluetoothError::Platform(format!("BluetoothGatt.close failed: {error}"))
-                })?;
-            Ok(())
-        });
-        if let Ok(mut states) = gatt_callbacks().lock() {
-            states.remove(&self.callback_state_id);
-        }
-        let _ = &self.callback;
+        let _ = self.close_gatt();
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_bluetooth_ClassicDiscoveryBridgeCallback_onDeviceFoundNative(
-    mut env: JNIEnv,
-    callback: JObject,
-    device_address: JString,
-    device_name: JObject,
+pub extern "system" fn Java_waterkit_bluetooth_ClassicDiscoveryBridgeCallback_onDeviceFoundNative<
+    'caller,
+>(
+    mut env: EnvUnowned<'caller>,
+    callback: JObject<'caller>,
+    device_address: JString<'caller>,
+    device_name: JObject<'caller>,
     major_device_class: jni::sys::jint,
     is_paired: jni::sys::jboolean,
 ) {
-    let callback_state_id =
-        callback_state_id(&mut env, &callback, "waterkit_classic_discovery_state");
-    let sender = {
-        let callbacks = classic_discovery_callbacks()
-            .lock()
-            .unwrap_or_else(|error| {
-                panic!(
-                    "waterkit-bluetooth: classic discovery callback registry mutex poisoned: {error}"
-                )
-            });
-        callbacks.get(&callback_state_id).cloned()
-    };
-    let Some(sender) = sender else {
-        debug_assert!(
-            false,
-            "waterkit-bluetooth: missing classic discovery callback state for id {callback_state_id}"
-        );
-        return;
-    };
+    with_callback_env(&mut env, |env| {
+        let sender: Arc<async_channel::Sender<ClassicDevice>> =
+            callback_state(env, &callback, jni_str!("waterkit_classic_discovery_state"));
 
-    let device_address: String = env
-        .get_string(&device_address)
-        .unwrap_or_else(|error| {
+        let device_address = device_address.try_to_string(env).unwrap_or_else(|error| {
             panic!(
                 "waterkit-bluetooth: decode deviceAddress failed in classic discovery callback: {error}"
             )
-        })
-        .into();
-    let device_name = if device_name.is_null() {
-        None
-    } else {
-        let value: String = env
-            .get_string(&JString::from(device_name))
-            .unwrap_or_else(|error| {
-                panic!(
-                    "waterkit-bluetooth: decode deviceName failed in classic discovery callback: {error}"
-                )
-            })
-            .into();
-        if value.is_empty() { None } else { Some(value) }
-    };
+        });
+        let device_name = if device_name.is_null() {
+            None
+        } else {
+            let value = env
+                .as_cast::<JString>(&device_name)
+                .and_then(|value| value.try_to_string(env))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "waterkit-bluetooth: decode deviceName failed in classic discovery callback: {error}"
+                    )
+                });
+            if value.is_empty() { None } else { Some(value) }
+        };
 
-    if let Err(error) = sender.try_send(ClassicDevice {
-        device: BluetoothDevice {
-            id: DeviceId::new(device_address),
-            name: device_name,
-            rssi: None,
-            is_connected: false,
-        },
-        device_class: major_device_class.cast_unsigned(),
-        is_paired: is_paired != 0,
-    }) {
-        debug_assert!(
-            false,
-            "waterkit-bluetooth: dropping classic discovery result because receiver is closed: {error}"
-        );
-    }
+        if let Err(error) = sender.try_send(ClassicDevice {
+            device: BluetoothDevice {
+                id: DeviceId::new(device_address),
+                name: device_name,
+                rssi: None,
+                is_connected: false,
+            },
+            device_class: major_device_class.cast_unsigned(),
+            is_paired,
+        }) {
+            debug_assert!(
+                false,
+                "waterkit-bluetooth: dropping classic discovery result because receiver is closed: {error}"
+            );
+        }
+        Ok(())
+    });
 }
 
 pub struct ClassicBluetoothInner {
@@ -1839,16 +1736,20 @@ impl ClassicBluetoothInner {
             }
         }
 
-        let callback_state_id = next_callback_state_id()?;
         let (tx, rx) = async_channel::unbounded();
+        let callback_state = Arc::new(tx);
+        let callback_state_handle = callback_state_handle(&callback_state)?;
         let session = with_android_context(|env, context| {
-            init_dex(env, context)?;
-            register_callback_natives(env)?;
-            let helper_class = get_helper_class(env)?;
-            let callback_class =
-                load_class(env, "waterkit.bluetooth.ClassicDiscoveryBridgeCallback")?;
+            let loader = init_dex(env, context)?;
+            register_callback_natives(env, &loader)?;
+            let helper_class = get_helper_class(env, &loader)?;
+            let callback_class = load_class(
+                env,
+                &loader,
+                "waterkit.bluetooth.ClassicDiscoveryBridgeCallback",
+            )?;
             let callback = env
-                .new_object(callback_class, "()V", &[])
+                .new_object(callback_class, jni_sig!("()V"), &[])
                 .map_err(|error| {
                     BluetoothError::Platform(format!(
                         "new ClassicDiscoveryBridgeCallback failed: {error}"
@@ -1856,22 +1757,27 @@ impl ClassicBluetoothInner {
                 })?;
             env.set_field(
                 &callback,
-                "waterkit_classic_discovery_state",
-                "J",
-                JValue::Long(callback_state_id),
+                jni_str!("waterkit_classic_discovery_state"),
+                jni_sig!("J"),
+                JValue::Long(callback_state_handle),
             )
             .map_err(|error| {
                 BluetoothError::Platform(format!(
                     "set waterkit_classic_discovery_state failed: {error}"
                 ))
             })?;
+            let callback = env.new_global_ref(callback).map_err(|error| {
+                BluetoothError::Platform(format!("new_global_ref callback failed: {error}"))
+            })?;
 
             let started = env
                 .call_static_method(
-                    helper_class,
-                    "startClassicDiscovery",
-                    "(Landroid/content/Context;Lwaterkit/bluetooth/ClassicDiscoveryCallback;)Z",
-                    &[JValue::Object(context), JValue::Object(&callback)],
+                    &helper_class,
+                    jni_str!("startClassicDiscovery"),
+                    jni_sig!(
+                        "(Landroid/content/Context;Lwaterkit/bluetooth/ClassicDiscoveryCallback;)Z"
+                    ),
+                    &[JValue::Object(context), JValue::Object(callback.as_obj())],
                 )
                 .map_err(|error| {
                     BluetoothError::Platform(format!(
@@ -1885,28 +1791,17 @@ impl ClassicBluetoothInner {
                     ))
                 })?;
             if !started {
+                release_callback_state(env, &callback)?;
                 return Err(BluetoothError::GattError(
                     "BluetoothAdapter.startDiscovery returned false".into(),
                 ));
             }
 
-            let callback = env.new_global_ref(callback).map_err(|error| {
-                BluetoothError::Platform(format!("new_global_ref callback failed: {error}"))
-            })?;
             Ok(ClassicDiscoverySession {
                 callback,
-                callback_state_id,
+                _callback_state: Arc::clone(&callback_state),
             })
         })?;
-
-        {
-            let mut callbacks = classic_discovery_callbacks().lock().map_err(|error| {
-                BluetoothError::Platform(format!(
-                    "classic discovery callback registry mutex poisoned: {error}"
-                ))
-            })?;
-            callbacks.insert(callback_state_id, tx);
-        }
 
         *self.discovery_session.lock().map_err(|error| {
             BluetoothError::Platform(format!("classic discovery session mutex poisoned: {error}"))
@@ -1924,17 +1819,14 @@ impl ClassicBluetoothInner {
             return Ok(());
         };
 
-        if let Ok(mut callbacks) = classic_discovery_callbacks().lock() {
-            callbacks.remove(&session.callback_state_id);
-        }
-
         let result = with_android_context(|env, context| {
-            init_dex(env, context)?;
-            let helper_class = get_helper_class(env)?;
+            release_callback_state(env, &session.callback)?;
+            let loader = init_dex(env, context)?;
+            let helper_class = get_helper_class(env, &loader)?;
             env.call_static_method(
-                helper_class,
-                "stopClassicDiscovery",
-                "(Landroid/content/Context;)V",
+                &helper_class,
+                jni_str!("stopClassicDiscovery"),
+                jni_sig!("(Landroid/content/Context;)V"),
                 &[JValue::Object(context)],
             )
             .map_err(|error| {
@@ -1945,7 +1837,6 @@ impl ClassicBluetoothInner {
             Ok(())
         });
 
-        let _ = &session.callback;
         result
     }
 
@@ -1976,8 +1867,8 @@ impl ClassicBluetoothInner {
             .name("waterkit-spp-android".to_owned())
             .spawn(move || {
                 let socket = with_android_context(|env, context| {
-                    init_dex(env, context)?;
-                    let helper_class = get_helper_class(env)?;
+                    let loader = init_dex(env, context)?;
+                    let helper_class = get_helper_class(env, &loader)?;
                     let device_id = env.new_string(device_id).map_err(|error| {
                         BluetoothError::Platform(format!("new_string device_id failed: {error}"))
                     })?;
@@ -1988,9 +1879,11 @@ impl ClassicBluetoothInner {
                     })?;
                     let socket = env
                         .call_static_method(
-                            helper_class,
-                            "connectSpp",
-                            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)Landroid/bluetooth/BluetoothSocket;",
+                            &helper_class,
+                            jni_str!("connectSpp"),
+                            jni_sig!(
+                                "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)Landroid/bluetooth/BluetoothSocket;"
+                            ),
                             &[
                                 JValue::Object(context),
                                 JValue::Object(&device_id),
@@ -2035,8 +1928,8 @@ impl ClassicBluetoothInner {
                     match command {
                         SppCommand::Read { max_bytes, tx } => {
                             let result = with_android_context(|env, context| {
-                                init_dex(env, context)?;
-                                let helper_class = get_helper_class(env)?;
+                                let loader = init_dex(env, context)?;
+                                let helper_class = get_helper_class(env, &loader)?;
                                 let max_bytes = i32::try_from(max_bytes).map_err(|_| {
                                     BluetoothError::Platform(format!(
                                         "SPP read size exceeds i32: {max_bytes}"
@@ -2044,9 +1937,9 @@ impl ClassicBluetoothInner {
                                 })?;
                                 let bytes = env
                                     .call_static_method(
-                                        helper_class,
-                                        "readSpp",
-                                        "(Landroid/bluetooth/BluetoothSocket;I)[B",
+                                        &helper_class,
+                                        jni_str!("readSpp"),
+                                        jni_sig!("(Landroid/bluetooth/BluetoothSocket;I)[B"),
                                         &[
                                             JValue::Object(socket.as_obj()),
                                             JValue::Int(max_bytes),
@@ -2068,7 +1961,12 @@ impl ClassicBluetoothInner {
                                         "SPP stream closed".into(),
                                     ));
                                 }
-                                env.convert_byte_array(JByteArray::from(bytes)).map_err(|error| {
+                                let bytes = JByteArray::cast_local(env, bytes).map_err(|error| {
+                                    BluetoothError::Platform(format!(
+                                        "cast readSpp byte array failed: {error}"
+                                    ))
+                                })?;
+                                env.convert_byte_array(bytes).map_err(|error| {
                                     BluetoothError::Platform(format!(
                                         "decode readSpp byte array failed: {error}"
                                     ))
@@ -2078,8 +1976,8 @@ impl ClassicBluetoothInner {
                         }
                         SppCommand::Write { data, tx } => {
                             let result = with_android_context(|env, context| {
-                                init_dex(env, context)?;
-                                let helper_class = get_helper_class(env)?;
+                                let loader = init_dex(env, context)?;
+                                let helper_class = get_helper_class(env, &loader)?;
                                 let payload = env.byte_array_from_slice(&data).map_err(|error| {
                                     BluetoothError::Platform(format!(
                                         "byte_array_from_slice failed in writeSpp: {error}"
@@ -2087,9 +1985,9 @@ impl ClassicBluetoothInner {
                                 })?;
                                 let written = env
                                     .call_static_method(
-                                        helper_class,
-                                        "writeSpp",
-                                        "(Landroid/bluetooth/BluetoothSocket;[B)I",
+                                        &helper_class,
+                                        jni_str!("writeSpp"),
+                                        jni_sig!("(Landroid/bluetooth/BluetoothSocket;[B)I"),
                                         &[
                                             JValue::Object(socket.as_obj()),
                                             JValue::Object(&JObject::from(payload)),
@@ -2116,12 +2014,12 @@ impl ClassicBluetoothInner {
                         }
                         SppCommand::Close { tx } => {
                             let _ = with_android_context(|env, context| {
-                                init_dex(env, context)?;
-                                let helper_class = get_helper_class(env)?;
+                                let loader = init_dex(env, context)?;
+                                let helper_class = get_helper_class(env, &loader)?;
                                 env.call_static_method(
-                                    helper_class,
-                                    "closeSpp",
-                                    "(Landroid/bluetooth/BluetoothSocket;)V",
+                                    &helper_class,
+                                    jni_str!("closeSpp"),
+                                    jni_sig!("(Landroid/bluetooth/BluetoothSocket;)V"),
                                     &[JValue::Object(socket.as_obj())],
                                 )
                                 .map_err(|error| {
@@ -2138,12 +2036,12 @@ impl ClassicBluetoothInner {
                 }
 
                 let _ = with_android_context(|env, context| {
-                    init_dex(env, context)?;
-                    let helper_class = get_helper_class(env)?;
+                    let loader = init_dex(env, context)?;
+                    let helper_class = get_helper_class(env, &loader)?;
                     env.call_static_method(
-                        helper_class,
-                        "closeSpp",
-                        "(Landroid/bluetooth/BluetoothSocket;)V",
+                        &helper_class,
+                        jni_str!("closeSpp"),
+                        jni_sig!("(Landroid/bluetooth/BluetoothSocket;)V"),
                         &[JValue::Object(socket.as_obj())],
                     )
                     .map_err(|error| {
@@ -2255,24 +2153,24 @@ pub mod jni_api {
     use super::{get_helper_class, init_dex};
     use crate::AdapterState;
     use crate::BluetoothError;
-    use jni::JNIEnv;
     use jni::objects::{JObject, JValue};
+    use jni::{Env, jni_sig, jni_str};
 
     /// Get adapter state with JNI context.
     ///
     /// # Errors
     /// Returns error if JNI operations fail.
     pub fn get_adapter_state(
-        env: &mut JNIEnv,
+        env: &mut Env<'_>,
         context: &JObject,
     ) -> Result<AdapterState, BluetoothError> {
-        init_dex(env, context)?;
-        let helper_class = get_helper_class(env)?;
+        let loader = init_dex(env, context)?;
+        let helper_class = get_helper_class(env, &loader)?;
         let state = env
             .call_static_method(
                 &helper_class,
-                "getAdapterState",
-                "(Landroid/content/Context;)I",
+                jni_str!("getAdapterState"),
+                jni_sig!("(Landroid/content/Context;)I"),
                 &[JValue::Object(context)],
             )
             .map_err(|e| BluetoothError::Platform(format!("getAdapterState: {e}")))?

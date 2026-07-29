@@ -1,5 +1,6 @@
 import UserNotifications
 import Foundation
+import os
 
 #if os(iOS)
 import UIKit
@@ -33,10 +34,9 @@ class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         let actionId = response.actionIdentifier
 
         // Handle text input response
-        if let textResponse = response as? UNTextInputNotificationResponse {
-            let userText = textResponse.userText
-            // Log for debugging - in a real app, this would call back to Rust
-            NSLog("[WaterKit] Text input received: actionId=\(actionId), text=\(userText)")
+        if response is UNTextInputNotificationResponse {
+            Logger(subsystem: "dev.waterui", category: "notification")
+                .debug("Text input notification action received")
             completionHandler()
             return
         }

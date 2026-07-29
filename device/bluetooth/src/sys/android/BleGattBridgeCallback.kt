@@ -32,7 +32,11 @@ class BleGattBridgeCallback : BluetoothGattCallback() {
         value: ByteArray
     )
 
+    @Synchronized
     override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+        if (waterkit_gatt_state == 0L) {
+            return
+        }
         onConnectionStateNative(
             gatt.device.address,
             newState == android.bluetooth.BluetoothProfile.STATE_CONNECTED,
@@ -40,15 +44,23 @@ class BleGattBridgeCallback : BluetoothGattCallback() {
         )
     }
 
+    @Synchronized
     override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+        if (waterkit_gatt_state == 0L) {
+            return
+        }
         onServicesDiscoveredNative(gatt.device.address, encodeServicesPayload(gatt), status)
     }
 
+    @Synchronized
     override fun onCharacteristicRead(
         gatt: BluetoothGatt,
         characteristic: BluetoothGattCharacteristic,
         status: Int
     ) {
+        if (waterkit_gatt_state == 0L) {
+            return
+        }
         onCharacteristicReadNative(
             gatt.device.address,
             characteristic.service.uuid.toString(),
@@ -58,12 +70,16 @@ class BleGattBridgeCallback : BluetoothGattCallback() {
         )
     }
 
+    @Synchronized
     override fun onCharacteristicRead(
         gatt: BluetoothGatt,
         characteristic: BluetoothGattCharacteristic,
         value: ByteArray,
         status: Int
     ) {
+        if (waterkit_gatt_state == 0L) {
+            return
+        }
         onCharacteristicReadNative(
             gatt.device.address,
             characteristic.service.uuid.toString(),
@@ -73,11 +89,15 @@ class BleGattBridgeCallback : BluetoothGattCallback() {
         )
     }
 
+    @Synchronized
     override fun onCharacteristicWrite(
         gatt: BluetoothGatt,
         characteristic: BluetoothGattCharacteristic,
         status: Int
     ) {
+        if (waterkit_gatt_state == 0L) {
+            return
+        }
         onCharacteristicWriteNative(
             gatt.device.address,
             characteristic.service.uuid.toString(),
@@ -86,7 +106,11 @@ class BleGattBridgeCallback : BluetoothGattCallback() {
         )
     }
 
+    @Synchronized
     override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+        if (waterkit_gatt_state == 0L) {
+            return
+        }
         onCharacteristicChangedNative(
             gatt.device.address,
             characteristic.service.uuid.toString(),
@@ -95,17 +119,26 @@ class BleGattBridgeCallback : BluetoothGattCallback() {
         )
     }
 
+    @Synchronized
     override fun onCharacteristicChanged(
         gatt: BluetoothGatt,
         characteristic: BluetoothGattCharacteristic,
         value: ByteArray
     ) {
+        if (waterkit_gatt_state == 0L) {
+            return
+        }
         onCharacteristicChangedNative(
             gatt.device.address,
             characteristic.service.uuid.toString(),
             characteristic.uuid.toString(),
             value
         )
+    }
+
+    @Synchronized
+    fun releaseNativeState() {
+        waterkit_gatt_state = 0
     }
 
     private fun encodeServicesPayload(gatt: BluetoothGatt): String {

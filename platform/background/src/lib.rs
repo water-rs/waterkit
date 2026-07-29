@@ -841,13 +841,8 @@ pub(crate) fn dispatch_launched_event(
     identifier: &str,
     kind_raw: u8,
 ) {
-    let task = match BackgroundTask::from_raw(runtime_handle, task_token, identifier, kind_raw) {
-        Ok(task) => task,
-        Err(error) => {
-            eprintln!("invalid launched task callback payload: {error}");
-            return;
-        }
-    };
+    let task = BackgroundTask::from_raw(runtime_handle, task_token, identifier, kind_raw)
+        .unwrap_or_else(|error| panic!("invalid launched task callback payload: {error}"));
 
     #[allow(clippy::cast_possible_truncation)]
     let sender = unsafe { &*(event_ctx as usize as *const async_channel::Sender<BackgroundEvent>) };
@@ -856,13 +851,8 @@ pub(crate) fn dispatch_launched_event(
 
 #[cfg(target_os = "ios")]
 pub(crate) fn dispatch_expired_event(event_ctx: u64, identifier: &str, kind_raw: u8) {
-    let expiration = match BackgroundTaskExpiration::from_raw(identifier, kind_raw) {
-        Ok(expiration) => expiration,
-        Err(error) => {
-            eprintln!("invalid expired task callback payload: {error}");
-            return;
-        }
-    };
+    let expiration = BackgroundTaskExpiration::from_raw(identifier, kind_raw)
+        .unwrap_or_else(|error| panic!("invalid expired task callback payload: {error}"));
 
     #[allow(clippy::cast_possible_truncation)]
     let sender = unsafe { &*(event_ctx as usize as *const async_channel::Sender<BackgroundEvent>) };

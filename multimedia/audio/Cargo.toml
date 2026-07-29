@@ -72,7 +72,7 @@ waterkit-build.workspace = true
 [dev-dependencies]
 hex = "0.4"
 
-[target.'cfg(any(target_os = "macos", target_os = "android", target_os = "windows", target_os = "linux"))'.dependencies]
+[target.'cfg(any(target_os = "ios", target_os = "macos", target_os = "android", target_os = "windows", target_os = "linux"))'.dependencies]
 # Cross-platform audio playback (default features include vorbis/mp3/flac/wav)
 rodio = { workspace = true, features = ["playback", "flac", "vorbis", "wav", "mp3"], optional = true }
 # Cross-platform audio I/O (for recording)

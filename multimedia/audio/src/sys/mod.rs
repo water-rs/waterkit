@@ -2,18 +2,12 @@
 //!
 //! - Audio playback: handled by rodio across all platforms
 //! - Media center: platform-specific "Now Playing" integration
-//! - Recording: cpal on desktop, native on mobile
+//! - Recording: cpal on every supported platform
 
-// Recording - use cpal on desktop platforms, explicit mobile inner elsewhere
-#[cfg(all(feature = "recording", not(target_os = "ios")))]
+#[cfg(feature = "recording")]
 mod desktop_record;
-#[cfg(all(feature = "recording", not(target_os = "ios")))]
+#[cfg(feature = "recording")]
 pub use desktop_record::AudioRecorderInner;
-
-#[cfg(all(feature = "recording", target_os = "ios"))]
-mod mobile_record;
-#[cfg(all(feature = "recording", target_os = "ios"))]
-pub use mobile_record::AudioRecorderInner;
 
 #[cfg(all(feature = "media-session", any(target_os = "ios", target_os = "macos")))]
 mod apple;

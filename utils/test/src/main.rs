@@ -1,5 +1,5 @@
-use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use eyre::{Context, Result};
 use owo_colors::OwoColorize;
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -60,7 +60,7 @@ fn run_android(crate_path: &Path) -> Result<()> {
     let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
 
     if !crate_path.join("Cargo.toml").exists() {
-        anyhow::bail!("No Cargo.toml found at {}", crate_path.display());
+        eyre::bail!("No Cargo.toml found at {}", crate_path.display());
     }
 
     info!("Target crate: {}", crate_path.display());
@@ -82,7 +82,7 @@ fn run_android(crate_path: &Path) -> Result<()> {
         .context("Parse content toml")?;
     let package_name = content_doc["package"]["name"].as_str().unwrap_or("");
     let feature = get_crate_feature(package_name).ok_or_else(|| {
-        anyhow::anyhow!("Unsupported crate package name for harness features: {package_name}")
+        eyre::eyre!("Unsupported crate package name for harness features: {package_name}")
     })?;
 
     // 4. Run cargo ndk build
@@ -109,7 +109,7 @@ fn run_android(crate_path: &Path) -> Result<()> {
         .context("Failed to run cargo ndk")?;
 
     if !status.success() {
-        anyhow::bail!("Android build failed");
+        eyre::bail!("Android build failed");
     }
 
     info!("{}", "Android libraries built successfully.".green().bold());
@@ -130,7 +130,7 @@ fn run_macos(crate_path: &Path) -> Result<()> {
     let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
     let manifest_path = crate_path.join("Cargo.toml");
     if !manifest_path.exists() {
-        anyhow::bail!("No Cargo.toml found at {}", crate_path.display());
+        eyre::bail!("No Cargo.toml found at {}", crate_path.display());
     }
 
     let root_dir = workspace_root();
@@ -150,12 +150,12 @@ fn run_macos(crate_path: &Path) -> Result<()> {
         .status()
         .context("Failed to run cargo build for macOS test crate")?;
     if !build_status.success() {
-        anyhow::bail!("macOS build failed for {}", metadata.package_name);
+        eyre::bail!("macOS build failed for {}", metadata.package_name);
     }
 
     let binary_path = root_dir.join("target/debug").join(&metadata.bin_name);
     if !binary_path.exists() {
-        anyhow::bail!(
+        eyre::bail!(
             "Built binary not found at {}. Ensure crate has a runnable binary target.",
             binary_path.display()
         );
@@ -196,7 +196,7 @@ fn run_ios(crate_path: &Path) -> Result<()> {
     let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
 
     if !crate_path.join("Cargo.toml").exists() {
-        anyhow::bail!("No Cargo.toml found at {}", crate_path.display());
+        eyre::bail!("No Cargo.toml found at {}", crate_path.display());
     }
 
     info!("Target crate: {}", crate_path.display());
@@ -218,7 +218,7 @@ fn run_ios(crate_path: &Path) -> Result<()> {
         .context("Parse content toml")?;
     let package_name = content_doc["package"]["name"].as_str().unwrap_or("");
     let feature = get_crate_feature(package_name).ok_or_else(|| {
-        anyhow::anyhow!("Unsupported crate package name for harness features: {package_name}")
+        eyre::eyre!("Unsupported crate package name for harness features: {package_name}")
     })?;
 
     // 3. Build for iOS Simulator
@@ -240,7 +240,7 @@ fn run_ios(crate_path: &Path) -> Result<()> {
         .context("Failed to run cargo build")?;
 
     if !status.success() {
-        anyhow::bail!("iOS build failed");
+        eyre::bail!("iOS build failed");
     }
 
     // 4. Swift Compile
@@ -313,7 +313,7 @@ fn run_ios(crate_path: &Path) -> Result<()> {
         .context("Failed to compile Swift app")?;
 
     if !status.success() {
-        anyhow::bail!("Swift compilation failed");
+        eyre::bail!("Swift compilation failed");
     }
 
     // 5. Bundle
@@ -343,7 +343,7 @@ fn run_ios(crate_path: &Path) -> Result<()> {
         .context("Failed to codesign")?;
 
     if !status.success() {
-        anyhow::bail!("Codesign failed");
+        eyre::bail!("Codesign failed");
     }
 
     // 7. Install & Launch
@@ -357,7 +357,7 @@ fn run_ios(crate_path: &Path) -> Result<()> {
         .context("Failed to install to simulator")?;
 
     if !status.success() {
-        anyhow::bail!("Installation failed (ensure a simulator is booted)");
+        eyre::bail!("Installation failed (ensure a simulator is booted)");
     }
 
     let report_path = ios_report_path(simulator_id)?;
@@ -381,7 +381,7 @@ fn run_ios(crate_path: &Path) -> Result<()> {
         .context("Failed to launch app")?;
 
     if !status.success() {
-        anyhow::bail!("Launch failed");
+        eyre::bail!("Launch failed");
     }
 
     let report_json = std::fs::read_to_string(&report_path)
@@ -408,7 +408,7 @@ fn parse_macos_metadata(manifest_path: &Path) -> Result<MacosMetadata> {
 
     let package_name = manifest["package"]["name"]
         .as_str()
-        .ok_or_else(|| anyhow::anyhow!("Missing package.name in {}", manifest_path.display()))?
+        .ok_or_else(|| eyre::eyre!("Missing package.name in {}", manifest_path.display()))?
         .to_owned();
 
     let bin_name = select_primary_bin_name(&manifest, &package_name)?;
@@ -437,10 +437,10 @@ fn select_primary_bin_name(manifest: &DocumentMut, package_name: &str) -> Result
     let first = bin_tables
         .iter()
         .next()
-        .ok_or_else(|| anyhow::anyhow!("First [[bin]] entry is missing"))?;
+        .ok_or_else(|| eyre::eyre!("First [[bin]] entry is missing"))?;
     let name = first["name"]
         .as_str()
-        .ok_or_else(|| anyhow::anyhow!("First [[bin]] entry is missing a name field"))?;
+        .ok_or_else(|| eyre::eyre!("First [[bin]] entry is missing a name field"))?;
     Ok(name.to_owned())
 }
 
@@ -458,7 +458,7 @@ fn run_macos_cli_binary(root_dir: &Path, binary_path: &Path, bin_name: &str) -> 
         .with_context(|| format!("Failed to run macOS test binary {bin_name}"))?;
 
     if !output.status.success() {
-        anyhow::bail!("macOS CLI run failed for binary {}", bin_name);
+        eyre::bail!("macOS CLI run failed for binary {}", bin_name);
     }
 
     Ok(output_text(&output))
@@ -527,7 +527,7 @@ fn run_macos_app_bundle(
         .status()
         .context("Failed to run codesign for macOS bundle")?;
     if !codesign_status.success() {
-        anyhow::bail!("codesign failed for {}", app_dir.display());
+        eyre::bail!("codesign failed for {}", app_dir.display());
     }
 
     info!("{}", "Launching app bundle...".green().bold());
@@ -537,7 +537,7 @@ fn run_macos_app_bundle(
         .status()
         .context("Failed to run open -W for macOS app bundle")?;
     if !open_status.success() {
-        anyhow::bail!("open -W failed for {}", app_dir.display());
+        eyre::bail!("open -W failed for {}", app_dir.display());
     }
 
     Ok(())
@@ -554,7 +554,7 @@ fn build_android_apk(root_dir: &Path) -> Result<()> {
         .context("Failed to run Android Gradle build")?;
 
     if !status.success() {
-        anyhow::bail!("Android APK build failed");
+        eyre::bail!("Android APK build failed");
     }
 
     Ok(())
@@ -564,7 +564,7 @@ fn install_android_apk(root_dir: &Path) -> Result<()> {
     info!("{}", "Installing Android APK...".yellow().bold());
     let apk = root_dir.join("tests/android/app/build/outputs/apk/debug/app-debug.apk");
     if !apk.exists() {
-        anyhow::bail!("Android APK not found at {}", apk.display());
+        eyre::bail!("Android APK not found at {}", apk.display());
     }
 
     let status = std::process::Command::new("adb")
@@ -575,7 +575,7 @@ fn install_android_apk(root_dir: &Path) -> Result<()> {
         .context("Failed to install Android APK with adb")?;
 
     if !status.success() {
-        anyhow::bail!("Android APK installation failed");
+        eyre::bail!("Android APK installation failed");
     }
 
     Ok(())
@@ -647,7 +647,7 @@ fn wait_for_android_report(timeout: Duration) -> Result<TestReport> {
 
         if Instant::now() >= deadline {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!(
+            eyre::bail!(
                 "Timed out waiting for Android test report; last adb stderr: {}",
                 stderr.trim()
             );
@@ -664,7 +664,7 @@ fn run_adb<const N: usize>(args: [&str; N]) -> Result<()> {
         .context("Failed to run adb")?;
 
     if !status.success() {
-        anyhow::bail!("adb command failed");
+        eyre::bail!("adb command failed");
     }
 
     Ok(())
@@ -683,7 +683,7 @@ fn ios_report_path(simulator_id: &str) -> Result<PathBuf> {
         .context("Failed to query iOS app data container")?;
 
     if !output.status.success() {
-        anyhow::bail!("Failed to query iOS app data container");
+        eyre::bail!("Failed to query iOS app data container");
     }
 
     let container = String::from_utf8(output.stdout)
@@ -695,11 +695,11 @@ fn parse_process_report(platform: &str, package_name: &str, output: &str) -> Res
     let report = parse_report_block(output)
         .context("Failed to parse structured test report")?
         .ok_or_else(|| {
-            anyhow::anyhow!("{platform} test {package_name} did not emit a structured test report")
+            eyre::eyre!("{platform} test {package_name} did not emit a structured test report")
         })?;
 
     if report.cases.is_empty() {
-        anyhow::bail!("{platform} test {package_name} emitted an empty report");
+        eyre::bail!("{platform} test {package_name} emitted an empty report");
     }
 
     Ok(report)
@@ -716,7 +716,7 @@ fn ensure_report_success(report: &TestReport) -> Result<()> {
     );
 
     if report.has_failures() {
-        anyhow::bail!("WaterKit test failures: {}", report.failure_summary());
+        eyre::bail!("WaterKit test failures: {}", report.failure_summary());
     }
 
     Ok(())
@@ -767,7 +767,7 @@ fn add_swift_rpath_if_exists(binary_path: &Path, rpath: &Path) -> Result<()> {
         return Ok(());
     }
 
-    anyhow::bail!(
+    eyre::bail!(
         "install_name_tool failed for {} with rpath {}: {}",
         binary_path.display(),
         rpath.display(),

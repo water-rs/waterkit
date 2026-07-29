@@ -24,6 +24,7 @@ waterkit-build.workspace = true
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+futures.workspace = true
 swift-bridge.workspace = true
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]

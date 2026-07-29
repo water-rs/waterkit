@@ -25,7 +25,7 @@ mod ffi {
     }
 
     extern "Swift" {
-        fn get_current_location() -> LocationResult;
+        fn get_current_location(callback: Box<dyn FnOnce(LocationResult) -> ()>);
     }
 }
 
@@ -34,7 +34,14 @@ mod ffi {
 /// # Errors
 /// Returns a `LocationError` if the location cannot be retrieved.
 pub async fn get_location() -> Result<Location, LocationError> {
-    match ffi::get_current_location() {
+    let (sender, receiver) = futures::channel::oneshot::channel();
+    ffi::get_current_location(Box::new(move |result| {
+        let _ = sender.send(result);
+    }));
+    let result = receiver
+        .await
+        .map_err(|_| LocationError::Platform("location callback dropped".into()))?;
+    match result {
         ffi::LocationResult::Success(data) => {
             let timestamp = Timestamp::from_millisecond(data.timestamp_ms)
                 .map_err(|e| LocationError::Platform(e.to_string()))?;

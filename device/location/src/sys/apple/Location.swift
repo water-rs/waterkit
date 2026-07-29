@@ -1,78 +1,105 @@
 import Foundation
 import CoreLocation
 
-// Swift implementation using swift-bridge generated types
+private let locationRequestTimeout: TimeInterval = 10.0
 
-class LocationDelegate: NSObject, CLLocationManagerDelegate {
-    var location: CLLocation?
-    var error: Error?
-    var completed = false
-    var runLoop: CFRunLoop?
+private final class LocationRequest: NSObject, CLLocationManagerDelegate {
+    private let manager = CLLocationManager()
+    private var callback: ((LocationResult) -> Void)?
+    private var timeout: DispatchWorkItem?
+    private var keepAlive: LocationRequest?
 
-    private func finish() {
-        completed = true
-        if let runLoop {
-            CFRunLoopStop(runLoop)
+    init(callback: @escaping (LocationResult) -> Void) {
+        self.callback = callback
+    }
+
+    func start() {
+        keepAlive = self
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let servicesEnabled = CLLocationManager.locationServicesEnabled()
+            DispatchQueue.main.async { [weak self] in
+                self?.startOnMain(servicesEnabled: servicesEnabled)
+            }
         }
     }
-    
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        location = locations.last
-        finish()
+
+    private func startOnMain(servicesEnabled: Bool) {
+        guard servicesEnabled else {
+            finish(.ServiceDisabled)
+            return
+        }
+        let status = manager.authorizationStatus
+        guard status != .denied && status != .restricted else {
+            finish(.PermissionDenied)
+            return
+        }
+
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        let timeout = DispatchWorkItem { [weak self] in
+            self?.finish(.Timeout)
+        }
+        self.timeout = timeout
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + locationRequestTimeout,
+            execute: timeout
+        )
+        manager.requestLocation()
     }
-    
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else {
+            finish(.NotAvailable)
+            return
+        }
+        let timestampMs = Int64(location.timestamp.timeIntervalSince1970 * 1000)
+        finish(.Success(LocationData(
+            latitude: location.coordinate.latitude,
+            longitude: location.coordinate.longitude,
+            altitude: location.altitude,
+            horizontal_accuracy: location.horizontalAccuracy,
+            vertical_accuracy: location.verticalAccuracy,
+            timestamp_ms: timestampMs
+        )))
+    }
+
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        self.error = error
-        finish()
+        guard let code = (error as? CLError)?.code else {
+            finish(.NotAvailable)
+            return
+        }
+        switch code {
+        case .denied:
+            finish(.PermissionDenied)
+        case .locationUnknown:
+            break
+        default:
+            finish(.NotAvailable)
+        }
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let status = manager.authorizationStatus
+        if status == .denied || status == .restricted {
+            finish(.PermissionDenied)
+        }
+    }
+
+    private func finish(_ result: LocationResult) {
+        guard let callback else {
+            return
+        }
+        self.callback = nil
+        timeout?.cancel()
+        timeout = nil
+        manager.delegate = nil
+        callback(result)
+        keepAlive = nil
     }
 }
 
-func get_current_location() -> LocationResult {
-    // Check authorization
-    let status = CLLocationManager.authorizationStatus()
-    switch status {
-    case .denied, .restricted:
-        return .PermissionDenied
-    case .notDetermined:
-        return .PermissionDenied
-    default:
-        break
+func get_current_location(callback: @escaping (LocationResult) -> Void) {
+    DispatchQueue.main.async {
+        LocationRequest(callback: callback).start()
     }
-    
-    // Check if location services are enabled
-    guard CLLocationManager.locationServicesEnabled() else {
-        return .ServiceDisabled
-    }
-    
-    let manager = CLLocationManager()
-    let delegate = LocationDelegate()
-    manager.delegate = delegate
-    manager.desiredAccuracy = kCLLocationAccuracyBest
-    delegate.runLoop = CFRunLoopGetCurrent()
-    
-    manager.requestLocation()
-    
-    if !delegate.completed {
-        _ = CFRunLoopRunInMode(.defaultMode, 10.0, false)
-    }
-    
-    if !delegate.completed {
-        return .Timeout
-    }
-    
-    guard let location = delegate.location else {
-        return .NotAvailable
-    }
-    
-    let timestampMs = Int64(location.timestamp.timeIntervalSince1970 * 1000)
-    let data = LocationData(
-        latitude: location.coordinate.latitude,
-        longitude: location.coordinate.longitude,
-        altitude: location.altitude,
-        horizontal_accuracy: location.horizontalAccuracy,
-        vertical_accuracy: location.verticalAccuracy,
-        timestamp_ms: timestampMs
-    )
-    
-    return .Success(data)
 }

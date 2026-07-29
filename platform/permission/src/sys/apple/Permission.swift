@@ -28,7 +28,7 @@ func check_permission(permission: PermissionType) -> PermissionResult {
 func request_permission(permission: PermissionType) -> PermissionResult {
     switch permission {
     case .Location:
-        return requestLocationPermission()
+        return checkLocationPermission()
     case .Camera:
         return requestCameraPermission()
     case .Microphone:
@@ -44,72 +44,44 @@ func request_permission(permission: PermissionType) -> PermissionResult {
 
 // MARK: - Request Implementations
 
-class LocationPermissionDelegate: NSObject, CLLocationManagerDelegate {
-    var authorizationStatus: CLAuthorizationStatus?
-    var completed = false
-    var isFirstCallback = true
-    var runLoop: CFRunLoop?
+private final class LocationPermissionRequest: NSObject, CLLocationManagerDelegate {
+    private let manager = CLLocationManager()
+    private var callback: ((PermissionResult) -> Void)?
+    private var keepAlive: LocationPermissionRequest?
 
-    private func finish(with status: CLAuthorizationStatus) {
-        authorizationStatus = status
-        completed = true
-        if let runLoop {
-            CFRunLoopStop(runLoop)
-        }
+    init(callback: @escaping (PermissionResult) -> Void) {
+        self.callback = callback
+    }
+
+    func start() {
+        keepAlive = self
+        manager.delegate = self
+        manager.requestWhenInUseAuthorization()
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
-        // Skip the first callback which fires immediately with current status
-        if isFirstCallback {
-            isFirstCallback = false
-            // If already determined on first callback, we're done
-            if status != .notDetermined {
-                finish(with: status)
-            }
+        guard status != .notDetermined else {
             return
         }
-        // Subsequent callbacks indicate actual status change
-        finish(with: status)
+        finish(statusFromCLAuthorizationStatus(status))
+    }
+
+    private func finish(_ result: PermissionResult) {
+        guard let callback else {
+            return
+        }
+        self.callback = nil
+        manager.delegate = nil
+        callback(result)
+        keepAlive = nil
     }
 }
 
-private var locationManager: CLLocationManager?
-private var locationDelegate: LocationPermissionDelegate?
-
-private func requestLocationPermission() -> PermissionResult {
-    let manager = CLLocationManager()
-    let delegate = LocationPermissionDelegate()
-
-    // Check if already determined
-    let currentStatus = manager.authorizationStatus
-    if currentStatus != .notDetermined {
-        return statusFromCLAuthorizationStatus(currentStatus)
+func request_location_permission(callback: @escaping (PermissionResult) -> Void) {
+    DispatchQueue.main.async {
+        LocationPermissionRequest(callback: callback).start()
     }
-
-    manager.delegate = delegate
-    delegate.runLoop = CFRunLoopGetCurrent()
-
-    // Keep references alive while the authorization flow is in flight.
-    locationManager = manager
-    locationDelegate = delegate
-    defer {
-        locationManager = nil
-        locationDelegate = nil
-    }
-
-    // Request authorization
-    manager.requestWhenInUseAuthorization()
-
-    if !delegate.completed {
-        _ = CFRunLoopRunInMode(.defaultMode, 60.0, false)
-    }
-
-    if let status = delegate.authorizationStatus {
-        return statusFromCLAuthorizationStatus(status)
-    }
-
-    return checkLocationPermission()
 }
 
 private func statusFromCLAuthorizationStatus(_ status: CLAuthorizationStatus) -> PermissionResult {

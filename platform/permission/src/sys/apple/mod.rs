@@ -24,6 +24,7 @@ mod ffi {
     extern "Swift" {
         fn check_permission(permission: PermissionType) -> PermissionResult;
         fn request_permission(permission: PermissionType) -> PermissionResult;
+        fn request_location_permission(callback: Box<dyn FnOnce(PermissionResult) -> ()>);
     }
 }
 
@@ -76,7 +77,19 @@ pub async fn check(permission: Permission) -> PermissionStatus {
 /// Returns [`PermissionError::Unsupported`] for permissions that have no
 /// Apple bridge.
 pub async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
-    permission_to_ffi(permission).map_or(Err(PermissionError::Unsupported), |p| {
-        Ok(status_from_ffi(ffi::request_permission(p)))
-    })
+    if matches!(
+        permission,
+        Permission::Location | Permission::LocationWhenInUse | Permission::LocationAlways
+    ) {
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        ffi::request_location_permission(Box::new(move |result| {
+            let _ = sender.send(result);
+        }));
+        return receiver
+            .await
+            .map(status_from_ffi)
+            .map_err(|_| PermissionError::Platform("location permission callback dropped".into()));
+    }
+    let permission_type = permission_to_ffi(permission).ok_or(PermissionError::Unsupported)?;
+    Ok(status_from_ffi(ffi::request_permission(permission_type)))
 }

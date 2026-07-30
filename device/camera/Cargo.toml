@@ -46,7 +46,7 @@ winit.workspace = true
 
 # Desktop platforms (Windows, macOS, Linux) - use nokhwa
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
-nokhwa = { workspace = true, features = ["input-native", "output-wgpu"] }
+nokhwa = { workspace = true, features = ["input-native"] }
 
 # Apple platforms (iOS, macOS) - use native AVCaptureSession
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]

@@ -240,7 +240,7 @@ quick-xml = "0.41"
 subtp = "0.2"
 winit = "0.30"
 pollster = "1.0"
-nokhwa = { version = "0.10", features = ["input-native", "output-wgpu"] }
+nokhwa = "0.10"
 rav1e = { version = "0.8", default-features = false, features = ["threading"] }
 rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
 media-codec = "0.9"

@@ -261,6 +261,7 @@ rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 arboard = "3"
 clipboard-rs = { version = "0.3", features = ["image"] }
 wayland-sys = { version = "0.31.11", features = ["dlopen"] }
+xcap = "0.9.8"
 notify-rust = "4"
 futures-timer = "3"
 netdev = "0.45"
@@ -281,3 +282,8 @@ clippy.pedantic = { level = "warn", priority = -1 }
 clippy.nursery = { level = "warn", priority = -1 }
 clippy.cargo = { level = "warn", priority = -1 }
 clippy.multiple_crate_versions = "allow"
+
+# xcb 1.7.0 still builds with vulnerable quick-xml 0.30. Upstream has migrated
+# to quick-xml 0.41, but has not released that change yet.
+[patch.crates-io]
+xcb = { git = "https://github.com/rust-x-bindings/rust-xcb", rev = "ae3b2cd080e78173223038ccbebdc644eaf4a9ad" }

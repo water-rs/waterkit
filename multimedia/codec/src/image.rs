@@ -228,8 +228,10 @@ fn is_heif_family(data: &[u8]) -> bool {
     }
 
     if compat
-        .chunks_exact(4)
-        .any(|brand| is_avif_brand([brand[0], brand[1], brand[2], brand[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|brand| is_avif_brand(*brand))
     {
         return false;
     }
@@ -237,8 +239,10 @@ fn is_heif_family(data: &[u8]) -> bool {
         return true;
     }
     compat
-        .chunks_exact(4)
-        .any(|brand| is_heif_brand([brand[0], brand[1], brand[2], brand[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|brand| is_heif_brand(*brand))
 }
 
 #[cfg(target_vendor = "apple")]
@@ -250,8 +254,10 @@ fn is_avif_family(data: &[u8]) -> bool {
         return true;
     }
     compat
-        .chunks_exact(4)
-        .any(|brand| is_avif_brand([brand[0], brand[1], brand[2], brand[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|brand| is_avif_brand(*brand))
 }
 
 #[cfg(target_vendor = "apple")]
@@ -427,7 +433,9 @@ fn apply_avif_alpha(
         )));
     }
     for (pixel, alpha) in rgba
-        .chunks_exact_mut(4)
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
         .zip(&alpha_frame.data[..pixel_count])
     {
         pixel[3] = *alpha;
@@ -443,7 +451,7 @@ fn encode_rgba8_to_hdr_rgba16f(rgba8: &[u8], bit_depth: u8) -> Vec<u8> {
     let max_code = 2f32.powi(i32::from(bit_depth)) - 1.0;
     let headroom_scale = max_code / 255.0;
     let mut out = Vec::with_capacity(rgba8.len() * core::mem::size_of::<u16>());
-    for px in rgba8.chunks_exact(4) {
+    for px in rgba8.as_chunks::<4>().0 {
         let r = (f32::from(px[0]) / 255.0) * headroom_scale;
         let g = (f32::from(px[1]) / 255.0) * headroom_scale;
         let b = (f32::from(px[2]) / 255.0) * headroom_scale;

@@ -24,9 +24,9 @@ async-channel.workspace = true
 blocking.workspace = true
 tracing.workspace = true
 
-# Desktop (screenshots crate for simple screenshot)
+# Desktop screen capture
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
-screenshots = "0.8"
+xcap.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wayland-sys.workspace = true

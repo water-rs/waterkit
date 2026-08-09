@@ -1,6 +1,6 @@
 //! Desktop platform implementation (Windows/Linux/macOS).
 //!
-//! Uses the `screenshots` crate for screen capture and the `image` crate for PNG encoding.
+//! Uses `xcap` for screen capture and PNG encoding.
 //! HEIF/AVIF encoding is not supported on desktop platforms (use macOS native APIs).
 
 use crate::screenshot::ImageFormat;
@@ -10,6 +10,23 @@ use brightness::blocking::{Brightness, brightness_devices};
 use std::io::Cursor;
 #[cfg(target_os = "linux")]
 use wayland_sys as _;
+
+fn map_xcap_error(error: xcap::XCapError) -> Error {
+    Error::Platform(error.to_string())
+}
+
+fn monitors() -> Result<Vec<xcap::Monitor>, Error> {
+    xcap::Monitor::all().map_err(map_xcap_error)
+}
+
+fn monitor_by_id(id: u32) -> Result<xcap::Monitor, Error> {
+    for monitor in monitors()? {
+        if monitor.id().map_err(map_xcap_error)? == id {
+            return Ok(monitor);
+        }
+    }
+    Err(Error::MonitorNotFound)
+}
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn map_brightness_error(error: &brightness::Error) -> Error {
@@ -34,17 +51,16 @@ fn first_brightness_device() -> Result<brightness::blocking::BrightnessDevice, E
 
 /// Enumerate all screens.
 pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
-    let screens = screenshots::Screen::all().map_err(|e| Error::Platform(e.to_string()))?;
-
-    let mut infos = Vec::with_capacity(screens.len());
-    for screen in &screens {
+    let monitors = monitors()?;
+    let mut infos = Vec::with_capacity(monitors.len());
+    for monitor in monitors {
         infos.push(ScreenInfo::new(
-            screen.display_info.id,
-            format!("Screen {}", screen.display_info.id),
-            screen.display_info.width,
-            screen.display_info.height,
-            screen.display_info.scale_factor,
-            screen.display_info.is_primary,
+            monitor.id().map_err(map_xcap_error)?,
+            monitor.name().map_err(map_xcap_error)?,
+            monitor.width().map_err(map_xcap_error)?,
+            monitor.height().map_err(map_xcap_error)?,
+            monitor.scale_factor().map_err(map_xcap_error)?,
+            monitor.is_primary().map_err(map_xcap_error)?,
         ));
     }
 
@@ -53,13 +69,16 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
 
 /// Returns the maximum refresh rate across connected desktop displays.
 pub fn max_refresh_rate_hz() -> Result<f32, Error> {
-    let screens = screenshots::Screen::all().map_err(|e| Error::Platform(e.to_string()))?;
-    screens
-        .iter()
-        .map(|screen| screen.display_info.frequency)
-        .filter(|hz| hz.is_finite() && *hz > 0.0)
-        .max_by(f32::total_cmp)
-        .ok_or(Error::MonitorNotFound)
+    let mut max_refresh_rate = None;
+    for monitor in monitors()? {
+        let refresh_rate = monitor.frequency().map_err(map_xcap_error)?;
+        if refresh_rate.is_finite() && refresh_rate > 0.0 {
+            max_refresh_rate = Some(
+                max_refresh_rate.map_or(refresh_rate, |current: f32| current.max(refresh_rate)),
+            );
+        }
+    }
+    max_refresh_rate.ok_or(Error::MonitorNotFound)
 }
 
 #[allow(clippy::unused_async)]
@@ -117,17 +136,8 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
         return super::apple::screenshot(display, format);
     }
 
-    // Find the screen by ID
-    let screens = screenshots::Screen::all().map_err(|e| Error::Platform(e.to_string()))?;
-    let screen = screens
-        .iter()
-        .find(|s| s.display_info.id == display.id())
-        .ok_or(Error::MonitorNotFound)?;
-
-    // Capture
-    let image = screen
-        .capture()
-        .map_err(|e| Error::Platform(e.to_string()))?;
+    let monitor = monitor_by_id(display.id())?;
+    let image = monitor.capture_image().map_err(map_xcap_error)?;
 
     let width = image.width();
     let height = image.height();
@@ -136,7 +146,7 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
     let mut buffer = Vec::new();
     let mut cursor = Cursor::new(&mut buffer);
     image
-        .write_to(&mut cursor, screenshots::image::ImageFormat::Png)
+        .write_to(&mut cursor, xcap::image::ImageFormat::Png)
         .map_err(|e| Error::Encoding(e.to_string()))?;
 
     Ok(Screenshot::new(buffer, width, height, ImageFormat::Png))
@@ -158,10 +168,10 @@ use wgpu::{Device, Extent3d, Queue, TextureDimension, TextureFormat, TextureUsag
 
 /// Screen stream for Windows/Linux.
 ///
-/// Uses the `screenshots` crate for capture with GPU texture upload.
+/// Uses `xcap` for capture with GPU texture upload.
 #[cfg(not(target_os = "macos"))]
 pub struct ScreenStreamInner {
-    screen: screenshots::Screen,
+    monitor: xcap::Monitor,
     device: Arc<Device>,
     queue: Arc<Queue>,
     width: u32,
@@ -177,17 +187,13 @@ impl ScreenStreamInner {
         queue: Arc<Queue>,
         _config: &StreamConfig,
     ) -> Result<Self, Error> {
-        let screens = screenshots::Screen::all().map_err(|e| Error::Platform(e.to_string()))?;
-        let screen = screens
-            .into_iter()
-            .find(|s| s.display_info.id == display.id())
-            .ok_or(Error::MonitorNotFound)?;
+        let monitor = monitor_by_id(display.id())?;
 
         let width = display.width();
         let height = display.height();
 
         Ok(Self {
-            screen,
+            monitor,
             device,
             queue,
             width,
@@ -203,7 +209,7 @@ impl ScreenStreamInner {
 
     /// Try to capture a frame without blocking.
     pub fn try_next_frame(&self) -> Option<ScreenFrame> {
-        let image = self.screen.capture().ok()?;
+        let image = self.monitor.capture_image().ok()?;
         let width = image.width();
         let height = image.height();
         let rgba = image.into_raw();

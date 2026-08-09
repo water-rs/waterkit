@@ -3,10 +3,10 @@
 //! Opens a window and displays the camera feed in real-time.
 
 use futures::StreamExt;
+use shaderloom::CompiledShader;
 use std::pin::pin;
 use std::sync::Arc;
 use waterkit_camera::Camera;
-use shaderloom::CompiledShader;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};

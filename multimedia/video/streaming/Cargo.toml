@@ -36,7 +36,7 @@ zenwave = { workspace = true, features = ["rustls"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = ["Win32_Storage_FileSystem"] }
-zenwave = { workspace = true, features = ["native-tls"] }
+zenwave = { workspace = true, features = ["rustls"] }
 blake3 = { version = "1", features = ["pure"] }
 
 [target.'cfg(not(any(target_vendor = "apple", target_os = "android", target_os = "windows")))'.dependencies]

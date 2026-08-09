@@ -99,7 +99,7 @@ zenwave = { version = "0.5.0", default-features = false, features = ["hyper-rust
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = ["Media_Playback", "Media_Control", "Foundation", "Storage_Streams", "Win32_Media_MediaFoundation", "Win32_System_Com"], optional = true }
-zenwave = { version = "0.5.0", default-features = false, features = ["hyper-native-tls", "ws"], optional = true }
+zenwave = { version = "0.5.0", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
 
 # Linux
 [target.'cfg(target_os = "linux")'.dependencies]

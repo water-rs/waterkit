@@ -308,7 +308,10 @@ fn convert_to_linear_rgba(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let y_coordinates = vec2<i32>(global_id.xy);
-    let uv_coordinates = vec2<i32>(global_id.xy / 2u);
+    let uv_coordinates = vec2<i32>(
+        i32(global_id.x / 2u),
+        i32(global_id.y / 2u),
+    );
     let y = textureLoad(y_texture, y_coordinates, 0).r;
     let uv = textureLoad(uv_texture, uv_coordinates, 0).rg;
     let linear_rgb = decode_yuv_to_linear(y, uv);

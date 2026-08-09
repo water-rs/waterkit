@@ -177,7 +177,11 @@ fn tone_map_hdr_to_sdr(linear_rgb: vec3<f32>) -> vec3<f32> {
         knee + (1.0 - knee) * (1.0 - exp(-(safe.g - knee) / shoulder)),
         knee + (1.0 - knee) * (1.0 - exp(-(safe.b - knee) / shoulder)),
     );
-    return select(safe, compressed, safe > vec3<f32>(knee));
+    return vec3<f32>(
+        select(safe.r, compressed.r, safe.r > knee),
+        select(safe.g, compressed.g, safe.g > knee),
+        select(safe.b, compressed.b, safe.b > knee),
+    );
 }
 
 fn normalize_yuv(y_sample: f32, uv_sample: vec2<f32>) -> vec3<f32> {

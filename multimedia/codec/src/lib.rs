@@ -56,6 +56,14 @@
 ))]
 mod bitstream;
 mod color;
+// The VA-API backend reads its output layout back from the negotiated
+// `DecodedFormat`, so Linux never has to infer it from the codec configuration.
+#[cfg(any(
+    test,
+    target_vendor = "apple",
+    target_os = "android",
+    target_os = "windows"
+))]
 mod config;
 mod frame;
 mod image;

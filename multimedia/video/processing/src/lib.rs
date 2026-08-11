@@ -106,8 +106,11 @@ pub struct Identity;
 impl<Frame> FrameProcessor<Frame> for Identity {
     type Output = Frame;
 
-    async fn process(&mut self, input: TimedFrame<Frame>) -> Result<TimedFrame<Frame>, Error> {
-        Ok(input)
+    fn process(
+        &mut self,
+        input: TimedFrame<Frame>,
+    ) -> impl Future<Output = Result<TimedFrame<Frame>, Error>> {
+        core::future::ready(Ok(input))
     }
 }
 

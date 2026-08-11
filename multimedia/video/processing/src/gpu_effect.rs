@@ -2,6 +2,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use filtrate::{
     Effect, EffectContext, EffectFrameTiming, EffectInput, EffectOutput, EffectRedrawCallback,
+    WgslModuleCache,
 };
 use waterkit_video_core::{Error, FrameTiming};
 
@@ -224,15 +225,19 @@ impl<E: Effect> GpuEffectProcessor<E> {
         if let Some(callback) = redraw_callback {
             effect.set_redraw_callback(callback);
         }
+        // One processor owns one effect on one device, so its cache lives as
+        // long as the setup that populates it.
+        let shader_cache = WgslModuleCache::new();
         effect
             .setup(&EffectContext {
                 device: &device,
                 queue: &queue,
+                shader_cache: &shader_cache,
                 input_format,
                 output_format,
             })
             .await
-            .map_err(|message| Error::Processing(message.to_owned()))?;
+            .map_err(|error| Error::Processing(error.to_string()))?;
 
         Ok(Self {
             effect,
@@ -266,10 +271,19 @@ impl<E: Effect> GpuEffectProcessor<E> {
 impl<E: Effect> FrameProcessor<GpuTextureFrame> for GpuEffectProcessor<E> {
     type Output = GpuTextureFrame;
 
-    async fn process(
+    fn process(
         &mut self,
         input: TimedFrame<GpuTextureFrame>,
-    ) -> Result<TimedFrame<Self::Output>, Error> {
+    ) -> impl Future<Output = Result<TimedFrame<Self::Output>, Error>> {
+        core::future::ready(self.encode_frame(input))
+    }
+}
+
+impl<E: Effect> GpuEffectProcessor<E> {
+    fn encode_frame(
+        &mut self,
+        input: TimedFrame<GpuTextureFrame>,
+    ) -> Result<TimedFrame<GpuTextureFrame>, Error> {
         let (input, timing) = input.into_parts();
         if input.format() != self.input_format {
             return Err(Error::Processing(format!(
@@ -319,7 +333,7 @@ impl<E: Effect> FrameProcessor<GpuTextureFrame> for GpuEffectProcessor<E> {
         self.needs_redraw = self
             .effect
             .encode_render(&effect_input, &effect_output, &mut encoder)
-            .map_err(|message| Error::Processing(message.to_owned()))?;
+            .map_err(|error| Error::Processing(error.to_string()))?;
         self.queue.submit([encoder.finish()]);
         Ok(TimedFrame::new(output, timing))
     }

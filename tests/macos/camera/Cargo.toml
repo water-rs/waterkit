@@ -5,6 +5,13 @@ edition = "2024"
 publish = false
 
 [dependencies]
+
+# The harness only runs on macOS, so its window and GPU stack is scoped to macOS
+# rather than built for every target the workspace is swept with. `winit` in
+# particular pulls in `android-activity`, which `compile_error!`s until an
+# application selects a game-activity or native-activity backend - something a
+# test harness cannot do.
+[target.'cfg(target_os = "macos")'.dependencies]
 waterkit-camera.workspace = true
 shaderloom.workspace = true
 winit.workspace = true

@@ -8,7 +8,7 @@
 
 mod sys;
 
-/// Android-specific JNI helpers that require an explicit `JNIEnv` and `Context`.
+/// Android-specific JNI helpers that require an explicit `Env` and `Context`.
 #[cfg(target_os = "android")]
 pub mod android {
     pub use crate::sys::android::{delete_with_context, get_with_context, set_with_context};

@@ -1,8 +1,7 @@
 //! Android background scheduler backend using `JobScheduler`.
 
-use jni::JNIEnv;
-use jni::objects::{GlobalRef, JObject, JValue};
-use jni::{JavaVM, errors::Error as JniError};
+use jni::objects::{Global, JObject, JValue};
+use jni::{Env, JavaVM, errors::Error as JniError, jni_sig, jni_str};
 
 use crate::{
     AppRefreshRequest, BackgroundCapabilities, BackgroundError, BootstrapConfig,
@@ -123,7 +122,7 @@ impl BackgroundRuntimeInner {
     pub fn cancel_all(&self) -> Result<(), BackgroundError> {
         with_env_context(|env, context| {
             let scheduler = get_job_scheduler(env, context)?;
-            env.call_method(&scheduler, "cancelAll", "()V", &[])
+            env.call_method(&scheduler, jni_str!("cancelAll"), jni_sig!("()V"), &[])
                 .map_err(jni_error("JobScheduler.cancelAll"))?;
             Ok(())
         })
@@ -184,8 +183,8 @@ fn schedule_job(spec: &JobSpec<'_>, job_service_class: &str) -> Result<(), Backg
         let result = env
             .call_method(
                 &scheduler,
-                "schedule",
-                "(Landroid/app/job/JobInfo;)I",
+                jni_str!("schedule"),
+                jni_sig!("(Landroid/app/job/JobInfo;)I"),
                 &[JValue::Object(&job_info)],
             )
             .map_err(jni_error("JobScheduler.schedule"))?
@@ -203,37 +202,29 @@ fn schedule_job(spec: &JobSpec<'_>, job_service_class: &str) -> Result<(), Backg
     })
 }
 
-fn build_job_info<'a>(
-    env: &mut JNIEnv<'a>,
-    context: &JObject<'static>,
+fn build_job_info<'local>(
+    env: &mut Env<'local>,
+    context: &JObject<'_>,
     job_id: i32,
     spec: &JobSpec<'_>,
     job_service_class: &str,
-) -> Result<JObject<'a>, BackgroundError> {
-    let component_name_class = env
-        .find_class("android/content/ComponentName")
-        .map_err(jni_error("find ComponentName"))?;
-
+) -> Result<JObject<'local>, BackgroundError> {
     let service_class_name = env
         .new_string(job_service_class)
         .map_err(jni_error("new_string service class"))?;
 
     let component_name = env
         .new_object(
-            component_name_class,
-            "(Landroid/content/Context;Ljava/lang/String;)V",
+            jni_str!("android/content/ComponentName"),
+            jni_sig!("(Landroid/content/Context;Ljava/lang/String;)V"),
             &[JValue::Object(context), JValue::Object(&service_class_name)],
         )
         .map_err(jni_error("new ComponentName"))?;
 
-    let builder_class = env
-        .find_class("android/app/job/JobInfo$Builder")
-        .map_err(jni_error("find JobInfo$Builder"))?;
-
     let builder = env
         .new_object(
-            builder_class,
-            "(ILandroid/content/ComponentName;)V",
+            jni_str!("android/app/job/JobInfo$Builder"),
+            jni_sig!("(ILandroid/content/ComponentName;)V"),
             &[JValue::Int(job_id), JValue::Object(&component_name)],
         )
         .map_err(jni_error("new JobInfo.Builder"))?;
@@ -246,69 +237,86 @@ fn build_job_info<'a>(
 
     env.call_method(
         &builder,
-        "setRequiredNetworkType",
-        "(I)Landroid/app/job/JobInfo$Builder;",
+        jni_str!("setRequiredNetworkType"),
+        jni_sig!("(I)Landroid/app/job/JobInfo$Builder;"),
         &[JValue::Int(network_type)],
     )
     .map_err(jni_error("JobInfo.Builder.setRequiredNetworkType"))?;
 
     env.call_method(
         &builder,
-        "setRequiresCharging",
-        "(Z)Landroid/app/job/JobInfo$Builder;",
-        &[JValue::Bool(bool_to_jni(spec.requires_external_power))],
+        jni_str!("setRequiresCharging"),
+        jni_sig!("(Z)Landroid/app/job/JobInfo$Builder;"),
+        &[JValue::Bool(spec.requires_external_power)],
     )
     .map_err(jni_error("JobInfo.Builder.setRequiresCharging"))?;
 
     if spec.min_latency_ms > 0 {
         env.call_method(
             &builder,
-            "setMinimumLatency",
-            "(J)Landroid/app/job/JobInfo$Builder;",
+            jni_str!("setMinimumLatency"),
+            jni_sig!("(J)Landroid/app/job/JobInfo$Builder;"),
             &[JValue::Long(spec.min_latency_ms)],
         )
         .map_err(jni_error("JobInfo.Builder.setMinimumLatency"))?;
     }
 
-    env.call_method(&builder, "build", "()Landroid/app/job/JobInfo;", &[])
-        .map_err(jni_error("JobInfo.Builder.build"))?
-        .l()
-        .map_err(jni_error("JobInfo.Builder.build result"))
+    env.call_method(
+        &builder,
+        jni_str!("build"),
+        jni_sig!("()Landroid/app/job/JobInfo;"),
+        &[],
+    )
+    .map_err(jni_error("JobInfo.Builder.build"))?
+    .l()
+    .map_err(jni_error("JobInfo.Builder.build result"))
 }
 
 fn with_env_context<T>(
-    operation: impl FnOnce(&mut JNIEnv<'_>, &JObject<'static>) -> Result<T, BackgroundError>,
+    operation: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, BackgroundError>,
 ) -> Result<T, BackgroundError> {
-    let (vm, context_ref) = ensure_context_global()?;
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|error| BackgroundError::Platform(format!("attach_current_thread: {error}")))?;
-
-    operation(&mut env, context_ref.as_obj())
+    let (vm, context) = ensure_context_global()?;
+    vm.attach_current_thread(
+        |env| -> Result<Result<T, BackgroundError>, jni::errors::Error> {
+            Ok(operation(env, context.as_obj()))
+        },
+    )
+    .map_err(|error| BackgroundError::Platform(format!("attach_current_thread: {error}")))?
 }
 
-fn ensure_context_global() -> Result<(JavaVM, GlobalRef), BackgroundError> {
+fn ensure_context_global() -> Result<(JavaVM, Global<JObject<'static>>), BackgroundError> {
     let android_context = ndk_context::android_context();
-    let vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) }
-        .map_err(|error| BackgroundError::Platform(format!("from_raw vm: {error}")))?;
+    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
+    let raw_context: jni::sys::jobject = android_context.context().cast();
+    assert!(
+        !raw_vm.is_null(),
+        "waterkit-background: ndk_context returned a null JavaVM"
+    );
+    assert!(
+        !raw_context.is_null(),
+        "waterkit-background: ndk_context returned a null Android Context"
+    );
 
-    let context = unsafe { JObject::from_raw(android_context.context().cast()) };
+    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
+    // valid for the lifetime of the application.
+    let vm = unsafe { JavaVM::from_raw(raw_vm) };
+    let context = vm
+        .attach_current_thread(|env| -> jni::errors::Result<Global<JObject<'static>>> {
+            // SAFETY: `ndk_context` publishes a global reference to the
+            // application `Context` that outlives this attachment, and
+            // `as_cast_raw` only borrows it.
+            let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
+            env.new_global_ref(&*context)
+        })
+        .map_err(jni_error("new_global_ref context"))?;
 
-    let context_ref = {
-        let env = vm.attach_current_thread().map_err(|error| {
-            BackgroundError::Platform(format!("attach_current_thread: {error}"))
-        })?;
-        env.new_global_ref(&context)
-            .map_err(jni_error("new_global_ref context"))?
-    };
-
-    Ok((vm, context_ref))
+    Ok((vm, context))
 }
 
-fn get_job_scheduler<'a>(
-    env: &mut JNIEnv<'a>,
-    context: &JObject<'static>,
-) -> Result<JObject<'a>, BackgroundError> {
+fn get_job_scheduler<'local>(
+    env: &mut Env<'local>,
+    context: &JObject<'_>,
+) -> Result<JObject<'local>, BackgroundError> {
     let service_name = env
         .new_string(JOB_SCHEDULER_SERVICE)
         .map_err(jni_error("new_string jobscheduler"))?;
@@ -316,8 +324,8 @@ fn get_job_scheduler<'a>(
     let scheduler = env
         .call_method(
             context,
-            "getSystemService",
-            "(Ljava/lang/String;)Ljava/lang/Object;",
+            jni_str!("getSystemService"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
             &[JValue::Object(&service_name)],
         )
         .map_err(jni_error("Context.getSystemService"))?
@@ -334,12 +342,17 @@ fn get_job_scheduler<'a>(
 }
 
 fn cancel_job(
-    env: &mut JNIEnv<'_>,
+    env: &mut Env<'_>,
     scheduler: &JObject<'_>,
     job_id: i32,
 ) -> Result<(), BackgroundError> {
-    env.call_method(scheduler, "cancel", "(I)V", &[JValue::Int(job_id)])
-        .map_err(jni_error("JobScheduler.cancel"))?;
+    env.call_method(
+        scheduler,
+        jni_str!("cancel"),
+        jni_sig!("(I)V"),
+        &[JValue::Int(job_id)],
+    )
+    .map_err(jni_error("JobScheduler.cancel"))?;
     Ok(())
 }
 
@@ -348,10 +361,6 @@ fn duration_ms(duration: Option<std::time::Duration>) -> i64 {
         .map(|value| value.as_millis())
         .and_then(|value| i64::try_from(value).ok())
         .unwrap_or(0)
-}
-
-fn bool_to_jni(value: bool) -> u8 {
-    u8::from(value)
 }
 
 fn jni_error(context: &'static str) -> impl FnOnce(JniError) -> BackgroundError {

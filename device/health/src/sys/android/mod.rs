@@ -1,144 +1,130 @@
 use crate::{HealthDataType, HealthError, HealthSample};
 use futures::future;
-use jni::JNIEnv;
-use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
-use std::mem::ManuallyDrop;
+use jni::objects::{Global, JClass, JObject, JString, JValue};
+use jni::{Env, JavaVM, jni_sig, jni_str};
 use std::sync::OnceLock;
 use waterkit_core::Timestamp;
 
 const HELPER_CLASS_NAME: &str = "waterkit.health.HealthHelper";
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
-static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
+
+/// `waterkit.health.HealthHelper`, loaded once from [`DEX_BYTES`].
+static HELPER_CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
 
 fn with_android_context<T, F>(f: F) -> Result<T, HealthError>
 where
-    F: for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<T, HealthError>,
+    F: FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, HealthError>,
 {
     let android_context = ndk_context::android_context();
-    let vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) }
-        .map_err(|error| HealthError::Platform(format!("JavaVM::from_raw failed: {error}")))?;
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|error| HealthError::Platform(format!("attach_current_thread failed: {error}")))?;
-
-    let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
+    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
+    let raw_context: jni::sys::jobject = android_context.context().cast();
     assert!(
-        !context.is_null(),
-        "waterkit-health: ndk_context returned null Android Context"
+        !raw_vm.is_null(),
+        "waterkit-health: ndk_context returned a null JavaVM"
+    );
+    assert!(
+        !raw_context.is_null(),
+        "waterkit-health: ndk_context returned a null Android Context"
     );
 
-    f(&mut env, &context)
+    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
+    // valid for the lifetime of the application.
+    let vm = unsafe { JavaVM::from_raw(raw_vm) };
+    vm.attach_current_thread(
+        |env| -> Result<Result<T, HealthError>, jni::errors::Error> {
+            // SAFETY: `ndk_context` publishes a global reference to the application
+            // `Context` that outlives this attachment, and `as_cast_raw` only
+            // borrows it.
+            let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
+            Ok(f(env, &context))
+        },
+    )
+    .map_err(|error| HealthError::Platform(format!("attach_current_thread failed: {error}")))?
 }
 
-fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), HealthError> {
-    if CLASS_LOADER.get().is_some() {
-        return Ok(());
+/// Returns the cached helper class, loading the embedded DEX on first use.
+fn helper_class(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+) -> Result<&'static Global<JClass<'static>>, HealthError> {
+    if let Some(class) = HELPER_CLASS.get() {
+        return Ok(class);
     }
 
-    let cache_dir = env
-        .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
-        .and_then(jni::objects::JValueGen::l)
-        .map_err(|error| HealthError::Platform(format!("Context.getCacheDir failed: {error}")))?;
+    let class = load_helper_class(env, context)?;
+    Ok(HELPER_CLASS.get_or_init(|| class))
+}
 
-    let cache_path = env
-        .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
-        .and_then(jni::objects::JValueGen::l)
-        .map_err(|error| HealthError::Platform(format!("File.getAbsolutePath failed: {error}")))?;
-
-    let cache_path_string: String = env
-        .get_string(&JString::from(cache_path))
-        .map_err(|error| HealthError::Platform(format!("cache path decode failed: {error}")))?
-        .into();
-
-    let dex_path = format!("{cache_path_string}/waterkit_health.dex");
-    let _ = std::fs::remove_file(&dex_path);
-    std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|error| HealthError::Platform(format!("write DEX failed: {error}")))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut permissions = std::fs::metadata(&dex_path)
-            .map_err(|error| HealthError::Platform(format!("dex metadata failed: {error}")))?
-            .permissions();
-        permissions.set_mode(0o444);
-        std::fs::set_permissions(&dex_path, permissions).map_err(|error| {
-            HealthError::Platform(format!("set dex permissions failed: {error}"))
-        })?;
-    }
-
-    let dex_path_java = env
-        .new_string(dex_path)
-        .map_err(|error| HealthError::Platform(format!("new dex path string failed: {error}")))?;
-    let cache_path_java = env
-        .new_string(cache_path_string)
-        .map_err(|error| HealthError::Platform(format!("new cache path string failed: {error}")))?;
-
+fn load_helper_class(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+) -> Result<Global<JClass<'static>>, HealthError> {
     let parent_loader = env
-        .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
-        .and_then(jni::objects::JValueGen::l)
+        .call_method(
+            context,
+            jni_str!("getClassLoader"),
+            jni_sig!("()Ljava/lang/ClassLoader;"),
+            &[],
+        )
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| {
             HealthError::Platform(format!("Context.getClassLoader failed: {error}"))
         })?;
 
-    let dex_loader_class = env
-        .find_class("dalvik/system/DexClassLoader")
-        .map_err(|error| HealthError::Platform(format!("find DexClassLoader failed: {error}")))?;
-
+    let dex_bytes = env
+        .byte_array_from_slice(DEX_BYTES)
+        .map_err(|error| HealthError::Platform(format!("copy DEX failed: {error}")))?;
+    let dex_buffer = env
+        .call_static_method(
+            jni_str!("java/nio/ByteBuffer"),
+            jni_str!("wrap"),
+            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
+            &[JValue::Object(&dex_bytes)],
+        )
+        .and_then(jni::objects::JValueOwned::l)
+        .map_err(|error| HealthError::Platform(format!("wrap DEX failed: {error}")))?;
     let class_loader = env
         .new_object(
-            dex_loader_class,
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V",
-            &[
-                JValue::Object(&dex_path_java),
-                JValue::Object(&cache_path_java),
-                JValue::Object(&JObject::null()),
-                JValue::Object(&parent_loader),
-            ],
+            jni_str!("dalvik/system/InMemoryDexClassLoader"),
+            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
+            &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
         )
-        .map_err(|error| HealthError::Platform(format!("new DexClassLoader failed: {error}")))?;
-
-    let class_loader_global = env
-        .new_global_ref(class_loader)
-        .map_err(|error| HealthError::Platform(format!("new_global_ref failed: {error}")))?;
-
-    if CLASS_LOADER.set(class_loader_global).is_err() {
-        assert!(
-            CLASS_LOADER.get().is_some(),
-            "waterkit-health: class loader initialization race left loader unset"
-        );
-    }
-
-    Ok(())
-}
-
-fn get_helper_class<'local>(env: &mut JNIEnv<'local>) -> Result<JClass<'local>, HealthError> {
-    let class_loader = CLASS_LOADER
-        .get()
-        .ok_or_else(|| HealthError::Platform("class loader not initialized".into()))?;
+        .map_err(|error| {
+            HealthError::Platform(format!("new InMemoryDexClassLoader failed: {error}"))
+        })?;
 
     let helper_name = env.new_string(HELPER_CLASS_NAME).map_err(|error| {
         HealthError::Platform(format!("new helper class string failed: {error}"))
     })?;
-
     let helper_class = env
         .call_method(
-            class_loader.as_obj(),
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
+            &class_loader,
+            jni_str!("loadClass"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
             &[JValue::Object(&helper_name)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| HealthError::Platform(format!("ClassLoader.loadClass failed: {error}")))?;
+    let helper_class = env.cast_local::<JClass>(helper_class).map_err(|error| {
+        HealthError::Platform(format!("loadClass returned a non-class: {error}"))
+    })?;
 
-    Ok(helper_class.into())
+    env.new_global_ref(helper_class)
+        .map_err(|error| HealthError::Platform(format!("new_global_ref failed: {error}")))
 }
 
-fn is_available_with_context(env: &mut JNIEnv, context: &JObject) -> Result<bool, HealthError> {
-    init_dex(env, context)?;
-    let helper_class = get_helper_class(env)?;
-    env.call_static_method(&helper_class, "isAvailable", "()Z", &[])
+fn decode_string(env: &Env<'_>, value: &JObject<'_>) -> Result<String, HealthError> {
+    env.as_cast::<JString>(value)
+        .and_then(|text| text.try_to_string(env))
+        .map_err(|error| HealthError::Platform(format!("string decode failed: {error}")))
+}
+
+fn is_available_with_context(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+) -> Result<bool, HealthError> {
+    let helper_class = helper_class(env, context)?;
+    env.call_static_method(helper_class, jni_str!("isAvailable"), jni_sig!("()Z"), &[])
         .map_err(|error| {
             HealthError::Platform(format!("HealthHelper.isAvailable failed: {error}"))
         })?
@@ -210,8 +196,7 @@ pub async fn query_samples(
     let start_str = start.to_string();
     let end_str = end.to_string();
     future::ready(with_android_context(|env, context| {
-        init_dex(env, context)?;
-        let helper_class = get_helper_class(env)?;
+        let helper_class = helper_class(env, context)?;
 
         let data_type_java = env.new_string(data_type_name).map_err(|error| {
             HealthError::Platform(format!("new_string data_type failed: {error}"))
@@ -226,8 +211,8 @@ pub async fn query_samples(
         let payload = env
             .call_static_method(
                 helper_class,
-                "querySamples",
-                "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+                jni_str!("querySamples"),
+                jni_sig!("(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
                 &[
                     JValue::Object(context),
                     JValue::Object(&data_type_java),
@@ -246,12 +231,7 @@ pub async fn query_samples(
             return Ok(Vec::new());
         }
 
-        let payload: String = env
-            .get_string(&JString::from(payload))
-            .map_err(|error| {
-                HealthError::Platform(format!("decode querySamples payload failed: {error}"))
-            })?
-            .into();
+        let payload = decode_string(env, &payload)?;
         Ok(parse_samples(data_type, &payload))
     }))
     .await
@@ -262,8 +242,7 @@ pub async fn write_sample(sample: HealthSample) -> Result<(), HealthError> {
     let start_str = sample.start().to_string();
     let end_str = sample.end().to_string();
     future::ready(with_android_context(|env, context| {
-        init_dex(env, context)?;
-        let helper_class = get_helper_class(env)?;
+        let helper_class = helper_class(env, context)?;
 
         let data_type = env.new_string(data_type_name).map_err(|error| {
             HealthError::Platform(format!("new_string data_type failed: {error}"))
@@ -281,8 +260,8 @@ pub async fn write_sample(sample: HealthSample) -> Result<(), HealthError> {
         let error = env
             .call_static_method(
                 helper_class,
-                "writeSample",
-                "(Landroid/content/Context;Ljava/lang/String;DLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+                jni_str!("writeSample"),
+                jni_sig!("(Landroid/content/Context;Ljava/lang/String;DLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
                 &[
                     JValue::Object(context),
                     JValue::Object(&data_type),
@@ -303,15 +282,7 @@ pub async fn write_sample(sample: HealthSample) -> Result<(), HealthError> {
         if error.is_null() {
             Ok(())
         } else {
-            let message: String = env
-                .get_string(&JString::from(error))
-                .map_err(|error| {
-                    HealthError::Platform(format!(
-                        "decode writeSample error failed: {error}"
-                    ))
-                })?
-                .into();
-            Err(map_android_health_error(message))
+            Err(map_android_health_error(decode_string(env, &error)?))
         }
     }))
     .await

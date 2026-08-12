@@ -5,10 +5,11 @@ use crate::{
     ExposureMode, FlashMode, FocusMode, Frame, Photo, PixelFormat, RawPhoto, RawPhotoFormat,
     RawVideoFormat, Resolution, StabilizationMode,
 };
-use jni::JavaVM;
 use jni::objects::{
-    GlobalRef, JByteArray, JFloatArray, JIntArray, JObject, JObjectArray, JString, JValue,
+    Global, JByteArray, JClass, JFloatArray, JIntArray, JObject, JObjectArray, JString, JValue,
 };
+use jni::strings::JNIStr;
+use jni::{Env, JavaVM, jni_sig, jni_str};
 use std::num::NonZeroU8;
 use std::path::Path;
 use std::sync::Arc;
@@ -17,7 +18,6 @@ use std::time::{Duration, Instant};
 
 const DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 const HELPER_CLASS: &str = "waterkit.camera.CameraHelper";
-const DEX_FILENAME: &str = "waterkit_camera.dex";
 
 const DYNAMIC_RANGE_SDR: i32 = 0;
 const DYNAMIC_RANGE_HDR10: i32 = 1;
@@ -50,162 +50,147 @@ struct RawFrame {
 #[derive(Debug)]
 struct AndroidBridge {
     vm: JavaVM,
-    helper: GlobalRef,
+    helper: Global<JObject<'static>>,
 }
 
 impl AndroidBridge {
-    #[allow(clippy::too_many_lines)]
     fn new() -> Result<Self, CameraError> {
         let android_context = ndk_context::android_context();
-        let vm = unsafe {
-            JavaVM::from_raw(android_context.vm().cast())
-                .map_err(|error| CameraError::PlatformError(format!("JavaVM::from_raw: {error}")))?
-        };
+        let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
+        let raw_context: jni::sys::jobject = android_context.context().cast();
+        assert!(
+            !raw_vm.is_null(),
+            "waterkit-camera: ndk_context returned a null JavaVM"
+        );
+        assert!(
+            !raw_context.is_null(),
+            "waterkit-camera: ndk_context returned a null Android Context"
+        );
 
-        let context = {
-            let env = vm.attach_current_thread().map_err(|error| {
+        // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which
+        // stays valid for the lifetime of the application.
+        let vm = unsafe { JavaVM::from_raw(raw_vm) };
+
+        let helper = vm
+            .attach_current_thread(
+                |env| -> Result<Result<Global<JObject<'static>>, CameraError>, jni::errors::Error> {
+                    // SAFETY: `ndk_context` publishes a global reference to the
+                    // application `Context` that outlives this attachment, and
+                    // `as_cast_raw` only borrows it.
+                    let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
+                    Ok(Self::create_helper(env, &context))
+                },
+            )
+            .map_err(|error| {
                 CameraError::PlatformError(format!("attach_current_thread: {error}"))
-            })?;
-
-            let context_obj = unsafe { JObject::from_raw(android_context.context().cast()) };
-            env.new_global_ref(&context_obj).map_err(|error| {
-                CameraError::PlatformError(format!("new_global_ref(context): {error}"))
-            })?
-        };
-
-        let class_loader = {
-            let mut env = vm.attach_current_thread().map_err(|error| {
-                CameraError::PlatformError(format!("attach_current_thread: {error}"))
-            })?;
-
-            let cache_dir = env
-                .call_method(context.as_obj(), "getCacheDir", "()Ljava/io/File;", &[])
-                .and_then(jni::objects::JValueGen::l)
-                .map_err(|error| CameraError::PlatformError(format!("getCacheDir: {error}")))?;
-
-            let cache_path_obj = env
-                .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
-                .and_then(jni::objects::JValueGen::l)
-                .map_err(|error| CameraError::PlatformError(format!("getAbsolutePath: {error}")))?;
-
-            let cache_path = env
-                .get_string((&cache_path_obj).into())
-                .map_err(|error| {
-                    CameraError::PlatformError(format!("get_string(cache path): {error}"))
-                })?
-                .to_str()
-                .map_err(|error| {
-                    CameraError::PlatformError(format!("to_str(cache path): {error}"))
-                })?
-                .to_owned();
-
-            let dex_path = format!("{cache_path}/{DEX_FILENAME}");
-            std::fs::write(&dex_path, DEX_BYTES)
-                .map_err(|error| CameraError::PlatformError(format!("write dex: {error}")))?;
-
-            let dex_path_jstring = env.new_string(&dex_path).map_err(|error| {
-                CameraError::PlatformError(format!("new_string(dex path): {error}"))
-            })?;
-
-            let parent_loader = env
-                .call_method(
-                    context.as_obj(),
-                    "getClassLoader",
-                    "()Ljava/lang/ClassLoader;",
-                    &[],
-                )
-                .and_then(jni::objects::JValueGen::l)
-                .map_err(|error| CameraError::PlatformError(format!("getClassLoader: {error}")))?;
-
-            let dex_class_loader =
-                env.find_class("dalvik/system/DexClassLoader")
-                    .map_err(|error| {
-                        CameraError::PlatformError(format!("find DexClassLoader: {error}"))
-                    })?;
-
-            let loader_obj = env
-                .new_object(
-                    dex_class_loader,
-                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V",
-                    &[
-                        JValue::Object(&dex_path_jstring),
-                        JValue::Object(&cache_path_obj),
-                        JValue::Object(&JObject::null()),
-                        JValue::Object(&parent_loader),
-                    ],
-                )
-                .map_err(|error| CameraError::PlatformError(format!("new DexClassLoader: {error}")))?;
-
-            env.new_global_ref(loader_obj).map_err(|error| {
-                CameraError::PlatformError(format!("new_global_ref(class loader): {error}"))
-            })?
-        };
-
-        let helper = {
-            let mut env = vm.attach_current_thread().map_err(|error| {
-                CameraError::PlatformError(format!("attach_current_thread: {error}"))
-            })?;
-
-            let helper_name = env.new_string(HELPER_CLASS).map_err(|error| {
-                CameraError::PlatformError(format!("new_string(helper): {error}"))
-            })?;
-
-            let class_obj = env
-                .call_method(
-                    class_loader.as_obj(),
-                    "loadClass",
-                    "(Ljava/lang/String;)Ljava/lang/Class;",
-                    &[JValue::Object(&helper_name)],
-                )
-                .and_then(jni::objects::JValueGen::l)
-                .map_err(|error| {
-                    CameraError::PlatformError(format!("loadClass({HELPER_CLASS}): {error}"))
-                })?;
-
-            let helper_class: jni::objects::JClass = class_obj.into();
-            let helper_obj = env
-                .new_object(
-                    helper_class,
-                    "(Landroid/content/Context;)V",
-                    &[JValue::Object(context.as_obj())],
-                )
-                .map_err(|error| {
-                    CameraError::PlatformError(format!("new CameraHelper instance: {error}"))
-                })?;
-
-            env.new_global_ref(helper_obj).map_err(|error| {
-                CameraError::PlatformError(format!("new_global_ref(helper): {error}"))
-            })?
-        };
+            })??;
 
         Ok(Self { vm, helper })
     }
 
-    fn with_env<T, F>(&self, mut f: F) -> Result<T, CameraError>
-    where
-        F: FnMut(&mut jni::JNIEnv) -> Result<T, CameraError>,
-    {
-        let mut env = self.vm.attach_current_thread().map_err(|error| {
-            CameraError::PlatformError(format!("attach_current_thread: {error}"))
+    /// Loads `CameraHelper` from the embedded DEX and constructs one instance
+    /// bound to the application context.
+    fn create_helper(
+        env: &mut Env<'_>,
+        context: &JObject<'_>,
+    ) -> Result<Global<JObject<'static>>, CameraError> {
+        let parent_loader = env
+            .call_method(
+                context,
+                jni_str!("getClassLoader"),
+                jni_sig!("()Ljava/lang/ClassLoader;"),
+                &[],
+            )
+            .and_then(jni::objects::JValueOwned::l)
+            .map_err(|error| CameraError::PlatformError(format!("getClassLoader: {error}")))?;
+
+        let dex_bytes = env
+            .byte_array_from_slice(DEX_BYTES)
+            .map_err(|error| CameraError::PlatformError(format!("copy dex: {error}")))?;
+        let dex_bytes = JObject::from(dex_bytes);
+        let dex_buffer = env
+            .call_static_method(
+                jni_str!("java/nio/ByteBuffer"),
+                jni_str!("wrap"),
+                jni_sig!("([B)Ljava/nio/ByteBuffer;"),
+                &[JValue::Object(&dex_bytes)],
+            )
+            .and_then(jni::objects::JValueOwned::l)
+            .map_err(|error| CameraError::PlatformError(format!("wrap dex: {error}")))?;
+        let loader = env
+            .new_object(
+                jni_str!("dalvik/system/InMemoryDexClassLoader"),
+                jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
+                &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
+            )
+            .map_err(|error| {
+                CameraError::PlatformError(format!("new InMemoryDexClassLoader: {error}"))
+            })?;
+
+        let helper_name = env
+            .new_string(HELPER_CLASS)
+            .map_err(|error| CameraError::PlatformError(format!("new_string(helper): {error}")))?;
+        let class_obj = env
+            .call_method(
+                &loader,
+                jni_str!("loadClass"),
+                jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
+                &[JValue::Object(&helper_name)],
+            )
+            .and_then(jni::objects::JValueOwned::l)
+            .map_err(|error| {
+                CameraError::PlatformError(format!("loadClass({HELPER_CLASS}): {error}"))
+            })?;
+        let helper_class = env.cast_local::<JClass>(class_obj).map_err(|error| {
+            CameraError::PlatformError(format!("loadClass({HELPER_CLASS}) cast: {error}"))
         })?;
-        f(&mut env)
+
+        let helper_obj = env
+            .new_object(
+                &helper_class,
+                jni_sig!("(Landroid/content/Context;)V"),
+                &[JValue::Object(context)],
+            )
+            .map_err(|error| {
+                CameraError::PlatformError(format!("new CameraHelper instance: {error}"))
+            })?;
+
+        env.new_global_ref(helper_obj)
+            .map_err(|error| CameraError::PlatformError(format!("new_global_ref(helper): {error}")))
+    }
+
+    fn with_env<T, F>(&self, f: F) -> Result<T, CameraError>
+    where
+        F: FnOnce(&mut Env<'_>) -> Result<T, CameraError>,
+    {
+        self.vm
+            .attach_current_thread(
+                |env| -> Result<Result<T, CameraError>, jni::errors::Error> { Ok(f(env)) },
+            )
+            .map_err(|error| {
+                CameraError::PlatformError(format!("attach_current_thread: {error}"))
+            })?
     }
 
     fn read_java_string(
-        env: &mut jni::JNIEnv,
-        object: JObject,
+        env: &mut Env<'_>,
+        object: JObject<'_>,
         context: &str,
     ) -> Result<String, CameraError> {
-        let jstring: JString = object.into();
-        env.get_string(&jstring)
+        env.as_cast::<JString>(&object)
+            .and_then(|text| text.try_to_string(env))
             .map_err(|error| CameraError::PlatformError(format!("get_string({context}): {error}")))
-            .map(Into::into)
     }
 
-    fn frame_size_internal(&self, env: &mut jni::JNIEnv) -> Result<Resolution, CameraError> {
+    fn frame_size_internal(&self, env: &mut Env<'_>) -> Result<Resolution, CameraError> {
         let dims_obj = env
-            .call_method(self.helper.as_obj(), "getFrameSize", "()[I", &[])
-            .and_then(jni::objects::JValueGen::l)
+            .call_method(
+                self.helper.as_obj(),
+                jni_str!("getFrameSize"),
+                jni_sig!("()[I"),
+                &[],
+            )
+            .and_then(jni::objects::JValueOwned::l)
             .map_err(|error| CameraError::PlatformError(format!("getFrameSize: {error}")))?;
 
         if dims_obj.is_null() {
@@ -214,12 +199,13 @@ impl AndroidBridge {
             ));
         }
 
-        let dims_array: JIntArray = dims_obj.into();
+        let dims_array = env.cast_local::<JIntArray>(dims_obj).map_err(|error| {
+            CameraError::PlatformError(format!("getFrameSize is not an int array: {error}"))
+        })?;
         let mut dims = [0_i32; 2];
-        env.get_int_array_region(&dims_array, 0, &mut dims)
-            .map_err(|error| {
-                CameraError::PlatformError(format!("get_int_array_region(frame size): {error}"))
-            })?;
+        dims_array.get_region(env, 0, &mut dims).map_err(|error| {
+            CameraError::PlatformError(format!("get_region(frame size): {error}"))
+        })?;
 
         let width = u32::try_from(dims[0])
             .map_err(|_| CameraError::PlatformError(format!("invalid frame width: {}", dims[0])))?;
@@ -236,7 +222,7 @@ impl AndroidBridge {
         Ok(Resolution { width, height })
     }
 
-    fn call_bool_with_camera(&self, method: &str, camera_id: &str) -> Result<bool, CameraError> {
+    fn call_bool_with_camera(&self, method: &JNIStr, camera_id: &str) -> Result<bool, CameraError> {
         self.with_env(|env| {
             let camera_id_java = env.new_string(camera_id).map_err(|error| {
                 CameraError::PlatformError(format!("new_string(camera_id): {error}"))
@@ -245,15 +231,15 @@ impl AndroidBridge {
             env.call_method(
                 self.helper.as_obj(),
                 method,
-                "(Ljava/lang/String;)Z",
+                jni_sig!("(Ljava/lang/String;)Z"),
                 &[JValue::Object(&camera_id_java)],
             )
-            .and_then(jni::objects::JValueGen::z)
+            .and_then(jni::objects::JValueOwned::z)
             .map_err(|error| CameraError::PlatformError(format!("{method}: {error}")))
         })
     }
 
-    fn call_int_with_camera(&self, method: &str, camera_id: &str) -> Result<i32, CameraError> {
+    fn call_int_with_camera(&self, method: &JNIStr, camera_id: &str) -> Result<i32, CameraError> {
         self.with_env(|env| {
             let camera_id_java = env.new_string(camera_id).map_err(|error| {
                 CameraError::PlatformError(format!("new_string(camera_id): {error}"))
@@ -262,17 +248,17 @@ impl AndroidBridge {
             env.call_method(
                 self.helper.as_obj(),
                 method,
-                "(Ljava/lang/String;)I",
+                jni_sig!("(Ljava/lang/String;)I"),
                 &[JValue::Object(&camera_id_java)],
             )
-            .and_then(jni::objects::JValueGen::i)
+            .and_then(jni::objects::JValueOwned::i)
             .map_err(|error| CameraError::PlatformError(format!("{method}: {error}")))
         })
     }
 
     fn call_int_array_with_camera(
         &self,
-        method: &str,
+        method: &JNIStr,
         camera_id: &str,
     ) -> Result<Vec<i32>, CameraError> {
         self.with_env(|env| {
@@ -284,27 +270,24 @@ impl AndroidBridge {
                 .call_method(
                     self.helper.as_obj(),
                     method,
-                    "(Ljava/lang/String;)[I",
+                    jni_sig!("(Ljava/lang/String;)[I"),
                     &[JValue::Object(&camera_id_java)],
                 )
-                .and_then(jni::objects::JValueGen::l)
+                .and_then(jni::objects::JValueOwned::l)
                 .map_err(|error| CameraError::PlatformError(format!("{method}: {error}")))?;
 
             if arr_obj.is_null() {
                 return Ok(Vec::new());
             }
 
-            let arr: JIntArray = arr_obj.into();
-            let len = env
-                .get_array_length(&arr)
+            let arr = env.cast_local::<JIntArray>(arr_obj).map_err(|error| {
+                CameraError::PlatformError(format!("{method} is not an int array: {error}"))
+            })?;
+            let len = arr
+                .len(env)
                 .map_err(|error| CameraError::PlatformError(format!("{method} length: {error}")))?;
-            let mut out = vec![
-                0_i32;
-                usize::try_from(len).map_err(|_| {
-                    CameraError::PlatformError(format!("{method} length exceeds usize: {len}"))
-                })?
-            ];
-            env.get_int_array_region(&arr, 0, &mut out)
+            let mut out = vec![0_i32; len];
+            arr.get_region(env, 0, &mut out)
                 .map_err(|error| CameraError::PlatformError(format!("{method} read: {error}")))?;
             Ok(out)
         })
@@ -312,7 +295,7 @@ impl AndroidBridge {
 
     fn call_float_array_with_camera(
         &self,
-        method: &str,
+        method: &JNIStr,
         camera_id: &str,
     ) -> Result<Vec<f32>, CameraError> {
         self.with_env(|env| {
@@ -324,27 +307,24 @@ impl AndroidBridge {
                 .call_method(
                     self.helper.as_obj(),
                     method,
-                    "(Ljava/lang/String;)[F",
+                    jni_sig!("(Ljava/lang/String;)[F"),
                     &[JValue::Object(&camera_id_java)],
                 )
-                .and_then(jni::objects::JValueGen::l)
+                .and_then(jni::objects::JValueOwned::l)
                 .map_err(|error| CameraError::PlatformError(format!("{method}: {error}")))?;
 
             if arr_obj.is_null() {
                 return Ok(Vec::new());
             }
 
-            let arr: JFloatArray = arr_obj.into();
-            let len = env
-                .get_array_length(&arr)
+            let arr = env.cast_local::<JFloatArray>(arr_obj).map_err(|error| {
+                CameraError::PlatformError(format!("{method} is not a float array: {error}"))
+            })?;
+            let len = arr
+                .len(env)
                 .map_err(|error| CameraError::PlatformError(format!("{method} length: {error}")))?;
-            let mut out = vec![
-                0_f32;
-                usize::try_from(len).map_err(|_| {
-                    CameraError::PlatformError(format!("{method} length exceeds usize: {len}"))
-                })?
-            ];
-            env.get_float_array_region(&arr, 0, &mut out)
+            let mut out = vec![0_f32; len];
+            arr.get_region(env, 0, &mut out)
                 .map_err(|error| CameraError::PlatformError(format!("{method} read: {error}")))?;
             Ok(out)
         })
@@ -355,11 +335,11 @@ impl AndroidBridge {
             let rows_obj = env
                 .call_method(
                     self.helper.as_obj(),
-                    "listCameras",
-                    "()[[Ljava/lang/String;",
+                    jni_str!("listCameras"),
+                    jni_sig!("()[[Ljava/lang/String;"),
                     &[],
                 )
-                .and_then(jni::objects::JValueGen::l)
+                .and_then(jni::objects::JValueOwned::l)
                 .map_err(|error| {
                     CameraError::EnumerationFailed(format!("listCameras JNI call: {error}"))
                 })?;
@@ -368,20 +348,18 @@ impl AndroidBridge {
                 return Ok(Vec::new());
             }
 
-            let rows: JObjectArray = rows_obj.into();
-            let row_count = env.get_array_length(&rows).map_err(|error| {
+            let rows = env.cast_local::<JObjectArray>(rows_obj).map_err(|error| {
+                CameraError::EnumerationFailed(format!("listCameras is not an array: {error}"))
+            })?;
+            let row_count = rows.len(env).map_err(|error| {
                 CameraError::EnumerationFailed(format!("listCameras length: {error}"))
             })?;
 
-            let mut cameras = Vec::with_capacity(usize::try_from(row_count).unwrap_or(0));
+            let mut cameras = Vec::with_capacity(row_count);
             for index in 0..row_count {
-                let camera_row_obj =
-                    env.get_object_array_element(&rows, index)
-                        .map_err(|error| {
-                            CameraError::EnumerationFailed(format!(
-                                "listCameras row {index}: {error}"
-                            ))
-                        })?;
+                let camera_row_obj = rows.get_element(env, index).map_err(|error| {
+                    CameraError::EnumerationFailed(format!("listCameras row {index}: {error}"))
+                })?;
 
                 if camera_row_obj.is_null() {
                     return Err(CameraError::EnumerationFailed(format!(
@@ -389,8 +367,14 @@ impl AndroidBridge {
                     )));
                 }
 
-                let camera_row: JObjectArray = camera_row_obj.into();
-                let column_count = env.get_array_length(&camera_row).map_err(|error| {
+                let camera_row =
+                    env.cast_local::<JObjectArray>(camera_row_obj)
+                        .map_err(|error| {
+                            CameraError::EnumerationFailed(format!(
+                                "listCameras row {index} is not an array: {error}"
+                            ))
+                        })?;
+                let column_count = camera_row.len(env).map_err(|error| {
                     CameraError::EnumerationFailed(format!(
                         "listCameras row {index} length: {error}"
                     ))
@@ -401,23 +385,15 @@ impl AndroidBridge {
                     )));
                 }
 
-                let id_obj = env
-                    .get_object_array_element(&camera_row, 0)
-                    .map_err(|error| {
-                        CameraError::EnumerationFailed(format!("camera id row {index}: {error}"))
-                    })?;
-                let name_obj = env
-                    .get_object_array_element(&camera_row, 1)
-                    .map_err(|error| {
-                        CameraError::EnumerationFailed(format!("camera name row {index}: {error}"))
-                    })?;
-                let is_front_obj =
-                    env.get_object_array_element(&camera_row, 2)
-                        .map_err(|error| {
-                            CameraError::EnumerationFailed(format!(
-                                "camera facing row {index}: {error}"
-                            ))
-                        })?;
+                let id_obj = camera_row.get_element(env, 0).map_err(|error| {
+                    CameraError::EnumerationFailed(format!("camera id row {index}: {error}"))
+                })?;
+                let name_obj = camera_row.get_element(env, 1).map_err(|error| {
+                    CameraError::EnumerationFailed(format!("camera name row {index}: {error}"))
+                })?;
+                let is_front_obj = camera_row.get_element(env, 2).map_err(|error| {
+                    CameraError::EnumerationFailed(format!("camera facing row {index}: {error}"))
+                })?;
 
                 if id_obj.is_null() || name_obj.is_null() || is_front_obj.is_null() {
                     return Err(CameraError::EnumerationFailed(format!(
@@ -452,7 +428,8 @@ impl AndroidBridge {
     }
 
     fn get_supported_resolutions(&self, camera_id: &str) -> Result<Vec<Resolution>, CameraError> {
-        let flat = self.call_int_array_with_camera("getSupportedResolutions", camera_id)?;
+        let flat =
+            self.call_int_array_with_camera(jni_str!("getSupportedResolutions"), camera_id)?;
         if flat.len() % 2 != 0 {
             return Err(CameraError::PlatformError(format!(
                 "getSupportedResolutions returned odd array length: {}",
@@ -486,7 +463,8 @@ impl AndroidBridge {
     }
 
     fn get_supported_frame_rates(&self, camera_id: &str) -> Result<Vec<u32>, CameraError> {
-        let rates = self.call_int_array_with_camera("getSupportedFrameRates", camera_id)?;
+        let rates =
+            self.call_int_array_with_camera(jni_str!("getSupportedFrameRates"), camera_id)?;
         let mut out = Vec::with_capacity(rates.len());
         for fps in rates {
             let value = u32::try_from(fps).map_err(|_| {
@@ -503,7 +481,7 @@ impl AndroidBridge {
     }
 
     fn get_zoom_range(&self, camera_id: &str) -> Result<Option<(f32, f32)>, CameraError> {
-        let range = self.call_float_array_with_camera("getZoomRange", camera_id)?;
+        let range = self.call_float_array_with_camera(jni_str!("getZoomRange"), camera_id)?;
         if range.is_empty() {
             return Ok(None);
         }
@@ -545,24 +523,29 @@ impl AndroidBridge {
         frame_rates.sort_unstable();
         frame_rates.dedup();
 
-        let supports_hdr = self.call_bool_with_camera("supportsHdr", camera_id)?;
-        let supports_dolby_vision = self.call_bool_with_camera("supportsDolbyVision", camera_id)?;
+        let supports_hdr = self.call_bool_with_camera(jni_str!("supportsHdr"), camera_id)?;
+        let supports_dolby_vision =
+            self.call_bool_with_camera(jni_str!("supportsDolbyVision"), camera_id)?;
         let supports_standard_stabilization =
-            self.call_bool_with_camera("supportsStandardStabilization", camera_id)?;
+            self.call_bool_with_camera(jni_str!("supportsStandardStabilization"), camera_id)?;
         let supports_cinematic_stabilization =
-            self.call_bool_with_camera("supportsCinematicStabilization", camera_id)?;
+            self.call_bool_with_camera(jni_str!("supportsCinematicStabilization"), camera_id)?;
         let supports_exposure_compensation =
-            self.call_bool_with_camera("supportsExposureCompensation", camera_id)?;
-        let supports_manual_focus = self.call_bool_with_camera("supportsManualFocus", camera_id)?;
+            self.call_bool_with_camera(jni_str!("supportsExposureCompensation"), camera_id)?;
+        let supports_manual_focus =
+            self.call_bool_with_camera(jni_str!("supportsManualFocus"), camera_id)?;
         let supports_manual_white_balance =
-            self.call_bool_with_camera("supportsManualWhiteBalance", camera_id)?;
-        let has_flash = self.call_bool_with_camera("hasFlash", camera_id)?;
-        let has_torch = self.call_bool_with_camera("hasTorch", camera_id)?;
-        let supports_raw_photo = self.call_bool_with_camera("supportsRawPhoto", camera_id)?;
-        let supports_raw_video = self.call_bool_with_camera("supportsRawVideo", camera_id)?;
+            self.call_bool_with_camera(jni_str!("supportsManualWhiteBalance"), camera_id)?;
+        let has_flash = self.call_bool_with_camera(jni_str!("hasFlash"), camera_id)?;
+        let has_torch = self.call_bool_with_camera(jni_str!("hasTorch"), camera_id)?;
+        let supports_raw_photo =
+            self.call_bool_with_camera(jni_str!("supportsRawPhoto"), camera_id)?;
+        let supports_raw_video =
+            self.call_bool_with_camera(jni_str!("supportsRawVideo"), camera_id)?;
         let supports_concurrent_multi_camera =
-            self.call_bool_with_camera("supportsConcurrentMultiCamera", camera_id)?;
-        let max_concurrent_raw = self.call_int_with_camera("maxConcurrentCameras", camera_id)?;
+            self.call_bool_with_camera(jni_str!("supportsConcurrentMultiCamera"), camera_id)?;
+        let max_concurrent_raw =
+            self.call_int_with_camera(jni_str!("maxConcurrentCameras"), camera_id)?;
         let max_concurrent_u8 = u8::try_from(max_concurrent_raw).map_err(|_| {
             CameraError::PlatformError(format!(
                 "maxConcurrentCameras must fit in u8, got {max_concurrent_raw}"
@@ -645,8 +628,8 @@ impl AndroidBridge {
             let opened = env
                 .call_method(
                     self.helper.as_obj(),
-                    "openCamera",
-                    "(Ljava/lang/String;III)Z",
+                    jni_str!("openCamera"),
+                    jni_sig!("(Ljava/lang/String;III)Z"),
                     &[
                         JValue::Object(&camera_id_java),
                         JValue::Int(width),
@@ -654,7 +637,7 @@ impl AndroidBridge {
                         JValue::Int(fps),
                     ],
                 )
-                .and_then(jni::objects::JValueGen::z)
+                .and_then(jni::objects::JValueOwned::z)
                 .map_err(|error| {
                     CameraError::OpenFailed(format!("openCamera JNI call: {error}"))
                 })?;
@@ -672,8 +655,13 @@ impl AndroidBridge {
     fn start_capture(&self) -> Result<(), CameraError> {
         self.with_env(|env| {
             let started = env
-                .call_method(self.helper.as_obj(), "startCapture", "()Z", &[])
-                .and_then(jni::objects::JValueGen::z)
+                .call_method(
+                    self.helper.as_obj(),
+                    jni_str!("startCapture"),
+                    jni_sig!("()Z"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::z)
                 .map_err(|error| {
                     CameraError::StartFailed(format!("startCapture JNI call: {error}"))
                 })?;
@@ -690,16 +678,26 @@ impl AndroidBridge {
 
     fn stop_capture(&self) -> Result<(), CameraError> {
         self.with_env(|env| {
-            env.call_method(self.helper.as_obj(), "stopCapture", "()V", &[])
-                .map_err(|error| CameraError::PlatformError(format!("stopCapture: {error}")))?;
+            env.call_method(
+                self.helper.as_obj(),
+                jni_str!("stopCapture"),
+                jni_sig!("()V"),
+                &[],
+            )
+            .map_err(|error| CameraError::PlatformError(format!("stopCapture: {error}")))?;
             Ok(())
         })
     }
 
     fn close_camera(&self) -> Result<(), CameraError> {
         self.with_env(|env| {
-            env.call_method(self.helper.as_obj(), "closeCamera", "()V", &[])
-                .map_err(|error| CameraError::PlatformError(format!("closeCamera: {error}")))?;
+            env.call_method(
+                self.helper.as_obj(),
+                jni_str!("closeCamera"),
+                jni_sig!("()V"),
+                &[],
+            )
+            .map_err(|error| CameraError::PlatformError(format!("closeCamera: {error}")))?;
             Ok(())
         })
     }
@@ -718,11 +716,11 @@ impl AndroidBridge {
             let frame_obj = env
                 .call_method(
                     self.helper.as_obj(),
-                    "waitForNextFrame",
-                    "(I)[B",
+                    jni_str!("waitForNextFrame"),
+                    jni_sig!("(I)[B"),
                     &[JValue::Int(timeout_ms.max(0))],
                 )
-                .and_then(jni::objects::JValueGen::l)
+                .and_then(jni::objects::JValueOwned::l)
                 .map_err(|error| {
                     CameraError::CaptureFailed(format!("waitForNextFrame JNI call: {error}"))
                 })?;
@@ -731,7 +729,9 @@ impl AndroidBridge {
                 return Ok(None);
             }
 
-            let frame_array: JByteArray = frame_obj.into();
+            let frame_array = env.cast_local::<JByteArray>(frame_obj).map_err(|error| {
+                CameraError::CaptureFailed(format!("frame is not a byte array: {error}"))
+            })?;
             let data = env.convert_byte_array(&frame_array).map_err(|error| {
                 CameraError::CaptureFailed(format!("convert_byte_array(frame): {error}"))
             })?;
@@ -791,36 +791,41 @@ impl AndroidBridge {
         })
     }
 
-    fn call_bool_no_args(&self, method: &str) -> Result<bool, CameraError> {
+    fn call_bool_no_args(&self, method: &JNIStr) -> Result<bool, CameraError> {
         self.with_env(|env| {
-            env.call_method(self.helper.as_obj(), method, "()Z", &[])
-                .and_then(jni::objects::JValueGen::z)
+            env.call_method(self.helper.as_obj(), method, jni_sig!("()Z"), &[])
+                .and_then(jni::objects::JValueOwned::z)
                 .map_err(|error| CameraError::PlatformError(format!("{method}: {error}")))
         })
     }
 
-    fn call_bool_with_float(&self, method: &str, value: f32) -> Result<bool, CameraError> {
+    fn call_bool_with_float(&self, method: &JNIStr, value: f32) -> Result<bool, CameraError> {
         self.with_env(|env| {
             env.call_method(
                 self.helper.as_obj(),
                 method,
-                "(F)Z",
+                jni_sig!("(F)Z"),
                 &[JValue::Float(value)],
             )
-            .and_then(jni::objects::JValueGen::z)
+            .and_then(jni::objects::JValueOwned::z)
             .map_err(|error| CameraError::PlatformError(format!("{method}: {error}")))
         })
     }
 
-    fn call_bool_with_int(&self, method: &str, value: i32) -> Result<bool, CameraError> {
+    fn call_bool_with_int(&self, method: &JNIStr, value: i32) -> Result<bool, CameraError> {
         self.with_env(|env| {
-            env.call_method(self.helper.as_obj(), method, "(I)Z", &[JValue::Int(value)])
-                .and_then(jni::objects::JValueGen::z)
-                .map_err(|error| CameraError::PlatformError(format!("{method}: {error}")))
+            env.call_method(
+                self.helper.as_obj(),
+                method,
+                jni_sig!("(I)Z"),
+                &[JValue::Int(value)],
+            )
+            .and_then(jni::objects::JValueOwned::z)
+            .map_err(|error| CameraError::PlatformError(format!("{method}: {error}")))
         })
     }
 
-    fn call_bool_with_string(&self, method: &str, value: &str) -> Result<bool, CameraError> {
+    fn call_bool_with_string(&self, method: &JNIStr, value: &str) -> Result<bool, CameraError> {
         self.with_env(|env| {
             let jvalue = env.new_string(value).map_err(|error| {
                 CameraError::PlatformError(format!("new_string(path): {error}"))
@@ -828,16 +833,16 @@ impl AndroidBridge {
             env.call_method(
                 self.helper.as_obj(),
                 method,
-                "(Ljava/lang/String;)Z",
+                jni_sig!("(Ljava/lang/String;)Z"),
                 &[JValue::Object(&jvalue)],
             )
-            .and_then(jni::objects::JValueGen::z)
+            .and_then(jni::objects::JValueOwned::z)
             .map_err(|error| CameraError::PlatformError(format!("{method}: {error}")))
         })
     }
 
     fn set_zoom(&self, value: f32) -> Result<(), CameraError> {
-        if self.call_bool_with_float("setZoom", value)? {
+        if self.call_bool_with_float(jni_str!("setZoom"), value)? {
             Ok(())
         } else {
             Err(CameraError::ControlUnsupported("zoom".into()))
@@ -845,7 +850,7 @@ impl AndroidBridge {
     }
 
     fn set_flash_mode(&self, value: i32) -> Result<(), CameraError> {
-        if self.call_bool_with_int("setFlashMode", value)? {
+        if self.call_bool_with_int(jni_str!("setFlashMode"), value)? {
             Ok(())
         } else {
             Err(CameraError::ControlUnsupported("flash".into()))
@@ -853,7 +858,7 @@ impl AndroidBridge {
     }
 
     fn set_stabilization_mode(&self, value: i32) -> Result<(), CameraError> {
-        if self.call_bool_with_int("setStabilizationMode", value)? {
+        if self.call_bool_with_int(jni_str!("setStabilizationMode"), value)? {
             Ok(())
         } else {
             Err(CameraError::ControlUnsupported("stabilization".into()))
@@ -861,7 +866,7 @@ impl AndroidBridge {
     }
 
     fn set_dynamic_range(&self, value: i32) -> Result<(), CameraError> {
-        if self.call_bool_with_int("setDynamicRange", value)? {
+        if self.call_bool_with_int(jni_str!("setDynamicRange"), value)? {
             Ok(())
         } else {
             Err(CameraError::ControlUnsupported("dynamic_range".into()))
@@ -869,7 +874,7 @@ impl AndroidBridge {
     }
 
     fn set_exposure_compensation(&self, value: f32) -> Result<(), CameraError> {
-        if self.call_bool_with_float("setExposureCompensation", value)? {
+        if self.call_bool_with_float(jni_str!("setExposureCompensation"), value)? {
             Ok(())
         } else {
             Err(CameraError::ControlUnsupported(
@@ -879,7 +884,7 @@ impl AndroidBridge {
     }
 
     fn set_focus_mode(&self, value: i32) -> Result<(), CameraError> {
-        if self.call_bool_with_int("setFocusMode", value)? {
+        if self.call_bool_with_int(jni_str!("setFocusMode"), value)? {
             Ok(())
         } else {
             Err(CameraError::ControlUnsupported("focus_mode".into()))
@@ -887,7 +892,7 @@ impl AndroidBridge {
     }
 
     fn set_focus_distance_normalized(&self, value: f32) -> Result<(), CameraError> {
-        if self.call_bool_with_float("setFocusDistanceNormalized", value)? {
+        if self.call_bool_with_float(jni_str!("setFocusDistanceNormalized"), value)? {
             Ok(())
         } else {
             Err(CameraError::ControlUnsupported("focus_distance".into()))
@@ -895,7 +900,7 @@ impl AndroidBridge {
     }
 
     fn capture_photo_data(&self) -> Result<Vec<u8>, CameraError> {
-        if !self.call_bool_no_args("capturePhoto")? {
+        if !self.call_bool_no_args(jni_str!("capturePhoto"))? {
             return Err(CameraError::CaptureFailed(
                 "CameraHelper.capturePhoto returned false".into(),
             ));
@@ -903,8 +908,13 @@ impl AndroidBridge {
 
         self.with_env(|env| {
             let data_obj = env
-                .call_method(self.helper.as_obj(), "consumePhotoData", "()[B", &[])
-                .and_then(jni::objects::JValueGen::l)
+                .call_method(
+                    self.helper.as_obj(),
+                    jni_str!("consumePhotoData"),
+                    jni_sig!("()[B"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::l)
                 .map_err(|error| {
                     CameraError::CaptureFailed(format!("consumePhotoData JNI call: {error}"))
                 })?;
@@ -915,7 +925,9 @@ impl AndroidBridge {
                 ));
             }
 
-            let data: JByteArray = data_obj.into();
+            let data = env.cast_local::<JByteArray>(data_obj).map_err(|error| {
+                CameraError::CaptureFailed(format!("photo data is not a byte array: {error}"))
+            })?;
             env.convert_byte_array(&data).map_err(|error| {
                 CameraError::CaptureFailed(format!("convert_byte_array(photo): {error}"))
             })
@@ -923,7 +935,7 @@ impl AndroidBridge {
     }
 
     fn capture_raw_photo_data(&self) -> Result<Vec<u8>, CameraError> {
-        if !self.call_bool_no_args("captureRawPhoto")? {
+        if !self.call_bool_no_args(jni_str!("captureRawPhoto"))? {
             return Err(CameraError::CaptureFailed(
                 "CameraHelper.captureRawPhoto returned false".into(),
             ));
@@ -931,8 +943,13 @@ impl AndroidBridge {
 
         self.with_env(|env| {
             let data_obj = env
-                .call_method(self.helper.as_obj(), "consumeRawPhotoData", "()[B", &[])
-                .and_then(jni::objects::JValueGen::l)
+                .call_method(
+                    self.helper.as_obj(),
+                    jni_str!("consumeRawPhotoData"),
+                    jni_sig!("()[B"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::l)
                 .map_err(|error| {
                     CameraError::CaptureFailed(format!("consumeRawPhotoData JNI call: {error}"))
                 })?;
@@ -943,7 +960,9 @@ impl AndroidBridge {
                 ));
             }
 
-            let data: JByteArray = data_obj.into();
+            let data = env.cast_local::<JByteArray>(data_obj).map_err(|error| {
+                CameraError::CaptureFailed(format!("photo data is not a byte array: {error}"))
+            })?;
             env.convert_byte_array(&data).map_err(|error| {
                 CameraError::CaptureFailed(format!("convert_byte_array(raw photo): {error}"))
             })
@@ -951,7 +970,7 @@ impl AndroidBridge {
     }
 
     fn start_recording(&self, path: &str) -> Result<(), CameraError> {
-        if self.call_bool_with_string("startRecording", path)? {
+        if self.call_bool_with_string(jni_str!("startRecording"), path)? {
             Ok(())
         } else {
             Err(CameraError::RecordingError(
@@ -961,7 +980,7 @@ impl AndroidBridge {
     }
 
     fn stop_recording(&self) -> Result<(), CameraError> {
-        if self.call_bool_no_args("stopRecording")? {
+        if self.call_bool_no_args(jni_str!("stopRecording"))? {
             Ok(())
         } else {
             Err(CameraError::RecordingError(
@@ -973,8 +992,13 @@ impl AndroidBridge {
     fn recording_duration_ms(&self) -> Result<u64, CameraError> {
         self.with_env(|env| {
             let value = env
-                .call_method(self.helper.as_obj(), "getRecordingDurationMs", "()J", &[])
-                .and_then(jni::objects::JValueGen::j)
+                .call_method(
+                    self.helper.as_obj(),
+                    jni_str!("getRecordingDurationMs"),
+                    jni_sig!("()J"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::j)
                 .map_err(|error| {
                     CameraError::RecordingError(format!("getRecordingDurationMs: {error}"))
                 })?;
@@ -988,7 +1012,7 @@ impl AndroidBridge {
     }
 
     fn start_raw_recording(&self, path: &str) -> Result<(), CameraError> {
-        if self.call_bool_with_string("startRawRecording", path)? {
+        if self.call_bool_with_string(jni_str!("startRawRecording"), path)? {
             Ok(())
         } else {
             Err(CameraError::RecordingError(
@@ -998,7 +1022,7 @@ impl AndroidBridge {
     }
 
     fn stop_raw_recording(&self) -> Result<(), CameraError> {
-        if self.call_bool_no_args("stopRawRecording")? {
+        if self.call_bool_no_args(jni_str!("stopRawRecording"))? {
             Ok(())
         } else {
             Err(CameraError::RecordingError(
@@ -1012,11 +1036,11 @@ impl AndroidBridge {
             let value = env
                 .call_method(
                     self.helper.as_obj(),
-                    "getRawRecordingDurationMs",
-                    "()J",
+                    jni_str!("getRawRecordingDurationMs"),
+                    jni_sig!("()J"),
                     &[],
                 )
-                .and_then(jni::objects::JValueGen::j)
+                .and_then(jni::objects::JValueOwned::j)
                 .map_err(|error| {
                     CameraError::RecordingError(format!("getRawRecordingDurationMs: {error}"))
                 })?;

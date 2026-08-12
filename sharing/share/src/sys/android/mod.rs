@@ -1,28 +1,35 @@
 use crate::{ShareError, ShareResult, ShareSheet};
 use futures::future;
-use jni::JNIEnv;
-use jni::JavaVM;
 use jni::objects::JObject;
-use std::mem::ManuallyDrop;
+use jni::{Env, JavaVM};
 
 fn with_android_context<T, F>(f: F) -> Result<T, ShareError>
 where
-    F: for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<T, ShareError>,
+    F: FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, ShareError>,
 {
     let android_context = ndk_context::android_context();
-    let vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) }
-        .map_err(|e| ShareError::Platform(format!("JavaVM::from_raw: {e}")))?;
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|e| ShareError::Platform(format!("attach_current_thread: {e}")))?;
-
-    let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
+    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
+    let raw_context: jni::sys::jobject = android_context.context().cast();
     assert!(
-        !context.is_null(),
-        "ndk_context returned null Android Context"
+        !raw_vm.is_null(),
+        "waterkit-share: ndk_context returned a null JavaVM"
+    );
+    assert!(
+        !raw_context.is_null(),
+        "waterkit-share: ndk_context returned a null Android Context"
     );
 
-    f(&mut env, &context)
+    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
+    // valid for the lifetime of the application.
+    let vm = unsafe { JavaVM::from_raw(raw_vm) };
+    vm.attach_current_thread(|env| -> Result<Result<T, ShareError>, jni::errors::Error> {
+        // SAFETY: `ndk_context` publishes a global reference to the application
+        // `Context` that outlives this attachment, and `as_cast_raw` only
+        // borrows it.
+        let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
+        Ok(f(env, &context))
+    })
+    .map_err(|e| ShareError::Platform(format!("attach_current_thread: {e}")))?
 }
 
 pub async fn show_share_sheet(sheet: ShareSheet) -> Result<ShareResult, ShareError> {
@@ -35,22 +42,18 @@ pub async fn show_share_sheet(sheet: ShareSheet) -> Result<ShareResult, ShareErr
 /// Android-specific share functions requiring JNI context.
 pub mod jni_api {
     use crate::{ShareError, ShareItem, ShareResult, ShareSheet};
-    use jni::JNIEnv;
     use jni::objects::{JObject, JValue};
+    use jni::{Env, jni_sig, jni_str};
 
     /// Show a share sheet with JNI context.
     ///
     /// # Errors
     /// Returns error if JNI operations fail.
     pub fn share_with_context(
-        env: &mut JNIEnv,
-        context: &JObject,
+        env: &mut Env<'_>,
+        context: &JObject<'_>,
         sheet: &ShareSheet,
     ) -> Result<ShareResult, ShareError> {
-        let intent_class = env
-            .find_class("android/content/Intent")
-            .map_err(|e| ShareError::Platform(format!("find_class: {e}")))?;
-
         let has_multiple_items = sheet.items.len() > 1;
         let action = if has_multiple_items {
             "android.intent.action.SEND_MULTIPLE"
@@ -61,12 +64,12 @@ pub mod jni_api {
             .new_string(action)
             .map_err(|e| ShareError::Platform(format!("new_string: {e}")))?;
         let intent = env
-            .new_object(intent_class, "()V", &[])
+            .new_object(jni_str!("android/content/Intent"), jni_sig!("()V"), &[])
             .map_err(|e| ShareError::Platform(format!("new_object: {e}")))?;
         env.call_method(
             &intent,
-            "setAction",
-            "(Ljava/lang/String;)Landroid/content/Intent;",
+            jni_str!("setAction"),
+            jni_sig!("(Ljava/lang/String;)Landroid/content/Intent;"),
             &[JValue::Object(&action_jstr)],
         )
         .map_err(|e| ShareError::Platform(format!("setAction: {e}")))?;
@@ -82,8 +85,8 @@ pub mod jni_api {
                         .map_err(|e| ShareError::Platform(format!("new_string: {e}")))?;
                     env.call_method(
                         &intent,
-                        "putExtra",
-                        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+                        jni_str!("putExtra"),
+                        jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;"),
                         &[JValue::Object(&extra_text), JValue::Object(&text_jstr)],
                     )
                     .map_err(|e| ShareError::Platform(format!("putExtra: {e}")))?;
@@ -92,8 +95,8 @@ pub mod jni_api {
                         .map_err(|e| ShareError::Platform(format!("new_string: {e}")))?;
                     env.call_method(
                         &intent,
-                        "setType",
-                        "(Ljava/lang/String;)Landroid/content/Intent;",
+                        jni_str!("setType"),
+                        jni_sig!("(Ljava/lang/String;)Landroid/content/Intent;"),
                         &[JValue::Object(&mime)],
                     )
                     .map_err(|e| ShareError::Platform(format!("setType: {e}")))?;
@@ -104,8 +107,8 @@ pub mod jni_api {
                         .map_err(|e| ShareError::Platform(format!("new_string: {e}")))?;
                     env.call_method(
                         &intent,
-                        "setType",
-                        "(Ljava/lang/String;)Landroid/content/Intent;",
+                        jni_str!("setType"),
+                        jni_sig!("(Ljava/lang/String;)Landroid/content/Intent;"),
                         &[JValue::Object(&mime)],
                     )
                     .map_err(|e| ShareError::Platform(format!("setType: {e}")))?;
@@ -122,8 +125,8 @@ pub mod jni_api {
                 .map_err(|e| ShareError::Platform(format!("new_string: {e}")))?;
             env.call_method(
                 &intent,
-                "putExtra",
-                "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+                jni_str!("putExtra"),
+                jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;"),
                 &[
                     JValue::Object(&extra_subject),
                     JValue::Object(&subject_jstr),
@@ -135,23 +138,22 @@ pub mod jni_api {
         let chooser_title = env
             .new_string("Share")
             .map_err(|e| ShareError::Platform(format!("new_string: {e}")))?;
-        let chooser_class = env
-            .find_class("android/content/Intent")
-            .map_err(|e| ShareError::Platform(format!("find_class: {e}")))?;
         let chooser = env
             .call_static_method(
-                chooser_class,
-                "createChooser",
-                "(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent;",
+                jni_str!("android/content/Intent"),
+                jni_str!("createChooser"),
+                jni_sig!(
+                    "(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent;"
+                ),
                 &[JValue::Object(&intent), JValue::Object(&chooser_title)],
             )
-            .and_then(jni::objects::JValueGen::l)
+            .and_then(jni::objects::JValueOwned::l)
             .map_err(|e| ShareError::Platform(format!("createChooser: {e}")))?;
 
         env.call_method(
             context,
-            "startActivity",
-            "(Landroid/content/Intent;)V",
+            jni_str!("startActivity"),
+            jni_sig!("(Landroid/content/Intent;)V"),
             &[JValue::Object(&chooser)],
         )
         .map_err(|e| ShareError::Platform(format!("startActivity: {e}")))?;

@@ -2,9 +2,10 @@
 
 #![cfg(target_os = "android")]
 
-use jni::JNIEnv;
-use jni::objects::JObject;
+use jni::errors::ThrowRuntimeExAndDefault;
+use jni::objects::{JDoubleArray, JObject};
 use jni::sys::{jdoubleArray, jstring};
+use jni::{Env, EnvUnowned};
 use waterkit_test_report::{TestCase, TestReport, to_json_pretty};
 
 const PERMISSION_NOT_DETERMINED: i32 = 0;
@@ -18,41 +19,48 @@ const PERMISSION_GRANTED: i32 = 3;
 const ANDROID_SENSOR_TYPE_ACCELEROMETER: i32 = 1;
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest(
-    mut env: JNIEnv,
-    _this: JObject,
-    activity: JObject,
+pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    activity: JObject<'local>,
 ) {
     init_logger();
-    let report = run_native_report(&mut env, &activity);
-    log_report(&report);
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let report = run_native_report(env, &activity);
+        log_report(&report);
+        Ok(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>();
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_waterkit_test_MainActivity_runTestReport(
-    mut env: JNIEnv,
-    _this: JObject,
-    activity: JObject,
+pub extern "system" fn Java_com_waterkit_test_MainActivity_runTestReport<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    activity: JObject<'local>,
 ) -> jstring {
     init_logger();
-    let report = run_native_report(&mut env, &activity);
-    log_report(&report);
+    env.with_env(|env| -> jni::errors::Result<jstring> {
+        let report = run_native_report(env, &activity);
+        log_report(&report);
 
-    let json = match to_json_pretty(&report) {
-        Ok(json) => json,
-        Err(error) => {
-            log::error!("Failed to serialize WaterKit test report: {error}");
-            return std::ptr::null_mut();
-        }
-    };
+        let json = match to_json_pretty(&report) {
+            Ok(json) => json,
+            Err(error) => {
+                log::error!("Failed to serialize WaterKit test report: {error}");
+                return Ok(std::ptr::null_mut());
+            }
+        };
 
-    match env.new_string(json) {
-        Ok(value) => value.into_raw(),
-        Err(error) => {
-            log::error!("Failed to create Java report string: {error}");
-            std::ptr::null_mut()
+        match env.new_string(json) {
+            Ok(value) => Ok(value.into_raw()),
+            Err(error) => {
+                log::error!("Failed to create Java report string: {error}");
+                Ok(std::ptr::null_mut())
+            }
         }
-    }
+    })
+    .resolve::<ThrowRuntimeExAndDefault>()
 }
 
 fn init_logger() {
@@ -61,7 +69,7 @@ fn init_logger() {
     );
 }
 
-fn run_native_report(_env: &mut JNIEnv<'_>, _activity: &JObject<'_>) -> TestReport {
+fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport {
     let mut report = TestReport::new("android", "waterkit-test-android");
     #[cfg(any(
         feature = "sensor",
@@ -80,24 +88,6 @@ fn run_native_report(_env: &mut JNIEnv<'_>, _activity: &JObject<'_>) -> TestRepo
             return report;
         }
     };
-    #[cfg(any(
-        feature = "sensor",
-        feature = "location",
-        feature = "permission",
-        feature = "fs",
-        feature = "secret"
-    ))]
-    let java_vm = match _env.get_java_vm() {
-        Ok(vm) => vm,
-        Err(error) => {
-            report.push(TestCase::failed(
-                "harness.java_vm",
-                format!("failed to get Java VM: {error}"),
-            ));
-            return report;
-        }
-    };
-
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -111,33 +101,16 @@ fn run_native_report(_env: &mut JNIEnv<'_>, _activity: &JObject<'_>) -> TestRepo
             feature = "fs",
             feature = "secret"
         ))]
-        let mut env = match java_vm.get_env() {
-            Ok(value) => value,
-            Err(error) => {
-                report.push(TestCase::failed(
-                    "harness.jni_env",
-                    format!("failed to attach/get JNIEnv: {error}"),
-                ));
-                return;
-            }
-        };
-        #[cfg(any(
-            feature = "sensor",
-            feature = "location",
-            feature = "permission",
-            feature = "fs",
-            feature = "secret"
-        ))]
         let activity = activity_global.as_obj();
 
         #[cfg(feature = "sensor")]
-        record_android_sensor(&mut report, &mut env, activity);
+        record_android_sensor(&mut report, _env, activity);
 
         #[cfg(feature = "location")]
-        record_android_location(&mut report, &mut env, activity);
+        record_android_location(&mut report, _env, activity);
 
         #[cfg(feature = "permission")]
-        record_android_permission(&mut report, &mut env, activity);
+        record_android_permission(&mut report, _env, activity);
 
         #[cfg(feature = "camera")]
         record_android_camera(&mut report);
@@ -146,7 +119,7 @@ fn run_native_report(_env: &mut JNIEnv<'_>, _activity: &JObject<'_>) -> TestRepo
         record_android_clipboard(&mut report).await;
 
         #[cfg(feature = "fs")]
-        record_android_fs(&mut report, &mut env, activity);
+        record_android_fs(&mut report, _env, activity);
 
         #[cfg(feature = "haptic")]
         record_android_haptic(&mut report);
@@ -155,7 +128,7 @@ fn run_native_report(_env: &mut JNIEnv<'_>, _activity: &JObject<'_>) -> TestRepo
         record_android_notification(&mut report);
 
         #[cfg(feature = "secret")]
-        record_android_secret(&mut report, &mut env, activity);
+        record_android_secret(&mut report, _env, activity);
 
         #[cfg(feature = "system")]
         record_android_system(&mut report);
@@ -217,7 +190,10 @@ fn run_native_report(_env: &mut JNIEnv<'_>, _activity: &JObject<'_>) -> TestRepo
         #[cfg(feature = "health")]
         report.push(TestCase::passed_with_message(
             "health.availability",
-            format!("available={}", waterkit_content::health::is_available()),
+            format!(
+                "available={}",
+                waterkit_content::health::capabilities().available
+            ),
         ));
 
         #[cfg(feature = "deeplink")]
@@ -284,7 +260,7 @@ fn log_report(report: &TestReport) {
 }
 
 #[cfg(feature = "sensor")]
-fn record_android_sensor(report: &mut TestReport, env: &mut JNIEnv<'_>, activity: &JObject<'_>) {
+fn record_android_sensor(report: &mut TestReport, env: &mut Env<'_>, activity: &JObject<'_>) {
     match waterkit_content::sensor::android::is_sensor_available_with_context(
         env,
         activity,
@@ -339,7 +315,7 @@ fn record_android_sensor(report: &mut TestReport, env: &mut JNIEnv<'_>, activity
 }
 
 #[cfg(feature = "location")]
-fn record_android_location(report: &mut TestReport, env: &mut JNIEnv<'_>, activity: &JObject<'_>) {
+fn record_android_location(report: &mut TestReport, env: &mut Env<'_>, activity: &JObject<'_>) {
     match waterkit_content::location::android::get_location_with_context(env, activity) {
         Ok(location) => {
             let latitude = location.latitude().get();
@@ -366,11 +342,7 @@ fn record_android_location(report: &mut TestReport, env: &mut JNIEnv<'_>, activi
 }
 
 #[cfg(feature = "permission")]
-fn record_android_permission(
-    report: &mut TestReport,
-    env: &mut JNIEnv<'_>,
-    activity: &JObject<'_>,
-) {
+fn record_android_permission(report: &mut TestReport, env: &mut Env<'_>, activity: &JObject<'_>) {
     match waterkit_content::permission::android::check_with_activity(
         env,
         activity,
@@ -414,7 +386,7 @@ async fn record_android_clipboard(report: &mut TestReport) {
             }
 
             match clipboard.text().await {
-                Ok(text) if text == "WaterKit Test" => {
+                Ok(text) if text.as_deref() == Some("WaterKit Test") => {
                     report.push(TestCase::passed("clipboard.round_trip"));
                 }
                 Ok(text) => report.push(TestCase::failed(
@@ -435,7 +407,7 @@ async fn record_android_clipboard(report: &mut TestReport) {
 }
 
 #[cfg(feature = "fs")]
-fn record_android_fs(report: &mut TestReport, env: &mut JNIEnv<'_>, activity: &JObject<'_>) {
+fn record_android_fs(report: &mut TestReport, env: &mut Env<'_>, activity: &JObject<'_>) {
     match waterkit_content::fs::WaterFs::cache_dir_with_context(env, activity) {
         Ok(path) if path.as_os_str().is_empty() => report.push(TestCase::failed(
             "fs.cache_dir",
@@ -470,7 +442,7 @@ fn record_android_notification(report: &mut TestReport) {
         .body("notification test")
         .show();
     match result {
-        Ok(()) => report.push(TestCase::passed("notification.show")),
+        Ok(_) => report.push(TestCase::passed("notification.show")),
         Err(error) => report.push(TestCase::failed(
             "notification.show",
             format!("notification show failed: {error}"),
@@ -479,7 +451,7 @@ fn record_android_notification(report: &mut TestReport) {
 }
 
 #[cfg(feature = "secret")]
-fn record_android_secret(report: &mut TestReport, env: &mut JNIEnv<'_>, activity: &JObject<'_>) {
+fn record_android_secret(report: &mut TestReport, env: &mut Env<'_>, activity: &JObject<'_>) {
     match waterkit_content::secret::android::set_with_context(
         env,
         activity,
@@ -527,7 +499,7 @@ fn record_android_system(report: &mut TestReport) {
         "system.snapshot",
         format!(
             "connectivity={:?} thermal={thermal:?}",
-            connectivity.connection_type
+            connectivity.connection_type()
         ),
     ));
 }
@@ -581,12 +553,20 @@ fn record_android_screen(report: &mut TestReport) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_waterkit_test_MainActivity_testCheckPermission(
-    mut env: JNIEnv,
-    _this: JObject,
-    activity: JObject,
+pub extern "system" fn Java_com_waterkit_test_MainActivity_testCheckPermission<'local>(
+    mut unowned_env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    activity: JObject<'local>,
     _permission_type: i32,
 ) -> i32 {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<i32> {
+            Ok(check_permission(env, &activity, _permission_type))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+fn check_permission(_env: &mut Env<'_>, _activity: &JObject<'_>, _permission_type: i32) -> i32 {
     #[cfg(feature = "permission")]
     {
         let permission = match _permission_type {
@@ -603,7 +583,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_testCheckPermission(
         };
 
         return match waterkit_content::permission::android::check_with_activity(
-            &mut env, &activity, permission,
+            _env, _activity, permission,
         ) {
             Ok(waterkit_content::permission::PermissionStatus::NotDetermined) => {
                 PERMISSION_NOT_DETERMINED
@@ -624,22 +604,27 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_testCheckPermission(
 
     #[cfg(not(feature = "permission"))]
     {
-        let _ = (&mut env, &activity);
+        let _ = (_env, _activity);
         log::error!("testCheckPermission called without enabling permission feature");
         PERMISSION_NOT_DETERMINED
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_waterkit_test_MainActivity_testGetLocation(
-    env: JNIEnv,
-    _this: JObject,
-    activity: JObject,
+pub extern "system" fn Java_com_waterkit_test_MainActivity_testGetLocation<'local>(
+    mut unowned_env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    activity: JObject<'local>,
 ) -> jdoubleArray {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<jdoubleArray> { Ok(get_location(env, &activity)) })
+        .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+fn get_location(_env: &mut Env<'_>, _activity: &JObject<'_>) -> jdoubleArray {
     #[cfg(feature = "location")]
     {
-        let mut env = env;
-        match waterkit_content::location::android::get_location_with_context(&mut env, &activity) {
+        match waterkit_content::location::android::get_location_with_context(_env, _activity) {
             Ok(location) => {
                 let altitude = location.altitude().unwrap_or(0.0);
                 let accuracy = location.horizontal_accuracy().unwrap_or(0.0);
@@ -651,16 +636,16 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_testGetLocation(
                     accuracy,
                 ];
 
-                let array = match env.new_double_array(payload.len() as i32) {
+                let array = match JDoubleArray::new(_env, payload.len()) {
                     Ok(arr) => arr,
                     Err(error) => {
-                        log::error!("new_double_array failed: {error}");
+                        log::error!("JDoubleArray::new failed: {error}");
                         return std::ptr::null_mut();
                     }
                 };
 
-                if let Err(error) = env.set_double_array_region(&array, 0, &payload) {
-                    log::error!("set_double_array_region failed: {error}");
+                if let Err(error) = array.set_region(_env, 0, &payload) {
+                    log::error!("set_region failed: {error}");
                     return std::ptr::null_mut();
                 }
 
@@ -675,7 +660,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_testGetLocation(
 
     #[cfg(not(feature = "location"))]
     {
-        let _ = (&env, &activity);
+        let _ = (_env, _activity);
         log::error!("testGetLocation called without enabling location feature");
         std::ptr::null_mut()
     }

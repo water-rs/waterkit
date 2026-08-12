@@ -37,7 +37,7 @@ pub(crate) fn mailto_url(subject: Option<&str>, body: &str) -> String {
     url
 }
 
-/// Android-specific JNI helper for cases where you already have `JNIEnv` + `Context`.
+/// Android-specific JNI helper for cases where you already have an `Env` + `Context`.
 ///
 /// The default async API ([`ShareSheet::show`]) already uses `ndk-context` automatically.
 #[cfg(target_os = "android")]

@@ -1,17 +1,18 @@
 //! Android biometric authentication implementation using JNI.
 
 use crate::{BiometricError, BiometricType};
-use jni::JNIEnv;
-use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
+use jni::errors::ThrowRuntimeExAndDefault;
+use jni::objects::{Global, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jlong};
-use std::mem::ManuallyDrop;
+use jni::{Env, EnvUnowned, JavaVM, NativeMethod, jni_sig, jni_str};
 use std::sync::OnceLock;
 
 /// Embedded DEX bytecode.
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
-/// Cached class loader.
-static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
+/// `waterkit.biometric.BiometricHelper`, loaded once from [`DEX_BYTES`] with its
+/// native method registered.
+static HELPER_CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
 
 /// Map to store callbacks: pointer -> Sender.
 /// Note: We cast the raw pointer of the Sender to pass to Java, and cast it back.
@@ -23,21 +24,33 @@ type BiometricSender = tokio::sync::oneshot::Sender<Result<(), BiometricError>>;
 
 fn with_android_context<T, F>(f: F) -> Result<T, BiometricError>
 where
-    F: for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<T, BiometricError>,
+    F: FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, BiometricError>,
 {
     let android_context = ndk_context::android_context();
-    let vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) }
-        .map_err(|e| BiometricError::Platform(format!("from_raw JavaVM: {e}")))?;
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|e| BiometricError::Platform(format!("attach_current_thread: {e}")))?;
-    let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
-    if context.is_null() {
-        return Err(BiometricError::Platform(
-            "Android Context not available from ndk_context".into(),
-        ));
-    }
-    f(&mut env, &context)
+    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
+    let raw_context: jni::sys::jobject = android_context.context().cast();
+    assert!(
+        !raw_vm.is_null(),
+        "waterkit-biometric: ndk_context returned a null JavaVM"
+    );
+    assert!(
+        !raw_context.is_null(),
+        "waterkit-biometric: ndk_context returned a null Android Context"
+    );
+
+    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
+    // valid for the lifetime of the application.
+    let vm = unsafe { JavaVM::from_raw(raw_vm) };
+    vm.attach_current_thread(
+        |env| -> Result<Result<T, BiometricError>, jni::errors::Error> {
+            // SAFETY: `ndk_context` publishes a global reference to the application
+            // `Context` that outlives this attachment, and `as_cast_raw` only
+            // borrows it.
+            let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
+            Ok(f(env, &context))
+        },
+    )
+    .map_err(|e| BiometricError::Platform(format!("attach_current_thread: {e}")))?
 }
 
 /// Initialize Android biometric support by loading helper classes and JNI bindings.
@@ -45,163 +58,143 @@ where
 /// # Errors
 ///
 /// Returns [`BiometricError`] when JNI setup, DEX loading, or native registration fails.
-pub fn init(env: &mut JNIEnv, context: &JObject) -> Result<(), BiometricError> {
-    if CLASS_LOADER.get().is_some() {
-        return Ok(());
+pub fn init(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), BiometricError> {
+    helper_class(env, context)?;
+    Ok(())
+}
+
+/// Returns the cached helper class, loading the embedded DEX and registering its
+/// native method on first use.
+///
+/// `BiometricHelper` lives in a secondary DEX loaded at runtime, so the JVM
+/// cannot resolve `onResult` by symbol name - it has to be registered against
+/// the loaded class explicitly.
+fn helper_class(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+) -> Result<&'static Global<JClass<'static>>, BiometricError> {
+    if let Some(class) = HELPER_CLASS.get() {
+        return Ok(class);
     }
 
-    // Write DEX to cache directory (Copied from haptic crate logic)
-    let cache_dir = env
-        .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
-        .map_err(|e| BiometricError::Platform(format!("getCacheDir: {e}")))?
-        .l()
-        .map_err(|e| BiometricError::Platform(format!("getCacheDir res: {e}")))?;
+    let class = load_helper_class(env, context)?;
+    let class = HELPER_CLASS.get_or_init(|| class);
+    register_natives(env, class)?;
+    Ok(class)
+}
 
-    let cache_path = env
-        .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
-        .map_err(|e| BiometricError::Platform(format!("getAbsolutePath: {e}")))?
-        .l()
-        .map_err(|e| BiometricError::Platform(format!("getAbsolutePath res: {e}")))?;
-
-    let dex_path = format!(
-        "{}/waterkit_biometric.dex",
-        env.get_string((&cache_path).into())
-            .map_err(|e| BiometricError::Platform(format!("get_string: {e}")))?
-            .to_str()
-            .map_err(|e| BiometricError::Platform(format!("to_str: {e}")))?
-    );
-
-    // Remove if exists to handle previous read-only setting
-    let _ = std::fs::remove_file(&dex_path);
-
-    std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| BiometricError::Platform(format!("write DEX: {e}")))?;
-
-    // Make DEX read-only as required by modern Android security
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&dex_path)
-            .map_err(|e| BiometricError::Platform(format!("metadata DEX failed: {e}")))?
-            .permissions();
-        perms.set_mode(0o444); // Read-only
-        std::fs::set_permissions(&dex_path, perms)
-            .map_err(|e| BiometricError::Platform(format!("set_permissions DEX failed: {e}")))?;
-    }
-
-    let dex_path_jstring = env
-        .new_string(&dex_path)
-        .map_err(|e| BiometricError::Platform(format!("new_string: {e}")))?;
-
+fn load_helper_class(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+) -> Result<Global<JClass<'static>>, BiometricError> {
     let parent_loader = env
-        .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .call_method(
+            context,
+            jni_str!("getClassLoader"),
+            jni_sig!("()Ljava/lang/ClassLoader;"),
+            &[],
+        )
         .map_err(|e| BiometricError::Platform(format!("getClassLoader: {e}")))?
         .l()
         .map_err(|e| BiometricError::Platform(format!("getClassLoader res: {e}")))?;
 
-    let dex_class_loader_class = env
-        .find_class("dalvik/system/DexClassLoader")
-        .map_err(|e| BiometricError::Platform(format!("find DexClassLoader: {e}")))?;
-
+    let dex_bytes = env
+        .byte_array_from_slice(DEX_BYTES)
+        .map_err(|e| BiometricError::Platform(format!("copy DEX: {e}")))?;
+    let dex_buffer = env
+        .call_static_method(
+            jni_str!("java/nio/ByteBuffer"),
+            jni_str!("wrap"),
+            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
+            &[JValue::Object(&dex_bytes)],
+        )
+        .map_err(|e| BiometricError::Platform(format!("wrap DEX: {e}")))?
+        .l()
+        .map_err(|e| BiometricError::Platform(format!("wrap DEX res: {e}")))?;
     let class_loader = env
         .new_object(
-            dex_class_loader_class,
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V",
-            &[
-                JValue::Object(&dex_path_jstring),
-                JValue::Object(&cache_path),
-                JValue::Object(&JObject::null()),
-                JValue::Object(&parent_loader),
-            ],
+            jni_str!("dalvik/system/InMemoryDexClassLoader"),
+            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
+            &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
         )
-        .map_err(|e| BiometricError::Platform(format!("new DexClassLoader: {e}")))?;
+        .map_err(|e| BiometricError::Platform(format!("new InMemoryDexClassLoader: {e}")))?;
 
-    let global_ref = env
-        .new_global_ref(class_loader)
-        .map_err(|e| BiometricError::Platform(format!("new_global_ref: {e}")))?;
-
-    let _ = CLASS_LOADER.set(global_ref);
-
-    // Register native method
-    // We need to register `onResult` in `waterkit.biometric.BiometricHelper`.
-    // Since we load the class from our DexClassLoader, we must find it there and register natives.
-
-    // However, standard JNI `RegisterNatives` might be tricky with custom ClassLoader if JNI expects the class to be reachable from system loader?
-    // Actually, we can use `JNI_OnLoad` if we were a shared library, but we are statically linked usually?
-    // Or we just export `Java_waterkit_biometric_BiometricHelper_onResult`.
-    // BUT `BiometricHelper` is in a secondary DEX, so the runtime might not find the symbol automatically if the class is loaded dynamically?
-    // Actually, since we load the class dynamically, we MUST manually register natives on the loaded class!
-
-    register_natives(env)?;
-
-    Ok(())
-}
-
-fn register_natives(env: &mut JNIEnv) -> Result<(), BiometricError> {
-    let helper = get_helper_class(env)?;
-    let native_methods = [jni::NativeMethod {
-        name: "onResult".into(),
-        sig: "(JZLjava/lang/String;)V".into(),
-        fn_ptr: Java_waterkit_biometric_BiometricHelper_onResult as *mut _,
-    }];
-
-    env.register_native_methods(helper, &native_methods)
-        .map_err(|e| BiometricError::Platform(format!("register_native_methods: {e}")))
-}
-
-fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JClass<'a>, BiometricError> {
-    let loader = CLASS_LOADER
-        .get()
-        .ok_or_else(|| BiometricError::Platform("Class loader not initialized".into()))?;
-
-    let helper_class_name = env
+    let class_name = env
         .new_string("waterkit.biometric.BiometricHelper")
         .map_err(|e| BiometricError::Platform(format!("new_string: {e}")))?;
-
-    let loaded_class = env
+    let class = env
         .call_method(
-            loader.as_obj(),
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
-            &[JValue::Object(&helper_class_name)],
+            &class_loader,
+            jni_str!("loadClass"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
+            &[JValue::Object(&class_name)],
         )
         .map_err(|e| BiometricError::Platform(format!("loadClass: {e}")))?
         .l()
         .map_err(|e| BiometricError::Platform(format!("loadClass res: {e}")))?;
+    let class = env
+        .cast_local::<JClass>(class)
+        .map_err(|e| BiometricError::Platform(format!("loadClass returned a non-class: {e}")))?;
 
-    Ok(loaded_class.into())
+    env.new_global_ref(class)
+        .map_err(|e| BiometricError::Platform(format!("new_global_ref: {e}")))
+}
+
+fn register_natives(
+    env: &mut Env<'_>,
+    class: &Global<JClass<'static>>,
+) -> Result<(), BiometricError> {
+    // SAFETY: `onResult` is a static native method, so its Rust counterpart
+    // takes `EnvUnowned` and `JClass` as its first two parameters, and the
+    // remaining parameters match the descriptor below.
+    let native_methods = [unsafe {
+        NativeMethod::from_raw_parts(
+            jni_str!("onResult"),
+            jni_str!("(JZLjava/lang/String;)V"),
+            Java_waterkit_biometric_BiometricHelper_onResult as *mut _,
+        )
+    }];
+
+    // SAFETY: the descriptor above matches the exported function's signature.
+    unsafe { env.register_native_methods(class, &native_methods) }
+        .map_err(|e| BiometricError::Platform(format!("register_native_methods: {e}")))
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_waterkit_biometric_BiometricHelper_onResult(
-    mut env: JNIEnv,
-    _class: JClass,
+pub extern "system" fn Java_waterkit_biometric_BiometricHelper_onResult<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
     callback_ptr: jlong,
     success: jboolean,
-    error_msg: JString,
+    error_msg: JString<'local>,
 ) {
-    let sender_ptr = callback_ptr as *mut BiometricSender;
-    let sender = unsafe { Box::from_raw(sender_ptr) };
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let sender_ptr = callback_ptr as *mut BiometricSender;
+        // SAFETY: `authenticate_with_context` leaked exactly one `Box` per call
+        // and Java hands that same pointer back exactly once.
+        let sender = unsafe { Box::from_raw(sender_ptr) };
 
-    if success != 0 {
-        let _ = sender.send(Ok(()));
-    } else {
-        let error_str: String = env
-            .get_string(&error_msg)
-            .map_or_else(|_| "Unknown JNI error".into(), Into::into);
-        let _ = sender.send(Err(BiometricError::Failed(error_str)));
-    }
+        if success {
+            let error = error_msg
+                .try_to_string(env)
+                .unwrap_or_else(|_| String::from("Unknown JNI error"));
+            let _ = sender.send(Err(BiometricError::Failed(error)));
+        } else {
+            let _ = sender.send(Ok(()));
+        }
+        Ok(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>();
 }
 
 #[allow(clippy::unused_async)]
 pub async fn is_available() -> bool {
     with_android_context(|env, context| {
-        init(env, context)?;
-        let class = get_helper_class(env)?;
+        let class = helper_class(env, context)?;
         env.call_static_method(
             class,
-            "isAvailable",
-            "(Landroid/content/Context;)Z",
+            jni_str!("isAvailable"),
+            jni_sig!("(Landroid/content/Context;)Z"),
             &[JValue::Object(context)],
         )
         .map_err(|e| BiometricError::Platform(format!("isAvailable call: {e}")))?
@@ -214,13 +207,12 @@ pub async fn is_available() -> bool {
 #[allow(clippy::unused_async)]
 pub async fn get_biometric_type() -> Option<BiometricType> {
     with_android_context(|env, context| {
-        init(env, context)?;
-        let class = get_helper_class(env)?;
+        let class = helper_class(env, context)?;
         let biometric_type = env
             .call_static_method(
                 class,
-                "getBiometricType",
-                "(Landroid/content/Context;)I",
+                jni_str!("getBiometricType"),
+                jni_sig!("(Landroid/content/Context;)I"),
                 &[JValue::Object(context)],
             )
             .map_err(|e| BiometricError::Platform(format!("getBiometricType call: {e}")))?
@@ -256,11 +248,11 @@ pub async fn authenticate(reason: &str) -> Result<(), BiometricError> {
 ///
 /// Returns [`BiometricError`] when JNI calls fail or helper initialization cannot be completed.
 pub fn authenticate_with_context(
-    env: &mut JNIEnv,
-    context: &JObject,
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
     reason: &str,
 ) -> Result<tokio::sync::oneshot::Receiver<Result<(), BiometricError>>, BiometricError> {
-    init(env, context)?;
+    let class = helper_class(env, context)?;
 
     let (tx, rx) = tokio::sync::oneshot::channel();
     let sender_box = Box::new(tx);
@@ -270,11 +262,10 @@ pub fn authenticate_with_context(
         .new_string(reason)
         .map_err(|e| BiometricError::Platform(format!("new_string: {e}")))?;
 
-    let class = get_helper_class(env)?;
     env.call_static_method(
         class,
-        "authenticate",
-        "(Landroid/content/Context;Ljava/lang/String;J)V",
+        jni_str!("authenticate"),
+        jni_sig!("(Landroid/content/Context;Ljava/lang/String;J)V"),
         &[
             JValue::Object(context),
             JValue::Object(&reason_jstr),
@@ -283,6 +274,7 @@ pub fn authenticate_with_context(
     )
     .map_err(|e| {
         // If fail, we must drop the box to avoid leak
+        // SAFETY: Java never saw the pointer, so this reclaims the only copy.
         let _ = unsafe { Box::from_raw(sender_ptr as *mut BiometricSender) };
         BiometricError::Platform(format!("authenticate call: {e}"))
     })?;

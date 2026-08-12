@@ -34,6 +34,8 @@ swift-bridge.workspace = true
 async-channel.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 
 [build-dependencies]
 waterkit-build.workspace = true

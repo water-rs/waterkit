@@ -1,15 +1,16 @@
 use crate::{NdefMessage, NdefRecord, NfcError, NfcTag, NfcTagType};
-use jni::objects::{GlobalRef, JObject, JString, JValue};
-use jni::{JNIEnv, JavaVM};
+use jni::objects::{Global, JClass, JObject, JString, JValue};
+use jni::{Env, JavaVM, jni_sig, jni_str};
 use std::fmt::Write;
-use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
-static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
+
+/// [`NFC_HELPER_CLASS_NAME`], loaded once from [`DEX_BYTES`].
+static HELPER_CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
 
 const NFC_HELPER_CLASS_NAME: &str = "waterkit.nfc.NfcHelper";
 const NFC_ACTION_TAG_DISCOVERED: &str = "android.nfc.action.TAG_DISCOVERED";
@@ -19,109 +20,105 @@ const EXTRA_TAG_KEY: &str = "android.nfc.extra.TAG";
 
 fn with_android_context<T, F>(f: F) -> Result<T, NfcError>
 where
-    F: for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<T, NfcError>,
+    F: FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, NfcError>,
 {
     let android_context = ndk_context::android_context();
-    let vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) }
-        .map_err(|e| NfcError::Platform(format!("JavaVM::from_raw: {e}")))?;
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|e| NfcError::Platform(format!("attach_current_thread: {e}")))?;
-
-    let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
+    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
+    let raw_context: jni::sys::jobject = android_context.context().cast();
     assert!(
-        !context.is_null(),
-        "waterkit-nfc: ndk_context returned null Android Context"
+        !raw_vm.is_null(),
+        "waterkit-nfc: ndk_context returned a null JavaVM"
+    );
+    assert!(
+        !raw_context.is_null(),
+        "waterkit-nfc: ndk_context returned a null Android Context"
     );
 
-    f(&mut env, &context)
+    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
+    // valid for the lifetime of the application.
+    let vm = unsafe { JavaVM::from_raw(raw_vm) };
+    vm.attach_current_thread(|env| -> Result<Result<T, NfcError>, jni::errors::Error> {
+        // SAFETY: `ndk_context` publishes a global reference to the application
+        // `Context` that outlives this attachment, and `as_cast_raw` only
+        // borrows it.
+        let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
+        Ok(f(env, &context))
+    })
+    .map_err(|e| NfcError::Platform(format!("attach_current_thread: {e}")))?
 }
 
-fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), NfcError> {
-    if CLASS_LOADER.get().is_some() {
-        return Ok(());
+/// Returns the cached helper class, loading the embedded DEX on first use.
+fn helper_class(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+) -> Result<&'static Global<JClass<'static>>, NfcError> {
+    if let Some(class) = HELPER_CLASS.get() {
+        return Ok(class);
     }
-    let cache_dir = env
-        .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
-        .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| NfcError::Platform(format!("getCacheDir: {e}")))?;
-    let cache_path = env
-        .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
-        .and_then(jni::objects::JValueGen::l)
-        .map_err(|e| NfcError::Platform(format!("getAbsolutePath: {e}")))?;
-    let dex_path = format!(
-        "{}/waterkit_nfc.dex",
-        env.get_string((&cache_path).into())
-            .map_err(|e| NfcError::Platform(format!("get_string: {e}")))?
-            .to_str()
-            .map_err(|e| NfcError::Platform(format!("to_str: {e}")))?
-    );
-    let _ = std::fs::remove_file(&dex_path);
-    std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| NfcError::Platform(format!("write DEX: {e}")))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&dex_path)
-            .map_err(|e| NfcError::Platform(format!("metadata DEX: {e}")))?
-            .permissions();
-        perms.set_mode(0o444);
-        std::fs::set_permissions(&dex_path, perms)
-            .map_err(|e| NfcError::Platform(format!("set_permissions DEX: {e}")))?;
-    }
-    let dex_path_jstring = env
-        .new_string(&dex_path)
-        .map_err(|e| NfcError::Platform(format!("new_string: {e}")))?;
+
+    let class = load_helper_class(env, context)?;
+    Ok(HELPER_CLASS.get_or_init(|| class))
+}
+
+fn load_helper_class(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+) -> Result<Global<JClass<'static>>, NfcError> {
     let parent_loader = env
-        .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
-        .and_then(jni::objects::JValueGen::l)
+        .call_method(
+            context,
+            jni_str!("getClassLoader"),
+            jni_sig!("()Ljava/lang/ClassLoader;"),
+            &[],
+        )
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|e| NfcError::Platform(format!("getClassLoader: {e}")))?;
-    let dex_class = env
-        .find_class("dalvik/system/DexClassLoader")
-        .map_err(|e| NfcError::Platform(format!("find_class: {e}")))?;
+
+    let dex_bytes = env
+        .byte_array_from_slice(DEX_BYTES)
+        .map_err(|e| NfcError::Platform(format!("byte_array_from_slice DEX: {e}")))?;
+    let dex_bytes = JObject::from(dex_bytes);
+    let dex_buffer = env
+        .call_static_method(
+            jni_str!("java/nio/ByteBuffer"),
+            jni_str!("wrap"),
+            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
+            &[JValue::Object(&dex_bytes)],
+        )
+        .and_then(jni::objects::JValueOwned::l)
+        .map_err(|e| NfcError::Platform(format!("ByteBuffer.wrap DEX: {e}")))?;
     let loader = env
         .new_object(
-            dex_class,
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V",
-            &[
-                JValue::Object(&dex_path_jstring),
-                JValue::Object(&cache_path),
-                JValue::Object(&JObject::null()),
-                JValue::Object(&parent_loader),
-            ],
+            jni_str!("dalvik/system/InMemoryDexClassLoader"),
+            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
+            &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
         )
-        .map_err(|e| NfcError::Platform(format!("new_object: {e}")))?;
-    let global = env
-        .new_global_ref(loader)
-        .map_err(|e| NfcError::Platform(format!("global_ref: {e}")))?;
-    if CLASS_LOADER.set(global).is_err() {
-        assert!(
-            CLASS_LOADER.get().is_some(),
-            "waterkit-nfc: class loader initialization race left loader unset"
-        );
-    }
-    Ok(())
-}
+        .map_err(|e| NfcError::Platform(format!("new InMemoryDexClassLoader: {e}")))?;
 
-fn helper_class<'local>(
-    env: &mut JNIEnv<'local>,
-) -> Result<jni::objects::JClass<'local>, NfcError> {
     let helper_class_name = env
         .new_string(NFC_HELPER_CLASS_NAME)
         .map_err(|e| NfcError::Platform(format!("new_string: {e}")))?;
-    let loader = CLASS_LOADER
-        .get()
-        .ok_or_else(|| NfcError::Platform("Class loader not initialized".into()))?;
-    let cls = env
+    let class = env
         .call_method(
-            loader.as_obj(),
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
+            &loader,
+            jni_str!("loadClass"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
             &[JValue::Object(&helper_class_name)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|e| NfcError::Platform(format!("loadClass: {e}")))?;
-    Ok(cls.into())
+    let class = env
+        .cast_local::<JClass>(class)
+        .map_err(|e| NfcError::Platform(format!("loadClass returned a non-class: {e}")))?;
+
+    env.new_global_ref(class)
+        .map_err(|e| NfcError::Platform(format!("global_ref: {e}")))
+}
+
+fn decode_string(env: &Env<'_>, value: &JObject<'_>) -> Result<String, NfcError> {
+    env.as_cast::<JString>(value)
+        .and_then(|text| text.try_to_string(env))
+        .map_err(|e| NfcError::Platform(format!("string decode failed: {e}")))
 }
 
 fn is_nfc_intent_action(action: &str) -> bool {
@@ -152,7 +149,7 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>, NfcError> {
     }
 
     let mut bytes = Vec::with_capacity(hex.len() / 2);
-    for chunk in hex.as_bytes().chunks_exact(2) {
+    for chunk in hex.as_bytes().as_chunks::<2>().0 {
         let value = std::str::from_utf8(chunk)
             .map_err(|e| NfcError::Platform(format!("hex utf8 decode failed: {e}")))?;
         let byte = u8::from_str_radix(value, 16)
@@ -222,14 +219,14 @@ pub fn nfc_is_available() -> bool {
 
 #[derive(Debug)]
 struct TagSnapshot {
-    tag: GlobalRef,
+    tag: Global<JObject<'static>>,
     tag_id: String,
     tag_type: NfcTagType,
     ndef_records: Option<String>,
 }
 
 pub struct NfcReaderInner {
-    latest_tag: Arc<Mutex<Option<GlobalRef>>>,
+    latest_tag: Arc<Mutex<Option<Arc<Global<JObject<'static>>>>>>,
     stop_flag: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
@@ -285,7 +282,7 @@ impl NfcReaderInner {
                                     "waterkit-nfc: latest tag mutex poisoned in reader thread: {error}"
                                 )
                             });
-                            *guard = Some(snapshot.tag);
+                            *guard = Some(Arc::new(snapshot.tag));
                         }
 
                         if tag_tx
@@ -362,22 +359,22 @@ impl Drop for NfcReaderInner {
 /// Android-specific NFC functions requiring JNI context.
 pub mod jni_api {
     use super::{
-        EXTRA_TAG_KEY, JNIEnv, JObject, JString, JValue, NfcError, TagSnapshot, decode_tag_type,
-        helper_class, init_dex, is_nfc_intent_action,
+        EXTRA_TAG_KEY, Env, JObject, JValue, NfcError, TagSnapshot, decode_string, decode_tag_type,
+        helper_class, is_nfc_intent_action,
     };
+    use jni::{jni_sig, jni_str};
 
     /// Check if NFC is available with JNI context.
     ///
     /// # Errors
     ///
     /// Returns error if JNI operations fail.
-    pub fn is_available(env: &mut JNIEnv, context: &JObject) -> Result<bool, NfcError> {
-        init_dex(env, context)?;
-        let cls = helper_class(env)?;
+    pub fn is_available(env: &mut Env<'_>, context: &JObject<'_>) -> Result<bool, NfcError> {
+        let cls = helper_class(env, context)?;
         env.call_static_method(
             cls,
-            "isAvailable",
-            "(Landroid/content/Context;)Z",
+            jni_str!("isAvailable"),
+            jni_sig!("(Landroid/content/Context;)Z"),
             &[JValue::Object(context)],
         )
         .map_err(|e| NfcError::Platform(format!("isAvailable: {e}")))?
@@ -391,31 +388,37 @@ pub mod jni_api {
     ///
     /// Returns error if JNI operations fail.
     pub(super) fn current_tag_snapshot(
-        env: &mut JNIEnv,
-        context: &JObject,
+        env: &mut Env<'_>,
+        context: &JObject<'_>,
     ) -> Result<Option<TagSnapshot>, NfcError> {
-        init_dex(env, context)?;
-        let cls = helper_class(env)?;
+        let cls = helper_class(env, context)?;
 
         let intent = env
-            .call_method(context, "getIntent", "()Landroid/content/Intent;", &[])
-            .and_then(jni::objects::JValueGen::l)
+            .call_method(
+                context,
+                jni_str!("getIntent"),
+                jni_sig!("()Landroid/content/Intent;"),
+                &[],
+            )
+            .and_then(jni::objects::JValueOwned::l)
             .map_err(|e| NfcError::Platform(format!("Context.getIntent failed: {e}")))?;
         if intent.is_null() {
             return Ok(None);
         }
 
         let action = env
-            .call_method(&intent, "getAction", "()Ljava/lang/String;", &[])
-            .and_then(jni::objects::JValueGen::l)
+            .call_method(
+                &intent,
+                jni_str!("getAction"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )
+            .and_then(jni::objects::JValueOwned::l)
             .map_err(|e| NfcError::Platform(format!("Intent.getAction failed: {e}")))?;
         if action.is_null() {
             return Ok(None);
         }
-        let action_value: String = env
-            .get_string(&JString::from(action))
-            .map_err(|e| NfcError::Platform(format!("decode intent action failed: {e}")))?
-            .into();
+        let action_value = decode_string(env, &action)?;
         if !is_nfc_intent_action(&action_value) {
             return Ok(None);
         }
@@ -426,11 +429,11 @@ pub mod jni_api {
         let tag = env
             .call_method(
                 &intent,
-                "getParcelableExtra",
-                "(Ljava/lang/String;)Landroid/os/Parcelable;",
+                jni_str!("getParcelableExtra"),
+                jni_sig!("(Ljava/lang/String;)Landroid/os/Parcelable;"),
                 &[JValue::Object(&tag_extra_key)],
             )
-            .and_then(jni::objects::JValueGen::l)
+            .and_then(jni::objects::JValueOwned::l)
             .map_err(|e| NfcError::Platform(format!("Intent.getParcelableExtra failed: {e}")))?;
         if tag.is_null() {
             return Ok(None);
@@ -441,28 +444,25 @@ pub mod jni_api {
 
         let tag_id = env
             .call_static_method(
-                &cls,
-                "getTagId",
-                "(Landroid/nfc/Tag;)Ljava/lang/String;",
+                cls,
+                jni_str!("getTagId"),
+                jni_sig!("(Landroid/nfc/Tag;)Ljava/lang/String;"),
                 &[JValue::Object(&tag)],
             )
-            .and_then(jni::objects::JValueGen::l)
+            .and_then(jni::objects::JValueOwned::l)
             .map_err(|e| NfcError::Platform(format!("NfcHelper.getTagId failed: {e}")))?;
         if tag_id.is_null() {
             return Err(NfcError::Platform(
                 "NfcHelper.getTagId returned null".into(),
             ));
         }
-        let tag_id_value: String = env
-            .get_string(&JString::from(tag_id))
-            .map_err(|e| NfcError::Platform(format!("decode tag id failed: {e}")))?
-            .into();
+        let tag_id_value = decode_string(env, &tag_id)?;
 
         let tag_type = env
             .call_static_method(
-                &cls,
-                "getTagType",
-                "(Landroid/nfc/Tag;)I",
+                cls,
+                jni_str!("getTagType"),
+                jni_sig!("(Landroid/nfc/Tag;)I"),
                 &[JValue::Object(&tag)],
             )
             .map_err(|e| NfcError::Platform(format!("NfcHelper.getTagType failed: {e}")))?
@@ -471,21 +471,17 @@ pub mod jni_api {
 
         let records = env
             .call_static_method(
-                &cls,
-                "readTag",
-                "(Landroid/nfc/Tag;)Ljava/lang/String;",
+                cls,
+                jni_str!("readTag"),
+                jni_sig!("(Landroid/nfc/Tag;)Ljava/lang/String;"),
                 &[JValue::Object(&tag)],
             )
-            .and_then(jni::objects::JValueGen::l)
+            .and_then(jni::objects::JValueOwned::l)
             .map_err(|e| NfcError::Platform(format!("NfcHelper.readTag failed: {e}")))?;
         let records = if records.is_null() {
             None
         } else {
-            Some(
-                env.get_string(&JString::from(records))
-                    .map_err(|e| NfcError::Platform(format!("decode NDEF records failed: {e}")))?
-                    .into(),
-            )
+            Some(decode_string(env, &records)?)
         };
 
         Ok(Some(TagSnapshot {
@@ -502,13 +498,12 @@ pub mod jni_api {
     ///
     /// Returns error if writing fails.
     pub(super) fn write_tag(
-        env: &mut JNIEnv,
-        context: &JObject,
-        tag: &JObject,
+        env: &mut Env<'_>,
+        context: &JObject<'_>,
+        tag: &JObject<'_>,
         records_json: &str,
     ) -> Result<(), NfcError> {
-        init_dex(env, context)?;
-        let cls = helper_class(env)?;
+        let cls = helper_class(env, context)?;
 
         let records = env
             .new_string(records_json)
@@ -516,20 +511,17 @@ pub mod jni_api {
         let error_value = env
             .call_static_method(
                 cls,
-                "writeTag",
-                "(Landroid/nfc/Tag;Ljava/lang/String;)Ljava/lang/String;",
+                jni_str!("writeTag"),
+                jni_sig!("(Landroid/nfc/Tag;Ljava/lang/String;)Ljava/lang/String;"),
                 &[JValue::Object(tag), JValue::Object(&records)],
             )
-            .and_then(jni::objects::JValueGen::l)
+            .and_then(jni::objects::JValueOwned::l)
             .map_err(|e| NfcError::Platform(format!("NfcHelper.writeTag failed: {e}")))?;
         if error_value.is_null() {
             return Ok(());
         }
 
-        let error_message: String = env
-            .get_string(&JString::from(error_value))
-            .map_err(|e| NfcError::Platform(format!("decode writeTag error failed: {e}")))?
-            .into();
+        let error_message = decode_string(env, &error_value)?;
         if error_message.to_ascii_lowercase().contains("read-only") {
             return Err(NfcError::ReadOnly);
         }

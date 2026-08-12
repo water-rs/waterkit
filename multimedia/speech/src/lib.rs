@@ -12,7 +12,7 @@ mod sys;
 use futures_core::Stream;
 use waterkit_core::Capabilities;
 
-/// Android-specific JNI helpers that require `JNIEnv` and `Context`.
+/// Android-specific JNI helpers that require an `Env` and `Context`.
 #[cfg(target_os = "android")]
 pub mod android {
     pub use crate::sys::init_with_context;

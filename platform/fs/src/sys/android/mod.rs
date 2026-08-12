@@ -11,10 +11,7 @@ const GET_EXTERNAL_FILES_DIR: MethodSignature<'static, 'static> =
     jni_sig!((JString) -> java.io.File);
 const GET_CACHE_DIR: MethodSignature<'static, 'static> = jni_sig!(() -> java.io.File);
 
-fn string_object_to_path(
-    env: &mut Env<'_>,
-    value: &JObject,
-) -> jni::errors::Result<Option<PathBuf>> {
+fn string_object_to_path(env: &Env<'_>, value: &JObject) -> jni::errors::Result<Option<PathBuf>> {
     if value.is_null() {
         return Ok(None);
     }
@@ -32,11 +29,11 @@ fn file_object_to_path(env: &mut Env<'_>, file: &JObject) -> jni::errors::Result
     string_object_to_path(env, &absolute_path)
 }
 
-fn call_context_file_method<'sig, 'args>(
+fn call_context_file_method(
     env: &mut Env<'_>,
     context: &JObject,
     method_name: &JNIStr,
-    signature: &MethodSignature<'sig, 'args>,
+    signature: &MethodSignature<'_, '_>,
     args: &[JValue],
 ) -> jni::errors::Result<Option<PathBuf>> {
     let file = env

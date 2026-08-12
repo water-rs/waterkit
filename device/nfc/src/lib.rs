@@ -12,7 +12,7 @@ mod sys;
 
 use futures_core::Stream;
 
-/// Android-specific JNI helpers that require `JNIEnv` and `Context`.
+/// Android-specific JNI helpers that require an `Env` and `Context`.
 #[cfg(target_os = "android")]
 pub mod android {
     pub use crate::sys::jni_api::is_available;

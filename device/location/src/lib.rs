@@ -31,7 +31,7 @@ mod sys;
 
 pub use waterkit_permission::{Permission, PermissionStatus};
 
-/// Android-specific JNI helpers that require a `JNIEnv` and `Context`/`Activity`.
+/// Android-specific JNI helpers that require an `Env` and `Context`/`Activity`.
 ///
 /// These are intentionally separate from the async public API because Android
 /// permission/location flows require an app-owned JNI context.

@@ -12,7 +12,7 @@ mod sys;
 use std::collections::HashMap;
 use url::Url;
 
-/// Android-specific JNI helpers that require `JNIEnv` and `Context`.
+/// Android-specific JNI helpers that require an `Env` and `Context`.
 #[cfg(target_os = "android")]
 pub mod android {
     pub use crate::sys::jni_api::{can_open_url_with_context, open_url_with_context};

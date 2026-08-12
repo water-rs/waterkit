@@ -1,152 +1,140 @@
 use crate::{Calendar, CalendarError, Event, EventData};
 use futures::future;
-use jni::JNIEnv;
 use jni::errors::Error as JniError;
-use jni::objects::{GlobalRef, JClass, JObject, JObjectArray, JString, JValue};
-use std::mem::ManuallyDrop;
+use jni::objects::{Global, JClass, JObject, JObjectArray, JString, JValue};
+use jni::{Env, JavaVM, jni_sig, jni_str};
 use std::sync::OnceLock;
 use waterkit_core::Timestamp;
 
 const HELPER_CLASS_NAME: &str = "waterkit.calendar.CalendarHelper";
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
-static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
+
+/// [`HELPER_CLASS_NAME`], loaded once from [`DEX_BYTES`].
+static HELPER_CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
 
 fn with_android_context<T, F>(f: F) -> Result<T, CalendarError>
 where
-    F: for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<T, CalendarError>,
+    F: FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, CalendarError>,
 {
     let android_context = ndk_context::android_context();
-    let vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) }
-        .map_err(|error| CalendarError::Platform(format!("JavaVM::from_raw failed: {error}")))?;
-    let mut env = vm.attach_current_thread().map_err(|error| {
-        CalendarError::Platform(format!("attach_current_thread failed: {error}"))
-    })?;
-
-    let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
+    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
+    let raw_context: jni::sys::jobject = android_context.context().cast();
     assert!(
-        !context.is_null(),
-        "waterkit-calendar: ndk_context returned null Android Context"
+        !raw_vm.is_null(),
+        "waterkit-calendar: ndk_context returned a null JavaVM"
+    );
+    assert!(
+        !raw_context.is_null(),
+        "waterkit-calendar: ndk_context returned a null Android Context"
     );
 
-    f(&mut env, &context)
+    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
+    // valid for the lifetime of the application.
+    let vm = unsafe { JavaVM::from_raw(raw_vm) };
+    vm.attach_current_thread(
+        |env| -> Result<Result<T, CalendarError>, jni::errors::Error> {
+            // SAFETY: `ndk_context` publishes a global reference to the application
+            // `Context` that outlives this attachment, and `as_cast_raw` only
+            // borrows it.
+            let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
+            Ok(f(env, &context))
+        },
+    )
+    .map_err(|error| CalendarError::Platform(format!("attach_current_thread failed: {error}")))?
 }
 
-fn init_dex(env: &mut JNIEnv, context: &JObject) -> Result<(), CalendarError> {
-    if CLASS_LOADER.get().is_some() {
-        return Ok(());
+/// Returns the cached helper class, loading the embedded DEX on first use.
+fn helper_class(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+) -> Result<&'static Global<JClass<'static>>, CalendarError> {
+    if let Some(class) = HELPER_CLASS.get() {
+        return Ok(class);
     }
 
-    let cache_dir = env
-        .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
-        .and_then(jni::objects::JValueGen::l)
-        .map_err(|error| map_jni_error(env, "Context.getCacheDir failed", &error))?;
+    let class = load_helper_class(env, context)?;
+    Ok(HELPER_CLASS.get_or_init(|| class))
+}
 
-    let cache_path = env
-        .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
-        .and_then(jni::objects::JValueGen::l)
-        .map_err(|error| map_jni_error(env, "File.getAbsolutePath failed", &error))?;
-
-    let cache_path_string: String = env
-        .get_string(&JString::from(cache_path))
-        .map_err(|error| CalendarError::Platform(format!("cache path decode failed: {error}")))?
-        .into();
-
-    let dex_path = format!("{cache_path_string}/waterkit_calendar.dex");
-    let _ = std::fs::remove_file(&dex_path);
-    std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|error| CalendarError::Platform(format!("write DEX failed: {error}")))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut permissions = std::fs::metadata(&dex_path)
-            .map_err(|error| CalendarError::Platform(format!("dex metadata failed: {error}")))?
-            .permissions();
-        permissions.set_mode(0o444);
-        std::fs::set_permissions(&dex_path, permissions).map_err(|error| {
-            CalendarError::Platform(format!("set dex permissions failed: {error}"))
-        })?;
-    }
-
-    let dex_path_java = env
-        .new_string(dex_path)
-        .map_err(|error| CalendarError::Platform(format!("new dex path string failed: {error}")))?;
-    let cache_path_java = env.new_string(cache_path_string).map_err(|error| {
-        CalendarError::Platform(format!("new cache path string failed: {error}"))
-    })?;
-
+fn load_helper_class(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+) -> Result<Global<JClass<'static>>, CalendarError> {
     let parent_loader = env
-        .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
-        .and_then(jni::objects::JValueGen::l)
+        .call_method(
+            context,
+            jni_str!("getClassLoader"),
+            jni_sig!("()Ljava/lang/ClassLoader;"),
+            &[],
+        )
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| map_jni_error(env, "Context.getClassLoader failed", &error))?;
 
-    let dex_loader_class = env
-        .find_class("dalvik/system/DexClassLoader")
-        .map_err(|error| map_jni_error(env, "find DexClassLoader failed", &error))?;
-
+    let dex_bytes = env
+        .byte_array_from_slice(DEX_BYTES)
+        .map_err(|error| CalendarError::Platform(format!("copy DEX failed: {error}")))?;
+    let dex_bytes = JObject::from(dex_bytes);
+    let dex_buffer = env
+        .call_static_method(
+            jni_str!("java/nio/ByteBuffer"),
+            jni_str!("wrap"),
+            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
+            &[JValue::Object(&dex_bytes)],
+        )
+        .and_then(jni::objects::JValueOwned::l)
+        .map_err(|error| map_jni_error(env, "ByteBuffer.wrap DEX failed", &error))?;
     let class_loader = env
         .new_object(
-            dex_loader_class,
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V",
-            &[
-                JValue::Object(&dex_path_java),
-                JValue::Object(&cache_path_java),
-                JValue::Object(&JObject::null()),
-                JValue::Object(&parent_loader),
-            ],
+            jni_str!("dalvik/system/InMemoryDexClassLoader"),
+            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
+            &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
         )
-        .map_err(|error| map_jni_error(env, "new DexClassLoader failed", &error))?;
-
-    let class_loader_global = env
-        .new_global_ref(class_loader)
-        .map_err(|error| CalendarError::Platform(format!("new_global_ref failed: {error}")))?;
-
-    if CLASS_LOADER.set(class_loader_global).is_err() {
-        assert!(
-            CLASS_LOADER.get().is_some(),
-            "calendar class loader initialization race left loader unset"
-        );
-    }
-
-    Ok(())
-}
-
-fn get_helper_class<'local>(env: &mut JNIEnv<'local>) -> Result<JClass<'local>, CalendarError> {
-    let class_loader = CLASS_LOADER
-        .get()
-        .ok_or_else(|| CalendarError::Platform("class loader not initialized".into()))?;
+        .map_err(|error| map_jni_error(env, "new InMemoryDexClassLoader failed", &error))?;
 
     let helper_name = env.new_string(HELPER_CLASS_NAME).map_err(|error| {
         CalendarError::Platform(format!("new helper class string failed: {error}"))
     })?;
-
     let helper_class = env
         .call_method(
-            class_loader.as_obj(),
-            "loadClass",
-            "(Ljava/lang/String;)Ljava/lang/Class;",
+            &class_loader,
+            jni_str!("loadClass"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
             &[JValue::Object(&helper_name)],
         )
-        .and_then(jni::objects::JValueGen::l)
+        .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| map_jni_error(env, "ClassLoader.loadClass failed", &error))?;
+    let helper_class = env.cast_local::<JClass>(helper_class).map_err(|error| {
+        CalendarError::Platform(format!("loadClass returned a non-class: {error}"))
+    })?;
 
-    Ok(helper_class.into())
+    env.new_global_ref(helper_class)
+        .map_err(|error| CalendarError::Platform(format!("new_global_ref failed: {error}")))
+}
+
+fn decode_string(env: &Env<'_>, value: &JObject<'_>) -> Result<String, CalendarError> {
+    match env
+        .as_cast::<JString>(value)
+        .and_then(|text| text.try_to_string(env))
+    {
+        Ok(text) => Ok(text),
+        Err(error) => Err(CalendarError::Platform(format!(
+            "string decode failed: {error}"
+        ))),
+    }
 }
 
 fn ensure_calendar_permission(
-    env: &mut JNIEnv,
-    context: &JObject,
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
     write_access: bool,
 ) -> Result<(), CalendarError> {
-    let helper_class = get_helper_class(env)?;
-    let write_flag = u8::from(write_access);
+    let helper_class = helper_class(env, context)?;
     let granted = env
         .call_static_method(
-            &helper_class,
-            "hasCalendarPermission",
-            "(Landroid/content/Context;Z)Z",
-            &[JValue::Object(context), JValue::Bool(write_flag)],
+            helper_class,
+            jni_str!("hasCalendarPermission"),
+            jni_sig!("(Landroid/content/Context;Z)Z"),
+            &[JValue::Object(context), JValue::Bool(write_access)],
         )
         .map_err(|error| map_jni_error(env, "CalendarHelper.hasCalendarPermission failed", &error))?
         .z()
@@ -164,41 +152,33 @@ fn ensure_calendar_permission(
 }
 
 fn read_string_array(
-    env: &mut JNIEnv,
-    array_object: JObject,
+    env: &mut Env<'_>,
+    array_object: JObject<'_>,
     op_name: &str,
 ) -> Result<Vec<String>, CalendarError> {
     if array_object.is_null() {
         return Ok(Vec::new());
     }
 
-    let array = JObjectArray::from(array_object);
-    let len = env.get_array_length(&array).map_err(|error| {
-        CalendarError::Platform(format!("{op_name}: get_array_length failed: {error}"))
+    let array = env
+        .cast_local::<JObjectArray>(array_object)
+        .map_err(|error| {
+            CalendarError::Platform(format!("{op_name}: result is not an array: {error}"))
+        })?;
+    let len = array.len(env).map_err(|error| {
+        CalendarError::Platform(format!("{op_name}: array length failed: {error}"))
     })?;
-    let len_usize = usize::try_from(len).map_err(|_| {
-        CalendarError::Platform(format!("{op_name}: negative array length returned: {len}"))
-    })?;
-    let mut rows = Vec::with_capacity(len_usize);
+
+    let mut rows = Vec::with_capacity(len);
     for index in 0..len {
-        let value = env
-            .get_object_array_element(&array, index)
-            .map_err(|error| {
-                CalendarError::Platform(format!(
-                    "{op_name}: get_object_array_element({index}) failed: {error}"
-                ))
-            })?;
+        let value = array.get_element(env, index).map_err(|error| {
+            CalendarError::Platform(format!("{op_name}: element({index}) failed: {error}"))
+        })?;
         if value.is_null() {
             continue;
         }
 
-        let decoded: String = env
-            .get_string(&JString::from(value))
-            .map_err(|error| {
-                CalendarError::Platform(format!("{op_name}: get_string({index}) failed: {error}"))
-            })?
-            .into();
-        rows.push(decoded);
+        rows.push(decode_string(env, &value)?);
     }
 
     Ok(rows)
@@ -257,18 +237,17 @@ fn parse_event_row(row: &str) -> Result<Event, CalendarError> {
 }
 
 fn list_calendars_with_context(
-    env: &mut JNIEnv,
-    context: &JObject,
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
 ) -> Result<Vec<Calendar>, CalendarError> {
-    init_dex(env, context)?;
     ensure_calendar_permission(env, context, false)?;
 
-    let helper_class = get_helper_class(env)?;
+    let helper_class = helper_class(env, context)?;
     let rows_object = env
         .call_static_method(
-            &helper_class,
-            "listCalendars",
-            "(Landroid/content/Context;)[Ljava/lang/String;",
+            helper_class,
+            jni_str!("listCalendars"),
+            jni_sig!("(Landroid/content/Context;)[Ljava/lang/String;"),
             &[JValue::Object(context)],
         )
         .map_err(|error| map_jni_error(env, "CalendarHelper.listCalendars failed", &error))?
@@ -284,15 +263,14 @@ fn list_calendars_with_context(
 }
 
 fn fetch_events_with_context(
-    env: &mut JNIEnv,
-    context: &JObject,
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
     start: Timestamp,
     end: Timestamp,
 ) -> Result<Vec<Event>, CalendarError> {
-    init_dex(env, context)?;
     ensure_calendar_permission(env, context, false)?;
 
-    let helper_class = get_helper_class(env)?;
+    let helper_class = helper_class(env, context)?;
     let start_str = start.to_string();
     let end_str = end.to_string();
     let start_java = env
@@ -304,9 +282,11 @@ fn fetch_events_with_context(
 
     let rows_object = env
         .call_static_method(
-            &helper_class,
-            "fetchEvents",
-            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)[Ljava/lang/String;",
+            helper_class,
+            jni_str!("fetchEvents"),
+            jni_sig!(
+                "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)[Ljava/lang/String;"
+            ),
             &[
                 JValue::Object(context),
                 JValue::Object(&start_java),
@@ -326,14 +306,13 @@ fn fetch_events_with_context(
 }
 
 fn create_event_with_context(
-    env: &mut JNIEnv,
-    context: &JObject,
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
     data: &EventData,
 ) -> Result<Event, CalendarError> {
-    init_dex(env, context)?;
     ensure_calendar_permission(env, context, true)?;
 
-    let helper_class = get_helper_class(env)?;
+    let helper_class = helper_class(env, context)?;
     let title_java = env
         .new_string(&data.title)
         .map_err(|error| CalendarError::Platform(format!("new title string failed: {error}")))?;
@@ -359,9 +338,9 @@ fn create_event_with_context(
 
     let created_event_id = env
         .call_static_method(
-            &helper_class,
-            "createEventIso",
-            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;)J",
+            helper_class,
+            jni_str!("createEventIso"),
+            jni_sig!("(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;)J"),
             &[
                 JValue::Object(context),
                 JValue::Object(&title_java),
@@ -369,7 +348,7 @@ fn create_event_with_context(
                 JValue::Object(&location_java),
                 JValue::Object(&start_java),
                 JValue::Object(&end_java),
-                JValue::Bool(u8::from(data.is_all_day)),
+                JValue::Bool(data.is_all_day),
                 JValue::Object(&calendar_id_java),
             ],
         )
@@ -387,9 +366,9 @@ fn create_event_with_context(
 
     let created_event_row = env
         .call_static_method(
-            &helper_class,
-            "fetchEventById",
-            "(Landroid/content/Context;J)Ljava/lang/String;",
+            helper_class,
+            jni_str!("fetchEventById"),
+            jni_sig!("(Landroid/content/Context;J)Ljava/lang/String;"),
             &[JValue::Object(context), JValue::Long(created_event_id)],
         )
         .map_err(|error| map_jni_error(env, "CalendarHelper.fetchEventById failed", &error))?
@@ -406,35 +385,27 @@ fn create_event_with_context(
         )));
     }
 
-    let created_event_row: String = env
-        .get_string(&JString::from(created_event_row))
-        .map_err(|error| {
-            CalendarError::Platform(format!(
-                "CalendarHelper.fetchEventById row decode failed: {error}"
-            ))
-        })?
-        .into();
+    let created_event_row = decode_string(env, &created_event_row)?;
     parse_event_row(&created_event_row)
 }
 
 fn delete_event_with_context(
-    env: &mut JNIEnv,
-    context: &JObject,
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
     id: &str,
 ) -> Result<(), CalendarError> {
     let event_id = id
         .parse::<i64>()
         .map_err(|_| CalendarError::NotFound(id.to_string()))?;
 
-    init_dex(env, context)?;
     ensure_calendar_permission(env, context, true)?;
 
-    let helper_class = get_helper_class(env)?;
+    let helper_class = helper_class(env, context)?;
     let deleted = env
         .call_static_method(
-            &helper_class,
-            "deleteEvent",
-            "(Landroid/content/Context;J)Z",
+            helper_class,
+            jni_str!("deleteEvent"),
+            jni_sig!("(Landroid/content/Context;J)Z"),
             &[JValue::Object(context), JValue::Long(event_id)],
         )
         .map_err(|error| map_jni_error(env, "CalendarHelper.deleteEvent failed", &error))?
@@ -452,7 +423,7 @@ fn delete_event_with_context(
     }
 }
 
-fn map_jni_error(env: &mut JNIEnv<'_>, operation: &str, error: &JniError) -> CalendarError {
+fn map_jni_error(env: &mut Env<'_>, operation: &str, error: &JniError) -> CalendarError {
     let message = take_java_exception_string(env).map_or_else(
         || format!("{operation}: {error}"),
         |java_message| format!("{operation}: {java_message}"),
@@ -465,17 +436,21 @@ fn map_jni_error(env: &mut JNIEnv<'_>, operation: &str, error: &JniError) -> Cal
     }
 }
 
-fn take_java_exception_string(env: &mut JNIEnv<'_>) -> Option<String> {
-    let has_exception = env.exception_check().ok()?;
-    if !has_exception {
+fn take_java_exception_string(env: &mut Env<'_>) -> Option<String> {
+    if !env.exception_check() {
         return None;
     }
 
-    let throwable = env.exception_occurred().ok()?;
-    let _ = env.exception_clear();
+    let throwable = env.exception_occurred()?;
+    env.exception_clear();
 
     let throwable_text = env
-        .call_method(throwable, "toString", "()Ljava/lang/String;", &[])
+        .call_method(
+            &throwable,
+            jni_str!("toString"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )
         .ok()?
         .l()
         .ok()?;
@@ -483,9 +458,9 @@ fn take_java_exception_string(env: &mut JNIEnv<'_>) -> Option<String> {
         return Some("java.lang.Throwable".into());
     }
 
-    env.get_string(&JString::from(throwable_text))
+    env.as_cast::<JString>(&throwable_text)
+        .and_then(|text| text.try_to_string(env))
         .ok()
-        .map(Into::into)
 }
 
 fn is_permission_denied_message(message: &str) -> bool {
@@ -498,10 +473,7 @@ fn is_permission_denied_message(message: &str) -> bool {
 }
 
 pub async fn list_calendars() -> Result<Vec<Calendar>, CalendarError> {
-    future::ready(with_android_context(|env, context| {
-        list_calendars_with_context(env, context)
-    }))
-    .await
+    future::ready(with_android_context(list_calendars_with_context)).await
 }
 
 pub async fn fetch_events(start: Timestamp, end: Timestamp) -> Result<Vec<Event>, CalendarError> {

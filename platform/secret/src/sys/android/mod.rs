@@ -1,10 +1,9 @@
 //! Android secret storage implementation using Android Keystore.
 
 use crate::SecretError;
-use jni::JNIEnv;
 use jni::objects::{JByteArray, JObject, JObjectArray, JString, JValue};
+use jni::{Env, JavaVM, jni_sig, jni_str};
 use std::fmt::Display;
-use std::mem::ManuallyDrop;
 
 const SHARED_PREFERENCES_NAME: &str = "waterkit_secrets";
 const KEY_ALIAS_PREFIX: &str = "waterkit.secret";
@@ -29,21 +28,33 @@ fn system_error(action: &str, err: impl Display) -> SecretError {
 
 fn with_android_context<T, F>(f: F) -> Result<T, SecretError>
 where
-    F: for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<T, SecretError>,
+    F: FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, SecretError>,
 {
     let android_context = ndk_context::android_context();
-    let vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) }
-        .map_err(|err| system_error("failed to obtain JavaVM from ndk_context", err))?;
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|err| system_error("failed to attach current thread to JVM", err))?;
-    let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
-    if context.is_null() {
-        return Err(SecretError::Platform(
-            "failed to obtain Android Context from ndk_context".into(),
-        ));
-    }
-    f(&mut env, &context)
+    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
+    let raw_context: jni::sys::jobject = android_context.context().cast();
+    assert!(
+        !raw_vm.is_null(),
+        "waterkit-secret: ndk_context returned a null JavaVM"
+    );
+    assert!(
+        !raw_context.is_null(),
+        "waterkit-secret: ndk_context returned a null Android Context"
+    );
+
+    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
+    // valid for the lifetime of the application.
+    let vm = unsafe { JavaVM::from_raw(raw_vm) };
+    vm.attach_current_thread(
+        |env| -> Result<Result<T, SecretError>, jni::errors::Error> {
+            // SAFETY: `ndk_context` publishes a global reference to the application
+            // `Context` that outlives this attachment, and `as_cast_raw` only
+            // borrows it.
+            let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
+            Ok(f(env, &context))
+        },
+    )
+    .map_err(|err| system_error("failed to attach current thread to JVM", err))?
 }
 
 fn entry_identifier(service: &str, account: &str) -> String {
@@ -58,9 +69,15 @@ fn key_alias(service: &str, account: &str) -> String {
     format!("{KEY_ALIAS_PREFIX}.{}", entry_identifier(service, account))
 }
 
+fn decode_string(env: &Env<'_>, value: &JObject<'_>, action: &str) -> Result<String, SecretError> {
+    env.as_cast::<JString>(value)
+        .and_then(|text| text.try_to_string(env))
+        .map_err(|err| system_error(action, err))
+}
+
 fn get_shared_preferences<'local>(
-    env: &mut JNIEnv<'local>,
-    context: &JObject<'local>,
+    env: &mut Env<'local>,
+    context: &JObject<'_>,
 ) -> Result<JObject<'local>, SecretError> {
     let preferences_name = env
         .new_string(SHARED_PREFERENCES_NAME)
@@ -68,8 +85,8 @@ fn get_shared_preferences<'local>(
 
     env.call_method(
         context,
-        "getSharedPreferences",
-        "(Ljava/lang/String;I)Landroid/content/SharedPreferences;",
+        jni_str!("getSharedPreferences"),
+        jni_sig!("(Ljava/lang/String;I)Landroid/content/SharedPreferences;"),
         &[
             JValue::Object(&preferences_name),
             JValue::Int(SHARED_PREFERENCES_MODE_PRIVATE),
@@ -81,13 +98,13 @@ fn get_shared_preferences<'local>(
 }
 
 fn get_preferences_editor<'local>(
-    env: &mut JNIEnv<'local>,
-    preferences: &JObject<'local>,
+    env: &mut Env<'local>,
+    preferences: &JObject<'_>,
 ) -> Result<JObject<'local>, SecretError> {
     env.call_method(
         preferences,
-        "edit",
-        "()Landroid/content/SharedPreferences$Editor;",
+        jni_str!("edit"),
+        jni_sig!("()Landroid/content/SharedPreferences$Editor;"),
         &[],
     )
     .map_err(|err| system_error("SharedPreferences.edit() failed", err))?
@@ -95,25 +112,22 @@ fn get_preferences_editor<'local>(
     .map_err(|err| system_error("SharedPreferences editor JNI result conversion failed", err))
 }
 
-fn apply_editor<'local>(
-    env: &mut JNIEnv<'local>,
-    editor: &JObject<'local>,
-) -> Result<(), SecretError> {
-    env.call_method(editor, "apply", "()V", &[])
+fn apply_editor(env: &mut Env<'_>, editor: &JObject<'_>) -> Result<(), SecretError> {
+    env.call_method(editor, jni_str!("apply"), jni_sig!("()V"), &[])
         .map_err(|err| system_error("SharedPreferences.Editor.apply() failed", err))?;
     Ok(())
 }
 
-fn load_keystore<'local>(env: &mut JNIEnv<'local>) -> Result<JObject<'local>, SecretError> {
+fn load_keystore<'local>(env: &mut Env<'local>) -> Result<JObject<'local>, SecretError> {
     let provider = env
         .new_string(KEYSTORE_PROVIDER)
         .map_err(|err| system_error("failed to allocate keystore provider string", err))?;
 
     let keystore = env
         .call_static_method(
-            "java/security/KeyStore",
-            "getInstance",
-            "(Ljava/lang/String;)Ljava/security/KeyStore;",
+            jni_str!("java/security/KeyStore"),
+            jni_str!("getInstance"),
+            jni_sig!("(Ljava/lang/String;)Ljava/security/KeyStore;"),
             &[JValue::Object(&provider)],
         )
         .map_err(|err| system_error("KeyStore.getInstance failed", err))?
@@ -124,8 +138,8 @@ fn load_keystore<'local>(env: &mut JNIEnv<'local>) -> Result<JObject<'local>, Se
     let null_password = JObject::null();
     env.call_method(
         &keystore,
-        "load",
-        "(Ljava/io/InputStream;[C)V",
+        jni_str!("load"),
+        jni_sig!("(Ljava/io/InputStream;[C)V"),
         &[
             JValue::Object(&null_input_stream),
             JValue::Object(&null_password),
@@ -136,9 +150,9 @@ fn load_keystore<'local>(env: &mut JNIEnv<'local>) -> Result<JObject<'local>, Se
     Ok(keystore)
 }
 
-fn keystore_contains_alias<'local>(
-    env: &mut JNIEnv<'local>,
-    keystore: &JObject<'local>,
+fn keystore_contains_alias(
+    env: &mut Env<'_>,
+    keystore: &JObject<'_>,
     alias: &str,
 ) -> Result<bool, SecretError> {
     let alias_jstring = env
@@ -147,8 +161,8 @@ fn keystore_contains_alias<'local>(
 
     env.call_method(
         keystore,
-        "containsAlias",
-        "(Ljava/lang/String;)Z",
+        jni_str!("containsAlias"),
+        jni_sig!("(Ljava/lang/String;)Z"),
         &[JValue::Object(&alias_jstring)],
     )
     .map_err(|err| system_error("KeyStore.containsAlias failed", err))?
@@ -157,21 +171,22 @@ fn keystore_contains_alias<'local>(
 }
 
 fn single_string_array<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     value: &str,
 ) -> Result<JObjectArray<'local>, SecretError> {
     let array = env
-        .new_object_array(1, "java/lang/String", JObject::null())
+        .new_object_array(1, jni_str!("java/lang/String"), JObject::null())
         .map_err(|err| system_error("failed to allocate String[]", err))?;
     let value_jstring = env
         .new_string(value)
         .map_err(|err| system_error("failed to allocate String value", err))?;
-    env.set_object_array_element(&array, 0, &value_jstring)
+    array
+        .set_element(env, 0, &value_jstring)
         .map_err(|err| system_error("failed to populate String[]", err))?;
     Ok(array)
 }
 
-fn generate_secret_key(env: &mut JNIEnv<'_>, alias: &str) -> Result<(), SecretError> {
+fn generate_secret_key(env: &mut Env<'_>, alias: &str) -> Result<(), SecretError> {
     let alias_jstring = env
         .new_string(alias)
         .map_err(|err| system_error("failed to allocate key alias", err))?;
@@ -179,8 +194,8 @@ fn generate_secret_key(env: &mut JNIEnv<'_>, alias: &str) -> Result<(), SecretEr
     let purposes = KEY_PURPOSE_ENCRYPT | KEY_PURPOSE_DECRYPT;
     let builder = env
         .new_object(
-            "android/security/keystore/KeyGenParameterSpec$Builder",
-            "(Ljava/lang/String;I)V",
+            jni_str!("android/security/keystore/KeyGenParameterSpec$Builder"),
+            jni_sig!("(Ljava/lang/String;I)V"),
             &[JValue::Object(&alias_jstring), JValue::Int(purposes)],
         )
         .map_err(|err| system_error("KeyGenParameterSpec.Builder init failed", err))?;
@@ -188,8 +203,8 @@ fn generate_secret_key(env: &mut JNIEnv<'_>, alias: &str) -> Result<(), SecretEr
     let block_modes = single_string_array(env, BLOCK_MODE_GCM)?;
     env.call_method(
         &builder,
-        "setBlockModes",
-        "([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;",
+        jni_str!("setBlockModes"),
+        jni_sig!("([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;"),
         &[JValue::Object(block_modes.as_ref())],
     )
     .map_err(|err| system_error("KeyGenParameterSpec.setBlockModes failed", err))?;
@@ -197,16 +212,16 @@ fn generate_secret_key(env: &mut JNIEnv<'_>, alias: &str) -> Result<(), SecretEr
     let paddings = single_string_array(env, ENCRYPTION_PADDING_NONE)?;
     env.call_method(
         &builder,
-        "setEncryptionPaddings",
-        "([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;",
+        jni_str!("setEncryptionPaddings"),
+        jni_sig!("([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;"),
         &[JValue::Object(paddings.as_ref())],
     )
     .map_err(|err| system_error("KeyGenParameterSpec.setEncryptionPaddings failed", err))?;
 
     env.call_method(
         &builder,
-        "setKeySize",
-        "(I)Landroid/security/keystore/KeyGenParameterSpec$Builder;",
+        jni_str!("setKeySize"),
+        jni_sig!("(I)Landroid/security/keystore/KeyGenParameterSpec$Builder;"),
         &[JValue::Int(AES_KEY_SIZE_BITS)],
     )
     .map_err(|err| system_error("KeyGenParameterSpec.setKeySize failed", err))?;
@@ -214,8 +229,8 @@ fn generate_secret_key(env: &mut JNIEnv<'_>, alias: &str) -> Result<(), SecretEr
     let spec = env
         .call_method(
             &builder,
-            "build",
-            "()Landroid/security/keystore/KeyGenParameterSpec;",
+            jni_str!("build"),
+            jni_sig!("()Landroid/security/keystore/KeyGenParameterSpec;"),
             &[],
         )
         .map_err(|err| system_error("KeyGenParameterSpec.build failed", err))?
@@ -230,9 +245,9 @@ fn generate_secret_key(env: &mut JNIEnv<'_>, alias: &str) -> Result<(), SecretEr
         .map_err(|err| system_error("failed to allocate key provider string", err))?;
     let key_generator = env
         .call_static_method(
-            "javax/crypto/KeyGenerator",
-            "getInstance",
-            "(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyGenerator;",
+            jni_str!("javax/crypto/KeyGenerator"),
+            jni_str!("getInstance"),
+            jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyGenerator;"),
             &[JValue::Object(&algorithm), JValue::Object(&provider)],
         )
         .map_err(|err| system_error("KeyGenerator.getInstance failed", err))?
@@ -241,16 +256,16 @@ fn generate_secret_key(env: &mut JNIEnv<'_>, alias: &str) -> Result<(), SecretEr
 
     env.call_method(
         &key_generator,
-        "init",
-        "(Ljava/security/spec/AlgorithmParameterSpec;)V",
+        jni_str!("init"),
+        jni_sig!("(Ljava/security/spec/AlgorithmParameterSpec;)V"),
         &[JValue::Object(&spec)],
     )
     .map_err(|err| system_error("KeyGenerator.init failed", err))?;
 
     env.call_method(
         &key_generator,
-        "generateKey",
-        "()Ljavax/crypto/SecretKey;",
+        jni_str!("generateKey"),
+        jni_sig!("()Ljavax/crypto/SecretKey;"),
         &[],
     )
     .map_err(|err| system_error("KeyGenerator.generateKey failed", err))?;
@@ -258,12 +273,14 @@ fn generate_secret_key(env: &mut JNIEnv<'_>, alias: &str) -> Result<(), SecretEr
     Ok(())
 }
 
-fn ensure_hardware_backed<'local>(
-    env: &mut JNIEnv<'local>,
-    key: &JObject<'local>,
-) -> Result<(), SecretError> {
+fn ensure_hardware_backed(env: &mut Env<'_>, key: &JObject<'_>) -> Result<(), SecretError> {
     let algorithm = env
-        .call_method(key, "getAlgorithm", "()Ljava/lang/String;", &[])
+        .call_method(
+            key,
+            jni_str!("getAlgorithm"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )
         .map_err(|err| system_error("SecretKey.getAlgorithm failed", err))?
         .l()
         .map_err(|err| system_error("SecretKey algorithm JNI result conversion failed", err))?;
@@ -273,9 +290,9 @@ fn ensure_hardware_backed<'local>(
 
     let secret_key_factory = env
         .call_static_method(
-            "javax/crypto/SecretKeyFactory",
-            "getInstance",
-            "(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/SecretKeyFactory;",
+            jni_str!("javax/crypto/SecretKeyFactory"),
+            jni_str!("getInstance"),
+            jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/SecretKeyFactory;"),
             &[
                 JValue::Object(algorithm.as_ref()),
                 JValue::Object(&provider),
@@ -286,15 +303,15 @@ fn ensure_hardware_backed<'local>(
         .map_err(|err| system_error("SecretKeyFactory JNI result conversion failed", err))?;
 
     let key_info_class = env
-        .find_class("android/security/keystore/KeyInfo")
+        .find_class(jni_str!("android/security/keystore/KeyInfo"))
         .map_err(|err| {
             system_error("android.security.keystore.KeyInfo class lookup failed", err)
         })?;
     let key_info = env
         .call_method(
             &secret_key_factory,
-            "getKeySpec",
-            "(Ljava/security/Key;Ljava/lang/Class;)Ljava/security/spec/KeySpec;",
+            jni_str!("getKeySpec"),
+            jni_sig!("(Ljava/security/Key;Ljava/lang/Class;)Ljava/security/spec/KeySpec;"),
             &[JValue::Object(key), JValue::Object(key_info_class.as_ref())],
         )
         .map_err(|err| system_error("SecretKeyFactory.getKeySpec failed", err))?
@@ -307,7 +324,12 @@ fn ensure_hardware_backed<'local>(
         })?;
 
     let inside_secure_hardware = env
-        .call_method(&key_info, "isInsideSecureHardware", "()Z", &[])
+        .call_method(
+            &key_info,
+            jni_str!("isInsideSecureHardware"),
+            jni_sig!("()Z"),
+            &[],
+        )
         .map_err(|err| system_error("KeyInfo.isInsideSecureHardware failed", err))?
         .z()
         .map_err(|err| {
@@ -327,7 +349,7 @@ fn ensure_hardware_backed<'local>(
 }
 
 fn ensure_secret_key<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     alias: &str,
 ) -> Result<JObject<'local>, SecretError> {
     let keystore = load_keystore(env)?;
@@ -343,8 +365,8 @@ fn ensure_secret_key<'local>(
     let key = env
         .call_method(
             &keystore,
-            "getKey",
-            "(Ljava/lang/String;[C)Ljava/security/Key;",
+            jni_str!("getKey"),
+            jni_sig!("(Ljava/lang/String;[C)Ljava/security/Key;"),
             &[
                 JValue::Object(&alias_jstring),
                 JValue::Object(&null_password),
@@ -364,14 +386,14 @@ fn ensure_secret_key<'local>(
     Ok(key)
 }
 
-fn get_cipher<'local>(env: &mut JNIEnv<'local>) -> Result<JObject<'local>, SecretError> {
+fn get_cipher<'local>(env: &mut Env<'local>) -> Result<JObject<'local>, SecretError> {
     let transformation = env
         .new_string(CIPHER_TRANSFORMATION_AES_GCM)
         .map_err(|err| system_error("failed to allocate cipher transformation string", err))?;
     env.call_static_method(
-        "javax/crypto/Cipher",
-        "getInstance",
-        "(Ljava/lang/String;)Ljavax/crypto/Cipher;",
+        jni_str!("javax/crypto/Cipher"),
+        jni_str!("getInstance"),
+        jni_sig!("(Ljava/lang/String;)Ljavax/crypto/Cipher;"),
         &[JValue::Object(&transformation)],
     )
     .map_err(|err| system_error("Cipher.getInstance failed", err))?
@@ -379,29 +401,23 @@ fn get_cipher<'local>(env: &mut JNIEnv<'local>) -> Result<JObject<'local>, Secre
     .map_err(|err| system_error("Cipher JNI result conversion failed", err))
 }
 
-fn encode_base64<'local>(
-    env: &mut JNIEnv<'local>,
-    data: &JByteArray<'local>,
-) -> Result<String, SecretError> {
+fn encode_base64(env: &mut Env<'_>, data: &JByteArray<'_>) -> Result<String, SecretError> {
     let encoded = env
         .call_static_method(
-            "android/util/Base64",
-            "encodeToString",
-            "([BI)Ljava/lang/String;",
+            jni_str!("android/util/Base64"),
+            jni_str!("encodeToString"),
+            jni_sig!("([BI)Ljava/lang/String;"),
             &[JValue::Object(data.as_ref()), JValue::Int(BASE64_NO_WRAP)],
         )
         .map_err(|err| system_error("Base64.encodeToString failed", err))?
         .l()
         .map_err(|err| system_error("Base64.encodeToString JNI result conversion failed", err))?;
 
-    let encoded_jstring: JString = encoded.into();
-    env.get_string(&encoded_jstring)
-        .map_err(|err| system_error("failed to read Base64 encoded string", err))
-        .map(Into::into)
+    decode_string(env, &encoded, "failed to read Base64 encoded string")
 }
 
 fn decode_base64<'local>(
-    env: &mut JNIEnv<'local>,
+    env: &mut Env<'local>,
     encoded: &str,
 ) -> Result<JByteArray<'local>, SecretError> {
     let encoded_jstring = env
@@ -409,9 +425,9 @@ fn decode_base64<'local>(
         .map_err(|err| system_error("failed to allocate Base64 input string", err))?;
     let decoded = env
         .call_static_method(
-            "android/util/Base64",
-            "decode",
-            "(Ljava/lang/String;I)[B",
+            jni_str!("android/util/Base64"),
+            jni_str!("decode"),
+            jni_sig!("(Ljava/lang/String;I)[B"),
             &[
                 JValue::Object(&encoded_jstring),
                 JValue::Int(BASE64_NO_WRAP),
@@ -420,19 +436,20 @@ fn decode_base64<'local>(
         .map_err(|err| system_error("Base64.decode failed", err))?
         .l()
         .map_err(|err| system_error("Base64.decode JNI result conversion failed", err))?;
-    Ok(decoded.into())
+    env.cast_local::<JByteArray>(decoded)
+        .map_err(|err| system_error("Base64.decode did not return a byte array", err))
 }
 
-fn encrypt_payload<'local>(
-    env: &mut JNIEnv<'local>,
-    key: &JObject<'local>,
+fn encrypt_payload(
+    env: &mut Env<'_>,
+    key: &JObject<'_>,
     plaintext: &str,
 ) -> Result<String, SecretError> {
     let cipher = get_cipher(env)?;
     env.call_method(
         &cipher,
-        "init",
-        "(ILjava/security/Key;)V",
+        jni_str!("init"),
+        jni_sig!("(ILjava/security/Key;)V"),
         &[JValue::Int(CIPHER_MODE_ENCRYPT), JValue::Object(key)],
     )
     .map_err(|err| system_error("Cipher.init (encrypt) failed", err))?;
@@ -440,23 +457,27 @@ fn encrypt_payload<'local>(
     let plaintext_bytes = env
         .byte_array_from_slice(plaintext.as_bytes())
         .map_err(|err| system_error("failed to allocate plaintext byte array", err))?;
-    let ciphertext: JByteArray = env
+    let ciphertext = env
         .call_method(
             &cipher,
-            "doFinal",
-            "([B)[B",
+            jni_str!("doFinal"),
+            jni_sig!("([B)[B"),
             &[JValue::Object(plaintext_bytes.as_ref())],
         )
         .map_err(|err| system_error("Cipher.doFinal (encrypt) failed", err))?
         .l()
-        .map_err(|err| system_error("Cipher.doFinal JNI result conversion failed", err))?
-        .into();
-    let iv: JByteArray = env
-        .call_method(&cipher, "getIV", "()[B", &[])
+        .map_err(|err| system_error("Cipher.doFinal JNI result conversion failed", err))?;
+    let ciphertext = env
+        .cast_local::<JByteArray>(ciphertext)
+        .map_err(|err| system_error("Cipher.doFinal did not return a byte array", err))?;
+    let iv = env
+        .call_method(&cipher, jni_str!("getIV"), jni_sig!("()[B"), &[])
         .map_err(|err| system_error("Cipher.getIV failed", err))?
         .l()
-        .map_err(|err| system_error("Cipher.getIV JNI result conversion failed", err))?
-        .into();
+        .map_err(|err| system_error("Cipher.getIV JNI result conversion failed", err))?;
+    let iv = env
+        .cast_local::<JByteArray>(iv)
+        .map_err(|err| system_error("Cipher.getIV did not return a byte array", err))?;
 
     let iv_encoded = encode_base64(env, &iv)?;
     let ciphertext_encoded = encode_base64(env, &ciphertext)?;
@@ -465,9 +486,9 @@ fn encrypt_payload<'local>(
     ))
 }
 
-fn decrypt_payload<'local>(
-    env: &mut JNIEnv<'local>,
-    key: &JObject<'local>,
+fn decrypt_payload(
+    env: &mut Env<'_>,
+    key: &JObject<'_>,
     payload: &str,
 ) -> Result<String, SecretError> {
     let (iv_encoded, ciphertext_encoded) =
@@ -482,8 +503,8 @@ fn decrypt_payload<'local>(
 
     let gcm_spec = env
         .new_object(
-            "javax/crypto/spec/GCMParameterSpec",
-            "(I[B)V",
+            jni_str!("javax/crypto/spec/GCMParameterSpec"),
+            jni_sig!("(I[B)V"),
             &[JValue::Int(GCM_TAG_BITS), JValue::Object(iv.as_ref())],
         )
         .map_err(|err| system_error("GCMParameterSpec creation failed", err))?;
@@ -491,8 +512,8 @@ fn decrypt_payload<'local>(
     let cipher = get_cipher(env)?;
     env.call_method(
         &cipher,
-        "init",
-        "(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V",
+        jni_str!("init"),
+        jni_sig!("(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V"),
         &[
             JValue::Int(CIPHER_MODE_DECRYPT),
             JValue::Object(key),
@@ -501,17 +522,19 @@ fn decrypt_payload<'local>(
     )
     .map_err(|err| system_error("Cipher.init (decrypt) failed", err))?;
 
-    let plaintext: JByteArray = env
+    let plaintext = env
         .call_method(
             &cipher,
-            "doFinal",
-            "([B)[B",
+            jni_str!("doFinal"),
+            jni_sig!("([B)[B"),
             &[JValue::Object(ciphertext.as_ref())],
         )
         .map_err(|err| system_error("Cipher.doFinal (decrypt) failed", err))?
         .l()
-        .map_err(|err| system_error("Cipher.doFinal JNI result conversion failed", err))?
-        .into();
+        .map_err(|err| system_error("Cipher.doFinal JNI result conversion failed", err))?;
+    let plaintext = env
+        .cast_local::<JByteArray>(plaintext)
+        .map_err(|err| system_error("Cipher.doFinal did not return a byte array", err))?;
     let plaintext_bytes = env
         .convert_byte_array(&plaintext)
         .map_err(|err| system_error("failed to convert plaintext byte array", err))?;
@@ -541,9 +564,9 @@ pub async fn delete(service: &str, account: &str) -> Result<(), SecretError> {
 /// # Errors
 ///
 /// Returns [`SecretError`] when key generation, encryption, or `SharedPreferences` writes fail.
-pub fn set_with_context<'local>(
-    env: &mut JNIEnv<'local>,
-    context: &JObject<'local>,
+pub fn set_with_context(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
     service: &str,
     account: &str,
     password: &str,
@@ -564,8 +587,10 @@ pub fn set_with_context<'local>(
 
     env.call_method(
         &editor,
-        "putString",
-        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;",
+        jni_str!("putString"),
+        jni_sig!(
+            "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;"
+        ),
         &[
             JValue::Object(&entry_key_jstring),
             JValue::Object(&payload_jstring),
@@ -580,9 +605,9 @@ pub fn set_with_context<'local>(
 /// # Errors
 ///
 /// Returns [`SecretError`] when key retrieval, `SharedPreferences` reads, or decryption fails.
-pub fn get_with_context<'local>(
-    env: &mut JNIEnv<'local>,
-    context: &JObject<'local>,
+pub fn get_with_context(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
     service: &str,
     account: &str,
 ) -> Result<String, SecretError> {
@@ -597,8 +622,8 @@ pub fn get_with_context<'local>(
     let stored_payload = env
         .call_method(
             &preferences,
-            "getString",
-            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+            jni_str!("getString"),
+            jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
             &[
                 JValue::Object(&entry_key_jstring),
                 JValue::Object(&null_default),
@@ -617,11 +642,11 @@ pub fn get_with_context<'local>(
         return Err(SecretError::NotFound);
     }
 
-    let stored_payload_java: JString = stored_payload.into();
-    let stored_payload_text: String = env
-        .get_string(&stored_payload_java)
-        .map_err(|err| system_error("failed to read encrypted payload string", err))?
-        .into();
+    let stored_payload_text = decode_string(
+        env,
+        &stored_payload,
+        "failed to read encrypted payload string",
+    )?;
 
     let key = ensure_secret_key(env, &alias)?;
     decrypt_payload(env, &key, &stored_payload_text)
@@ -632,9 +657,9 @@ pub fn get_with_context<'local>(
 /// # Errors
 ///
 /// Returns [`SecretError`] when `SharedPreferences` updates or key deletion operations fail.
-pub fn delete_with_context<'local>(
-    env: &mut JNIEnv<'local>,
-    context: &JObject<'local>,
+pub fn delete_with_context(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
     service: &str,
     account: &str,
 ) -> Result<(), SecretError> {
@@ -648,8 +673,8 @@ pub fn delete_with_context<'local>(
         .map_err(|err| system_error("failed to allocate SharedPreferences key", err))?;
     env.call_method(
         &editor,
-        "remove",
-        "(Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;",
+        jni_str!("remove"),
+        jni_sig!("(Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;"),
         &[JValue::Object(&entry_key_jstring)],
     )
     .map_err(|err| system_error("SharedPreferences.Editor.remove failed", err))?;
@@ -662,8 +687,8 @@ pub fn delete_with_context<'local>(
             .map_err(|err| system_error("failed to allocate key alias", err))?;
         env.call_method(
             &keystore,
-            "deleteEntry",
-            "(Ljava/lang/String;)V",
+            jni_str!("deleteEntry"),
+            jni_sig!("(Ljava/lang/String;)V"),
             &[JValue::Object(&alias_jstring)],
         )
         .map_err(|err| system_error("KeyStore.deleteEntry failed", err))?;

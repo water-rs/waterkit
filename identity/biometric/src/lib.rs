@@ -9,7 +9,7 @@ mod sys;
 use thiserror::Error;
 use waterkit_core::Capabilities;
 
-/// Android-specific JNI helpers that require a `JNIEnv` and `Context`.
+/// Android-specific JNI helpers that require an `Env` and `Context`.
 #[cfg(target_os = "android")]
 pub mod android {
     pub use crate::sys::android::{authenticate_with_context, init};

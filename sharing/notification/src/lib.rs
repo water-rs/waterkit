@@ -490,8 +490,8 @@ impl Notification {
     #[cfg(target_os = "android")]
     pub fn show_with_context(
         mut self,
-        env: &mut jni::JNIEnv,
-        context: &jni::objects::JObject,
+        env: &mut jni::Env<'_>,
+        context: &jni::objects::JObject<'_>,
     ) -> Result<NotificationHandle, NotificationError> {
         // Generate ID if not provided
         let id = self

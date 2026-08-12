@@ -43,10 +43,7 @@ fn multiple_file_picker_callbacks() -> &'static Mutex<HashMap<u64, MultiPickerCa
     LOCK.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn decode_optional_string(
-    env: &mut Env<'_>,
-    uri: &JObject<'_>,
-) -> jni::errors::Result<Option<String>> {
+fn decode_optional_string(env: &Env<'_>, uri: &JObject<'_>) -> jni::errors::Result<Option<String>> {
     if uri.is_null() {
         return Ok(None);
     }
@@ -188,7 +185,7 @@ pub fn init_with_context(env: &mut Env<'_>, context: &JObject) -> Result<(), Dia
         .as_cast::<JString>(&cache_path)
         .and_then(|path| path.try_to_string(env))
         .map_err(|e| DialogError::PlatformError(format!("decode cache path: {e}")))?;
-    let dex_path = format!("{}/waterkit_dialog.dex", cache_path_string);
+    let dex_path = format!("{cache_path_string}/waterkit_dialog.dex");
 
     std::fs::write(&dex_path, DEX_BYTES)
         .map_err(|e| DialogError::PlatformError(format!("write DEX: {e}")))?;

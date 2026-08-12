@@ -271,28 +271,30 @@ fn decode_pcm(
 ) -> Result<Vec<f32>, PacketAudioError> {
     match encoding {
         PCM_16_BIT => {
-            let chunks = bytes.chunks_exact(2);
-            if !chunks.remainder().is_empty() {
+            let (chunks, remainder) = bytes.as_chunks::<2>();
+            if !remainder.is_empty() {
                 return Err(decode_message(
                     presentation_time,
                     "MediaCodec AAC emitted misaligned PCM16 bytes",
                 ));
             }
             Ok(chunks
+                .iter()
                 .map(|chunk| {
                     f32::from(i16::from_ne_bytes([chunk[0], chunk[1]])) / f32::from(i16::MAX)
                 })
                 .collect())
         }
         PCM_FLOAT => {
-            let chunks = bytes.chunks_exact(4);
-            if !chunks.remainder().is_empty() {
+            let (chunks, remainder) = bytes.as_chunks::<4>();
+            if !remainder.is_empty() {
                 return Err(decode_message(
                     presentation_time,
                     "MediaCodec AAC emitted misaligned float PCM bytes",
                 ));
             }
             Ok(chunks
+                .iter()
                 .map(|chunk| f32::from_ne_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
                 .collect())
         }

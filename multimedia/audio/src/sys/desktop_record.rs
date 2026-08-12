@@ -79,6 +79,10 @@ impl AudioRecorderInner {
     }
 
     /// Start recording.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
+    )]
     #[allow(clippy::future_not_send, clippy::unused_async)]
     pub async fn start(&mut self) -> Result<(), RecordError> {
         if self.stream.is_some() {
@@ -134,6 +138,10 @@ impl AudioRecorderInner {
     }
 
     /// Stop recording.
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
+    )]
     #[allow(clippy::future_not_send, clippy::unused_async)]
     pub async fn stop(&mut self) -> Result<(), RecordError> {
         self.recording.store(false, Ordering::Relaxed);

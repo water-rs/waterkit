@@ -42,6 +42,10 @@ required-features = ["preview-example"]
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 pollster = "1.0"
+
+# winit pulls in `android-activity`, which only builds once an application picks
+# an activity backend; the preview example it serves is desktop-only.
+[target.'cfg(not(target_os = "android"))'.dev-dependencies]
 winit.workspace = true
 
 # Desktop platforms (Windows, macOS, Linux) - use nokhwa

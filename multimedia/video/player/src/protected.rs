@@ -3639,10 +3639,7 @@ fn throwable_text(env: &mut Env<'_>, throwable: &JThrowable<'_>) -> String {
     };
     env.as_cast::<JString>(&text)
         .and_then(|text| text.try_to_string(env))
-        .map_or_else(
-            |_| String::from("Java exception with invalid description"),
-            |text| text,
-        )
+        .unwrap_or_else(|_| String::from("Java exception with invalid description"))
 }
 
 fn clear_pending_exception(env: &Env<'_>) {

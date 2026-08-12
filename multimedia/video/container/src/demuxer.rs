@@ -566,7 +566,9 @@ fn decode_utf16(bytes: &[u8], little_endian: bool) -> Result<String, VideoError>
     }
 
     let units = bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| {
             if little_endian {
                 u16::from_le_bytes([chunk[0], chunk[1]])

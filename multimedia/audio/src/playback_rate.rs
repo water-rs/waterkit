@@ -177,10 +177,10 @@ impl RealtimeStretch {
                 "pitch stretcher must accept the advertised source capacity"
             );
             offset += pushed_samples;
-            self.expected_output_frames += pushed_frames
+            self.expected_output_frames = pushed_frames
                 .to_f64()
                 .expect("pitch stretcher input frame count must fit f64")
-                * self.stretch_ratio;
+                .mul_add(self.stretch_ratio, self.expected_output_frames);
             self.drain_available(&mut output);
         }
         output

@@ -3,7 +3,9 @@
 #![cfg(target_os = "android")]
 
 use jni::errors::ThrowRuntimeExAndDefault;
-use jni::objects::{JDoubleArray, JObject};
+#[cfg(feature = "location")]
+use jni::objects::JDoubleArray;
+use jni::objects::JObject;
 use jni::sys::{jdoubleArray, jstring};
 use jni::{Env, EnvUnowned};
 use waterkit_test_report::{TestCase, TestReport, to_json_pretty};
@@ -582,7 +584,7 @@ fn check_permission(_env: &mut Env<'_>, _activity: &JObject<'_>, _permission_typ
             }
         };
 
-        return match waterkit_content::permission::android::check_with_activity(
+        match waterkit_content::permission::android::check_with_activity(
             _env, _activity, permission,
         ) {
             Ok(waterkit_content::permission::PermissionStatus::NotDetermined) => {
@@ -599,7 +601,7 @@ fn check_permission(_env: &mut Env<'_>, _activity: &JObject<'_>, _permission_typ
                 log::error!("Permission check failed: {error}");
                 PERMISSION_NOT_DETERMINED
             }
-        };
+        }
     }
 
     #[cfg(not(feature = "permission"))]
@@ -649,11 +651,11 @@ fn get_location(_env: &mut Env<'_>, _activity: &JObject<'_>) -> jdoubleArray {
                     return std::ptr::null_mut();
                 }
 
-                return array.into_raw();
+                array.into_raw()
             }
             Err(error) => {
                 log::error!("Location test failed: {error}");
-                return std::ptr::null_mut();
+                std::ptr::null_mut()
             }
         }
     }

@@ -925,7 +925,7 @@ fn call_audio_track_builder_object(
 fn release_audio_track(env: &mut Env<'_>, track: &JObject<'_>) {
     if let Err(error) = env.call_method(track, jni_str!("release"), jni_sig!("()V"), &[]) {
         tracing::error!(%error, "failed to release Android offloaded AudioTrack");
-        let _ = env.exception_clear();
+        let () = env.exception_clear();
     }
 }
 

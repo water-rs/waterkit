@@ -176,7 +176,7 @@ fn init_dex(
             jni_sig!("([B)Ljava/nio/ByteBuffer;"),
             &[JValue::Object(&dex_bytes)],
         )
-        .and_then(|value| value.l())
+        .and_then(jni::JValueOwned::l)
         .map_err(|error| BluetoothError::Platform(format!("ByteBuffer.wrap DEX: {error}")))?;
     let parent_loader = env
         .call_method(
@@ -185,7 +185,7 @@ fn init_dex(
             jni_sig!("()Ljava/lang/ClassLoader;"),
             &[],
         )
-        .and_then(|value| value.l())
+        .and_then(jni::JValueOwned::l)
         .map_err(|e| BluetoothError::Platform(format!("getClassLoader: {e}")))?;
     let dex_class = env
         .find_class(jni_str!("dalvik/system/InMemoryDexClassLoader"))
@@ -216,7 +216,7 @@ fn load_class<'local>(
             jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
             &[JValue::Object(&class_name)],
         )
-        .and_then(|value| value.l())
+        .and_then(jni::JValueOwned::l)
         .map_err(|e| BluetoothError::Platform(format!("loadClass: {e}")))?;
     env.cast_local::<JClass>(class)
         .map_err(|error| BluetoothError::Platform(format!("cast loaded class: {error}")))
@@ -904,10 +904,14 @@ pub extern "system" fn Java_waterkit_bluetooth_BleGattBridgeCallback_onConnectio
         let state: Arc<GattCallbackState> =
             callback_state(env, &callback, jni_str!("waterkit_gatt_state"));
 
-        let mut connect_slot = state.connect.lock().unwrap_or_else(|error| {
-            panic!("waterkit-bluetooth: GATT connect slot mutex poisoned: {error}")
-        });
-        if let Some(tx) = connect_slot.take() {
+        let pending = state
+            .connect
+            .lock()
+            .unwrap_or_else(|error| {
+                panic!("waterkit-bluetooth: GATT connect slot mutex poisoned: {error}")
+            })
+            .take();
+        if let Some(tx) = pending {
             let result = if connected && status == 0 {
                 Ok(())
             } else {
@@ -946,10 +950,14 @@ pub extern "system" fn Java_waterkit_bluetooth_BleGattBridgeCallback_onServicesD
             )))
         };
 
-        let mut discover_slot = state.discover_services.lock().unwrap_or_else(|error| {
-            panic!("waterkit-bluetooth: GATT discover slot mutex poisoned: {error}")
-        });
-        if let Some(tx) = discover_slot.take() {
+        let pending = state
+            .discover_services
+            .lock()
+            .unwrap_or_else(|error| {
+                panic!("waterkit-bluetooth: GATT discover slot mutex poisoned: {error}")
+            })
+            .take();
+        if let Some(tx) = pending {
             let _ = tx.send(result);
         } else {
             debug_assert!(
@@ -997,10 +1005,14 @@ pub extern "system" fn Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacter
             )))
         };
 
-        let mut reads = state.reads.lock().unwrap_or_else(|error| {
-            panic!("waterkit-bluetooth: GATT read map mutex poisoned: {error}")
-        });
-        if let Some(tx) = reads.remove(&key) {
+        let pending = state
+            .reads
+            .lock()
+            .unwrap_or_else(|error| {
+                panic!("waterkit-bluetooth: GATT read map mutex poisoned: {error}")
+            })
+            .remove(&key);
+        if let Some(tx) = pending {
             let _ = tx.send(result);
         } else {
             debug_assert!(
@@ -1045,10 +1057,14 @@ pub extern "system" fn Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacter
             )))
         };
 
-        let mut writes = state.writes.lock().unwrap_or_else(|error| {
-            panic!("waterkit-bluetooth: GATT write map mutex poisoned: {error}")
-        });
-        if let Some(tx) = writes.remove(&key) {
+        let pending = state
+            .writes
+            .lock()
+            .unwrap_or_else(|error| {
+                panic!("waterkit-bluetooth: GATT write map mutex poisoned: {error}")
+            })
+            .remove(&key);
+        if let Some(tx) = pending {
             let _ = tx.send(result);
         } else {
             debug_assert!(
@@ -1129,8 +1145,8 @@ impl std::fmt::Debug for BleConnectionInner {
 }
 
 impl BleConnectionInner {
-    fn callback_state(&self) -> Result<Arc<GattCallbackState>, BluetoothError> {
-        Ok(Arc::clone(&self.callback_state))
+    fn callback_state(&self) -> Arc<GattCallbackState> {
+        Arc::clone(&self.callback_state)
     }
 
     fn close_gatt(&mut self) -> Result<(), BluetoothError> {
@@ -1279,7 +1295,7 @@ impl BleConnectionInner {
     }
 
     pub async fn discover_services(&self) -> Result<Vec<GattService>, BluetoothError> {
-        let state = self.callback_state()?;
+        let state = self.callback_state();
         let (tx, rx) = oneshot::channel::<Result<Vec<GattService>, BluetoothError>>();
         {
             let mut discover_slot = state.discover_services.lock().map_err(|error| {
@@ -1337,7 +1353,7 @@ impl BleConnectionInner {
         service: &Uuid,
         characteristic: &Uuid,
     ) -> Result<Vec<u8>, BluetoothError> {
-        let state = self.callback_state()?;
+        let state = self.callback_state();
         let key = (service.0.clone(), characteristic.0.clone());
         let (tx, rx) = oneshot::channel::<Result<Vec<u8>, BluetoothError>>();
         {
@@ -1398,7 +1414,7 @@ impl BleConnectionInner {
         characteristic: &Uuid,
         data: &[u8],
     ) -> Result<(), BluetoothError> {
-        let state = self.callback_state()?;
+        let state = self.callback_state();
         let key = (service.0.clone(), characteristic.0.clone());
         let (tx, rx) = oneshot::channel::<Result<(), BluetoothError>>();
         {
@@ -1480,6 +1496,7 @@ impl BleConnectionInner {
     #[allow(
         clippy::too_many_lines,
         clippy::unused_async,
+        clippy::unused_async_trait_impl,
         reason = "Android notification subscription is one JNI descriptor transaction; the API is async to match callback-based GATT operations."
     )]
     pub async fn subscribe(
@@ -1487,7 +1504,7 @@ impl BleConnectionInner {
         service: &Uuid,
         characteristic: &Uuid,
     ) -> Result<async_channel::Receiver<Vec<u8>>, BluetoothError> {
-        let state = self.callback_state()?;
+        let state = self.callback_state();
         let key = (service.0.clone(), characteristic.0.clone());
         let (tx, rx) = async_channel::unbounded();
         {
@@ -1719,7 +1736,11 @@ impl ClassicBluetoothInner {
         }
     }
 
-    #[allow(clippy::unused_async)]
+    #[allow(
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
+    )]
     pub async fn start_discovery(
         &self,
     ) -> Result<async_channel::Receiver<ClassicDevice>, BluetoothError> {
@@ -1819,7 +1840,7 @@ impl ClassicBluetoothInner {
             return Ok(());
         };
 
-        let result = with_android_context(|env, context| {
+        with_android_context(|env, context| {
             release_callback_state(env, &session.callback)?;
             let loader = init_dex(env, context)?;
             let helper_class = get_helper_class(env, &loader)?;
@@ -1835,9 +1856,7 @@ impl ClassicBluetoothInner {
                 ))
             })?;
             Ok(())
-        });
-
-        result
+        })
     }
 
     #[allow(clippy::unused_async)]

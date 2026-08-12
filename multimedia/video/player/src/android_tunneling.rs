@@ -648,7 +648,7 @@ fn release_codec(env: &mut Env<'_>, codec: &JObject<'_>, stop: bool) {
     for &(method, label) in methods {
         if let Err(error) = env.call_method(codec, method, jni_sig!("()V"), &[]) {
             tracing::error!(%error, method = label, "failed to release Android tunneled MediaCodec");
-            let _ = env.exception_clear();
+            let () = env.exception_clear();
         }
     }
 }

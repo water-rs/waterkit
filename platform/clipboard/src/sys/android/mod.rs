@@ -148,7 +148,7 @@ fn decode_string(env: &Env<'_>, value: &JObject<'_>) -> Result<String, Clipboard
         .map_err(|e| ClipboardError::Platform(format!("JNI error string decode: {e}")))
 }
 
-fn read_byte_array(env: &mut Env<'_>, value: JObject<'_>) -> Result<Vec<u8>, ClipboardError> {
+fn read_byte_array(env: &Env<'_>, value: JObject<'_>) -> Result<Vec<u8>, ClipboardError> {
     let array = env
         .cast_local::<JByteArray>(value)
         .map_err(|e| ClipboardError::Platform(format!("JNI error byte array cast: {e}")))?;

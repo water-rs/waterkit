@@ -173,11 +173,11 @@ impl AndroidBridge {
     }
 
     fn read_java_string(
-        env: &mut Env<'_>,
-        object: JObject<'_>,
+        env: &Env<'_>,
+        object: &JObject<'_>,
         context: &str,
     ) -> Result<String, CameraError> {
-        env.as_cast::<JString>(&object)
+        env.as_cast::<JString>(object)
             .and_then(|text| text.try_to_string(env))
             .map_err(|error| CameraError::PlatformError(format!("get_string({context}): {error}")))
     }
@@ -401,9 +401,9 @@ impl AndroidBridge {
                     )));
                 }
 
-                let id = Self::read_java_string(env, id_obj, "camera id")?;
-                let name = Self::read_java_string(env, name_obj, "camera name")?;
-                let is_front_raw = Self::read_java_string(env, is_front_obj, "camera facing")?;
+                let id = Self::read_java_string(env, &id_obj, "camera id")?;
+                let name = Self::read_java_string(env, &name_obj, "camera name")?;
+                let is_front_raw = Self::read_java_string(env, &is_front_obj, "camera facing")?;
 
                 let is_front_facing = match is_front_raw.as_str() {
                     "true" | "True" | "TRUE" => true,
@@ -438,7 +438,7 @@ impl AndroidBridge {
         }
 
         let mut out = Vec::with_capacity(flat.len() / 2);
-        for chunk in flat.chunks_exact(2) {
+        for chunk in flat.as_chunks::<2>().0 {
             let width = u32::try_from(chunk[0]).map_err(|_| {
                 CameraError::PlatformError(format!(
                     "resolution width must be positive, got {}",
@@ -1093,6 +1093,7 @@ impl CameraInner {
     /// Open a camera by ID.
     #[allow(
         clippy::unused_async,
+        clippy::unused_async_trait_impl,
         reason = "the cross-platform camera open API is async even when the Android JNI setup completes synchronously"
     )]
     pub async fn open(
@@ -1370,6 +1371,7 @@ impl CameraInner {
 
     #[allow(
         clippy::unused_async,
+        clippy::unused_async_trait_impl,
         reason = "the cross-platform camera capture API is async even when the Android JNI call completes synchronously"
     )]
     pub async fn capture_photo(&self) -> Result<Photo, CameraError> {
@@ -1422,6 +1424,7 @@ impl CameraInner {
 
     #[allow(
         clippy::unused_async,
+        clippy::unused_async_trait_impl,
         reason = "the cross-platform camera raw capture API is async even when the Android JNI call completes synchronously"
     )]
     pub async fn capture_raw_photo(&self) -> Result<RawPhoto, CameraError> {

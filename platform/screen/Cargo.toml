@@ -50,4 +50,8 @@ ndk-context.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 pollster = "1.0"
+
+# winit pulls in `android-activity`, which only builds once an application picks
+# an activity backend; it is desktop-only here.
+[target.'cfg(not(target_os = "android"))'.dev-dependencies]
 winit = "0.30"

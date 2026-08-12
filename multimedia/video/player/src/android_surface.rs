@@ -29,7 +29,7 @@ impl From<jni::errors::Error> for AttachedVideoError {
     }
 }
 
-pub(crate) fn with_attached_env<T>(
+pub fn with_attached_env<T>(
     vm: &JavaVM,
     operation: impl FnOnce(&mut Env<'_>) -> Result<T, Error>,
 ) -> Result<T, Error> {

@@ -24,6 +24,7 @@ serde_json.workspace = true
 swift-bridge.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
+waterkit-build.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
 

@@ -1,55 +1,16 @@
 use crate::{DeepLink, DeepLinkError};
-use jni::objects::{Global, JObject};
-use jni::{Env, JavaVM};
+use jni::Env;
+use jni::objects::JObject;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
+use waterkit_build::{AndroidError, jvm_and_context, with_android_context};
 
-/// Returns the application's JVM together with a global reference to its
-/// Android `Context`, both published by `ndk_context`.
-fn context_global() -> Result<(JavaVM, Global<JObject<'static>>), DeepLinkError> {
-    let android_context = ndk_context::android_context();
-    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
-    let raw_context: jni::sys::jobject = android_context.context().cast();
-    assert!(
-        !raw_vm.is_null(),
-        "waterkit-deeplink: ndk_context returned a null JavaVM"
-    );
-    assert!(
-        !raw_context.is_null(),
-        "waterkit-deeplink: ndk_context returned a null Android Context"
-    );
-
-    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
-    // valid for the lifetime of the application.
-    let vm = unsafe { JavaVM::from_raw(raw_vm) };
-    let context = vm
-        .attach_current_thread(|env| -> jni::errors::Result<Global<JObject<'static>>> {
-            // SAFETY: `ndk_context` publishes a global reference to the
-            // application `Context` that outlives this attachment, and
-            // `as_cast_raw` only borrows it.
-            let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-            env.new_global_ref(&*context)
-        })
-        .map_err(|e| DeepLinkError::Platform(format!("new_global_ref context: {e}")))?;
-
-    Ok((vm, context))
-}
-
-/// Runs `f` with the calling thread attached to the application's JVM and the
-/// Android `Context`.
-fn with_android_context<T, F>(f: F) -> Result<T, DeepLinkError>
-where
-    F: FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, DeepLinkError>,
-{
-    let (vm, context) = context_global()?;
-    vm.attach_current_thread(
-        |env| -> Result<Result<T, DeepLinkError>, jni::errors::Error> {
-            Ok(f(env, context.as_obj()))
-        },
-    )
-    .map_err(|e| DeepLinkError::Platform(format!("attach_current_thread: {e}")))?
+impl From<AndroidError> for DeepLinkError {
+    fn from(error: AndroidError) -> Self {
+        Self::Platform(error.to_string())
+    }
 }
 
 pub mod jni_api {
@@ -226,7 +187,7 @@ impl DeepLinkHandlerInner {
     )]
     #[allow(clippy::unused_async)]
     pub async fn start() -> Result<(Self, async_channel::Receiver<DeepLink>), DeepLinkError> {
-        let (vm, context) = context_global()?;
+        let (vm, context) = jvm_and_context()?;
         let (link_tx, link_rx) = async_channel::unbounded();
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_for_thread = Arc::clone(&stop_flag);

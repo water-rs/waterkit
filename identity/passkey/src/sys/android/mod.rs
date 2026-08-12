@@ -7,6 +7,7 @@ use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{Global, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jlong};
 use jni::{Env, EnvUnowned, NativeMethod, jni_sig, jni_str};
+use waterkit_build::{AndroidError, DexHelper, dex_helper, with_android_context};
 
 use crate::{
     AuthenticateOptions, AuthenticationResult, Availability, PasskeyError, RegisterOptions,
@@ -16,11 +17,15 @@ use crate::{
 
 use super::PasskeyBackend;
 
-const DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
+/// `waterkit.passkey.PasskeyHelper`, embedded as a DEX by this crate's build
+/// script and loaded on first use.
+static HELPER: DexHelper = dex_helper!("waterkit.passkey.PasskeyHelper");
 
-/// `waterkit.passkey.PasskeyHelper`, loaded once from [`DEX_BYTES`] with its
-/// native callbacks registered.
-static HELPER_CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
+impl From<AndroidError> for PasskeyError {
+    fn from(error: AndroidError) -> Self {
+        Self::Platform(error.to_string())
+    }
+}
 
 type RegisterSender = tokio::sync::oneshot::Sender<Result<RegistrationResult, PasskeyError>>;
 type AuthenticateSender = tokio::sync::oneshot::Sender<Result<AuthenticationResult, PasskeyError>>;
@@ -88,114 +93,24 @@ impl PasskeyBackend for PlatformBackend {
     }
 }
 
-fn with_android_context<T, F>(f: F) -> Result<T, PasskeyError>
-where
-    F: FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, PasskeyError>,
-{
-    let android_context = ndk_context::android_context();
-    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
-    let raw_context: jni::sys::jobject = android_context.context().cast();
-    assert!(
-        !raw_vm.is_null(),
-        "waterkit-passkey: ndk_context returned a null JavaVM"
-    );
-    assert!(
-        !raw_context.is_null(),
-        "waterkit-passkey: ndk_context returned a null Android Context"
-    );
-
-    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
-    // valid for the lifetime of the application.
-    let vm = unsafe { jni::JavaVM::from_raw(raw_vm) };
-    vm.attach_current_thread(
-        |env| -> Result<Result<T, PasskeyError>, jni::errors::Error> {
-            // SAFETY: `ndk_context` publishes a global reference to the application
-            // `Context` that outlives this attachment, and `as_cast_raw` only
-            // borrows it.
-            let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-            Ok(f(env, &context))
-        },
-    )
-    .map_err(|error| PasskeyError::Platform(format!("attach_current_thread failed: {error}")))?
-}
-
-/// Returns the cached helper class, loading the embedded DEX and registering its
-/// native callbacks on first use.
+/// Returns the helper class, registering its native callbacks on first use.
+///
+/// The helper lives in a DEX loaded at runtime, so the JVM cannot resolve its
+/// native methods by symbol name - they have to be registered against the loaded
+/// class explicitly. `RegisterNatives` just re-sets the same function pointers,
+/// so a racing second registration is harmless.
 fn helper_class(
     env: &mut Env<'_>,
     context: &JObject<'_>,
 ) -> Result<&'static Global<JClass<'static>>, PasskeyError> {
-    if let Some(class) = HELPER_CLASS.get() {
-        return Ok(class);
+    static NATIVES_REGISTERED: OnceLock<()> = OnceLock::new();
+
+    let class = HELPER.class(env, context)?;
+    if NATIVES_REGISTERED.get().is_none() {
+        register_natives(env, class)?;
+        let _ = NATIVES_REGISTERED.set(());
     }
-
-    let class = load_helper_class(env, context)?;
-    let class = HELPER_CLASS.get_or_init(|| class);
-    register_natives(env, class)?;
     Ok(class)
-}
-
-fn load_helper_class(
-    env: &mut Env<'_>,
-    context: &JObject<'_>,
-) -> Result<Global<JClass<'static>>, PasskeyError> {
-    let parent_loader = env
-        .call_method(
-            context,
-            jni_str!("getClassLoader"),
-            jni_sig!("()Ljava/lang/ClassLoader;"),
-            &[],
-        )
-        .map_err(|error| PasskeyError::Platform(format!("getClassLoader failed: {error}")))?
-        .l()
-        .map_err(|error| {
-            PasskeyError::Platform(format!("getClassLoader result invalid: {error}"))
-        })?;
-
-    let dex_bytes = env
-        .byte_array_from_slice(DEX_BYTES)
-        .map_err(|error| PasskeyError::Platform(format!("copy DEX failed: {error}")))?;
-    let dex_buffer = env
-        .call_static_method(
-            jni_str!("java/nio/ByteBuffer"),
-            jni_str!("wrap"),
-            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
-            &[JValue::Object(&dex_bytes)],
-        )
-        .map_err(|error| PasskeyError::Platform(format!("wrap DEX failed: {error}")))?
-        .l()
-        .map_err(|error| PasskeyError::Platform(format!("wrap DEX result invalid: {error}")))?;
-    let loader = env
-        .new_object(
-            jni_str!("dalvik/system/InMemoryDexClassLoader"),
-            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
-            &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
-        )
-        .map_err(|error| {
-            PasskeyError::Platform(format!("new InMemoryDexClassLoader failed: {error}"))
-        })?;
-
-    let class_name = env
-        .new_string("waterkit.passkey.PasskeyHelper")
-        .map_err(|error| {
-            PasskeyError::Platform(format!("new helper class string failed: {error}"))
-        })?;
-    let loaded_class = env
-        .call_method(
-            &loader,
-            jni_str!("loadClass"),
-            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-            &[JValue::Object(&class_name)],
-        )
-        .map_err(|error| PasskeyError::Platform(format!("loadClass failed: {error}")))?
-        .l()
-        .map_err(|error| PasskeyError::Platform(format!("loadClass result invalid: {error}")))?;
-    let loaded_class = env.cast_local::<JClass>(loaded_class).map_err(|error| {
-        PasskeyError::Platform(format!("loadClass returned a non-class: {error}"))
-    })?;
-
-    env.new_global_ref(loaded_class)
-        .map_err(|error| PasskeyError::Platform(format!("new_global_ref failed: {error}")))
 }
 
 fn register_natives(

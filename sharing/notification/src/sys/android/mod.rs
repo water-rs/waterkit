@@ -1,21 +1,22 @@
 //! Android notification implementation using JNI.
 
 use jni::errors::ThrowRuntimeExAndDefault;
-use jni::objects::{Global, JClass, JObject, JString, JValue};
+use jni::objects::{JClass, JObject, JString, JValue};
 use jni::{Env, EnvUnowned, JavaVM, jni_sig, jni_str};
 use serde::Serialize;
-use std::sync::OnceLock;
 
 use crate::{InterruptionLevel, Notification, NotificationError};
+use waterkit_build::{AndroidError, DexHelper, dex_helper};
 
-/// Embedded DEX bytecode containing `NotificationHelper` class.
-static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
+/// `waterkit.notification.NotificationHelper`, embedded as a DEX by this crate's build script and
+/// loaded on first use.
+static HELPER: DexHelper = dex_helper!("waterkit.notification.NotificationHelper");
 
-/// `waterkit.notification.NotificationHelper`, loaded once from [`DEX_BYTES`].
-///
-/// A loaded class keeps its defining class loader alive, so caching the class is
-/// enough to keep the DEX resident and lets every later call skip the load.
-static HELPER_CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
+impl From<AndroidError> for NotificationError {
+    fn from(error: AndroidError) -> Self {
+        Self::Platform(error.to_string())
+    }
+}
 
 /// One entry of the JSON array the Kotlin helper parses into notification actions.
 #[derive(Serialize)]
@@ -48,80 +49,6 @@ pub extern "system" fn Java_waterkit_notification_NotificationHelper_onAction<'l
     .resolve::<ThrowRuntimeExAndDefault>();
 }
 
-/// Returns the cached `NotificationHelper` class, loading the embedded DEX on
-/// first use.
-fn helper_class(
-    env: &mut Env<'_>,
-    context: &JObject<'_>,
-) -> Result<&'static Global<JClass<'static>>, NotificationError> {
-    if let Some(class) = HELPER_CLASS.get() {
-        return Ok(class);
-    }
-
-    let class = load_helper_class(env, context)?;
-    Ok(HELPER_CLASS.get_or_init(|| class))
-}
-
-/// Loads `waterkit.notification.NotificationHelper` from the embedded DEX.
-fn load_helper_class(
-    env: &mut Env<'_>,
-    context: &JObject<'_>,
-) -> Result<Global<JClass<'static>>, NotificationError> {
-    let parent_loader = env
-        .call_method(
-            context,
-            jni_str!("getClassLoader"),
-            jni_sig!("()Ljava/lang/ClassLoader;"),
-            &[],
-        )
-        .map_err(|e| NotificationError::Platform(format!("getClassLoader failed: {e}")))?
-        .l()
-        .map_err(|e| NotificationError::Platform(format!("getClassLoader result: {e}")))?;
-
-    let dex_bytes = env
-        .byte_array_from_slice(DEX_BYTES)
-        .map_err(|e| NotificationError::Platform(format!("copying the DEX failed: {e}")))?;
-    let dex_buffer = env
-        .call_static_method(
-            jni_str!("java/nio/ByteBuffer"),
-            jni_str!("wrap"),
-            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
-            &[JValue::Object(&dex_bytes)],
-        )
-        .map_err(|e| NotificationError::Platform(format!("wrapping the DEX failed: {e}")))?
-        .l()
-        .map_err(|e| NotificationError::Platform(format!("wrapping the DEX result: {e}")))?;
-    let class_loader = env
-        .new_object(
-            jni_str!("dalvik/system/InMemoryDexClassLoader"),
-            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
-            &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
-        )
-        .map_err(|e| {
-            NotificationError::Platform(format!("constructing InMemoryDexClassLoader: {e}"))
-        })?;
-
-    let class_name = env
-        .new_string("waterkit.notification.NotificationHelper")
-        .map_err(|e| NotificationError::Platform(format!("new_string: {e}")))?;
-    let class = env
-        .call_method(
-            &class_loader,
-            jni_str!("loadClass"),
-            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-            &[JValue::Object(&class_name)],
-        )
-        .map_err(|e| NotificationError::Platform(format!("loadClass: {e}")))?
-        .l()
-        .map_err(|e| NotificationError::Platform(format!("loadClass result: {e}")))?;
-    let class = env
-        .cast_local::<JClass>(class)
-        .map_err(|e| NotificationError::Platform(format!("loadClass returned a non-class: {e}")))?;
-
-    env.new_global_ref(class)
-        .map_err(|e| NotificationError::Platform(format!("new_global_ref: {e}")))
-}
-
 /// Show a notification with an Android context.
 ///
 /// # Errors
@@ -133,7 +60,7 @@ pub fn show_notification_with_context(
     context: &JObject<'_>,
     notification: &Notification,
 ) -> Result<NotificationHandleInner, NotificationError> {
-    let helper = helper_class(env, context)?;
+    let helper = HELPER.class(env, context)?;
 
     let jtitle = env
         .new_string(&notification.title)

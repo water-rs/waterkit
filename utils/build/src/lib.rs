@@ -26,12 +26,24 @@
 
 #![warn(missing_docs)]
 
+#[cfg(not(target_os = "android"))]
 mod android;
+#[cfg(target_os = "android")]
+mod android_runtime;
+#[cfg(not(target_os = "android"))]
 mod apple;
 
+#[cfg(not(target_os = "android"))]
 pub use android::{
     AndroidConfig, build_kotlin, build_kotlin_with_config, find_android_jar, find_d8_jar,
 };
+#[cfg(not(target_os = "android"))]
 pub use apple::{
     AppleSwiftConfig, SwiftBridgeCrate, build_apple_bridge, compile_multi_swift, compile_swift,
+};
+
+#[cfg(target_os = "android")]
+pub use android_runtime::{
+    AndroidError, DexHelper, decode_optional_string, decode_string, jvm_and_context,
+    with_android_context,
 };

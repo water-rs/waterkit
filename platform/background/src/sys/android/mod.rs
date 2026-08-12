@@ -1,13 +1,20 @@
 //! Android background scheduler backend using `JobScheduler`.
 
-use jni::objects::{Global, JObject, JValue};
-use jni::{Env, JavaVM, errors::Error as JniError, jni_sig, jni_str};
+use jni::objects::{JObject, JValue};
+use jni::{Env, errors::Error as JniError, jni_sig, jni_str};
+use waterkit_build::{AndroidError, jvm_and_context};
 
 use crate::{
     AppRefreshRequest, BackgroundCapabilities, BackgroundError, BootstrapConfig,
     ContinuedProcessingRequest, ContinuedProcessingStrategy, ProcessingRequest, TaskIdentifier,
     TaskKind,
 };
+
+impl From<AndroidError> for BackgroundError {
+    fn from(error: AndroidError) -> Self {
+        Self::Platform(error.to_string())
+    }
+}
 
 const JOB_SCHEDULER_SERVICE: &str = "jobscheduler";
 const JOB_SCHEDULER_RESULT_SUCCESS: i32 = 1;
@@ -275,42 +282,13 @@ fn build_job_info<'local>(
 fn with_env_context<T>(
     operation: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, BackgroundError>,
 ) -> Result<T, BackgroundError> {
-    let (vm, context) = ensure_context_global()?;
+    let (vm, context) = jvm_and_context()?;
     vm.attach_current_thread(
         |env| -> Result<Result<T, BackgroundError>, jni::errors::Error> {
             Ok(operation(env, context.as_obj()))
         },
     )
     .map_err(|error| BackgroundError::Platform(format!("attach_current_thread: {error}")))?
-}
-
-fn ensure_context_global() -> Result<(JavaVM, Global<JObject<'static>>), BackgroundError> {
-    let android_context = ndk_context::android_context();
-    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
-    let raw_context: jni::sys::jobject = android_context.context().cast();
-    assert!(
-        !raw_vm.is_null(),
-        "waterkit-background: ndk_context returned a null JavaVM"
-    );
-    assert!(
-        !raw_context.is_null(),
-        "waterkit-background: ndk_context returned a null Android Context"
-    );
-
-    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
-    // valid for the lifetime of the application.
-    let vm = unsafe { JavaVM::from_raw(raw_vm) };
-    let context = vm
-        .attach_current_thread(|env| -> jni::errors::Result<Global<JObject<'static>>> {
-            // SAFETY: `ndk_context` publishes a global reference to the
-            // application `Context` that outlives this attachment, and
-            // `as_cast_raw` only borrows it.
-            let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-            env.new_global_ref(&*context)
-        })
-        .map_err(jni_error("new_global_ref context"))?;
-
-    Ok((vm, context))
 }
 
 fn get_job_scheduler<'local>(

@@ -1,37 +1,20 @@
 use crate::{ConnectionType, ConnectivityInfo, SystemLoad, ThermalState};
 use jni::objects::{JObject, JValue};
-use jni::{Env, JavaVM, jni_sig, jni_str};
+use jni::{Env, jni_sig, jni_str};
+use waterkit_build::{AndroidError, with_android_context};
 
 /// Runs `f` with the calling thread attached to the application's JVM and the
-/// Android `Context` published by `ndk_context`.
+/// Android `Context`.
+///
+/// System probes report "unknown" rather than failing, so an unavailable JVM and
+/// a JNI failure collapse to the same `None`.
 fn with_jni<T, F>(f: F) -> Option<T>
 where
     F: FnOnce(&mut Env<'_>, &JObject<'_>) -> Option<T>,
 {
-    let android_context = ndk_context::android_context();
-    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
-    let raw_context: jni::sys::jobject = android_context.context().cast();
-    assert!(
-        !raw_vm.is_null(),
-        "waterkit-system: ndk_context returned a null JavaVM"
-    );
-    assert!(
-        !raw_context.is_null(),
-        "waterkit-system: ndk_context returned a null Android Context"
-    );
-
-    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
-    // valid for the lifetime of the application.
-    let vm = unsafe { JavaVM::from_raw(raw_vm) };
-    vm.attach_current_thread(|env| -> jni::errors::Result<Option<T>> {
-        // SAFETY: `ndk_context` publishes a global reference to the application
-        // `Context` that outlives this attachment, and `as_cast_raw` only
-        // borrows it.
-        let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-        Ok(f(env, &context))
-    })
-    .ok()
-    .flatten()
+    with_android_context(|env, context| -> Result<Option<T>, AndroidError> { Ok(f(env, context)) })
+        .ok()
+        .flatten()
 }
 
 pub fn get_connectivity_info() -> ConnectivityInfo {

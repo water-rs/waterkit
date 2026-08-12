@@ -2,117 +2,19 @@
 
 use crate::{ScalarData, SensorData, SensorError};
 use futures::stream;
-use jni::objects::{Global, JClass, JDoubleArray, JObject, JValue};
-use jni::{Env, JavaVM, jni_sig, jni_str};
-use std::sync::OnceLock;
+use jni::objects::{JDoubleArray, JObject, JValue};
+use jni::{Env, jni_sig, jni_str};
+use waterkit_build::{AndroidError, DexHelper, dex_helper, with_android_context};
 use waterkit_core::Timestamp;
 
-/// Embedded DEX bytecode containing `SensorHelper` class.
-static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
+/// `waterkit.sensor.SensorHelper`, embedded as a DEX by this crate's build script and
+/// loaded on first use.
+static HELPER: DexHelper = dex_helper!("waterkit.sensor.SensorHelper");
 
-/// `waterkit.sensor.SensorHelper`, loaded once from [`DEX_BYTES`].
-static HELPER_CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
-
-/// Returns the cached helper class, loading the embedded DEX on first use.
-fn helper_class(
-    env: &mut Env<'_>,
-    context: &JObject<'_>,
-) -> Result<&'static Global<JClass<'static>>, SensorError> {
-    if let Some(class) = HELPER_CLASS.get() {
-        return Ok(class);
+impl From<AndroidError> for SensorError {
+    fn from(error: AndroidError) -> Self {
+        Self::Platform(error.to_string())
     }
-
-    let class = load_helper_class(env, context)?;
-    Ok(HELPER_CLASS.get_or_init(|| class))
-}
-
-fn load_helper_class(
-    env: &mut Env<'_>,
-    context: &JObject<'_>,
-) -> Result<Global<JClass<'static>>, SensorError> {
-    let parent_loader = env
-        .call_method(
-            context,
-            jni_str!("getClassLoader"),
-            jni_sig!("()Ljava/lang/ClassLoader;"),
-            &[],
-        )
-        .map_err(|e| SensorError::Platform(format!("getClassLoader failed: {e}")))?
-        .l()
-        .map_err(|e| SensorError::Platform(format!("getClassLoader result: {e}")))?;
-
-    let dex_bytes = env
-        .byte_array_from_slice(DEX_BYTES)
-        .map_err(|e| SensorError::Platform(format!("byte_array_from_slice DEX: {e}")))?;
-    let dex_bytes = JObject::from(dex_bytes);
-    let dex_buffer = env
-        .call_static_method(
-            jni_str!("java/nio/ByteBuffer"),
-            jni_str!("wrap"),
-            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
-            &[JValue::Object(&dex_bytes)],
-        )
-        .map_err(|e| SensorError::Platform(format!("ByteBuffer.wrap DEX: {e}")))?
-        .l()
-        .map_err(|e| SensorError::Platform(format!("ByteBuffer.wrap DEX result: {e}")))?;
-    let class_loader = env
-        .new_object(
-            jni_str!("dalvik/system/InMemoryDexClassLoader"),
-            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
-            &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
-        )
-        .map_err(|e| SensorError::Platform(format!("new InMemoryDexClassLoader: {e}")))?;
-
-    let helper_class_name = env
-        .new_string("waterkit.sensor.SensorHelper")
-        .map_err(|e| SensorError::Platform(format!("new_string: {e}")))?;
-    let helper_class = env
-        .call_method(
-            &class_loader,
-            jni_str!("loadClass"),
-            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-            &[JValue::Object(&helper_class_name)],
-        )
-        .map_err(|e| SensorError::Platform(format!("loadClass: {e}")))?
-        .l()
-        .map_err(|e| SensorError::Platform(format!("loadClass result: {e}")))?;
-    let helper_class = env
-        .cast_local::<JClass>(helper_class)
-        .map_err(|e| SensorError::Platform(format!("loadClass returned a non-class: {e}")))?;
-
-    env.new_global_ref(helper_class)
-        .map_err(|e| SensorError::Platform(format!("new_global_ref: {e}")))
-}
-
-fn with_android_context<T, F>(f: F) -> Result<T, SensorError>
-where
-    F: FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, SensorError>,
-{
-    let android_context = ndk_context::android_context();
-    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
-    let raw_context: jni::sys::jobject = android_context.context().cast();
-    assert!(
-        !raw_vm.is_null(),
-        "waterkit-sensor: ndk_context returned a null JavaVM"
-    );
-    assert!(
-        !raw_context.is_null(),
-        "waterkit-sensor: ndk_context returned a null Android Context"
-    );
-
-    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
-    // valid for the lifetime of the application.
-    let vm = unsafe { JavaVM::from_raw(raw_vm) };
-    vm.attach_current_thread(
-        |env| -> Result<Result<T, SensorError>, jni::errors::Error> {
-            // SAFETY: `ndk_context` publishes a global reference to the application
-            // `Context` that outlives this attachment, and `as_cast_raw` only
-            // borrows it.
-            let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-            Ok(f(env, &context))
-        },
-    )
-    .map_err(|e| SensorError::Platform(format!("attach_current_thread failed: {e}")))?
 }
 
 /// Reads the `[D` payload the helper returns, rejecting the "unavailable"
@@ -191,7 +93,7 @@ pub fn is_sensor_available_with_context(
     context: &JObject<'_>,
     sensor_type: i32,
 ) -> Result<bool, SensorError> {
-    let helper = helper_class(env, context)?;
+    let helper = HELPER.class(env, context)?;
 
     env.call_static_method(
         helper,
@@ -214,7 +116,7 @@ pub fn read_sensor_with_context(
     context: &JObject<'_>,
     sensor_type: i32,
 ) -> Result<SensorData, SensorError> {
-    let helper = helper_class(env, context)?;
+    let helper = HELPER.class(env, context)?;
 
     let result = env
         .call_static_method(
@@ -239,7 +141,7 @@ pub fn read_pressure_with_context(
     env: &mut Env<'_>,
     context: &JObject<'_>,
 ) -> Result<ScalarData, SensorError> {
-    let helper = helper_class(env, context)?;
+    let helper = HELPER.class(env, context)?;
 
     let result = env
         .call_static_method(
@@ -264,7 +166,7 @@ pub fn read_light_with_context(
     env: &mut Env<'_>,
     context: &JObject<'_>,
 ) -> Result<ScalarData, SensorError> {
-    let helper = helper_class(env, context)?;
+    let helper = HELPER.class(env, context)?;
 
     let result = env
         .call_static_method(

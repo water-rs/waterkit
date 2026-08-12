@@ -1,112 +1,18 @@
 use crate::{Contact, ContactData, ContactsError, EmailAddress, PhoneNumber};
 use futures::future;
-use jni::objects::{Global, JClass, JObject, JObjectArray, JString, JValue};
-use jni::{Env, JavaVM, jni_sig, jni_str};
+use jni::objects::{JObject, JObjectArray, JString, JValue};
+use jni::{Env, jni_sig, jni_str};
 use std::fmt::Display;
-use std::sync::OnceLock;
+use waterkit_build::{AndroidError, DexHelper, dex_helper, with_android_context};
 
-static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
+/// `waterkit.contacts.ContactsHelper`, embedded as a DEX by this crate's build script and
+/// loaded on first use.
+static HELPER: DexHelper = dex_helper!("waterkit.contacts.ContactsHelper");
 
-/// `waterkit.contacts.ContactsHelper`, loaded once from [`DEX_BYTES`].
-static HELPER_CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
-
-fn with_android_context<T, F>(f: F) -> Result<T, ContactsError>
-where
-    F: FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, ContactsError>,
-{
-    let android_context = ndk_context::android_context();
-    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
-    let raw_context: jni::sys::jobject = android_context.context().cast();
-    assert!(
-        !raw_vm.is_null(),
-        "waterkit-contacts: ndk_context returned a null JavaVM"
-    );
-    assert!(
-        !raw_context.is_null(),
-        "waterkit-contacts: ndk_context returned a null Android Context"
-    );
-
-    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
-    // valid for the lifetime of the application.
-    let vm = unsafe { JavaVM::from_raw(raw_vm) };
-    vm.attach_current_thread(
-        |env| -> Result<Result<T, ContactsError>, jni::errors::Error> {
-            // SAFETY: `ndk_context` publishes a global reference to the application
-            // `Context` that outlives this attachment, and `as_cast_raw` only
-            // borrows it.
-            let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-            Ok(f(env, &context))
-        },
-    )
-    .map_err(|e| platform_error("attach_current_thread", e))?
-}
-
-/// Returns the cached helper class, loading the embedded DEX on first use.
-fn helper_class(
-    env: &mut Env<'_>,
-    context: &JObject<'_>,
-) -> Result<&'static Global<JClass<'static>>, ContactsError> {
-    if let Some(class) = HELPER_CLASS.get() {
-        return Ok(class);
+impl From<AndroidError> for ContactsError {
+    fn from(error: AndroidError) -> Self {
+        Self::Platform(error.to_string())
     }
-
-    let class = load_helper_class(env, context)?;
-    Ok(HELPER_CLASS.get_or_init(|| class))
-}
-
-fn load_helper_class(
-    env: &mut Env<'_>,
-    context: &JObject<'_>,
-) -> Result<Global<JClass<'static>>, ContactsError> {
-    let parent_loader = env
-        .call_method(
-            context,
-            jni_str!("getClassLoader"),
-            jni_sig!("()Ljava/lang/ClassLoader;"),
-            &[],
-        )
-        .and_then(jni::objects::JValueOwned::l)
-        .map_err(|e| map_jni_error(env, "getClassLoader", e))?;
-
-    let dex_bytes = env
-        .byte_array_from_slice(DEX_BYTES)
-        .map_err(|e| map_jni_error(env, "byte_array_from_slice DEX", e))?;
-    let dex_bytes = JObject::from(dex_bytes);
-    let dex_buffer = env
-        .call_static_method(
-            jni_str!("java/nio/ByteBuffer"),
-            jni_str!("wrap"),
-            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
-            &[JValue::Object(&dex_bytes)],
-        )
-        .and_then(jni::objects::JValueOwned::l)
-        .map_err(|e| map_jni_error(env, "ByteBuffer.wrap DEX", e))?;
-    let class_loader = env
-        .new_object(
-            jni_str!("dalvik/system/InMemoryDexClassLoader"),
-            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
-            &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
-        )
-        .map_err(|e| map_jni_error(env, "new InMemoryDexClassLoader", e))?;
-
-    let helper_class_name = env
-        .new_string("waterkit.contacts.ContactsHelper")
-        .map_err(|e| map_jni_error(env, "new_string helper_class_name", e))?;
-    let loaded_class = env
-        .call_method(
-            &class_loader,
-            jni_str!("loadClass"),
-            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-            &[JValue::Object(&helper_class_name)],
-        )
-        .and_then(jni::objects::JValueOwned::l)
-        .map_err(|e| map_jni_error(env, "loadClass ContactsHelper", e))?;
-    let loaded_class = env
-        .cast_local::<JClass>(loaded_class)
-        .map_err(|e| map_jni_error(env, "cast ContactsHelper", e))?;
-
-    env.new_global_ref(loaded_class)
-        .map_err(|e| map_jni_error(env, "new_global_ref ContactsHelper", e))
 }
 
 fn decode_string(env: &mut Env<'_>, value: &JObject<'_>) -> Result<String, ContactsError> {
@@ -123,7 +29,7 @@ fn fetch_all_with_context(
     env: &mut Env<'_>,
     context: &JObject<'_>,
 ) -> Result<Vec<Contact>, ContactsError> {
-    let helper_class = helper_class(env, context)?;
+    let helper_class = HELPER.class(env, context)?;
     let result = env
         .call_static_method(
             helper_class,
@@ -142,7 +48,7 @@ fn search_with_context(
     context: &JObject<'_>,
     query: &str,
 ) -> Result<Vec<Contact>, ContactsError> {
-    let helper_class = helper_class(env, context)?;
+    let helper_class = HELPER.class(env, context)?;
     let query_jstring = env
         .new_string(query)
         .map_err(|e| map_jni_error(env, "new_string query", e))?;
@@ -164,7 +70,7 @@ fn get_with_context(
     context: &JObject<'_>,
     id: &str,
 ) -> Result<Contact, ContactsError> {
-    let helper_class = helper_class(env, context)?;
+    let helper_class = HELPER.class(env, context)?;
     let id_jstring = env
         .new_string(id)
         .map_err(|e| map_jni_error(env, "new_string id", e))?;
@@ -190,7 +96,7 @@ fn create_with_context(
     context: &JObject<'_>,
     data: &ContactData,
 ) -> Result<Contact, ContactsError> {
-    let helper_class = helper_class(env, context)?;
+    let helper_class = HELPER.class(env, context)?;
     let payload = serialize_contact_data(data);
     let payload_jstring = env
         .new_string(payload)
@@ -219,7 +125,7 @@ fn delete_with_context(
     context: &JObject<'_>,
     id: &str,
 ) -> Result<(), ContactsError> {
-    let helper_class = helper_class(env, context)?;
+    let helper_class = HELPER.class(env, context)?;
     let id_jstring = env
         .new_string(id)
         .map_err(|e| map_jni_error(env, "new_string id", e))?;
@@ -354,15 +260,6 @@ fn serialize_contact_data(data: &ContactData) -> String {
         birthday,
         data.note.as_deref().unwrap_or(""),
     )
-}
-
-fn platform_error(action: &str, err: impl Display) -> ContactsError {
-    let message = format!("{action}: {err}");
-    if is_permission_message(&message) {
-        ContactsError::PermissionDenied
-    } else {
-        ContactsError::Platform(message)
-    }
 }
 
 fn map_jni_error(env: &mut Env<'_>, action: &str, err: impl Display) -> ContactsError {

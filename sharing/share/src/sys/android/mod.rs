@@ -1,35 +1,11 @@
 use crate::{ShareError, ShareResult, ShareSheet};
 use futures::future;
-use jni::objects::JObject;
-use jni::{Env, JavaVM};
+use waterkit_build::{AndroidError, with_android_context};
 
-fn with_android_context<T, F>(f: F) -> Result<T, ShareError>
-where
-    F: FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, ShareError>,
-{
-    let android_context = ndk_context::android_context();
-    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
-    let raw_context: jni::sys::jobject = android_context.context().cast();
-    assert!(
-        !raw_vm.is_null(),
-        "waterkit-share: ndk_context returned a null JavaVM"
-    );
-    assert!(
-        !raw_context.is_null(),
-        "waterkit-share: ndk_context returned a null Android Context"
-    );
-
-    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
-    // valid for the lifetime of the application.
-    let vm = unsafe { JavaVM::from_raw(raw_vm) };
-    vm.attach_current_thread(|env| -> Result<Result<T, ShareError>, jni::errors::Error> {
-        // SAFETY: `ndk_context` publishes a global reference to the application
-        // `Context` that outlives this attachment, and `as_cast_raw` only
-        // borrows it.
-        let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-        Ok(f(env, &context))
-    })
-    .map_err(|e| ShareError::Platform(format!("attach_current_thread: {e}")))?
+impl From<AndroidError> for ShareError {
+    fn from(error: AndroidError) -> Self {
+        Self::Platform(error.to_string())
+    }
 }
 
 pub async fn show_share_sheet(sheet: ShareSheet) -> Result<ShareResult, ShareError> {

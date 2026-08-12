@@ -6,7 +6,7 @@ use crate::{
     RawVideoFormat, Resolution, StabilizationMode,
 };
 use jni::objects::{
-    Global, JByteArray, JClass, JFloatArray, JIntArray, JObject, JObjectArray, JString, JValue,
+    Global, JByteArray, JFloatArray, JIntArray, JObject, JObjectArray, JString, JValue,
 };
 use jni::strings::JNIStr;
 use jni::{Env, JavaVM, jni_sig, jni_str};
@@ -15,9 +15,17 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use waterkit_build::{AndroidError, DexHelper, dex_helper, jvm_and_context};
 
-const DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
-const HELPER_CLASS: &str = "waterkit.camera.CameraHelper";
+/// `waterkit.camera.CameraHelper`, embedded as a DEX by this crate's build
+/// script and loaded on first use.
+static HELPER: DexHelper = dex_helper!("waterkit.camera.CameraHelper");
+
+impl From<AndroidError> for CameraError {
+    fn from(error: AndroidError) -> Self {
+        Self::PlatformError(error.to_string())
+    }
+}
 
 const DYNAMIC_RANGE_SDR: i32 = 0;
 const DYNAMIC_RANGE_HDR10: i32 = 1;
@@ -55,30 +63,12 @@ struct AndroidBridge {
 
 impl AndroidBridge {
     fn new() -> Result<Self, CameraError> {
-        let android_context = ndk_context::android_context();
-        let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
-        let raw_context: jni::sys::jobject = android_context.context().cast();
-        assert!(
-            !raw_vm.is_null(),
-            "waterkit-camera: ndk_context returned a null JavaVM"
-        );
-        assert!(
-            !raw_context.is_null(),
-            "waterkit-camera: ndk_context returned a null Android Context"
-        );
-
-        // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which
-        // stays valid for the lifetime of the application.
-        let vm = unsafe { JavaVM::from_raw(raw_vm) };
+        let (vm, context) = jvm_and_context()?;
 
         let helper = vm
             .attach_current_thread(
                 |env| -> Result<Result<Global<JObject<'static>>, CameraError>, jni::errors::Error> {
-                    // SAFETY: `ndk_context` publishes a global reference to the
-                    // application `Context` that outlives this attachment, and
-                    // `as_cast_raw` only borrows it.
-                    let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-                    Ok(Self::create_helper(env, &context))
+                    Ok(Self::create_helper(env, context.as_obj()))
                 },
             )
             .map_err(|error| {
@@ -90,64 +80,17 @@ impl AndroidBridge {
 
     /// Loads `CameraHelper` from the embedded DEX and constructs one instance
     /// bound to the application context.
+    /// Loads `CameraHelper` and constructs one instance bound to the
+    /// application context.
     fn create_helper(
         env: &mut Env<'_>,
         context: &JObject<'_>,
     ) -> Result<Global<JObject<'static>>, CameraError> {
-        let parent_loader = env
-            .call_method(
-                context,
-                jni_str!("getClassLoader"),
-                jni_sig!("()Ljava/lang/ClassLoader;"),
-                &[],
-            )
-            .and_then(jni::objects::JValueOwned::l)
-            .map_err(|error| CameraError::PlatformError(format!("getClassLoader: {error}")))?;
-
-        let dex_bytes = env
-            .byte_array_from_slice(DEX_BYTES)
-            .map_err(|error| CameraError::PlatformError(format!("copy dex: {error}")))?;
-        let dex_bytes = JObject::from(dex_bytes);
-        let dex_buffer = env
-            .call_static_method(
-                jni_str!("java/nio/ByteBuffer"),
-                jni_str!("wrap"),
-                jni_sig!("([B)Ljava/nio/ByteBuffer;"),
-                &[JValue::Object(&dex_bytes)],
-            )
-            .and_then(jni::objects::JValueOwned::l)
-            .map_err(|error| CameraError::PlatformError(format!("wrap dex: {error}")))?;
-        let loader = env
-            .new_object(
-                jni_str!("dalvik/system/InMemoryDexClassLoader"),
-                jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
-                &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
-            )
-            .map_err(|error| {
-                CameraError::PlatformError(format!("new InMemoryDexClassLoader: {error}"))
-            })?;
-
-        let helper_name = env
-            .new_string(HELPER_CLASS)
-            .map_err(|error| CameraError::PlatformError(format!("new_string(helper): {error}")))?;
-        let class_obj = env
-            .call_method(
-                &loader,
-                jni_str!("loadClass"),
-                jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-                &[JValue::Object(&helper_name)],
-            )
-            .and_then(jni::objects::JValueOwned::l)
-            .map_err(|error| {
-                CameraError::PlatformError(format!("loadClass({HELPER_CLASS}): {error}"))
-            })?;
-        let helper_class = env.cast_local::<JClass>(class_obj).map_err(|error| {
-            CameraError::PlatformError(format!("loadClass({HELPER_CLASS}) cast: {error}"))
-        })?;
+        let helper_class = HELPER.class(env, context)?;
 
         let helper_obj = env
             .new_object(
-                &helper_class,
+                helper_class,
                 jni_sig!("(Landroid/content/Context;)V"),
                 &[JValue::Object(context)],
             )

@@ -2,125 +2,30 @@
 
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
-use jni::objects::{Global, JByteArray, JClass, JObject, JString, JValue};
+use jni::objects::{Global, JByteArray, JObject, JValue};
 use jni::{Env, JavaVM, jni_sig, jni_str};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
+use waterkit_build::{AndroidError, DexHelper, decode_string, dex_helper, jvm_and_context};
 
-static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
+/// `waterkit.clipboard.ClipboardHelper`, embedded as a DEX by this crate's build script and
+/// loaded on first use.
+static HELPER: DexHelper = dex_helper!("waterkit.clipboard.ClipboardHelper");
 
-/// `waterkit.clipboard.ClipboardHelper`, loaded once from [`DEX_BYTES`].
-static HELPER_CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
+impl From<AndroidError> for ClipboardError {
+    fn from(error: AndroidError) -> Self {
+        Self::Platform(error.to_string())
+    }
+}
 
 type ClipboardPresence = (bool, bool, bool, bool);
 
-/// Returns the application's JVM together with a global reference to its
-/// Android `Context`, both published by `ndk_context`.
-fn jvm_and_context() -> Result<(JavaVM, Global<JObject<'static>>), ClipboardError> {
-    let android_context = ndk_context::android_context();
-    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
-    let raw_context: jni::sys::jobject = android_context.context().cast();
-    assert!(
-        !raw_vm.is_null(),
-        "waterkit-clipboard: ndk_context returned a null JavaVM"
-    );
-    assert!(
-        !raw_context.is_null(),
-        "waterkit-clipboard: ndk_context returned a null Android Context"
-    );
-
-    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
-    // valid for the lifetime of the application.
-    let vm = unsafe { JavaVM::from_raw(raw_vm) };
-    let context = vm
-        .attach_current_thread(|env| -> jni::errors::Result<Global<JObject<'static>>> {
-            // SAFETY: `ndk_context` publishes a global reference to the
-            // application `Context` that outlives this attachment, and
-            // `as_cast_raw` only borrows it.
-            let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-            env.new_global_ref(&*context)
-        })
-        .map_err(|e| ClipboardError::Platform(format!("JNI error new_global_ref: {e}")))?;
-
-    Ok((vm, context))
-}
-
-/// Returns the cached helper class, loading the embedded DEX on first use.
-fn helper_class(
-    env: &mut Env<'_>,
-    context: &JObject<'_>,
-) -> Result<&'static Global<JClass<'static>>, ClipboardError> {
-    if let Some(class) = HELPER_CLASS.get() {
-        return Ok(class);
-    }
-
-    let class = load_helper_class(env, context)?;
-    Ok(HELPER_CLASS.get_or_init(|| class))
-}
-
-fn load_helper_class(
-    env: &mut Env<'_>,
-    context: &JObject<'_>,
-) -> Result<Global<JClass<'static>>, ClipboardError> {
-    let parent_loader = env
-        .call_method(
-            context,
-            jni_str!("getClassLoader"),
-            jni_sig!("()Ljava/lang/ClassLoader;"),
-            &[],
-        )
-        .and_then(jni::objects::JValueOwned::l)
-        .map_err(|e| ClipboardError::Platform(format!("JNI error getClassLoader: {e}")))?;
-
-    let dex_bytes = env
-        .byte_array_from_slice(DEX_BYTES)
-        .map_err(|e| ClipboardError::Platform(format!("JNI error byte_array_from_slice: {e}")))?;
-    let dex_bytes = JObject::from(dex_bytes);
-    let dex_buffer = env
-        .call_static_method(
-            jni_str!("java/nio/ByteBuffer"),
-            jni_str!("wrap"),
-            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
-            &[JValue::Object(&dex_bytes)],
-        )
-        .and_then(jni::objects::JValueOwned::l)
-        .map_err(|e| ClipboardError::Platform(format!("JNI error ByteBuffer.wrap: {e}")))?;
-    let class_loader = env
-        .new_object(
-            jni_str!("dalvik/system/InMemoryDexClassLoader"),
-            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
-            &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
-        )
-        .map_err(|e| {
-            ClipboardError::Platform(format!("JNI error new InMemoryDexClassLoader: {e}"))
-        })?;
-
-    let helper_class_name = env
-        .new_string("waterkit.clipboard.ClipboardHelper")
-        .map_err(|e| ClipboardError::Platform(format!("JNI error new_string name: {e}")))?;
-    let helper_class = env
-        .call_method(
-            &class_loader,
-            jni_str!("loadClass"),
-            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-            &[JValue::Object(&helper_class_name)],
-        )
-        .and_then(jni::objects::JValueOwned::l)
-        .map_err(|e| ClipboardError::Platform(format!("JNI error loadClass: {e}")))?;
-    let helper_class = env
-        .cast_local::<JClass>(helper_class)
-        .map_err(|e| ClipboardError::Platform(format!("JNI error loadClass cast: {e}")))?;
-
-    env.new_global_ref(helper_class)
-        .map_err(|e| ClipboardError::Platform(format!("JNI error new_global_ref: {e}")))
-}
-
 /// Reads one `(Landroid/content/Context;)Z` probe on the helper.
 fn probe(env: &mut Env<'_>, context: &JObject<'_>, name: &jni::strings::JNIStr) -> bool {
-    let Ok(helper_class) = helper_class(env, context) else {
+    let Ok(helper_class) = HELPER.class(env, context) else {
         return false;
     };
     env.call_static_method(
@@ -140,12 +45,6 @@ fn query_clipboard_presence(env: &mut Env<'_>, context: &JObject<'_>) -> Clipboa
         probe(env, context, jni_str!("hasFiles")),
         probe(env, context, jni_str!("hasImage")),
     )
-}
-
-fn decode_string(env: &Env<'_>, value: &JObject<'_>) -> Result<String, ClipboardError> {
-    env.as_cast::<JString>(value)
-        .and_then(|text| text.try_to_string(env))
-        .map_err(|e| ClipboardError::Platform(format!("JNI error string decode: {e}")))
 }
 
 fn read_byte_array(env: &Env<'_>, value: JObject<'_>) -> Result<Vec<u8>, ClipboardError> {
@@ -175,7 +74,10 @@ impl ClipboardInner {
         // Load the helper DEX up front so later calls are plain lookups.
         vm.attach_current_thread(
             |env| -> Result<Result<(), ClipboardError>, jni::errors::Error> {
-                Ok(helper_class(env, context.as_obj()).map(|_| ()))
+                Ok(HELPER
+                    .class(env, context.as_obj())
+                    .map(|_| ())
+                    .map_err(ClipboardError::from))
             },
         )
         .map_err(|e| ClipboardError::Platform(format!("JNI attach error: {e}")))??;
@@ -203,7 +105,7 @@ impl ClipboardInner {
         what: &'static str,
     ) -> Result<Option<String>, ClipboardError> {
         self.with_env(|env, context| {
-            let helper_class = helper_class(env, context)?;
+            let helper_class = HELPER.class(env, context)?;
 
             let value = env
                 .call_static_method(
@@ -219,7 +121,9 @@ impl ClipboardInner {
             if value.is_null() {
                 Ok(None)
             } else {
-                decode_string(env, &value).map(Some)
+                decode_string(env, &value)
+                    .map(Some)
+                    .map_err(ClipboardError::from)
             }
         })
     }
@@ -281,7 +185,7 @@ impl ClipboardInner {
     /// Get image as RGBA.
     pub fn get_image(&self) -> Result<Option<Image>, ClipboardError> {
         self.with_env(|env, context| {
-            let helper_class = helper_class(env, context)?;
+            let helper_class = HELPER.class(env, context)?;
 
             let width = env
                 .call_static_method(
@@ -340,7 +244,7 @@ impl ClipboardInner {
     pub fn get_binary(&self, mime: &str) -> Result<Option<Vec<u8>>, ClipboardError> {
         let mime = mime.to_string();
         self.with_env(|env, context| {
-            let helper_class = helper_class(env, context)?;
+            let helper_class = HELPER.class(env, context)?;
 
             let jmime = env
                 .new_string(&mime)
@@ -371,7 +275,7 @@ impl ClipboardInner {
     pub fn set_text(&self, text: &str) -> Result<(), ClipboardError> {
         let text = text.to_string();
         self.with_env(|env, context| {
-            let helper_class = helper_class(env, context)?;
+            let helper_class = HELPER.class(env, context)?;
 
             let jtext = env
                 .new_string(&text)
@@ -394,7 +298,7 @@ impl ClipboardInner {
         let html = html.to_string();
         let alt = alt_text.unwrap_or("").to_string();
         self.with_env(|env, context| {
-            let helper_class = helper_class(env, context)?;
+            let helper_class = HELPER.class(env, context)?;
 
             let jhtml = env
                 .new_string(&html)
@@ -435,7 +339,7 @@ impl ClipboardInner {
         );
 
         self.with_env(|env, context| {
-            let helper_class = helper_class(env, context)?;
+            let helper_class = HELPER.class(env, context)?;
 
             let juri = env
                 .new_string(&url)
@@ -457,7 +361,7 @@ impl ClipboardInner {
     pub fn set_image_from_path(&self, path: &Path) -> Result<(), ClipboardError> {
         let path_str = path.to_string_lossy().to_string();
         self.with_env(|env, context| {
-            let helper_class = helper_class(env, context)?;
+            let helper_class = HELPER.class(env, context)?;
 
             let jpath = env
                 .new_string(&path_str)
@@ -488,7 +392,7 @@ impl ClipboardInner {
         let data = data.to_vec();
         let mime = mime.to_string();
         self.with_env(|env, context| {
-            let helper_class = helper_class(env, context)?;
+            let helper_class = HELPER.class(env, context)?;
 
             let jdata = env
                 .byte_array_from_slice(&data)
@@ -528,7 +432,7 @@ impl ClipboardInner {
     /// Clear clipboard.
     pub fn clear(&self) -> Result<(), ClipboardError> {
         self.with_env(|env, context| {
-            let helper_class = helper_class(env, context)?;
+            let helper_class = HELPER.class(env, context)?;
 
             env.call_static_method(
                 helper_class,

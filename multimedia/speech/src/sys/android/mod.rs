@@ -5,6 +5,13 @@ use jni::{Env, EnvUnowned, JavaVM, NativeMethod, jni_sig, jni_str};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use waterkit_build::{AndroidError, jvm_and_context};
+
+impl From<AndroidError> for SpeechError {
+    fn from(error: AndroidError) -> Self {
+        Self::Platform(error.to_string())
+    }
+}
 
 type InitTx = tokio::sync::oneshot::Sender<bool>;
 
@@ -28,28 +35,14 @@ fn ensure_runtime_initialized() -> Result<(), SpeechError> {
         return Ok(());
     }
 
-    let android_context = ndk_context::android_context();
-    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
-    let raw_context: jni::sys::jobject = android_context.context().cast();
-    assert!(
-        !raw_vm.is_null(),
-        "waterkit-speech: ndk_context returned a null JavaVM"
-    );
-    assert!(
-        !raw_context.is_null(),
-        "waterkit-speech: ndk_context returned a null Android Context"
-    );
-
-    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
-    // valid for the lifetime of the application.
-    let vm = unsafe { JavaVM::from_raw(raw_vm) };
+    // `SpeechHelper` and `SpeechInitCallback` must come from the *same* class
+    // loader - `initTts` takes the callback as a parameter, and classes loaded by
+    // different loaders are distinct types to the JVM - so this crate keeps its
+    // own two-class loader rather than one `DexHelper` per class.
+    let (vm, context) = jvm_and_context()?;
     vm.attach_current_thread(
         |env| -> Result<Result<(), SpeechError>, jni::errors::Error> {
-            // SAFETY: `ndk_context` publishes a global reference to the application
-            // `Context` that outlives this attachment, and `as_cast_raw` only
-            // borrows it.
-            let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-            Ok(init_with_context(env, &context))
+            Ok(init_with_context(env, context.as_obj()))
         },
     )
     .map_err(|e| SpeechError::Platform(format!("attach_current_thread: {e}")))?

@@ -26,6 +26,7 @@ swift-bridge.workspace = true
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
+waterkit-build.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
 

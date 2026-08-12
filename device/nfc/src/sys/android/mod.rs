@@ -1,18 +1,23 @@
 use crate::{NdefMessage, NdefRecord, NfcError, NfcTag, NfcTagType};
-use jni::objects::{Global, JClass, JObject, JString, JValue};
-use jni::{Env, JavaVM, jni_sig, jni_str};
+use jni::objects::{Global, JObject, JValue};
+use jni::{Env, JavaVM};
 use std::fmt::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
+use waterkit_build::{AndroidError, DexHelper, decode_string, dex_helper};
 
-static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
+/// `waterkit.nfc.NfcHelper`, embedded as a DEX by this crate's build script and
+/// loaded on first use.
+static HELPER: DexHelper = dex_helper!("waterkit.nfc.NfcHelper");
 
-/// [`NFC_HELPER_CLASS_NAME`], loaded once from [`DEX_BYTES`].
-static HELPER_CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
+impl From<AndroidError> for NfcError {
+    fn from(error: AndroidError) -> Self {
+        Self::Platform(error.to_string())
+    }
+}
 
-const NFC_HELPER_CLASS_NAME: &str = "waterkit.nfc.NfcHelper";
 const NFC_ACTION_TAG_DISCOVERED: &str = "android.nfc.action.TAG_DISCOVERED";
 const NFC_ACTION_TECH_DISCOVERED: &str = "android.nfc.action.TECH_DISCOVERED";
 const NFC_ACTION_NDEF_DISCOVERED: &str = "android.nfc.action.NDEF_DISCOVERED";
@@ -45,80 +50,6 @@ where
         Ok(f(env, &context))
     })
     .map_err(|e| NfcError::Platform(format!("attach_current_thread: {e}")))?
-}
-
-/// Returns the cached helper class, loading the embedded DEX on first use.
-fn helper_class(
-    env: &mut Env<'_>,
-    context: &JObject<'_>,
-) -> Result<&'static Global<JClass<'static>>, NfcError> {
-    if let Some(class) = HELPER_CLASS.get() {
-        return Ok(class);
-    }
-
-    let class = load_helper_class(env, context)?;
-    Ok(HELPER_CLASS.get_or_init(|| class))
-}
-
-fn load_helper_class(
-    env: &mut Env<'_>,
-    context: &JObject<'_>,
-) -> Result<Global<JClass<'static>>, NfcError> {
-    let parent_loader = env
-        .call_method(
-            context,
-            jni_str!("getClassLoader"),
-            jni_sig!("()Ljava/lang/ClassLoader;"),
-            &[],
-        )
-        .and_then(jni::objects::JValueOwned::l)
-        .map_err(|e| NfcError::Platform(format!("getClassLoader: {e}")))?;
-
-    let dex_bytes = env
-        .byte_array_from_slice(DEX_BYTES)
-        .map_err(|e| NfcError::Platform(format!("byte_array_from_slice DEX: {e}")))?;
-    let dex_bytes = JObject::from(dex_bytes);
-    let dex_buffer = env
-        .call_static_method(
-            jni_str!("java/nio/ByteBuffer"),
-            jni_str!("wrap"),
-            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
-            &[JValue::Object(&dex_bytes)],
-        )
-        .and_then(jni::objects::JValueOwned::l)
-        .map_err(|e| NfcError::Platform(format!("ByteBuffer.wrap DEX: {e}")))?;
-    let loader = env
-        .new_object(
-            jni_str!("dalvik/system/InMemoryDexClassLoader"),
-            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
-            &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
-        )
-        .map_err(|e| NfcError::Platform(format!("new InMemoryDexClassLoader: {e}")))?;
-
-    let helper_class_name = env
-        .new_string(NFC_HELPER_CLASS_NAME)
-        .map_err(|e| NfcError::Platform(format!("new_string: {e}")))?;
-    let class = env
-        .call_method(
-            &loader,
-            jni_str!("loadClass"),
-            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-            &[JValue::Object(&helper_class_name)],
-        )
-        .and_then(jni::objects::JValueOwned::l)
-        .map_err(|e| NfcError::Platform(format!("loadClass: {e}")))?;
-    let class = env
-        .cast_local::<JClass>(class)
-        .map_err(|e| NfcError::Platform(format!("loadClass returned a non-class: {e}")))?;
-
-    env.new_global_ref(class)
-        .map_err(|e| NfcError::Platform(format!("global_ref: {e}")))
-}
-
-fn decode_string(env: &Env<'_>, value: &JObject<'_>) -> Result<String, NfcError> {
-    env.as_cast::<JString>(value)
-        .and_then(|text| text.try_to_string(env))
-        .map_err(|e| NfcError::Platform(format!("string decode failed: {e}")))
 }
 
 fn is_nfc_intent_action(action: &str) -> bool {
@@ -360,7 +291,7 @@ impl Drop for NfcReaderInner {
 pub mod jni_api {
     use super::{
         EXTRA_TAG_KEY, Env, JObject, JValue, NfcError, TagSnapshot, decode_string, decode_tag_type,
-        helper_class, is_nfc_intent_action,
+        is_nfc_intent_action,
     };
     use jni::{jni_sig, jni_str};
 
@@ -370,7 +301,7 @@ pub mod jni_api {
     ///
     /// Returns error if JNI operations fail.
     pub fn is_available(env: &mut Env<'_>, context: &JObject<'_>) -> Result<bool, NfcError> {
-        let cls = helper_class(env, context)?;
+        let cls = super::HELPER.class(env, context)?;
         env.call_static_method(
             cls,
             jni_str!("isAvailable"),
@@ -391,7 +322,7 @@ pub mod jni_api {
         env: &mut Env<'_>,
         context: &JObject<'_>,
     ) -> Result<Option<TagSnapshot>, NfcError> {
-        let cls = helper_class(env, context)?;
+        let cls = super::HELPER.class(env, context)?;
 
         let intent = env
             .call_method(
@@ -503,7 +434,7 @@ pub mod jni_api {
         tag: &JObject<'_>,
         records_json: &str,
     ) -> Result<(), NfcError> {
-        let cls = helper_class(env, context)?;
+        let cls = super::HELPER.class(env, context)?;
 
         let records = env
             .new_string(records_json)

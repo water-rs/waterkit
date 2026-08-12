@@ -2,8 +2,15 @@
 
 use crate::SecretError;
 use jni::objects::{JByteArray, JObject, JObjectArray, JString, JValue};
-use jni::{Env, JavaVM, jni_sig, jni_str};
+use jni::{Env, jni_sig, jni_str};
 use std::fmt::Display;
+use waterkit_build::{AndroidError, with_android_context};
+
+impl From<AndroidError> for SecretError {
+    fn from(error: AndroidError) -> Self {
+        Self::Platform(error.to_string())
+    }
+}
 
 const SHARED_PREFERENCES_NAME: &str = "waterkit_secrets";
 const KEY_ALIAS_PREFIX: &str = "waterkit.secret";
@@ -24,37 +31,6 @@ const PAYLOAD_SEPARATOR: char = ':';
 
 fn system_error(action: &str, err: impl Display) -> SecretError {
     SecretError::Platform(format!("{action}: {err}"))
-}
-
-fn with_android_context<T, F>(f: F) -> Result<T, SecretError>
-where
-    F: FnOnce(&mut Env<'_>, &JObject<'_>) -> Result<T, SecretError>,
-{
-    let android_context = ndk_context::android_context();
-    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
-    let raw_context: jni::sys::jobject = android_context.context().cast();
-    assert!(
-        !raw_vm.is_null(),
-        "waterkit-secret: ndk_context returned a null JavaVM"
-    );
-    assert!(
-        !raw_context.is_null(),
-        "waterkit-secret: ndk_context returned a null Android Context"
-    );
-
-    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
-    // valid for the lifetime of the application.
-    let vm = unsafe { JavaVM::from_raw(raw_vm) };
-    vm.attach_current_thread(
-        |env| -> Result<Result<T, SecretError>, jni::errors::Error> {
-            // SAFETY: `ndk_context` publishes a global reference to the application
-            // `Context` that outlives this attachment, and `as_cast_raw` only
-            // borrows it.
-            let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-            Ok(f(env, &context))
-        },
-    )
-    .map_err(|err| system_error("failed to attach current thread to JVM", err))?
 }
 
 fn entry_identifier(service: &str, account: &str) -> String {

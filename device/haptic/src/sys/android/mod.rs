@@ -1,102 +1,113 @@
 //! Android haptic implementation using JNI.
 
 use crate::{HapticError, HapticPattern, HapticStep, Intensity};
-use jni::JNIEnv;
-use jni::objects::{GlobalRef, JClass, JObject, JValue};
-use std::mem::ManuallyDrop;
+use jni::objects::{Global, JClass, JIntArray, JLongArray, JObject, JString, JValue};
+use jni::{Env, JavaVM, jni_sig, jni_str};
 use std::sync::OnceLock;
 
-/// Embedded DEX bytecode containing `HapticHelper` class.
+/// Embedded DEX bytecode containing the `HapticHelper` class.
 static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
-/// Cached class loader for the embedded DEX.
-static CLASS_LOADER: OnceLock<GlobalRef> = OnceLock::new();
+/// `waterkit.haptic.HapticHelper`, loaded once from [`DEX_BYTES`].
+///
+/// A loaded class keeps its defining `DexClassLoader` alive, so caching the
+/// class is enough to keep the whole DEX resident and lets every later call
+/// skip both the file write and `ClassLoader.loadClass`.
+static HELPER_CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
 
-/// Initialize the DEX class loader. Must be called with a valid Context.
-pub fn init_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), HapticError> {
-    if CLASS_LOADER.get().is_some() {
-        return Ok(());
+impl From<jni::errors::Error> for HapticError {
+    fn from(error: jni::errors::Error) -> Self {
+        Self::Platform(error.to_string())
+    }
+}
+
+/// Returns the cached `HapticHelper` class, loading the embedded DEX on first use.
+fn helper_class(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+) -> Result<&'static Global<JClass<'static>>, HapticError> {
+    if let Some(class) = HELPER_CLASS.get() {
+        return Ok(class);
     }
 
-    // Write DEX to cache directory
+    let class = load_helper_class(env, context)?;
+    Ok(HELPER_CLASS.get_or_init(|| class))
+}
+
+/// Writes [`DEX_BYTES`] into the application cache directory and loads
+/// `waterkit.haptic.HapticHelper` from it through a `DexClassLoader`.
+fn load_helper_class(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+) -> Result<Global<JClass<'static>>, HapticError> {
     let cache_dir = env
-        .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
-        .map_err(|e| HapticError::Platform(format!("getCacheDir failed: {e}")))?
-        .l()
-        .map_err(|e| HapticError::Platform(format!("getCacheDir result: {e}")))?;
+        .call_method(
+            context,
+            jni_str!("getCacheDir"),
+            jni_sig!("()Ljava/io/File;"),
+            &[],
+        )
+        .map_err(|e| HapticError::InitFailed(format!("Context.getCacheDir failed: {e}")))?
+        .l()?;
 
     let cache_path = env
-        .call_method(&cache_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
-        .map_err(|e| HapticError::Platform(format!("getAbsolutePath failed: {e}")))?
-        .l()
-        .map_err(|e| HapticError::Platform(format!("getAbsolutePath result: {e}")))?;
+        .call_method(
+            &cache_dir,
+            jni_str!("getAbsolutePath"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )
+        .map_err(|e| HapticError::InitFailed(format!("File.getAbsolutePath failed: {e}")))?
+        .l()?;
 
-    let dex_path = format!(
-        "{}/waterkit_haptic.dex",
-        env.get_string((&cache_path).into())
-            .map_err(|e| HapticError::Platform(format!("get_string failed: {e}")))?
-            .to_str()
-            .map_err(|e| HapticError::Platform(format!("to_str failed: {e}")))?
-    );
+    let cache_path_string = env
+        .as_cast::<JString>(&cache_path)
+        .and_then(|path| path.try_to_string(env))
+        .map_err(|e| HapticError::InitFailed(format!("decoding the cache path failed: {e}")))?;
+    let dex_path = format!("{cache_path_string}/waterkit_haptic.dex");
 
-    // Write DEX bytes to file
     std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| HapticError::Platform(format!("write DEX failed: {e}")))?;
+        .map_err(|e| HapticError::InitFailed(format!("writing {dex_path} failed: {e}")))?;
 
-    // Create DexClassLoader
-    let dex_path_jstring = env
-        .new_string(&dex_path)
-        .map_err(|e| HapticError::Platform(format!("new_string failed: {e}")))?;
-
+    let dex_path_string = env.new_string(&dex_path)?;
     let parent_loader = env
-        .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
-        .map_err(|e| HapticError::Platform(format!("getClassLoader failed: {e}")))?
-        .l()
-        .map_err(|e| HapticError::Platform(format!("getClassLoader result: {e}")))?;
-
-    let dex_class_loader_class = env
-        .find_class("dalvik/system/DexClassLoader")
-        .map_err(|e| HapticError::Platform(format!("find DexClassLoader: {e}")))?;
+        .call_method(
+            context,
+            jni_str!("getClassLoader"),
+            jni_sig!("()Ljava/lang/ClassLoader;"),
+            &[],
+        )
+        .map_err(|e| HapticError::InitFailed(format!("Context.getClassLoader failed: {e}")))?
+        .l()?;
 
     let class_loader = env
         .new_object(
-            dex_class_loader_class,
-            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V",
+            jni_str!("dalvik/system/DexClassLoader"),
+            jni_sig!(
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V"
+            ),
             &[
-                JValue::Object(&dex_path_jstring),
+                JValue::Object(&dex_path_string),
                 JValue::Object(&cache_path),
                 JValue::Object(&JObject::null()),
                 JValue::Object(&parent_loader),
             ],
         )
-        .map_err(|e| HapticError::Platform(format!("new DexClassLoader: {e}")))?;
+        .map_err(|e| HapticError::InitFailed(format!("constructing DexClassLoader failed: {e}")))?;
 
-    let global_ref = env
-        .new_global_ref(class_loader)
-        .map_err(|e| HapticError::Platform(format!("new_global_ref: {e}")))?;
+    let helper_name = env.new_string("waterkit.haptic.HapticHelper")?;
+    let helper = env
+        .call_method(
+            &class_loader,
+            jni_str!("loadClass"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
+            &[JValue::Object(&helper_name)],
+        )
+        .map_err(|e| HapticError::InitFailed(format!("loading HapticHelper failed: {e}")))?
+        .l()?;
 
-    let _ = CLASS_LOADER.set(global_ref);
-    Ok(())
-}
-
-fn get_helper_class<'a>(env: &mut JNIEnv<'a>) -> Result<JObject<'a>, HapticError> {
-    let class_loader = CLASS_LOADER
-        .get()
-        .ok_or_else(|| HapticError::InitFailed("Class loader not initialized".into()))?;
-
-    let helper_class_name = env
-        .new_string("waterkit.haptic.HapticHelper")
-        .map_err(|e| HapticError::Platform(format!("new_string: {e}")))?;
-
-    env.call_method(
-        class_loader.as_obj(),
-        "loadClass",
-        "(Ljava/lang/String;)Ljava/lang/Class;",
-        &[JValue::Object(&helper_class_name)],
-    )
-    .map_err(|e| HapticError::Platform(format!("loadClass: {e}")))?
-    .l()
-    .map_err(|e| HapticError::Platform(format!("loadClass result: {e}")))
+    let helper = env.cast_local::<JClass>(helper)?;
+    Ok(env.new_global_ref(helper)?)
 }
 
 fn duration_millis_i64(duration: std::time::Duration) -> Result<i64, HapticError> {
@@ -116,39 +127,37 @@ fn amplitude_i32(intensity: Intensity) -> i32 {
 }
 
 /// Check if haptic feedback is available (requires context).
-pub fn is_available_with_context(env: &mut JNIEnv, context: &JObject) -> Result<bool, HapticError> {
-    init_with_context(env, context)?;
+pub fn is_available_with_context(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+) -> Result<bool, HapticError> {
+    let helper = helper_class(env, context)?;
 
-    let helper: JClass = get_helper_class(env)?.into();
-
-    let result = env
+    let available = env
         .call_static_method(
             helper,
-            "isAvailable",
-            "(Landroid/content/Context;)Z",
+            jni_str!("isAvailable"),
+            jni_sig!("(Landroid/content/Context;)Z"),
             &[JValue::Object(context)],
         )
         .map_err(|e| HapticError::Platform(format!("isAvailable call failed: {e}")))?
-        .z()
-        .map_err(|e| HapticError::Platform(format!("isAvailable result: {e}")))?;
+        .z()?;
 
-    Ok(result)
+    Ok(available)
 }
 
 /// Trigger impact feedback with context.
 pub fn impact_with_context(
-    env: &mut JNIEnv,
-    context: &JObject,
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
     intensity: Intensity,
 ) -> Result<(), HapticError> {
-    init_with_context(env, context)?;
-
-    let helper: JClass = get_helper_class(env)?.into();
+    let helper = helper_class(env, context)?;
 
     env.call_static_method(
         helper,
-        "impact",
-        "(Landroid/content/Context;F)V",
+        jni_str!("impact"),
+        jni_sig!("(Landroid/content/Context;F)V"),
         &[JValue::Object(context), JValue::Float(intensity.value())],
     )
     .map_err(|e| HapticError::Platform(format!("impact call failed: {e}")))?;
@@ -157,15 +166,13 @@ pub fn impact_with_context(
 }
 
 /// Trigger selection feedback with context.
-pub fn selection_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(), HapticError> {
-    init_with_context(env, context)?;
-
-    let helper: JClass = get_helper_class(env)?.into();
+pub fn selection_with_context(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), HapticError> {
+    let helper = helper_class(env, context)?;
 
     env.call_static_method(
         helper,
-        "selection",
-        "(Landroid/content/Context;)V",
+        jni_str!("selection"),
+        jni_sig!("(Landroid/content/Context;)V"),
         &[JValue::Object(context)],
     )
     .map_err(|e| HapticError::Platform(format!("selection call failed: {e}")))?;
@@ -175,18 +182,16 @@ pub fn selection_with_context(env: &mut JNIEnv, context: &JObject) -> Result<(),
 
 /// Trigger notification feedback with context.
 pub fn notification_with_context(
-    env: &mut JNIEnv,
-    context: &JObject,
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
     notification_type: i32,
 ) -> Result<(), HapticError> {
-    init_with_context(env, context)?;
-
-    let helper: JClass = get_helper_class(env)?.into();
+    let helper = helper_class(env, context)?;
 
     env.call_static_method(
         helper,
-        "notification",
-        "(Landroid/content/Context;I)V",
+        jni_str!("notification"),
+        jni_sig!("(Landroid/content/Context;I)V"),
         &[JValue::Object(context), JValue::Int(notification_type)],
     )
     .map_err(|e| HapticError::Platform(format!("notification call failed: {e}")))?;
@@ -196,12 +201,10 @@ pub fn notification_with_context(
 
 /// Play a custom haptic pattern with context.
 pub fn play_pattern_with_context(
-    env: &mut JNIEnv,
-    context: &JObject,
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
     pattern: &HapticPattern,
 ) -> Result<(), HapticError> {
-    init_with_context(env, context)?;
-
     // Convert pattern to timings and amplitudes arrays
     let mut timings = Vec::with_capacity(pattern.steps().len());
     let mut amplitudes = Vec::with_capacity(pattern.steps().len());
@@ -222,39 +225,19 @@ pub fn play_pattern_with_context(
         }
     }
 
-    let helper: JClass = get_helper_class(env)?.into();
-    let timings_len = i32::try_from(timings.len()).map_err(|_| {
-        HapticError::Platform(format!(
-            "haptic timing count exceeds i32: {}",
-            timings.len()
-        ))
-    })?;
-    let amplitudes_len = i32::try_from(amplitudes.len()).map_err(|_| {
-        HapticError::Platform(format!(
-            "haptic amplitude count exceeds i32: {}",
-            amplitudes.len()
-        ))
-    })?;
+    let helper = helper_class(env, context)?;
 
-    // Create Java long[] for timings
-    let timings_array = env
-        .new_long_array(timings_len)
-        .map_err(|e| HapticError::Platform(format!("new_long_array: {e}")))?;
-    env.set_long_array_region(&timings_array, 0, &timings)
-        .map_err(|e| HapticError::Platform(format!("set_long_array_region: {e}")))?;
+    let timings_array = JLongArray::new(env, timings.len())?;
+    timings_array.set_region(env, 0, &timings)?;
 
-    // Create Java int[] for amplitudes
-    let amplitudes_array = env
-        .new_int_array(amplitudes_len)
-        .map_err(|e| HapticError::Platform(format!("new_int_array: {e}")))?;
-    env.set_int_array_region(&amplitudes_array, 0, &amplitudes)
-        .map_err(|e| HapticError::Platform(format!("set_int_array_region: {e}")))?;
+    let amplitudes_array = JIntArray::new(env, amplitudes.len())?;
+    amplitudes_array.set_region(env, 0, &amplitudes)?;
 
-    let result = env
+    let played = env
         .call_static_method(
             helper,
-            "playPattern",
-            "(Landroid/content/Context;[J[I)Z",
+            jni_str!("playPattern"),
+            jni_sig!("(Landroid/content/Context;[J[I)Z"),
             &[
                 JValue::Object(context),
                 JValue::Object(&timings_array),
@@ -262,35 +245,38 @@ pub fn play_pattern_with_context(
             ],
         )
         .map_err(|e| HapticError::Platform(format!("playPattern call failed: {e}")))?
-        .z()
-        .map_err(|e| HapticError::Platform(format!("playPattern result: {e}")))?;
+        .z()?;
 
-    if result {
+    if played {
         Ok(())
     } else {
         Err(HapticError::Platform("pattern playback failed".into()))
     }
 }
 
+/// Runs `f` against the current thread's JNI environment and the application
+/// `Context` published by `ndk_context`.
 fn with_android_context<T, F>(f: F) -> Result<T, HapticError>
 where
-    F: for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<T, HapticError>,
+    F: for<'local> FnOnce(&mut Env<'local>, &JObject<'local>) -> Result<T, HapticError>,
 {
     let android_context = ndk_context::android_context();
-    let vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) }
-        .map_err(|e| HapticError::Platform(format!("JavaVM::from_raw failed: {e}")))?;
+    // SAFETY: `ndk_context` publishes the process' JavaVM pointer, which stays
+    // valid for the lifetime of the application.
+    let vm = unsafe { JavaVM::from_raw(android_context.vm().cast()) };
 
-    let mut env = vm
-        .attach_current_thread()
-        .map_err(|e| HapticError::Platform(format!("attach_current_thread failed: {e}")))?;
+    vm.attach_current_thread(|env| {
+        // SAFETY: `ndk_context` publishes a global reference to the application
+        // `Context` that outlives this attachment. `JObject` only borrows it -
+        // it never deletes the reference on drop.
+        let context = unsafe { JObject::from_raw(env, android_context.context().cast()) };
+        assert!(
+            !context.is_null(),
+            "waterkit-haptic: ndk_context returned null Android Context"
+        );
 
-    let context = ManuallyDrop::new(unsafe { JObject::from_raw(android_context.context().cast()) });
-    assert!(
-        !context.is_null(),
-        "waterkit-haptic: ndk_context returned null Android Context"
-    );
-
-    f(&mut env, &context)
+        f(env, &context)
+    })
 }
 
 pub fn is_available() -> bool {

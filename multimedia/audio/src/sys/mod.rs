@@ -21,6 +21,9 @@ mod windows;
 #[cfg(all(feature = "media-session", target_os = "linux"))]
 mod linux;
 
+#[cfg(all(feature = "media-session", target_arch = "wasm32"))]
+mod web;
+
 #[cfg(all(
     feature = "media-session",
     not(any(
@@ -28,7 +31,8 @@ mod linux;
         target_os = "macos",
         target_os = "android",
         target_os = "windows",
-        target_os = "linux"
+        target_os = "linux",
+        target_arch = "wasm32"
     ))
 ))]
 compile_error!("waterkit-audio supports only macOS, iOS, Android, Windows, and Linux.");
@@ -47,3 +51,6 @@ pub use windows::MediaSessionInner;
 
 #[cfg(all(feature = "media-session", target_os = "linux"))]
 pub use linux::MediaSessionInner;
+
+#[cfg(all(feature = "media-session", target_arch = "wasm32"))]
+pub use web::MediaSessionInner;

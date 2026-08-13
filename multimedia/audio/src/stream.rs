@@ -9,13 +9,13 @@ mod android;
 mod windows;
 
 #[cfg(all(
-    not(any(target_os = "android", target_os = "windows")),
+    not(any(target_os = "android", target_os = "windows", target_arch = "wasm32")),
     feature = "he-aac"
 ))]
 use symphonia_adapter_fdk_aac::AacDecoder as FdkAacDecoder;
 #[cfg(all(
     not(any(target_os = "android", target_os = "windows")),
-    not(feature = "he-aac")
+    any(not(feature = "he-aac"), target_arch = "wasm32")
 ))]
 use symphonia_codec_aac::AacDecoder;
 #[cfg(not(any(target_os = "android", target_os = "windows")))]

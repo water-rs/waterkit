@@ -61,10 +61,17 @@ smallvec = { workspace = true }
 timestretch = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 
-[target.'cfg(not(any(target_os = "android", target_os = "windows")))'.dependencies]
+[target.'cfg(not(any(target_os = "android", target_os = "windows", target_arch = "wasm32")))'.dependencies]
 symphonia-core = { workspace = true, optional = true }
 symphonia-codec-aac = { workspace = true, optional = true }
 symphonia-adapter-fdk-aac = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+symphonia-core = { workspace = true, optional = true }
+symphonia-codec-aac = { workspace = true, optional = true }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Navigator", "Window"] }
 
 [build-dependencies]
 waterkit-build.workspace = true
@@ -72,7 +79,7 @@ waterkit-build.workspace = true
 [dev-dependencies]
 hex = "0.4"
 
-[target.'cfg(any(target_os = "ios", target_os = "macos", target_os = "android", target_os = "windows", target_os = "linux"))'.dependencies]
+[target.'cfg(any(target_os = "ios", target_os = "macos", target_os = "android", target_os = "windows", target_os = "linux", target_arch = "wasm32"))'.dependencies]
 # Cross-platform audio playback (default features include vorbis/mp3/flac/wav)
 rodio = { workspace = true, features = ["playback", "flac", "vorbis", "wav", "mp3"], optional = true }
 # Cross-platform audio I/O (for recording)

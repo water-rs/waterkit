@@ -161,6 +161,13 @@ enum DecodedFrameInner {
     /// Software-decoded frame with NV12 data.
     /// Available on non-Apple platforms, or desktop Apple platforms with software-fallback.
     #[cfg(waterkit_software_frames)]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "WebCodecs frame construction is owned by the browser adapter"
+        )
+    )]
     Software {
         data: Vec<u8>,
         width: u32,
@@ -205,6 +212,13 @@ impl DecodedFrame {
 
     /// Create a decoded frame from tightly packed bi-planar software output.
     #[cfg(waterkit_software_frames)]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "WebCodecs frame construction is owned by the browser adapter"
+        )
+    )]
     pub(crate) const fn from_biplanar_data(
         data: Vec<u8>,
         width: u32,

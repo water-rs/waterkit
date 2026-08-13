@@ -69,6 +69,10 @@ enum ShutdownInner {
     #[cfg(target_os = "android")]
     Android(Arc<std::sync::atomic::AtomicBool>),
     #[cfg(target_arch = "wasm32")]
+    #[expect(
+        dead_code,
+        reason = "browser clipboard watching returns Unsupported before constructing a shutdown handle"
+    )]
     Web,
 }
 

@@ -44,3 +44,9 @@ windows.workspace = true
 zbus.workspace = true
 futures.workspace = true
 async-io.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+async-channel.workspace = true
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Geolocation", "Navigator", "Window"] }

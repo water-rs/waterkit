@@ -103,6 +103,13 @@ pub struct ScreenInfo {
 
 impl ScreenInfo {
     /// Create a new `ScreenInfo`.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the browser screen adapter does not synthesize ScreenInfo"
+        )
+    )]
     pub(crate) const fn new(
         id: u32,
         name: String,

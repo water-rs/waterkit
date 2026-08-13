@@ -13,6 +13,9 @@ mod windows;
 #[cfg(target_os = "linux")]
 mod linux;
 
+#[cfg(target_arch = "wasm32")]
+mod web;
+
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod desktop;
 
@@ -29,12 +32,16 @@ pub use windows::{check, request};
 #[cfg(target_os = "linux")]
 pub use linux::{check, request};
 
+#[cfg(target_arch = "wasm32")]
+pub use web::{check, request};
+
 #[cfg(not(any(
     target_os = "ios",
     target_os = "macos",
     target_os = "android",
     target_os = "windows",
-    target_os = "linux"
+    target_os = "linux",
+    target_arch = "wasm32"
 )))]
 compile_error!("waterkit-permission supports only macOS, iOS, Android, Windows, and Linux.");
 
@@ -43,7 +50,8 @@ compile_error!("waterkit-permission supports only macOS, iOS, Android, Windows, 
     target_os = "macos",
     target_os = "android",
     target_os = "windows",
-    target_os = "linux"
+    target_os = "linux",
+    target_arch = "wasm32"
 )))]
 pub(crate) async fn check(_permission: crate::Permission) -> crate::PermissionStatus {
     panic!("waterkit-permission supports only macOS, iOS, Android, Windows, and Linux.")
@@ -54,7 +62,8 @@ pub(crate) async fn check(_permission: crate::Permission) -> crate::PermissionSt
     target_os = "macos",
     target_os = "android",
     target_os = "windows",
-    target_os = "linux"
+    target_os = "linux",
+    target_arch = "wasm32"
 )))]
 pub(crate) async fn request(
     _permission: crate::Permission,

@@ -50,6 +50,13 @@ pub struct Screenshot {
 
 impl Screenshot {
     /// Create a new `Screenshot`.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "browser screenshot capture is not exposed by the platform adapter"
+        )
+    )]
     pub(crate) const fn new(data: Vec<u8>, width: u32, height: u32, format: ImageFormat) -> Self {
         Self {
             data,

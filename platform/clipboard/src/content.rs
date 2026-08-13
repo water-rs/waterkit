@@ -133,6 +133,13 @@ impl ClipboardEvent {
     /// Create a new clipboard event.
     #[must_use]
     #[allow(clippy::fn_params_excessive_bools)]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "browser clipboard change observation is unavailable"
+        )
+    )]
     pub(crate) const fn new(
         has_text: bool,
         has_html: bool,

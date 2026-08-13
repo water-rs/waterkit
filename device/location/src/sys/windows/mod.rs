@@ -5,23 +5,24 @@ use crate::{Location, LocationError, Timestamp};
 // FILETIME epoch offset: 11644473600 seconds between 1601-01-01 and 1970-01-01
 const FILETIME_UNIX_DIFF: i64 = 11_644_473_600;
 
+/// Windows `E_ACCESSDENIED`, which `GetGeopositionAsync` returns when the user
+/// has denied location access.
+const E_ACCESSDENIED: windows::core::HRESULT =
+    windows::core::HRESULT(0x8007_0005_u32.cast_signed());
+
 pub async fn get_location() -> Result<Location, LocationError> {
-    use windows::Devices::Geolocation::{GeolocationAccessStatus, Geolocator};
+    use windows::Devices::Geolocation::Geolocator;
 
-    let map_err = |e: windows::core::Error| LocationError::Platform(e.to_string());
-
-    // Request access (this also serves as permission check on Windows)
-    let access = Geolocator::RequestAccessAsync()
-        .map_err(map_err)?
-        .await
-        .map_err(map_err)?;
-
-    if access == GeolocationAccessStatus::Denied {
-        return Err(LocationError::PermissionDenied);
-    }
-    if access != GeolocationAccessStatus::Allowed {
-        return Err(LocationError::NotAvailable);
-    }
+    // The crate contract says this function never triggers the runtime
+    // prompt — waterkit-permission owns that flow — so no RequestAccessAsync
+    // here. A denied grant surfaces as E_ACCESSDENIED from the position call.
+    let map_err = |e: windows::core::Error| {
+        if e.code() == E_ACCESSDENIED {
+            LocationError::PermissionDenied
+        } else {
+            LocationError::Platform(e.to_string())
+        }
+    };
 
     let geolocator = Geolocator::new().map_err(map_err)?;
 
@@ -37,22 +38,27 @@ pub async fn get_location() -> Result<Location, LocationError> {
 
     let pos = point.Position().map_err(map_err)?;
 
-    // Windows DateTime.UniversalTime is 100-nanosecond intervals since 1601-01-01
-    // Convert to Unix timestamp (seconds since 1970-01-01)
+    // Windows DateTime.UniversalTime is 100-nanosecond intervals since
+    // 1601-01-01; keep the full precision instead of truncating to seconds.
     let filetime = coord.Timestamp().map_err(map_err)?.UniversalTime;
+    let unix_100ns = i128::from(filetime) - i128::from(FILETIME_UNIX_DIFF) * 10_000_000;
+    let timestamp = Timestamp::from_nanosecond(unix_100ns * 100)
+        .map_err(|e| LocationError::Platform(e.to_string()))?;
 
-    let unix_seconds = (filetime / 10_000_000) - FILETIME_UNIX_DIFF;
+    let mut location = Location::from_degrees(pos.Latitude, pos.Longitude, timestamp)?;
 
-    let timestamp =
-        Timestamp::from_second(unix_seconds).map_err(|e| LocationError::Platform(e.to_string()))?;
+    if let Ok(accuracy) = coord.Accuracy() {
+        location = location.with_horizontal_accuracy(accuracy);
+    }
 
-    let accuracy = coord.Accuracy().ok();
-
-    let mut location =
-        Location::from_degrees(pos.Latitude, pos.Longitude, timestamp)?.with_altitude(pos.Altitude);
-
-    if let Some(acc) = accuracy {
-        location = location.with_horizontal_accuracy(acc);
+    // BasicGeoposition.Altitude is always populated, 0.0 included, so its
+    // validity comes from AltitudeAccuracy being present.
+    if let Ok(reference) = coord.AltitudeAccuracy()
+        && let Ok(vertical_accuracy) = reference.Value()
+    {
+        location = location
+            .with_altitude(pos.Altitude)
+            .with_vertical_accuracy(vertical_accuracy);
     }
 
     Ok(location)

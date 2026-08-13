@@ -32,7 +32,8 @@ swift-bridge.workspace = true
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
-ndk-context.workspace = true
+futures.workspace = true
+waterkit-build.workspace = true
 
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -42,3 +43,4 @@ windows.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
 futures.workspace = true
+async-io.workspace = true

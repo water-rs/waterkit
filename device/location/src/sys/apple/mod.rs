@@ -48,14 +48,16 @@ pub async fn get_location() -> Result<Location, LocationError> {
 
             let mut location = Location::from_degrees(data.latitude, data.longitude, timestamp)?;
 
-            if !data.altitude.is_nan() {
-                location = location.with_altitude(data.altitude);
+            // CoreLocation reports altitude validity through verticalAccuracy:
+            // a negative value means the altitude is invalid. The altitude
+            // itself is a plain double (0.0 is a legal reading), never NaN.
+            if data.vertical_accuracy >= 0.0 {
+                location = location
+                    .with_altitude(data.altitude)
+                    .with_vertical_accuracy(data.vertical_accuracy);
             }
             if data.horizontal_accuracy >= 0.0 {
                 location = location.with_horizontal_accuracy(data.horizontal_accuracy);
-            }
-            if data.vertical_accuracy >= 0.0 {
-                location = location.with_vertical_accuracy(data.vertical_accuracy);
             }
 
             Ok(location)

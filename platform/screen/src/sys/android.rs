@@ -11,25 +11,19 @@ use crate::frame::ScreenFrame;
 use crate::screenshot::{ImageFormat, Screenshot};
 use crate::stream::StreamConfig;
 use crate::{Error, ScreenInfo};
-use jni::objects::{Global, JByteArray, JClass, JIntArray, JObject, JString, JValue};
+use jni::objects::{JByteArray, JClass, JIntArray, JObject, JValue};
 use jni::{Env, JavaVM, jni_sig, jni_str};
 use std::num::NonZeroU64;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use waterkit_build::{DexHelper, dex_helper};
 use wgpu::{Device, Queue};
 
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
 
-/// Embedded DEX bytecode containing `ScreenHelper` class.
-/// Generated at build time by kotlinc + D8.
-static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
-
-/// Cached class loader for the embedded DEX.
-static CLASS_LOADER: OnceLock<Global<JObject<'static>>> = OnceLock::new();
-
-/// Cached application context.
-static CONTEXT: OnceLock<Global<JObject<'static>>> = OnceLock::new();
+/// `waterkit.screen.ScreenHelper`, loaded directly from the embedded DEX.
+static HELPER: DexHelper = dex_helper!("waterkit.screen.ScreenHelper");
 
 fn get_vm() -> Result<JavaVM, Error> {
     let android_context = ndk_context::android_context();
@@ -47,10 +41,6 @@ fn with_attached_env<T>(
 }
 
 fn ensure_dex_loaded() -> Result<(), Error> {
-    if CLASS_LOADER.get().is_some() {
-        return Ok(());
-    }
-
     let android_context = ndk_context::android_context();
     let raw_context: jni::sys::jobject = android_context.context().cast();
     if raw_context.is_null() {
@@ -63,84 +53,9 @@ fn ensure_dex_loaded() -> Result<(), Error> {
 }
 
 fn init_with_context(env: &mut Env<'_>, context: &JObject) -> Result<(), Error> {
-    if CLASS_LOADER.get().is_some() {
-        return Ok(());
-    }
-
-    // Write DEX to cache directory
-    let cache_dir = env
-        .call_method(
-            context,
-            jni_str!("getCacheDir"),
-            jni_sig!("()Ljava/io/File;"),
-            &[],
-        )
-        .map_err(|e| Error::Platform(format!("getCacheDir: {e}")))?
-        .l()
-        .map_err(|e| Error::Platform(format!("getCacheDir result: {e}")))?;
-
-    let cache_path = env
-        .call_method(
-            &cache_dir,
-            jni_str!("getAbsolutePath"),
-            jni_sig!("()Ljava/lang/String;"),
-            &[],
-        )
-        .map_err(|e| Error::Platform(format!("getAbsolutePath: {e}")))?
-        .l()
-        .map_err(|e| Error::Platform(format!("getAbsolutePath result: {e}")))?;
-
-    let cache_path_string = env
-        .as_cast::<JString>(&cache_path)
-        .and_then(|path| path.try_to_string(env))
-        .map_err(|e| Error::Platform(format!("decode cache path: {e}")))?;
-    let dex_path = format!("{cache_path_string}/waterkit_screen.dex");
-
-    // Write DEX bytes to file
-    std::fs::write(&dex_path, DEX_BYTES).map_err(|e| Error::Platform(format!("write DEX: {e}")))?;
-
-    // Create DexClassLoader
-    let dex_path_jstring = env
-        .new_string(&dex_path)
-        .map_err(|e| Error::Platform(format!("new_string: {e}")))?;
-
-    let parent_loader = env
-        .call_method(
-            context,
-            jni_str!("getClassLoader"),
-            jni_sig!("()Ljava/lang/ClassLoader;"),
-            &[],
-        )
-        .map_err(|e| Error::Platform(format!("getClassLoader: {e}")))?
-        .l()
-        .map_err(|e| Error::Platform(format!("getClassLoader result: {e}")))?;
-
-    let dex_class_loader_class = env
-        .find_class(jni_str!("dalvik/system/DexClassLoader"))
-        .map_err(|e| Error::Platform(format!("find DexClassLoader: {e}")))?;
-
-    let class_loader = env
-        .new_object(
-            dex_class_loader_class,
-            jni_sig!(
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V"
-            ),
-            &[
-                JValue::Object(&dex_path_jstring),
-                JValue::Object(&cache_path),
-                JValue::Object(&JObject::null()),
-                JValue::Object(&parent_loader),
-            ],
-        )
-        .map_err(|e| Error::Platform(format!("new DexClassLoader: {e}")))?;
-
-    let global_ref = env
-        .new_global_ref(class_loader)
-        .map_err(|e| Error::Platform(format!("new_global_ref: {e}")))?;
-
-    let _ = CLASS_LOADER.set(global_ref);
-
-    // Also initialize the Kotlin helper with context
+    HELPER
+        .class(env, context)
+        .map_err(|error| Error::Platform(format!("load embedded ScreenHelper DEX: {error}")))?;
     let helper_class = get_helper_class(env)?;
     env.call_static_method(
         &helper_class,
@@ -155,34 +70,24 @@ fn init_with_context(env: &mut Env<'_>, context: &JObject) -> Result<(), Error> 
 
 /// Get the `ScreenHelper` class.
 fn get_helper_class<'local>(env: &mut Env<'local>) -> Result<JClass<'local>, Error> {
-    let loader = CLASS_LOADER
-        .get()
-        .ok_or_else(|| Error::Platform("Class loader not initialized".into()))?;
-
-    let class_name = env
-        .new_string("waterkit.screen.ScreenHelper")
-        .map_err(|e| Error::Platform(format!("new_string: {e}")))?;
-
-    let loaded_class = env
-        .call_method(
-            loader.as_obj(),
-            jni_str!("loadClass"),
-            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-            &[JValue::Object(&class_name)],
-        )
-        .map_err(|e| Error::Platform(format!("loadClass: {e}")))?
-        .l()
-        .map_err(|e| Error::Platform(format!("loadClass result: {e}")))?;
-
-    env.cast_local::<JClass>(loaded_class).map_err(Error::from)
+    let android_context = ndk_context::android_context();
+    let raw_context: jni::sys::jobject = android_context.context().cast();
+    if raw_context.is_null() {
+        return Err(Error::Platform("ndk_context returned null Context".into()));
+    }
+    // SAFETY: `ndk_context` publishes the process-lifetime application
+    // context, and this local reference does not outlive the attached `Env`.
+    let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
+    let helper = HELPER
+        .class(env, &context)
+        .map_err(|error| Error::Platform(format!("load ScreenHelper: {error}")))?;
+    env.new_local_ref(helper.as_obj())
+        .and_then(|class| env.cast_local::<JClass>(class))
+        .map_err(Error::from)
 }
 
 /// Initialize the screen module with Android context.
 pub fn init(env: &mut Env<'_>, context: &JObject) -> Result<(), Error> {
-    let global = env
-        .new_global_ref(context)
-        .map_err(|e| Error::Platform(e.to_string()))?;
-    let _ = CONTEXT.set(global);
     init_with_context(env, context)
 }
 

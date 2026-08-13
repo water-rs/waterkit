@@ -56,6 +56,11 @@ fn main() -> Result<()> {
 fn run_android(crate_path: &Path) -> Result<()> {
     info!("{}", "Preparing Android test environment...".green().bold());
 
+    let toolchain = AndroidToolchain::resolve()?;
+    with_android_device_awake(&toolchain, || run_android_awake(crate_path, &toolchain))
+}
+
+fn run_android_awake(crate_path: &Path, toolchain: &AndroidToolchain) -> Result<()> {
     // 1. Verify crate path
     let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
 
@@ -72,6 +77,7 @@ fn run_android(crate_path: &Path) -> Result<()> {
         .parent()
         .unwrap() // kit (root)
         .to_path_buf();
+    let android_api = android_min_sdk(&root_dir)?;
 
     // 3. Get feature
     let content_cargo_path = crate_path.join("Cargo.toml");
@@ -95,6 +101,8 @@ fn run_android(crate_path: &Path) -> Result<()> {
         "x86_64",
         "-o",
         "tests/android/app/src/main/jniLibs",
+        "-P",
+        &android_api,
         "build",
         "-p",
         "waterkit-test-android",
@@ -114,11 +122,11 @@ fn run_android(crate_path: &Path) -> Result<()> {
 
     info!("{}", "Android libraries built successfully.".green().bold());
 
-    build_android_apk(&root_dir)?;
-    install_android_apk(&root_dir)?;
-    grant_android_permissions_for_feature(feature)?;
-    launch_android_test()?;
-    let report = wait_for_android_report(Duration::from_secs(60))?;
+    build_android_apk(&root_dir, toolchain)?;
+    install_android_apk(&root_dir, toolchain)?;
+    grant_android_permissions_for_feature(feature, toolchain)?;
+    launch_android_test(toolchain)?;
+    let report = wait_for_android_report(Duration::from_secs(60), toolchain)?;
     ensure_report_success(&report)?;
 
     Ok(())
@@ -543,12 +551,149 @@ fn run_macos_app_bundle(
     Ok(())
 }
 
-fn build_android_apk(root_dir: &Path) -> Result<()> {
+struct AndroidToolchain {
+    sdk_root: PathBuf,
+    adb: PathBuf,
+}
+
+fn android_min_sdk(root_dir: &Path) -> Result<String> {
+    let build_gradle = root_dir.join("tests/android/app/build.gradle.kts");
+    let contents = std::fs::read_to_string(&build_gradle)
+        .with_context(|| format!("Failed to read {}", build_gradle.display()))?;
+    parse_android_min_sdk(&contents).ok_or_else(|| {
+        eyre::eyre!(
+            "Could not find defaultConfig minSdk in {}",
+            build_gradle.display()
+        )
+    })
+}
+
+fn parse_android_min_sdk(build_gradle: &str) -> Option<String> {
+    let default_config = regex::Regex::new(r"(?s)defaultConfig\s*\{(?<body>.*?)\n\s*\}").ok()?;
+    let min_sdk = regex::Regex::new(r"(?m)^\s*minSdk\s*=\s*(?<api>\d+)\s*$").ok()?;
+    let body = default_config
+        .captures(build_gradle)?
+        .name("body")?
+        .as_str();
+    Some(min_sdk.captures(body)?.name("api")?.as_str().to_owned())
+}
+
+impl AndroidToolchain {
+    fn resolve() -> Result<Self> {
+        let adb = which::which("adb").context("Android platform tool `adb` was not found")?;
+        let adb = std::fs::canonicalize(&adb)
+            .with_context(|| format!("Failed to resolve adb path {}", adb.display()))?;
+        let sdk_root = configured_android_sdk_root()
+            .or_else(|| sdk_root_from_adb(&adb))
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "Could not determine the Android SDK root from ANDROID_SDK_ROOT, ANDROID_HOME, or adb path {}",
+                    adb.display()
+                )
+            })?;
+
+        if !sdk_root.join("platforms").is_dir() {
+            eyre::bail!(
+                "Android SDK root {} does not contain a platforms directory",
+                sdk_root.display()
+            );
+        }
+
+        Ok(Self { sdk_root, adb })
+    }
+}
+
+fn with_android_device_awake<T>(
+    toolchain: &AndroidToolchain,
+    run: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let original = android_stay_awake_setting(toolchain)?;
+    set_android_stay_awake(toolchain, original | 2)?;
+
+    let run_result = run_adb(
+        toolchain,
+        ["shell", "input", "keyevent", "KEYCODE_WAKEUP"],
+    )
+    .and_then(|()| run());
+    let restore_result = set_android_stay_awake(toolchain, original);
+    match (run_result, restore_result) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error).context("Android tests passed, but restoring the device stay-awake setting failed"),
+        (Err(error), Err(restore_error)) => Err(error).with_context(|| {
+            format!(
+                "Android test failed and restoring the device stay-awake setting also failed: {restore_error:#}"
+            )
+        }),
+    }
+}
+
+fn android_stay_awake_setting(toolchain: &AndroidToolchain) -> Result<u32> {
+    let output = std::process::Command::new(&toolchain.adb)
+        .args([
+            "shell",
+            "settings",
+            "get",
+            "global",
+            "stay_on_while_plugged_in",
+        ])
+        .output()
+        .context("Failed to read Android stay-awake setting with adb")?;
+    if !output.status.success() {
+        eyre::bail!(
+            "adb could not read Android stay-awake setting: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    String::from_utf8(output.stdout)
+        .context("Android stay-awake setting was not valid UTF-8")?
+        .trim()
+        .parse()
+        .context("Android stay-awake setting was not an integer bitmask")
+}
+
+fn set_android_stay_awake(toolchain: &AndroidToolchain, setting: u32) -> Result<()> {
+    let status = std::process::Command::new(&toolchain.adb)
+        .args([
+            "shell",
+            "settings",
+            "put",
+            "global",
+            "stay_on_while_plugged_in",
+        ])
+        .arg(setting.to_string())
+        .status()
+        .context("Failed to set Android stay-awake setting with adb")?;
+    if !status.success() {
+        eyre::bail!("adb could not set Android stay-awake setting to {setting}");
+    }
+    Ok(())
+}
+
+fn configured_android_sdk_root() -> Option<PathBuf> {
+    ["ANDROID_SDK_ROOT", "ANDROID_HOME"]
+        .into_iter()
+        .find_map(std::env::var_os)
+        .map(PathBuf::from)
+}
+
+fn sdk_root_from_adb(adb: &Path) -> Option<PathBuf> {
+    let platform_tools = adb.parent()?;
+    if platform_tools.file_name()? != "platform-tools" {
+        return None;
+    }
+    platform_tools.parent().map(Path::to_path_buf)
+}
+
+fn build_android_apk(root_dir: &Path, toolchain: &AndroidToolchain) -> Result<()> {
     info!("{}", "Building Android APK...".yellow().bold());
     let android_dir = root_dir.join("tests/android");
     let gradlew = android_dir.join("gradlew");
     let status = std::process::Command::new(&gradlew)
         .current_dir(&android_dir)
+        .env("ANDROID_HOME", &toolchain.sdk_root)
+        .env("ANDROID_SDK_ROOT", &toolchain.sdk_root)
         .arg(":app:assembleDebug")
         .status()
         .context("Failed to run Android Gradle build")?;
@@ -560,14 +705,14 @@ fn build_android_apk(root_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn install_android_apk(root_dir: &Path) -> Result<()> {
+fn install_android_apk(root_dir: &Path, toolchain: &AndroidToolchain) -> Result<()> {
     info!("{}", "Installing Android APK...".yellow().bold());
     let apk = root_dir.join("tests/android/app/build/outputs/apk/debug/app-debug.apk");
     if !apk.exists() {
         eyre::bail!("Android APK not found at {}", apk.display());
     }
 
-    let status = std::process::Command::new("adb")
+    let status = std::process::Command::new(&toolchain.adb)
         .arg("install")
         .arg("-r")
         .arg(&apk)
@@ -581,8 +726,19 @@ fn install_android_apk(root_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn grant_android_permissions_for_feature(feature: &str) -> Result<()> {
+fn grant_android_permissions_for_feature(
+    feature: &str,
+    toolchain: &AndroidToolchain,
+) -> Result<()> {
     let permissions: &[&str] = match feature {
+        "full" => &[
+            "android.permission.ACCESS_FINE_LOCATION",
+            "android.permission.ACCESS_COARSE_LOCATION",
+            "android.permission.CAMERA",
+            "android.permission.RECORD_AUDIO",
+            "android.permission.READ_CONTACTS",
+            "android.permission.READ_CALENDAR",
+        ],
         "location" | "permission" => &[
             "android.permission.ACCESS_FINE_LOCATION",
             "android.permission.ACCESS_COARSE_LOCATION",
@@ -595,39 +751,51 @@ fn grant_android_permissions_for_feature(feature: &str) -> Result<()> {
     };
 
     for permission in permissions {
-        run_adb(["shell", "pm", "grant", "com.waterkit.test", permission])?;
+        run_adb(
+            toolchain,
+            ["shell", "pm", "grant", "com.waterkit.test", permission],
+        )?;
     }
 
     Ok(())
 }
 
-fn launch_android_test() -> Result<()> {
-    run_adb(["shell", "am", "force-stop", "com.waterkit.test"])?;
-    run_adb([
-        "shell",
-        "run-as",
-        "com.waterkit.test",
-        "rm",
-        "-f",
-        "files/waterkit-test-report.json",
-    ])?;
-    run_adb([
-        "shell",
-        "am",
-        "start",
-        "-n",
-        "com.waterkit.test/.MainActivity",
-        "--ez",
-        "run_test",
-        "true",
-    ])
+fn launch_android_test(toolchain: &AndroidToolchain) -> Result<()> {
+    run_adb(
+        toolchain,
+        ["shell", "am", "force-stop", "com.waterkit.test"],
+    )?;
+    run_adb(
+        toolchain,
+        [
+            "shell",
+            "run-as",
+            "com.waterkit.test",
+            "rm",
+            "-f",
+            "files/waterkit-test-report.json",
+        ],
+    )?;
+    run_adb(
+        toolchain,
+        [
+            "shell",
+            "am",
+            "start",
+            "-n",
+            "com.waterkit.test/.MainActivity",
+            "--ez",
+            "run_test",
+            "true",
+        ],
+    )
 }
 
-fn wait_for_android_report(timeout: Duration) -> Result<TestReport> {
+fn wait_for_android_report(timeout: Duration, toolchain: &AndroidToolchain) -> Result<TestReport> {
     let deadline = Instant::now() + timeout;
 
     loop {
-        let output = std::process::Command::new("adb")
+        let output = std::process::Command::new(&toolchain.adb)
             .args([
                 "exec-out",
                 "run-as",
@@ -657,8 +825,8 @@ fn wait_for_android_report(timeout: Duration) -> Result<TestReport> {
     }
 }
 
-fn run_adb<const N: usize>(args: [&str; N]) -> Result<()> {
-    let status = std::process::Command::new("adb")
+fn run_adb<const N: usize>(toolchain: &AndroidToolchain, args: [&str; N]) -> Result<()> {
+    let status = std::process::Command::new(&toolchain.adb)
         .args(args)
         .status()
         .context("Failed to run adb")?;
@@ -785,7 +953,9 @@ fn workspace_root() -> PathBuf {
 }
 
 fn get_crate_feature(package_name: &str) -> Option<&'static str> {
-    if package_name.contains("sensor") {
+    if package_name == "waterkit" {
+        Some("full")
+    } else if package_name.contains("sensor") {
         Some("sensor")
     } else if package_name.contains("biometric") {
         Some("biometric")
@@ -839,5 +1009,35 @@ fn get_crate_feature(package_name: &str) -> Option<&'static str> {
         Some("passkey")
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{get_crate_feature, parse_android_min_sdk, sdk_root_from_adb};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn derives_android_sdk_root_from_platform_tools_adb() {
+        assert_eq!(
+            sdk_root_from_adb(Path::new("/opt/android-sdk/platform-tools/adb")),
+            Some(PathBuf::from("/opt/android-sdk"))
+        );
+    }
+
+    #[test]
+    fn rejects_adb_outside_android_platform_tools() {
+        assert_eq!(sdk_root_from_adb(Path::new("/usr/local/bin/adb")), None);
+    }
+
+    #[test]
+    fn selects_full_harness_for_waterkit_facade() {
+        assert_eq!(get_crate_feature("waterkit"), Some("full"));
+    }
+
+    #[test]
+    fn parses_android_min_sdk_from_default_config() {
+        let build_gradle = include_str!("../tests/fixtures/android-build.gradle.kts");
+        assert_eq!(parse_android_min_sdk(build_gradle).as_deref(), Some("26"));
     }
 }

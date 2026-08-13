@@ -287,7 +287,7 @@ fn ensure_hardware_backed(env: &mut Env<'_>, key: &JObject<'_>) -> Result<(), Se
         .call_method(
             &secret_key_factory,
             jni_str!("getKeySpec"),
-            jni_sig!("(Ljava/security/Key;Ljava/lang/Class;)Ljava/security/spec/KeySpec;"),
+            jni_sig!("(Ljavax/crypto/SecretKey;Ljava/lang/Class;)Ljava/security/spec/KeySpec;"),
             &[JValue::Object(key), JValue::Object(key_info_class.as_ref())],
         )
         .map_err(|err| system_error("SecretKeyFactory.getKeySpec failed", err))?

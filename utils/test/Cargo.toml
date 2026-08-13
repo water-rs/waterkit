@@ -9,6 +9,8 @@ clap = { version = "4", features = ["derive"] }
 toml_edit = "0.25"
 eyre = "0.6"
 owo-colors = "4.3"
+regex = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 waterkit-test-report.workspace = true
+which = "8"

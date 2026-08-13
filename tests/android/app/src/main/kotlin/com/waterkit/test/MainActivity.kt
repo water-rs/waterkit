@@ -21,6 +21,7 @@ import java.nio.file.StandardCopyOption
 class MainActivity : AppCompatActivity() {
     
     private lateinit var logText: TextView
+    private var pendingNativeTest = false
     
     companion object {
         private const val REPORT_FILE_NAME = "waterkit-test-report.json"
@@ -79,12 +80,7 @@ class MainActivity : AppCompatActivity() {
         
         // Generic Native Test
         layout.addView(testButton("Run Generic Native Test") {
-            log("Running native test...")
-            Thread {
-                val report = runTestReport(this)
-                writeReport(report)
-                runOnUiThread { log("Native test report written") }
-            }.start()
+            runNativeTest()
         })
 
         // Permission Tests
@@ -147,6 +143,10 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(layout)
         setContentView(scroll)
 
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
         checkIntent(intent)
     }
 
@@ -156,16 +156,36 @@ class MainActivity : AppCompatActivity() {
         checkIntent(intent)
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && pendingNativeTest) {
+            pendingNativeTest = false
+            runNativeTest()
+        }
+    }
+
     private fun checkIntent(intent: android.content.Intent) {
         if (intent.getBooleanExtra("run_test", false)) {
-            log("Auto-running native test...")
-            android.util.Log.i("waterkit", "Auto-running native test triggered from intent")
-            Thread {
-                val report = runTestReport(this)
-                writeReport(report)
-                runOnUiThread { log("Native test report written") }
-            }.start()
+            intent.removeExtra("run_test")
+            pendingNativeTest = true
+            runPendingNativeTest()
         }
+    }
+
+    private fun runPendingNativeTest() {
+        if (!pendingNativeTest || !hasWindowFocus()) return
+        pendingNativeTest = false
+        runNativeTest()
+    }
+
+    private fun runNativeTest() {
+        log("Running native test...")
+        android.util.Log.i("waterkit", "Native test started with window focus")
+        Thread {
+            val report = runTestReport(this)
+            writeReport(report)
+            runOnUiThread { log("Native test report written") }
+        }.start()
     }
 
     private fun writeReport(report: String) {

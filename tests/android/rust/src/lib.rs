@@ -5,7 +5,7 @@
 use jni::errors::ThrowRuntimeExAndDefault;
 #[cfg(feature = "location")]
 use jni::objects::JDoubleArray;
-use jni::objects::JObject;
+use jni::objects::{Global, JObject};
 use jni::sys::{jdoubleArray, jstring};
 use jni::{Env, EnvUnowned};
 use waterkit_test_report::{TestCase, TestReport, to_json_pretty};
@@ -28,6 +28,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest<'local>(
 ) {
     init_logger();
     env.with_env(|env| -> jni::errors::Result<()> {
+        let _android_context = AndroidContextOwner::new(env, &activity)?;
         let report = run_native_report(env, &activity);
         log_report(&report);
         Ok(())
@@ -43,6 +44,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTestReport<'local>
 ) -> jstring {
     init_logger();
     env.with_env(|env| -> jni::errors::Result<jstring> {
+        let _android_context = AndroidContextOwner::new(env, &activity)?;
         let report = run_native_report(env, &activity);
         log_report(&report);
 
@@ -63,6 +65,38 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTestReport<'local>
         }
     })
     .resolve::<ThrowRuntimeExAndDefault>()
+}
+
+struct AndroidContextOwner {
+    _activity: Global<JObject<'static>>,
+}
+
+impl AndroidContextOwner {
+    fn new(env: &mut Env<'_>, activity: &JObject<'_>) -> jni::errors::Result<Self> {
+        let java_vm = env.get_java_vm()?;
+        let activity = env.new_global_ref(activity)?;
+        // SAFETY: both pointers are retained for this owner's lifetime, and
+        // the harness creates exactly one owner around each native test run.
+        unsafe {
+            ndk_context::initialize_android_context(
+                java_vm.get_raw().cast(),
+                activity.as_obj().as_raw().cast(),
+            );
+        }
+        Ok(Self {
+            _activity: activity,
+        })
+    }
+}
+
+impl Drop for AndroidContextOwner {
+    fn drop(&mut self) {
+        // SAFETY: construction initialized the context exactly once and this
+        // owner is dropped exactly once after the native test run.
+        unsafe {
+            ndk_context::release_android_context();
+        }
+    }
 }
 
 fn init_logger() {
@@ -336,6 +370,9 @@ fn record_android_location(report: &mut TestReport, env: &mut Env<'_>, activity:
                 ));
             }
         }
+        Err(waterkit_content::location::LocationError::NotAvailable) => report.push(
+            TestCase::skipped("location.get", "Android has no last known location"),
+        ),
         Err(error) => report.push(TestCase::failed(
             "location.get",
             format!("location read failed: {error}"),

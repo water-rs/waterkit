@@ -30,7 +30,11 @@ failed.
 
 ```bash
 cargo run -p waterkit-test -- android device/sensor
+cargo run -p waterkit-test -- android .
 ```
+
+Passing the workspace root (`.`) enables every supported Android harness
+feature in one APK so they can be exercised together on a connected device.
 
 The Android app also keeps the manual UI buttons for local exploration.
 

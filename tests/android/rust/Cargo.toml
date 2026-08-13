@@ -16,6 +16,34 @@ waterkit_content = { path = "../../..", package = "waterkit", default-features =
 waterkit-test-report.workspace = true
 
 [features]
+full = [
+    "sensor",
+    "biometric",
+    "location",
+    "audio",
+    "camera",
+    "clipboard",
+    "codec",
+    "dialog",
+    "fs",
+    "haptic",
+    "notification",
+    "permission",
+    "secret",
+    "system",
+    "video",
+    "bluetooth",
+    "nfc",
+    "share",
+    "speech",
+    "deeplink",
+    "contacts",
+    "calendar",
+    "health",
+    "screen",
+    "background",
+    "passkey",
+]
 sensor = ["waterkit_content/sensor"]
 biometric = ["waterkit_content/biometric"]
 location = ["waterkit_content/location"]
@@ -44,7 +72,5 @@ background = ["waterkit_content/background"]
 passkey = ["waterkit_content/passkey"]
 
 
-# The CLI only enables a single feature for the module under test.
-
 [target.'cfg(target_os = "android")'.dependencies]
-# Android specific deps
+ndk-context = "0.1"

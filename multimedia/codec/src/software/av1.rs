@@ -3,7 +3,10 @@
 use crate::{CodecError, DecodePacket, DecodedPixelLayout};
 use rav1d::include::dav1d::data::Dav1dData;
 use rav1d::include::dav1d::dav1d::{Dav1dContext, Dav1dSettings};
-use rav1d::include::dav1d::headers::DAV1D_PIXEL_LAYOUT_I420;
+use rav1d::include::dav1d::headers::{
+    DAV1D_PIXEL_LAYOUT_I400, DAV1D_PIXEL_LAYOUT_I420, DAV1D_PIXEL_LAYOUT_I422,
+    DAV1D_PIXEL_LAYOUT_I444,
+};
 use rav1d::include::dav1d::picture::Dav1dPicture;
 use rav1d::src::lib as rav1d_lib;
 use rav1e::prelude::*;
@@ -22,12 +25,18 @@ pub struct CpuFrame {
     pub timestamp_ns: u64,
     pub layout: DecodedPixelLayout,
     /// CICP color description carried by the decoded AV1 sequence header.
-    #[cfg(not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32")))]
+    #[cfg(all(
+        not(any(target_os = "android", target_arch = "wasm32")),
+        any(test, not(target_vendor = "apple"))
+    ))]
     pub color: Av1ColorDescription,
 }
 
 /// Coding-independent color metadata attached to an AV1 frame.
-#[cfg(not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32")))]
+#[cfg(all(
+    not(any(target_os = "android", target_arch = "wasm32")),
+    any(test, not(target_vendor = "apple"))
+))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Av1ColorDescription {
     /// H.273 color-primaries code point.
@@ -164,12 +173,52 @@ struct PictureLayout {
     bit_depth: usize,
     y_stride: usize,
     uv_stride: usize,
-    y_min_stride: usize,
-    uv_min_stride: usize,
+    source_uv_width: usize,
+    source_uv_height: usize,
     uv_width: usize,
     uv_height: usize,
+    has_chroma: bool,
     y_size: usize,
     uv_size: usize,
+}
+
+trait Av1Sample {
+    const BYTES: usize;
+    const NEUTRAL_CHROMA: u16;
+
+    unsafe fn read(ptr: *const u8, byte_offset: usize) -> u16;
+    fn append(value: u16, output: &mut Vec<u8>);
+}
+
+struct EightBitSample;
+
+impl Av1Sample for EightBitSample {
+    const BYTES: usize = 1;
+    const NEUTRAL_CHROMA: u16 = 128;
+
+    unsafe fn read(ptr: *const u8, byte_offset: usize) -> u16 {
+        u16::from(unsafe { *ptr.add(byte_offset) })
+    }
+
+    fn append(value: u16, output: &mut Vec<u8>) {
+        output.push(u8::try_from(value).expect("8-bit AV1 sample exceeds u8"));
+    }
+}
+
+struct TenBitSample;
+
+impl Av1Sample for TenBitSample {
+    const BYTES: usize = 2;
+    const NEUTRAL_CHROMA: u16 = 512;
+
+    unsafe fn read(ptr: *const u8, byte_offset: usize) -> u16 {
+        let bytes = unsafe { slice::from_raw_parts(ptr.add(byte_offset), Self::BYTES) };
+        u16::from_ne_bytes([bytes[0], bytes[1]])
+    }
+
+    fn append(value: u16, output: &mut Vec<u8>) {
+        output.extend_from_slice(&(value << 6).to_le_bytes());
+    }
 }
 
 impl Av1Decoder {
@@ -267,8 +316,14 @@ impl Av1Decoder {
     fn picture_to_cpu_frame(picture: &Dav1dPicture) -> Result<CpuFrame, CodecError> {
         let layout = Self::picture_layout(picture)?;
         let y_ptr = Self::plane_ptr(picture, 0, "Y")?;
-        let u_ptr = Self::plane_ptr(picture, 1, "U")?;
-        let v_ptr = Self::plane_ptr(picture, 2, "V")?;
+        let chroma_ptrs = if layout.has_chroma {
+            Some((
+                Self::plane_ptr(picture, 1, "U")?,
+                Self::plane_ptr(picture, 2, "V")?,
+            ))
+        } else {
+            None
+        };
 
         let pixel_layout = match layout.bit_depth {
             8 => DecodedPixelLayout::Nv12,
@@ -280,7 +335,10 @@ impl Av1Decoder {
             }
         };
         let mut biplanar = Vec::with_capacity(layout.y_size + layout.uv_size);
-        #[cfg(not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32")))]
+        #[cfg(all(
+            not(any(target_os = "android", target_arch = "wasm32")),
+            any(test, not(target_vendor = "apple"))
+        ))]
         let sequence_header = unsafe {
             picture
                 .seq_hdr
@@ -289,7 +347,10 @@ impl Av1Decoder {
                 })?
                 .as_ref()
         };
-        #[cfg(not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32")))]
+        #[cfg(all(
+            not(any(target_os = "android", target_arch = "wasm32")),
+            any(test, not(target_vendor = "apple"))
+        ))]
         let color = Av1ColorDescription {
             primaries: u8::try_from(sequence_header.pri).map_err(|_| {
                 CodecError::DecodingFailed("AV1 color primaries exceed CICP range".into())
@@ -303,10 +364,19 @@ impl Av1Decoder {
             full_range: sequence_header.color_range != 0,
         };
 
-        if layout.bit_depth == 8 {
-            Self::copy_8_bit_i420_to_nv12(&layout, y_ptr, u_ptr, v_ptr, &mut biplanar);
-        } else {
-            Self::copy_10_bit_i420_to_p010(&layout, y_ptr, u_ptr, v_ptr, &mut biplanar);
+        match layout.bit_depth {
+            8 => {
+                Self::copy_to_biplanar::<EightBitSample>(
+                    &layout,
+                    y_ptr,
+                    chroma_ptrs,
+                    &mut biplanar,
+                );
+            }
+            10 => {
+                Self::copy_to_biplanar::<TenBitSample>(&layout, y_ptr, chroma_ptrs, &mut biplanar);
+            }
+            _ => unreachable!("pixel layout rejects unsupported AV1 bit depths"),
         }
 
         Ok(CpuFrame {
@@ -320,11 +390,10 @@ impl Av1Decoder {
                 ))
             })?,
             layout: pixel_layout,
-            #[cfg(not(any(
-                target_vendor = "apple",
-                target_os = "android",
-                target_arch = "wasm32"
-            )))]
+            #[cfg(all(
+                not(any(target_os = "android", target_arch = "wasm32")),
+                any(test, not(target_vendor = "apple"))
+            ))]
             color,
         })
     }
@@ -342,12 +411,17 @@ impl Av1Decoder {
         let height_u32 = u32::try_from(height).map_err(|_| {
             CodecError::DecodingFailed(format!("rav1d height {height} exceeds supported range"))
         })?;
-        if picture.p.layout != DAV1D_PIXEL_LAYOUT_I420 {
-            return Err(CodecError::DecodingFailed(format!(
-                "rav1d returned unsupported pixel layout {}",
-                picture.p.layout
-            )));
-        }
+        let (source_uv_width, source_uv_height, has_chroma) = match picture.p.layout {
+            DAV1D_PIXEL_LAYOUT_I400 => (0, 0, false),
+            DAV1D_PIXEL_LAYOUT_I420 => (width.div_ceil(2), height.div_ceil(2), true),
+            DAV1D_PIXEL_LAYOUT_I422 => (width.div_ceil(2), height, true),
+            DAV1D_PIXEL_LAYOUT_I444 => (width, height, true),
+            layout => {
+                return Err(CodecError::DecodingFailed(format!(
+                    "rav1d returned unknown pixel layout {layout}"
+                )));
+            }
+        };
         let bit_depth = usize::try_from(picture.p.bpc).map_err(|_| {
             CodecError::DecodingFailed(format!(
                 "rav1d returned invalid bit depth {}",
@@ -366,12 +440,16 @@ impl Av1Decoder {
                 picture.stride[0]
             ))
         })?;
-        let uv_stride = usize::try_from(picture.stride[1]).map_err(|_| {
-            CodecError::DecodingFailed(format!(
-                "rav1d returned invalid UV stride {}",
-                picture.stride[1]
-            ))
-        })?;
+        let uv_stride = if has_chroma {
+            usize::try_from(picture.stride[1]).map_err(|_| {
+                CodecError::DecodingFailed(format!(
+                    "rav1d returned invalid UV stride {}",
+                    picture.stride[1]
+                ))
+            })?
+        } else {
+            0
+        };
 
         let sample_bytes = if bit_depth <= 8 { 1 } else { 2 };
         let uv_width = width.div_ceil(2);
@@ -386,10 +464,10 @@ impl Av1Decoder {
                 "rav1d Y stride {y_stride} is smaller than required {y_min_stride}"
             )));
         }
-        let uv_min_stride = uv_width
+        let uv_min_stride = source_uv_width
             .checked_mul(sample_bytes)
             .ok_or_else(|| CodecError::DecodingFailed("rav1d UV stride overflow".to_string()))?;
-        if uv_stride < uv_min_stride {
+        if has_chroma && uv_stride < uv_min_stride {
             return Err(CodecError::DecodingFailed(format!(
                 "rav1d UV stride {uv_stride} is smaller than required {uv_min_stride}"
             )));
@@ -403,72 +481,67 @@ impl Av1Decoder {
             bit_depth,
             y_stride,
             uv_stride,
-            y_min_stride,
-            uv_min_stride,
+            source_uv_width,
+            source_uv_height,
             uv_width,
             uv_height,
+            has_chroma,
             y_size,
             uv_size,
         })
     }
 
-    fn copy_8_bit_i420_to_nv12(
+    fn copy_to_biplanar<S: Av1Sample>(
         layout: &PictureLayout,
         y_ptr: *const u8,
-        u_ptr: *const u8,
-        v_ptr: *const u8,
-        nv12: &mut Vec<u8>,
+        chroma_ptrs: Option<(*const u8, *const u8)>,
+        output: &mut Vec<u8>,
     ) {
         for row in 0..layout.height {
-            let src = unsafe { y_ptr.add(row * layout.y_stride) };
-            let row_bytes = unsafe { slice::from_raw_parts(src, layout.width) };
-            nv12.extend_from_slice(row_bytes);
+            for column in 0..layout.width {
+                let offset = row * layout.y_stride + column * S::BYTES;
+                let sample = unsafe { S::read(y_ptr, offset) };
+                S::append(sample, output);
+            }
         }
+
         for row in 0..layout.uv_height {
-            let u_row = unsafe {
-                slice::from_raw_parts(u_ptr.add(row * layout.uv_stride), layout.uv_width)
-            };
-            let v_row = unsafe {
-                slice::from_raw_parts(v_ptr.add(row * layout.uv_stride), layout.uv_width)
-            };
-            for col in 0..layout.uv_width {
-                nv12.push(u_row[col]);
-                nv12.push(v_row[col]);
+            for column in 0..layout.uv_width {
+                let (u, v) =
+                    chroma_ptrs.map_or((S::NEUTRAL_CHROMA, S::NEUTRAL_CHROMA), |(u_ptr, v_ptr)| {
+                        (
+                            Self::downsample_chroma::<S>(layout, u_ptr, column, row),
+                            Self::downsample_chroma::<S>(layout, v_ptr, column, row),
+                        )
+                    });
+                S::append(u, output);
+                S::append(v, output);
             }
         }
     }
 
-    fn copy_10_bit_i420_to_p010(
+    fn downsample_chroma<S: Av1Sample>(
         layout: &PictureLayout,
-        y_ptr: *const u8,
-        u_ptr: *const u8,
-        v_ptr: *const u8,
-        p010: &mut Vec<u8>,
-    ) {
-        for row in 0..layout.height {
-            let src = unsafe { y_ptr.add(row * layout.y_stride) };
-            let row_bytes = unsafe { slice::from_raw_parts(src, layout.y_min_stride) };
-            for col in 0..layout.width {
-                let i = col * 2;
-                let value = u16::from_ne_bytes([row_bytes[i], row_bytes[i + 1]]);
-                p010.extend_from_slice(&(value << 6).to_le_bytes());
+        plane: *const u8,
+        output_column: usize,
+        output_row: usize,
+    ) -> u16 {
+        let horizontal_samples = layout.source_uv_width.div_ceil(layout.uv_width);
+        let vertical_samples = layout.source_uv_height.div_ceil(layout.uv_height);
+        let source_column = output_column * horizontal_samples;
+        let source_row = output_row * vertical_samples;
+        let end_column = (source_column + horizontal_samples).min(layout.source_uv_width);
+        let end_row = (source_row + vertical_samples).min(layout.source_uv_height);
+        let mut sum = 0_u32;
+        let mut count = 0_u32;
+        for row in source_row..end_row {
+            for column in source_column..end_column {
+                let offset = row * layout.uv_stride + column * S::BYTES;
+                sum += u32::from(unsafe { S::read(plane, offset) });
+                count += 1;
             }
         }
-        for row in 0..layout.uv_height {
-            let u_row = unsafe {
-                slice::from_raw_parts(u_ptr.add(row * layout.uv_stride), layout.uv_min_stride)
-            };
-            let v_row = unsafe {
-                slice::from_raw_parts(v_ptr.add(row * layout.uv_stride), layout.uv_min_stride)
-            };
-            for col in 0..layout.uv_width {
-                let i = col * 2;
-                let u = u16::from_ne_bytes([u_row[i], u_row[i + 1]]);
-                let v = u16::from_ne_bytes([v_row[i], v_row[i + 1]]);
-                p010.extend_from_slice(&(u << 6).to_le_bytes());
-                p010.extend_from_slice(&(v << 6).to_le_bytes());
-            }
-        }
+        u16::try_from((sum + count / 2) / count).expect("averaged AV1 chroma exceeds u16")
     }
 
     fn plane_ptr(
@@ -486,5 +559,47 @@ impl Av1Decoder {
 impl Drop for Av1Decoder {
     fn drop(&mut self) {
         unsafe { rav1d_lib::dav1d_close(Some(NonNull::from(&mut self.ctx))) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Av1Decoder, PictureLayout, TenBitSample};
+
+    #[test]
+    fn ten_bit_444_is_downsampled_to_p010() {
+        let y = [0_u16, 256, 512, 1023];
+        let u = [0_u16, 100, 200, 300];
+        let v = [400_u16, 500, 600, 700];
+        let layout = PictureLayout {
+            width: 2,
+            height: 2,
+            width_u32: 2,
+            height_u32: 2,
+            bit_depth: 10,
+            y_stride: 4,
+            uv_stride: 4,
+            source_uv_width: 2,
+            source_uv_height: 2,
+            uv_width: 1,
+            uv_height: 1,
+            has_chroma: true,
+            y_size: 8,
+            uv_size: 4,
+        };
+        let mut output = Vec::new();
+        Av1Decoder::copy_to_biplanar::<TenBitSample>(
+            &layout,
+            y.as_ptr().cast(),
+            Some((u.as_ptr().cast(), v.as_ptr().cast())),
+            &mut output,
+        );
+        let samples: Vec<u16> = output
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|bytes| u16::from_le_bytes(*bytes) >> 6)
+            .collect();
+        assert_eq!(samples, [0, 256, 512, 1023, 150, 550]);
     }
 }

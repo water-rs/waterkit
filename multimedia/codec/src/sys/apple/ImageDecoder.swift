@@ -64,6 +64,15 @@ private func linearToUnorm8(_ value: Float) -> UInt8 {
     return UInt8((clamped * 255.0).rounded())
 }
 
+@inline(__always)
+private func linearToSrgbUnorm8(_ value: Float) -> UInt8 {
+    let clamped = min(max(value, 0.0), 1.0)
+    let encoded = clamped <= 0.003_130_8
+        ? clamped * 12.92
+        : 1.055 * pow(clamped, 1.0 / 2.4) - 0.055
+    return UInt8((encoded * 255.0).rounded())
+}
+
 private func rgba16fToRgba8(_ rgba16f: [UInt8]) -> [UInt8]? {
     guard rgba16f.count.isMultiple(of: 8) else {
         return nil
@@ -76,9 +85,9 @@ private func rgba16fToRgba8(_ rgba16f: [UInt8]) -> [UInt8]? {
         let g = float16FromLittleEndian(rgba16f[src + 2], rgba16f[src + 3])
         let b = float16FromLittleEndian(rgba16f[src + 4], rgba16f[src + 5])
         let a = float16FromLittleEndian(rgba16f[src + 6], rgba16f[src + 7])
-        rgba8[dst] = linearToUnorm8(r)
-        rgba8[dst + 1] = linearToUnorm8(g)
-        rgba8[dst + 2] = linearToUnorm8(b)
+        rgba8[dst] = linearToSrgbUnorm8(r)
+        rgba8[dst + 1] = linearToSrgbUnorm8(g)
+        rgba8[dst + 2] = linearToSrgbUnorm8(b)
         rgba8[dst + 3] = linearToUnorm8(a)
         src += 8
         dst += 4

@@ -30,6 +30,7 @@ rav1e = { workspace = true, optional = true }
 rav1d = { workspace = true, optional = true }
 avif-parse = { version = "2.1", optional = true }
 yuv = { version = "0.8.16", optional = true }
+moxcms = { version = "0.8.1", features = ["extended_range"], optional = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2.workspace = true
@@ -56,7 +57,7 @@ cros-codecs = { version = "0.0.6", default-features = false, features = ["vaapi"
 
 [features]
 default = ["software-fallback"]
-software-fallback = ["dep:rav1e", "dep:rav1d", "dep:avif-parse", "dep:yuv"]
+software-fallback = ["dep:rav1e", "dep:rav1d", "dep:avif-parse", "dep:yuv", "dep:moxcms"]
 
 [lints]
 workspace = true

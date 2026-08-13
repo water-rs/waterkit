@@ -48,7 +48,6 @@ private var cachedSupportsManualFocus: Bool = false
 private var cachedSupportsManualWhiteBalance: Bool = false
 private var cachedZoomMin: Float = 1.0
 private var cachedZoomMax: Float = 1.0
-private var cachedSupportsHdr: Bool = false
 private var cachedSupportsDolbyVision: Bool = false
 private var cachedSupportsStandardStabilization: Bool = false
 private var cachedSupportsCinematicStabilization: Bool = false
@@ -58,6 +57,10 @@ private var cachedSupportsConcurrentMultiCam: Bool = false
 private var cachedMaxConcurrentCameras: UInt8 = 1
 private var cachedSupportsRawPhoto: Bool = false
 private var cachedSupportsRawVideo: Bool = true
+#if os(iOS)
+private var cachedSdrFormat: AVCaptureDevice.Format?
+private var cachedDolbyVisionFormat: AVCaptureDevice.Format?
+#endif
 
 // MARK: - Frame Delegate
 
@@ -227,6 +230,9 @@ func camera_open(device_id: RustString) -> CameraResultFFI {
 
     let session = AVCaptureSession()
     session.sessionPreset = .high
+    #if os(iOS)
+    session.automaticallyConfiguresCaptureDeviceForWideColor = false
+    #endif
 
     do {
         let input = try AVCaptureDeviceInput(device: device)
@@ -431,10 +437,28 @@ private func queryCapabilities(device: AVCaptureDevice, movieOutput: AVCaptureMo
     cachedExposureDurationMinNs = UInt64(CMTimeGetSeconds(minDuration) * 1_000_000_000)
     cachedExposureDurationMaxNs = UInt64(CMTimeGetSeconds(maxDuration) * 1_000_000_000)
 
-    // HDR (iOS only)
-    cachedSupportsHdr = format.isVideoHDRSupported
+    // Apple records 10-bit HLG with Dolby Vision metadata. HDR10/PQ is not an
+    // AVCaptureMovieFileOutput profile, so expose only the profile we can
+    // actually configure and record.
+    let activeDimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+    let closestFormat = { (colorSpace: AVCaptureColorSpace) -> AVCaptureDevice.Format? in
+        device.formats
+            .filter { candidate in candidate.supportedColorSpaces.contains(colorSpace) }
+            .min { lhs, rhs in
+                let lhsDimensions = CMVideoFormatDescriptionGetDimensions(lhs.formatDescription)
+                let rhsDimensions = CMVideoFormatDescriptionGetDimensions(rhs.formatDescription)
+                let lhsDistance = abs(lhsDimensions.width - activeDimensions.width) +
+                    abs(lhsDimensions.height - activeDimensions.height)
+                let rhsDistance = abs(rhsDimensions.width - activeDimensions.width) +
+                    abs(rhsDimensions.height - activeDimensions.height)
+                return lhsDistance < rhsDistance
+            }
+    }
+    cachedSdrFormat = closestFormat(.sRGB)
+    cachedDolbyVisionFormat = closestFormat(.HLG_BT2020)
     cachedSupportsDolbyVision =
-        cachedSupportsHdr && (movieOutput?.availableVideoCodecTypes.contains(.hevc) ?? false)
+        cachedDolbyVisionFormat != nil &&
+        (movieOutput?.availableVideoCodecTypes.contains(.hevc) ?? false)
 
     // Stabilization (iOS only)
     cachedSupportsStandardStabilization = format.isVideoStabilizationModeSupported(.standard)
@@ -458,7 +482,6 @@ private func queryCapabilities(device: AVCaptureDevice, movieOutput: AVCaptureMo
     cachedIsoMax = 0
     cachedExposureDurationMinNs = 0
     cachedExposureDurationMaxNs = 0
-    cachedSupportsHdr = false
     cachedSupportsDolbyVision = false
     cachedSupportsStandardStabilization = false
     cachedSupportsCinematicStabilization = false
@@ -515,10 +538,6 @@ func camera_get_zoom_min() -> Float {
 
 func camera_get_zoom_max() -> Float {
     return cachedZoomMax
-}
-
-func camera_supports_hdr() -> Bool {
-    return cachedSupportsHdr
 }
 
 func camera_supports_dolby_vision() -> Bool {
@@ -825,55 +844,66 @@ func camera_set_torch_mode(enabled: Bool) -> CameraResultFFI {
 
 // MARK: - HDR Control
 
-func camera_set_hdr(enabled: Bool) -> CameraResultFFI {
-    return camera_set_dynamic_range(profile: enabled ? 1 : 0)
-}
-
 func camera_set_dynamic_range(profile: UInt8) -> CameraResultFFI {
     #if os(iOS)
     guard let device = currentDevice else {
         return .OpenFailed
     }
-
-    if profile == 3 && !cachedSupportsDolbyVision {
-        return .Unsupported
+    guard movieOutput?.isRecording != true else {
+        return .AlreadyInUse
+    }
+    guard let session = captureSession else {
+        return .OpenFailed
     }
 
-    let enableHdr: Bool
+    let format: AVCaptureDevice.Format
+    let colorSpace: AVCaptureColorSpace
+    let codec: AVVideoCodecType
     switch profile {
     case 0:
-        enableHdr = false
-    case 1, 2, 3:
-        if !device.activeFormat.isVideoHDRSupported {
+        guard let sdrFormat = cachedSdrFormat else { return .Unsupported }
+        format = sdrFormat
+        colorSpace = .sRGB
+        codec = .h264
+    case 3:
+        guard cachedSupportsDolbyVision, let dolbyFormat = cachedDolbyVisionFormat else {
             return .Unsupported
         }
-        enableHdr = true
+        format = dolbyFormat
+        colorSpace = .HLG_BT2020
+        codec = .hevc
+    case 1, 2:
+        return .Unsupported
     default:
         return .Unsupported
     }
 
     do {
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+        session.sessionPreset = .inputPriority
         try device.lockForConfiguration()
+        device.activeFormat = format
+        device.activeColorSpace = colorSpace
         device.automaticallyAdjustsVideoHDREnabled = false
-        device.isVideoHDREnabled = enableHdr
+        if format.isVideoHDRSupported {
+            device.isVideoHDREnabled = profile != 0
+        }
         device.unlockForConfiguration()
+
+        guard let output = movieOutput, let connection = output.connection(with: .video) else {
+            return .OpenFailed
+        }
+        guard output.availableVideoCodecTypes.contains(codec) else {
+            return .Unsupported
+        }
+        output.setOutputSettings([AVVideoCodecKey: codec], for: connection)
         return .Success
     } catch {
         return .OpenFailed
     }
     #else
-    return .Unsupported
-    #endif
-}
-
-func camera_get_hdr() -> Bool {
-    #if os(iOS)
-    guard let device = currentDevice else {
-        return false
-    }
-    return device.isVideoHDREnabled
-    #else
-    return false
+    return profile == 0 ? .Success : .Unsupported
     #endif
 }
 

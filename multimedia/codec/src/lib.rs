@@ -79,7 +79,10 @@ mod sys;
     target_os = "windows"
 ))]
 pub use bitstream::{ConvertedProtectedSample, NalStreamConverter};
-pub use color::{ColorOutputTarget, VideoColorUniform, YUV_COLOR_SHADER_WGSL, video_color_uniform};
+pub use color::{
+    ColorOutputTarget, SDR_REFERENCE_WHITE_NITS, VideoColorUniform, YUV_COLOR_SHADER_WGSL,
+    video_color_uniform,
+};
 pub use frame::{
     DecodedFrame, DecodedFrameUploader, DecodedPixelLayout, GpuFrame, LinearRgbaConverter,
 };

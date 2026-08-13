@@ -13,7 +13,7 @@ use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 use std::{ptr, slice};
 
-/// CPU-side frame data for software codec output (NV12 format).
+/// CPU-side frame data for software codec output (NV12 or P010 format).
 pub struct CpuFrame {
     /// Bi-planar data: Y plane followed by interleaved UV plane.
     pub data: Vec<u8>,
@@ -21,6 +21,23 @@ pub struct CpuFrame {
     pub height: u32,
     pub timestamp_ns: u64,
     pub layout: DecodedPixelLayout,
+    /// CICP color description carried by the decoded AV1 sequence header.
+    #[cfg(not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32")))]
+    pub color: Av1ColorDescription,
+}
+
+/// Coding-independent color metadata attached to an AV1 frame.
+#[cfg(not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Av1ColorDescription {
+    /// H.273 color-primaries code point.
+    pub primaries: u8,
+    /// H.273 transfer-characteristics code point.
+    pub transfer: u8,
+    /// H.273 matrix-coefficients code point.
+    pub matrix: u8,
+    /// Whether YUV samples use full rather than studio range.
+    pub full_range: bool,
 }
 
 /// AV1 software encoder using rav1e.
@@ -263,6 +280,28 @@ impl Av1Decoder {
             }
         };
         let mut biplanar = Vec::with_capacity(layout.y_size + layout.uv_size);
+        #[cfg(not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32")))]
+        let sequence_header = unsafe {
+            picture
+                .seq_hdr
+                .ok_or_else(|| {
+                    CodecError::DecodingFailed("rav1d returned no AV1 sequence header".into())
+                })?
+                .as_ref()
+        };
+        #[cfg(not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32")))]
+        let color = Av1ColorDescription {
+            primaries: u8::try_from(sequence_header.pri).map_err(|_| {
+                CodecError::DecodingFailed("AV1 color primaries exceed CICP range".into())
+            })?,
+            transfer: u8::try_from(sequence_header.trc).map_err(|_| {
+                CodecError::DecodingFailed("AV1 transfer characteristics exceed CICP range".into())
+            })?,
+            matrix: u8::try_from(sequence_header.mtrx).map_err(|_| {
+                CodecError::DecodingFailed("AV1 matrix coefficients exceed CICP range".into())
+            })?,
+            full_range: sequence_header.color_range != 0,
+        };
 
         if layout.bit_depth == 8 {
             Self::copy_8_bit_i420_to_nv12(&layout, y_ptr, u_ptr, v_ptr, &mut biplanar);
@@ -281,6 +320,12 @@ impl Av1Decoder {
                 ))
             })?,
             layout: pixel_layout,
+            #[cfg(not(any(
+                target_vendor = "apple",
+                target_os = "android",
+                target_arch = "wasm32"
+            )))]
+            color,
         })
     }
 

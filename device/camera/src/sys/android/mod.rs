@@ -466,9 +466,23 @@ impl AndroidBridge {
         frame_rates.sort_unstable();
         frame_rates.dedup();
 
-        let supports_hdr = self.call_bool_with_camera(jni_str!("supportsHdr"), camera_id)?;
-        let supports_dolby_vision =
-            self.call_bool_with_camera(jni_str!("supportsDolbyVision"), camera_id)?;
+        let dynamic_range_values =
+            self.call_int_array_with_camera(jni_str!("getSupportedDynamicRanges"), camera_id)?;
+        let mut dynamic_ranges = Vec::with_capacity(dynamic_range_values.len());
+        for value in dynamic_range_values {
+            dynamic_ranges.push(match value {
+                DYNAMIC_RANGE_SDR => DynamicRangeProfile::Sdr,
+                DYNAMIC_RANGE_HDR10 => DynamicRangeProfile::Hdr10,
+                DYNAMIC_RANGE_HLG10 => DynamicRangeProfile::Hlg10,
+                DYNAMIC_RANGE_DOLBY_VISION => DynamicRangeProfile::DolbyVision,
+                value => {
+                    return Err(CameraError::PlatformError(format!(
+                        "getSupportedDynamicRanges returned unknown profile {value}"
+                    )));
+                }
+            });
+        }
+        let supports_dolby_vision = dynamic_ranges.contains(&DynamicRangeProfile::DolbyVision);
         let supports_standard_stabilization =
             self.call_bool_with_camera(jni_str!("supportsStandardStabilization"), camera_id)?;
         let supports_cinematic_stabilization =
@@ -500,13 +514,10 @@ impl AndroidBridge {
             ))
         })?;
 
-        let mut dynamic_ranges = vec![DynamicRangeProfile::Sdr];
-        if supports_hdr {
-            dynamic_ranges.push(DynamicRangeProfile::Hdr10);
-            dynamic_ranges.push(DynamicRangeProfile::Hlg10);
-        }
-        if supports_dolby_vision {
-            dynamic_ranges.push(DynamicRangeProfile::DolbyVision);
+        if !dynamic_ranges.contains(&DynamicRangeProfile::Sdr) {
+            return Err(CameraError::PlatformError(
+                "getSupportedDynamicRanges omitted the required SDR profile".into(),
+            ));
         }
 
         let mut stabilization_modes = vec![StabilizationMode::Off];

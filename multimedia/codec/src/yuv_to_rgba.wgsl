@@ -53,6 +53,7 @@ const TRANSFER_HLG: u32 = 2u;
 const TARGET_GAMMA_SDR: u32 = 0u;
 const TARGET_LINEAR_SDR: u32 = 1u;
 const TARGET_LINEAR_HDR: u32 = 2u;
+const SDR_REFERENCE_WHITE_NITS: f32 = 203.0;
 
 fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {
@@ -95,11 +96,11 @@ fn pq_to_linear(value: f32) -> f32 {
     let denominator = max(c2 - c3 * v_pow, 1e-6);
     let absolute_nits = 10000.0 * pow(numerator / denominator, 1.0 / m1);
 
-    // Normalize to an SDR reference white of 100 nits.
-    return absolute_nits / 100.0;
+    // Normalize to the framework-wide diffuse SDR reference white.
+    return absolute_nits / SDR_REFERENCE_WHITE_NITS;
 }
 
-fn hlg_to_linear(value: f32) -> f32 {
+fn hlg_to_scene_linear(value: f32) -> f32 {
     let a = 0.17883277;
     let b = 0.28466892;
     let c = 0.55991073;
@@ -111,8 +112,15 @@ fn hlg_to_linear(value: f32) -> f32 {
         scene_linear = (exp((e - c) / a) + b) / 12.0;
     }
 
-    // Keep typical HLG highlights above SDR white.
-    return scene_linear * 12.0;
+    return scene_linear;
+}
+
+fn hlg_scene_to_display_linear(scene_rgb: vec3<f32>) -> vec3<f32> {
+    let safe = max(scene_rgb, vec3<f32>(0.0));
+    let scene_luminance = dot(safe, vec3<f32>(0.2627, 0.6780, 0.0593));
+    let system_gamma = 1.2;
+    let ootf_gain = pow(max(scene_luminance, 1e-6), system_gamma - 1.0);
+    return safe * ootf_gain * (1000.0 / SDR_REFERENCE_WHITE_NITS);
 }
 
 fn decode_transfer_to_linear(rgb: vec3<f32>, transfer_mode: u32) -> vec3<f32> {
@@ -124,10 +132,12 @@ fn decode_transfer_to_linear(rgb: vec3<f32>, transfer_mode: u32) -> vec3<f32> {
         );
     }
     if transfer_mode == TRANSFER_HLG {
-        return vec3<f32>(
-            hlg_to_linear(rgb.r),
-            hlg_to_linear(rgb.g),
-            hlg_to_linear(rgb.b),
+        return hlg_scene_to_display_linear(
+            vec3<f32>(
+                hlg_to_scene_linear(rgb.r),
+                hlg_to_scene_linear(rgb.g),
+                hlg_to_scene_linear(rgb.b),
+            ),
         );
     }
     return vec3<f32>(
@@ -142,7 +152,7 @@ fn decode_transfer_scalar(value: f32, transfer_mode: u32) -> f32 {
         return pq_to_linear(value);
     }
     if transfer_mode == TRANSFER_HLG {
-        return hlg_to_linear(value);
+        return hlg_to_scene_linear(value);
     }
     return bt709_to_linear(value);
 }
@@ -169,7 +179,10 @@ fn convert_primaries_to_srgb(linear_rgb: vec3<f32>, primaries_mode: u32) -> vec3
 
 fn tone_map_hdr_to_sdr(linear_rgb: vec3<f32>) -> vec3<f32> {
     let safe = max(linear_rgb, vec3<f32>(0.0));
-    let source_peak = max(color_params.max_content_light_nits / 100.0, 1.0);
+    let source_peak = max(
+        color_params.max_content_light_nits / SDR_REFERENCE_WHITE_NITS,
+        1.0,
+    );
     let knee = 0.75;
     let shoulder = max((source_peak - knee) / 4.0, 0.25);
     let compressed = vec3<f32>(
@@ -246,10 +259,14 @@ fn bt2020_constant_luminance_to_linear(yuv: vec3<f32>) -> vec3<f32> {
     let b_linear = decode_transfer_scalar(b_gamma, color_params.transfer_mode);
     let g_linear =
         (y_linear - 0.2627 * r_linear - 0.0593 * b_linear) / 0.6780;
-    return max(
+    let linear_rgb = max(
         vec3<f32>(r_linear, g_linear, b_linear),
         vec3<f32>(0.0),
     );
+    if color_params.transfer_mode == TRANSFER_HLG {
+        return hlg_scene_to_display_linear(linear_rgb);
+    }
+    return linear_rgb;
 }
 
 fn decode_yuv_to_linear(y: f32, uv: vec2<f32>) -> vec3<f32> {

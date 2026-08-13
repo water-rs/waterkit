@@ -10,8 +10,12 @@ import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.DngCreator
 import android.hardware.camera2.TotalCaptureResult
+import android.hardware.camera2.params.DynamicRangeProfiles
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
 import android.media.Image
 import android.media.ImageReader
+import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaRecorder
@@ -28,6 +32,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 
@@ -47,6 +52,7 @@ class CameraHelper(private val appContext: Context) {
         private const val DYNAMIC_RANGE_HDR10 = 1
         private const val DYNAMIC_RANGE_HLG10 = 2
         private const val DYNAMIC_RANGE_DOLBY_VISION = 3
+        private const val PLATFORM_DYNAMIC_RANGE_STANDARD = 1L
 
         private const val FLASH_OFF = 0
         private const val FLASH_ON = 1
@@ -102,6 +108,7 @@ class CameraHelper(private val appContext: Context) {
     private var frameRate: Int = 30
 
     private var selectedDynamicRangeProfile: Int = DYNAMIC_RANGE_SDR
+    private var selectedPlatformDynamicRangeProfile: Long = PLATFORM_DYNAMIC_RANGE_STANDARD
     private var selectedFlashMode: Int = FLASH_OFF
     private var selectedStabilizationMode: Int = STABILIZATION_OFF
     private var selectedZoomFactor: Float = 1.0f
@@ -116,8 +123,9 @@ class CameraHelper(private val appContext: Context) {
     private var cachedSupportsExposureCompensation: Boolean = false
     private var cachedSupportsManualFocus: Boolean = false
     private var cachedSupportsManualWhiteBalance: Boolean = false
-    private var cachedSupportsHdr: Boolean = false
-    private var cachedSupportsDolbyVision: Boolean = false
+    private var cachedPlatformDynamicRanges: Map<Int, Long> = mapOf(
+        DYNAMIC_RANGE_SDR to PLATFORM_DYNAMIC_RANGE_STANDARD,
+    )
     private var cachedSupportsStandardStabilization: Boolean = false
     private var cachedSupportsCinematicStabilization: Boolean = false
     private var cachedHasFlash: Boolean = false
@@ -135,8 +143,8 @@ class CameraHelper(private val appContext: Context) {
         val supportsExposureCompensation: Boolean,
         val supportsManualFocus: Boolean,
         val supportsManualWhiteBalance: Boolean,
-        val supportsHdr: Boolean,
-        val supportsDolbyVision: Boolean,
+        val dynamicRanges: IntArray,
+        val platformDynamicRanges: Map<Int, Long>,
         val supportsStandardStabilization: Boolean,
         val supportsCinematicStabilization: Boolean,
         val hasFlash: Boolean,
@@ -209,6 +217,7 @@ class CameraHelper(private val appContext: Context) {
             frameRate = chooseNearestFrameRate(requestedFrameRate.coerceIn(1, 240), snapshot.frameRates)
 
             selectedDynamicRangeProfile = DYNAMIC_RANGE_SDR
+            selectedPlatformDynamicRangeProfile = PLATFORM_DYNAMIC_RANGE_STANDARD
             selectedFlashMode = FLASH_OFF
             selectedStabilizationMode = STABILIZATION_OFF
             selectedZoomFactor = 1.0f
@@ -807,11 +816,8 @@ class CameraHelper(private val appContext: Context) {
     fun supportsManualWhiteBalance(cameraId: String): Boolean {
         return queryCapabilitySnapshot(cameraId).supportsManualWhiteBalance
     }
-    fun supportsHdr(cameraId: String): Boolean {
-        return queryCapabilitySnapshot(cameraId).supportsHdr
-    }
-    fun supportsDolbyVision(cameraId: String): Boolean {
-        return queryCapabilitySnapshot(cameraId).supportsDolbyVision
+    fun getSupportedDynamicRanges(cameraId: String): IntArray {
+        return queryCapabilitySnapshot(cameraId).dynamicRanges
     }
     fun supportsStandardStabilization(cameraId: String): Boolean {
         return queryCapabilitySnapshot(cameraId).supportsStandardStabilization
@@ -887,16 +893,17 @@ class CameraHelper(private val appContext: Context) {
             Log.e(TAG, "Invalid dynamic range profile: $profile")
             return false
         }
-        if ((profile == DYNAMIC_RANGE_HDR10 || profile == DYNAMIC_RANGE_HLG10) && !cachedSupportsHdr) {
-            Log.e(TAG, "HDR profile requested but HDR is unsupported")
+        if (isRecording) {
+            Log.e(TAG, "Dynamic range cannot change while recording")
             return false
         }
-        if (profile == DYNAMIC_RANGE_DOLBY_VISION && !cachedSupportsDolbyVision) {
-            Log.e(TAG, "Dolby Vision profile requested but unsupported")
+        val platformProfile = cachedPlatformDynamicRanges[profile] ?: run {
+            Log.e(TAG, "Dynamic range profile is not supported by this camera: $profile")
             return false
         }
         selectedDynamicRangeProfile = profile
-        return updateRepeatingRequest()
+        selectedPlatformDynamicRangeProfile = platformProfile
+        return true
     }
     fun setExposureCompensation(ev: Float): Boolean {
         val characteristics = currentCharacteristics ?: run {
@@ -1046,10 +1053,8 @@ class CameraHelper(private val appContext: Context) {
         val zoomMin = zoomRange?.first ?: 1.0f
         val zoomMax = zoomRange?.second ?: maxDigitalZoom
 
-        val sceneModes = characteristics.get(CameraCharacteristics.CONTROL_AVAILABLE_SCENE_MODES)
-            ?: intArrayOf()
-        val supportsHdr = sceneModes.contains(CaptureRequest.CONTROL_SCENE_MODE_HDR)
-        val supportsDolbyVision = supportsHdr && supportsHevcEncoder()
+        val platformDynamicRanges = queryDynamicRangeProfiles(characteristics)
+        val dynamicRanges = platformDynamicRanges.keys.sorted().toIntArray()
 
         val stabilizationModes = characteristics.get(
             CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES,
@@ -1071,8 +1076,8 @@ class CameraHelper(private val appContext: Context) {
             supportsExposureCompensation = supportsExposureCompensation,
             supportsManualFocus = supportsManualFocus,
             supportsManualWhiteBalance = supportsManualWhiteBalance,
-            supportsHdr = supportsHdr,
-            supportsDolbyVision = supportsDolbyVision,
+            dynamicRanges = dynamicRanges,
+            platformDynamicRanges = platformDynamicRanges,
             supportsStandardStabilization = supportsStandardStabilization,
             supportsCinematicStabilization = false,
             hasFlash = hasFlash,
@@ -1100,6 +1105,66 @@ class CameraHelper(private val appContext: Context) {
         return (max > 1) to max
     }
 
+    private fun queryDynamicRangeProfiles(
+        characteristics: CameraCharacteristics,
+    ): Map<Int, Long> {
+        val result = linkedMapOf(DYNAMIC_RANGE_SDR to PLATFORM_DYNAMIC_RANGE_STANDARD)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return result
+        }
+
+        val profiles = characteristics.get(
+            CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES,
+        ) ?: return result
+        val supported = profiles.supportedProfiles
+        val supportsMixedStandard = { profile: Long ->
+            val constraints = profiles.getProfileCaptureRequestConstraints(profile)
+            constraints.isEmpty() || constraints.contains(DynamicRangeProfiles.STANDARD)
+        }
+
+        if (
+            supported.contains(DynamicRangeProfiles.HLG10) &&
+            supportsMixedStandard(DynamicRangeProfiles.HLG10) &&
+            encoderProfile(
+                MediaFormat.MIMETYPE_VIDEO_HEVC,
+                setOf(MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10),
+            ) != null
+        ) {
+            result[DYNAMIC_RANGE_HLG10] = DynamicRangeProfiles.HLG10
+        }
+        if (
+            supported.contains(DynamicRangeProfiles.HDR10) &&
+            supportsMixedStandard(DynamicRangeProfiles.HDR10) &&
+            encoderProfile(
+                MediaFormat.MIMETYPE_VIDEO_HEVC,
+                setOf(MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10),
+            ) != null
+        ) {
+            result[DYNAMIC_RANGE_HDR10] = DynamicRangeProfiles.HDR10
+        }
+
+        val dolbyProfiles = listOf(
+            DynamicRangeProfiles.DOLBY_VISION_10B_HDR_OEM,
+            DynamicRangeProfiles.DOLBY_VISION_10B_HDR_REF,
+            DynamicRangeProfiles.DOLBY_VISION_10B_HDR_OEM_PO,
+            DynamicRangeProfiles.DOLBY_VISION_10B_HDR_REF_PO,
+            DynamicRangeProfiles.DOLBY_VISION_8B_HDR_OEM,
+            DynamicRangeProfiles.DOLBY_VISION_8B_HDR_REF,
+            DynamicRangeProfiles.DOLBY_VISION_8B_HDR_OEM_PO,
+            DynamicRangeProfiles.DOLBY_VISION_8B_HDR_REF_PO,
+        )
+        val dolbyProfile = dolbyProfiles.firstOrNull { profile ->
+            supported.contains(profile) && supportsMixedStandard(profile)
+        }
+        if (
+            dolbyProfile != null &&
+            encoderProfile(MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION, null) != null
+        ) {
+            result[DYNAMIC_RANGE_DOLBY_VISION] = dolbyProfile
+        }
+        return result
+    }
+
     private fun cacheSnapshot(snapshot: CapabilitySnapshot) {
         cachedResolutions = if (snapshot.resolutions.isEmpty()) {
             intArrayOf(frameWidth, frameHeight)
@@ -1117,8 +1182,7 @@ class CameraHelper(private val appContext: Context) {
         cachedSupportsExposureCompensation = snapshot.supportsExposureCompensation
         cachedSupportsManualFocus = snapshot.supportsManualFocus
         cachedSupportsManualWhiteBalance = snapshot.supportsManualWhiteBalance
-        cachedSupportsHdr = snapshot.supportsHdr
-        cachedSupportsDolbyVision = snapshot.supportsDolbyVision
+        cachedPlatformDynamicRanges = snapshot.platformDynamicRanges
         cachedSupportsStandardStabilization = snapshot.supportsStandardStabilization
         cachedSupportsCinematicStabilization = snapshot.supportsCinematicStabilization
         cachedHasFlash = snapshot.hasFlash
@@ -1181,45 +1245,65 @@ class CameraHelper(private val appContext: Context) {
 
         val sessionLatch = CountDownLatch(1)
         var configured = false
+        val callback = object : CameraCaptureSession.StateCallback() {
+            override fun onConfigured(session: CameraCaptureSession) {
+                captureSession = session
+                try {
+                    val template = if (includeRecorderSurface) {
+                        CameraDevice.TEMPLATE_RECORD
+                    } else {
+                        CameraDevice.TEMPLATE_PREVIEW
+                    }
+                    val builder = device.createCaptureRequest(template)
+                    builder.addTarget(previewReader.surface)
+                    if (includeRecorderSurface) {
+                        val recordingSurface = recorderSurface
+                            ?: error("Recorder surface lost during session configuration")
+                        builder.addTarget(recordingSurface)
+                    }
+                    applyRequestControls(builder, forStillCapture = false)
+                    session.setRepeatingRequest(builder.build(), null, handler)
+                    previewRequestBuilder = builder
+                    configured = true
+                } catch (error: Exception) {
+                    Log.e(TAG, "Failed to configure repeating request", error)
+                    previewRequestBuilder = null
+                    configured = false
+                }
+                sessionLatch.countDown()
+            }
+
+            override fun onConfigureFailed(session: CameraCaptureSession) {
+                Log.e(TAG, "Camera capture session configuration failed")
+                sessionLatch.countDown()
+            }
+        }
 
         try {
-            device.createCaptureSession(
-                surfaces,
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        captureSession = session
-                        try {
-                            val template = if (includeRecorderSurface) {
-                                CameraDevice.TEMPLATE_RECORD
-                            } else {
-                                CameraDevice.TEMPLATE_PREVIEW
-                            }
-                            val builder = device.createCaptureRequest(template)
-                            builder.addTarget(previewReader.surface)
-                            if (includeRecorderSurface) {
-                                val recordingSurface = recorderSurface
-                                    ?: error("Recorder surface lost during session configuration")
-                                builder.addTarget(recordingSurface)
-                            }
-                            applyRequestControls(builder, forStillCapture = false)
-                            session.setRepeatingRequest(builder.build(), null, handler)
-                            previewRequestBuilder = builder
-                            configured = true
-                        } catch (error: Exception) {
-                            Log.e(TAG, "Failed to configure repeating request", error)
-                            previewRequestBuilder = null
-                            configured = false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val recordingSurface = recorderSurface
+                val outputs = surfaces.map { surface ->
+                    OutputConfiguration(surface).apply {
+                        val profile = if (includeRecorderSurface && surface === recordingSurface) {
+                            selectedPlatformDynamicRangeProfile
+                        } else {
+                            DynamicRangeProfiles.STANDARD
                         }
-                        sessionLatch.countDown()
+                        setDynamicRangeProfile(profile)
                     }
-
-                    override fun onConfigureFailed(session: CameraCaptureSession) {
-                        Log.e(TAG, "Camera capture session configuration failed")
-                        sessionLatch.countDown()
-                    }
-                },
-                handler,
-            )
+                }
+                val executor = Executor { command -> handler.post(command) }
+                device.createCaptureSession(
+                    SessionConfiguration(
+                        SessionConfiguration.SESSION_REGULAR,
+                        outputs,
+                        executor,
+                        callback,
+                    ),
+                )
+            } else {
+                device.createCaptureSession(surfaces, callback, handler)
+            }
         } catch (error: Exception) {
             Log.e(TAG, "Failed to create capture session", error)
             return false
@@ -1328,13 +1412,8 @@ class CameraHelper(private val appContext: Context) {
             }
         }
 
-        if (selectedDynamicRangeProfile == DYNAMIC_RANGE_SDR) {
-            trySet(builder, CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-            trySet(builder, CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
-        } else {
-            trySet(builder, CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_USE_SCENE_MODE)
-            trySet(builder, CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_HDR)
-        }
+        trySet(builder, CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+        trySet(builder, CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
 
         applyZoom(builder, selectedZoomFactor, characteristics)
     }
@@ -1396,12 +1475,17 @@ class CameraHelper(private val appContext: Context) {
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
 
             val encoder = when (selectedDynamicRangeProfile) {
-                DYNAMIC_RANGE_DOLBY_VISION,
+                DYNAMIC_RANGE_DOLBY_VISION -> MediaRecorder.VideoEncoder.DOLBY_VISION
                 DYNAMIC_RANGE_HDR10,
                 DYNAMIC_RANGE_HLG10 -> MediaRecorder.VideoEncoder.HEVC
                 else -> MediaRecorder.VideoEncoder.H264
             }
             recorder.setVideoEncoder(encoder)
+            if (selectedDynamicRangeProfile != DYNAMIC_RANGE_SDR) {
+                val profileLevel = recordingEncoderProfile()
+                    ?: error("Selected dynamic range has no matching video encoder profile")
+                recorder.setVideoEncodingProfileLevel(profileLevel.profile, profileLevel.level)
+            }
             recorder.setVideoEncodingBitRate(computeVideoBitrate(frameWidth, frameHeight, frameRate))
             recorder.setVideoFrameRate(frameRate)
             recorder.setVideoSize(frameWidth, frameHeight)
@@ -1525,16 +1609,44 @@ class CameraHelper(private val appContext: Context) {
         recorderSurface = null
     }
 
-    private fun supportsHevcEncoder(): Boolean {
+    private fun encoderProfile(
+        mimeType: String,
+        acceptedProfiles: Set<Int>?,
+    ): MediaCodecInfo.CodecProfileLevel? {
         return try {
             val codecs = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
-            codecs.any { codec ->
-                codec.isEncoder && codec.supportedTypes.any { type ->
-                    type.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, ignoreCase = true)
+            codecs.asSequence()
+                .filter { codec -> codec.isEncoder }
+                .flatMap { codec ->
+                    codec.supportedTypes.asSequence()
+                        .filter { type -> type.equals(mimeType, ignoreCase = true) }
+                        .flatMap { type -> codec.getCapabilitiesForType(type).profileLevels.asSequence() }
                 }
-            }
-        } catch (_: Exception) {
-            false
+                .filter { profileLevel ->
+                    acceptedProfiles == null || acceptedProfiles.contains(profileLevel.profile)
+                }
+                .maxByOrNull { profileLevel -> profileLevel.level }
+        } catch (error: Exception) {
+            Log.e(TAG, "Failed to query encoder profile for $mimeType", error)
+            null
+        }
+    }
+
+    private fun recordingEncoderProfile(): MediaCodecInfo.CodecProfileLevel? {
+        return when (selectedDynamicRangeProfile) {
+            DYNAMIC_RANGE_HLG10 -> encoderProfile(
+                MediaFormat.MIMETYPE_VIDEO_HEVC,
+                setOf(MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10),
+            )
+            DYNAMIC_RANGE_HDR10 -> encoderProfile(
+                MediaFormat.MIMETYPE_VIDEO_HEVC,
+                setOf(MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10),
+            )
+            DYNAMIC_RANGE_DOLBY_VISION -> encoderProfile(
+                MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION,
+                null,
+            )
+            else -> null
         }
     }
 

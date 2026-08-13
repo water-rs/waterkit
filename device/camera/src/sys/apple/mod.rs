@@ -64,7 +64,6 @@ mod ffi {
         fn camera_supports_manual_white_balance() -> bool;
         fn camera_get_zoom_min() -> f32;
         fn camera_get_zoom_max() -> f32;
-        fn camera_supports_hdr() -> bool;
         fn camera_supports_dolby_vision() -> bool;
         fn camera_supports_standard_stabilization() -> bool;
         fn camera_supports_cinematic_stabilization() -> bool;
@@ -99,8 +98,6 @@ mod ffi {
         fn camera_set_torch_mode(enabled: bool) -> CameraResultFFI;
 
         // HDR
-        fn camera_set_hdr(enabled: bool) -> CameraResultFFI;
-        fn camera_get_hdr() -> bool;
         fn camera_set_dynamic_range(profile: u8) -> CameraResultFFI;
 
         // Stabilization
@@ -512,10 +509,6 @@ impl CameraInner {
             },
             dynamic_ranges: {
                 let mut ranges = vec![DynamicRangeProfile::Sdr];
-                if ffi::camera_supports_hdr() {
-                    ranges.push(DynamicRangeProfile::Hdr10);
-                    ranges.push(DynamicRangeProfile::Hlg10);
-                }
                 if ffi::camera_supports_dolby_vision() {
                     ranges.push(DynamicRangeProfile::DolbyVision);
                 }

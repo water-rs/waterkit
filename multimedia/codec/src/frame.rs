@@ -125,7 +125,11 @@ impl DecodedPixelLayout {
     /// Number of bytes required for a tightly packed frame.
     #[must_use]
     pub const fn packed_len(self, width: u32, height: u32) -> usize {
-        let samples = (width as usize) * (height as usize) * 3 / 2;
+        let width = width as usize;
+        let height = height as usize;
+        let luma_samples = width * height;
+        let chroma_samples = width.div_ceil(2) * height.div_ceil(2) * 2;
+        let samples = luma_samples + chroma_samples;
         match self {
             Self::Nv12 => samples,
             Self::P010 => samples * 2,
@@ -527,7 +531,7 @@ impl GpuFrame {
 /// Reusable native-YUV to linear RGBA16F converter pipeline.
 ///
 /// The output uses sRGB/BT.709 primaries and linear light relative to a
-/// 100-nit reference white. HDR values intentionally remain above `1.0`.
+/// 203-nit reference white. HDR values intentionally remain above `1.0`.
 pub struct LinearRgbaConverter {
     pipeline: ComputePipeline,
     bind_group_layout: BindGroupLayout,

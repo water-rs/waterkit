@@ -9,6 +9,9 @@ use crate::DecodedPixelLayout;
 /// Unified GPU shader used by `WaterKit` conversion and presentation pipelines.
 pub const YUV_COLOR_SHADER_WGSL: &str = include_str!("yuv_to_rgba.wgsl");
 
+/// `WaterUI`'s linear-light value for diffuse SDR white, in nits.
+pub const SDR_REFERENCE_WHITE_NITS: f32 = 203.0;
+
 /// Color-space contract expected by the destination texture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
@@ -17,7 +20,7 @@ pub enum ColorOutputTarget {
     GammaSdr = 0,
     /// Linear SDR output for an sRGB render target.
     LinearSdr = 1,
-    /// Linear extended-range output preserving HDR relative to 100-nit white.
+    /// Linear extended-range output preserving HDR relative to 203-nit white.
     LinearHdr = 2,
 }
 
@@ -88,7 +91,7 @@ pub fn video_color_uniform(
         },
         max_content_light_nits: color.content_light_level.map_or_else(
             || match color.transfer {
-                TransferFunction::Sdr => 100.0,
+                TransferFunction::Sdr => SDR_REFERENCE_WHITE_NITS,
                 TransferFunction::Pq => 10_000.0,
                 TransferFunction::Hlg => 1_000.0,
             },
@@ -104,7 +107,7 @@ mod tests {
         ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo,
     };
 
-    use super::{ColorOutputTarget, video_color_uniform};
+    use super::{ColorOutputTarget, SDR_REFERENCE_WHITE_NITS, video_color_uniform};
     use crate::DecodedPixelLayout;
 
     #[test]
@@ -128,5 +131,17 @@ mod tests {
         assert!(
             (f32::from_ne_bytes(bytes[24..28].try_into().unwrap()) - 10_000.0).abs() < f32::EPSILON
         );
+    }
+
+    #[test]
+    fn sdr_uniform_uses_framework_reference_white() {
+        let uniform = video_color_uniform(
+            VideoColorInfo::default(),
+            DecodedPixelLayout::Nv12,
+            ColorOutputTarget::LinearSdr,
+        );
+        let bytes = uniform.to_bytes();
+        let reference_white = f32::from_ne_bytes(bytes[24..28].try_into().unwrap());
+        assert!((reference_white - SDR_REFERENCE_WHITE_NITS).abs() < f32::EPSILON);
     }
 }

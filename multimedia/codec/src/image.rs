@@ -2,23 +2,39 @@ use half::f16;
 use image::{ColorType, DynamicImage, GenericImageView};
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
+))]
+use moxcms::{
+    CicpColorPrimaries, CicpProfile, ColorProfile, Layout, MatrixCoefficients as CicpMatrix,
+    TransferCharacteristics, TransformOptions,
+};
+#[cfg(all(
+    feature = "software-fallback",
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
 ))]
 use std::io::Cursor;
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
 ))]
-use yuv::{YuvBiPlanarImage, YuvConversionMode, YuvRange, YuvStandardMatrix, yuv_nv12_to_rgba};
+use yuv::{
+    YuvBiPlanarImage, YuvConversionMode, YuvRange, YuvStandardMatrix, p010_to_rgba10,
+    yuv_nv12_to_rgba,
+};
 
 use crate::CodecError;
 #[cfg(target_vendor = "apple")]
 use crate::image_apple;
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
 ))]
 use crate::software::av1::{Av1Decoder, CpuFrame};
+#[cfg(all(
+    feature = "software-fallback",
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
+))]
+use crate::{DecodedPixelLayout, SDR_REFERENCE_WHITE_NITS};
 
 /// Pixel formats currently emitted by `decode_image`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,7 +42,7 @@ use crate::software::av1::{Av1Decoder, CpuFrame};
 pub enum DecodedPixelFormat {
     /// 8-bit normalized sRGB RGBA.
     Rgba8UnormSrgb,
-    /// 16-bit float RGBA (reserved for HDR decoders).
+    /// 16-bit floating-point linear RGBA.
     Rgba16Float,
 }
 
@@ -112,22 +128,16 @@ impl DecodedImage {
 /// Returns [`CodecError::DecodingFailed`] when decoding fails.
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
 ))]
 pub fn decode_image(data: &[u8]) -> Result<DecodedImage, CodecError> {
-    match decode_image_platform(data) {
-        Ok(decoded) => Ok(decoded),
-        Err(primary_err) => {
-            if is_avif(data) {
-                return decode_avif_software(data).map_err(|fallback_err| {
-                    CodecError::DecodingFailed(format!(
-                        "image decode failed: {primary_err}; AVIF software fallback failed: {fallback_err}"
-                    ))
-                });
-            }
-            Err(primary_err)
-        }
+    if is_avif(data) {
+        #[cfg(target_vendor = "apple")]
+        return decode_image_platform(data);
+        #[cfg(not(target_vendor = "apple"))]
+        return decode_avif_software(data);
     }
+    decode_image_platform(data)
 }
 
 /// Decodes image bytes into RGBA pixels.
@@ -137,7 +147,7 @@ pub fn decode_image(data: &[u8]) -> Result<DecodedImage, CodecError> {
 /// Returns [`CodecError::DecodingFailed`] when decoding fails.
 #[cfg(not(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
 )))]
 pub fn decode_image(data: &[u8]) -> Result<DecodedImage, CodecError> {
     decode_image_platform(data)
@@ -295,7 +305,7 @@ fn is_avif_brand(brand: [u8; 4]) -> bool {
 
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
 ))]
 fn is_avif(data: &[u8]) -> bool {
     matches!(image::guess_format(data), Ok(image::ImageFormat::Avif))
@@ -303,7 +313,7 @@ fn is_avif(data: &[u8]) -> bool {
 
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
 ))]
 fn decode_avif_software(data: &[u8]) -> Result<DecodedImage, CodecError> {
     let mut cursor = Cursor::new(data);
@@ -312,83 +322,62 @@ fn decode_avif_software(data: &[u8]) -> Result<DecodedImage, CodecError> {
     let metadata = avif.primary_item_metadata().map_err(|err| {
         CodecError::DecodingFailed(format!("AV1 sequence metadata parse failed: {err}"))
     })?;
-    if !(8..=16).contains(&metadata.bit_depth) {
+    if !matches!(metadata.bit_depth, 8 | 10) {
         return Err(CodecError::Unsupported(format!(
-            "AVIF software decode supports 8-bit to 16-bit AV1 payloads, got {}-bit",
+            "AVIF software decode supports 8-bit and 10-bit AV1 payloads, got {}-bit",
             metadata.bit_depth
         )));
     }
 
     let primary_frame = decode_av1_item(&avif.primary_item, "primary")?;
-
-    let width = primary_frame.width;
-    let height = primary_frame.height;
-    let uv_width = (width as usize).div_ceil(2);
-    let uv_height = (height as usize).div_ceil(2);
-    let y_size = (width as usize) * (height as usize);
-    let uv_size = uv_width * uv_height * 2;
-    if primary_frame.data.len() != y_size + uv_size {
+    let expected_layout = if metadata.bit_depth == 8 {
+        DecodedPixelLayout::Nv12
+    } else {
+        DecodedPixelLayout::P010
+    };
+    if primary_frame.layout != expected_layout {
         return Err(CodecError::DecodingFailed(format!(
-            "AV1 primary frame NV12 size mismatch: got {}, expected {}",
-            primary_frame.data.len(),
-            y_size + uv_size
+            "AVIF metadata declares {}-bit samples but rav1d returned {:?}",
+            metadata.bit_depth, primary_frame.layout
         )));
     }
-
-    let mut rgba = vec![0u8; y_size * 4];
-    let uv_stride = u32::try_from(
-        uv_width
-            .checked_mul(2)
-            .ok_or_else(|| CodecError::DecodingFailed("AVIF UV stride overflow".to_string()))?,
-    )
-    .map_err(|_| CodecError::DecodingFailed("AVIF UV stride exceeds u32 range".to_string()))?;
-    let bi_planar = YuvBiPlanarImage {
-        y_plane: &primary_frame.data[..y_size],
-        y_stride: width,
-        uv_plane: &primary_frame.data[y_size..],
-        uv_stride,
-        width,
-        height,
-    };
-    yuv_nv12_to_rgba(
-        &bi_planar,
-        &mut rgba,
-        width * 4,
-        YuvRange::Full,
-        YuvStandardMatrix::Bt709,
-        YuvConversionMode::Balanced,
-    )
-    .map_err(|err| CodecError::DecodingFailed(format!("NV12 to RGBA conversion failed: {err}")))?;
+    let width = primary_frame.width;
+    let height = primary_frame.height;
+    let transfer = normalized_transfer(primary_frame.color.transfer)?;
+    let hdr = is_hdr_transfer(transfer);
+    let wide_gamut =
+        normalized_primaries(primary_frame.color.primaries)? != CicpColorPrimaries::Bt709;
+    let mut linear_rgba = decode_avif_linear_rgba(&primary_frame)?;
 
     if let Some(alpha_item) = avif.alpha_item.as_deref() {
-        apply_avif_alpha(&mut rgba, alpha_item, width, height)?;
+        apply_avif_alpha(&mut linear_rgba, alpha_item, width, height)?;
     }
 
-    if metadata.bit_depth > 8 {
-        let rgba16f = encode_rgba8_to_hdr_rgba16f(&rgba, metadata.bit_depth);
+    if hdr {
+        let rgba16f = encode_linear_rgba16f(&linear_rgba);
         return Ok(DecodedImage::new(
             rgba16f,
             width,
             height,
             DecodedPixelFormat::Rgba16Float,
             true,
-            false,
+            wide_gamut,
         ));
     }
 
     Ok(DecodedImage::new(
-        rgba,
+        encode_linear_srgb_rgba8(&linear_rgba),
         width,
         height,
         DecodedPixelFormat::Rgba8UnormSrgb,
         false,
-        false,
+        wide_gamut,
     ))
 }
 
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
 ))]
 fn decode_av1_item(data: &[u8], item_name: &str) -> Result<CpuFrame, CodecError> {
     let mut decoder = Av1Decoder::new()?;
@@ -403,10 +392,10 @@ fn decode_av1_item(data: &[u8], item_name: &str) -> Result<CpuFrame, CodecError>
 
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
 ))]
 fn apply_avif_alpha(
-    rgba: &mut [u8],
+    rgba: &mut [f32],
     alpha_item: &[u8],
     width: u32,
     height: u32,
@@ -426,42 +415,287 @@ fn apply_avif_alpha(
                 .and_then(|height| width.checked_mul(height))
         })
         .ok_or_else(|| CodecError::DecodingFailed("AVIF dimensions overflow usize".into()))?;
-    if alpha_frame.data.len() < pixel_count {
+    let sample_bytes = match alpha_frame.layout {
+        DecodedPixelLayout::Nv12 => 1,
+        DecodedPixelLayout::P010 => 2,
+    };
+    let y_len = pixel_count
+        .checked_mul(sample_bytes)
+        .ok_or_else(|| CodecError::DecodingFailed("AVIF alpha plane length overflow".into()))?;
+    if alpha_frame.data.len() < y_len {
         return Err(CodecError::DecodingFailed(format!(
-            "AVIF alpha frame Y plane too small: got {}, need at least {pixel_count}",
+            "AVIF alpha frame Y plane too small: got {}, need at least {y_len}",
             alpha_frame.data.len()
         )));
     }
-    for (pixel, alpha) in rgba
-        .as_chunks_mut::<4>()
-        .0
-        .iter_mut()
-        .zip(&alpha_frame.data[..pixel_count])
-    {
-        pixel[3] = *alpha;
+    for (index, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        pixel[3] = match alpha_frame.layout {
+            DecodedPixelLayout::Nv12 => f32::from(alpha_frame.data[index]) / 255.0,
+            DecodedPixelLayout::P010 => {
+                let offset = index * 2;
+                f32::from(
+                    u16::from_le_bytes([alpha_frame.data[offset], alpha_frame.data[offset + 1]])
+                        >> 6,
+                ) / 1023.0
+            }
+        };
     }
     Ok(())
 }
 
 #[cfg(all(
     feature = "software-fallback",
-    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
 ))]
-fn encode_rgba8_to_hdr_rgba16f(rgba8: &[u8], bit_depth: u8) -> Vec<u8> {
-    let max_code = 2f32.powi(i32::from(bit_depth)) - 1.0;
-    let headroom_scale = max_code / 255.0;
-    let mut out = Vec::with_capacity(rgba8.len() * core::mem::size_of::<u16>());
-    for px in rgba8.as_chunks::<4>().0 {
-        let r = (f32::from(px[0]) / 255.0) * headroom_scale;
-        let g = (f32::from(px[1]) / 255.0) * headroom_scale;
-        let b = (f32::from(px[2]) / 255.0) * headroom_scale;
-        let a = f32::from(px[3]) / 255.0;
-        out.extend_from_slice(&f16::from_f32(r).to_le_bytes());
-        out.extend_from_slice(&f16::from_f32(g).to_le_bytes());
-        out.extend_from_slice(&f16::from_f32(b).to_le_bytes());
-        out.extend_from_slice(&f16::from_f32(a).to_le_bytes());
+fn decode_avif_linear_rgba(frame: &CpuFrame) -> Result<Vec<f32>, CodecError> {
+    let width = frame.width;
+    let height = frame.height;
+    let pixel_count = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| CodecError::DecodingFailed("AVIF dimensions overflow usize".into()))?;
+    let encoded_rgba = decode_avif_yuv(frame, pixel_count)?;
+    let transfer = normalized_transfer(frame.color.transfer)?;
+    let source = ColorProfile::new_from_cicp(CicpProfile {
+        color_primaries: normalized_primaries(frame.color.primaries)?,
+        transfer_characteristics: transfer,
+        matrix_coefficients: CicpMatrix::Identity,
+        full_range: true,
+    });
+    let destination = ColorProfile::new_from_cicp(CicpProfile {
+        color_primaries: CicpColorPrimaries::Bt709,
+        transfer_characteristics: TransferCharacteristics::Linear,
+        matrix_coefficients: CicpMatrix::Identity,
+        full_range: true,
+    });
+    let transform = source
+        .create_transform_f32(
+            Layout::Rgba,
+            &destination,
+            Layout::Rgba,
+            TransformOptions {
+                allow_extended_range_rgb_xyz: true,
+                ..TransformOptions::default()
+            },
+        )
+        .map_err(|err| CodecError::DecodingFailed(format!("AVIF CICP transform failed: {err}")))?;
+    let mut linear = vec![0.0; encoded_rgba.len()];
+    transform
+        .transform(&encoded_rgba, &mut linear)
+        .map_err(|err| CodecError::DecodingFailed(format!("AVIF color transform failed: {err}")))?;
+
+    for pixel in linear.as_chunks_mut::<4>().0 {
+        let absolute_scale = match transfer {
+            TransferCharacteristics::Smpte2084 => 10_000.0 / SDR_REFERENCE_WHITE_NITS,
+            TransferCharacteristics::Hlg => {
+                let luminance = 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2];
+                luminance.max(1e-6).powf(0.2) * (1_000.0 / SDR_REFERENCE_WHITE_NITS)
+            }
+            _ => 1.0,
+        };
+        pixel[0] *= absolute_scale;
+        pixel[1] *= absolute_scale;
+        pixel[2] *= absolute_scale;
+    }
+    Ok(linear)
+}
+
+#[cfg(all(
+    feature = "software-fallback",
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
+))]
+fn decode_avif_yuv(frame: &CpuFrame, pixel_count: usize) -> Result<Vec<f32>, CodecError> {
+    let expected_len = frame.layout.packed_len(frame.width, frame.height);
+    if frame.data.len() != expected_len {
+        return Err(CodecError::DecodingFailed(format!(
+            "AV1 primary frame {:?} size mismatch: got {}, expected {expected_len}",
+            frame.layout,
+            frame.data.len()
+        )));
+    }
+    let range = if frame.color.full_range {
+        YuvRange::Full
+    } else {
+        YuvRange::Limited
+    };
+    let matrix = match normalized_matrix(frame.color.matrix)? {
+        CicpMatrix::Bt709 => YuvStandardMatrix::Bt709,
+        CicpMatrix::Bt470Bg | CicpMatrix::Smpte170m => YuvStandardMatrix::Bt601,
+        CicpMatrix::Bt2020Ncl => YuvStandardMatrix::Bt2020,
+        matrix => {
+            return Err(CodecError::Unsupported(format!(
+                "AVIF software decode does not support CICP matrix {matrix:?}"
+            )));
+        }
+    };
+    let y_samples = pixel_count;
+    match frame.layout {
+        DecodedPixelLayout::Nv12 => {
+            let y_size = y_samples;
+            let mut rgba = vec![0_u8; pixel_count * 4];
+            let image = YuvBiPlanarImage {
+                y_plane: &frame.data[..y_size],
+                y_stride: frame.width,
+                uv_plane: &frame.data[y_size..],
+                uv_stride: frame.width.div_ceil(2) * 2,
+                width: frame.width,
+                height: frame.height,
+            };
+            yuv_nv12_to_rgba(
+                &image,
+                &mut rgba,
+                frame.width * 4,
+                range,
+                matrix,
+                YuvConversionMode::Balanced,
+            )
+            .map_err(|err| {
+                CodecError::DecodingFailed(format!("NV12 to RGBA conversion failed: {err}"))
+            })?;
+            Ok(rgba
+                .into_iter()
+                .map(|value| f32::from(value) / 255.0)
+                .collect())
+        }
+        DecodedPixelLayout::P010 => {
+            let samples: Vec<u16> = frame
+                .data
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|bytes| u16::from_le_bytes(*bytes))
+                .collect();
+            let mut rgba = vec![0_u16; pixel_count * 4];
+            let image = YuvBiPlanarImage {
+                y_plane: &samples[..y_samples],
+                y_stride: frame.width,
+                uv_plane: &samples[y_samples..],
+                uv_stride: frame.width.div_ceil(2) * 2,
+                width: frame.width,
+                height: frame.height,
+            };
+            p010_to_rgba10(&image, &mut rgba, frame.width * 4, range, matrix).map_err(|err| {
+                CodecError::DecodingFailed(format!("P010 to RGBA10 conversion failed: {err}"))
+            })?;
+            Ok(rgba
+                .into_iter()
+                .map(|value| f32::from(value) / 1023.0)
+                .collect())
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "software-fallback",
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
+))]
+fn normalized_primaries(value: u8) -> Result<CicpColorPrimaries, CodecError> {
+    let primaries = CicpColorPrimaries::try_from(value).map_err(|err| {
+        CodecError::DecodingFailed(format!("invalid AVIF color primaries: {err}"))
+    })?;
+    let primaries = match primaries {
+        CicpColorPrimaries::Unspecified => CicpColorPrimaries::Bt709,
+        value => value,
+    };
+    match primaries {
+        CicpColorPrimaries::Bt709
+        | CicpColorPrimaries::Bt470Bg
+        | CicpColorPrimaries::Bt601
+        | CicpColorPrimaries::Bt2020
+        | CicpColorPrimaries::Smpte432 => Ok(primaries),
+        value => Err(CodecError::Unsupported(format!(
+            "AVIF software decode does not support CICP color primaries {value:?}"
+        ))),
+    }
+}
+
+#[cfg(all(
+    feature = "software-fallback",
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
+))]
+fn normalized_transfer(value: u8) -> Result<TransferCharacteristics, CodecError> {
+    let transfer = TransferCharacteristics::try_from(value).map_err(|err| {
+        CodecError::DecodingFailed(format!("invalid AVIF transfer function: {err}"))
+    })?;
+    let transfer = match transfer {
+        TransferCharacteristics::Unspecified => TransferCharacteristics::Srgb,
+        value => value,
+    };
+    match transfer {
+        TransferCharacteristics::Bt709
+        | TransferCharacteristics::Bt601
+        | TransferCharacteristics::Linear
+        | TransferCharacteristics::Srgb
+        | TransferCharacteristics::Bt202010bit
+        | TransferCharacteristics::Bt202012bit
+        | TransferCharacteristics::Smpte2084
+        | TransferCharacteristics::Hlg => Ok(transfer),
+        value => Err(CodecError::Unsupported(format!(
+            "AVIF software decode does not support CICP transfer function {value:?}"
+        ))),
+    }
+}
+
+#[cfg(all(
+    feature = "software-fallback",
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
+))]
+const fn is_hdr_transfer(transfer: TransferCharacteristics) -> bool {
+    matches!(
+        transfer,
+        TransferCharacteristics::Smpte2084 | TransferCharacteristics::Hlg
+    )
+}
+
+#[cfg(all(
+    feature = "software-fallback",
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
+))]
+fn normalized_matrix(value: u8) -> Result<CicpMatrix, CodecError> {
+    let matrix = CicpMatrix::try_from(value)
+        .map_err(|err| CodecError::DecodingFailed(format!("invalid AVIF matrix: {err}")))?;
+    Ok(match matrix {
+        CicpMatrix::Unspecified => CicpMatrix::Bt709,
+        value => value,
+    })
+}
+
+#[cfg(all(
+    feature = "software-fallback",
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
+))]
+fn encode_linear_rgba16f(rgba: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(rgba.len() * core::mem::size_of::<u16>());
+    for channel in rgba {
+        out.extend_from_slice(&f16::from_f32(*channel).to_le_bytes());
     }
     out
+}
+
+#[cfg(all(
+    feature = "software-fallback",
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
+))]
+fn encode_linear_srgb_rgba8(rgba: &[f32]) -> Vec<u8> {
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|pixel| {
+            let encode = |value: f32| {
+                let encoded = if value <= 0.003_130_8 {
+                    value * 12.92
+                } else {
+                    1.055 * value.powf(1.0 / 2.4) - 0.055
+                };
+                (encoded.clamp(0.0, 1.0) * 255.0).round() as u8
+            };
+            [
+                encode(pixel[0]),
+                encode(pixel[1]),
+                encode(pixel[2]),
+                (pixel[3].clamp(0.0, 1.0) * 255.0).round() as u8,
+            ]
+        })
+        .collect()
 }
 
 const fn is_high_precision_color(color: ColorType) -> bool {
@@ -483,4 +717,29 @@ fn encode_rgba16f(image: DynamicImage, color: ColorType) -> (Vec<u8>, bool) {
         _ => unreachable!("encode_rgba16f only supports 32-bit float inputs"),
     }
     (output, has_hdr_headroom)
+}
+
+#[cfg(all(
+    test,
+    feature = "software-fallback",
+    not(any(target_vendor = "apple", target_os = "android", target_arch = "wasm32"))
+))]
+mod tests {
+    use moxcms::TransferCharacteristics;
+
+    use super::{encode_linear_srgb_rgba8, is_hdr_transfer};
+
+    #[test]
+    fn hdr_classification_uses_transfer_function_not_sample_precision() {
+        assert!(!is_hdr_transfer(TransferCharacteristics::Srgb));
+        assert!(!is_hdr_transfer(TransferCharacteristics::Bt202010bit));
+        assert!(is_hdr_transfer(TransferCharacteristics::Smpte2084));
+        assert!(is_hdr_transfer(TransferCharacteristics::Hlg));
+    }
+
+    #[test]
+    fn linear_sdr_is_encoded_as_srgb() {
+        let encoded = encode_linear_srgb_rgba8(&[0.5, 0.5, 0.5, 1.0]);
+        assert_eq!(encoded, [188, 188, 188, 255]);
+    }
 }

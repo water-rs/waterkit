@@ -15,5 +15,7 @@ fn main() {
 
 #[cfg(not(target_os = "macos"))]
 fn main() {
-    eprintln!("waterkit-camera-test is a macOS-only preview harness; nothing to run on this target.");
+    eprintln!(
+        "waterkit-camera-test is a macOS-only preview harness; nothing to run on this target."
+    );
 }

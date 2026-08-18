@@ -610,11 +610,8 @@ fn with_android_device_awake<T>(
     let original = android_stay_awake_setting(toolchain)?;
     set_android_stay_awake(toolchain, original | 2)?;
 
-    let run_result = run_adb(
-        toolchain,
-        ["shell", "input", "keyevent", "KEYCODE_WAKEUP"],
-    )
-    .and_then(|()| run());
+    let run_result =
+        run_adb(toolchain, ["shell", "input", "keyevent", "KEYCODE_WAKEUP"]).and_then(|()| run());
     let restore_result = set_android_stay_awake(toolchain, original);
     match (run_result, restore_result) {
         (Ok(value), Ok(())) => Ok(value),

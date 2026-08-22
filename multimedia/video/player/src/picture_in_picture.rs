@@ -210,6 +210,11 @@ impl PictureInPictureController {
 
     /// Synchronizes platform controls with current playback state.
     ///
+    /// On a platform with no picture-in-picture concept there is no controller
+    /// to inform, so the sync completes vacuously. Requesting picture in
+    /// picture is where the missing capability surfaces: [`Self::enter`]
+    /// returns [`VideoError::Unsupported`] there.
+    ///
     /// # Errors
     ///
     /// Returns an error when the platform helper cannot be reached.
@@ -236,9 +241,7 @@ impl PictureInPictureController {
 
         #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "macos")))]
         {
-            Err(VideoError::Unsupported(
-                "picture in picture controller sync is unavailable on this platform".into(),
-            ))
+            Ok(())
         }
     }
 

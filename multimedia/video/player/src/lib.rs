@@ -32,9 +32,7 @@ pub use audio_track::SelectableAudioTrack;
 pub use dash::{
     DashPlaybackSession, DashSegmentPoll, DashStreamedSegment, DashStreamedSubtitleSegment,
 };
-pub use decode::{
-    AudioTrackDecoder, DecodedVideoFrame, VideoPlayer, VideoTrackDecoder, detect_codec_type,
-};
+pub use decode::{AudioTrackDecoder, DecodedVideoFrame, VideoPlayer, VideoTrackDecoder};
 pub use live::{LivePlaybackRateRange, LiveWindow};
 pub use picture_in_picture::{
     PictureInPictureCommand, PictureInPictureCommandStream, PictureInPictureController,

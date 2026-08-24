@@ -39,7 +39,6 @@ pub use waterkit_video_player::{
     PictureInPictureCommand, PictureInPictureCommandStream, PictureInPictureController,
     PictureInPictureControllerState, PictureInPictureHostId, SelectableAudioTrack,
     SelectableSubtitleTrack, SelectableVideoTrack, VideoPlayer, VideoTrackDecoder,
-    detect_codec_type,
 };
 
 #[cfg(all(target_os = "android", feature = "streaming"))]

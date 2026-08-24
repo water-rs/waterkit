@@ -15,7 +15,7 @@ mod subtitles;
 
 pub use color::{probe_mp4_color_info, probe_mp4_color_info_bytes};
 pub use demuxer::{
-    EmbeddedSubtitleCodec, EmbeddedSubtitleCue, EmbeddedSubtitleTrack, VideoReader,
+    EmbeddedSubtitleCodec, EmbeddedSubtitleCue, EmbeddedSubtitleTrack, VideoCodec, VideoReader,
     embedded_subtitle_tracks, read_embedded_subtitle_cues,
 };
 pub use muxer::{CodecType as MuxerCodecType, VideoFormat, VideoWriter};

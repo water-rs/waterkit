@@ -49,6 +49,21 @@ pub struct EmbeddedSubtitleCue {
     pub text: String,
 }
 
+/// The coded video format a [`VideoReader`]'s track carries.
+///
+/// Read from the track's sample entry, which is where the container states it.
+/// Sniffing it back out of the codec-configuration bytes cannot tell an `av1C`
+/// from anything else, and guesses `avcC` from a profile byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoCodec {
+    /// H.264 / AVC, configured by an `avcC` box.
+    H264,
+    /// H.265 / HEVC, configured by an `hvcC` box.
+    H265,
+    /// AV1, configured by an `av1C` box.
+    Av1,
+}
+
 /// Video reader for MP4/MOV files.
 #[derive(Debug)]
 pub struct VideoReader {
@@ -57,6 +72,7 @@ pub struct VideoReader {
     width: u32,
     height: u32,
     sample_metas: Vec<SampleMeta>,
+    codec: Option<VideoCodec>,
     codec_config: Option<Vec<u8>>,
     current_index: usize,
     timescale: u32,
@@ -90,6 +106,7 @@ impl VideoReader {
         let mut width = 0u32;
         let mut height = 0u32;
         let mut sample_count = 0u32;
+        let mut codec: Option<VideoCodec> = None;
         let mut codec_config: Option<Vec<u8>> = None;
         let mut timescale = 0u32;
         let mut has_audio = false;
@@ -114,11 +131,19 @@ impl VideoReader {
                     let mut buf = Vec::new();
                     let mut cursor = Cursor::new(&mut buf);
                     if avcc.write_box(&mut cursor).is_ok() {
+                        codec = Some(VideoCodec::H264);
                         codec_config = Some(buf);
                     }
+                } else if let Some(av1c) = extract_box_from_file(path_ref, *b"av1C")? {
+                    // The mp4 crate has no `av01` sample entry, so it silently
+                    // skips the one this track has; read the `av1C` box out of
+                    // the file the same way HEVC's is read below.
+                    codec = Some(VideoCodec::Av1);
+                    codec_config = Some(av1c);
                 } else {
                     // For HEVC (hvc1/hev1), mp4 crate cannot reliably expose raw hvcC bytes.
                     // Extract hvcC atom directly from file for decoder initialization.
+                    codec = Some(VideoCodec::H265);
                     codec_config = extract_box_from_file(path_ref, *b"hvcC")?;
                 }
             }
@@ -141,6 +166,7 @@ impl VideoReader {
             width,
             height,
             sample_metas,
+            codec,
             codec_config,
             current_index: 0,
             timescale,
@@ -270,7 +296,16 @@ impl VideoReader {
         })
     }
 
-    /// Get codec configuration (avcC or hvcC raw data).
+    /// The coded video format this file's video track carries.
+    ///
+    /// `None` when the track declares a sample entry this reader does not
+    /// recognize.
+    #[must_use]
+    pub const fn codec(&self) -> Option<VideoCodec> {
+        self.codec
+    }
+
+    /// Get codec configuration (avcC, hvcC or av1C raw data).
     #[must_use]
     pub fn codec_config(&self) -> Option<&[u8]> {
         self.codec_config.as_deref()

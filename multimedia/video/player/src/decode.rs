@@ -13,7 +13,7 @@ use waterkit_audio::{
 };
 use waterkit_codec::{CodecType, DecodePacket, DecodedFrame, Decoder};
 use waterkit_video_container::{
-    Codec as ContainerCodec, EncodedSample, TrackId, TrackInfo, TrackKind, VideoReader,
+    Codec as ContainerCodec, EncodedSample, TrackId, TrackInfo, TrackKind, VideoCodec, VideoReader,
     probe_mp4_color_info,
 };
 use waterkit_video_core::{Error, FrameTiming, VideoColorInfo};
@@ -572,7 +572,16 @@ impl VideoPlayer {
         let (width, height) = reader.dimensions();
         let color_info = probe_mp4_color_info(path, Some(height))?;
         let codec_config = reader.codec_config().map(<[u8]>::to_vec);
-        let codec_type = detect_codec_type(codec_config.as_deref())?;
+        let codec_type = match reader.codec() {
+            Some(VideoCodec::H264) => CodecType::H264,
+            Some(VideoCodec::H265) => CodecType::H265,
+            Some(VideoCodec::Av1) => CodecType::Av1,
+            None => {
+                return Err(Error::Unsupported(String::from(
+                    "video track declares a sample entry this reader does not recognize",
+                )));
+            }
+        };
         let decoder = Decoder::new(codec_type, codec_config.as_deref(), width, height)
             .map_err(|error| Error::Codec(error.to_string()))?;
         let timescale = reader.timescale();
@@ -777,42 +786,6 @@ impl VideoPlayer {
     fn handle_decoded_frame(&mut self, decoded: DecodedFrame) -> Result<(), Error> {
         self.frames.receive(decoded, self.discard_before)
     }
-}
-
-/// Detects the decoder codec from an AVC or HEVC configuration record.
-///
-/// # Errors
-///
-/// Returns [`Error::Unsupported`] when no recognized configuration is present.
-pub fn detect_codec_type(config: Option<&[u8]>) -> Result<CodecType, Error> {
-    let Some(config) = config else {
-        return Err(Error::Unsupported(String::from(
-            "video track has no codec configuration",
-        )));
-    };
-
-    if config.len() >= 8 && &config[4..8] == b"avcC" {
-        return Ok(CodecType::H264);
-    }
-    if config.len() >= 7 && config[0] == 0x01 {
-        let profile = config[1];
-        if matches!(profile, 66 | 77 | 88 | 100 | 110 | 122 | 144) {
-            return Ok(CodecType::H264);
-        }
-    }
-    if config.len() >= 8 && &config[4..8] == b"hvcC" {
-        return Ok(CodecType::H265);
-    }
-    if config.len() >= 23 && config[0] == 0x01 {
-        let level = config[12];
-        if level > 0 && level <= 186 {
-            return Ok(CodecType::H265);
-        }
-    }
-
-    Err(Error::Unsupported(String::from(
-        "video codec configuration is neither H.264/AVC nor H.265/HEVC",
-    )))
 }
 
 fn estimated_video_duration(samples: &[SampleMetadata], timescale: u32) -> Duration {

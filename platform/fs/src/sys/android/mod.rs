@@ -88,11 +88,22 @@ pub fn cache_dir_with_context(env: &mut Env<'_>, context: &JObject) -> Option<Pa
 }
 
 pub fn documents_dir() -> Option<PathBuf> {
-    tracing::warn!("waterkit-fs: Android documents_dir requires Context");
-    None
+    with_android_context("documents", documents_dir_with_context)
 }
 
 pub fn cache_dir() -> Option<PathBuf> {
-    tracing::warn!("waterkit-fs: Android cache_dir requires Context");
-    None
+    with_android_context("cache", cache_dir_with_context)
+}
+
+fn with_android_context(
+    directory: &str,
+    resolve: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    waterkit_build::with_android_context(|env, context| {
+        Ok::<_, waterkit_build::AndroidError>(resolve(env, context))
+    })
+    .unwrap_or_else(|error| {
+        tracing::error!("waterkit-fs: failed to resolve Android {directory} dir: {error}");
+        None
+    })
 }

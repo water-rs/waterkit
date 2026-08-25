@@ -544,6 +544,10 @@ pub struct VideoPlayer {
     has_audio: bool,
     color_info: VideoColorInfo,
     drained: bool,
+    /// Encoded samples handed to the decoder since the last decoder rebuild.
+    submitted_samples: u64,
+    /// Frames the decoder returned since the last decoder rebuild.
+    decoded_frames: u64,
     discard_before: Option<Duration>,
 }
 
@@ -622,6 +626,8 @@ impl VideoPlayer {
             has_audio,
             color_info,
             drained: false,
+            submitted_samples: 0,
+            decoded_frames: 0,
             discard_before: None,
         })
     }
@@ -693,6 +699,20 @@ impl VideoPlayer {
                     if let Some(frame) = self.frames.pop(self.color_info) {
                         return Ok(Some(frame));
                     }
+                    // Every sample went in, the decoder was drained, and nothing
+                    // came out. That is a decoder that cannot decode this
+                    // stream, not a video that has finished playing — and the
+                    // two are indistinguishable to a caller who is only told
+                    // "no more frames". Reported as end-of-stream it becomes a
+                    // player that waits forever for a playback that never
+                    // started.
+                    if self.submitted_samples > 0 && self.decoded_frames == 0 {
+                        return Err(Error::Codec(format!(
+                            "{:?} decoder produced no frames from {} encoded sample(s); \
+                             this platform cannot decode this stream",
+                            self.codec_type, self.submitted_samples
+                        )));
+                    }
                 }
                 return Ok(None);
             };
@@ -701,6 +721,7 @@ impl VideoPlayer {
             let duration = sample_duration(&self.sample_metadata, self.timescale, sample_index);
             let progress = normalized_progress(sample_index, self.total_samples);
             self.frames.submit(presentation_time, duration, progress);
+            self.submitted_samples = self.submitted_samples.saturating_add(1);
 
             for decoded in self.decoder.decode(packet) {
                 let decoded = decoded.map_err(|error| Error::Codec(error.to_string()))?;
@@ -730,6 +751,8 @@ impl VideoPlayer {
         self.rebuild_decoder()?;
         self.reader.seek_to_sample(keyframe_index);
         self.drained = false;
+        self.submitted_samples = 0;
+        self.decoded_frames = 0;
         let target_time =
             sample_presentation_time(&self.sample_metadata, self.timescale, target_index);
         self.discard_before = Some(target_time);
@@ -784,6 +807,7 @@ impl VideoPlayer {
     }
 
     fn handle_decoded_frame(&mut self, decoded: DecodedFrame) -> Result<(), Error> {
+        self.decoded_frames = self.decoded_frames.saturating_add(1);
         self.frames.receive(decoded, self.discard_before)
     }
 }

@@ -20,8 +20,8 @@ pub enum NalStreamConverter {
         #[cfg(any(test, target_os = "android"))]
         /// Boundary between primary and secondary platform codec data.
         secondary_parameter_set_offset: Option<usize>,
-        #[cfg(any(test, target_os = "linux"))]
-        /// Whether parameter sets have already been prefixed on Linux.
+        #[cfg(any(test, target_os = "linux", target_os = "windows"))]
+        /// Whether the parameter sets have already been prefixed in-band.
         sent_parameter_sets: bool,
     },
 }
@@ -77,7 +77,7 @@ impl NalStreamConverter {
             parameter_sets: parsed.parameter_sets,
             #[cfg(any(test, target_os = "android"))]
             secondary_parameter_set_offset: parsed.secondary_parameter_set_offset,
-            #[cfg(any(test, target_os = "linux"))]
+            #[cfg(any(test, target_os = "linux", target_os = "windows"))]
             sent_parameter_sets: false,
         })
     }
@@ -156,8 +156,14 @@ impl NalStreamConverter {
         }
     }
 
-    #[cfg(any(test, target_os = "linux"))]
+    #[cfg(any(test, target_os = "linux", target_os = "windows"))]
     /// Converts one access unit and prepends configuration parameter sets once.
+    ///
+    /// A decoder fed a raw Annex B elementary stream has nowhere else to learn
+    /// the sequence and picture parameter sets: the container keeps them in
+    /// `avcC`/`hvcC`, out of band, and the samples themselves carry only slice
+    /// NALs. Such a decoder waits for an SPS that never arrives — consuming
+    /// every sample, returning no frames, and reporting no error.
     ///
     /// # Errors
     ///

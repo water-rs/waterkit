@@ -4,9 +4,11 @@ use crate::{
     CodecError, DecodePacket, DecodedPixelLayout, bitstream::NalStreamConverter,
     config::decoded_pixel_layout,
 };
+use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::fmt;
 use std::ptr;
+use std::time::Duration;
 use windows::Win32::Media::MediaFoundation::{
     IMF2DBuffer, IMFMediaType, IMFSample, IMFTransform, MF_E_NO_MORE_TYPES,
     MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE, MF_MT_FRAME_RATE,
@@ -121,6 +123,15 @@ pub struct WindowsDecoder {
     output_stream_info: MFT_OUTPUT_STREAM_INFO,
     output_layout: DecodedPixelLayout,
     input_bitstream: NalStreamConverter,
+    /// The exact presentation time submitted for each Media Foundation sample
+    /// time, keyed by that sample time.
+    ///
+    /// Media Foundation counts in 100ns units, so a presentation time derived
+    /// from a container timescale does not survive the round trip: 1024 ticks
+    /// at 12288/s is 83.333333ms going in and 83.3333ms coming back. Callers
+    /// match a decoded frame to the packet they submitted by exact timestamp,
+    /// and 33ns of quantization is enough to miss.
+    submitted_times: BTreeMap<i64, Duration>,
     _media_foundation: MediaFoundationSession,
 }
 
@@ -200,6 +211,7 @@ impl WindowsDecoder {
                 output_stream_info,
                 output_layout,
                 input_bitstream,
+                submitted_times: BTreeMap::new(),
                 _media_foundation: media_foundation,
             })
         }
@@ -208,7 +220,13 @@ impl WindowsDecoder {
     /// Decode compressed video data.
     pub fn decode(&mut self, packet: DecodePacket<'_>) -> Result<Vec<WindowsFrame>, CodecError> {
         unsafe {
-            let annex_b = self.input_bitstream.convert_sample(packet.data())?;
+            // In-band, not just in the media type: the Media Foundation
+            // transform accepts `MF_MT_MPEG_SEQUENCE_HEADER` and still waits for
+            // an SPS in the elementary stream, consuming every sample, emitting
+            // no frame and reporting no error.
+            let annex_b = self
+                .input_bitstream
+                .convert_sample_with_parameter_sets(packet.data())?;
             let input_sample = create_sample(&annex_b)?;
             let time_100ns =
                 i64::try_from(packet.presentation_time().as_nanos() / 100).map_err(|_| {
@@ -217,6 +235,8 @@ impl WindowsDecoder {
             input_sample.SetSampleTime(time_100ns).map_err(|error| {
                 CodecError::DecodingFailed(format!("SetSampleTime failed: {error}"))
             })?;
+            self.submitted_times
+                .insert(time_100ns, packet.presentation_time());
 
             self.transform
                 .ProcessInput(0, &input_sample, 0)
@@ -239,7 +259,12 @@ impl WindowsDecoder {
                 .map_err(|error| {
                     CodecError::DecodingFailed(format!("start decoder drain failed: {error}"))
                 })?;
-            self.collect_output()
+            let frames = self.collect_output();
+            // Anything still recorded here belongs to a sample the decoder
+            // never emitted, and the stream is over; keeping it would grow the
+            // map for the life of the decoder.
+            self.submitted_times.clear();
+            frames
         }
     }
 
@@ -275,12 +300,28 @@ impl WindowsDecoder {
             match result {
                 Ok(()) => {
                     if let Some(sample) = output_sample.as_ref() {
-                        frames.push(extract_biplanar_frame(
+                        let mut frame = extract_biplanar_frame(
                             sample,
                             self.width,
                             self.height,
                             self.output_layout,
-                        )?);
+                        )?;
+                        // Hand back the presentation time that went in, not the
+                        // one Media Foundation's 100ns grid rounded it to.
+                        let sample_time =
+                            i64::try_from(frame.timestamp_ns / 100).map_err(|_| {
+                                CodecError::DecodingFailed("decoded sample time exceeds i64".into())
+                            })?;
+                        if let Some(submitted) = self.submitted_times.remove(&sample_time) {
+                            frame.timestamp_ns =
+                                u64::try_from(submitted.as_nanos()).map_err(|_| {
+                                    CodecError::DecodingFailed(
+                                        "submitted presentation time exceeds u64 nanoseconds"
+                                            .into(),
+                                    )
+                                })?;
+                        }
+                        frames.push(frame);
                     }
                 }
                 Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => return Ok(frames),

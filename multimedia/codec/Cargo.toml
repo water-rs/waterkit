@@ -11,6 +11,9 @@ keywords = ["codec", "video", "wgpu", "gpu", "h264", "h265", "av1"]
 categories = ["multimedia::video", "graphics"]
 
 [dependencies]
+# `rav1d` reports EAGAIN as the platform's `libc::EAGAIN`; matching on it needs
+# the same constant, and its value differs across platforms (11 / 35).
+libc = "0.2"
 thiserror.workspace = true
 wgpu.workspace = true
 image.workspace = true

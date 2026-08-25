@@ -11,10 +11,20 @@ use rav1d::include::dav1d::picture::Dav1dPicture;
 use rav1d::src::lib as rav1d_lib;
 use rav1e::prelude::*;
 use std::fmt;
-use std::io::ErrorKind;
 use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 use std::{ptr, slice};
+
+/// `EAGAIN` as `rav1d` reports it: "no picture yet, send more data".
+///
+/// `rav1d` defines its own `EAGAIN` as `libc::EAGAIN`, so this is the same
+/// constant it returns — 11 on Linux and Windows, 35 on Apple platforms. Reading
+/// the returned code through `std::io::Error::from_raw_os_error` instead is
+/// wrong on Windows, where that constructor interprets its argument as a Win32
+/// error code rather than a CRT `errno`: 11 becomes `ERROR_BAD_FORMAT`, never
+/// matches `ErrorKind::WouldBlock`, and a request for more data is reported as
+/// a hard decode failure. Hardcoding a number instead is wrong on Apple.
+const DAV1D_EAGAIN: i32 = libc::EAGAIN;
 
 /// CPU-side frame data for software codec output (NV12 or P010 format).
 pub struct CpuFrame {
@@ -293,9 +303,7 @@ impl Av1Decoder {
                 saw_would_block_once = false;
                 continue;
             }
-            if status.0 < 0
-                && std::io::Error::from_raw_os_error(-status.0).kind() == ErrorKind::WouldBlock
-            {
+            if status.0 == -DAV1D_EAGAIN {
                 if saw_would_block_once {
                     break;
                 }

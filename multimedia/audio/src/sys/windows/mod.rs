@@ -131,10 +131,10 @@ fn setup_button_handler(
                 _ => None,
             };
 
-            if let Some(command) = cmd {
-                if let Err(error) = command_sender.try_send(command) {
-                    tracing::warn!(%error, "failed to deliver Windows media command");
-                }
+            if let Some(command) = cmd
+                && let Err(error) = command_sender.try_send(command)
+            {
+                tracing::warn!(%error, "failed to deliver Windows media command");
             }
         }
         Ok(())

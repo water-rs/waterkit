@@ -445,6 +445,10 @@ impl AndroidBridge {
         Ok(Some((min, max)))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear pass over the CameraCharacteristics keys; splitting it would scatter a single query across helpers that share no meaning."
+    )]
     fn query_capabilities(
         &self,
         camera_id: &str,

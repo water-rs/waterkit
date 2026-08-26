@@ -241,8 +241,8 @@ impl WindowsAacDecoder {
             })?;
         let bytes = extract_sample_bytes(sample)
             .map_err(|message| decode_message(submitted_time, message))?;
-        let chunks = bytes.chunks_exact(BYTES_PER_FLOAT_SAMPLE as usize);
-        if !chunks.remainder().is_empty() {
+        let (chunks, remainder) = bytes.as_chunks::<{ BYTES_PER_FLOAT_SAMPLE as usize }>();
+        if !remainder.is_empty() {
             return Err(decode_message(
                 submitted_time,
                 format!(
@@ -252,7 +252,8 @@ impl WindowsAacDecoder {
             ));
         }
         let samples = chunks
-            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .iter()
+            .map(|chunk| f32::from_le_bytes(*chunk))
             .collect::<Vec<_>>();
         DecodedAudioFrame::from_interleaved_pcm(
             presentation_time,

@@ -16,6 +16,12 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+      # `shaderloom` compiles WGSL to DXIL on Windows and shells out to `dxc`,
+      # which the runner image does not carry. WaterUI's Windows job installs it
+      # the same way.
+      - name: Install DirectX Shader Compiler
+        if: runner.os == 'Windows'
+        uses: tracel-ai/github-actions/install-dxc@295f2fdbae5271f4f8ad56d634e4ff6a95daafc8
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |

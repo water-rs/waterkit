@@ -287,3 +287,7 @@ clippy.multiple_crate_versions = "allow"
 # to quick-xml 0.41, but has not released that change yet.
 [patch.crates-io]
 xcb = { git = "https://github.com/rust-x-bindings/rust-xcb", rev = "ae3b2cd080e78173223038ccbebdc644eaf4a9ad" }
+# `block` 0.1.6 declares the Blocks ABI symbol as an uninhabited extern
+# static. Keep WaterKit's standalone workspace warning-free until that fix is
+# released upstream.
+block = { git = "https://github.com/Dicklesworthstone/rust-block", rev = "b39ae859d1ee8e8cb5eef6a516471f1578d26b96" }

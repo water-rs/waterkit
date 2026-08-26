@@ -143,6 +143,11 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(layout)
         setContentView(scroll)
 
+        // The harness cold-starts this activity with `--ez run_test true`, and a
+        // cold start never reaches `onNewIntent`. Without this the flag is never
+        // armed, `onWindowFocusChanged` finds nothing pending, and the run sits
+        // idle until the harness gives up.
+        checkIntent(intent)
     }
 
     override fun onPostResume() {

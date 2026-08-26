@@ -185,9 +185,8 @@ impl ScreenStreamInner {
     }
 
     /// Get next frame asynchronously.
-    #[allow(clippy::unused_async)]
-    pub async fn next_frame(&self) -> Option<ScreenFrame> {
-        self.try_next_frame()
+    pub fn next_frame(&self) -> impl Future<Output = Option<ScreenFrame>> {
+        core::future::ready(self.try_next_frame())
     }
 
     /// Try to get a frame without blocking.

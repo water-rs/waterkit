@@ -11,6 +11,13 @@ use std::io::Cursor;
 #[cfg(target_os = "linux")]
 use wayland_sys as _;
 
+// Taking a reference here, as `needless_pass_by_value` suggests, would stop
+// this being usable as `.map_err(map_xcap_error)` — which is its only caller
+// shape, a dozen times over in this file.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "must own its argument to be passed directly to `Result::map_err`."
+)]
 fn map_xcap_error(error: xcap::XCapError) -> Error {
     Error::Platform(error.to_string())
 }

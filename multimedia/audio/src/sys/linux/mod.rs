@@ -217,12 +217,15 @@ struct MprisPlayer {
 impl MprisPlayer {
     #[zbus(property)]
     fn playback_status(&self) -> String {
-        match *self
+        // Bind the value out of the guard first: matching on the guard itself
+        // holds the read lock for the whole `match`, which is how a later arm
+        // that touches `state` turns into a deadlock.
+        let status = *self
             .state
             .status
             .read()
-            .expect("MPRIS playback status lock must not be poisoned")
-        {
+            .expect("MPRIS playback status lock must not be poisoned");
+        match status {
             PlaybackStatus::Playing => String::from("Playing"),
             PlaybackStatus::Paused => String::from("Paused"),
             PlaybackStatus::Stopped => String::from("Stopped"),

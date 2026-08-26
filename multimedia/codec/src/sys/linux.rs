@@ -618,7 +618,7 @@ fn annex_b_nalus(data: &[u8]) -> Vec<&[u8]> {
     nalus
 }
 
-fn find_start_code(data: &[u8], from: usize) -> Option<(usize, usize)> {
+const fn find_start_code(data: &[u8], from: usize) -> Option<(usize, usize)> {
     let mut i = from;
     while i + 3 <= data.len() {
         if i + 4 <= data.len()

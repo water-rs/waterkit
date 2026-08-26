@@ -100,7 +100,7 @@ pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
     Err(SensorError::NotAvailable)
 }
 
-pub fn gyroscope_watch(_interval_ms: u32) -> Result<stream::Empty<SensorData>, SensorError> {
+pub const fn gyroscope_watch(_interval_ms: u32) -> Result<stream::Empty<SensorData>, SensorError> {
     Err(SensorError::NotAvailable)
 }
 
@@ -154,7 +154,7 @@ pub async fn barometer_read() -> Result<ScalarData, SensorError> {
     Err(SensorError::NotAvailable)
 }
 
-pub fn barometer_watch(_interval_ms: u32) -> Result<stream::Empty<ScalarData>, SensorError> {
+pub const fn barometer_watch(_interval_ms: u32) -> Result<stream::Empty<ScalarData>, SensorError> {
     Err(SensorError::NotAvailable)
 }
 

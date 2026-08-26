@@ -210,6 +210,10 @@ impl ScreenStreamInner {
 
     /// Capture next frame asynchronously.
     #[allow(clippy::unused_async)]
+    #[allow(
+        clippy::future_not_send,
+        reason = "the Windows capture session is a thread-affine `*mut c_void`, so `ScreenStream` is deliberately not `Sync` and these futures cannot be `Send`."
+    )]
     pub async fn next_frame(&self) -> Option<ScreenFrame> {
         self.try_next_frame()
     }

@@ -455,7 +455,14 @@ private func queryCapabilities(device: AVCaptureDevice, movieOutput: AVCaptureMo
             }
     }
     cachedSdrFormat = closestFormat(.sRGB)
-    cachedDolbyVisionFormat = closestFormat(.HLG_BT2020)
+    // HLG_BT2020 arrived in iOS 14.1, one point release after this module's
+    // deployment target. Below it there is simply no Dolby Vision format, which
+    // the capability flag below already reports as unsupported.
+    if #available(iOS 14.1, macCatalyst 14.1, macOS 11.0, *) {
+        cachedDolbyVisionFormat = closestFormat(.HLG_BT2020)
+    } else {
+        cachedDolbyVisionFormat = nil
+    }
     cachedSupportsDolbyVision =
         cachedDolbyVisionFormat != nil &&
         (movieOutput?.availableVideoCodecTypes.contains(.hevc) ?? false)
@@ -867,6 +874,9 @@ func camera_set_dynamic_range(profile: UInt8) -> CameraResultFFI {
         codec = .h264
     case 3:
         guard cachedSupportsDolbyVision, let dolbyFormat = cachedDolbyVisionFormat else {
+            return .Unsupported
+        }
+        guard #available(iOS 14.1, macCatalyst 14.1, macOS 11.0, *) else {
             return .Unsupported
         }
         format = dolbyFormat

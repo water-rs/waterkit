@@ -23,7 +23,7 @@ playback = [
     "dep:timestretch",
     "media-session",
 ]
-recording = ["dep:cpal"]
+recording = ["dep:cpal", "dep:tracing"]
 streaming = [
     "dep:rodio",
     "dep:timestretch",

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/water-rs/waterkit/releases/tag/waterkit-v0.1.1) - 2026-08-25
+
+### Added
+
+- Added AV1 track detection, demuxing, decoding, and cross-platform video pipeline support.
+- Added GPU image filtering, HDR capture profiles, media streaming, and platform-native device integrations.
+- Added regional, passkey, background, deeplink, health, contact, speech, NFC, and sharing packages to the publishable workspace.
+
+### Changed
+
+- Migrated reactive state to Nami 0.11 and updated the shared GPU and platform dependency stack.
+- Reorganized WaterKit into independently publishable core, platform, device, multimedia, identity, and sharing packages.
+- Made every first-party dependency require the 0.1.1 release cohort and moved Shaderloom to its registry contract.
+
+### Fixed
+
+- Fixed Android filesystem resolution, JNI integration, DEX loading, camera, sensor, and media behavior.
+- Fixed Apple audio feature gating, location continuations, capture profiles, and video timestamp handling.
+- Fixed Windows decoder parameter sets and timestamps, decoder end-of-stream handling, and cross-platform correctness gates.
+- Fixed Web target support and eliminated placeholder device results in favor of real platform behavior.
+
 ## [0.1.0](https://github.com/water-rs/waterkit/releases/tag/waterkit-v0.1.0) - 2026-02-07
 
 ### Added

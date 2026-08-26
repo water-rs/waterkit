@@ -49,6 +49,7 @@ jobs:
             libudev-dev \
             libva-dev \
             libgbm-dev \
+            libegl-dev \
             libdav1d-dev \
             nasm \
             libavutil-dev \
@@ -113,6 +114,7 @@ jobs:
             libudev-dev \
             libva-dev \
             libgbm-dev \
+            libegl-dev \
             libdav1d-dev \
             nasm \
             libavutil-dev \
@@ -171,6 +173,7 @@ jobs:
             libudev-dev \
             libva-dev \
             libgbm-dev \
+            libegl-dev \
             libdav1d-dev \
             nasm \
             libavutil-dev \
@@ -259,6 +262,7 @@ jobs:
             libudev-dev \
             libva-dev \
             libgbm-dev \
+            libegl-dev \
             libdav1d-dev \
             nasm \
             libavutil-dev \

@@ -291,3 +291,10 @@ xcb = { git = "https://github.com/rust-x-bindings/rust-xcb", rev = "ae3b2cd080e7
 # static. Keep WaterKit's standalone workspace warning-free until that fix is
 # released upstream.
 block = { git = "https://github.com/Dicklesworthstone/rust-block", rev = "b39ae859d1ee8e8cb5eef6a516471f1578d26b96" }
+# TEMPORARY, verification only — do not merge.
+# `filtrate 0.2.0` is not on crates.io; it still lives in the WaterUI repo, so
+# every cargo command here dies in resolution and this workspace has never been
+# compiled by CI. Point at the source so the lint and test jobs can run.
+filtrate = { git = "https://github.com/water-rs/waterui", rev = "66c0dc9e646cd019034922e5523b249d8c8059c5" }
+filtrate-core = { git = "https://github.com/water-rs/waterui", rev = "66c0dc9e646cd019034922e5523b249d8c8059c5" }
+filtrate-derive = { git = "https://github.com/water-rs/waterui", rev = "66c0dc9e646cd019034922e5523b249d8c8059c5" }

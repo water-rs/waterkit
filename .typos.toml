@@ -5,6 +5,10 @@ trak = "trak"
 trun = "trun"
 # MaxCLL, the HDR maximum content light level metadata field.
 CLL = "CLL"
+# JNI type signatures, where each letter names a type: `(IZ)V` is a method
+# taking an int and a boolean and returning void. Respelling these breaks
+# every method descriptor they appear in.
+IZ = "IZ"
 # Mirrors the `seek` API it reports on, rather than the English past tense.
 seeked = "seeked"
 thw = "thw"

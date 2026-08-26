@@ -812,8 +812,23 @@ fn wait_for_android_report(timeout: Duration, toolchain: &AndroidToolchain) -> R
 
         if Instant::now() >= deadline {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            // The poll above is silent by design: `test -s` just exits non-zero
+            // while the report is absent, so on a timeout its stderr says
+            // nothing about why. Everything that would explain it — a crash on
+            // start, a panic inside the harness activity, a sensor the emulator
+            // does not provide — is in logcat, and the emulator is about to be
+            // destroyed. Take it with us.
+            let logcat = std::process::Command::new(&toolchain.adb)
+                .args(["logcat", "-d", "-t", "300"])
+                .output()
+                .map_or_else(
+                    |error| format!("<could not read logcat: {error}>"),
+                    |logcat| String::from_utf8_lossy(&logcat.stdout).trim().to_string(),
+                );
             eyre::bail!(
-                "Timed out waiting for Android test report; last adb stderr: {}",
+                "Timed out waiting for Android test report.\n\
+                 last adb stderr: {}\n\
+                 --- last 300 lines of logcat ---\n{logcat}",
                 stderr.trim()
             );
         }

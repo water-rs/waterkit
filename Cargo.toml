@@ -128,7 +128,7 @@ tracing = "0.1.44"
 # Reactive primitive used by waterkit-core.
 nami = "0.11.0"
 nami-core = "0.3.3"
-executor-core = { version = "0.6", features = ["std"] }
+executor-core = { version = "0.7.1", features = ["std"] }
 # Core primitives shared by every functional crate.
 waterkit-core = { path = "core", version = "0.1.1" }
 # Functional Crates

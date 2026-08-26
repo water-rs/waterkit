@@ -126,8 +126,8 @@ aes = "0.9.1"
 cbc = "0.2.1"
 tracing = "0.1.44"
 # Reactive primitive used by waterkit-core.
-nami = "0.10.1"
-nami-core = "0.3.2"
+nami = "0.11.0"
+nami-core = "0.3.3"
 executor-core = { version = "0.6", features = ["std"] }
 # Core primitives shared by every functional crate.
 waterkit-core = { path = "core", version = "0.1.0" }

@@ -1,5 +1,12 @@
 [default.extend-words]
+# ISO base media file format box names, spelled as the specification spells
+# them. `trun` is the track fragment run box, alongside `trak`.
 trak = "trak"
+trun = "trun"
+# MaxCLL, the HDR maximum content light level metadata field.
+CLL = "CLL"
+# Mirrors the `seek` API it reports on, rather than the English past tense.
+seeked = "seeked"
 thw = "thw"
 cose = "cose"
 COSE = "COSE"

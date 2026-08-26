@@ -28,6 +28,7 @@ jobs:
             libva-dev \
             libgbm-dev \
             libegl-dev \
+            libpipewire-0.3-dev \
             libdav1d-dev \
             nasm \
             libavutil-dev \

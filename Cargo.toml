@@ -282,6 +282,15 @@ clippy.pedantic = { level = "warn", priority = -1 }
 clippy.nursery = { level = "warn", priority = -1 }
 clippy.cargo = { level = "warn", priority = -1 }
 clippy.multiple_crate_versions = "allow"
+# Every capability here is one API implemented once per platform, and whether it
+# awaits is a property of the platform, not of the API: `accelerometer_read`
+# awaits a JNI callback on Android and reads a sysfs file on Linux;
+# `is_available` awaits a Binder round trip on Android and answers from a
+# constant on the fallback. The signature has to be the same on all of them, so
+# the implementations that happen not to await are correct as written, and
+# rewriting only those to return `impl Future` would make the shim set less
+# uniform, not more honest.
+clippy.unused_async_trait_impl = "allow"
 
 # xcb 1.7.0 still builds with vulnerable quick-xml 0.30. Upstream has migrated
 # to quick-xml 0.41, but has not released that change yet.

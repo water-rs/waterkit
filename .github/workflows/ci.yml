@@ -95,10 +95,30 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: clippy-${{ matrix.os }}
       - run: cargo clippy --all-targets --all-features -- -D warnings
+      # The `web` backends sit behind `cfg(target_arch = "wasm32")`, so no other
+      # job in this workflow compiles a line of them and a dependency can change
+      # its API out from under them while everything stays green. Build every
+      # crate that has one. `--lib` because several of them carry
+      # dev-dependencies that do not support wasm.
+      - name: Check web backends on wasm32
+        if: runner.os == 'Linux'
+        run: >
+          cargo check --target wasm32-unknown-unknown --lib
+          -p waterkit-fs
+          -p waterkit-permission
+          -p waterkit-clipboard
+          -p waterkit-location
+          -p waterkit-screen
+          -p waterkit-codec
+          -p waterkit-video-streaming
+      - name: Clippy waterkit-fs on wasm32
+        if: runner.os == 'Linux'
+        run: cargo clippy -p waterkit-fs --target wasm32-unknown-unknown --all-targets -- -D warnings
       # A decode-only consumer takes `waterkit-codec` without its `gpu` feature
       # and must link no `wgpu`. Nothing in `--all-features` exercises that
       # shape, so check and lint it explicitly.

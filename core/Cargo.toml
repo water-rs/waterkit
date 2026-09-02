@@ -1,0 +1,29 @@
+[package]
+name = "waterkit-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Shared primitives for waterkit (reactive Subscribed, units, identifiers, time)"
+keywords = ["kit", "reactive", "waterui", "permission", "units"]
+categories = ["gui", "data-structures"]
+
+[lints]
+workspace = true
+
+[dependencies]
+nami = { workspace = true }
+executor-core = { workspace = true }
+thiserror = { workspace = true }
+jiff = { workspace = true }
+uuid = { version = "1", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+futures = { workspace = true }
+async-channel = { workspace = true }
+
+[features]
+default = []
+serde = ["uuid/serde", "jiff/serde"]

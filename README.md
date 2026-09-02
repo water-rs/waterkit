@@ -22,7 +22,7 @@ Waterkit is organized into focused, independent crates. You can use the main `wa
 | **[FS](fs)** | File system helpers, sandboxing, and file picking. |
 | **[Haptic](haptic)** | Haptic feedback and vibration control. |
 | **[Health](health)** | Health data integration (HealthKit / Health Connect). |
-| **[Location](location)** | GPS and location services (CoreLocation, LocationManager, etc.). |
+| **[Location](location)** | GPS and location services (CoreLocation, Android location APIs, etc.). |
 | **[NFC](nfc)** | NFC read/write and tag interaction workflows. |
 | **[Notification](notification)** | Local system notifications. |
 | **[Permission](permission)** | Unified API for requesting system permissions (Camera, Mic, Location, etc.). |
@@ -77,32 +77,40 @@ Waterkit uses a mix of pure Rust crates and native bridges (Swift/Kotlin) to ach
 Here's a quick example of using multiple modules together:
 
 ```rust
+use waterkit::dialog::Dialog;
+use waterkit::location::Location;
 use waterkit::permission::{Permission, PermissionStatus};
-use waterkit::location::LocationManager;
-use waterkit::dialog::{Alert, Button};
 
-async fn example() {
+async fn example() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Check Permissions
     let perm = waterkit::permission::check(Permission::Location).await;
-    
-    if perm != PermissionStatus::Granted {
-        // 2. Request if needed
-        let status = waterkit::permission::request(Permission::Location).await;
-        if status != PermissionStatus::Granted {
-            // 3. Show Native Alert
-            Alert::new("Permission Denied")
-                .message("We need location access to show you the map.")
-                .button(Button::default("OK"))
-                .show()
-                .await;
-            return;
-        }
+
+    // 2. Request if needed
+    let status = if perm == PermissionStatus::Granted {
+        perm
+    } else {
+        waterkit::permission::request(Permission::Location).await?
+    };
+
+    if status != PermissionStatus::Granted {
+        // 3. Show Native Alert
+        Dialog::new(
+            "Permission Denied",
+            "We need location access to show you the map.",
+        )
+        .show()
+        .await?;
+        return Ok(());
     }
 
     // 4. Use Location
-    let location_manager = LocationManager::new().await.unwrap();
-    let loc = location_manager.get_current_location().await.unwrap();
-    log::info!("Location: {}, {}", loc.latitude, loc.longitude);
+    let loc = Location::get().await?;
+    log::info!(
+        "Location: {}, {}",
+        loc.latitude().get(),
+        loc.longitude().get()
+    );
+    Ok(())
 }
 ```
 

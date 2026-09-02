@@ -1,0 +1,31 @@
+[package]
+name = "waterkit-video"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Modular video umbrella for WaterKit containers, streaming, processing, and playback"
+keywords = ["video", "playback", "streaming", "codec", "media"]
+categories = ["multimedia::video"]
+
+[lints]
+workspace = true
+
+[dependencies]
+waterkit-video-core.workspace = true
+waterkit-video-container = { workspace = true, optional = true }
+waterkit-video-streaming = { workspace = true, optional = true }
+waterkit-video-processing = { workspace = true, optional = true }
+waterkit-video-player = { workspace = true, optional = true }
+
+[features]
+default = ["player"]
+container = ["dep:waterkit-video-container"]
+streaming = ["dep:waterkit-video-streaming", "waterkit-video-player?/streaming"]
+offline = ["streaming", "waterkit-video-streaming/offline"]
+processing = ["dep:waterkit-video-processing"]
+filtrate = ["processing", "waterkit-video-processing/filtrate"]
+player = ["container", "dep:waterkit-video-player"]
+full = ["player", "streaming", "offline", "processing", "filtrate"]

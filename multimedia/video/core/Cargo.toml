@@ -1,0 +1,17 @@
+[package]
+name = "waterkit-video-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+description = "Engine-neutral timing, color, stream, and error types for WaterKit video"
+keywords = ["video", "media", "timing", "hdr"]
+categories = ["multimedia::video"]
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

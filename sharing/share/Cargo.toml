@@ -1,0 +1,41 @@
+[package]
+name = "waterkit-share"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Cross-platform share sheet and social sharing"
+keywords = ["share", "sharing", "social", "send"]
+categories = ["os", "gui"]
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+futures = { workspace = true }
+percent-encoding = { workspace = true }
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+waterkit-build.workspace = true
+jni.workspace = true
+ndk-context.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+    "ApplicationModel_DataTransfer",
+    "Foundation",
+    "Storage",
+    "Storage_Streams",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus.workspace = true
+
+[build-dependencies]
+waterkit-build.workspace = true

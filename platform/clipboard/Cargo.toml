@@ -1,0 +1,55 @@
+[package]
+name = "waterkit-clipboard"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Cross-platform clipboard management"
+keywords = ["clipboard", "copy", "paste"]
+categories = ["os", "gui"]
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+futures.workspace = true
+async-channel.workspace = true
+blocking.workspace = true
+tracing.workspace = true
+
+# Desktop (Windows, Linux, macOS)
+[target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
+clipboard-rs = { workspace = true }
+image = { workspace = true }
+
+# Apple platforms (iOS only - macOS uses clipboard-rs)
+[target.'cfg(target_os = "ios")'.dependencies]
+swift-bridge.workspace = true
+percent-encoding.workspace = true
+
+[target.'cfg(target_os = "ios")'.build-dependencies]
+waterkit-build.workspace = true
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+waterkit-build.workspace = true
+jni.workspace = true
+ndk-context.workspace = true
+percent-encoding.workspace = true
+
+[target.'cfg(target_os = "android")'.build-dependencies]
+waterkit-build.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Clipboard", "Navigator", "Window"] }
+
+[build-dependencies]
+waterkit-build.workspace = true
+
+[dev-dependencies]
+image = { workspace = true }
+tokio = { workspace = true }

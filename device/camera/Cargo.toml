@@ -1,0 +1,67 @@
+[package]
+name = "waterkit-camera"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository = "https://github.com/water-rs/waterkit"
+description = "Cross-platform camera and video streaming with GPU-first frame delivery"
+keywords = ["camera", "video", "streaming", "ios", "android"]
+categories = ["multimedia::video", "gui"]
+
+[lints]
+workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["waterkit-codec"]
+
+[dependencies]
+waterkit-core = { workspace = true }
+thiserror = { workspace = true }
+wgpu.workspace = true
+futures.workspace = true
+async-channel.workspace = true
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+waterkit-codec = { workspace = true, optional = true }
+shaderloom = { workspace = true, optional = true }
+
+[build-dependencies]
+waterkit-build.workspace = true
+shaderloom = { workspace = true, features = ["build"], optional = true }
+
+[features]
+codec = ["dep:waterkit-codec"]
+preview-example = ["dep:shaderloom"]
+
+[[example]]
+name = "preview"
+required-features = ["preview-example"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+pollster = "1.0"
+
+# winit pulls in `android-activity`, which only builds once an application picks
+# an activity backend; the preview example it serves is desktop-only.
+[target.'cfg(not(target_os = "android"))'.dev-dependencies]
+winit.workspace = true
+
+# Desktop platforms (Windows, macOS, Linux) - use nokhwa
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+nokhwa = { workspace = true, features = ["input-native"] }
+
+# Apple platforms (iOS, macOS) - use native AVCaptureSession
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+objc.workspace = true
+core-graphics-types = "0.2"
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+waterkit-build.workspace = true
+jni.workspace = true
+ndk-context.workspace = true

@@ -1,0 +1,7 @@
+Starting: Intent { cmp=com.waterkit.test/.MainActivity (has extras) }
+Status: ok
+LaunchState: COLD
+Activity: com.waterkit.test/.MainActivity
+TotalTime: 271
+WaitTime: 273
+Complete

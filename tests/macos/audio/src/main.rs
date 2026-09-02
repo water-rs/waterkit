@@ -9,7 +9,7 @@
 //!   `--artwork <path>`     Set artwork image path
 
 use std::time::Duration;
-use waterkit_audio::AudioPlayer;
+use waterkit_audio::{AudioPlayer, MediaArtwork};
 
 struct Args {
     audio_file: Option<String>,
@@ -97,15 +97,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if let Some(art) = args.artwork {
             let expanded = expand_path(&art);
-            let url = format!("file://{}", expanded);
-            p = p.artwork_url(url);
+            let encoded = std::fs::read(&expanded)?;
+            p = p.artwork(MediaArtwork::new(encoded));
             println!("Artwork: {}", expanded);
         }
 
         println!("\nNow Playing (Metadata):");
-        println!("  Title:  {:?}", p.metadata().title);
-        println!("  Artist: {:?}", p.metadata().artist);
-        println!("  Album:  {:?}", p.metadata().album);
+        println!("  Title:  {:?}", p.metadata().title());
+        println!("  Artist: {:?}", p.metadata().artist());
+        println!("  Album:  {:?}", p.metadata().album());
         println!();
 
         println!("Starting playback...");
@@ -144,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     && player_ref.position().as_secs() > 0
                     && player_ref
                         .metadata()
-                        .duration
+                        .duration()
                         .is_some_and(|d| player_ref.position() >= d)
                 {
                     break;

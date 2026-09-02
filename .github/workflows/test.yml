@@ -16,6 +16,12 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+      # `shaderloom` compiles WGSL to DXIL on Windows and shells out to `dxc`,
+      # which the runner image does not carry. WaterUI's Windows job installs it
+      # the same way.
+      - name: Install DirectX Shader Compiler
+        if: runner.os == 'Windows'
+        uses: tracel-ai/github-actions/install-dxc@295f2fdbae5271f4f8ad56d634e4ff6a95daafc8
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -27,6 +33,8 @@ jobs:
             libudev-dev \
             libva-dev \
             libgbm-dev \
+            libegl-dev \
+            libpipewire-0.3-dev \
             libdav1d-dev \
             nasm \
             libavutil-dev \
@@ -59,8 +67,78 @@ jobs:
         run: |
           echo "PKG_CONFIG_PATH=C:/vcpkg/installed/x64-windows/lib/pkgconfig" >> $GITHUB_ENV
           echo "C:/vcpkg/installed/x64-windows/bin" >> $GITHUB_PATH
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: test-${{ matrix.os }}
+      - run: cargo test --verbose --workspace --all-targets --no-run
       - run: cargo test --verbose --all-features
+      - name: Run macOS sensor integration harness
+        if: runner.os == 'macOS'
+        run: cargo run -p waterkit-test -- macos tests/macos/sensor
+      - name: Run macOS location integration harness
+        if: runner.os == 'macOS'
+        run: cargo run -p waterkit-test -- macos tests/macos/location
+
+  android-device-e2e:
+    name: Android device E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          add-to-path: true
+      - name: Set Android NDK environment
+        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: android-device-e2e
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+      # GitHub's Linux runners expose /dev/kvm only to root until a udev rule
+      # opens it; without this the emulator silently falls back to software
+      # emulation (7-minute boot, `am start -W` times out) and the harness
+      # never gets to run. This is the documented prerequisite for hardware
+      # acceleration on hosted runners.
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run Android sensor harness on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          script: cargo run -p waterkit-test -- android device/sensor
+
+  ios-device-e2e:
+    name: iOS device E2E
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ios-device-e2e
+      - name: Boot an available iPhone simulator
+        run: |
+          read SIMULATOR_ID SIMULATOR_STATE < <(xcrun simctl list devices available -j | ruby -rjson -e 'devices = JSON.parse($stdin.read)["devices"].values.flatten; device = devices.find { |candidate| candidate["isAvailable"] && candidate["name"].include?("iPhone") && candidate["state"] == "Shutdown" } || devices.find { |candidate| candidate["isAvailable"] && candidate["name"].include?("iPhone") }; abort("no available iPhone simulator") unless device; puts "#{device["udid"]} #{device["state"]}"')
+          if [ "$SIMULATOR_STATE" != "Booted" ]; then
+            xcrun simctl boot "$SIMULATOR_ID"
+          fi
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b
+      - name: Run iOS sensor harness on simulator
+        run: cargo run -p waterkit-test -- ios device/sensor

@@ -1,0 +1,51 @@
+[package]
+name = "waterkit-fs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "File system and path utilities"
+keywords = ["fs", "filesystem", "paths", "io"]
+categories = ["filesystem", "gui"]
+
+[lints]
+workspace = true
+
+[dependencies]
+async-fs = "2.2.0"
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+# Apple platforms (iOS, macOS)
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge = { workspace = true, features = ["async"] }
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true
+waterkit-build.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+indexed_db_futures = "0.6.4"
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+
+[build-dependencies]
+waterkit-build.workspace = true
+
+# Desktop (Windows, macOS, Linux)
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+dirs.workspace = true
+
+# Windows specific features (if needed via rfd/dirs are usually automatic)
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = ["Foundation"] }

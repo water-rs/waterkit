@@ -1,0 +1,26 @@
+[package]
+name = "waterkit-video-processing"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+description = "Typed frame-processing composition for WaterKit video"
+keywords = ["video", "processing", "pipeline", "frames"]
+categories = ["multimedia::video"]
+
+[dependencies]
+waterkit-video-core.workspace = true
+filtrate = { version = "0.2.0", optional = true }
+wgpu = { workspace = true, optional = true }
+
+[features]
+default = []
+filtrate = ["dep:filtrate", "dep:wgpu"]
+
+[dev-dependencies]
+futures-lite = "2"
+
+[lints]
+workspace = true

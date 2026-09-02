@@ -1,0 +1,72 @@
+[package]
+name = "waterkit-codec"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Hardware-aware video codec with deterministic timing and wgpu texture output"
+keywords = ["codec", "video", "wgpu", "gpu", "h264", "h265", "av1"]
+categories = ["multimedia::video", "graphics"]
+
+[dependencies]
+# `rav1d` reports EAGAIN as the platform's `libc::EAGAIN`; matching on it needs
+# the same constant, and its value differs across platforms (11 / 35).
+libc = "0.2"
+thiserror.workspace = true
+wgpu.workspace = true
+image.workspace = true
+half = "2"
+waterkit-video-core.workspace = true
+shaderloom.workspace = true
+tracing.workspace = true
+
+[build-dependencies]
+waterkit-build.workspace = true
+shaderloom = { workspace = true, features = ["build"] }
+
+# Software fallback codecs (private, not exposed in public API)
+# Only enabled on desktop platforms - mobile and wasm use their native decode paths
+[target.'cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))'.dependencies]
+rav1e = { workspace = true, optional = true }
+rav1d = { workspace = true, optional = true }
+avif-parse = { version = "2.1", optional = true }
+yuv = { version = "0.8.16", optional = true }
+moxcms = { version = "0.8.1", features = ["extended_range"], optional = true }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2.workspace = true
+objc2-video-toolbox.workspace = true
+objc2-core-media.workspace = true
+objc2-core-video = { workspace = true, features = ["CVMetalTexture", "CVMetalTextureCache"] }
+objc2-core-foundation.workspace = true
+objc2-foundation.workspace = true
+objc2-io-surface.workspace = true
+objc2-metal = { workspace = true, features = ["MTLBlitCommandEncoder", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLDevice", "MTLPixelFormat", "MTLTexture", "MTLTypes"] }
+wgpu-hal.workspace = true
+swift-bridge.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+ndk = { version = "0.9", features = ["media", "api-level-29"] }
+ndk-sys = "0.6"
+jni.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = ["Win32_Media_MediaFoundation", "Win32_System_Com"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+cros-codecs = { version = "0.0.6", default-features = false, features = ["vaapi"] }
+
+# The software AV1 decoder's end-to-end test builds its input with `image`'s
+# AVIF *encoder*. Nothing else in the workspace encodes AVIF, so that encoder
+# (ravif -> rav1e) is asked for here instead of in the shared workspace entry.
+[target.'cfg(not(any(target_os = "android", target_arch = "wasm32")))'.dev-dependencies]
+image = { workspace = true, features = ["avif"] }
+
+[features]
+default = ["software-fallback"]
+software-fallback = ["dep:rav1e", "dep:rav1d", "dep:avif-parse", "dep:yuv", "dep:moxcms"]
+
+[lints]
+workspace = true

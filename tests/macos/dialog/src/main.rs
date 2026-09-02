@@ -8,8 +8,8 @@ async fn main() {
     println!("Showing File Picker...");
     match FileDialog::new()
         .with_title("Select a file")
-        .add_filter("Text", &["txt", "rs"])
-        .show_open_single_file()
+        .with_filter("Text", &["txt", "rs"])
+        .pick_single()
         .await
     {
         Ok(Some(path)) => println!("File selected: {:?}", path),

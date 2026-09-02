@@ -143,12 +143,17 @@ fn main() {
     // Try to get actual screen resolution
     let (screen_width, screen_height) = match waterkit_screen::screens() {
         Ok(screens) if !screens.is_empty() => {
-            let primary = screens.iter().find(|s| s.is_primary).unwrap_or(&screens[0]);
+            let primary = screens
+                .iter()
+                .find(|s| s.is_primary())
+                .unwrap_or(&screens[0]);
             println!(
                 "  Using screen: {} ({}x{})",
-                primary.name, primary.width, primary.height
+                primary.name(),
+                primary.width(),
+                primary.height()
             );
-            (primary.width, primary.height)
+            (primary.width(), primary.height())
         }
         _ => {
             println!("  No screen info available, using 4K default");

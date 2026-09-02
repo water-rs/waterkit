@@ -1,0 +1,24 @@
+[package]
+name = "waterkit-build"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Shared build utilities and Android runtime bridge for waterkit crates"
+keywords = ["build", "swift", "kotlin", "automation"]
+categories = ["development-tools::build-utils"]
+
+# The build-time half. Build scripts are compiled for the host, so this is what a
+# `[build-dependencies]` copy of this crate resolves to on every developer and CI
+# machine.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+swift-bridge-build.workspace = true
+
+# The runtime half. Only a build *targeting* Android pulls these in, which is why
+# the Swift/Kotlin toolchain never reaches an application's dependency closure.
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true
+ndk-context.workspace = true
+thiserror.workspace = true

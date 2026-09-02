@@ -1,0 +1,156 @@
+//! Cross-platform deep linking and URL scheme handling.
+//!
+//! Provides APIs for:
+//! - Receiving incoming deep links (custom URL schemes and universal links)
+//! - Opening URLs in external apps
+//! - Checking if a URL can be handled
+
+#![warn(missing_docs)]
+
+mod sys;
+
+use std::collections::HashMap;
+use url::Url;
+
+/// Android-specific JNI helpers that require an `Env` and `Context`.
+#[cfg(target_os = "android")]
+pub mod android {
+    pub use crate::sys::jni_api::{can_open_url_with_context, open_url_with_context};
+}
+
+/// A parsed deep link.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct DeepLink {
+    url: String,
+    scheme: String,
+    host: Option<String>,
+    path: String,
+    query_params: HashMap<String, String>,
+}
+
+impl DeepLink {
+    /// Parse a URL string into a `DeepLink`.
+    ///
+    /// # Errors
+    /// Returns error if the URL is malformed.
+    pub fn parse(url: &str) -> Result<Self, DeepLinkError> {
+        let parsed = Url::parse(url).map_err(|_| DeepLinkError::InvalidUrl(url.to_string()))?;
+        let query_params = parsed
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+
+        Ok(Self {
+            url: url.to_string(),
+            scheme: parsed.scheme().to_string(),
+            host: parsed.host_str().map(str::to_string),
+            path: parsed.path().to_string(),
+            query_params,
+        })
+    }
+
+    /// The full URL string.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// The URL scheme (e.g., "myapp", "https").
+    #[must_use]
+    pub fn scheme(&self) -> &str {
+        &self.scheme
+    }
+
+    /// The host component.
+    #[must_use]
+    pub fn host(&self) -> Option<&str> {
+        self.host.as_deref()
+    }
+
+    /// The path component.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Query parameters.
+    #[must_use]
+    pub const fn query_params(&self) -> &HashMap<String, String> {
+        &self.query_params
+    }
+}
+
+/// Deep link handler that receives incoming links.
+#[derive(Debug)]
+pub struct DeepLinkHandler {
+    inner: sys::DeepLinkHandlerInner,
+    events: async_channel::Receiver<DeepLink>,
+}
+
+impl DeepLinkHandler {
+    /// Starts listening for incoming deep links.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeepLinkError`] if the handler cannot be initialized.
+    pub async fn new() -> Result<Self, DeepLinkError> {
+        let (inner, events) = sys::DeepLinkHandlerInner::start().await?;
+        Ok(Self { inner, events })
+    }
+
+    /// Returns the stream of incoming deep links.
+    pub fn events(&self) -> impl futures_core::Stream<Item = DeepLink> + Send + 'static {
+        self.events.clone()
+    }
+
+    /// Returns the initial deep link that launched the app, if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeepLinkError`] if the platform query fails.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn initial_link(&self) -> Result<Option<DeepLink>, DeepLinkError> {
+        self.inner.initial_link()
+    }
+
+    /// Stops listening for deep links.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn stop(&self) {
+        self.inner.stop();
+    }
+}
+
+/// Open a URL in the default handler (browser, app, etc.).
+///
+/// # Errors
+/// Returns error if the URL cannot be opened.
+pub async fn open_url(url: &str) -> Result<(), DeepLinkError> {
+    sys::open_url(url).await
+}
+
+/// Check if a URL scheme can be handled by an installed app.
+///
+/// # Errors
+/// Returns error if the check fails.
+pub async fn can_open_url(url: &str) -> Result<bool, DeepLinkError> {
+    sys::can_open_url(url).await
+}
+
+/// Errors in deep linking operations.
+#[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
+pub enum DeepLinkError {
+    /// Invalid URL.
+    #[error("invalid URL: {0}")]
+    InvalidUrl(String),
+    /// Not supported.
+    #[error("not supported")]
+    Unsupported,
+    /// Permission denied.
+    #[error("permission denied")]
+    PermissionDenied,
+    /// Platform error.
+    #[error("platform error: {0}")]
+    Platform(String),
+}

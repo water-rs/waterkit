@@ -1,0 +1,33 @@
+[package]
+name = "waterkit-calendar"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Cross-platform calendar and events access"
+keywords = ["calendar", "events", "schedule"]
+categories = ["os"]
+
+[lints]
+workspace = true
+
+[dependencies]
+waterkit-core = { workspace = true, features = ["serde"] }
+thiserror = { workspace = true }
+futures = { workspace = true }
+blocking = { workspace = true }
+serde = { workspace = true }
+waterkit-fs = { workspace = true }
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+waterkit-build.workspace = true
+jni.workspace = true
+ndk-context.workspace = true
+
+[build-dependencies]
+waterkit-build.workspace = true

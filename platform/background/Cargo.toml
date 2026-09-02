@@ -1,0 +1,32 @@
+[package]
+name = "waterkit-background"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Cross-platform background task scheduling and execution hooks"
+keywords = ["background", "scheduler", "ios", "android"]
+categories = ["os", "asynchronous"]
+
+[lints]
+workspace = true
+
+[dependencies]
+async-channel.workspace = true
+futures-core = "0.3"
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_os = "ios")'.dependencies]
+swift-bridge.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+waterkit-build.workspace = true
+jni.workspace = true
+ndk-context.workspace = true
+
+[build-dependencies]
+waterkit-build.workspace = true

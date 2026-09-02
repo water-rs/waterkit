@@ -1,0 +1,118 @@
+[package]
+name = "waterkit-audio"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Cross-platform audio playback and recording"
+keywords = ["audio", "sound", "playback", "recording", "multimedia"]
+categories = ["multimedia::audio", "gui"]
+
+[lints]
+workspace = true
+
+[features]
+default = ["playback", "recording", "streaming", "media-session", "apple-artwork"]
+playback = [
+    "dep:lofty",
+    "dep:rodio",
+    "dep:cpal",
+    "dep:zenwave",
+    "dep:timestretch",
+    "media-session",
+]
+recording = ["dep:cpal", "dep:tracing"]
+streaming = [
+    "dep:rodio",
+    "dep:timestretch",
+    "dep:tracing",
+    "dep:symphonia-core",
+    "dep:symphonia-codec-aac",
+    "dep:ndk",
+    "dep:ndk-sys",
+    "dep:windows",
+]
+he-aac = ["streaming", "dep:symphonia-adapter-fdk-aac"]
+media-session = [
+    "dep:tracing",
+    "dep:swift-bridge",
+    "dep:jni",
+    "dep:ndk-context",
+    "dep:windows",
+    "dep:zbus",
+    "dep:mpris-server",
+    "dep:smol",
+    "dep:tempfile",
+    "dep:url",
+]
+apple-artwork = ["media-session", "dep:zenwave"]
+
+[dependencies]
+thiserror = { workspace = true }
+# Audio metadata extraction
+lofty = { version = "0.24", optional = true }
+# Async primitives (runtime-agnostic)
+async-channel = { workspace = true }
+futures = { workspace = true }
+num-traits = { workspace = true }
+smallvec = { workspace = true }
+timestretch = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+
+[target.'cfg(not(any(target_os = "android", target_os = "windows", target_arch = "wasm32")))'.dependencies]
+symphonia-core = { workspace = true, optional = true }
+symphonia-codec-aac = { workspace = true, optional = true }
+symphonia-adapter-fdk-aac = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+symphonia-core = { workspace = true, optional = true }
+symphonia-codec-aac = { workspace = true, optional = true }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Navigator", "Window"] }
+
+[build-dependencies]
+waterkit-build.workspace = true
+
+[dev-dependencies]
+hex = "0.4"
+
+[target.'cfg(any(target_os = "ios", target_os = "macos", target_os = "android", target_os = "windows", target_os = "linux", target_arch = "wasm32"))'.dependencies]
+# Cross-platform audio playback (default features include vorbis/mp3/flac/wav)
+rodio = { workspace = true, features = ["playback", "flac", "vorbis", "wav", "mp3"], optional = true }
+# Cross-platform audio I/O (for recording)
+cpal = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+rodio = { workspace = true, optional = true }
+
+# Apple platforms (iOS, macOS)
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge = { workspace = true, optional = true }
+zenwave = { version = "0.5.0", default-features = false, features = ["hyper-native-tls", "ws"], optional = true }
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+
+# Android - use rustls with ring backend (avoids aws-lc-rs CMake issues)
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { workspace = true, optional = true }
+ndk-context = { workspace = true, optional = true }
+ndk = { version = "0.9", features = ["media", "api-level-29"], optional = true }
+ndk-sys = { version = "0.6", optional = true }
+zenwave = { version = "0.5.0", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
+
+# Windows
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = ["Media_Playback", "Media_Control", "Foundation", "Storage_Streams", "Win32_Media_MediaFoundation", "Win32_System_Com"], optional = true }
+zenwave = { version = "0.5.0", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
+
+# Linux
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { workspace = true, optional = true }
+mpris-server = { version = "0.10", optional = true }
+zenwave = { version = "0.5.0", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
+smol = { version = "2", optional = true }
+tempfile = { version = "3", optional = true }
+url = { version = "2", optional = true }

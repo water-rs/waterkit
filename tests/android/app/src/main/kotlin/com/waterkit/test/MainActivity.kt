@@ -10,6 +10,9 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * Reusable test activity for waterkit crates.
@@ -18,8 +21,12 @@ import androidx.core.content.ContextCompat
 class MainActivity : AppCompatActivity() {
     
     private lateinit var logText: TextView
+    private var pendingNativeTest = false
     
     companion object {
+        private const val REPORT_FILE_NAME = "waterkit-test-report.json"
+        private const val REPORT_TEMP_FILE_NAME = "waterkit-test-report.json.tmp"
+
         init {
             System.loadLibrary("waterkit_test_android")
         }
@@ -35,6 +42,7 @@ class MainActivity : AppCompatActivity() {
     
     // Generic runner
     private external fun runTest(activity: AppCompatActivity)
+    private external fun runTestReport(activity: AppCompatActivity): String
     
     // ===== End JNI declarations =====
     
@@ -72,11 +80,7 @@ class MainActivity : AppCompatActivity() {
         
         // Generic Native Test
         layout.addView(testButton("Run Generic Native Test") {
-            log("Running native test...")
-            Thread {
-                runTest(this)
-                runOnUiThread { log("Native test trigger complete (Check Logcat for details)") }
-            }.start()
+            runNativeTest()
         })
 
         // Permission Tests
@@ -139,6 +143,15 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(layout)
         setContentView(scroll)
 
+        // The harness cold-starts this activity with `--ez run_test true`, and a
+        // cold start never reaches `onNewIntent`. Without this the flag is never
+        // armed, `onWindowFocusChanged` finds nothing pending, and the run sits
+        // idle until the harness gives up.
+        checkIntent(intent)
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
         checkIntent(intent)
     }
 
@@ -148,15 +161,49 @@ class MainActivity : AppCompatActivity() {
         checkIntent(intent)
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && pendingNativeTest) {
+            pendingNativeTest = false
+            runNativeTest()
+        }
+    }
+
     private fun checkIntent(intent: android.content.Intent) {
         if (intent.getBooleanExtra("run_test", false)) {
-            log("Auto-running native test...")
-            android.util.Log.i("waterkit", "Auto-running native test triggered from intent")
-            Thread {
-                runTest(this)
-                runOnUiThread { log("Native test trigger complete") }
-            }.start()
+            intent.removeExtra("run_test")
+            pendingNativeTest = true
+            runPendingNativeTest()
         }
+    }
+
+    private fun runPendingNativeTest() {
+        if (!pendingNativeTest || !hasWindowFocus()) return
+        pendingNativeTest = false
+        runNativeTest()
+    }
+
+    private fun runNativeTest() {
+        log("Running native test...")
+        android.util.Log.i("waterkit", "Native test started with window focus")
+        Thread {
+            val report = runTestReport(this)
+            writeReport(report)
+            runOnUiThread { log("Native test report written") }
+        }.start()
+    }
+
+    private fun writeReport(report: String) {
+        val reportFile = File(filesDir, REPORT_FILE_NAME)
+        val tempReportFile = File(filesDir, REPORT_TEMP_FILE_NAME)
+        tempReportFile.writeText(report)
+        Files.move(
+            tempReportFile.toPath(),
+            reportFile.toPath(),
+            StandardCopyOption.REPLACE_EXISTING,
+            StandardCopyOption.ATOMIC_MOVE,
+        )
+        android.util.Log.i("waterkit-report", report)
     }
     
     private fun sectionHeader(title: String) = TextView(this).apply {

@@ -1,0 +1,52 @@
+[package]
+name = "waterkit-location"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Cross-platform location and GPS services"
+keywords = ["location", "gps", "geolocation", "maps"]
+categories = ["os", "gui"]
+
+[lints]
+workspace = true
+
+[dependencies]
+waterkit-core = { workspace = true }
+waterkit-permission = { workspace = true }
+thiserror = { workspace = true }
+jiff = { workspace = true }
+
+[build-dependencies]
+waterkit-build.workspace = true
+
+# Apple platforms (iOS, macOS)
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+futures.workspace = true
+swift-bridge.workspace = true
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true
+futures.workspace = true
+waterkit-build.workspace = true
+
+# Windows
+[target.'cfg(target_os = "windows")'.dependencies]
+windows.workspace = true
+
+# Linux
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus.workspace = true
+futures.workspace = true
+async-io.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+async-channel.workspace = true
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Geolocation", "Navigator", "Window"] }

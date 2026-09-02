@@ -20,7 +20,11 @@ fn apple_build() {
     use std::process::Command;
 
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let sensor_crate = manifest_dir.join("../../../sensor");
+    let kit_root = manifest_dir
+        .ancestors()
+        .nth(3)
+        .expect("waterkit-sensor-test manifest must live under kit/tests/macos/sensor");
+    let sensor_crate = kit_root.join("device/sensor");
     let swift_file = sensor_crate.join("src/sys/apple/sensor.swift");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 

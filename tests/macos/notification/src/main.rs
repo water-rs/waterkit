@@ -1,9 +1,13 @@
 //! Test notification with actions, quick reply, and updates in a bundled macOS app.
 
+#[cfg(target_os = "macos")]
 use std::fs::OpenOptions;
+#[cfg(target_os = "macos")]
 use std::io::Write;
+#[cfg(target_os = "macos")]
 use waterkit_notification::{Action, Notification, TextInputAction};
 
+#[cfg(target_os = "macos")]
 fn log(msg: &str) {
     // Write to a fixed log path relative to the executable
     let log_path = std::env::current_exe()
@@ -15,10 +19,10 @@ fn log(msg: &str) {
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
         let _ = writeln!(file, "{msg}");
     }
-    // Also print to stdout
-    println!("{msg}");
+    tracing::debug!("{msg}");
 }
 
+#[cfg(target_os = "macos")]
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
     fn CFRunLoopRunInMode(
@@ -28,6 +32,7 @@ unsafe extern "C" {
     ) -> i32;
 }
 
+#[cfg(target_os = "macos")]
 fn run_loop_for(seconds: f64) {
     let iterations = (seconds * 10.0) as u32;
     for _ in 0..iterations {
@@ -38,6 +43,7 @@ fn run_loop_for(seconds: f64) {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn main() {
     // Test 1: Notification with quick reply
     log("=== Test 1: Quick Reply ===");
@@ -126,3 +132,6 @@ fn main() {
 
     log("Test complete.");
 }
+
+#[cfg(not(target_os = "macos"))]
+fn main() {}

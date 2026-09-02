@@ -21,11 +21,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let displays = screens()?;
     let primary = displays
         .iter()
-        .find(|d| d.is_primary)
+        .find(|d| d.is_primary())
         .unwrap_or(&displays[0]);
     println!(
         "Screen: {} ({}x{})\n",
-        primary.name, primary.width, primary.height
+        primary.name(),
+        primary.width(),
+        primary.height()
     );
 
     // Test 1: Screenshot capture (PNG encoding)
@@ -48,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Test 2: GPU Streaming Capture ===");
     {
         // Create wgpu device
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
         let (device, queue) =
@@ -87,7 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test 3: GPU Streaming + H.265 Encode
     println!("=== Test 3: GPU Streaming + H.265 Encode ===");
     {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))?;
         let (device, queue) =

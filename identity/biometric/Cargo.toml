@@ -1,0 +1,44 @@
+[package]
+name = "waterkit-biometric"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Cross-platform biometric authentication (FaceID, Fingerprint)"
+keywords = ["biometric", "authentication", "faceid", "touchid", "fingerprint"]
+categories = ["os", "gui"]
+
+[lints]
+workspace = true
+
+[dependencies]
+waterkit-core = { workspace = true }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+
+# Apple platforms (iOS, macOS)
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+waterkit-build.workspace = true
+jni.workspace = true
+ndk-context.workspace = true
+
+[build-dependencies]
+waterkit-build.workspace = true
+
+# Windows
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = ["Security_Credentials_UI", "Foundation"] }
+
+# Linux
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus.workspace = true
+futures.workspace = true
+tokio = { workspace = true, features = ["time"] }

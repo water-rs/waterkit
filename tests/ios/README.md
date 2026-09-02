@@ -19,25 +19,18 @@ tests/ios/
 
 ## Usage
 
-### 1. Build for iOS Simulator
-
-Use the `waterkit-test` CLI:
+Boot an iOS Simulator, then run through the `waterkit-test` CLI from the
+workspace root. The command builds the selected Rust feature library, compiles
+the SwiftUI harness, installs and launches it on the booted simulator, reads the
+structured JSON report from the app container, and fails if any reported case
+failed.
 
 ```bash
-# From workspace root
-cargo run -p waterkit-test -- ios biometric
+cargo run -p waterkit-test -- ios device/sensor
 ```
 
-This will:
-1. Update `tests/ios/rust/Cargo.toml` to point to the `biometric` crate.
-2. Build the Rust static library for `aarch64-apple-ios-sim`.
-
-### 2. Run the App
-
-1. Open `tests/ios/app/Package.swift` in Xcode.
-2. Ensure the destination is an iOS Simulator.
-3. Link the Rust library (will need manual linking in Xcode for now as it's a static lib).
-4. Run!
+The SwiftUI app still exposes a manual "Run All Tests" button for local
+exploration.
 
 ## Requirements
 

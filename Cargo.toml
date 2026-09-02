@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["tests/shared/dialog-demo", "waterkit-build", "permission", "location", "audio", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/video", "tests/macos/notification", "tests/macos/passkey", "tools/waterkit-test", "haptic", "notification", "dialog", "biometric", "clipboard", "fs", "secret", "camera", "sensor", "codec", "screen", "system", "video", "regional", "bluetooth", "nfc", "share", "speech", "contacts", "calendar", "health", "deeplink", "background", "passkey"]
+members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/notification", "tests/macos/passkey", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "multimedia/video/core", "multimedia/video/container", "multimedia/video/streaming", "multimedia/video/processing", "multimedia/video/player", "multimedia/video/cli", "identity/*", "sharing/*", "utils/build"]
 
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Lexo Liu"]
 license = "MIT OR Apache-2.0"
@@ -16,7 +16,7 @@ categories = ["gui", "development-tools"]
 
 [package]
 name = "waterkit"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -32,7 +32,7 @@ all-features = true
 [dependencies]
 waterkit-permission = { workspace = true, optional = true }
 waterkit-location = { workspace = true, optional = true }
-waterkit-audio = { workspace = true, optional = true }
+waterkit-audio = { workspace = true, optional = true, features = ["playback", "recording", "streaming", "media-session", "apple-artwork"] }
 waterkit-haptic = { workspace = true, optional = true }
 waterkit-notification = { workspace = true, optional = true }
 waterkit-dialog = { workspace = true, optional = true }
@@ -122,53 +122,73 @@ passkey = ["dep:waterkit-passkey"]
 
 
 [workspace.dependencies]
+aes = "0.9.1"
+cbc = "0.2.1"
 tracing = "0.1.44"
+# Reactive primitive used by waterkit-core.
+nami = "0.11.0"
+nami-core = "0.3.3"
+executor-core = { version = "0.7.1", features = ["std"] }
+# Core primitives shared by every functional crate.
+waterkit-core = { path = "core", version = "0.1.1" }
 # Functional Crates
-waterkit-permission = { path = "permission", version = "0.1.0" }
-waterkit-location = { path = "location", version = "0.1.0" }
-waterkit-audio = { path = "audio", version = "0.1.0" }
-waterkit-haptic = { path = "haptic", version = "0.1.0" }
-waterkit-notification = { path = "notification", version = "0.1.0" }
-waterkit-dialog = { path = "dialog", version = "0.1.0" }
-waterkit-biometric = { path = "biometric", version = "0.1.0" }
-waterkit-clipboard = { path = "clipboard", version = "0.1.0" }
-waterkit-fs = { path = "fs", version = "0.1.0" }
-waterkit-secret = { path = "secret", version = "0.1.0" }
-waterkit-camera = { path = "camera", version = "0.1.0" }
-waterkit-sensor = { path = "sensor", version = "0.1.0" }
-waterkit-codec = { path = "codec", version = "0.1.0" }
-waterkit-screen = { path = "screen", version = "0.1.0" }
-waterkit-system = { path = "system", version = "0.1.0" }
-waterkit-video = { path = "video", version = "0.1.0" }
-waterkit-regional = { path = "regional", version = "0.1.0" }
-waterkit-bluetooth = { path = "bluetooth", version = "0.1.0" }
-waterkit-nfc = { path = "nfc", version = "0.1.0" }
-waterkit-share = { path = "share", version = "0.1.0" }
-waterkit-speech = { path = "speech", version = "0.1.0" }
-waterkit-contacts = { path = "contacts", version = "0.1.0" }
-waterkit-calendar = { path = "calendar", version = "0.1.0" }
-waterkit-health = { path = "health", version = "0.1.0" }
-waterkit-deeplink = { path = "deeplink", version = "0.1.0" }
-waterkit-background = { path = "background", version = "0.1.0" }
-waterkit-passkey = { path = "passkey", version = "0.1.0" }
+waterkit-permission = { path = "platform/permission", version = "0.1.1" }
+waterkit-location = { path = "device/location", version = "0.1.1" }
+waterkit-audio = { path = "multimedia/audio", version = "0.1.1", default-features = false }
+waterkit-haptic = { path = "device/haptic", version = "0.1.1" }
+waterkit-notification = { path = "sharing/notification", version = "0.1.1" }
+waterkit-dialog = { path = "sharing/dialog", version = "0.1.1" }
+waterkit-biometric = { path = "identity/biometric", version = "0.1.1" }
+waterkit-clipboard = { path = "platform/clipboard", version = "0.1.1" }
+waterkit-fs = { path = "platform/fs", version = "0.1.1" }
+waterkit-secret = { path = "platform/secret", version = "0.1.1" }
+waterkit-camera = { path = "device/camera", version = "0.1.1" }
+waterkit-sensor = { path = "device/sensor", version = "0.1.1" }
+waterkit-codec = { path = "multimedia/codec", version = "0.1.1" }
+shaderloom = "0.1.0"
+waterkit-screen = { path = "platform/screen", version = "0.1.1" }
+waterkit-system = { path = "platform/system", version = "0.1.1" }
+waterkit-video = { path = "multimedia/video", version = "0.1.1" }
+waterkit-video-core = { path = "multimedia/video/core", version = "0.1.1" }
+waterkit-video-container = { path = "multimedia/video/container", version = "0.1.1" }
+waterkit-video-streaming = { path = "multimedia/video/streaming", version = "0.1.1" }
+waterkit-video-processing = { path = "multimedia/video/processing", version = "0.1.1" }
+waterkit-video-player = { path = "multimedia/video/player", version = "0.1.1" }
+waterkit-regional = { path = "platform/regional", version = "0.1.1" }
+waterkit-bluetooth = { path = "device/bluetooth", version = "0.1.1" }
+waterkit-nfc = { path = "device/nfc", version = "0.1.1" }
+waterkit-share = { path = "sharing/share", version = "0.1.1" }
+waterkit-speech = { path = "multimedia/speech", version = "0.1.1" }
+waterkit-contacts = { path = "identity/contacts", version = "0.1.1" }
+waterkit-calendar = { path = "identity/calendar", version = "0.1.1" }
+waterkit-health = { path = "device/health", version = "0.1.1" }
+waterkit-deeplink = { path = "platform/deeplink", version = "0.1.1" }
+waterkit-background = { path = "platform/background", version = "0.1.1" }
+waterkit-passkey = { path = "identity/passkey", version = "0.1.1" }
 
 # Cross-platform
 futures = "0.3"
-async-channel = "2.3"
+smallvec = "1.15"
+async-channel = "2.5"
+async-fs = "2"
 thiserror = "2"
+num-traits = "0.2"
 blocking = "1"
 async-io = "2"
 async-process = "2"
-wgpu = "27"
-metal = "0.33"
+wgpu = "29.0.4"
+wgpu-hal = { version = "29.0.4", features = ["metal"] }
 
 # Common
 log = "0.4"
 cfg-if = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.8"
-image = "0.25"
+toml = "1.1"
+# Decoders only. `default-formats` also pulls `image`'s AVIF *encoder*
+# (ravif -> rav1e); the one place that encodes AVIF is a `waterkit-codec` test,
+# which asks for that feature itself as a dev-dependency.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
 
 # Apple
 core-foundation = "0.10"
@@ -179,10 +199,11 @@ objc2-core-video = "0.3"
 objc2-video-toolbox = "0.3"
 objc2-core-foundation = "0.3"
 objc2-io-surface = "0.3"
+objc2-metal = "0.3"
 objc = "0.2"
 
 # Security
-keyring = "3"
+keyring = "4"
 
 
 # Apple platforms
@@ -190,11 +211,12 @@ swift-bridge = "0.1"
 swift-bridge-build = "0.1"
 
 # Android
-jni = "0.21"
+jni = "0.22"
 ndk-context = "0.1"
 
 # Build utilities
-waterkit-build = { path = "waterkit-build", version = "0.1.0" }
+waterkit-build = { path = "utils/build", version = "0.1.1" }
+waterkit-test-report = { path = "utils/test-report", version = "0.1.1" }
 
 # Windows
 windows = { version = "0.62", features = ["Devices_Geolocation", "Foundation"] }
@@ -207,17 +229,25 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 
 # Audio/Video
-rodio = "0.19"
-cpal = "0.15"
+rodio = { version = "0.22", default-features = false }
+cpal = "0.18"
+symphonia-core = "0.6.0"
+symphonia-codec-aac = "0.6.0"
+symphonia-adapter-fdk-aac = "0.2.0"
 mp4 = "0.14"
 byteorder = "1.5"
+bytes = "1.12"
+broadcast-common = { version = "8.4", default-features = false, features = ["std"] }
+transmux = { version = "0.17", default-features = false, features = ["std"] }
+quick-xml = "0.41"
+subtp = "0.2"
 winit = "0.30"
-pollster = "0.4"
-nokhwa = { version = "0.10", features = ["input-native", "output-wgpu"] }
+pollster = "1.0"
+nokhwa = "0.10"
 rav1e = { version = "0.8", default-features = false, features = ["threading"] }
 rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
-media-codec = "0.8"
-timestretch = "0.2"
+media-codec = "0.9"
+timestretch = "0.8"
 
 # Time
 jiff = "0.2"
@@ -225,18 +255,20 @@ jiff = "0.2"
 # URL encoding
 percent-encoding = "2.3"
 url = "2.5"
+zenwave = { version = "0.5.0", default-features = false, features = ["hyper-backend"] }
 
 # System/OS
-sysinfo = "0.37"
+sysinfo = "0.39"
 dirs = "6.0"
-rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "async-std"] }
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 arboard = "3"
 clipboard-rs = { version = "0.3", features = ["image"] }
-wayland-sys = { version = "0.30.1", features = ["dlopen"] }
+wayland-sys = { version = "0.31.11", features = ["dlopen"] }
+xcap = "0.9.8"
 notify-rust = "4"
 futures-timer = "3"
-netdev = "0.40"
-swift-rs = "1.0.6"
+netdev = "0.45"
+swift-rs = "1.0.7"
 sys-locale = "0.3"
 iana-time-zone = "0.1"
 
@@ -253,3 +285,21 @@ clippy.pedantic = { level = "warn", priority = -1 }
 clippy.nursery = { level = "warn", priority = -1 }
 clippy.cargo = { level = "warn", priority = -1 }
 clippy.multiple_crate_versions = "allow"
+# Every capability here is one API implemented once per platform, and whether it
+# awaits is a property of the platform, not of the API: `accelerometer_read`
+# awaits a JNI callback on Android and reads a sysfs file on Linux;
+# `is_available` awaits a Binder round trip on Android and answers from a
+# constant on the fallback. The signature has to be the same on all of them, so
+# the implementations that happen not to await are correct as written, and
+# rewriting only those to return `impl Future` would make the shim set less
+# uniform, not more honest.
+clippy.unused_async_trait_impl = "allow"
+
+# xcb 1.7.0 still builds with vulnerable quick-xml 0.30. Upstream has migrated
+# to quick-xml 0.41, but has not released that change yet.
+[patch.crates-io]
+xcb = { git = "https://github.com/rust-x-bindings/rust-xcb", rev = "ae3b2cd080e78173223038ccbebdc644eaf4a9ad" }
+# `block` 0.1.6 declares the Blocks ABI symbol as an uninhabited extern
+# static. Keep WaterKit's standalone workspace warning-free until that fix is
+# released upstream.
+block = { git = "https://github.com/Dicklesworthstone/rust-block", rev = "b39ae859d1ee8e8cb5eef6a516471f1578d26b96" }

@@ -1,0 +1,39 @@
+[package]
+name = "waterkit-passkey"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Cross-platform passkey (WebAuthn) registration and authentication"
+keywords = ["passkey", "webauthn", "authentication", "security"]
+categories = ["os", "authentication"]
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+waterkit-build.workspace = true
+jni.workspace = true
+ndk-context.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Networking_WindowsWebServices"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus.workspace = true
+
+[build-dependencies]
+waterkit-build.workspace = true

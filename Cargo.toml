@@ -145,7 +145,7 @@ waterkit-secret = { path = "platform/secret", version = "0.1.1" }
 waterkit-camera = { path = "device/camera", version = "0.1.1" }
 waterkit-sensor = { path = "device/sensor", version = "0.1.1" }
 waterkit-codec = { path = "multimedia/codec", version = "0.1.1" }
-shaderloom = "0.1.0"
+shaderloom = "0.1.2"
 waterkit-screen = { path = "platform/screen", version = "0.1.1" }
 waterkit-system = { path = "platform/system", version = "0.1.1" }
 waterkit-video = { path = "multimedia/video", version = "0.1.1" }

@@ -12,5 +12,6 @@ owo-colors = "4.3"
 regex = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
+wait-timeout = "0.2"
 waterkit-test-report.workspace = true
 which = "8"

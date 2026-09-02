@@ -2,14 +2,33 @@ use clap::{Parser, Subcommand};
 use eyre::{Context, Result};
 use owo_colors::OwoColorize;
 use std::path::{Path, PathBuf};
-use std::process::Output;
+use std::process::{Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use toml_edit::DocumentMut;
 use tracing::{info, warn};
+use wait_timeout::ChildExt;
 use waterkit_test_report::{TestReport, from_json, parse_report_block};
 
 const MACOS_HEADERPAD_RUSTFLAGS: &str = "-C link-arg=-Wl,-headerpad_max_install_names";
+
+/// How long the harness allows Android to bring the test activity to its first
+/// frame, measured by `am start -W`.
+///
+/// A cold start right after `adb install` is the single most variable step in
+/// the run: a physical Pixel 9 Pro draws the first frame in ~0.27s, while a
+/// hosted-CI emulator sharing two vCPUs with the background dexopt that the
+/// install just triggered has been measured at 55.2s. This bounds only the
+/// launch, so a launch that never completes is reported as a launch failure
+/// instead of silently consuming the budget meant for the test.
+const ANDROID_LAUNCH_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// How long the native test itself has to run and write its report, measured
+/// from the moment Android reports the activity displayed.
+const ANDROID_REPORT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Cadence for polling the on-device report file over `adb`.
+const ANDROID_REPORT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Parser)]
 #[command(name = "waterkit-test")]
@@ -126,7 +145,7 @@ fn run_android_awake(crate_path: &Path, toolchain: &AndroidToolchain) -> Result<
     install_android_apk(&root_dir, toolchain)?;
     grant_android_permissions_for_feature(feature, toolchain)?;
     launch_android_test(toolchain)?;
-    let report = wait_for_android_report(Duration::from_secs(60), toolchain)?;
+    let report = wait_for_android_report(ANDROID_REPORT_TIMEOUT, toolchain)?;
     ensure_report_success(&report)?;
 
     Ok(())
@@ -773,19 +792,92 @@ fn launch_android_test(toolchain: &AndroidToolchain) -> Result<()> {
             "files/waterkit-test-report.json",
         ],
     )?;
-    run_adb(
+    // Everything logcat holds from here on belongs to this run, so a failure
+    // dump can be complete instead of an arbitrary tail that a busy device
+    // fills with unrelated system chatter in seconds.
+    run_adb(toolchain, ["logcat", "-c"])?;
+
+    // `-W` makes Android tell us when the activity actually reached its first
+    // frame instead of returning as soon as the start request is queued. The
+    // report deadline then bounds the native test alone, which is the thing it
+    // is meant to bound.
+    let output = run_adb_with_timeout(
         toolchain,
-        [
+        &[
             "shell",
             "am",
             "start",
+            "-W",
             "-n",
             "com.waterkit.test/.MainActivity",
             "--ez",
             "run_test",
             "true",
         ],
-    )
+        ANDROID_LAUNCH_TIMEOUT,
+        "launch the Android test activity",
+    )?;
+
+    let launch =
+        String::from_utf8(output.stdout).context("`am start -W` output was not valid UTF-8")?;
+    let status = am_start_field(&launch, "Status").unwrap_or("<missing>");
+    if status != "ok" {
+        eyre::bail!(
+            "Android test activity did not launch (Status: {status}).\n\
+             --- am start -W output ---\n{}\n--- adb stderr ---\n{}",
+            launch.trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    info!(
+        "Android test activity displayed in {}ms (LaunchState: {})",
+        am_start_field(&launch, "TotalTime").unwrap_or("<unknown>"),
+        am_start_field(&launch, "LaunchState").unwrap_or("<unknown>"),
+    );
+
+    Ok(())
+}
+
+/// Reads one `Key: value` line out of `am start -W` output.
+fn am_start_field<'a>(output: &'a str, key: &str) -> Option<&'a str> {
+    output.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        (name.trim() == key).then(|| value.trim())
+    })
+}
+
+/// Runs an `adb` command that must not hang, capturing its output.
+fn run_adb_with_timeout(
+    toolchain: &AndroidToolchain,
+    args: &[&str],
+    timeout: Duration,
+    description: &str,
+) -> Result<Output> {
+    let mut child = std::process::Command::new(&toolchain.adb)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("Failed to run adb to {description}"))?;
+
+    if child
+        .wait_timeout(timeout)
+        .with_context(|| format!("Failed to wait for adb to {description}"))?
+        .is_none()
+    {
+        child
+            .kill()
+            .with_context(|| format!("Failed to kill the adb command that should {description}"))?;
+        child
+            .wait()
+            .with_context(|| format!("Failed to reap the adb command that should {description}"))?;
+        eyre::bail!("adb did not {description} within {timeout:?}");
+    }
+
+    child
+        .wait_with_output()
+        .with_context(|| format!("Failed to read the output of the adb command that {description}"))
 }
 
 fn wait_for_android_report(timeout: Duration, toolchain: &AndroidToolchain) -> Result<TestReport> {
@@ -814,26 +906,27 @@ fn wait_for_android_report(timeout: Duration, toolchain: &AndroidToolchain) -> R
             let stderr = String::from_utf8_lossy(&output.stderr);
             // The poll above is silent by design: `test -s` just exits non-zero
             // while the report is absent, so on a timeout its stderr says
-            // nothing about why. Everything that would explain it — a crash on
-            // start, a panic inside the harness activity, a sensor the emulator
-            // does not provide — is in logcat, and the emulator is about to be
-            // destroyed. Take it with us.
+            // nothing about why. Everything that would explain it — a crash
+            // after the first frame, a panic inside the harness activity, a
+            // sensor the device does not provide — is in logcat, which was
+            // cleared just before launch and may be about to be destroyed along
+            // with the device. Take all of it with us.
             let logcat = std::process::Command::new(&toolchain.adb)
-                .args(["logcat", "-d", "-t", "300"])
+                .args(["logcat", "-d"])
                 .output()
                 .map_or_else(
                     |error| format!("<could not read logcat: {error}>"),
                     |logcat| String::from_utf8_lossy(&logcat.stdout).trim().to_string(),
                 );
             eyre::bail!(
-                "Timed out waiting for Android test report.\n\
+                "The Android test activity was displayed but no test report appeared within {timeout:?}.\n\
                  last adb stderr: {}\n\
-                 --- last 300 lines of logcat ---\n{logcat}",
+                 --- logcat since launch ---\n{logcat}",
                 stderr.trim()
             );
         }
 
-        thread::sleep(Duration::from_millis(250));
+        thread::sleep(ANDROID_REPORT_POLL_INTERVAL);
     }
 }
 
@@ -1026,8 +1119,23 @@ fn get_crate_feature(package_name: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{get_crate_feature, parse_android_min_sdk, sdk_root_from_adb};
+    use super::{am_start_field, get_crate_feature, parse_android_min_sdk, sdk_root_from_adb};
     use std::path::{Path, PathBuf};
+
+    /// A real `am start -W` reply, captured from a Pixel 9 Pro.
+    const AM_START_OK: &str = include_str!("../tests/fixtures/am-start-w.txt");
+
+    #[test]
+    fn reads_am_start_launch_fields() {
+        assert_eq!(am_start_field(AM_START_OK, "Status"), Some("ok"));
+        assert_eq!(am_start_field(AM_START_OK, "LaunchState"), Some("COLD"));
+        assert_eq!(am_start_field(AM_START_OK, "TotalTime"), Some("271"));
+    }
+
+    #[test]
+    fn reports_missing_am_start_field() {
+        assert_eq!(am_start_field(AM_START_OK, "Error"), None);
+    }
 
     #[test]
     fn derives_android_sdk_root_from_platform_tools_adb() {

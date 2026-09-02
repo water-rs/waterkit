@@ -99,6 +99,13 @@ jobs:
         with:
           shared-key: clippy-${{ matrix.os }}
       - run: cargo clippy --all-targets --all-features -- -D warnings
+      # A decode-only consumer takes `waterkit-codec` without its `gpu` feature
+      # and must link no `wgpu`. Nothing in `--all-features` exercises that
+      # shape, so check and lint it explicitly.
+      - name: Check waterkit-codec without GPU output
+        run: cargo check -p waterkit-codec --no-default-features --features software-fallback
+      - name: Clippy waterkit-codec without GPU output
+        run: cargo clippy -p waterkit-codec --all-targets --no-default-features --features software-fallback -- -D warnings
 
   cross-clippy:
     name: Clippy (${{ matrix.target }})
@@ -316,6 +323,9 @@ jobs:
       - uses: taiki-e/install-action@cargo-hack
       - run: cargo hack check --each-feature --no-dev-deps
       - run: cargo hack check --feature-powerset --no-dev-deps --depth 2
+      # The root package only re-exports `waterkit-codec` with its defaults, so
+      # walk that crate's own features too.
+      - run: cargo hack check -p waterkit-codec --feature-powerset --no-dev-deps
 
   test:
     name: Test

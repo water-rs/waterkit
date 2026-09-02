@@ -848,6 +848,7 @@ pub struct IOSurfaceFrame {
     /// The underlying `IOSurface`.
     pub surface: CFRetained<IOSurfaceRef>,
     /// Retained Core Video buffer used for Metal texture-cache interop.
+    #[cfg(feature = "gpu")]
     pub pixel_buffer: CFRetained<CVPixelBuffer>,
     /// Frame width in pixels.
     pub width: u32,
@@ -897,11 +898,13 @@ unsafe extern "C-unwind" fn decode_callback(
         let surface_raw = CVPixelBufferGetIOSurface(image_buffer_ref);
         if !surface_raw.is_null() {
             let surface = CFRetained::retain(NonNull::new_unchecked(surface_raw.cast_mut()));
+            #[cfg(feature = "gpu")]
             let pixel_buffer = CFRetained::retain(NonNull::new_unchecked(image_buffer));
             let timestamp_ns = cm_time_to_timestamp_ns(presentation_time_stamp)
                 .expect("VideoToolbox returned a decoded frame without a valid non-negative PTS");
             let frame = IOSurfaceFrame {
                 surface,
+                #[cfg(feature = "gpu")]
                 pixel_buffer,
                 width,
                 height,

@@ -4,6 +4,15 @@
 //! lazy GPU texture creation. Decoded frames are returned as an iterator of
 //! opaque [`DecodedFrame`] types that can be converted to GPU textures when needed.
 //!
+//! # Features
+//!
+//! - `gpu` (default): uploads decoded frames to `wgpu` textures and converts
+//!   them to linear RGBA on the GPU. Without it the crate decodes to CPU memory
+//!   only, [`DecodedFrame::copy_to_buffer`] is the way out, and no `wgpu` is
+//!   linked at all.
+//! - `software-fallback` (default): AV1 encode and decode in software on
+//!   desktop platforms.
+//!
 //! # Example
 //!
 //! ```ignore
@@ -28,7 +37,8 @@
 //! # Mapped Buffer Path
 //!
 //! Use [`Decoder::decode_into`] when a caller needs tightly packed decoded planes
-//! in a mapped buffer. This path performs a copy from native decoder storage.
+//! in a mapped buffer. This path performs a copy from native decoder storage and
+//! needs no GPU device, so it is available without the `gpu` feature.
 //!
 //! ```ignore
 //! let buffer = device.create_buffer(&BufferDescriptor {
@@ -83,14 +93,10 @@ pub use color::{
     ColorOutputTarget, SDR_REFERENCE_WHITE_NITS, VideoColorUniform, YUV_COLOR_SHADER_WGSL,
     video_color_uniform,
 };
-pub use frame::{
-    DecodedFrame, DecodedFrameUploader, DecodedPixelLayout, GpuFrame, LinearRgbaConverter,
-};
+pub use frame::{DecodedFrame, DecodedPixelLayout};
+#[cfg(feature = "gpu")]
+pub use frame::{DecodedFrameUploader, GpuFrame, LinearRgbaConverter};
 pub use image::{DecodedImage, DecodedPixelFormat, decode_image, decode_image_platform};
-
-use shaderloom::CompiledShader;
-
-const YUV_COLOR_SHADER: CompiledShader = include!(concat!(env!("OUT_DIR"), "/yuv_color.rs"));
 
 use std::{time::Duration, vec::IntoIter};
 use thiserror::Error;
@@ -294,7 +300,7 @@ impl std::fmt::Debug for EncodeStream {
 /// Unified video decoder with automatic hardware/software selection.
 ///
 /// Tries hardware acceleration first, falls back to software if unavailable.
-/// No GPU device is required until you convert frames with [`DecodedFrame::to_gpu_frame`].
+/// No GPU device is required until a decoded frame is uploaded to one.
 pub struct Decoder {
     inner: DecoderInner,
 }
@@ -330,7 +336,7 @@ impl Decoder {
     /// For AV1, `config` can be `None`.
     ///
     /// No GPU device is required - decoded frames can be converted to GPU textures
-    /// later using [`DecodedFrame::to_gpu_frame`].
+    /// later when the `gpu` feature is enabled.
     ///
     /// # Errors
     ///
@@ -449,7 +455,8 @@ impl Decoder {
     /// Decode compressed video data.
     ///
     /// Returns a streaming iterator yielding decoded frames as opaque [`DecodedFrame`] types.
-    /// Use [`DecodedFrame::to_gpu_frame`] to convert to GPU textures on your device.
+    /// With the `gpu` feature, convert them to GPU textures on your device;
+    /// otherwise read them out with [`DecodedFrame::copy_to_buffer`].
     pub fn decode(&mut self, packet: DecodePacket<'_>) -> DecodeStream {
         let result = self.decode_inner(packet);
         match result {
@@ -471,22 +478,11 @@ impl Decoder {
                 "video decoding is not supported by waterkit-codec on WebAssembly",
             ))),
             #[cfg(target_vendor = "apple")]
-            DecoderInner::Apple(dec) => {
-                let surfaces = dec.decode_to_iosurface(packet)?;
-                let mut frames = Vec::with_capacity(surfaces.len());
-                for surface in surfaces {
-                    let frame = DecodedFrame::from_iosurface(
-                        surface.surface,
-                        surface.pixel_buffer,
-                        surface.width,
-                        surface.height,
-                        surface.timestamp_ns,
-                        surface.layout,
-                    );
-                    frames.push(frame);
-                }
-                Ok(frames)
-            }
+            DecoderInner::Apple(dec) => Ok(dec
+                .decode_to_iosurface(packet)?
+                .iter()
+                .map(DecodedFrame::from_iosurface)
+                .collect()),
 
             #[cfg(target_os = "android")]
             DecoderInner::Android(dec) => {
@@ -584,17 +580,8 @@ impl Decoder {
             #[cfg(target_vendor = "apple")]
             DecoderInner::Apple(decoder) => Ok(decoder
                 .drain()?
-                .into_iter()
-                .map(|surface| {
-                    DecodedFrame::from_iosurface(
-                        surface.surface,
-                        surface.pixel_buffer,
-                        surface.width,
-                        surface.height,
-                        surface.timestamp_ns,
-                        surface.layout,
-                    )
-                })
+                .iter()
+                .map(DecodedFrame::from_iosurface)
                 .collect()),
             #[cfg(target_os = "android")]
             DecoderInner::Android(decoder) => Ok(decoder
@@ -705,14 +692,7 @@ impl Decoder {
                     }
 
                     // Copy IOSurface to buffer using DecodedFrame helper
-                    let frame = DecodedFrame::from_iosurface(
-                        surface.surface.clone(),
-                        surface.pixel_buffer.clone(),
-                        width,
-                        height,
-                        surface.timestamp_ns,
-                        surface.layout,
-                    );
+                    let frame = DecodedFrame::from_iosurface(surface);
                     frame.copy_to_buffer(&mut output[offset..offset + total_bytes]);
 
                     infos.push(FrameInfo {

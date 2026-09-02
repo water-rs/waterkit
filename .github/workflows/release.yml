@@ -21,6 +21,37 @@ jobs:
           ref: main
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+      # cargo publish verifies each package by building it; the native
+      # libraries the crates link (ALSA for waterkit-audio, ...) must be
+      # present here exactly as in the test workflow, or the verify build fails.
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libasound2-dev \
+            libudev-dev \
+            libva-dev \
+            libgbm-dev \
+            libegl-dev \
+            libpipewire-0.3-dev \
+            libdav1d-dev \
+            nasm \
+            libavutil-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavfilter-dev \
+            libavdevice-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libclang-dev \
+            libxcb1-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libdbus-1-dev
       - uses: MarcoIeni/release-plz-action@v0.5
         with:
           command: release
@@ -41,6 +72,37 @@ jobs:
           ref: main
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+      # cargo publish verifies each package by building it; the native
+      # libraries the crates link (ALSA for waterkit-audio, ...) must be
+      # present here exactly as in the test workflow, or the verify build fails.
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libasound2-dev \
+            libudev-dev \
+            libva-dev \
+            libgbm-dev \
+            libegl-dev \
+            libpipewire-0.3-dev \
+            libdav1d-dev \
+            nasm \
+            libavutil-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavfilter-dev \
+            libavdevice-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libclang-dev \
+            libxcb1-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libdbus-1-dev
       - uses: MarcoIeni/release-plz-action@v0.5
         with:
           command: release-pr

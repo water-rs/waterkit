@@ -105,6 +105,16 @@ jobs:
           shared-key: android-device-e2e
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
+      # GitHub's Linux runners expose /dev/kvm only to root until a udev rule
+      # opens it; without this the emulator silently falls back to software
+      # emulation (7-minute boot, `am start -W` times out) and the harness
+      # never gets to run. This is the documented prerequisite for hardware
+      # acceleration on hosted runners.
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       - name: Run Android sensor harness on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:

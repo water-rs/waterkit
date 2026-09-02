@@ -7,7 +7,7 @@ license.workspace = true
 readme = "README.md"
 repository.workspace = true
 description = "Hardware-aware video codec with deterministic timing and wgpu texture output"
-keywords = ["codec", "video", "wgpu", "gpu", "h264", "h265", "av1"]
+keywords = ["codec", "video", "gpu", "h264", "av1"]
 categories = ["multimedia::video", "graphics"]
 
 [dependencies]

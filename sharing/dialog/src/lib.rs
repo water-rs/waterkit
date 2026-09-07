@@ -39,8 +39,6 @@ pub use error::*;
 
 use std::path::{Path, PathBuf};
 
-use waterkit_fs::WaterFs;
-
 #[cfg(any(target_os = "android", target_os = "ios", test))]
 pub(crate) const PATH_LIST_SEPARATOR: char = '\0';
 
@@ -437,10 +435,18 @@ pub(crate) fn collect_filter_extensions(dialog: &FileDialog) -> Vec<String> {
     extensions
 }
 
+/// Applies the dialog's import policy to a picked path.
+///
+/// A browser hands back file contents rather than a path in the file system,
+/// so there is nothing to import *from* there and the web backend imports the
+/// bytes it was given instead.
+#[cfg(any(not(target_arch = "wasm32"), test))]
 pub(crate) fn finalize_selected_file(
     dialog: &FileDialog,
     path: PathBuf,
 ) -> Result<PathBuf, DialogError> {
+    use waterkit_fs::WaterFs;
+
     match dialog.import_to_cache_subdir.as_deref() {
         Some(cache_subdir) => {
             WaterFs::import_file_to_cache(&path, cache_subdir).map_err(DialogError::from)
@@ -449,6 +455,8 @@ pub(crate) fn finalize_selected_file(
     }
 }
 
+/// Applies the dialog's import policy to every picked path.
+#[cfg(any(not(target_arch = "wasm32"), test))]
 pub(crate) fn finalize_selected_files(
     dialog: &FileDialog,
     paths: Vec<PathBuf>,

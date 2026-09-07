@@ -96,7 +96,7 @@ pub async fn load_photo_media(
     }
 
     let path = import_browser_file(
-        &crate::FileDialog::new().import_to_cache_subdir(PHOTO_PICKER_CACHE_SUBDIR),
+        &crate::FileDialog::new().with_import_to_cache(PHOTO_PICKER_CACHE_SUBDIR),
         &handle.0,
         Path::new(PHOTO_PICKER_CACHE_SUBDIR),
     )

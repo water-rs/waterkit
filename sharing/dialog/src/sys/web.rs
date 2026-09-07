@@ -10,6 +10,10 @@ const PHOTO_PICKER_CACHE_SUBDIR: &str = "waterkit/dialog/photo-picker";
 #[derive(Debug, Clone)]
 pub struct Selection(rfd::FileHandle);
 
+#[expect(
+    clippy::future_not_send,
+    reason = "awaits `AsyncMessageDialog::show`, which on wasm resolves a browser dialog through a `JsFuture` whose shared state is an `Rc<RefCell<_>>` holding JS event closures"
+)]
 pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
     AsyncMessageDialog::new()
         .set_level(message_level(dialog.kind))
@@ -21,6 +25,10 @@ pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
     Ok(())
 }
 
+#[expect(
+    clippy::future_not_send,
+    reason = "awaits `AsyncMessageDialog::show`, which on wasm resolves a browser dialog through a `JsFuture` whose shared state is an `Rc<RefCell<_>>` holding JS event closures"
+)]
 pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
     let result = AsyncMessageDialog::new()
         .set_level(message_level(dialog.kind))
@@ -35,6 +43,10 @@ pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
     ))
 }
 
+#[expect(
+    clippy::future_not_send,
+    reason = "awaits `AsyncFileDialog::pick_file`, which on wasm is driven by a `<input type=\"file\">` element and its JS change-event closure, and then `import_browser_file` below"
+)]
 pub async fn show_open_single_file(
     dialog: crate::FileDialog,
 ) -> Result<Option<PathBuf>, DialogError> {
@@ -48,6 +60,10 @@ pub async fn show_open_single_file(
     }
 }
 
+#[expect(
+    clippy::future_not_send,
+    reason = "awaits `AsyncFileDialog::pick_files`, which on wasm is driven by a `<input type=\"file\">` element and its JS change-event closure, and then `import_browser_file` below"
+)]
 pub async fn show_open_multiple_files(
     dialog: crate::FileDialog,
 ) -> Result<Option<Vec<PathBuf>>, DialogError> {
@@ -68,6 +84,10 @@ pub async fn show_open_multiple_files(
     }
 }
 
+#[expect(
+    clippy::future_not_send,
+    reason = "awaits `AsyncFileDialog::pick_file`, which on wasm is driven by a `<input type=\"file\">` element and its JS change-event closure"
+)]
 pub async fn show_photo_picker(
     media_type: crate::MediaType,
 ) -> Result<Option<Selection>, DialogError> {
@@ -85,6 +105,10 @@ pub async fn show_photo_picker(
     Ok(result.map(Selection))
 }
 
+#[expect(
+    clippy::future_not_send,
+    reason = "awaits `import_browser_file` below, which holds the picked `rfd::FileHandle` (a JS `File`) across the await"
+)]
 pub async fn load_photo_media(
     handle: Selection,
     requested_media_type: crate::MediaType,
@@ -124,6 +148,10 @@ fn build_file_dialog(dialog: &crate::FileDialog) -> AsyncFileDialog {
     builder
 }
 
+#[expect(
+    clippy::future_not_send,
+    reason = "holds an `rfd::FileHandle` (a JS `File`) across `FileHandle::read`, then awaits `WaterFs::import_bytes_to_cache`, which on wasm writes through IndexedDB and keeps JS request objects alive across its awaits"
+)]
 async fn import_browser_file(
     dialog: &crate::FileDialog,
     file: &rfd::FileHandle,
@@ -147,7 +175,7 @@ fn media_extensions(media_type: crate::MediaType) -> Vec<&'static str> {
     }
 }
 
-fn message_level(type_: DialogType) -> MessageLevel {
+const fn message_level(type_: DialogType) -> MessageLevel {
     match type_ {
         DialogType::Info => MessageLevel::Info,
         DialogType::Warning => MessageLevel::Warning,

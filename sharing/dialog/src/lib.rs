@@ -113,6 +113,13 @@ impl Dialog {
     /// # Errors
     ///
     /// Returns [`DialogError`] if the native dialog cannot be shown.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "delegates to `Dialog::show`, whose browser backend awaits a `JsFuture` over an `Rc<RefCell<_>>` of JS event closures; the same future is `Send` on every other target"
+        )
+    )]
     pub async fn alert(
         title: impl Into<String>,
         message: impl Into<String>,
@@ -125,6 +132,13 @@ impl Dialog {
     /// # Errors
     ///
     /// Returns [`DialogError`] if the native dialog cannot be shown.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "delegates to `Dialog::show_confirm`, whose browser backend awaits a `JsFuture` over an `Rc<RefCell<_>>` of JS event closures; the same future is `Send` on every other target"
+        )
+    )]
     pub async fn confirm(
         title: impl Into<String>,
         message: impl Into<String>,
@@ -138,6 +152,13 @@ impl Dialog {
     ///
     /// Returns [`DialogError`] if the native dialog fails to show or is
     /// unsupported on this platform.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "the browser `sys::show_alert` awaits `rfd::AsyncMessageDialog::show`, a `JsFuture` over an `Rc<RefCell<_>>` of JS event closures; the same future is `Send` on every other target"
+        )
+    )]
     pub async fn show(self) -> Result<(), DialogError> {
         sys::show_alert(self).await
     }
@@ -149,6 +170,13 @@ impl Dialog {
     ///
     /// Returns [`DialogError`] if the native dialog fails to show or is
     /// unsupported on this platform.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "the browser `sys::show_confirm` awaits `rfd::AsyncMessageDialog::show`, a `JsFuture` over an `Rc<RefCell<_>>` of JS event closures; the same future is `Send` on every other target"
+        )
+    )]
     pub async fn show_confirm(self) -> Result<bool, DialogError> {
         sys::show_confirm(self).await
     }
@@ -219,6 +247,13 @@ impl FileDialog {
     /// # Errors
     ///
     /// Returns [`DialogError`] if the dialog cannot be displayed.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "the browser `sys::show_open_single_file` awaits a `<input type=\"file\">` element through `rfd`, then imports the picked JS `File` through IndexedDB; the same future is `Send` on every other target"
+        )
+    )]
     pub async fn pick_single(self) -> Result<Option<std::path::PathBuf>, DialogError> {
         sys::show_open_single_file(self).await
     }
@@ -228,6 +263,13 @@ impl FileDialog {
     /// # Errors
     ///
     /// Returns [`DialogError`] if the dialog cannot be displayed.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "the browser `sys::show_open_multiple_files` awaits a `<input type=\"file\">` element through `rfd`, then imports each picked JS `File` through IndexedDB; the same future is `Send` on every other target"
+        )
+    )]
     pub async fn pick_multiple(self) -> Result<Option<Vec<std::path::PathBuf>>, DialogError> {
         sys::show_open_multiple_files(self).await
     }
@@ -354,6 +396,13 @@ impl PhotoHandle {
     ///
     /// # Errors
     /// Returns an error if loading fails.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "delegates to `PhotoHandle::load_media`, which on the browser backend holds the picked JS `File` across the IndexedDB import; the same future is `Send` on every other target"
+        )
+    )]
     pub async fn load(self) -> Result<std::path::PathBuf, DialogError> {
         match self.load_media().await? {
             LoadedMedia::Image(path) | LoadedMedia::Video(path) => Ok(path),
@@ -367,6 +416,13 @@ impl PhotoHandle {
     ///
     /// # Errors
     /// Returns an error if loading fails.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "the browser `sys::load_photo_media` holds the picked JS `File` across `FileHandle::read` and the IndexedDB cache write; the same future is `Send` on every other target"
+        )
+    )]
     pub async fn load_media(self) -> Result<LoadedMedia, DialogError> {
         sys::load_photo_media(self.handle, self.requested_media_type).await
     }
@@ -399,6 +455,13 @@ impl PhotoPicker {
     ///
     /// # Errors
     /// Returns an error if the picker fails to show or is not supported.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "the browser `sys::show_photo_picker` awaits a `<input type=\"file\">` element through `rfd` and yields a JS `File` handle; the same future is `Send` on every other target"
+        )
+    )]
     pub async fn pick(self) -> Result<Option<PhotoHandle>, DialogError> {
         (sys::show_photo_picker(self.media_type).await?).map_or(Ok(None), |handle| {
             Ok(Some(PhotoHandle {

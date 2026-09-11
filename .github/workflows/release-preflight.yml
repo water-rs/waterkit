@@ -27,4 +27,9 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+      # The check builds rustdoc for both sides of the comparison, which
+      # compiles the whole workspace: without these it dies in `khronos-egl`'s
+      # build script looking for `egl.pc`, and reports a red preflight that
+      # says nothing about the API.
+      - uses: ./.github/actions/setup-linux-deps
       - uses: obi1kenobi/cargo-semver-checks-action@v2

@@ -1,0 +1,40 @@
+name: Setup Linux native dependencies
+description: >
+  Installs the native libraries a Linux build of this workspace needs: Wayland
+  and XCB, audio (ALSA, PipeWire), video (VA-API, GBM, EGL, dav1d, the FFmpeg
+  libraries, nasm), D-Bus and libclang for the bindgen-based crates. Every
+  Linux job needs the same list, so it lives here once instead of in seven
+  copies across the workflows — the copies had already drifted apart by one
+  job, the release preflight, which installed nothing and failed building
+  rustdoc because `khronos-egl` could not find `egl.pc`.
+runs:
+  using: composite
+  steps:
+    - name: Install Linux dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libwayland-dev \
+          libxkbcommon-dev \
+          libasound2-dev \
+          libudev-dev \
+          libva-dev \
+          libgbm-dev \
+          libegl-dev \
+          libpipewire-0.3-dev \
+          libdav1d-dev \
+          nasm \
+          libavutil-dev \
+          libavcodec-dev \
+          libavformat-dev \
+          libavfilter-dev \
+          libavdevice-dev \
+          libswscale-dev \
+          libswresample-dev \
+          libclang-dev \
+          libxcb1-dev \
+          libxcb-render0-dev \
+          libxcb-shape0-dev \
+          libxcb-xfixes0-dev \
+          libdbus-1-dev

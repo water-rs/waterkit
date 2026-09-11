@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/water-rs/waterkit/compare/waterkit-v0.1.1...waterkit-v0.1.2) - 2026-09-11
+
+### Added
+
+- *(codec)* put GPU texture output behind a `gpu` feature
+
+### Fixed
+
+- *(ci)* preserve a reproducible dialog wasm dependency graph
+- *(dialog)* admit that the browser dialog futures cannot be Send
+- *(dialog)* call the real builder on the web file dialog
+- *(fs)* port the web backend to the current indexed_db_futures API
+- stop ignoring the tracked iOS test-app Info.plist
+
+### Other
+
+- install the Linux native dependencies from one place ([#54](https://github.com/water-rs/waterkit/pull/54))
+- *(deps)* zenwave 0.6.1
+
 ## [0.1.1](https://github.com/water-rs/waterkit/releases/tag/waterkit-v0.1.1) - 2026-08-25
 
 ### Added

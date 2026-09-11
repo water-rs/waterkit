@@ -49,32 +49,7 @@ jobs:
         uses: tracel-ai/github-actions/install-dxc@295f2fdbae5271f4f8ad56d634e4ff6a95daafc8
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libasound2-dev \
-            libudev-dev \
-            libva-dev \
-            libgbm-dev \
-            libegl-dev \
-            libpipewire-0.3-dev \
-            libdav1d-dev \
-            nasm \
-            libavutil-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavfilter-dev \
-            libavdevice-dev \
-            libswscale-dev \
-            libswresample-dev \
-            libclang-dev \
-            libxcb1-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libdbus-1-dev
+        uses: ./.github/actions/setup-linux-deps
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
@@ -148,32 +123,7 @@ jobs:
         uses: tracel-ai/github-actions/install-dxc@295f2fdbae5271f4f8ad56d634e4ff6a95daafc8
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libasound2-dev \
-            libudev-dev \
-            libva-dev \
-            libgbm-dev \
-            libegl-dev \
-            libpipewire-0.3-dev \
-            libdav1d-dev \
-            nasm \
-            libavutil-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavfilter-dev \
-            libavdevice-dev \
-            libswscale-dev \
-            libswresample-dev \
-            libclang-dev \
-            libxcb1-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libdbus-1-dev
+        uses: ./.github/actions/setup-linux-deps
       - name: Setup Android NDK
         if: contains(matrix.target, 'android')
         uses: nttld/setup-ndk@v1
@@ -216,32 +166,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: tracel-ai/github-actions/install-dxc@295f2fdbae5271f4f8ad56d634e4ff6a95daafc8
       - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libasound2-dev \
-            libudev-dev \
-            libva-dev \
-            libgbm-dev \
-            libegl-dev \
-            libpipewire-0.3-dev \
-            libdav1d-dev \
-            nasm \
-            libavutil-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavfilter-dev \
-            libavdevice-dev \
-            libswscale-dev \
-            libswresample-dev \
-            libclang-dev \
-            libxcb1-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libdbus-1-dev
+        uses: ./.github/actions/setup-linux-deps
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
@@ -312,32 +237,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: tracel-ai/github-actions/install-dxc@295f2fdbae5271f4f8ad56d634e4ff6a95daafc8
       - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libasound2-dev \
-            libudev-dev \
-            libva-dev \
-            libgbm-dev \
-            libegl-dev \
-            libpipewire-0.3-dev \
-            libdav1d-dev \
-            nasm \
-            libavutil-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavfilter-dev \
-            libavdevice-dev \
-            libswscale-dev \
-            libswresample-dev \
-            libclang-dev \
-            libxcb1-dev \
-            libxcb-render0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libdbus-1-dev
+        uses: ./.github/actions/setup-linux-deps
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

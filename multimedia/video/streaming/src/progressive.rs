@@ -5,7 +5,7 @@ use futures::{AsyncWriteExt as _, StreamExt as _};
 use url::Url;
 use uuid::Uuid;
 use waterkit_video_core::Error;
-use zenwave::{Client as _, Method, redirect::FollowRedirect};
+use zenwave::{Client as _, Method};
 
 use crate::atomic;
 
@@ -149,7 +149,7 @@ pub async fn download(
     request: ProgressiveDownloadRequest,
     mut observe: impl FnMut(DownloadEvent),
 ) -> Result<DownloadReceipt, Error> {
-    let mut client = FollowRedirect::new(zenwave::raw_client());
+    let mut client = zenwave::client();
     let response = client
         .method(Method::GET, request.url.as_str())
         .map_err(|error| Error::Streaming(error.to_string()))?

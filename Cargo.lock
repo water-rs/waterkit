@@ -7539,7 +7539,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "toml",
  "waterkit-audio",
@@ -7573,7 +7573,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-audio"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "cpal 0.18.2",
@@ -7618,7 +7618,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-background"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "futures-core",
@@ -7633,7 +7633,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-biometric"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "futures",
  "jni 0.22.4",
@@ -7659,7 +7659,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-bluetooth"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "futures",
@@ -7676,7 +7676,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-build"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "jni 0.22.4",
  "ndk-context",
@@ -7686,7 +7686,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-calendar"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "blocking",
  "futures",
@@ -7702,7 +7702,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-camera"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "core-graphics-types 0.2.0",
@@ -7741,7 +7741,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-clipboard"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "blocking",
@@ -7762,7 +7762,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-codec"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "avif-parse",
  "cros-codecs",
@@ -7808,7 +7808,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-contacts"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "blocking",
  "futures",
@@ -7824,7 +7824,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "executor-core",
@@ -7837,7 +7837,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-deeplink"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "futures",
@@ -7854,7 +7854,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-dialog"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "futures",
  "jni 0.22.4",
@@ -7869,7 +7869,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-dialog-demo"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "waterkit-dialog",
 ]
@@ -7884,7 +7884,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-fs"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-fs",
  "dirs",
@@ -7902,7 +7902,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-haptic"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "futures",
  "jni 0.22.4",
@@ -7917,7 +7917,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-health"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "blocking",
  "futures",
@@ -7933,7 +7933,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-location"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "async-io",
@@ -7964,7 +7964,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-nfc"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "futures",
@@ -7980,7 +7980,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-notification"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "jni 0.22.4",
@@ -8006,7 +8006,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-passkey"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8032,7 +8032,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-permission"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "futures",
@@ -8051,7 +8051,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-regional"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "iana-time-zone",
  "sys-locale",
@@ -8060,7 +8060,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-screen"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "blocking",
@@ -8086,7 +8086,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-secret"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "apple-native-keyring-store",
  "jni 0.22.4",
@@ -8098,7 +8098,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-sensor"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "futures",
  "futures-core",
@@ -8127,7 +8127,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-share"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "futures",
  "jni 0.22.4",
@@ -8142,7 +8142,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-speech"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "async-process",
@@ -8162,7 +8162,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-system"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "jni 0.22.4",
  "ndk-context",
@@ -8176,7 +8176,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-test"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "eyre",
@@ -8234,7 +8234,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-test-report"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -8259,7 +8259,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-video"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "waterkit-video-container",
  "waterkit-video-core",
@@ -8270,7 +8270,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-video-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "dirs",
@@ -8288,7 +8288,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-video-container"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "broadcast-common",
  "byteorder",
@@ -8303,14 +8303,14 @@ dependencies = [
 
 [[package]]
 name = "waterkit-video-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "thiserror 2.0.20",
 ]
 
 [[package]]
 name = "waterkit-video-player"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes",
  "async-channel",
@@ -8333,7 +8333,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-video-processing"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "filtrate",
  "futures-lite",
@@ -8343,7 +8343,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-video-streaming"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-channel",
  "async-fs",

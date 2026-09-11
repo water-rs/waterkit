@@ -35,10 +35,33 @@ private func rustVec(from bytes: [UInt8]) -> RustVec<UInt8> {
     return pixels
 }
 
+/// Decodes one IEEE 754 binary16 value from its two little-endian bytes.
+///
+/// The bits are widened by hand rather than through `Float16`, which Swift
+/// does not offer on x86_64 macOS: a `Float(Float16(bitPattern:))` here
+/// compiles on Apple silicon and fails the Intel build of the same source.
 @inline(__always)
 private func float16FromLittleEndian(_ low: UInt8, _ high: UInt8) -> Float {
     let bits = UInt16(low) | (UInt16(high) << 8)
-    return Float(Float16(bitPattern: bits))
+    let sign = UInt32(bits & 0x8000) << 16
+    let exponent = UInt32((bits >> 10) & 0x1F)
+    let fraction = UInt32(bits & 0x03FF)
+
+    if exponent == 0x1F {
+        // Infinity or NaN: the payload moves up with the mantissa.
+        return Float(bitPattern: sign | 0x7F80_0000 | (fraction << 13))
+    }
+    if exponent == 0 {
+        // Zero or subnormal. A subnormal half is `fraction * 2^-24`, which
+        // every `Float` represents exactly.
+        if fraction == 0 {
+            return Float(bitPattern: sign)
+        }
+        let magnitude = Float(fraction) * 0x1p-24
+        return sign == 0 ? magnitude : -magnitude
+    }
+    // Normal: rebias the exponent (127 - 15) and left-align the mantissa.
+    return Float(bitPattern: sign | ((exponent + 112) << 23) | (fraction << 13))
 }
 
 private func rgba16fHasHdrHeadroom(_ rgba16f: [UInt8]) -> Bool {

@@ -1,10 +1,11 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use indexed_db_futures::prelude::*;
-use indexed_db_futures::web_sys::DomException;
-use js_sys::Uint8Array;
-use wasm_bindgen::JsValue;
+use indexed_db_futures::database::Database;
+use indexed_db_futures::error::{DomException, Error as IdbError, OpenDbError};
+use indexed_db_futures::prelude::{Build, BuildPrimitive, QuerySource};
+use indexed_db_futures::transaction::{Transaction, TransactionMode};
+use indexed_db_futures::typed_array::{Uint8Array, Uint8ArraySlice};
 
 use crate::cache_path_candidate;
 
@@ -13,21 +14,28 @@ const DATABASE_VERSION: u32 = 1;
 const FILE_STORE_NAME: &str = "files";
 const VIRTUAL_CACHE_ROOT: &str = "/waterfs/cache";
 
+// Every handle in this module -- `Database`, `Transaction`, `ObjectStore` and
+// the request futures -- wraps a `JsValue` bound to the browser thread that
+// created it, so nothing here can be `Send`. That is a property of the
+// IndexedDB API rather than of this code, hence the per-function expectations
+// below.
+
+#[expect(
+    clippy::future_not_send,
+    reason = "IndexedDB handles are `JsValue`s bound to the browser thread that created them"
+)]
 pub async fn read(path: &Path) -> io::Result<Vec<u8>> {
     let key = path_key(path)?;
     let database = open_database().await?;
-    let transaction = database
-        .transaction_on_one(FILE_STORE_NAME)
-        .map_err(storage_error)?;
-    let store = transaction
+    let transaction = read_transaction(&database)?;
+    let request = transaction
         .object_store(FILE_STORE_NAME)
-        .map_err(storage_error)?;
-    let value = store
-        .get_owned(key.clone())
         .map_err(storage_error)?
-        .await
+        .get::<Uint8Array, _, _>(key.as_str())
+        .primitive()
         .map_err(storage_error)?;
-    transaction.await.into_result().map_err(storage_error)?;
+    let value = request.await.map_err(storage_error)?;
+    transaction.commit().await.map_err(storage_error)?;
 
     let Some(value) = value else {
         return Err(io::Error::new(
@@ -36,12 +44,13 @@ pub async fn read(path: &Path) -> io::Result<Vec<u8>> {
         ));
     };
 
-    let bytes = Uint8Array::new(&value);
-    let mut output = vec![0; bytes.length() as usize];
-    bytes.copy_to(&mut output);
-    Ok(output)
+    Ok(value.into())
 }
 
+#[expect(
+    clippy::future_not_send,
+    reason = "IndexedDB handles are `JsValue`s bound to the browser thread that created them"
+)]
 pub async fn import_bytes_to_cache(
     bytes: &[u8],
     file_name: &str,
@@ -68,55 +77,71 @@ pub async fn import_bytes_to_cache(
     }
 }
 
-async fn open_database() -> io::Result<IdbDatabase> {
-    let mut request =
-        IdbDatabase::open_u32(DATABASE_NAME, DATABASE_VERSION).map_err(storage_error)?;
-    request.set_on_upgrade_needed(Some(
-        |event: &IdbVersionChangeEvent| -> Result<(), JsValue> {
-            if event
-                .db()
+#[expect(
+    clippy::future_not_send,
+    reason = "IndexedDB handles are `JsValue`s bound to the browser thread that created them"
+)]
+async fn open_database() -> io::Result<Database> {
+    Database::open(DATABASE_NAME)
+        .with_version(DATABASE_VERSION)
+        .with_on_upgrade_needed(|_event, database| {
+            if !database
                 .object_store_names()
-                .find(|store_name| store_name == FILE_STORE_NAME)
-                .is_none()
+                .any(|store_name| store_name == FILE_STORE_NAME)
             {
-                event.db().create_object_store(FILE_STORE_NAME)?;
+                database.create_object_store(FILE_STORE_NAME).build()?;
             }
             Ok(())
-        },
-    ));
-    request.await.map_err(storage_error)
+        })
+        .await
+        .map_err(open_error)
 }
 
-async fn contains_path(database: &IdbDatabase, key: &str) -> io::Result<bool> {
-    let transaction = database
-        .transaction_on_one(FILE_STORE_NAME)
-        .map_err(storage_error)?;
-    let store = transaction
-        .object_store(FILE_STORE_NAME)
-        .map_err(storage_error)?;
-    let value = store
-        .get_owned(key)
-        .map_err(storage_error)?
-        .await
-        .map_err(storage_error)?;
-    transaction.await.into_result().map_err(storage_error)?;
-    Ok(value.is_some())
+fn read_transaction(database: &Database) -> io::Result<Transaction<'_>> {
+    database
+        .transaction(FILE_STORE_NAME)
+        .build()
+        .map_err(storage_error)
 }
 
-async fn store_bytes(database: &IdbDatabase, key: &str, bytes: &[u8]) -> io::Result<()> {
-    let transaction = database
-        .transaction_on_one_with_mode(FILE_STORE_NAME, IdbTransactionMode::Readwrite)
-        .map_err(storage_error)?;
-    let store = transaction
+#[expect(
+    clippy::future_not_send,
+    reason = "IndexedDB handles are `JsValue`s bound to the browser thread that created them"
+)]
+async fn contains_path(database: &Database, key: &str) -> io::Result<bool> {
+    let transaction = read_transaction(database)?;
+    let request = transaction
         .object_store(FILE_STORE_NAME)
-        .map_err(storage_error)?;
-    let value = Uint8Array::from(bytes);
-    store
-        .put_key_val_owned(key, &value)
         .map_err(storage_error)?
-        .await
+        .count()
+        .with_query(key)
+        .primitive()
         .map_err(storage_error)?;
-    transaction.await.into_result().map_err(storage_error)?;
+    let matches = request.await.map_err(storage_error)?;
+    transaction.commit().await.map_err(storage_error)?;
+    Ok(matches > 0)
+}
+
+#[expect(
+    clippy::future_not_send,
+    reason = "IndexedDB handles are `JsValue`s bound to the browser thread that created them"
+)]
+async fn store_bytes(database: &Database, key: &str, bytes: &[u8]) -> io::Result<()> {
+    let transaction = database
+        .transaction(FILE_STORE_NAME)
+        .with_mode(TransactionMode::Readwrite)
+        .build()
+        .map_err(storage_error)?;
+    let request = transaction
+        .object_store(FILE_STORE_NAME)
+        .map_err(storage_error)?
+        .put(Uint8ArraySlice::new(bytes))
+        .with_key(key)
+        .without_key_type()
+        .primitive()
+        .map_err(storage_error)?;
+    request.await.map_err(storage_error)?;
+    transaction.commit().await.map_err(storage_error)?;
     Ok(())
 }
 
@@ -132,10 +157,56 @@ fn path_key(path: &Path) -> io::Result<String> {
     }
 }
 
-fn storage_error(error: DomException) -> io::Error {
-    io::Error::other(format!(
-        "waterfs web storage error: {} ({})",
-        error.name(),
-        error.message()
-    ))
+fn open_error(error: OpenDbError) -> io::Error {
+    match error {
+        OpenDbError::VersionZero => io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "waterfs web storage error: database version cannot be zero",
+        ),
+        OpenDbError::UnsupportedEnvironment => io::Error::new(
+            io::ErrorKind::Unsupported,
+            "waterfs web storage error: IndexedDB is unavailable in this environment",
+        ),
+        OpenDbError::NullFactory => io::Error::new(
+            io::ErrorKind::Unsupported,
+            "waterfs web storage error: the `indexedDB` getter returned null",
+        ),
+        OpenDbError::Base(error) => storage_error(error),
+    }
+}
+
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "used as a `map_err` argument, which hands the error over by value"
+)]
+fn storage_error(error: IdbError) -> io::Error {
+    let kind = match &error {
+        IdbError::DomException(exception) => dom_exception_kind(exception),
+        IdbError::Serialisation(_) | IdbError::MissingData(_) => io::ErrorKind::InvalidData,
+        IdbError::Unknown(_) => io::ErrorKind::Other,
+    };
+    io::Error::new(kind, format!("waterfs web storage error: {error}"))
+}
+
+/// Maps the `DomException` variants `IndexedDB` raises onto the
+/// [`io::ErrorKind`] the native backends produce for the same situation, so
+/// callers see one set of kinds across every platform. Conditions with no
+/// filesystem analogue -- a request against a finished transaction, an
+/// unrecognised exception -- stay [`io::ErrorKind::Other`] and carry their
+/// detail in the message.
+const fn dom_exception_kind(exception: &DomException) -> io::ErrorKind {
+    match exception {
+        DomException::NotFoundError(_) => io::ErrorKind::NotFound,
+        DomException::ConstraintError(_) => io::ErrorKind::AlreadyExists,
+        DomException::ReadOnlyError(_) | DomException::InvalidAccessError(_) => {
+            io::ErrorKind::PermissionDenied
+        }
+        DomException::DataError(_)
+        | DomException::DataCloneError(_)
+        | DomException::SyntaxError(_) => io::ErrorKind::InvalidData,
+        DomException::AbortError(_) => io::ErrorKind::Interrupted,
+        DomException::InvalidStateError(_)
+        | DomException::TransactionInactiveError(_)
+        | DomException::Other(_) => io::ErrorKind::Other,
+    }
 }

@@ -1,6 +1,6 @@
 //! Apple IOSurface-to-wgpu interop without CPU readback.
 
-use super::DecodedPixelLayout;
+use crate::DecodedPixelLayout;
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_core_foundation::CFRetained;
 use objc2_core_video::{

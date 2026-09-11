@@ -102,6 +102,13 @@ impl WaterFs {
     ///
     /// Returns [`FsError::NoDocumentsDir`] on platforms / OS configs
     /// where no documents directory is exposed.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::missing_const_for_fn,
+            reason = "the wasm body is a constant `Err`; the native bodies do real I/O"
+        )
+    )]
     pub fn documents_dir() -> Result<PathBuf> {
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
@@ -129,6 +136,13 @@ impl WaterFs {
     ///
     /// Returns [`FsError::NoCacheDir`] on platforms / OS configs where no
     /// cache directory is exposed.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::missing_const_for_fn,
+            reason = "the wasm body is a constant `Err`; the native bodies do real I/O"
+        )
+    )]
     pub fn cache_dir() -> Result<PathBuf> {
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
         {
@@ -155,6 +169,13 @@ impl WaterFs {
     /// # Errors
     ///
     /// Returns [`FsError::Io`] on read failure.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "the wasm backend awaits IndexedDB handles, which are bound to the browser thread"
+        )
+    )]
     pub async fn read(path: &Path) -> Result<Vec<u8>> {
         #[cfg(target_arch = "wasm32")]
         {
@@ -239,6 +260,13 @@ impl WaterFs {
     /// Returns [`FsError::NoFileName`] when `path` has no file name,
     /// [`FsError::NoCacheDir`] when the platform has no cache directory,
     /// [`FsError::Unsupported`] on wasm, or [`FsError::Io`] for the copy.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::missing_const_for_fn,
+            reason = "the wasm body is a constant `Err`; the native bodies do real I/O"
+        )
+    )]
     pub fn import_file_to_cache(path: &Path, cache_subdir: &Path) -> Result<PathBuf> {
         #[cfg(target_arch = "wasm32")]
         {
@@ -269,6 +297,13 @@ impl WaterFs {
     /// Returns [`FsError::NoFileName`] when `file_name` is invalid,
     /// [`FsError::NoCacheDir`] when no cache directory is available, or
     /// [`FsError::Io`] for write failures.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "the wasm backend awaits IndexedDB handles, which are bound to the browser thread"
+        )
+    )]
     pub async fn import_bytes_to_cache(
         bytes: &[u8],
         file_name: &str,
@@ -304,6 +339,7 @@ impl WaterFs {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn validate_file_name(path: &Path) -> Result<&OsStr> {
     path.file_name().ok_or(FsError::NoFileName)
 }

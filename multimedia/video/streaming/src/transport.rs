@@ -20,7 +20,7 @@ pub struct TransportRequest<'a> {
 pub async fn send(request: TransportRequest<'_>) -> Result<(Url, zenwave::Response), Error> {
     // WaterKit observes every redirect so its explicit redirect limit,
     // credential policy, and replayable license bodies remain authoritative.
-    let mut client = zenwave::raw_client();
+    let mut client = zenwave::client().disable_redirect();
     let original_method = request.method.clone();
     let mut method = request.method;
     let mut effective_url = request.url.clone();

@@ -1,6 +1,8 @@
 //! Build script for waterkit-codec.
 
 fn main() {
+    // The YUV-to-RGBA compute shader only exists on the GPU texture-output path.
+    #[cfg(feature = "gpu")]
     shaderloom::build::compile_wgsl_shader("src/yuv_to_rgba.wgsl", "yuv_color");
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();

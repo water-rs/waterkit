@@ -15,16 +15,19 @@ categories = ["multimedia::video", "graphics"]
 # the same constant, and its value differs across platforms (11 / 35).
 libc = "0.2"
 thiserror.workspace = true
-wgpu.workspace = true
 image.workspace = true
 half = "2"
 waterkit-video-core.workspace = true
-shaderloom.workspace = true
 tracing.workspace = true
+
+# GPU texture output. Optional so a decode-only consumer that just wants pixels
+# links neither wgpu nor the shader toolchain.
+wgpu = { workspace = true, optional = true }
+shaderloom = { workspace = true, optional = true }
 
 [build-dependencies]
 waterkit-build.workspace = true
-shaderloom = { workspace = true, features = ["build"] }
+shaderloom = { workspace = true, features = ["build"], optional = true }
 
 # Software fallback codecs (private, not exposed in public API)
 # Only enabled on desktop platforms - mobile and wasm use their native decode paths
@@ -39,13 +42,15 @@ moxcms = { version = "0.8.1", features = ["extended_range"], optional = true }
 objc2.workspace = true
 objc2-video-toolbox.workspace = true
 objc2-core-media.workspace = true
-objc2-core-video = { workspace = true, features = ["CVMetalTexture", "CVMetalTextureCache"] }
+objc2-core-video.workspace = true
 objc2-core-foundation.workspace = true
 objc2-foundation.workspace = true
 objc2-io-surface.workspace = true
-objc2-metal = { workspace = true, features = ["MTLBlitCommandEncoder", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLDevice", "MTLPixelFormat", "MTLTexture", "MTLTypes"] }
-wgpu-hal.workspace = true
 swift-bridge.workspace = true
+
+# Metal interop for the GPU texture-output path only.
+objc2-metal = { workspace = true, features = ["MTLBlitCommandEncoder", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLDevice", "MTLPixelFormat", "MTLTexture", "MTLTypes"], optional = true }
+wgpu-hal = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 ndk = { version = "0.9", features = ["media", "api-level-29"] }
@@ -65,7 +70,17 @@ cros-codecs = { version = "0.0.6", default-features = false, features = ["vaapi"
 image = { workspace = true, features = ["avif"] }
 
 [features]
-default = ["software-fallback"]
+default = ["gpu", "software-fallback"]
+# Uploads decoded frames to `wgpu` textures and converts them to linear RGBA on
+# the GPU. Off, the crate decodes to CPU memory only and links no `wgpu`.
+gpu = [
+    "dep:wgpu",
+    "dep:wgpu-hal",
+    "dep:shaderloom",
+    "dep:objc2-metal",
+    "objc2-core-video/CVMetalTexture",
+    "objc2-core-video/CVMetalTextureCache",
+]
 software-fallback = ["dep:rav1e", "dep:rav1d", "dep:avif-parse", "dep:yuv", "dep:moxcms"]
 
 [lints]

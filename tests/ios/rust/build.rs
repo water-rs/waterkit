@@ -18,47 +18,16 @@ fn main() {
 fn apple_build() {
     use std::path::PathBuf;
 
-    // Use waterkit-build to handle Swift bridge generation and compilation
-    // We only need generation here if we want to link it in Xcode.
-    // But we can also compile it into a static lib.
-    // Generate Swift bridge code to a known location for the app
+    // Only this crate's own bridge is generated into the app: each waterkit
+    // component crate already compiles its `sys/apple` Swift bridge into its
+    // own static lib via `build_apple_bridge`, and those objects are bundled
+    // into `libwaterkit_test_ios.a`, so the final link resolves every
+    // `extern "Swift"` symbol without the app ever seeing the feature bridges.
     // Relative to tests/ios/rust/Cargo.toml
     let out_dir = PathBuf::from("../app/WaterKitTest/Generated");
     std::fs::create_dir_all(&out_dir).unwrap();
 
-    let mut bridges = vec!["src/lib.rs".to_string()];
-
-    // Add biometric bridge if feature enabled via env var (set by cargo feature)
-    if std::env::var("CARGO_FEATURE_BIOMETRIC").is_ok() {
-        bridges.push("../../../identity/biometric/src/sys/apple/mod.rs".to_string());
-    }
-
-    // Add sensor bridge if feature enabled
-    if std::env::var("CARGO_FEATURE_SENSOR").is_ok() {
-        bridges.push("../../../device/sensor/src/sys/apple/mod.rs".to_string());
-    }
-
-    // Add camera bridge if feature enabled
-    if std::env::var("CARGO_FEATURE_CAMERA").is_ok() {
-        bridges.push("../../../device/camera/src/sys/apple/mod.rs".to_string());
-    }
-
-    // Add location bridge if feature enabled
-    if std::env::var("CARGO_FEATURE_LOCATION").is_ok() {
-        bridges.push("../../../device/location/src/sys/apple/mod.rs".to_string());
-    }
-
-    // Add permission bridge if feature enabled
-    if std::env::var("CARGO_FEATURE_PERMISSION").is_ok() {
-        bridges.push("../../../platform/permission/src/sys/apple/mod.rs".to_string());
-    }
-
-    // Add notification bridge if feature enabled
-    if std::env::var("CARGO_FEATURE_NOTIFICATION").is_ok() {
-        bridges.push("../../../sharing/notification/src/sys/apple/mod.rs".to_string());
-    }
-
-    // Add other crates as needed...
+    let bridges = vec!["src/lib.rs".to_string()];
 
     let bridges_refs: Vec<&str> = bridges.iter().map(|s| s.as_str()).collect();
 

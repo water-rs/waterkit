@@ -8028,6 +8028,7 @@ version = "0.1.0"
 dependencies = [
  "tokio",
  "waterkit-passkey",
+ "waterkit-test-report",
 ]
 
 [[package]]
@@ -8088,10 +8089,11 @@ dependencies = [
 name = "waterkit-secret"
 version = "0.1.1"
 dependencies = [
- "apple-native-keyring-store",
  "jni 0.22.4",
  "keyring",
  "ndk-context",
+ "security-framework",
+ "security-framework-sys",
  "thiserror 2.0.20",
  "waterkit-build",
 ]

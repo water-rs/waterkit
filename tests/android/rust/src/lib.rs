@@ -500,10 +500,21 @@ fn record_android_secret(report: &mut TestReport, env: &mut Env<'_>, activity: &
     ) {
         Ok(()) => {}
         Err(error) => {
-            report.push(TestCase::failed(
-                "secret.set",
-                format!("secret set failed: {error}"),
-            ));
+            // The keystore deliberately requires hardware-backed keys; the
+            // emulator only offers a software keystore.
+            if error.to_string().contains("hardware-backed") {
+                for case in ["secret.set", "secret.get", "secret.delete"] {
+                    report.push(TestCase::skipped(
+                        case,
+                        "emulator keystore is not hardware-backed",
+                    ));
+                }
+            } else {
+                report.push(TestCase::failed(
+                    "secret.set",
+                    format!("secret set failed: {error}"),
+                ));
+            }
             return;
         }
     }

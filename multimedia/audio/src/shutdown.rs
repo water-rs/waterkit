@@ -86,7 +86,10 @@ impl ShutdownReceiver {
 
     /// Wait for shutdown signal (blocking).
     ///
-    /// Use this in non-async contexts (e.g., background threads).
+    /// Use this in non-async contexts (e.g., background threads). Blocking a
+    /// thread is not possible on wasm, so this exists only on targets where a
+    /// blocking wait can exist.
+    #[cfg(not(target_family = "wasm"))]
     pub fn wait_blocking(&self) {
         let _ = self.receiver.recv_blocking();
     }

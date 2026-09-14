@@ -4,7 +4,9 @@
 //! - **Playback**: Playing audio files with media center integration
 //! - **Recording**: Capturing microphone input (async)
 //!
-//! Supports iOS, macOS, Android, Windows, and Linux.
+//! Supports iOS, macOS, Android, Windows, Linux, and `wasm32-unknown-unknown`
+//! (browser playback and media-session metadata via `WebAudio` and the Fetch
+//! API; recording is not available in browsers).
 
 #![warn(missing_docs)]
 
@@ -434,6 +436,13 @@ impl MediaSession {
     ///
     /// # Errors
     /// Returns [`MediaError::AudioFocusDenied`] if focus is refused.
+    #[cfg_attr(
+        target_family = "wasm",
+        allow(
+            clippy::missing_const_for_fn,
+            reason = "the web inner is a const no-op; native inners cannot be const"
+        )
+    )]
     pub fn request_audio_focus(&self) -> Result<(), MediaError> {
         self.inner.request_audio_focus()
     }
@@ -444,6 +453,13 @@ impl MediaSession {
     ///
     /// # Errors
     /// Returns [`MediaError::UpdateFailed`] if focus cannot be abandoned.
+    #[cfg_attr(
+        target_family = "wasm",
+        allow(
+            clippy::missing_const_for_fn,
+            reason = "the web inner is a const no-op; native inners cannot be const"
+        )
+    )]
     pub fn abandon_audio_focus(&self) -> Result<(), MediaError> {
         self.inner.abandon_audio_focus()
     }

@@ -24,9 +24,9 @@ impl MediaSessionInner {
             })?
             .navigator();
         let session = Reflect::get(&navigator, &JsValue::from_str("mediaSession"))
-            .map_err(initialization_error)?
+            .map_err(|error| initialization_error(&error))?
             .dyn_into::<Object>()
-            .map_err(initialization_error)?;
+            .map_err(|error| initialization_error(&error))?;
         let (sender, command_receiver) = async_channel::unbounded();
         let mut handlers = Vec::new();
         for (action, command) in [
@@ -51,17 +51,17 @@ impl MediaSessionInner {
         set_string(&init, "artist", metadata.artist().unwrap_or_default())?;
         set_string(&init, "album", metadata.album().unwrap_or_default())?;
         let constructor = Reflect::get(&js_sys::global(), &JsValue::from_str("MediaMetadata"))
-            .map_err(update_error)?
+            .map_err(|error| update_error(&error))?
             .dyn_into::<Function>()
-            .map_err(update_error)?;
-        let browser_metadata =
-            Reflect::construct(&constructor, &js_sys::Array::of1(&init)).map_err(update_error)?;
+            .map_err(|error| update_error(&error))?;
+        let browser_metadata = Reflect::construct(&constructor, &js_sys::Array::of1(&init))
+            .map_err(|error| update_error(&error))?;
         Reflect::set(
             &self.session,
             &JsValue::from_str("metadata"),
             &browser_metadata,
         )
-        .map_err(update_error)?;
+        .map_err(|error| update_error(&error))?;
         Ok(())
     }
 
@@ -76,14 +76,24 @@ impl MediaSessionInner {
             &JsValue::from_str("playbackState"),
             &JsValue::from_str(status),
         )
-        .map_err(update_error)?;
+        .map_err(|error| update_error(&error))?;
         Ok(())
     }
 
+    #[allow(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "browsers manage audio focus automatically; the signature matches the cross-platform MediaSessionInner interface"
+    )]
     pub const fn request_audio_focus(&self) -> Result<(), MediaError> {
         Ok(())
     }
 
+    #[allow(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "browsers manage audio focus automatically; the signature matches the cross-platform MediaSessionInner interface"
+    )]
     pub const fn abandon_audio_focus(&self) -> Result<(), MediaError> {
         Ok(())
     }
@@ -94,13 +104,13 @@ impl MediaSessionInner {
             &JsValue::from_str("metadata"),
             &JsValue::NULL,
         )
-        .map_err(update_error)?;
+        .map_err(|error| update_error(&error))?;
         Reflect::set(
             &self.session,
             &JsValue::from_str("playbackState"),
             &JsValue::from_str("none"),
         )
-        .map_err(update_error)?;
+        .map_err(|error| update_error(&error))?;
         Ok(())
     }
 
@@ -136,29 +146,29 @@ fn install_handler(
         let _ = sender.try_send(command.clone());
     }) as Box<dyn FnMut(JsValue)>);
     Reflect::get(session, &JsValue::from_str("setActionHandler"))
-        .map_err(initialization_error)?
+        .map_err(|error| initialization_error(&error))?
         .dyn_into::<Function>()
-        .map_err(initialization_error)?
+        .map_err(|error| initialization_error(&error))?
         .call2(session, &JsValue::from_str(action), handler.as_ref())
-        .map_err(initialization_error)?;
+        .map_err(|error| initialization_error(&error))?;
     Ok(handler)
 }
 
 fn set_string(object: &Object, name: &str, value: &str) -> Result<(), MediaError> {
     Reflect::set(object, &JsValue::from_str(name), &JsValue::from_str(value))
         .map(|_| ())
-        .map_err(update_error)
+        .map_err(|error| update_error(&error))
 }
 
-fn initialization_error(error: JsValue) -> MediaError {
+fn initialization_error(error: &JsValue) -> MediaError {
     MediaError::InitializationFailed(js_error(error))
 }
 
-fn update_error(error: JsValue) -> MediaError {
+fn update_error(error: &JsValue) -> MediaError {
     MediaError::UpdateFailed(js_error(error))
 }
 
-fn js_error(error: JsValue) -> String {
+fn js_error(error: &JsValue) -> String {
     error
         .as_string()
         .unwrap_or_else(|| format!("browser media session error: {error:?}"))

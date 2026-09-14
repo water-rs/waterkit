@@ -46,8 +46,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: test-${{ matrix.os }}
-      - run: cargo test --verbose --workspace --all-targets --no-run
-      - run: cargo test --verbose --all-features
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest list --workspace --all-targets
+      - run: cargo nextest run --all-features
+      - run: cargo test --doc --all-features
       - name: Run macOS sensor integration harness
         if: runner.os == 'macOS'
         run: cargo run -p waterkit-test -- macos tests/macos/sensor

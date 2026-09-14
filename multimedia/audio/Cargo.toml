@@ -69,6 +69,13 @@ symphonia-adapter-fdk-aac = { workspace = true, optional = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 symphonia-core = { workspace = true, optional = true }
 symphonia-codec-aac = { workspace = true, optional = true }
+# Browser playback through cpal's WebAudio backend (the `wasm-bindgen`
+# feature); rodio forwards it to its own cpal dependency.
+rodio = { workspace = true, features = ["playback", "flac", "vorbis", "wav", "mp3", "wasm-bindgen"], optional = true }
+cpal = { workspace = true, features = ["wasm-bindgen"], optional = true }
+# Browser HTTP via the Fetch API; zenwave forbids explicit backend features
+# on wasm32, so none are selected here.
+zenwave = { version = "0.6.1", default-features = false, features = ["ws"], optional = true }
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["Navigator", "Window"] }
@@ -79,7 +86,7 @@ waterkit-build.workspace = true
 [dev-dependencies]
 hex = "0.4"
 
-[target.'cfg(any(target_os = "ios", target_os = "macos", target_os = "android", target_os = "windows", target_os = "linux", target_arch = "wasm32"))'.dependencies]
+[target.'cfg(any(target_os = "ios", target_os = "macos", target_os = "android", target_os = "windows", target_os = "linux"))'.dependencies]
 # Cross-platform audio playback (default features include vorbis/mp3/flac/wav)
 rodio = { workspace = true, features = ["playback", "flac", "vorbis", "wav", "mp3"], optional = true }
 # Cross-platform audio I/O (for recording)

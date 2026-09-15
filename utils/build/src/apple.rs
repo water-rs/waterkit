@@ -371,6 +371,13 @@ fn clang_builtins_dir(swift_runtime_dir: &str, suffix: &str) -> Option<PathBuf> 
 /// implicitly when it drives a real app link; a `-nodefaultlibs` rustc-driven
 /// link does not, so crates embedding Swift objects must declare it or the
 /// dylib link fails with an undefined symbol (water-rs/waterui#929).
+///
+/// The library is declared through `rustc-link-arg`, not `rustc-link-lib`: the
+/// latter makes rustc merge the archive into `rlib`/`staticlib` artifacts,
+/// which rejects clang's archive format ("Unsupported archive identifier"). A
+/// link arg propagates verbatim to any linker invocation that includes this
+/// crate and stays inert for `staticlib` outputs, whose app link is driven by
+/// Xcode's clang driver and picks up the builtins on its own.
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 fn link_clang_builtins(swift_runtime_dir: &str) {
     let Some(suffix) = clang_builtins_suffix(swift_runtime_dir) else {
@@ -382,7 +389,7 @@ fn link_clang_builtins(swift_runtime_dir: &str) {
     match clang_builtins_dir(swift_runtime_dir, suffix) {
         Some(dir) => {
             println!("cargo:rustc-link-search=native={}", dir.display());
-            println!("cargo:rustc-link-lib=static=clang_rt.{suffix}");
+            println!("cargo:rustc-link-arg=-lclang_rt.{suffix}");
         }
         None => println!(
             "cargo:warning=libclang_rt.{suffix}.a not found under the active toolchain; Swift objects may fail to link"

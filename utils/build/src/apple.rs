@@ -331,6 +331,65 @@ fn swift_runtime_lib_dir(swift_runtime_dir: &str) -> PathBuf {
         .join(format!("lib/swift/{swift_runtime_dir}"))
 }
 
+/// The compiler-rt builtins archive name inside `lib/clang/*/lib/darwin` for a
+/// given Swift runtime directory.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn clang_builtins_suffix(swift_runtime_dir: &str) -> Option<&'static str> {
+    Some(match swift_runtime_dir {
+        "macosx" => "osx",
+        "iphoneos" => "ios",
+        "iphonesimulator" => "iossim",
+        "appletvos" => "tvos",
+        "appletvsimulator" => "tvossim",
+        "watchos" => "watchos",
+        "watchsimulator" => "watchossim",
+        "xros" => "xros",
+        "xrsimulator" => "xrsim",
+        _ => return None,
+    })
+}
+
+/// `<toolchain>/usr/lib/clang/<ver>/lib/darwin` containing `libclang_rt.<suffix>.a`.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn clang_builtins_dir(swift_runtime_dir: &str, suffix: &str) -> Option<PathBuf> {
+    let usr = swift_runtime_lib_dir(swift_runtime_dir)
+        .ancestors()
+        .nth(3)?
+        .to_path_buf();
+    let archive = format!("libclang_rt.{suffix}.a");
+    for entry in std::fs::read_dir(usr.join("lib/clang")).ok()? {
+        let darwin_dir = entry.ok()?.path().join("lib/darwin");
+        if darwin_dir.join(&archive).is_file() {
+            return Some(darwin_dir);
+        }
+    }
+    None
+}
+
+/// Swift objects built with `#available` checks call compiler-rt builtins such
+/// as `___isPlatformVersionAtLeast`. `swiftc` links `libclang_rt.<platform>.a`
+/// implicitly when it drives a real app link; a `-nodefaultlibs` rustc-driven
+/// link does not, so crates embedding Swift objects must declare it or the
+/// dylib link fails with an undefined symbol (water-rs/waterui#929).
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn link_clang_builtins(swift_runtime_dir: &str) {
+    let Some(suffix) = clang_builtins_suffix(swift_runtime_dir) else {
+        println!(
+            "cargo:warning=no clang builtins mapping for Swift runtime dir {swift_runtime_dir}"
+        );
+        return;
+    };
+    match clang_builtins_dir(swift_runtime_dir, suffix) {
+        Some(dir) => {
+            println!("cargo:rustc-link-search=native={}", dir.display());
+            println!("cargo:rustc-link-lib=static=clang_rt.{suffix}");
+        }
+        None => println!(
+            "cargo:warning=libclang_rt.{suffix}.a not found under the active toolchain; Swift objects may fail to link"
+        ),
+    }
+}
+
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 fn link_swift_runtime(swift_runtime_dir: &str) {
     let toolchain_lib = swift_runtime_lib_dir(swift_runtime_dir);
@@ -343,6 +402,8 @@ fn link_swift_runtime(swift_runtime_dir: &str) {
     if swift_runtime_dir == "macosx" {
         println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     }
+
+    link_clang_builtins(swift_runtime_dir);
 }
 
 /// Generate Swift bridge code from bridge modules.

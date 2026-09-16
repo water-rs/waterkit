@@ -1,5 +1,21 @@
 // swift-tools-version: 6.3.0
+import Foundation
 import PackageDescription
+
+// Manifest-relative paths keep the test app buildable from any checkout
+// location; `#filePath` is the manifest's own absolute path at evaluate time.
+let packageDir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+let repoRoot =
+    packageDir
+    .deletingLastPathComponent() // tests/ios
+    .deletingLastPathComponent() // tests
+    .deletingLastPathComponent() // repository root
+let bridgingHeader =
+    packageDir
+    .appendingPathComponent("WaterKitTest/Generated/Bridging-Header.h").path
+let librarySearchPath =
+    repoRoot
+    .appendingPathComponent("target/aarch64-apple-ios-sim/debug").path
 
 let package = Package(
     name: "WaterKitTest",
@@ -14,14 +30,14 @@ let package = Package(
             dependencies: [],
             path: "WaterKitTest",
             swiftSettings: [
-                .unsafeFlags(["-import-objc-header", "/Users/lexoliu/Coding/kit/tests/ios/app/WaterKitTest/Generated/Bridging-Header.h"])
+                .unsafeFlags(["-import-objc-header", bridgingHeader])
             ],
             linkerSettings: [
                 .unsafeFlags([
-                    "-L/Users/lexoliu/Coding/kit/target/aarch64-apple-ios-sim/debug",
+                    "-L\(librarySearchPath)",
                     "-lwaterkit_test_ios",
                     "-framework", "CoreFoundation",
-                    "-framework", "Security" // For biometric
+                    "-framework", "Security", // For biometric
                 ])
             ]
         )

@@ -554,14 +554,21 @@ fn run_macos_app_bundle(
         eyre::bail!("codesign failed for {}", app_dir.display());
     }
 
+    // `open -W` waits by attaching a kqueue to the launched process and fails
+    // with "initial call to kevent() failed: No such process" whenever the app
+    // finishes before `open` can attach — exactly what a fast
+    // permission-skipped run does. Spawning the bundle executable directly
+    // hands us the pid, so `wait` observes the termination no matter how
+    // quickly it happens; the bundle is still resolved from the executable
+    // path, so TCC attribution is unchanged.
     info!("{}", "Launching app bundle...".green().bold());
-    let open_status = std::process::Command::new("open")
-        .arg("-W")
-        .arg(&app_dir)
+    let run_status = std::process::Command::new(&app_binary)
         .status()
-        .context("Failed to run open -W for macOS app bundle")?;
-    if !open_status.success() {
-        eyre::bail!("open -W failed for {}", app_dir.display());
+        .with_context(|| format!("Failed to launch {}", app_binary.display()))?;
+    if !run_status.success() {
+        // The structured report in the log file is the result contract; a
+        // non-zero exit only adds context when the report never arrived.
+        warn!("{} exited with {run_status}", app_binary.display());
     }
 
     Ok(())

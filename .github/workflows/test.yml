@@ -75,7 +75,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      # The action's default `packages` list starts with `tools`, the legacy
+      # SDK package Google has removed from the repository, so sdkmanager now
+      # exits 1 with "Failed to find package 'tools'". The runner image already
+      # carries the platforms, build-tools and emulator this job needs; the
+      # only package the harness invokes by name is adb.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:

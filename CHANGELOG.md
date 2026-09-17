@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/water-rs/waterkit/compare/waterkit-v0.1.2...waterkit-v0.1.3) - 2026-09-17
+
+### Fixed
+
+- *(ci)* drop the removed "tools" package from the Android SDK setup
+- *(audio)* build waterkit-audio for wasm32-unknown-unknown ([#63](https://github.com/water-rs/waterkit/pull/63))
+
+### Other
+
+- let the PR source gate accept release-plz release branches ([#77](https://github.com/water-rs/waterkit/pull/77))
+- Merge remote-tracking branch 'origin/main' into chore/sync-main-0.1.2
+- prebuilt cargo-outdated + incremental/debuginfo trims ([#66](https://github.com/water-rs/waterkit/pull/66))
+- run tests with cargo nextest ([#65](https://github.com/water-rs/waterkit/pull/65))
+- run full feature matrix on simulators and add macOS passkey harness ([#61](https://github.com/water-rs/waterkit/pull/61))
+- publish to crates.io via OIDC trusted publishing ([#57](https://github.com/water-rs/waterkit/pull/57))
+- gate pull requests into main so only dev may merge ([#58](https://github.com/water-rs/waterkit/pull/58))
+
 ## [0.1.2](https://github.com/water-rs/waterkit/compare/waterkit-v0.1.1...waterkit-v0.1.2) - 2026-09-11
 
 ### Added

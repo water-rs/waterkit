@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4](https://github.com/water-rs/waterkit/compare/waterkit-v0.1.3...waterkit-v0.1.4) - 2026-09-17
+
+### Other
+
+- updated the following local packages: waterkit-fs, waterkit-dialog, waterkit-audio, waterkit-background, waterkit-biometric, waterkit-bluetooth, waterkit-calendar, waterkit-codec, waterkit-camera, waterkit-clipboard, waterkit-contacts, waterkit-deeplink, waterkit-haptic, waterkit-health, waterkit-permission, waterkit-location, waterkit-nfc, waterkit-notification, waterkit-passkey, waterkit-regional, waterkit-screen, waterkit-secret, waterkit-sensor, waterkit-share, waterkit-speech, waterkit-system, waterkit-video
+
 ## [0.1.3](https://github.com/water-rs/waterkit/compare/waterkit-v0.1.2...waterkit-v0.1.3) - 2026-09-17
 
 ### Fixed

@@ -372,12 +372,20 @@ fn clang_builtins_dir(swift_runtime_dir: &str, suffix: &str) -> Option<PathBuf> 
 /// link does not, so crates embedding Swift objects must declare it or the
 /// dylib link fails with an undefined symbol (water-rs/waterui#929).
 ///
-/// The library is declared through `rustc-link-arg`, not `rustc-link-lib`: the
-/// latter makes rustc merge the archive into `rlib`/`staticlib` artifacts,
-/// which rejects clang's archive format ("Unsupported archive identifier"). A
-/// link arg propagates verbatim to any linker invocation that includes this
-/// crate and stays inert for `staticlib` outputs, whose app link is driven by
-/// Xcode's clang driver and picks up the builtins on its own.
+/// The library is declared as `static:-bundle`. A plain `static` link-lib
+/// makes rustc merge the archive into `rlib`/`staticlib` artifacts, which
+/// rejects clang's archive format ("Unsupported archive identifier"); the
+/// `-bundle` modifier keeps the archive out of the rlib and instead records it
+/// as a native dependency that Cargo carries to every downstream final link —
+/// a `cdylib` app library built by the `water` CLI's static packaging path
+/// included. `rustc-link-arg` cannot do that: Cargo applies a build script's
+/// link args only to the emitting package's own targets, so it reached the
+/// crate's dylib in the shared-library debug build and never the application's
+/// release link, which failed with the undefined symbol
+/// (water-rs/waterui#929 in one shape, the Apple nightly's `water package`
+/// in the other). A `staticlib` output stays as before: nothing is bundled,
+/// and the app link driven by Xcode's clang driver picks up the builtins on
+/// its own.
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 fn link_clang_builtins(swift_runtime_dir: &str) {
     let Some(suffix) = clang_builtins_suffix(swift_runtime_dir) else {
@@ -389,7 +397,7 @@ fn link_clang_builtins(swift_runtime_dir: &str) {
     match clang_builtins_dir(swift_runtime_dir, suffix) {
         Some(dir) => {
             println!("cargo:rustc-link-search=native={}", dir.display());
-            println!("cargo:rustc-link-arg=-lclang_rt.{suffix}");
+            println!("cargo:rustc-link-lib=static:-bundle=clang_rt.{suffix}");
         }
         None => println!(
             "cargo:warning=libclang_rt.{suffix}.a not found under the active toolchain; Swift objects may fail to link"

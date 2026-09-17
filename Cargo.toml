@@ -4,7 +4,7 @@ members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "
 
 
 [workspace.package]
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 authors = ["Lexo Liu"]
 license = "MIT OR Apache-2.0"
@@ -16,7 +16,7 @@ categories = ["gui", "development-tools"]
 
 [package]
 name = "waterkit"
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -130,41 +130,41 @@ nami = "0.11.0"
 nami-core = "0.3.3"
 executor-core = { version = "0.7.1", features = ["std"] }
 # Core primitives shared by every functional crate.
-waterkit-core = { path = "core", version = "0.1.3" }
+waterkit-core = { path = "core", version = "0.1.4" }
 # Functional Crates
-waterkit-permission = { path = "platform/permission", version = "0.1.3" }
-waterkit-location = { path = "device/location", version = "0.1.3" }
-waterkit-audio = { path = "multimedia/audio", version = "0.1.3", default-features = false }
-waterkit-haptic = { path = "device/haptic", version = "0.1.3" }
-waterkit-notification = { path = "sharing/notification", version = "0.1.3" }
-waterkit-dialog = { path = "sharing/dialog", version = "0.1.3" }
-waterkit-biometric = { path = "identity/biometric", version = "0.1.3" }
-waterkit-clipboard = { path = "platform/clipboard", version = "0.1.3" }
-waterkit-fs = { path = "platform/fs", version = "0.1.3" }
-waterkit-secret = { path = "platform/secret", version = "0.1.3" }
-waterkit-camera = { path = "device/camera", version = "0.1.3" }
-waterkit-sensor = { path = "device/sensor", version = "0.1.3" }
-waterkit-codec = { path = "multimedia/codec", version = "0.1.3" }
+waterkit-permission = { path = "platform/permission", version = "0.1.4" }
+waterkit-location = { path = "device/location", version = "0.1.4" }
+waterkit-audio = { path = "multimedia/audio", version = "0.1.4", default-features = false }
+waterkit-haptic = { path = "device/haptic", version = "0.1.4" }
+waterkit-notification = { path = "sharing/notification", version = "0.1.4" }
+waterkit-dialog = { path = "sharing/dialog", version = "0.1.4" }
+waterkit-biometric = { path = "identity/biometric", version = "0.1.4" }
+waterkit-clipboard = { path = "platform/clipboard", version = "0.1.4" }
+waterkit-fs = { path = "platform/fs", version = "0.1.4" }
+waterkit-secret = { path = "platform/secret", version = "0.1.4" }
+waterkit-camera = { path = "device/camera", version = "0.1.4" }
+waterkit-sensor = { path = "device/sensor", version = "0.1.4" }
+waterkit-codec = { path = "multimedia/codec", version = "0.1.4" }
 shaderloom = "0.1.2"
-waterkit-screen = { path = "platform/screen", version = "0.1.3" }
-waterkit-system = { path = "platform/system", version = "0.1.3" }
-waterkit-video = { path = "multimedia/video", version = "0.1.3" }
-waterkit-video-core = { path = "multimedia/video/core", version = "0.1.3" }
-waterkit-video-container = { path = "multimedia/video/container", version = "0.1.3" }
-waterkit-video-streaming = { path = "multimedia/video/streaming", version = "0.1.3" }
-waterkit-video-processing = { path = "multimedia/video/processing", version = "0.1.3" }
-waterkit-video-player = { path = "multimedia/video/player", version = "0.1.3" }
-waterkit-regional = { path = "platform/regional", version = "0.1.3" }
-waterkit-bluetooth = { path = "device/bluetooth", version = "0.1.3" }
-waterkit-nfc = { path = "device/nfc", version = "0.1.3" }
-waterkit-share = { path = "sharing/share", version = "0.1.3" }
-waterkit-speech = { path = "multimedia/speech", version = "0.1.3" }
-waterkit-contacts = { path = "identity/contacts", version = "0.1.3" }
-waterkit-calendar = { path = "identity/calendar", version = "0.1.3" }
-waterkit-health = { path = "device/health", version = "0.1.3" }
-waterkit-deeplink = { path = "platform/deeplink", version = "0.1.3" }
-waterkit-background = { path = "platform/background", version = "0.1.3" }
-waterkit-passkey = { path = "identity/passkey", version = "0.1.3" }
+waterkit-screen = { path = "platform/screen", version = "0.1.4" }
+waterkit-system = { path = "platform/system", version = "0.1.4" }
+waterkit-video = { path = "multimedia/video", version = "0.1.4" }
+waterkit-video-core = { path = "multimedia/video/core", version = "0.1.4" }
+waterkit-video-container = { path = "multimedia/video/container", version = "0.1.4" }
+waterkit-video-streaming = { path = "multimedia/video/streaming", version = "0.1.4" }
+waterkit-video-processing = { path = "multimedia/video/processing", version = "0.1.4" }
+waterkit-video-player = { path = "multimedia/video/player", version = "0.1.4" }
+waterkit-regional = { path = "platform/regional", version = "0.1.4" }
+waterkit-bluetooth = { path = "device/bluetooth", version = "0.1.4" }
+waterkit-nfc = { path = "device/nfc", version = "0.1.4" }
+waterkit-share = { path = "sharing/share", version = "0.1.4" }
+waterkit-speech = { path = "multimedia/speech", version = "0.1.4" }
+waterkit-contacts = { path = "identity/contacts", version = "0.1.4" }
+waterkit-calendar = { path = "identity/calendar", version = "0.1.4" }
+waterkit-health = { path = "device/health", version = "0.1.4" }
+waterkit-deeplink = { path = "platform/deeplink", version = "0.1.4" }
+waterkit-background = { path = "platform/background", version = "0.1.4" }
+waterkit-passkey = { path = "identity/passkey", version = "0.1.4" }
 
 # Cross-platform
 futures = "0.3"
@@ -215,7 +215,7 @@ jni = "0.22"
 ndk-context = "0.1"
 
 # Build utilities
-waterkit-build = { path = "utils/build", version = "0.1.3" }
+waterkit-build = { path = "utils/build", version = "0.1.4" }
 waterkit-test-report = { path = "utils/test-report", version = "0.1.1" }
 
 # Windows

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/water-rs/waterkit/compare/waterkit-audio-v0.1.2...waterkit-audio-v0.1.3) - 2026-09-17
+
+### Fixed
+
+- *(audio)* build waterkit-audio for wasm32-unknown-unknown ([#63](https://github.com/water-rs/waterkit/pull/63))
+
+### Other
+
+- Merge remote-tracking branch 'origin/main' into chore/sync-main-0.1.2
+
 ## [0.1.2](https://github.com/water-rs/waterkit/compare/waterkit-audio-v0.1.1...waterkit-audio-v0.1.2) - 2026-09-11
 
 ### Other

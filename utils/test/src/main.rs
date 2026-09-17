@@ -105,7 +105,11 @@ fn run_android_awake(crate_path: &Path, toolchain: &AndroidToolchain) -> Result<
     let content_doc = content_toml_str
         .parse::<DocumentMut>()
         .context("Parse content toml")?;
-    let package_name = content_doc["package"]["name"].as_str().unwrap_or("");
+    let package_name = content_doc
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(|name| name.as_str())
+        .unwrap_or("");
     let feature = get_crate_feature(package_name).ok_or_else(|| {
         eyre::eyre!("Unsupported crate package name for harness features: {package_name}")
     })?;
@@ -243,7 +247,11 @@ fn run_ios(crate_path: &Path) -> Result<()> {
     let content_doc = content_toml_str
         .parse::<DocumentMut>()
         .context("Parse content toml")?;
-    let package_name = content_doc["package"]["name"].as_str().unwrap_or("");
+    let package_name = content_doc
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(|name| name.as_str())
+        .unwrap_or("");
     let feature = get_crate_feature(package_name).ok_or_else(|| {
         eyre::eyre!("Unsupported crate package name for harness features: {package_name}")
     })?;
@@ -273,23 +281,9 @@ fn run_ios(crate_path: &Path) -> Result<()> {
     // 4. Swift Compile
     info!("{}", "Compiling Swift app...".yellow().bold());
 
-    // Scan for extra .swift sources in the target crate
-    let mut extra_swift_sources = Vec::new();
-    let sys_apple_dir = crate_path.join("src/sys/apple");
-    #[allow(clippy::collapsible_if)]
-    if sys_apple_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(sys_apple_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "swift") {
-                    info!("Found extra Swift source: {}", path.display());
-                    extra_swift_sources.push(path);
-                }
-            }
-        }
-    }
-
-    // Ensure Generated directory exists (usually done by build script, but ensure path logic is sound)
+    // The app only compiles its own generated bridge; every component crate's
+    // `sys/apple` Swift bridge is already compiled into the static lib by that
+    // crate's own build script.
 
     // 4.1 Get SDK Path
     let sdk_path_output = std::process::Command::new("xcrun")
@@ -328,11 +322,6 @@ fn run_ios(crate_path: &Path) -> Result<()> {
         .arg("tests/ios/app/WaterKitTest/Generated/SwiftBridgeCore.swift")
         .arg("tests/ios/app/WaterKitTest/Generated/waterkit-test-ios/waterkit-test-ios.swift");
 
-    // Add extra sources
-    for src in extra_swift_sources {
-        swiftc_cmd.arg(src);
-    }
-
     let status = swiftc_cmd
         .arg("-o")
         .arg("WaterKitTestBinary")
@@ -362,6 +351,8 @@ fn run_ios(crate_path: &Path) -> Result<()> {
     )?;
 
     // 6. Codesign
+    // Plain ad-hoc signing: the simulator rejects launches when an ad-hoc
+    // signature carries entitlements.
     info!("{}", "Codesigning...".yellow().bold());
     let status = std::process::Command::new("codesign")
         .args(["-s", "-", "WaterKitTest.app"])
@@ -386,6 +377,8 @@ fn run_ios(crate_path: &Path) -> Result<()> {
     if !status.success() {
         eyre::bail!("Installation failed (ensure a simulator is booted)");
     }
+
+    grant_ios_permissions(feature, simulator_id)?;
 
     let report_path = ios_report_path(simulator_id)?;
     if report_path.exists() {
@@ -433,8 +426,10 @@ fn parse_macos_metadata(manifest_path: &Path) -> Result<MacosMetadata> {
         .parse::<DocumentMut>()
         .with_context(|| format!("Parse {}", manifest_path.display()))?;
 
-    let package_name = manifest["package"]["name"]
-        .as_str()
+    let package_name = manifest
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(|name| name.as_str())
         .ok_or_else(|| eyre::eyre!("Missing package.name in {}", manifest_path.display()))?
         .to_owned();
 
@@ -447,7 +442,9 @@ fn parse_macos_metadata(manifest_path: &Path) -> Result<MacosMetadata> {
 }
 
 fn select_primary_bin_name(manifest: &DocumentMut, package_name: &str) -> Result<String> {
-    let Some(bin_tables) = manifest["bin"].as_array_of_tables() else {
+    // Indexing a missing key panics on toml_edit documents; `get` keeps
+    // crates that rely on the default `src/main.rs` binary working.
+    let Some(bin_tables) = manifest.get("bin").and_then(|bin| bin.as_array_of_tables()) else {
         return Ok(package_name.to_owned());
     };
 
@@ -557,14 +554,21 @@ fn run_macos_app_bundle(
         eyre::bail!("codesign failed for {}", app_dir.display());
     }
 
+    // `open -W` waits by attaching a kqueue to the launched process and fails
+    // with "initial call to kevent() failed: No such process" whenever the app
+    // finishes before `open` can attach — exactly what a fast
+    // permission-skipped run does. Spawning the bundle executable directly
+    // hands us the pid, so `wait` observes the termination no matter how
+    // quickly it happens; the bundle is still resolved from the executable
+    // path, so TCC attribution is unchanged.
     info!("{}", "Launching app bundle...".green().bold());
-    let open_status = std::process::Command::new("open")
-        .arg("-W")
-        .arg(&app_dir)
+    let run_status = std::process::Command::new(&app_binary)
         .status()
-        .context("Failed to run open -W for macOS app bundle")?;
-    if !open_status.success() {
-        eyre::bail!("open -W failed for {}", app_dir.display());
+        .with_context(|| format!("Failed to launch {}", app_binary.display()))?;
+    if !run_status.success() {
+        // The structured report in the log file is the result contract; a
+        // non-zero exit only adds context when the report never arrived.
+        warn!("{} exited with {run_status}", app_binary.display());
     }
 
     Ok(())
@@ -754,6 +758,7 @@ fn grant_android_permissions_for_feature(
             "android.permission.RECORD_AUDIO",
             "android.permission.READ_CONTACTS",
             "android.permission.READ_CALENDAR",
+            "android.permission.POST_NOTIFICATIONS",
         ],
         "location" | "permission" => &[
             "android.permission.ACCESS_FINE_LOCATION",
@@ -763,6 +768,7 @@ fn grant_android_permissions_for_feature(
         "audio" | "speech" => &["android.permission.RECORD_AUDIO"],
         "contacts" => &["android.permission.READ_CONTACTS"],
         "calendar" => &["android.permission.READ_CALENDAR"],
+        "notification" => &["android.permission.POST_NOTIFICATIONS"],
         _ => &[],
     };
 
@@ -938,6 +944,49 @@ fn run_adb<const N: usize>(toolchain: &AndroidToolchain, args: [&str; N]) -> Res
 
     if !status.success() {
         eyre::bail!("adb command failed");
+    }
+
+    Ok(())
+}
+
+/// Grants the TCC permissions the harness can set without the system prompt
+/// once the app is installed, then plants a deterministic simulated location
+/// so `Location::get()` has a fix to return. Notification authorization is not
+/// a `simctl privacy` service, so that case skips instead.
+fn grant_ios_permissions(feature: &str, simulator_id: &str) -> Result<()> {
+    if !matches!(feature, "full" | "location" | "permission") {
+        return Ok(());
+    }
+
+    for service in ["location", "location-always"] {
+        let status = std::process::Command::new("xcrun")
+            .args([
+                "simctl",
+                "privacy",
+                simulator_id,
+                "grant",
+                service,
+                "com.waterkit.test",
+            ])
+            .status()
+            .context("Failed to grant simulator privacy permission")?;
+        if !status.success() {
+            eyre::bail!("simctl privacy grant {service} failed");
+        }
+    }
+
+    let status = std::process::Command::new("xcrun")
+        .args([
+            "simctl",
+            "location",
+            simulator_id,
+            "set",
+            "37.3349,-122.0090",
+        ])
+        .status()
+        .context("Failed to set simulated location")?;
+    if !status.success() {
+        eyre::bail!("simctl location set failed");
     }
 
     Ok(())

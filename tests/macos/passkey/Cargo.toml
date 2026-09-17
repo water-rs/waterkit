@@ -6,4 +6,5 @@ publish = false
 
 [dependencies]
 waterkit-passkey.workspace = true
+waterkit-test-report.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

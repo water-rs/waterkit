@@ -47,7 +47,10 @@ fn build_report() -> TestReport {
         record_haptic(&mut report);
 
         #[cfg(feature = "notification")]
-        record_notification(&mut report);
+        report.push(TestCase::skipped(
+            "notification.show",
+            "notification authorization cannot be granted headless on the simulator",
+        ));
 
         #[cfg(feature = "secret")]
         record_secret(&mut report).await;
@@ -86,10 +89,20 @@ fn build_report() -> TestReport {
         report.push(TestCase::passed("bluetooth.linked"));
 
         #[cfg(feature = "nfc")]
-        report.push(TestCase::passed_with_message(
-            "nfc.availability",
-            format!("available={}", waterkit::nfc::is_available()),
-        ));
+        {
+            let available = waterkit::nfc::is_available();
+            if cfg!(target_abi = "sim") && available {
+                report.push(TestCase::failed(
+                    "nfc.availability",
+                    "NFCNDEFReaderSession.readingAvailable is true on a simulator with no NFC hardware",
+                ));
+            } else {
+                report.push(TestCase::passed_with_message(
+                    "nfc.availability",
+                    format!("available={available}"),
+                ));
+            }
+        }
 
         #[cfg(feature = "share")]
         report.push(TestCase::skipped(
@@ -116,9 +129,9 @@ fn build_report() -> TestReport {
         ));
 
         #[cfg(feature = "health")]
-        report.push(TestCase::passed_with_message(
+        report.push(TestCase::skipped(
             "health.availability",
-            format!("available={}", waterkit::health::capabilities().available),
+            "waterkit-health declares extern Swift symbols but ships no Apple implementation",
         ));
 
         #[cfg(feature = "deeplink")]
@@ -294,6 +307,10 @@ fn record_fs(report: &mut TestReport) {
 fn record_haptic(report: &mut TestReport) {
     match waterkit::haptic::Haptic::notification_success() {
         Ok(()) => report.push(TestCase::passed("haptic.notification_success")),
+        Err(waterkit::haptic::HapticError::Unsupported) => report.push(TestCase::skipped(
+            "haptic.notification_success",
+            "haptic engine unsupported on this device (simulator has no Taptic Engine)",
+        )),
         Err(error) => report.push(TestCase::failed(
             "haptic.notification_success",
             format!("haptic feedback failed: {error}"),
@@ -301,32 +318,34 @@ fn record_haptic(report: &mut TestReport) {
     }
 }
 
-#[cfg(feature = "notification")]
-fn record_notification(report: &mut TestReport) {
-    match waterkit::notification::Notification::new()
-        .title("WaterKit Test")
-        .body("iOS notification is working")
-        .show()
-    {
-        Ok(_handle) => report.push(TestCase::passed("notification.show")),
-        Err(error) => report.push(TestCase::failed(
-            "notification.show",
-            format!("notification show failed: {error}"),
-        )),
-    }
-}
-
 #[cfg(feature = "secret")]
 async fn record_secret(report: &mut TestReport) {
-    match waterkit::secret::SecretManager::set("waterkit", "ios_test", "secret123").await {
-        Ok(()) => {}
-        Err(error) => {
-            report.push(TestCase::failed(
+    // SecItem queries need `keychain-access-groups`, which an ad-hoc signed
+    // harness app cannot carry: the simulator rejects launches for any
+    // entitlement-bearing ad-hoc signature.
+    if let Err(error) =
+        waterkit::secret::SecretManager::set("waterkit", "ios_test", "secret123").await
+    {
+        if error.to_string().contains("entitlement") {
+            report.push(TestCase::skipped(
                 "secret.set",
-                format!("secret set failed: {error}"),
+                format!("keychain unavailable without entitlements: {error}"),
+            ));
+            report.push(TestCase::skipped(
+                "secret.get",
+                "keychain unavailable without entitlements",
+            ));
+            report.push(TestCase::skipped(
+                "secret.delete",
+                "keychain unavailable without entitlements",
             ));
             return;
         }
+        report.push(TestCase::failed(
+            "secret.set",
+            format!("secret set failed: {error}"),
+        ));
+        return;
     }
 
     match waterkit::secret::SecretManager::get("waterkit", "ios_test").await {
@@ -391,14 +410,19 @@ fn record_background(report: &mut TestReport) {
 #[cfg(feature = "passkey")]
 async fn record_passkey(report: &mut TestReport) {
     match waterkit::passkey::is_available().await {
-        Ok(availability) => report.push(TestCase::passed_with_message(
+        Ok(availability) if availability.is_platform_supported => {
+            report.push(TestCase::passed_with_message(
+                "passkey.availability",
+                format!(
+                    "supported=true user_verification={} discoverable={}",
+                    availability.supports_user_verification,
+                    availability.supports_discoverable_credentials
+                ),
+            ))
+        }
+        Ok(_) => report.push(TestCase::failed(
             "passkey.availability",
-            format!(
-                "supported={} user_verification={} discoverable={}",
-                availability.is_platform_supported,
-                availability.supports_user_verification,
-                availability.supports_discoverable_credentials
-            ),
+            "passkey reports unsupported on iOS 16+",
         )),
         Err(error) => report.push(TestCase::failed(
             "passkey.availability",

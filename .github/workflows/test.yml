@@ -4,6 +4,9 @@ on:
   workflow_call:
 
 env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -46,14 +49,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: test-${{ matrix.os }}
-      - run: cargo test --verbose --workspace --all-targets --no-run
-      - run: cargo test --verbose --all-features
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest list --workspace --all-targets
+      - run: cargo nextest run --all-features
+      - run: cargo test --doc --all-features
       - name: Run macOS sensor integration harness
         if: runner.os == 'macOS'
         run: cargo run -p waterkit-test -- macos tests/macos/sensor
       - name: Run macOS location integration harness
         if: runner.os == 'macOS'
         run: cargo run -p waterkit-test -- macos tests/macos/location
+      - name: Run macOS passkey integration harness
+        if: runner.os == 'macOS'
+        run: cargo run -p waterkit-test -- macos tests/macos/passkey
 
   android-device-e2e:
     name: Android device E2E
@@ -67,7 +75,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      # The action's default `packages` list starts with `tools`, the legacy
+      # SDK package Google has removed from the repository, so sdkmanager now
+      # exits 1 with "Failed to find package 'tools'". The runner image already
+      # carries the platforms, build-tools and emulator this job needs; the
+      # only package the harness invokes by name is adb.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
@@ -90,12 +105,14 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Run Android sensor harness on emulator
+      # `.` is the workspace root crate `waterkit`, which `get_crate_feature`
+      # maps to `full`: every harness case runs on the one emulator boot.
+      - name: Run Android full harness on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
           arch: x86_64
-          script: cargo run -p waterkit-test -- android device/sensor
+          script: cargo run -p waterkit-test -- android .
 
   ios-device-e2e:
     name: iOS device E2E
@@ -115,5 +132,5 @@ jobs:
             xcrun simctl boot "$SIMULATOR_ID"
           fi
           xcrun simctl bootstatus "$SIMULATOR_ID" -b
-      - name: Run iOS sensor harness on simulator
-        run: cargo run -p waterkit-test -- ios device/sensor
+      - name: Run iOS full harness on simulator
+        run: cargo run -p waterkit-test -- ios .

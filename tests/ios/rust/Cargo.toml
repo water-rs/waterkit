@@ -17,6 +17,36 @@ waterkit = { path = "../../..", default-features = false }
 waterkit-test-report.workspace = true
 
 [features]
+# `health` stays out of `full`: waterkit-health declares extern Swift symbols
+# but ships no Apple implementation, so enabling it breaks the harness link
+# (water-rs/waterkit#60).
+full = [
+    "sensor",
+    "biometric",
+    "location",
+    "audio",
+    "camera",
+    "clipboard",
+    "codec",
+    "dialog",
+    "fs",
+    "haptic",
+    "notification",
+    "permission",
+    "secret",
+    "system",
+    "video",
+    "screen",
+    "bluetooth",
+    "nfc",
+    "share",
+    "speech",
+    "contacts",
+    "calendar",
+    "deeplink",
+    "background",
+    "passkey",
+]
 sensor = ["waterkit/sensor"]
 biometric = ["waterkit/biometric"]
 location = ["waterkit/location"]

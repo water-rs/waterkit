@@ -9,6 +9,7 @@ use crate::playback_rate::{
 };
 #[cfg(test)]
 use crate::playback_rate::{PitchStretchEngine, should_use_pitch_stretch};
+#[cfg(not(target_family = "wasm"))]
 use crate::shutdown::ShutdownHandle;
 use crate::{
     AudioDevice, AudioOutput, AudioStreamFormat, MediaArtwork, MediaCommand, MediaMetadata,
@@ -16,12 +17,15 @@ use crate::{
 };
 use futures::Stream;
 use lofty::prelude::*;
-use rodio::{Decoder, DeviceSinkBuilder, Player, Source, SpatialPlayer};
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source, SpatialPlayer};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+#[cfg(target_family = "wasm")]
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
+#[cfg(not(target_family = "wasm"))]
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -225,6 +229,18 @@ impl SpatialScene {
         self.listener.validate()
     }
 }
+
+/// Shared handle to the media session.
+///
+/// `Arc` on native targets, where the player may move across threads. `Rc` on
+/// wasm: the target is single-threaded and the browser objects inside the
+/// session are not `Send`/`Sync`, so an atomic refcount is both impossible to
+/// share and unnecessary.
+#[cfg(not(target_family = "wasm"))]
+type MediaSessionHandle = Arc<MediaSession>;
+/// Shared handle to the media session; see the native alias above.
+#[cfg(target_family = "wasm")]
+type MediaSessionHandle = Rc<MediaSession>;
 
 #[derive(Debug, Clone, Copy)]
 enum SinkInit {
@@ -435,12 +451,36 @@ impl PlaybackClock {
     }
 }
 
+/// Per-platform state that keeps the audio output alive for the player's
+/// lifetime.
+///
+/// On native targets the rodio output stream is owned by a background thread
+/// spawned in [`AudioPlayer::initialize_runtime`]; this holds the thread's
+/// shutdown signal and join handle so `Drop` can stop it cleanly.
+#[cfg(not(target_family = "wasm"))]
+struct RuntimeOwnership {
+    shutdown_handle: ShutdownHandle,
+    background_thread: Option<JoinHandle<()>>,
+}
+
+/// Per-platform state that keeps the audio output alive for the player's
+/// lifetime.
+///
+/// On wasm there is no background thread — `std::thread::spawn` panics and a
+/// blocking handoff would deadlock the browser's single thread — so the
+/// output stream is owned here directly and playback ends when the player is
+/// dropped.
+#[cfg(target_family = "wasm")]
+struct RuntimeOwnership {
+    /// Owned purely for its lifetime: playback ends when the player drops.
+    _stream: MixerDeviceSink,
+}
+
 struct RuntimeHandles {
     mixer: rodio::mixer::Mixer,
-    media_session: Arc<MediaSession>,
-    shutdown_handle: ShutdownHandle,
-    background_thread: JoinHandle<()>,
+    media_session: MediaSessionHandle,
     command_receiver: async_channel::Receiver<MediaCommand>,
+    ownership: RuntimeOwnership,
 }
 
 /// Cross-platform audio player with media center integration.
@@ -468,15 +508,21 @@ pub struct AudioPlayer {
     output_format: Option<AudioStreamFormat>,
     playback_params: Arc<PlaybackParams>,
     playback_clock: RwLock<PlaybackClock>,
-    media_session: Arc<MediaSession>,
+    media_session: MediaSessionHandle,
 
     // Deferred metadata updates: builder methods set this flag,
     // first action (play/pause/seek) flushes to media center
     metadata_dirty: AtomicBool,
 
-    // Background worker
-    shutdown_handle: ShutdownHandle,
-    background_thread: Option<JoinHandle<()>>,
+    // Platform state keeping the output stream alive
+    #[cfg_attr(
+        target_family = "wasm",
+        allow(
+            dead_code,
+            reason = "on wasm the runtime is held only for ownership; Drop reads it on native targets to stop the background thread"
+        )
+    )]
+    runtime: RuntimeOwnership,
     command_receiver: async_channel::Receiver<MediaCommand>,
 }
 
@@ -492,26 +538,35 @@ impl std::fmt::Debug for AudioPlayer {
 }
 
 impl AudioPlayer {
+    /// Open the platform output stream for `output`.
+    fn open_output_stream(output: &AudioOutput) -> Result<MixerDeviceSink, PlayerError> {
+        output
+            .selected_device()
+            .map_or_else(DeviceSinkBuilder::open_default_sink, |device| {
+                DeviceSinkBuilder::from_device(device.handle.clone())
+                    .and_then(DeviceSinkBuilder::open_stream)
+            })
+            .map_err(|e| PlayerError::OutputInitFailed(e.to_string()))
+    }
+
+    /// Native runtime: a background thread owns the output stream and parks
+    /// in `wait_blocking` until the player signals shutdown.
+    #[cfg(not(target_family = "wasm"))]
     fn initialize_runtime(output: &AudioOutput) -> Result<RuntimeHandles, PlayerError> {
         let (handle_tx, handle_rx) = std::sync::mpsc::channel();
         let (shutdown_handle, shutdown_rx) = ShutdownHandle::new();
-        let selected_device = output.selected_device().cloned();
+        let output = output.clone();
 
-        let media_session = Arc::new(MediaSession::new()?);
+        let media_session = MediaSessionHandle::new(MediaSession::new()?);
 
         let command_receiver = media_session.command_receiver();
 
         let background_thread = {
             std::thread::spawn(move || {
-                let stream =
-                    selected_device.map_or_else(DeviceSinkBuilder::open_default_sink, |device| {
-                        DeviceSinkBuilder::from_device(device.handle)
-                            .and_then(DeviceSinkBuilder::open_stream)
-                    });
-                let stream = match stream {
+                let stream = match Self::open_output_stream(&output) {
                     Ok(stream) => stream,
                     Err(e) => {
-                        let _ = handle_tx.send(Err(PlayerError::OutputInitFailed(e.to_string())));
+                        let _ = handle_tx.send(Err(e));
                         return;
                     }
                 };
@@ -531,9 +586,32 @@ impl AudioPlayer {
         Ok(RuntimeHandles {
             mixer,
             media_session,
-            shutdown_handle,
-            background_thread,
             command_receiver,
+            ownership: RuntimeOwnership {
+                shutdown_handle,
+                background_thread: Some(background_thread),
+            },
+        })
+    }
+
+    /// Browser runtime: the output stream is owned by the player on the
+    /// calling thread. `std::thread::spawn` panics on wasm32 and a blocking
+    /// handoff would deadlock the single browser thread, so there is no
+    /// background worker and no shutdown handshake — dropping the player
+    /// drops the stream and ends playback.
+    #[cfg(target_family = "wasm")]
+    fn initialize_runtime(output: &AudioOutput) -> Result<RuntimeHandles, PlayerError> {
+        let stream = Self::open_output_stream(output)?;
+        let mixer = stream.mixer().clone();
+
+        let media_session = MediaSessionHandle::new(MediaSession::new()?);
+        let command_receiver = media_session.command_receiver();
+
+        Ok(RuntimeHandles {
+            mixer,
+            media_session,
+            command_receiver,
+            ownership: RuntimeOwnership { _stream: stream },
         })
     }
 
@@ -603,8 +681,7 @@ impl AudioPlayer {
             playback_clock: RwLock::new(PlaybackClock::at_start(1.0)),
             media_session: runtime.media_session,
             metadata_dirty: AtomicBool::new(false),
-            shutdown_handle: runtime.shutdown_handle,
-            background_thread: Some(runtime.background_thread),
+            runtime: runtime.ownership,
             command_receiver: runtime.command_receiver,
         })
     }
@@ -660,8 +737,7 @@ impl AudioPlayer {
             playback_clock: RwLock::new(PlaybackClock::at_start(1.0)),
             media_session: runtime.media_session,
             metadata_dirty: AtomicBool::new(false),
-            shutdown_handle: runtime.shutdown_handle,
-            background_thread: Some(runtime.background_thread),
+            runtime: runtime.ownership,
             command_receiver: runtime.command_receiver,
         })
     }
@@ -1129,13 +1205,15 @@ impl AudioPlayer {
 
 impl Drop for AudioPlayer {
     fn drop(&mut self) {
-        // ShutdownHandle is dropped automatically, signaling background thread to exit.
-        // We explicitly drop it first to ensure the signal is sent before we try to join.
-        drop(std::mem::take(&mut self.shutdown_handle));
-
-        // Wait for background thread to exit cleanly
-        if let Some(handle) = self.background_thread.take() {
-            let _ = handle.join();
+        #[cfg(not(target_family = "wasm"))]
+        {
+            // Signal the background thread owning the output stream to exit,
+            // then wait for it so the stream is torn down cleanly. On wasm the
+            // stream is a plain field and drops with the player.
+            self.runtime.shutdown_handle.shutdown();
+            if let Some(thread) = self.runtime.background_thread.take() {
+                let _ = thread.join();
+            }
         }
 
         if let Err(error) = self.media_session.clear() {

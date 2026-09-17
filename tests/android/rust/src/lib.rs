@@ -500,10 +500,21 @@ fn record_android_secret(report: &mut TestReport, env: &mut Env<'_>, activity: &
     ) {
         Ok(()) => {}
         Err(error) => {
-            report.push(TestCase::failed(
-                "secret.set",
-                format!("secret set failed: {error}"),
-            ));
+            // The keystore deliberately requires hardware-backed keys; the
+            // emulator only offers a software keystore.
+            if error.to_string().contains("hardware-backed") {
+                for case in ["secret.set", "secret.get", "secret.delete"] {
+                    report.push(TestCase::skipped(
+                        case,
+                        "emulator keystore is not hardware-backed",
+                    ));
+                }
+            } else {
+                report.push(TestCase::failed(
+                    "secret.set",
+                    format!("secret set failed: {error}"),
+                ));
+            }
             return;
         }
     }
@@ -561,14 +572,19 @@ fn record_android_background(report: &mut TestReport) {
 #[cfg(feature = "passkey")]
 async fn record_android_passkey(report: &mut TestReport) {
     match waterkit_content::passkey::is_available().await {
-        Ok(availability) => report.push(TestCase::passed_with_message(
+        Ok(availability) if availability.is_platform_supported => {
+            report.push(TestCase::passed_with_message(
+                "passkey.availability",
+                format!(
+                    "supported=true user_verification={} discoverable={}",
+                    availability.supports_user_verification,
+                    availability.supports_discoverable_credentials
+                ),
+            ))
+        }
+        Ok(_) => report.push(TestCase::failed(
             "passkey.availability",
-            format!(
-                "supported={} user_verification={} discoverable={}",
-                availability.is_platform_supported,
-                availability.supports_user_verification,
-                availability.supports_discoverable_credentials
-            ),
+            "passkey reports unsupported on an API 34+ CredentialManager device",
         )),
         Err(error) => report.push(TestCase::failed(
             "passkey.availability",

@@ -1,7 +1,8 @@
 //! Apple platform (iOS/macOS) secure storage implementation.
 
 use crate::SecretError;
-use keyring::Entry;
+use security_framework::passwords::{self, PasswordOptions};
+use security_framework_sys::base::errSecItemNotFound;
 
 /// Save a secret to the Apple Keychain.
 ///
@@ -9,10 +10,7 @@ use keyring::Entry;
 /// Returns a `SecretError::Platform` if the keychain operation fails.
 #[allow(clippy::unused_async)]
 pub async fn set(service: &str, account: &str, password: &str) -> Result<(), SecretError> {
-    let entry = Entry::new(service, account).map_err(|e| SecretError::Platform(e.to_string()))?;
-
-    entry
-        .set_password(password)
+    passwords::set_generic_password(service, account, password.as_bytes())
         .map_err(|e| SecretError::Platform(e.to_string()))
 }
 
@@ -23,11 +21,10 @@ pub async fn set(service: &str, account: &str, password: &str) -> Result<(), Sec
 /// or `SecretError::Platform` if the keychain operation fails.
 #[allow(clippy::unused_async)]
 pub async fn get(service: &str, account: &str) -> Result<String, SecretError> {
-    let entry = Entry::new(service, account).map_err(|e| SecretError::Platform(e.to_string()))?;
-
-    match entry.get_password() {
-        Ok(pwd) => Ok(pwd),
-        Err(keyring::Error::NoEntry) => Err(SecretError::NotFound),
+    match passwords::generic_password(PasswordOptions::new_generic_password(service, account)) {
+        Ok(password) => String::from_utf8(password)
+            .map_err(|e| SecretError::Platform(format!("keychain item was not UTF-8: {e}"))),
+        Err(e) if e.code() == errSecItemNotFound => Err(SecretError::NotFound),
         Err(e) => Err(SecretError::Platform(e.to_string())),
     }
 }
@@ -39,10 +36,9 @@ pub async fn get(service: &str, account: &str) -> Result<String, SecretError> {
 /// Deleting a non-existent secret is considered success.
 #[allow(clippy::unused_async)]
 pub async fn delete(service: &str, account: &str) -> Result<(), SecretError> {
-    let entry = Entry::new(service, account).map_err(|e| SecretError::Platform(e.to_string()))?;
-
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()), // Deleting non-existent is success
+    match passwords::delete_generic_password(service, account) {
+        Ok(()) => Ok(()),
+        Err(e) if e.code() == errSecItemNotFound => Ok(()), // Deleting non-existent is success
         Err(e) => Err(SecretError::Platform(e.to_string())),
     }
 }

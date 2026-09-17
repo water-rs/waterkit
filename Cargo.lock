@@ -1366,6 +1366,8 @@ dependencies = [
  "block2 0.6.2",
  "coreaudio-rs",
  "dasp_sample",
+ "futures-channel",
+ "futures-util",
  "jni 0.22.4",
  "js-sys",
  "libc",
@@ -1381,6 +1383,8 @@ dependencies = [
  "objc2-core-audio-types",
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "windows 0.62.2",
  "windows-core 0.62.2",
@@ -8028,6 +8032,7 @@ version = "0.1.0"
 dependencies = [
  "tokio",
  "waterkit-passkey",
+ "waterkit-test-report",
 ]
 
 [[package]]
@@ -8088,10 +8093,11 @@ dependencies = [
 name = "waterkit-secret"
 version = "0.1.2"
 dependencies = [
- "apple-native-keyring-store",
  "jni 0.22.4",
  "keyring",
  "ndk-context",
+ "security-framework",
+ "security-framework-sys",
  "thiserror 2.0.20",
  "waterkit-build",
 ]

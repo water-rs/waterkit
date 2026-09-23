@@ -1,6 +1,6 @@
 //! AV1 software encoding (rav1e) and decoding (rav1d).
 
-use crate::{CodecError, DecodePacket, DecodedPixelLayout};
+use crate::{CodecError, DecodePacket, DecodedPixelLayout, EncoderProfile};
 use rav1d::include::dav1d::data::Dav1dData;
 use rav1d::include::dav1d::dav1d::{Dav1dContext, Dav1dSettings};
 use rav1d::include::dav1d::headers::{
@@ -76,18 +76,25 @@ impl fmt::Debug for Av1Encoder {
 }
 
 impl Av1Encoder {
-    pub fn new(width: usize, height: usize) -> Result<Self, CodecError> {
+    pub fn new(width: usize, height: usize, profile: EncoderProfile) -> Result<Self, CodecError> {
+        let realtime = matches!(profile, EncoderProfile::Realtime);
         let cfg = Config::new()
             .with_encoder_config(EncoderConfig {
                 width,
                 height,
                 bit_depth: 8,
                 chroma_sampling: ChromaSampling::Cs420,
-                speed_settings: SpeedSettings::from_preset(6),
+                // Realtime capture trades compression efficiency for speed;
+                // offline encoding keeps the balanced preset.
+                speed_settings: SpeedSettings::from_preset(if realtime { 10 } else { 6 }),
                 low_latency: true,
                 ..Default::default()
             })
-            .with_threads(4);
+            .with_threads(if realtime {
+                std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get)
+            } else {
+                4
+            });
 
         let ctx = cfg
             .new_context()
@@ -161,6 +168,37 @@ impl Av1Encoder {
         }
 
         Ok(output)
+    }
+
+    /// The `av1C` (`AV1CodecConfigurationRecord`) payload for this stream.
+    ///
+    /// rav1e knows the sequence-level fields at construction, so the record
+    /// is available before the first encoded packet; the container gets the
+    /// sequence header OBU itself inside the first keyframe sample.
+    pub fn codec_config(&self) -> Vec<u8> {
+        self.ctx.container_sequence_header()
+    }
+
+    /// Signal end of input and drain every packet the encoder still holds.
+    ///
+    /// rav1e keeps submitted frames queued internally; `encode_nv12` only
+    /// returns packets once the encoder decides to emit, so a recording must
+    /// call `flush` to receive the frames it already submitted. Each element
+    /// is one encoded frame.
+    pub fn flush(&mut self) -> Result<Vec<Vec<u8>>, CodecError> {
+        self.ctx.flush();
+
+        let mut packets = Vec::new();
+        loop {
+            match self.ctx.receive_packet() {
+                Ok(pkt) => packets.push(pkt.data),
+                Err(EncoderStatus::Encoded | EncoderStatus::NeedMoreData) => {}
+                Err(EncoderStatus::LimitReached) => break,
+                Err(e) => return Err(CodecError::EncodingFailed(e.to_string())),
+            }
+        }
+
+        Ok(packets)
     }
 }
 

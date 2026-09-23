@@ -88,7 +88,7 @@ mod sys;
     target_os = "linux",
     waterkit_hw_codec_windows
 ))]
-pub use bitstream::{ConvertedProtectedSample, NalStreamConverter};
+pub use bitstream::{ConvertedProtectedSample, NalStreamConverter, annex_b_to_length_prefixed};
 pub use color::{
     ColorOutputTarget, SDR_REFERENCE_WHITE_NITS, VideoColorUniform, YUV_COLOR_SHADER_WGSL,
     video_color_uniform,
@@ -734,6 +734,23 @@ fn copy_frames_to_buffer(
     Ok(infos)
 }
 
+/// How an [`Encoder`] trades compression efficiency for latency.
+///
+/// The profile is chosen at construction because software encoders bake
+/// their threading and speed preset into the context; it cannot be
+/// switched on the fly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EncoderProfile {
+    /// Compression-first encoding for offline jobs: balanced speed preset
+    /// and a modest thread count (rav1e preset 6 on four threads).
+    #[default]
+    Offline,
+    /// Latency-first encoding for live capture: the fastest settings each
+    /// backend offers (rav1e's maximum speed preset on every available
+    /// core; hardware encoders are already realtime).
+    Realtime,
+}
+
 /// Unified video encoder with automatic hardware/software selection.
 pub struct Encoder {
     inner: EncoderInner,
@@ -761,15 +778,20 @@ impl std::fmt::Debug for Encoder {
 }
 
 impl Encoder {
-    /// Create a new encoder.
+    /// Create a new encoder tuned for `profile`.
     ///
     /// # Errors
     ///
     /// Returns error if no suitable encoder is available.
-    pub fn new(codec: CodecType, width: u32, height: u32) -> Result<Self, CodecError> {
+    pub fn new(
+        codec: CodecType,
+        width: u32,
+        height: u32,
+        profile: EncoderProfile,
+    ) -> Result<Self, CodecError> {
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = (width, height);
+            let _ = (width, height, profile);
             let _unsupported = EncoderInner::Unsupported;
             return Err(CodecError::Unsupported(format!(
                 "{codec:?} encoding is not supported by waterkit-codec on WebAssembly"
@@ -780,6 +802,8 @@ impl Encoder {
         {
             #[cfg(not(waterkit_any_codec))]
             let _ = (width, height);
+            #[cfg(not(waterkit_av1_software))]
+            let _ = profile;
             match codec {
                 #[cfg(waterkit_hw_codec_apple)]
                 CodecType::H264 | CodecType::H265 => Ok(Self {
@@ -811,6 +835,7 @@ impl Encoder {
                     inner: EncoderInner::Av1(Box::new(software::av1::Av1Encoder::new(
                         width as usize,
                         height as usize,
+                        profile,
                     )?)),
                 }),
 
@@ -878,6 +903,34 @@ impl Encoder {
         }
     }
 
+    /// Drain frames the encoder still holds after the last `encode_nv12`.
+    ///
+    /// Hardware backends in this crate emit bitstream synchronously per
+    /// `encode_nv12` call, so flushing them yields no packets. The software
+    /// AV1 encoder queues input internally and only emits the held frames
+    /// here; each returned packet is one encoded frame.
+    ///
+    /// # Errors
+    /// Returns [`CodecError::EncodingFailed`] when the drain fails.
+    pub fn flush(&mut self) -> Result<Vec<Vec<u8>>, CodecError> {
+        match self.inner {
+            #[cfg(target_arch = "wasm32")]
+            EncoderInner::Unsupported => Err(CodecError::Unsupported(String::from(
+                "video encoding is not supported by waterkit-codec on WebAssembly",
+            ))),
+            #[cfg(waterkit_hw_codec_apple)]
+            EncoderInner::Apple(_) => Ok(Vec::new()),
+            #[cfg(waterkit_hw_codec_android)]
+            EncoderInner::Android(_) => Ok(Vec::new()),
+            #[cfg(waterkit_hw_codec_windows)]
+            EncoderInner::Windows(_) => Ok(Vec::new()),
+            #[cfg(waterkit_hw_codec_vaapi)]
+            EncoderInner::Linux(_) => Ok(Vec::new()),
+            #[cfg(waterkit_av1_software)]
+            EncoderInner::Av1(ref mut enc) => enc.flush(),
+        }
+    }
+
     #[cfg(waterkit_hw_codec_apple)]
     fn encode_iosurface_inner(&mut self, iosurface_ptr: u64) -> Result<Vec<u8>, CodecError> {
         match self.inner {
@@ -912,7 +965,7 @@ impl Encoder {
             EncoderInner::Linux(ref enc) => enc.get_codec_config(),
 
             #[cfg(waterkit_av1_software)]
-            EncoderInner::Av1(_) => None, // AV1 doesn't use codec config atoms
+            EncoderInner::Av1(ref enc) => Some(enc.codec_config()),
         }
     }
 }

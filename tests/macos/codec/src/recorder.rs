@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
-use waterkit_codec::{CodecType, Encoder};
+use waterkit_codec::{CodecType, Encoder, EncoderProfile};
 use waterkit_screen::{ScreenStream, StreamConfig, screens};
 
 const TARGET_FPS: f64 = 30.0;
@@ -203,7 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create encoder
     println!("Creating H.265 encoder...");
-    let mut encoder = Encoder::new(CodecType::H265, width, height)?;
+    let mut encoder = Encoder::new(CodecType::H265, width, height, EncoderProfile::Realtime)?;
     println!("Encoder ready!");
 
     // Create output file

@@ -1,11 +1,16 @@
 //! Desktop camera implementation using nokhwa.
 //!
 //! Desktop cameras don't support professional controls (ISO, focus, etc.).
-//! Frames are uploaded to GPU textures via CPU copy.
+//! Frames are uploaded to GPU textures via CPU copy. Video recording runs the
+//! capture stream through `waterkit-codec` and `waterkit-video-container` on a
+//! dedicated worker thread; raw recording writes the uncompressed `WKRV`
+//! frame stream the mobile backends use.
+
+mod recording;
 
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
-    Frame, Photo, PixelFormat, RawPhoto, Resolution, StabilizationMode,
+    Frame, Photo, PixelFormat, RawPhoto, RawVideoFormat, Resolution, StabilizationMode,
 };
 use nokhwa::Camera as NokhwaCamera;
 use nokhwa::pixel_format::RgbAFormat;
@@ -13,18 +18,34 @@ use nokhwa::utils::{
     CameraFormat as NokhwaCameraFormat, CameraIndex, FrameFormat as NokhwaFrameFormat,
     RequestedFormat, RequestedFormatType, Resolution as NokhwaResolution,
 };
+use recording::RecordingSession;
 use std::num::NonZeroU8;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Internal frame data from nokhwa.
-struct RawFrame {
+/// Internal frame data from nokhwa: decoded RGBA pixels and the capture
+/// timestamp as a duration since the camera stream started.
+pub(super) struct RawFrame {
     data: Vec<u8>,
     width: u32,
     height: u32,
-    timestamp: Instant,
+    timestamp: Duration,
+}
+
+/// One live frame subscription, owned by the capture thread.
+struct Subscriber {
+    sender: async_channel::Sender<Arc<RawFrame>>,
+    /// Frames displaced by `force_send` before the receiver could read them.
+    dropped: Arc<AtomicU64>,
+}
+
+/// A capture-stream receiver plus the count of frames it missed because a
+/// newer frame displaced the pending one before it was read.
+pub(super) struct FrameSubscription {
+    pub receiver: async_channel::Receiver<Arc<RawFrame>>,
+    pub dropped: Arc<AtomicU64>,
 }
 
 /// Wrapper around `NokhwaCamera` that implements Send.
@@ -44,10 +65,18 @@ pub struct CameraInner {
     resolution: Resolution,
     capabilities: CameraCapabilities,
     controls: CameraControls,
-    frame_receiver: async_channel::Receiver<RawFrame>,
+    /// Registrations travel to the capture thread over this unbounded
+    /// channel; the subscriber vector itself is owned by that thread alone.
+    subscriber_tx: async_channel::Sender<Subscriber>,
     streaming: Arc<AtomicBool>,
-    start_instant: Instant,
+    frame_rate: u32,
+    recording: Option<RecordingSession>,
 }
+
+/// Preview subscribers only ever need the newest frame.
+const PREVIEW_QUEUE: usize = 1;
+/// A recording may lag briefly on scheduler jitter before frames must drop.
+const RECORDING_QUEUE: usize = 4;
 
 fn parse_camera_index(camera_id: &str) -> CameraIndex {
     camera_id.parse::<u32>().map_or_else(
@@ -97,22 +126,37 @@ fn build_desktop_capabilities(
         uses_system_video_pipeline: false,
         supports_raw_photo: false,
         raw_photo_formats: Vec::new(),
-        supports_raw_video: false,
-        raw_video_formats: Vec::new(),
+        supports_raw_video: true,
+        raw_video_formats: vec![RawVideoFormat::Rgba8Frames],
     };
     capabilities.validate()?;
     Ok(capabilities)
 }
 
+/// Deliver `frame` to every live subscriber. A lagging subscriber's pending
+/// frame is displaced by the newer one rather than applying backpressure to
+/// the capture thread; each displaced frame is counted on the subscription.
+fn fan_out(subscribers: &mut Vec<Subscriber>, frame: &Arc<RawFrame>) {
+    subscribers.retain(|sub| !sub.sender.is_closed());
+    for sub in subscribers.iter() {
+        if let Ok(Some(_evicted)) = sub.sender.force_send(Arc::clone(frame)) {
+            sub.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 fn spawn_capture_thread(
     camera: Arc<Mutex<SendableCamera>>,
-    sender: async_channel::Sender<RawFrame>,
+    registration_rx: async_channel::Receiver<Subscriber>,
     streaming: Arc<AtomicBool>,
+    start_instant: Instant,
 ) {
     std::thread::spawn(move || {
+        let mut subscribers: Vec<Subscriber> = Vec::new();
         while streaming.load(Ordering::SeqCst) {
-            if sender.is_closed() {
-                break;
+            // Pick up subscriptions registered since the last frame.
+            while let Ok(subscriber) = registration_rx.try_recv() {
+                subscribers.push(subscriber);
             }
 
             let frame = {
@@ -123,13 +167,13 @@ fn spawn_capture_thread(
             if let Some(frame) = frame {
                 let decoded = frame.decode_image::<RgbAFormat>();
                 if let Ok(img) = decoded {
-                    let raw = RawFrame {
+                    let raw = Arc::new(RawFrame {
                         data: img.into_raw(),
                         width: frame.resolution().width(),
                         height: frame.resolution().height(),
-                        timestamp: Instant::now(),
-                    };
-                    let _ = sender.force_send(raw);
+                        timestamp: Instant::now().duration_since(start_instant),
+                    });
+                    fan_out(&mut subscribers, &raw);
                 }
             } else {
                 std::thread::sleep(Duration::from_millis(2));
@@ -186,9 +230,6 @@ impl CameraInner {
             height: resolution.height(),
         };
 
-        // Create frame channel
-        let (sender, receiver) = async_channel::bounded(1);
-
         let capabilities = build_desktop_capabilities(res, &config)?;
 
         // Start streaming immediately (RAII)
@@ -201,7 +242,8 @@ impl CameraInner {
 
         // Wrap camera in SendableCamera for thread safety
         let camera = Arc::new(Mutex::new(SendableCamera(camera)));
-        spawn_capture_thread(camera, sender, Arc::clone(&streaming));
+        let (subscriber_tx, subscriber_rx) = async_channel::unbounded();
+        spawn_capture_thread(camera, subscriber_rx, Arc::clone(&streaming), start_instant);
 
         Ok(Self {
             device,
@@ -209,10 +251,27 @@ impl CameraInner {
             resolution: res,
             capabilities,
             controls: CameraControls::default(),
-            frame_receiver: receiver,
+            subscriber_tx,
             streaming,
-            start_instant,
+            frame_rate: config.frame_rate.max(1),
+            recording: None,
         })
+    }
+
+    /// Subscribe a new receiver to the capture stream with `capacity`
+    /// queued frames. Every subscriber sees every frame until it falls
+    /// `capacity` behind; further frames then displace its oldest pending
+    /// frame and are counted on the subscription's `dropped` tally.
+    fn subscribe_frames(&self, capacity: usize) -> FrameSubscription {
+        let (sender, receiver) = async_channel::bounded(capacity);
+        let dropped = Arc::new(AtomicU64::new(0));
+        // Unbounded, so registration never blocks. When the capture thread
+        // has already exited the receiver simply yields no frames.
+        let _ = self.subscriber_tx.try_send(Subscriber {
+            sender,
+            dropped: Arc::clone(&dropped),
+        });
+        FrameSubscription { receiver, dropped }
     }
 
     pub const fn capabilities(&self) -> &CameraCapabilities {
@@ -257,12 +316,11 @@ impl CameraInner {
     pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
         let device = self.device.clone();
         let queue = self.queue.clone();
-        let receiver = self.frame_receiver.clone();
-        let start_instant = self.start_instant;
+        let receiver = self.subscribe_frames(PREVIEW_QUEUE).receiver;
 
         futures::stream::unfold(
-            (device, queue, receiver, start_instant),
-            move |(device, queue, receiver, start_instant)| async move {
+            (device, queue, receiver),
+            move |(device, queue, receiver)| async move {
                 let raw = receiver.recv().await.ok()?;
 
                 // Create GPU texture
@@ -302,17 +360,15 @@ impl CameraInner {
                     },
                 );
 
-                let timestamp = raw.timestamp.saturating_duration_since(start_instant);
-
                 let frame = Frame {
                     texture,
                     width: raw.width,
                     height: raw.height,
                     format: PixelFormat::Rgba8,
-                    timestamp,
+                    timestamp: raw.timestamp,
                 };
 
-                Some((frame, (device, queue, receiver, start_instant)))
+                Some((frame, (device, queue, receiver)))
             },
         )
     }
@@ -320,7 +376,8 @@ impl CameraInner {
     pub async fn capture_photo(&self) -> Result<Photo, CameraError> {
         // Wait for next frame from the stream
         let raw = self
-            .frame_receiver
+            .subscribe_frames(PREVIEW_QUEUE)
+            .receiver
             .recv()
             .await
             .map_err(|_| CameraError::CaptureFailed("no frame available".into()))?;
@@ -382,60 +439,54 @@ impl CameraInner {
         ))
     }
 
-    #[allow(
-        clippy::unused_self,
-        reason = "Recording is an instance API on supported camera backends; desktop has no recording session state to touch."
-    )]
-    pub fn start_recording(&self, _path: &Path) -> Result<(), CameraError> {
-        Err(CameraError::ControlUnsupported(
-            "recording not supported on desktop".into(),
-        ))
+    pub fn start_recording(&mut self, path: &Path) -> Result<(), CameraError> {
+        if self.recording.is_some() {
+            return Err(CameraError::AlreadyInUse);
+        }
+        let session = RecordingSession::compressed(
+            path,
+            self.subscribe_frames(RECORDING_QUEUE),
+            self.resolution.width,
+            self.resolution.height,
+            self.frame_rate,
+        )?;
+        self.recording = Some(session);
+        Ok(())
     }
 
-    #[allow(
-        clippy::unused_self,
-        reason = "Recording is an instance API on supported camera backends; desktop has no recording session state to touch."
-    )]
-    pub fn stop_recording(&self) -> Result<(), CameraError> {
-        Err(CameraError::ControlUnsupported(
-            "recording not supported on desktop".into(),
-        ))
+    pub fn stop_recording(&mut self) -> Result<(), CameraError> {
+        self.recording.take().map_or(Ok(()), RecordingSession::stop)
     }
 
-    #[allow(
-        clippy::unused_self,
-        reason = "Recording is an instance API on supported camera backends; desktop has no recording session timer."
-    )]
-    pub const fn recording_duration(&self) -> Duration {
-        Duration::ZERO
+    pub fn recording_duration(&self) -> Duration {
+        self.recording
+            .as_ref()
+            .map_or(Duration::ZERO, RecordingSession::duration)
     }
 
-    #[allow(
-        clippy::unused_self,
-        reason = "Raw recording is an instance API on supported camera backends; desktop has no raw recording session state."
-    )]
-    pub fn start_raw_recording(&self, _path: &Path) -> Result<(), CameraError> {
-        Err(CameraError::ControlUnsupported(
-            "raw recording not supported on desktop".into(),
-        ))
+    pub fn start_raw_recording(&mut self, path: &Path) -> Result<(), CameraError> {
+        if self.recording.is_some() {
+            return Err(CameraError::AlreadyInUse);
+        }
+        let session = RecordingSession::raw(
+            path,
+            self.subscribe_frames(RECORDING_QUEUE),
+            self.resolution.width,
+            self.resolution.height,
+            self.frame_rate,
+        )?;
+        self.recording = Some(session);
+        Ok(())
     }
 
-    #[allow(
-        clippy::unused_self,
-        reason = "Raw recording is an instance API on supported camera backends; desktop has no raw recording session state."
-    )]
-    pub fn stop_raw_recording(&self) -> Result<(), CameraError> {
-        Err(CameraError::ControlUnsupported(
-            "raw recording not supported on desktop".into(),
-        ))
+    pub fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
+        self.recording.take().map_or(Ok(()), RecordingSession::stop)
     }
 
-    #[allow(
-        clippy::unused_self,
-        reason = "Raw recording is an instance API on supported camera backends; desktop has no raw recording session timer."
-    )]
-    pub const fn raw_recording_duration(&self) -> Duration {
-        Duration::ZERO
+    pub fn raw_recording_duration(&self) -> Duration {
+        self.recording
+            .as_ref()
+            .map_or(Duration::ZERO, RecordingSession::duration)
     }
 }
 
@@ -443,5 +494,43 @@ impl Drop for CameraInner {
     fn drop(&mut self) {
         // Signal the capture thread to stop
         self.streaming.store(false, Ordering::SeqCst);
+        if let Some(session) = self.recording.take() {
+            let _ = session.stop();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A lagging subscriber loses its pending frame to the newest one, and
+    /// the loss is counted on the subscription rather than hidden.
+    #[test]
+    fn fan_out_counts_frames_displaced_for_a_lagging_subscriber() {
+        let (sender, receiver) = async_channel::bounded(1);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let mut subscribers = vec![Subscriber {
+            sender,
+            dropped: Arc::clone(&dropped),
+        }];
+        let frame = Arc::new(RawFrame {
+            data: vec![0],
+            width: 1,
+            height: 1,
+            timestamp: Duration::ZERO,
+        });
+        fan_out(&mut subscribers, &frame);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        // The channel still holds the first frame, so the second displaces it.
+        fan_out(&mut subscribers, &frame);
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        receiver.try_recv().unwrap();
+        fan_out(&mut subscribers, &frame);
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        // A closed receiver is pruned from the list.
+        drop(receiver);
+        fan_out(&mut subscribers, &frame);
+        assert!(subscribers.is_empty());
     }
 }

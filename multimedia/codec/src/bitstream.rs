@@ -277,6 +277,81 @@ fn protection_runs(
     Ok(runs)
 }
 
+/// Convert Annex-B (start-code) NAL units to length-prefixed framing.
+///
+/// This is the exact inverse of [`NalStreamConverter::length_prefixed_to_annex_b`]:
+/// encoders emit Annex-B; ISO-BMFF samples carry length-prefixed NAL units.
+///
+/// Detects both 4-byte (`00 00 00 01`) and 3-byte (`00 00 01`) start codes;
+/// each NAL is written as a big-endian `u32` length prefix followed by the NAL
+/// bytes, with no start codes. Returns `None` for a packet with no start
+/// code at all (already length-prefixed or unknown framing — the caller then
+/// writes the packet unchanged).
+///
+/// The second return value reports whether the packet contains a keyframe:
+/// NAL unit type 5 (IDR) for H.264, type 19 or 20 (`IDR_W_RADL`/`IDR_N_LP`)
+/// for H.265.
+#[must_use]
+pub fn annex_b_to_length_prefixed(data: &[u8], is_hevc: bool) -> (Option<Vec<u8>>, bool) {
+    let nalus = annex_b_nalus(data);
+    if nalus.is_empty() {
+        return (None, false);
+    }
+    let mut out = Vec::with_capacity(data.len());
+    let mut is_keyframe = false;
+    for (start, end) in nalus {
+        let nalu = &data[start..end];
+        let Ok(len) = u32::try_from(nalu.len()) else {
+            return (None, false);
+        };
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(nalu);
+        let nalu_type = if is_hevc {
+            (nalu[0] >> 1) & 0x3f
+        } else {
+            nalu[0] & 0x1f
+        };
+        if (!is_hevc && nalu_type == 5) || (is_hevc && (nalu_type == 19 || nalu_type == 20)) {
+            is_keyframe = true;
+        }
+    }
+    (Some(out), is_keyframe)
+}
+
+/// Returns `(start, end)` byte ranges of each NAL unit after its start code.
+fn annex_b_nalus(data: &[u8]) -> Vec<(usize, usize)> {
+    let mut nalus = Vec::new();
+    let mut i = 0;
+    while i + 3 <= data.len() {
+        let (is_start, start_code_len) = if data[i..].starts_with(&[0, 0, 0, 1]) {
+            (true, 4)
+        } else if data[i..].starts_with(&[0, 0, 1]) {
+            (true, 3)
+        } else {
+            (false, 0)
+        };
+        if is_start {
+            let start = i + start_code_len;
+            let mut end = data.len();
+            let mut j = start;
+            while j + 3 <= data.len() {
+                if data[j..].starts_with(&[0, 0, 1]) || data[j..].starts_with(&[0, 0, 0, 1]) {
+                    end = j;
+                    break;
+                }
+                j += 1;
+            }
+            if start < end {
+                nalus.push((start, end));
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    nalus
+}
+
 fn push_run(runs: &mut Vec<ProtectionRun>, encrypted: bool, length: usize) {
     if length == 0 {
         return;

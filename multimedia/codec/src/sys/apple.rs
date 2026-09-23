@@ -1254,6 +1254,35 @@ impl AppleDecoder {
     }
 }
 
+/// Open a hardware decoder for a crate-level codec type.
+pub fn open_decoder(
+    codec: crate::CodecType,
+    config: Option<&[u8]>,
+    width: u32,
+    height: u32,
+) -> Result<crate::DecoderInner, CodecError> {
+    let codec = match codec {
+        crate::CodecType::H264 => CodecType::H264,
+        crate::CodecType::H265 => CodecType::H265,
+        crate::CodecType::Av1 => unreachable!(),
+    };
+    AppleDecoder::new(codec, config, width, height).map(crate::DecoderInner::Apple)
+}
+
+/// Open a hardware encoder for a crate-level codec type.
+pub fn open_encoder(
+    codec: crate::CodecType,
+    width: u32,
+    height: u32,
+) -> Result<crate::EncoderInner, CodecError> {
+    let codec = match codec {
+        crate::CodecType::H264 => CodecType::H264,
+        crate::CodecType::H265 => CodecType::H265,
+        crate::CodecType::Av1 => unreachable!(),
+    };
+    AppleEncoder::with_size(codec, width, height).map(crate::EncoderInner::Apple)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AppleDecoder, CodecType};

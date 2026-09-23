@@ -7769,6 +7769,7 @@ name = "waterkit-codec"
 version = "0.1.4"
 dependencies = [
  "avif-parse",
+ "cfg_aliases 0.2.2",
  "cros-codecs",
  "half",
  "image",

@@ -105,6 +105,9 @@ secret = ["dep:waterkit-secret"]
 camera = ["dep:waterkit-camera"]
 sensor = ["dep:waterkit-sensor"]
 codec = ["dep:waterkit-codec"]
+# VA-API hardware video decode/encode on Linux. A still-image consumer keeps
+# `codec` alone; a video consumer that wants the hardware path opts in here.
+vaapi = ["codec", "waterkit-codec/vaapi"]
 screen = ["dep:waterkit-screen"]
 system = ["dep:waterkit-system"]
 video = ["dep:waterkit-video"]

@@ -15,11 +15,13 @@ use wgpu::{
     TextureViewDimension,
 };
 
-use super::{DecodedFrame, DecodedFrameInner, DecodedPixelLayout};
+#[cfg(waterkit_any_codec)]
+use super::DecodedFrameInner;
+use super::{DecodedFrame, DecodedPixelLayout};
 use crate::{ColorOutputTarget, video_color_uniform};
 use shaderloom::{CompiledShader, ShaderStage};
 
-#[cfg(target_vendor = "apple")]
+#[cfg(waterkit_hw_codec_apple)]
 mod apple;
 
 const YUV_COLOR_SHADER: CompiledShader = include!(concat!(env!("OUT_DIR"), "/yuv_color.rs"));
@@ -37,8 +39,9 @@ impl DecodedFrame {
 /// Reusable decoded-frame uploader that retains GPU plane textures across frames.
 #[derive(Debug)]
 pub struct DecodedFrameUploader {
+    #[cfg(waterkit_any_codec)]
     cached: Option<GpuFrame>,
-    #[cfg(target_vendor = "apple")]
+    #[cfg(waterkit_hw_codec_apple)]
     apple: Option<apple::AppleFrameUploader>,
 }
 
@@ -47,8 +50,9 @@ impl DecodedFrameUploader {
     #[must_use]
     pub const fn new() -> Self {
         Self {
+            #[cfg(waterkit_any_codec)]
             cached: None,
-            #[cfg(target_vendor = "apple")]
+            #[cfg(waterkit_hw_codec_apple)]
             apple: None,
         }
     }
@@ -56,50 +60,58 @@ impl DecodedFrameUploader {
     /// Uploads a decoded frame, reusing textures while dimensions and layout remain stable.
     #[must_use]
     pub fn upload(&mut self, decoded: DecodedFrame, device: &Device, queue: &Queue) -> GpuFrame {
-        let width = decoded.width();
-        let height = decoded.height();
-        let layout = decoded.pixel_layout();
-        let replace = self.cached.as_ref().is_some_and(|cached| {
-            cached.width != width || cached.height != height || cached.layout != layout
-        });
-        if replace {
-            self.cached = None;
+        #[cfg(waterkit_any_codec)]
+        {
+            let width = decoded.width();
+            let height = decoded.height();
+            let layout = decoded.pixel_layout();
+            let replace = self.cached.as_ref().is_some_and(|cached| {
+                cached.width != width || cached.height != height || cached.layout != layout
+            });
+            if replace {
+                self.cached = None;
+            }
+            let cached = self
+                .cached
+                .get_or_insert_with(|| GpuFrame::initialized(device, queue, width, height, layout));
+            match decoded.inner {
+                #[cfg(waterkit_hw_codec_apple)]
+                DecodedFrameInner::Hardware {
+                    pixel_buffer,
+                    timestamp_ns,
+                    ..
+                } => {
+                    self.apple
+                        .get_or_insert_with(|| apple::AppleFrameUploader::new(queue))
+                        .copy_surface_planes(
+                            queue,
+                            apple::SurfacePlaneCopy {
+                                pixel_buffer: &pixel_buffer,
+                                y_target: &cached.y_texture,
+                                uv_target: &cached.uv_texture,
+                                width,
+                                height,
+                                layout,
+                            },
+                        );
+                    cached.timestamp_ns = timestamp_ns;
+                    cached.clone()
+                }
+                #[cfg(waterkit_software_frames)]
+                DecodedFrameInner::Software {
+                    data, timestamp_ns, ..
+                } => {
+                    cached.write_biplanar(queue, &data);
+                    cached.timestamp_ns = timestamp_ns;
+                    cached.clone()
+                }
+            }
         }
-        let cached = self
-            .cached
-            .get_or_insert_with(|| GpuFrame::initialized(device, queue, width, height, layout));
-        let timestamp_ns = match decoded.inner {
-            #[cfg(target_vendor = "apple")]
-            DecodedFrameInner::Hardware {
-                pixel_buffer,
-                timestamp_ns,
-                ..
-            } => {
-                self.apple
-                    .get_or_insert_with(|| apple::AppleFrameUploader::new(queue))
-                    .copy_surface_planes(
-                        queue,
-                        apple::SurfacePlaneCopy {
-                            pixel_buffer: &pixel_buffer,
-                            y_target: &cached.y_texture,
-                            uv_target: &cached.uv_texture,
-                            width,
-                            height,
-                            layout,
-                        },
-                    );
-                timestamp_ns
-            }
-            #[cfg(waterkit_software_frames)]
-            DecodedFrameInner::Software {
-                data, timestamp_ns, ..
-            } => {
-                cached.write_biplanar(queue, &data);
-                timestamp_ns
-            }
-        };
-        cached.timestamp_ns = timestamp_ns;
-        cached.clone()
+        #[cfg(not(waterkit_any_codec))]
+        {
+            let _ = (device, queue);
+            match decoded.inner {}
+        }
     }
 }
 
@@ -134,6 +146,7 @@ impl std::fmt::Debug for GpuFrame {
 }
 
 impl GpuFrame {
+    #[cfg(waterkit_any_codec)]
     fn initialized(
         device: &Device,
         queue: &Queue,
@@ -169,6 +182,7 @@ impl GpuFrame {
         }
     }
 
+    #[cfg(waterkit_any_codec)]
     fn create_biplanar_textures(
         device: &Device,
         width: u32,

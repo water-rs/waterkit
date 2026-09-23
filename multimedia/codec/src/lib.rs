@@ -60,9 +60,9 @@
 
 #[cfg(any(
     test,
-    target_os = "android",
+    waterkit_hw_codec_android,
     target_os = "linux",
-    target_os = "windows"
+    waterkit_hw_codec_windows
 ))]
 mod bitstream;
 mod color;
@@ -70,9 +70,9 @@ mod color;
 // `DecodedFormat`, so Linux never has to infer it from the codec configuration.
 #[cfg(any(
     test,
-    target_vendor = "apple",
-    target_os = "android",
-    target_os = "windows"
+    waterkit_hw_codec_apple,
+    waterkit_hw_codec_android,
+    waterkit_hw_codec_windows
 ))]
 mod config;
 mod frame;
@@ -84,9 +84,9 @@ mod sys;
 
 #[cfg(any(
     test,
-    target_os = "android",
+    waterkit_hw_codec_android,
     target_os = "linux",
-    target_os = "windows"
+    waterkit_hw_codec_windows
 ))]
 pub use bitstream::{ConvertedProtectedSample, NalStreamConverter};
 pub use color::{
@@ -308,18 +308,15 @@ pub struct Decoder {
 enum DecoderInner {
     #[cfg(target_arch = "wasm32")]
     Unsupported,
-    #[cfg(target_vendor = "apple")]
+    #[cfg(waterkit_hw_codec_apple)]
     Apple(sys::apple::AppleDecoder),
-    #[cfg(target_os = "android")]
+    #[cfg(waterkit_hw_codec_android)]
     Android(sys::android::AndroidDecoder),
-    #[cfg(target_os = "windows")]
+    #[cfg(waterkit_hw_codec_windows)]
     Windows(sys::windows::WindowsDecoder),
-    #[cfg(target_os = "linux")]
+    #[cfg(waterkit_hw_codec_vaapi)]
     Linux(sys::linux::LinuxDecoder),
-    #[cfg(all(
-        feature = "software-fallback",
-        not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
-    ))]
+    #[cfg(waterkit_av1_software)]
     Av1(software::av1::Av1Decoder),
 }
 
@@ -358,97 +355,51 @@ impl Decoder {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let inner = match codec {
-                #[cfg(target_vendor = "apple")]
-                CodecType::H264 | CodecType::H265 => {
-                    let apple_codec = match codec {
-                        CodecType::H264 => sys::apple::CodecType::H264,
-                        CodecType::H265 => sys::apple::CodecType::H265,
-                        CodecType::Av1 => unreachable!(),
-                    };
-                    DecoderInner::Apple(sys::apple::AppleDecoder::new(
-                        apple_codec,
-                        config,
-                        width,
-                        height,
-                    )?)
-                }
+            // With no hardware decoder backend these stay unused: the AV1
+            // software decoder reads dimensions from the bitstream itself.
+            #[cfg(not(waterkit_hw_codec))]
+            let _ = (config, width, height);
 
-                #[cfg(target_os = "android")]
-                CodecType::H264 | CodecType::H265 => {
-                    let android_codec = match codec {
-                        CodecType::H264 => sys::android::CodecType::H264,
-                        CodecType::H265 => sys::android::CodecType::H265,
-                        CodecType::Av1 => unreachable!(),
-                    };
-                    DecoderInner::Android(sys::android::AndroidDecoder::new(
-                        android_codec,
-                        config,
-                        width,
-                        height,
-                    )?)
-                }
+            match codec {
+                #[cfg(waterkit_hw_codec_apple)]
+                CodecType::H264 | CodecType::H265 => Ok(Self {
+                    inner: sys::apple::open_decoder(codec, config, width, height)?,
+                }),
 
-                #[cfg(target_os = "windows")]
-                CodecType::H264 | CodecType::H265 => {
-                    let windows_codec = match codec {
-                        CodecType::H264 => sys::windows::CodecType::H264,
-                        CodecType::H265 => sys::windows::CodecType::H265,
-                        CodecType::Av1 => unreachable!(),
-                    };
-                    DecoderInner::Windows(sys::windows::WindowsDecoder::new(
-                        windows_codec,
-                        config,
-                        width,
-                        height,
-                    )?)
-                }
+                #[cfg(waterkit_hw_codec_android)]
+                CodecType::H264 | CodecType::H265 => Ok(Self {
+                    inner: sys::android::open_decoder(codec, config, width, height)?,
+                }),
 
-                #[cfg(target_os = "linux")]
-                CodecType::H264 | CodecType::H265 => {
-                    let linux_codec = match codec {
-                        CodecType::H264 => sys::linux::CodecType::H264,
-                        CodecType::H265 => sys::linux::CodecType::H265,
-                        CodecType::Av1 => unreachable!(),
-                    };
-                    DecoderInner::Linux(sys::linux::LinuxDecoder::new(
-                        linux_codec,
-                        config,
-                        width,
-                        height,
-                    )?)
-                }
+                #[cfg(waterkit_hw_codec_windows)]
+                CodecType::H264 | CodecType::H265 => Ok(Self {
+                    inner: sys::windows::open_decoder(codec, config, width, height)?,
+                }),
 
-                #[cfg(not(any(
-                    target_vendor = "apple",
-                    target_os = "android",
-                    target_os = "windows",
-                    target_os = "linux"
-                )))]
+                #[cfg(waterkit_hw_codec_vaapi)]
+                CodecType::H264 | CodecType::H265 => Ok(Self {
+                    inner: sys::linux::open_decoder(codec, config, width, height)?,
+                }),
+
+                #[cfg(not(waterkit_hw_codec))]
                 CodecType::H264 | CodecType::H265 => {
                     return Err(CodecError::Unsupported(format!(
                         "{codec:?} hardware decoding not available on this platform"
                     )));
                 }
 
-                #[cfg(all(
-                    feature = "software-fallback",
-                    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
-                ))]
-                CodecType::Av1 => DecoderInner::Av1(software::av1::Av1Decoder::new()?),
+                #[cfg(waterkit_av1_software)]
+                CodecType::Av1 => Ok(Self {
+                    inner: DecoderInner::Av1(software::av1::Av1Decoder::new()?),
+                }),
 
-                #[cfg(not(all(
-                    feature = "software-fallback",
-                    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
-                )))]
+                #[cfg(not(waterkit_av1_software))]
                 CodecType::Av1 => {
                     return Err(CodecError::Unsupported(
                         "AV1 software decoding not available on this platform".into(),
                     ));
                 }
-            };
-
-            Ok(Self { inner })
+            }
         }
     }
 
@@ -470,22 +421,22 @@ impl Decoder {
     }
 
     fn decode_inner(&mut self, packet: DecodePacket<'_>) -> Result<Vec<DecodedFrame>, CodecError> {
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(any(target_arch = "wasm32", not(waterkit_any_codec)))]
         let _ = packet;
-        match &mut self.inner {
+        match self.inner {
             #[cfg(target_arch = "wasm32")]
             DecoderInner::Unsupported => Err(CodecError::Unsupported(String::from(
                 "video decoding is not supported by waterkit-codec on WebAssembly",
             ))),
-            #[cfg(target_vendor = "apple")]
-            DecoderInner::Apple(dec) => Ok(dec
+            #[cfg(waterkit_hw_codec_apple)]
+            DecoderInner::Apple(ref mut dec) => Ok(dec
                 .decode_to_iosurface(packet)?
                 .iter()
                 .map(DecodedFrame::from_iosurface)
                 .collect()),
 
-            #[cfg(target_os = "android")]
-            DecoderInner::Android(dec) => {
+            #[cfg(waterkit_hw_codec_android)]
+            DecoderInner::Android(ref mut dec) => {
                 let android_frames = dec.decode(packet)?;
                 let mut frames = Vec::with_capacity(android_frames.len());
                 for android_frame in android_frames {
@@ -501,8 +452,8 @@ impl Decoder {
                 Ok(frames)
             }
 
-            #[cfg(target_os = "windows")]
-            DecoderInner::Windows(dec) => {
+            #[cfg(waterkit_hw_codec_windows)]
+            DecoderInner::Windows(ref mut dec) => {
                 let windows_frames = dec.decode(packet)?;
                 let mut frames = Vec::with_capacity(windows_frames.len());
                 for windows_frame in windows_frames {
@@ -518,8 +469,8 @@ impl Decoder {
                 Ok(frames)
             }
 
-            #[cfg(target_os = "linux")]
-            DecoderInner::Linux(dec) => {
+            #[cfg(waterkit_hw_codec_vaapi)]
+            DecoderInner::Linux(ref mut dec) => {
                 let linux_frames = dec.decode(packet)?;
                 let mut frames = Vec::with_capacity(linux_frames.len());
                 for linux_frame in linux_frames {
@@ -535,11 +486,8 @@ impl Decoder {
                 Ok(frames)
             }
 
-            #[cfg(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
-            ))]
-            DecoderInner::Av1(dec) => {
+            #[cfg(waterkit_av1_software)]
+            DecoderInner::Av1(ref mut dec) => {
                 let cpu_frames = dec.decode(packet)?;
                 let mut frames = Vec::with_capacity(cpu_frames.len());
                 for cpu_frame in cpu_frames {
@@ -572,19 +520,19 @@ impl Decoder {
     }
 
     fn drain_inner(&mut self) -> Result<Vec<DecodedFrame>, CodecError> {
-        match &mut self.inner {
+        match self.inner {
             #[cfg(target_arch = "wasm32")]
             DecoderInner::Unsupported => Err(CodecError::Unsupported(String::from(
                 "video decoding is not supported by waterkit-codec on WebAssembly",
             ))),
-            #[cfg(target_vendor = "apple")]
-            DecoderInner::Apple(decoder) => Ok(decoder
+            #[cfg(waterkit_hw_codec_apple)]
+            DecoderInner::Apple(ref mut decoder) => Ok(decoder
                 .drain()?
                 .iter()
                 .map(DecodedFrame::from_iosurface)
                 .collect()),
-            #[cfg(target_os = "android")]
-            DecoderInner::Android(decoder) => Ok(decoder
+            #[cfg(waterkit_hw_codec_android)]
+            DecoderInner::Android(ref mut decoder) => Ok(decoder
                 .drain()?
                 .into_iter()
                 .map(|frame| {
@@ -597,8 +545,8 @@ impl Decoder {
                     )
                 })
                 .collect()),
-            #[cfg(target_os = "windows")]
-            DecoderInner::Windows(decoder) => Ok(decoder
+            #[cfg(waterkit_hw_codec_windows)]
+            DecoderInner::Windows(ref mut decoder) => Ok(decoder
                 .drain()?
                 .into_iter()
                 .map(|frame| {
@@ -611,8 +559,8 @@ impl Decoder {
                     )
                 })
                 .collect()),
-            #[cfg(target_os = "linux")]
-            DecoderInner::Linux(decoder) => Ok(decoder
+            #[cfg(waterkit_hw_codec_vaapi)]
+            DecoderInner::Linux(ref mut decoder) => Ok(decoder
                 .drain()?
                 .into_iter()
                 .map(|frame| {
@@ -625,11 +573,8 @@ impl Decoder {
                     )
                 })
                 .collect()),
-            #[cfg(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
-            ))]
-            DecoderInner::Av1(decoder) => Ok(decoder
+            #[cfg(waterkit_av1_software)]
+            DecoderInner::Av1(ref mut decoder) => Ok(decoder
                 .drain()?
                 .into_iter()
                 .map(|frame| {
@@ -666,15 +611,15 @@ impl Decoder {
         packet: DecodePacket<'_>,
         output: &mut [u8],
     ) -> Result<Vec<FrameInfo>, CodecError> {
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(any(target_arch = "wasm32", not(waterkit_any_codec)))]
         let _ = (packet, output);
-        match &mut self.inner {
+        match self.inner {
             #[cfg(target_arch = "wasm32")]
             DecoderInner::Unsupported => Err(CodecError::Unsupported(String::from(
                 "video decoding is not supported by waterkit-codec on WebAssembly",
             ))),
-            #[cfg(target_vendor = "apple")]
-            DecoderInner::Apple(dec) => {
+            #[cfg(waterkit_hw_codec_apple)]
+            DecoderInner::Apple(ref mut dec) => {
                 let surfaces = dec.decode_to_iosurface(packet)?;
                 let mut infos = Vec::with_capacity(surfaces.len());
                 let mut offset = 0;
@@ -710,8 +655,8 @@ impl Decoder {
                 Ok(infos)
             }
 
-            #[cfg(target_os = "android")]
-            DecoderInner::Android(dec) => {
+            #[cfg(waterkit_hw_codec_android)]
+            DecoderInner::Android(ref mut dec) => {
                 let android_frames = dec.decode(packet)?;
                 copy_frames_to_buffer(
                     android_frames
@@ -721,8 +666,8 @@ impl Decoder {
                 )
             }
 
-            #[cfg(target_os = "windows")]
-            DecoderInner::Windows(dec) => {
+            #[cfg(waterkit_hw_codec_windows)]
+            DecoderInner::Windows(ref mut dec) => {
                 let windows_frames = dec.decode(packet)?;
                 copy_frames_to_buffer(
                     windows_frames
@@ -732,8 +677,8 @@ impl Decoder {
                 )
             }
 
-            #[cfg(target_os = "linux")]
-            DecoderInner::Linux(dec) => {
+            #[cfg(waterkit_hw_codec_vaapi)]
+            DecoderInner::Linux(ref mut dec) => {
                 let linux_frames = dec.decode(packet)?;
                 copy_frames_to_buffer(
                     linux_frames
@@ -743,11 +688,8 @@ impl Decoder {
                 )
             }
 
-            #[cfg(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
-            ))]
-            DecoderInner::Av1(dec) => {
+            #[cfg(waterkit_av1_software)]
+            DecoderInner::Av1(ref mut dec) => {
                 let cpu_frames = dec.decode(packet)?;
                 copy_frames_to_buffer(
                     cpu_frames
@@ -761,7 +703,7 @@ impl Decoder {
 }
 
 /// Helper to copy decoded frames to an output buffer.
-#[cfg(all(waterkit_software_frames, not(target_arch = "wasm32")))]
+#[cfg(waterkit_software_frames)]
 fn copy_frames_to_buffer(
     frames: impl Iterator<Item = (Vec<u8>, u32, u32, u64, DecodedPixelLayout)>,
     output: &mut [u8],
@@ -804,18 +746,15 @@ pub struct Encoder {
 enum EncoderInner {
     #[cfg(target_arch = "wasm32")]
     Unsupported,
-    #[cfg(target_vendor = "apple")]
+    #[cfg(waterkit_hw_codec_apple)]
     Apple(sys::apple::AppleEncoder),
-    #[cfg(target_os = "android")]
+    #[cfg(waterkit_hw_codec_android)]
     Android(sys::android::AndroidEncoder),
-    #[cfg(target_os = "windows")]
+    #[cfg(waterkit_hw_codec_windows)]
     Windows(sys::windows::WindowsEncoder),
-    #[cfg(target_os = "linux")]
+    #[cfg(waterkit_hw_codec_vaapi)]
     Linux(sys::linux::LinuxEncoder),
-    #[cfg(all(
-        feature = "software-fallback",
-        not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
-    ))]
+    #[cfg(waterkit_av1_software)]
     Av1(Box<software::av1::Av1Encoder>),
 }
 
@@ -843,92 +782,51 @@ impl Encoder {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let inner = match codec {
-                #[cfg(target_vendor = "apple")]
-                CodecType::H264 | CodecType::H265 => {
-                    let apple_codec = match codec {
-                        CodecType::H264 => sys::apple::CodecType::H264,
-                        CodecType::H265 => sys::apple::CodecType::H265,
-                        CodecType::Av1 => unreachable!(),
-                    };
-                    EncoderInner::Apple(sys::apple::AppleEncoder::with_size(
-                        apple_codec,
-                        width,
-                        height,
-                    )?)
-                }
+            #[cfg(not(waterkit_any_codec))]
+            let _ = (width, height);
+            match codec {
+                #[cfg(waterkit_hw_codec_apple)]
+                CodecType::H264 | CodecType::H265 => Ok(Self {
+                    inner: sys::apple::open_encoder(codec, width, height)?,
+                }),
 
-                #[cfg(target_os = "android")]
-                CodecType::H264 | CodecType::H265 => {
-                    let android_codec = match codec {
-                        CodecType::H264 => sys::android::CodecType::H264,
-                        CodecType::H265 => sys::android::CodecType::H265,
-                        CodecType::Av1 => unreachable!(),
-                    };
-                    EncoderInner::Android(sys::android::AndroidEncoder::new(
-                        android_codec,
-                        width,
-                        height,
-                    )?)
-                }
+                #[cfg(waterkit_hw_codec_android)]
+                CodecType::H264 | CodecType::H265 => Ok(Self {
+                    inner: sys::android::open_encoder(codec, width, height)?,
+                }),
 
-                #[cfg(target_os = "windows")]
-                CodecType::H264 | CodecType::H265 => {
-                    let windows_codec = match codec {
-                        CodecType::H264 => sys::windows::CodecType::H264,
-                        CodecType::H265 => sys::windows::CodecType::H265,
-                        CodecType::Av1 => unreachable!(),
-                    };
-                    EncoderInner::Windows(sys::windows::WindowsEncoder::new(
-                        windows_codec,
-                        width,
-                        height,
-                    )?)
-                }
+                #[cfg(waterkit_hw_codec_windows)]
+                CodecType::H264 | CodecType::H265 => Ok(Self {
+                    inner: sys::windows::open_encoder(codec, width, height)?,
+                }),
 
-                #[cfg(target_os = "linux")]
-                CodecType::H264 | CodecType::H265 => {
-                    let linux_codec = match codec {
-                        CodecType::H264 => sys::linux::CodecType::H264,
-                        CodecType::H265 => sys::linux::CodecType::H265,
-                        CodecType::Av1 => unreachable!(),
-                    };
-                    EncoderInner::Linux(sys::linux::LinuxEncoder::new(linux_codec, width, height)?)
-                }
+                #[cfg(waterkit_hw_codec_vaapi)]
+                CodecType::H264 | CodecType::H265 => Ok(Self {
+                    inner: sys::linux::open_encoder(codec, width, height)?,
+                }),
 
-                #[cfg(not(any(
-                    target_vendor = "apple",
-                    target_os = "android",
-                    target_os = "windows",
-                    target_os = "linux"
-                )))]
+                #[cfg(not(waterkit_hw_codec))]
                 CodecType::H264 | CodecType::H265 => {
                     return Err(CodecError::Unsupported(format!(
                         "{codec:?} hardware encoding not available on this platform"
                     )));
                 }
 
-                #[cfg(all(
-                    feature = "software-fallback",
-                    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
-                ))]
-                CodecType::Av1 => EncoderInner::Av1(Box::new(software::av1::Av1Encoder::new(
-                    width as usize,
-                    height as usize,
-                )?)),
+                #[cfg(waterkit_av1_software)]
+                CodecType::Av1 => Ok(Self {
+                    inner: EncoderInner::Av1(Box::new(software::av1::Av1Encoder::new(
+                        width as usize,
+                        height as usize,
+                    )?)),
+                }),
 
-                #[cfg(not(all(
-                    feature = "software-fallback",
-                    not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
-                )))]
+                #[cfg(not(waterkit_av1_software))]
                 CodecType::Av1 => {
                     return Err(CodecError::Unsupported(
                         "AV1 software encoding not available on this platform".into(),
                     ));
                 }
-            };
-
-            Ok(Self { inner })
+            }
         }
     }
 
@@ -948,37 +846,34 @@ impl Encoder {
     }
 
     fn encode_nv12_inner(&mut self, data: &[u8]) -> Result<Vec<u8>, CodecError> {
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(any(target_arch = "wasm32", not(waterkit_any_codec)))]
         let _ = data;
-        match &mut self.inner {
+        match self.inner {
             #[cfg(target_arch = "wasm32")]
             EncoderInner::Unsupported => Err(CodecError::Unsupported(String::from(
                 "video encoding is not supported by waterkit-codec on WebAssembly",
             ))),
-            #[cfg(target_vendor = "apple")]
-            EncoderInner::Apple(enc) => enc.encode_nv12(data),
+            #[cfg(waterkit_hw_codec_apple)]
+            EncoderInner::Apple(ref mut enc) => enc.encode_nv12(data),
 
-            #[cfg(target_os = "android")]
-            EncoderInner::Android(enc) => enc.encode_nv12(data),
+            #[cfg(waterkit_hw_codec_android)]
+            EncoderInner::Android(ref mut enc) => enc.encode_nv12(data),
 
-            #[cfg(target_os = "windows")]
-            EncoderInner::Windows(enc) => enc.encode_nv12(data),
+            #[cfg(waterkit_hw_codec_windows)]
+            EncoderInner::Windows(ref mut enc) => enc.encode_nv12(data),
 
-            #[cfg(target_os = "linux")]
-            EncoderInner::Linux(enc) => enc.encode_nv12(data),
+            #[cfg(waterkit_hw_codec_vaapi)]
+            EncoderInner::Linux(ref mut enc) => enc.encode_nv12(data),
 
-            #[cfg(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
-            ))]
-            EncoderInner::Av1(enc) => enc.encode_nv12(data),
+            #[cfg(waterkit_av1_software)]
+            EncoderInner::Av1(ref mut enc) => enc.encode_nv12(data),
         }
     }
 
     /// Encode directly from an `IOSurface` (zero-copy, Apple only).
     ///
     /// Returns a streaming iterator yielding encoded packets.
-    #[cfg(target_vendor = "apple")]
+    #[cfg(waterkit_hw_codec_apple)]
     pub fn encode_iosurface(&mut self, iosurface_ptr: u64) -> EncodeStream {
         let result = self.encode_iosurface_inner(iosurface_ptr);
         match result {
@@ -991,14 +886,11 @@ impl Encoder {
         }
     }
 
-    #[cfg(target_vendor = "apple")]
+    #[cfg(waterkit_hw_codec_apple)]
     fn encode_iosurface_inner(&mut self, iosurface_ptr: u64) -> Result<Vec<u8>, CodecError> {
-        match &mut self.inner {
-            EncoderInner::Apple(enc) => enc.encode_iosurface(iosurface_ptr),
-            #[cfg(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
-            ))]
+        match self.inner {
+            EncoderInner::Apple(ref mut enc) => enc.encode_iosurface(iosurface_ptr),
+            #[cfg(waterkit_av1_software)]
             EncoderInner::Av1(_) => Err(CodecError::Unsupported(
                 "IOSurface encoding not supported for AV1".into(),
             )),
@@ -1007,26 +899,27 @@ impl Encoder {
 
     /// Get codec configuration data (avcC/hvcC atom) if available.
     #[must_use]
+    #[allow(
+        clippy::missing_const_for_fn,
+        reason = "non-const on backends that call through to a platform encoder; only the reduced no-vaapi build is const-eligible"
+    )]
     pub fn codec_config(&self) -> Option<Vec<u8>> {
-        match &self.inner {
+        match self.inner {
             #[cfg(target_arch = "wasm32")]
             EncoderInner::Unsupported => None,
-            #[cfg(target_vendor = "apple")]
-            EncoderInner::Apple(enc) => enc.get_codec_config(),
+            #[cfg(waterkit_hw_codec_apple)]
+            EncoderInner::Apple(ref enc) => enc.get_codec_config(),
 
-            #[cfg(target_os = "android")]
-            EncoderInner::Android(enc) => enc.get_codec_config(),
+            #[cfg(waterkit_hw_codec_android)]
+            EncoderInner::Android(ref enc) => enc.get_codec_config(),
 
-            #[cfg(target_os = "windows")]
-            EncoderInner::Windows(enc) => enc.get_codec_config(),
+            #[cfg(waterkit_hw_codec_windows)]
+            EncoderInner::Windows(ref enc) => enc.get_codec_config(),
 
-            #[cfg(target_os = "linux")]
-            EncoderInner::Linux(enc) => enc.get_codec_config(),
+            #[cfg(waterkit_hw_codec_vaapi)]
+            EncoderInner::Linux(ref enc) => enc.get_codec_config(),
 
-            #[cfg(all(
-                feature = "software-fallback",
-                not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
-            ))]
+            #[cfg(waterkit_av1_software)]
             EncoderInner::Av1(_) => None, // AV1 doesn't use codec config atoms
         }
     }

@@ -7721,11 +7721,14 @@ dependencies = [
  "swift-bridge",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
  "waterkit-build",
  "waterkit-codec",
  "waterkit-core",
+ "waterkit-video-container",
  "wgpu",
  "winit",
+ "yuv",
 ]
 
 [[package]]

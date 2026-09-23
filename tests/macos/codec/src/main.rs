@@ -4,7 +4,7 @@
 //! Measures throughput with screen capture as input source.
 
 use std::time::Instant;
-use waterkit_codec::{CodecType, Encoder};
+use waterkit_codec::{CodecType, Encoder, EncoderProfile};
 
 fn create_test_nv12(width: u32, height: u32) -> Vec<u8> {
     // Create a dummy NV12 frame for testing
@@ -108,7 +108,7 @@ fn main() {
 
         // VideoToolbox H.264
         println!("\n--- Hardware H.264 (VideoToolbox) ---");
-        match Encoder::new(CodecType::H264, 1920, 1080) {
+        match Encoder::new(CodecType::H264, 1920, 1080, EncoderProfile::Offline) {
             Ok(mut encoder) => {
                 results.push(benchmark_encoder(
                     "H.264 VT (1080p)",
@@ -122,7 +122,7 @@ fn main() {
 
         // VideoToolbox H.265
         println!("\n--- Hardware H.265 (VideoToolbox) ---");
-        match Encoder::new(CodecType::H265, 1920, 1080) {
+        match Encoder::new(CodecType::H265, 1920, 1080, EncoderProfile::Offline) {
             Ok(mut encoder) => {
                 results.push(benchmark_encoder(
                     "H.265 VT (1080p)",
@@ -165,7 +165,12 @@ fn main() {
 
     // VideoToolbox H.264 on 4K
     println!("\n--- Hardware H.264 (VideoToolbox) on Screen Size ---");
-    match Encoder::new(CodecType::H264, screen_width, screen_height) {
+    match Encoder::new(
+        CodecType::H264,
+        screen_width,
+        screen_height,
+        EncoderProfile::Realtime,
+    ) {
         Ok(mut encoder) => {
             results.push(benchmark_encoder(
                 "H.264 VT (4K)",
@@ -179,7 +184,12 @@ fn main() {
 
     // VideoToolbox H.265 on 4K
     println!("\n--- Hardware H.265 (VideoToolbox) on Screen Size ---");
-    match Encoder::new(CodecType::H265, screen_width, screen_height) {
+    match Encoder::new(
+        CodecType::H265,
+        screen_width,
+        screen_height,
+        EncoderProfile::Realtime,
+    ) {
         Ok(mut encoder) => {
             results.push(benchmark_encoder(
                 "H.265 VT (4K)",

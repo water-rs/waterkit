@@ -42,7 +42,7 @@ waterkit-fs = { workspace = true, optional = true }
 waterkit-secret = { workspace = true, optional = true }
 waterkit-camera = { workspace = true, optional = true }
 waterkit-sensor = { workspace = true, optional = true }
-waterkit-codec = { workspace = true, optional = true }
+waterkit-codec = { workspace = true, features = ["gpu", "software-fallback"], optional = true }
 waterkit-screen = { workspace = true, optional = true }
 waterkit-system = { workspace = true, optional = true }
 waterkit-video = { workspace = true, optional = true }
@@ -147,7 +147,9 @@ waterkit-fs = { path = "platform/fs", version = "0.1.4" }
 waterkit-secret = { path = "platform/secret", version = "0.1.4" }
 waterkit-camera = { path = "device/camera", version = "0.1.4" }
 waterkit-sensor = { path = "device/sensor", version = "0.1.4" }
-waterkit-codec = { path = "multimedia/codec", version = "0.1.4" }
+# No default features: consumers opt into `gpu` (decoded-frame upload),
+# `software-fallback` (rav1e/rav1d + image decoding) and `vaapi` explicitly.
+waterkit-codec = { path = "multimedia/codec", version = "0.1.4", default-features = false }
 shaderloom = "0.1.2"
 waterkit-screen = { path = "platform/screen", version = "0.1.4" }
 waterkit-system = { path = "platform/system", version = "0.1.4" }

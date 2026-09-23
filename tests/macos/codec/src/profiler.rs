@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use waterkit_codec::{CodecType, Encoder};
+use waterkit_codec::{CodecType, Encoder, EncoderProfile};
 use waterkit_screen::{ImageFormat, ScreenStream, StreamConfig, screens, screenshot};
 
 const ITERATIONS: usize = 100;
@@ -105,7 +105,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let stream = ScreenStream::start(primary, device.clone(), queue.clone(), &config)?;
         let (width, height) = stream.dimensions();
 
-        let mut encoder = Encoder::new(CodecType::H265, width, height)?;
+        let mut encoder = Encoder::new(CodecType::H265, width, height, EncoderProfile::Offline)?;
 
         // Wait for stream to warm up
         std::thread::sleep(Duration::from_millis(500));

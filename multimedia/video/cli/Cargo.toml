@@ -19,7 +19,7 @@ waterkit-video-core.workspace = true
 waterkit-video-container.workspace = true
 waterkit-video-player.workspace = true
 waterkit-video-streaming.workspace = true
-waterkit-codec.workspace = true
+waterkit-codec = { workspace = true, features = ["gpu", "software-fallback"] }
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

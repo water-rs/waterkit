@@ -24,6 +24,8 @@ pub enum CodecType {
     /// H.265/HEVC codec.
     #[default]
     H265,
+    /// AV1 codec.
+    Av1,
 }
 
 /// Video writer for creating MP4/MOV files.
@@ -316,13 +318,12 @@ impl VideoWriter {
                                 ew.write_u16::<BigEndian>(0x0018)?; // Depth
                                 ew.write_i16::<BigEndian>(-1)?; // Pre-defined
 
-                                // Codec Config Box (avcC or hvcC)
+                                // Codec Config Box (avcC, hvcC or av1C)
                                 if let Some(config) = &self.codec_config {
-                                    // Use 'hvcC' if HEVC, 'avcC' if H264
-                                    let tag = if self.codec == CodecType::H265 {
-                                        b"hvcC"
-                                    } else {
-                                        b"avcC"
+                                    let tag = match self.codec {
+                                        CodecType::H264 => b"avcC",
+                                        CodecType::H265 => b"hvcC",
+                                        CodecType::Av1 => b"av1C",
                                     };
 
                                     // Wrap config payload in box header
@@ -332,10 +333,10 @@ impl VideoWriter {
                                     ew.write_all(config)?;
                                 }
 
-                                let type_code = if self.codec == CodecType::H265 {
-                                    b"hev1"
-                                } else {
-                                    b"avc1"
+                                let type_code = match self.codec {
+                                    CodecType::H264 => b"avc1",
+                                    CodecType::H265 => b"hev1",
+                                    CodecType::Av1 => b"av01",
                                 };
                                 write_box_header(ssw, type_code, entry.len() as u64)?;
                                 ssw.write_all(&entry)?;

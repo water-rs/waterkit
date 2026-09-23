@@ -20,7 +20,7 @@ waterkit-build.workspace = true
 waterkit-video-core.workspace = true
 waterkit-video-container.workspace = true
 waterkit-video-streaming = { workspace = true, optional = true }
-waterkit-codec = { workspace = true, features = ["vaapi"] }
+waterkit-codec = { workspace = true, features = ["vaapi", "software-fallback"] }
 waterkit-audio = { workspace = true, features = ["streaming", "media-session"] }
 futures.workspace = true
 async-channel.workspace = true

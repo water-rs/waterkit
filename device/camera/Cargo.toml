@@ -13,18 +13,15 @@ categories = ["multimedia::video", "gui"]
 [lints]
 workspace = true
 
-[package.metadata.cargo-machete]
-ignored = ["waterkit-codec"]
-
 [dependencies]
 waterkit-core = { workspace = true }
 thiserror = { workspace = true }
 wgpu.workspace = true
 futures.workspace = true
 async-channel.workspace = true
+tracing.workspace = true
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
-waterkit-codec = { workspace = true, optional = true }
 shaderloom = { workspace = true, optional = true }
 
 [build-dependencies]
@@ -32,7 +29,6 @@ waterkit-build.workspace = true
 shaderloom = { workspace = true, features = ["build"], optional = true }
 
 [features]
-codec = ["dep:waterkit-codec"]
 preview-example = ["dep:shaderloom"]
 
 [[example]]
@@ -48,9 +44,16 @@ pollster = "1.0"
 [target.'cfg(not(target_os = "android"))'.dev-dependencies]
 winit.workspace = true
 
-# Desktop platforms (Windows, macOS, Linux) - use nokhwa
+# Desktop platforms (Windows, Linux) - use nokhwa. Recording encodes through
+# waterkit-codec (hardware encoders plus the software AV1 fallback) and muxes
+# with waterkit-video-container; `yuv` does the RGBA to NV12 conversion.
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 nokhwa = { workspace = true, features = ["input-native"] }
+# `vaapi` (a no-op outside Linux, where it adds the VA-API hardware encoders
+# via cros-codecs) + `software-fallback` for the rav1e AV1 fallback.
+waterkit-codec = { workspace = true, features = ["software-fallback", "vaapi"] }
+waterkit-video-container.workspace = true
+yuv = "0.8.16"
 
 # Apple platforms (iOS, macOS) - use native AVCaptureSession
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]

@@ -618,3 +618,32 @@ impl Drop for AndroidEncoder {
         let _ = self.codec.stop();
     }
 }
+
+/// Open a hardware decoder for a crate-level codec type.
+pub fn open_decoder(
+    codec: crate::CodecType,
+    config: Option<&[u8]>,
+    width: u32,
+    height: u32,
+) -> Result<crate::DecoderInner, CodecError> {
+    let codec = match codec {
+        crate::CodecType::H264 => CodecType::H264,
+        crate::CodecType::H265 => CodecType::H265,
+        crate::CodecType::Av1 => unreachable!(),
+    };
+    AndroidDecoder::new(codec, config, width, height).map(crate::DecoderInner::Android)
+}
+
+/// Open a hardware encoder for a crate-level codec type.
+pub fn open_encoder(
+    codec: crate::CodecType,
+    width: u32,
+    height: u32,
+) -> Result<crate::EncoderInner, CodecError> {
+    let codec = match codec {
+        crate::CodecType::H264 => CodecType::H264,
+        crate::CodecType::H265 => CodecType::H265,
+        crate::CodecType::Av1 => unreachable!(),
+    };
+    AndroidEncoder::new(codec, width, height).map(crate::EncoderInner::Android)
+}

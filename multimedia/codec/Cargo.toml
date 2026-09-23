@@ -27,6 +27,7 @@ shaderloom = { workspace = true, optional = true }
 
 [build-dependencies]
 waterkit-build.workspace = true
+cfg_aliases = "0.2"
 shaderloom = { workspace = true, features = ["build"], optional = true }
 
 # Software fallback codecs (private, not exposed in public API)
@@ -61,7 +62,7 @@ jni.workspace = true
 windows = { workspace = true, features = ["Win32_Media_MediaFoundation", "Win32_System_Com"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-cros-codecs = { version = "0.0.6", default-features = false, features = ["vaapi"] }
+cros-codecs = { version = "0.0.6", default-features = false, features = ["vaapi"], optional = true }
 
 # The software AV1 decoder's end-to-end test builds its input with `image`'s
 # AVIF *encoder*. Nothing else in the workspace encodes AVIF, so that encoder
@@ -82,6 +83,11 @@ gpu = [
     "objc2-core-video/CVMetalTextureCache",
 ]
 software-fallback = ["dep:rav1e", "dep:rav1d", "dep:avif-parse", "dep:yuv", "dep:moxcms"]
+# VA-API hardware decode/encode on Linux via `cros-codecs`, which compiles
+# `cros-libva` against the system libva headers (>= 2.20). Off by default so a
+# consumer that only decodes still images links no hardware video decoder —
+# video consumers (waterkit-video-player and friends) opt in explicitly.
+vaapi = ["dep:cros-codecs"]
 
 [lints]
 workspace = true

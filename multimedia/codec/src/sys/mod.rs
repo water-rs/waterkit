@@ -1,13 +1,13 @@
 //! Platform-specific hardware codec implementations.
 
-#[cfg(target_vendor = "apple")]
+#[cfg(waterkit_hw_codec_apple)]
 pub mod apple;
 
-#[cfg(target_os = "android")]
+#[cfg(waterkit_hw_codec_android)]
 pub mod android;
 
-#[cfg(target_os = "windows")]
+#[cfg(waterkit_hw_codec_windows)]
 pub mod windows;
 
-#[cfg(target_os = "linux")]
+#[cfg(waterkit_hw_codec_vaapi)]
 pub mod linux;

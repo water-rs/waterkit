@@ -912,6 +912,13 @@ impl Encoder {
     ///
     /// # Errors
     /// Returns [`CodecError::EncodingFailed`] when the drain fails.
+    #[cfg_attr(
+        not(any(waterkit_av1_software, target_arch = "wasm32")),
+        expect(
+            clippy::missing_const_for_fn,
+            reason = "only the software AV1 and wasm32 arms are non-const; the hardware-only builds reduce to `Ok(Vec::new())`"
+        )
+    )]
     pub fn flush(&mut self) -> Result<Vec<Vec<u8>>, CodecError> {
         match self.inner {
             #[cfg(target_arch = "wasm32")]

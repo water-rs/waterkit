@@ -30,6 +30,9 @@ shaderloom = { workspace = true, features = ["build"], optional = true }
 
 [features]
 preview-example = ["dep:shaderloom"]
+# VA-API hardware encoders on Linux; off by default like the codec's own
+# `vaapi` (the software AV1 encoder still covers encoding without it).
+vaapi = ["waterkit-codec/vaapi"]
 
 [[example]]
 name = "preview"
@@ -49,9 +52,9 @@ winit.workspace = true
 # with waterkit-video-container; `yuv` does the RGBA to NV12 conversion.
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 nokhwa = { workspace = true, features = ["input-native"] }
-# `vaapi` (a no-op outside Linux, where it adds the VA-API hardware encoders
-# via cros-codecs) + `software-fallback` for the rav1e AV1 fallback.
-waterkit-codec = { workspace = true, features = ["software-fallback", "vaapi"] }
+# `software-fallback` carries the rav1e AV1 encoder; the `vaapi` feature adds
+# the VA-API hardware encoders via cros-codecs on Linux.
+waterkit-codec = { workspace = true, features = ["software-fallback"] }
 waterkit-video-container.workspace = true
 yuv = "0.8.16"
 

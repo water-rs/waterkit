@@ -27,6 +27,12 @@ mod web;
 #[cfg(target_arch = "wasm32")]
 pub use web::ClipboardInner;
 
+// Linux additionally exposes the PRIMARY selection (arboard backend)
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::Primary;
+
 /// Shutdown handle for the clipboard watcher.
 pub struct WatcherShutdown {
     inner: ShutdownInner,

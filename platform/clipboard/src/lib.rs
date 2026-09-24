@@ -72,6 +72,29 @@
 //! # }
 //! ```
 //!
+//! # Primary Selection (Linux only)
+//!
+//! Linux desktops also have a PRIMARY selection holding the text last
+//! selected; it is pasted with the middle mouse button. [`PrimarySelection`]
+//! reads and writes it under both X11 and Wayland (via the data-control
+//! protocol's primary-selection support):
+//!
+//! ```no_run
+//! use waterkit_clipboard::PrimarySelection;
+//!
+//! # async fn example() -> Result<(), waterkit_clipboard::ClipboardError> {
+//! let mut primary = PrimarySelection::new()?;
+//! primary.set_text("selected text")?;
+//! if let Some(text) = primary.text().await? {
+//!     println!("PRIMARY: {text}");
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! PRIMARY exists only on Linux desktops, so this API is compiled only for
+//! `target_os = "linux"`; other platforms do not get it at all.
+//!
 //! # Platform Notes
 //!
 //! | Feature | Windows | Linux | macOS | iOS | Android |
@@ -81,6 +104,7 @@
 //! | Image   | ✓       | ✓     | ✓     | ✓   | ✓       |
 //! | Files   | ✓       | ✓     | ✓     | ✓   | ✓       |
 //! | Watch   | ✓       | ✓     | ✓     | ✓   | ✓       |
+//! | PRIMARY | —       | ✓     | —     | —   | —       |
 //!
 //! ## Android
 //!
@@ -406,5 +430,88 @@ impl Clipboard {
     pub fn watch(&self) -> Result<ClipboardStream, ClipboardError> {
         let (receiver, shutdown) = sys::start_watch()?;
         Ok(ClipboardStream::new(receiver, shutdown))
+    }
+}
+
+/// A handle to the Linux PRIMARY selection.
+///
+/// PRIMARY holds the text last selected and is pasted with the middle mouse
+/// button. This type exists only on Linux (`cfg(target_os = "linux")`): the
+/// selection has no equivalent on other platforms and is never emulated with
+/// CLIPBOARD.
+///
+/// # Serving lifetime
+///
+/// A [`PrimarySelection`] owns the selection after [`set_text`](Self::set_text)
+/// and keeps answering paste requests from other clients:
+///
+/// - **X11**: a worker thread inside the crate serves `SelectionRequest`s
+///   until another client claims PRIMARY or this handle is dropped.
+/// - **Wayland**: the data is handed to a forked child process serving
+///   data-control requests until another client claims PRIMARY, independent
+///   of this handle's lifetime.
+///
+/// Wayland support needs a data-control protocol offering a primary selection
+/// (`zwlr_data_control_manager_v1` version 2+, or `ext_data_control_manager_v1`).
+/// Compositors without one expose no PRIMARY to Wayland clients; operations
+/// then return [`ClipboardError::Platform`].
+///
+/// # Example
+///
+/// ```no_run
+/// # async fn example() -> Result<(), waterkit_clipboard::ClipboardError> {
+/// let mut primary = waterkit_clipboard::PrimarySelection::new()?;
+/// primary.set_text("selected text")?;
+/// assert_eq!(primary.text().await?.as_deref(), Some("selected text"));
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone)]
+pub struct PrimarySelection {
+    inner: Arc<sys::Primary>,
+}
+
+#[cfg(target_os = "linux")]
+impl PrimarySelection {
+    /// Create a new PRIMARY selection handle.
+    ///
+    /// Connects to X11, or to a Wayland data-control protocol when
+    /// `WAYLAND_DISPLAY` is set and the compositor supports it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no selection backend can be reached (no X11
+    /// display and no Wayland data-control compositor).
+    pub fn new() -> Result<Self, ClipboardError> {
+        Ok(Self {
+            inner: Arc::new(sys::Primary::new()?),
+        })
+    }
+
+    /// Get text content from the PRIMARY selection.
+    ///
+    /// Returns `None` when no client currently owns a PRIMARY selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the selection backend cannot be reached (no X11
+    /// display, or a Wayland compositor without data-control support).
+    pub async fn text(&self) -> Result<Option<String>, ClipboardError> {
+        let inner = Arc::clone(&self.inner);
+        blocking::unblock(move || inner.get_text()).await
+    }
+
+    /// Set the PRIMARY selection text.
+    ///
+    /// The crate owns and serves the selection afterwards; see the type-level
+    /// docs for the per-display-server lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the selection backend cannot be reached (no X11
+    /// display, or a Wayland compositor without data-control support).
+    pub fn set_text(&mut self, text: &str) -> Result<(), ClipboardError> {
+        self.inner.set_text(text)
     }
 }

@@ -266,7 +266,7 @@ zenwave = { version = "0.6.1", default-features = false, features = ["hyper-back
 sysinfo = "0.39"
 dirs = "6.0"
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
-arboard = "3"
+arboard = { version = "3", default-features = false }
 clipboard-rs = { version = "0.3", features = ["image"] }
 wayland-sys = { version = "0.31.11", features = ["dlopen"] }
 xcap = "0.9.8"

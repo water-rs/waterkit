@@ -28,4 +28,6 @@ offline = ["streaming", "waterkit-video-streaming/offline"]
 processing = ["dep:waterkit-video-processing"]
 filtrate = ["processing", "waterkit-video-processing/filtrate"]
 player = ["container", "dep:waterkit-video-player"]
+# VA-API hardware decode on Linux, forwarded to the player's opt-in feature.
+vaapi = ["waterkit-video-player?/vaapi"]
 full = ["player", "streaming", "offline", "processing", "filtrate"]

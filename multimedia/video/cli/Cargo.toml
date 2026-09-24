@@ -28,5 +28,11 @@ pollster.workspace = true
 wgpu.workspace = true
 num-traits.workspace = true
 
+[features]
+# Hardware decode benchmarks opt in per invocation:
+# `cargo run -p waterkit-video-cli --features vaapi`. Kept off by default so a
+# workspace build does not drag VA-API into machines without the headers.
+vaapi = ["waterkit-video-player/vaapi"]
+
 [lints]
 workspace = true

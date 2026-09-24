@@ -3991,9 +3991,8 @@ dependencies = [
 
 [[package]]
 name = "nami"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b66f346970519dd65bc7c1dcf49696edcf43eb9916f3bb00f2b8841c44de6d35"
+version = "0.11.1"
+source = "git+https://github.com/water-rs/nami?rev=5dc2d92e4ee9a236afdf71aaf4ef5b26a6990425#5dc2d92e4ee9a236afdf71aaf4ef5b26a6990425"
 dependencies = [
  "async-channel",
  "async-io",
@@ -4010,14 +4009,12 @@ dependencies = [
 [[package]]
 name = "nami-core"
 version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a70d1da3e07e48053148d4e32d49274c9249ab710ec26e9f10570e175a647ec"
+source = "git+https://github.com/water-rs/nami?rev=5dc2d92e4ee9a236afdf71aaf4ef5b26a6990425#5dc2d92e4ee9a236afdf71aaf4ef5b26a6990425"
 
 [[package]]
 name = "nami-derive"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b76f4c97f6726b9589ca160480b114b8ee6cf4bfbe839253f426c1b778fc5fe"
+version = "0.3.0"
+source = "git+https://github.com/water-rs/nami?rev=5dc2d92e4ee9a236afdf71aaf4ef5b26a6990425#5dc2d92e4ee9a236afdf71aaf4ef5b26a6990425"
 dependencies = [
  "proc-macro2",
  "quote",

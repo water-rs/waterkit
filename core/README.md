@@ -10,7 +10,7 @@ concepts without depending on each other or on any UI framework.
 
 | Module | Purpose |
 |--------|---------|
-| [`subscribed`] | [`Subscribed<T>`] / [`SubscribedSink<T>`] — reactive state primitive with a single concrete return type that implements `nami::Signal` and can be turned into `futures::Stream`. Producers on any thread push values via the sink; readers on the binding's home thread observe via `get` / `watch` / `stream`. |
+| [`subscribed`] | [`Subscribed<T>`] / [`SubscribedSink<T>`] — reactive state primitive with a single concrete return type that implements `nami::Signal` and can be turned into `futures::Stream`. Producers on any thread push values via the sink; readers on the binding's home thread observe via `snapshot` / `watch` / `stream`. |
 | [`units`] | Typed scalar wrappers with validated ranges: `Brightness`, `Volume`, `Pan`, `PlaybackRate`, `Pitch`, `Zoom`, `Latitude`, `Longitude`, `RefreshRate`. |
 | [`time`] | Re-exports of `jiff::Timestamp` / `core::time::Duration`. The whole workspace standardizes on these. |
 | [`id`] | Re-export of `uuid::Uuid`. |

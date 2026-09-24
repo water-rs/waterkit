@@ -128,8 +128,10 @@ passkey = ["dep:waterkit-passkey"]
 aes = "0.9.1"
 cbc = "0.2.1"
 tracing = "0.1.44"
-# Reactive primitive used by waterkit-core.
-nami = "0.11.0"
+# Reactive primitive used by waterkit-core. Pinned to =0.11.1 so the
+# [patch.crates-io] entry below (nami#26, `Signal::get` → `snapshot`) is the
+# newest match — crates.io 0.11.2 still ships `get` and must not satisfy this.
+nami = "=0.11.1"
 nami-core = "0.3.3"
 executor-core = { version = "0.7.1", features = ["std"] }
 # Core primitives shared by every functional crate.
@@ -308,3 +310,9 @@ xcb = { git = "https://github.com/rust-x-bindings/rust-xcb", rev = "ae3b2cd080e7
 # static. Keep WaterKit's standalone workspace warning-free until that fix is
 # released upstream.
 block = { git = "https://github.com/Dicklesworthstone/rust-block", rev = "b39ae859d1ee8e8cb5eef6a516471f1578d26b96" }
+
+# nami#26 renames `Signal::get` to `Signal::snapshot`, removes the inherent
+# `Binding::get`, and renames `BindingMailbox::get`/`get_as` to
+# `snapshot`/`snapshot_as`; drop these entries once a nami release carries it.
+nami = { git = "https://github.com/water-rs/nami", rev = "5dc2d92e4ee9a236afdf71aaf4ef5b26a6990425" }
+nami-core = { git = "https://github.com/water-rs/nami", rev = "5dc2d92e4ee9a236afdf71aaf4ef5b26a6990425" }

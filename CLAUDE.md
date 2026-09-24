@@ -174,7 +174,7 @@ written justification.
 - `nami` is a hard dependency, not a feature. Returning `Subscribed<T>`
   is the single canonical way for a capability crate to expose a
   reactive value; downstream code uses
-  `subscribed.get()` / `.watch()` / `.map()` (Signal trait) or
+  `subscribed.snapshot()` / `.watch()` / `.map()` (Signal trait) or
   `subscribed.stream().next().await` (Stream).
 - Cross-thread producers (OS callbacks, background workers) hold the
   matching `SubscribedSink<T>` and call `sink.set(value)`. The mailbox

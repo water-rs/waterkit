@@ -316,3 +316,10 @@ block = { git = "https://github.com/Dicklesworthstone/rust-block", rev = "b39ae8
 # `snapshot`/`snapshot_as`; drop these entries once a nami release carries it.
 nami = { git = "https://github.com/water-rs/nami", rev = "5dc2d92e4ee9a236afdf71aaf4ef5b26a6990425" }
 nami-core = { git = "https://github.com/water-rs/nami", rev = "5dc2d92e4ee9a236afdf71aaf4ef5b26a6990425" }
+
+# waterkit#96: filtrate moved into water-rs/cherenkov ahead of a release.
+# Drop these entries once a filtrate release carries the new executor API.
+filtrate = { git = "https://github.com/water-rs/cherenkov", rev = "193e0fae22c35f160b2dd311f91a9b6d6999c8f4" }
+filtrate-core = { git = "https://github.com/water-rs/cherenkov", rev = "193e0fae22c35f160b2dd311f91a9b6d6999c8f4" }
+filtrate-derive = { git = "https://github.com/water-rs/cherenkov", rev = "193e0fae22c35f160b2dd311f91a9b6d6999c8f4" }
+cherenkov-shader = { git = "https://github.com/water-rs/cherenkov", rev = "193e0fae22c35f160b2dd311f91a9b6d6999c8f4" }

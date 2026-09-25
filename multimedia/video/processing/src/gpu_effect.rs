@@ -2,7 +2,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use filtrate::{
     Effect, EffectContext, EffectFrameTiming, EffectInput, EffectOutput, EffectRedrawCallback,
-    WgslModuleCache,
+    ShapeTextures,
 };
 use waterkit_video_core::{Error, FrameTiming};
 
@@ -225,14 +225,10 @@ impl<E: Effect> GpuEffectProcessor<E> {
         if let Some(callback) = redraw_callback {
             effect.set_redraw_callback(callback);
         }
-        // One processor owns one effect on one device, so its cache lives as
-        // long as the setup that populates it.
-        let shader_cache = WgslModuleCache::new();
         effect
             .setup(&EffectContext {
                 device: &device,
                 queue: &queue,
-                shader_cache: &shader_cache,
                 input_format,
                 output_format,
             })
@@ -293,16 +289,11 @@ impl<E: Effect> GpuEffectProcessor<E> {
             )));
         }
 
-        let (output_width, output_height) = self.effect.output_size(input.width(), input.height());
-        if output_width == 0 || output_height == 0 {
-            return Err(Error::Processing(format!(
-                "Filtrate effect produced invalid {output_width}x{output_height} output dimensions"
-            )));
-        }
+        // The executor maps a texture to a texture of the same size.
         let output = self.texture_pool.acquire(
             &self.device,
-            output_width,
-            output_height,
+            input.width(),
+            input.height(),
             self.output_format,
         );
         let effect_timing = effect_timing(timing);
@@ -315,6 +306,9 @@ impl<E: Effect> GpuEffectProcessor<E> {
             width: input.width(),
             height: input.height(),
             timing: effect_timing,
+            // Video frames carry no clip shape; a stage that reads one fails
+            // fast with `MissingShape`.
+            shape: ShapeTextures::default(),
         };
         let effect_output = EffectOutput {
             device: &self.device,
@@ -352,7 +346,7 @@ const fn effect_timing(timing: FrameTiming) -> EffectFrameTiming {
 mod tests {
     use std::time::Duration;
 
-    use filtrate::{FilterAdapter, filters::Brightness};
+    use filtrate::{Executor, filters::Brightness};
     use waterkit_video_core::FrameTiming;
 
     use crate::{FrameProcessor, TimedFrame};
@@ -407,7 +401,7 @@ mod tests {
             let mut processor = GpuEffectProcessor::new(
                 device.clone(),
                 queue,
-                FilterAdapter::new(Brightness(0.25_f32)),
+                Executor::new(Brightness(0.25_f32)),
                 format,
                 format,
                 None,

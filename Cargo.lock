@@ -1006,6 +1006,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cherenkov-shader"
+version = "0.0.0"
+source = "git+https://github.com/water-rs/cherenkov?rev=193e0fae22c35f160b2dd311f91a9b6d6999c8f4#193e0fae22c35f160b2dd311f91a9b6d6999c8f4"
+dependencies = [
+ "naga",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2188,32 +2197,31 @@ dependencies = [
 
 [[package]]
 name = "filtrate"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bd2ecaa0fba4ef2c21f6a773d5b4530ff6038a5138ac6a6a5498d30bcfb2e64"
+version = "0.2.1"
+source = "git+https://github.com/water-rs/cherenkov?rev=193e0fae22c35f160b2dd311f91a9b6d6999c8f4#193e0fae22c35f160b2dd311f91a9b6d6999c8f4"
 dependencies = [
  "bytemuck",
+ "cherenkov-shader",
  "filtrate-core",
  "filtrate-derive",
+ "half",
  "image",
- "num-traits",
- "shaderloom",
  "thiserror 2.0.20",
  "tracing",
+ "web-time",
  "wgpu",
+ "wide",
 ]
 
 [[package]]
 name = "filtrate-core"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27c1b316c214801461fc21a6fe1d9b8baf2c885f43a3cf5e1a86db969433ea9d"
+source = "git+https://github.com/water-rs/cherenkov?rev=193e0fae22c35f160b2dd311f91a9b6d6999c8f4#193e0fae22c35f160b2dd311f91a9b6d6999c8f4"
 
 [[package]]
 name = "filtrate-derive"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1122b58ca680672293776e7cfe92450d191c97a00de39fc96c6b1550f033a6d5"
+source = "git+https://github.com/water-rs/cherenkov?rev=193e0fae22c35f160b2dd311f91a9b6d6999c8f4#193e0fae22c35f160b2dd311f91a9b6d6999c8f4"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -6060,6 +6068,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "safe_arch"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42c6efa15875e6ecb39ca61fb0b0c1a40b84fac5a5ffe71eef7d1000c8eb3f5f"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8784,6 +8801,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "wide"
+version = "1.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d920ac99c3c8edce110cb8d07dbb324d6d026011dce85b1e9355b70f0adacc4f"
+dependencies = [
+ "bytemuck",
+ "safe_arch",
 ]
 
 [[package]]

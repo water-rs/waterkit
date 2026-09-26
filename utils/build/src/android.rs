@@ -503,8 +503,8 @@ mod tests {
     }
 
     #[test]
-    fn ignores_unparseable_entries() {
-        // Unparseable names lose even when they carry an android.jar.
+    fn ignores_unparsable_entries() {
+        // Unparsable names lose even when they carry an android.jar.
         let platforms = platforms_dir_with(
             &["android-36", "android-37.2-beta1", "android-preview"],
             &[],

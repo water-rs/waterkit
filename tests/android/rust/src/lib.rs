@@ -185,7 +185,10 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
         report.push(TestCase::passed("audio.linked"));
 
         #[cfg(feature = "codec")]
-        report.push(TestCase::passed("codec.linked"));
+        {
+            report.push(TestCase::passed("codec.linked"));
+            record_android_avif_decode(&mut report);
+        }
 
         #[cfg(feature = "dialog")]
         report.push(TestCase::passed("dialog.linked"));
@@ -718,5 +721,71 @@ fn get_location(_env: &mut Env<'_>, _activity: &JObject<'_>) -> jdoubleArray {
         let _ = (_env, _activity);
         log::error!("testGetLocation called without enabling location feature");
         std::ptr::null_mut()
+    }
+}
+
+#[cfg(feature = "codec")]
+fn record_android_avif_decode(report: &mut TestReport) {
+    const AVIF: &[u8] = include_bytes!("../fixtures/quadrants.avif");
+    match waterkit_content::codec::decode_image(AVIF) {
+        Ok(image) => {
+            let pixels = image.pixels();
+            if image.width() != 8 || image.height() != 8 {
+                report.push(TestCase::failed(
+                    "codec.decode_avif_platform",
+                    format!("expected 8x8, got {}x{}", image.width(), image.height()),
+                ));
+                return;
+            }
+            if image.pixel_format() != waterkit_content::codec::DecodedPixelFormat::Rgba8UnormSrgb {
+                report.push(TestCase::failed(
+                    "codec.decode_avif_platform",
+                    format!("unexpected pixel format {:?}", image.pixel_format()),
+                ));
+                return;
+            }
+            if pixels.len() != 256 {
+                report.push(TestCase::failed(
+                    "codec.decode_avif_platform",
+                    format!("expected 256 pixels bytes, got {}", pixels.len()),
+                ));
+                return;
+            }
+
+            let px = |x: usize, y: usize| {
+                let off = (y * image.width() as usize + x) * 4;
+                [
+                    pixels[off],
+                    pixels[off + 1],
+                    pixels[off + 2],
+                    pixels[off + 3],
+                ]
+            };
+            let close =
+                |a: [u8; 4], b: [u8; 4]| a.iter().zip(b.iter()).all(|(x, y)| x.abs_diff(*y) <= 8);
+            let checks = [
+                ((1, 1), [255, 0, 0, 255]),
+                ((6, 1), [0, 255, 0, 255]),
+                ((1, 6), [0, 0, 255, 255]),
+                ((6, 6), [255, 255, 255, 255]),
+            ];
+            let bad = checks
+                .iter()
+                .filter(|((x, y), expected)| !close(px(*x, *y), *expected))
+                .map(|((x, y), expected)| format!("({x},{y})={:?}!={:?}", px(*x, *y), expected))
+                .collect::<Vec<_>>();
+            if !bad.is_empty() {
+                report.push(TestCase::failed(
+                    "codec.decode_avif_platform",
+                    format!("quadrant pixels mismatch: {}", bad.join(" ")),
+                ));
+            } else {
+                report.push(TestCase::passed("codec.decode_avif_platform"));
+            }
+        }
+        Err(error) => report.push(TestCase::failed(
+            "codec.decode_avif_platform",
+            format!("decode_image failed: {error}"),
+        )),
     }
 }

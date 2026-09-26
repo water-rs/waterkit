@@ -124,7 +124,7 @@ enum AppleTargetOs {
     Macos,
 }
 
-#[cfg(any(target_os = "ios", target_os = "macos", test))]
+#[cfg(any(target_os = "ios", target_os = "macos"))]
 impl AppleTargetOs {
     fn from_cfg_target_os(target_os: &str) -> Option<Self> {
         match target_os {
@@ -133,7 +133,10 @@ impl AppleTargetOs {
             _ => None,
         }
     }
+}
 
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+impl AppleTargetOs {
     fn matches_swift_os(self, name: &str) -> Option<bool> {
         match name {
             "iOS" => Some(matches!(self, Self::Ios)),

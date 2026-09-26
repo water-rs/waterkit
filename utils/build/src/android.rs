@@ -187,22 +187,31 @@ pub fn find_android_jar() -> Option<PathBuf> {
     find_android_jar_in(&platforms_dir)
 }
 
+/// Platform directory version: `android-<major>` or `android-<major>.<minor>`,
+/// the layout current SDK installs use (e.g. `android-37.0`).
+fn platform_version(name: &str) -> Option<(u32, u32)> {
+    let version = name.strip_prefix("android-")?;
+    match version.split_once('.') {
+        Some((major, minor)) => Some((major.parse().ok()?, minor.parse().ok()?)),
+        None => Some((version.parse().ok()?, 0)),
+    }
+}
+
 fn find_android_jar_in(platforms_dir: &Path) -> Option<PathBuf> {
     // Find the highest API level
-    let mut best_api = 0u32;
+    let mut best_version: Option<(u32, u32)> = None;
     let mut best_path = None;
 
     if let Ok(entries) = fs::read_dir(platforms_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if let Some(api_str) = name_str.strip_prefix("android-")
-                && let Ok(api) = api_str.parse::<u32>()
-                && api > best_api
+            if let Some(version) = platform_version(&name_str)
+                && best_version.is_none_or(|best| version > best)
             {
                 let jar = entry.path().join("android.jar");
                 if jar.exists() {
-                    best_api = api;
+                    best_version = Some(version);
                     best_path = Some(jar);
                 }
             }
@@ -406,7 +415,7 @@ fn find_class_files(dir: &Path, results: &mut Vec<PathBuf>) {
 
 #[cfg(test)]
 mod tests {
-    use super::find_android_jar_in;
+    use super::{find_android_jar_in, platform_version};
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -436,9 +445,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_platform_versions() {
+        assert_eq!(platform_version("android-37"), Some((37, 0)));
+        assert_eq!(platform_version("android-37.0"), Some((37, 0)));
+        assert_eq!(platform_version("android-36.1"), Some((36, 1)));
+        assert_eq!(platform_version("android-37.2-beta1"), None);
+        assert_eq!(platform_version("android-1.2.3"), None);
+        assert_eq!(platform_version("android-"), None);
+        assert_eq!(platform_version("androidx-37"), None);
+    }
+
+    #[test]
     fn finds_jar_in_major_only_platform_dir() {
         let platforms = platforms_dir_with(&["android-37"], &[]);
-        assert_eq!(found_jar(&platforms), platforms.join("android-37/android.jar"));
+        assert_eq!(
+            found_jar(&platforms),
+            platforms.join("android-37/android.jar")
+        );
     }
 
     #[test]
@@ -486,7 +509,10 @@ mod tests {
             &["android-36", "android-37.2-beta1", "android-preview"],
             &[],
         );
-        assert_eq!(found_jar(&platforms), platforms.join("android-36/android.jar"));
+        assert_eq!(
+            found_jar(&platforms),
+            platforms.join("android-36/android.jar")
+        );
     }
 
     #[test]

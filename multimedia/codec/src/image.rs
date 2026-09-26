@@ -26,6 +26,8 @@ use yuv::{
 };
 
 use crate::CodecError;
+#[cfg(target_os = "android")]
+use crate::image_android;
 #[cfg(target_vendor = "apple")]
 use crate::image_apple;
 #[cfg(all(
@@ -178,6 +180,14 @@ pub fn decode_image_platform(data: &[u8]) -> Result<DecodedImage, CodecError> {
         return decode_isobmff_apple(data);
     }
 
+    // Android's platform still-image decoder: `BitmapFactory` covers AVIF on
+    // API 31+ and returns null where it has no codec, which is exactly the
+    // `DecodingFailed` this function reports.
+    #[cfg(target_os = "android")]
+    if is_avif_family(data) || is_heif_family(data) {
+        return image_android::decode_isobmff_android(data);
+    }
+
     let decoded = image::load_from_memory(data)
         .map_err(|err| CodecError::DecodingFailed(format!("image decode failed: {err}")))?;
     let (width, height) = decoded.dimensions();
@@ -234,7 +244,7 @@ fn decode_isobmff_apple(data: &[u8]) -> Result<DecodedImage, CodecError> {
     ))
 }
 
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", target_os = "android"))]
 fn is_heif_family(data: &[u8]) -> bool {
     let Some((major, compat)) = parse_isobmff_ftyp(data) else {
         return false;
@@ -262,7 +272,7 @@ fn is_heif_family(data: &[u8]) -> bool {
         .any(|brand| is_heif_brand(*brand))
 }
 
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", target_os = "android"))]
 fn is_avif_family(data: &[u8]) -> bool {
     let Some((major, compat)) = parse_isobmff_ftyp(data) else {
         return false;
@@ -277,7 +287,7 @@ fn is_avif_family(data: &[u8]) -> bool {
         .any(|brand| is_avif_brand(*brand))
 }
 
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", target_os = "android"))]
 fn parse_isobmff_ftyp(data: &[u8]) -> Option<([u8; 4], &[u8])> {
     if data.len() < 16 {
         return None;
@@ -294,7 +304,7 @@ fn parse_isobmff_ftyp(data: &[u8]) -> Option<([u8; 4], &[u8])> {
     Some(([data[8], data[9], data[10], data[11]], compat))
 }
 
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", target_os = "android"))]
 fn is_heif_brand(brand: [u8; 4]) -> bool {
     brand == *b"mif1"
         || brand == *b"msf1"
@@ -305,7 +315,7 @@ fn is_heif_brand(brand: [u8; 4]) -> bool {
         || brand == *b"hevx"
 }
 
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", target_os = "android"))]
 fn is_avif_brand(brand: [u8; 4]) -> bool {
     brand == *b"avif" || brand == *b"avis"
 }

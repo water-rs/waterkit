@@ -77,6 +77,8 @@ mod color;
 mod config;
 mod frame;
 mod image;
+#[cfg(target_os = "android")]
+pub(crate) mod image_android;
 #[cfg(target_vendor = "apple")]
 mod image_apple;
 mod software;

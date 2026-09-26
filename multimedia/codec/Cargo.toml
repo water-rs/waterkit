@@ -54,9 +54,13 @@ objc2-metal = { workspace = true, features = ["MTLBlitCommandEncoder", "MTLComma
 wgpu-hal = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
-ndk = { version = "0.9", features = ["media", "api-level-29"] }
+# `bitmap` wraps `AndroidBitmap_lockPixels`; `api-level-30` only gates the Rust
+# `BitmapInfo::flags` accessor (no API-30-only NDK call is made — the alpha
+# flags are read only when `Build$VERSION.SDK_INT >= 30` at runtime).
+ndk = { version = "0.9", features = ["media", "bitmap", "api-level-29", "api-level-30"] }
 ndk-sys = "0.6"
 jni.workspace = true
+waterkit-build.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = ["Win32_Media_MediaFoundation", "Win32_System_Com"] }

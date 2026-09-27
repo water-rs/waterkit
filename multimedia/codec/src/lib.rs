@@ -10,7 +10,7 @@
 //!   them to linear RGBA on the GPU. Without it the crate decodes to CPU memory
 //!   only, [`DecodedFrame::copy_to_buffer`] is the way out, and no `wgpu` is
 //!   linked at all.
-//! - `software-fallback` (default): AV1 encode and decode in software on
+//! - `software-decode` and `software-encode` (default; implies decode): the
 //!   desktop platforms.
 //!
 //! # Example
@@ -769,7 +769,7 @@ enum EncoderInner {
     Windows(sys::windows::WindowsEncoder),
     #[cfg(waterkit_hw_codec_vaapi)]
     Linux(sys::linux::LinuxEncoder),
-    #[cfg(waterkit_av1_software)]
+    #[cfg(waterkit_av1_software_encode)]
     Av1(Box<software::av1::Av1Encoder>),
 }
 
@@ -802,9 +802,9 @@ impl Encoder {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            #[cfg(not(waterkit_any_codec))]
+            #[cfg(not(any(waterkit_hw_codec, waterkit_av1_software_encode)))]
             let _ = (width, height);
-            #[cfg(not(waterkit_av1_software))]
+            #[cfg(not(waterkit_av1_software_encode))]
             let _ = profile;
             match codec {
                 #[cfg(waterkit_hw_codec_apple)]
@@ -832,7 +832,7 @@ impl Encoder {
                     "{codec:?} hardware encoding not available on this platform"
                 ))),
 
-                #[cfg(waterkit_av1_software)]
+                #[cfg(waterkit_av1_software_encode)]
                 CodecType::Av1 => Ok(Self {
                     inner: EncoderInner::Av1(Box::new(software::av1::Av1Encoder::new(
                         width as usize,
@@ -841,7 +841,7 @@ impl Encoder {
                     )?)),
                 }),
 
-                #[cfg(not(waterkit_av1_software))]
+                #[cfg(not(waterkit_av1_software_encode))]
                 CodecType::Av1 => Err(CodecError::Unsupported(
                     "AV1 software encoding not available on this platform".into(),
                 )),
@@ -865,7 +865,10 @@ impl Encoder {
     }
 
     fn encode_nv12_inner(&mut self, data: &[u8]) -> Result<Vec<u8>, CodecError> {
-        #[cfg(any(target_arch = "wasm32", not(waterkit_any_codec)))]
+        #[cfg(any(
+            target_arch = "wasm32",
+            not(any(waterkit_hw_codec, waterkit_av1_software_encode))
+        ))]
         let _ = data;
         match self.inner {
             #[cfg(target_arch = "wasm32")]
@@ -884,7 +887,7 @@ impl Encoder {
             #[cfg(waterkit_hw_codec_vaapi)]
             EncoderInner::Linux(ref mut enc) => enc.encode_nv12(data),
 
-            #[cfg(waterkit_av1_software)]
+            #[cfg(waterkit_av1_software_encode)]
             EncoderInner::Av1(ref mut enc) => enc.encode_nv12(data),
         }
     }
@@ -915,7 +918,7 @@ impl Encoder {
     /// # Errors
     /// Returns [`CodecError::EncodingFailed`] when the drain fails.
     #[cfg_attr(
-        not(any(waterkit_av1_software, target_arch = "wasm32")),
+        not(any(waterkit_av1_software_encode, target_arch = "wasm32")),
         expect(
             clippy::missing_const_for_fn,
             reason = "only the software AV1 and wasm32 arms are non-const; the hardware-only builds reduce to `Ok(Vec::new())`"
@@ -935,7 +938,7 @@ impl Encoder {
             EncoderInner::Windows(_) => Ok(Vec::new()),
             #[cfg(waterkit_hw_codec_vaapi)]
             EncoderInner::Linux(_) => Ok(Vec::new()),
-            #[cfg(waterkit_av1_software)]
+            #[cfg(waterkit_av1_software_encode)]
             EncoderInner::Av1(ref mut enc) => enc.flush(),
         }
     }
@@ -944,7 +947,7 @@ impl Encoder {
     fn encode_iosurface_inner(&mut self, iosurface_ptr: u64) -> Result<Vec<u8>, CodecError> {
         match self.inner {
             EncoderInner::Apple(ref mut enc) => enc.encode_iosurface(iosurface_ptr),
-            #[cfg(waterkit_av1_software)]
+            #[cfg(waterkit_av1_software_encode)]
             EncoderInner::Av1(_) => Err(CodecError::Unsupported(
                 "IOSurface encoding not supported for AV1".into(),
             )),
@@ -973,7 +976,7 @@ impl Encoder {
             #[cfg(waterkit_hw_codec_vaapi)]
             EncoderInner::Linux(ref enc) => enc.get_codec_config(),
 
-            #[cfg(waterkit_av1_software)]
+            #[cfg(waterkit_av1_software_encode)]
             EncoderInner::Av1(ref enc) => Some(enc.codec_config()),
         }
     }

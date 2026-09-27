@@ -1,0 +1,5 @@
+# WGSL sources are packaged verbatim by shaderloom, and the packaged
+# translations are checked byte for byte against a fresh package by
+# multimedia/codec/tests/packaged_shaders.rs; never convert their line endings.
+*.wgsl text eol=lf
+multimedia/codec/src/shaders/compiled/** -text

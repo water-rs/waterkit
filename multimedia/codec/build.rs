@@ -4,9 +4,19 @@
 #![recursion_limit = "2048"]
 
 fn main() {
-    // The YUV-to-RGBA compute shader only exists on the GPU texture-output path.
+    // The YUV-to-RGBA compute shader ships pre-translated under
+    // src/shaders/compiled (regenerate with package-shaders.sh), so the host
+    // runs no `naga`; only xcrun/dxc run on Apple/Windows targets.
     #[cfg(feature = "gpu")]
-    shaderloom::build::compile_wgsl_shader("src/yuv_to_rgba.wgsl", "yuv_color");
+    {
+        const PACKAGED_SHADERS: &str = "src/shaders/compiled";
+        if std::env::var("CARGO_CFG_TARGET_VENDOR").as_deref() == Ok("apple") {
+            shaderloom::packaged::compile_packaged_metallib(PACKAGED_SHADERS, "yuv_color");
+        }
+        if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+            shaderloom::packaged::compile_packaged_dxil(PACKAGED_SHADERS, "yuv_color");
+        }
+    }
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
@@ -21,7 +31,11 @@ fn main() {
         waterkit_hw_codec_windows: { target_os = "windows" },
         waterkit_hw_codec_vaapi: { all(target_os = "linux", feature = "vaapi") },
         waterkit_av1_software: { all(
-            feature = "software-fallback",
+            feature = "software-decode",
+            not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
+        ) },
+        waterkit_av1_software_encode: { all(
+            feature = "software-encode",
             not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
         ) },
         waterkit_hw_codec: { any(
@@ -36,7 +50,7 @@ fn main() {
             target_os = "windows",
             all(target_os = "linux", feature = "vaapi"),
             all(
-                feature = "software-fallback",
+                any(feature = "software-decode", feature = "software-encode"),
                 not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
             )
         ) },
@@ -45,7 +59,7 @@ fn main() {
             target_os = "windows",
             all(target_os = "linux", feature = "vaapi"),
             all(
-                feature = "software-fallback",
+                any(feature = "software-decode", feature = "software-encode"),
                 not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
             )
         ) },

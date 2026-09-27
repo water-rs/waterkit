@@ -1,7 +1,7 @@
 use half::f16;
 use image::{ColorType, DynamicImage, GenericImageView};
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -10,13 +10,13 @@ use moxcms::{
     TransferCharacteristics, TransformOptions,
 };
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
 use std::io::Cursor;
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -31,13 +31,13 @@ use crate::image_android;
 #[cfg(target_vendor = "apple")]
 use crate::image_apple;
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
 use crate::software::av1::{Av1Decoder, CpuFrame};
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -134,7 +134,7 @@ impl DecodedImage {
 ///
 /// Returns [`CodecError::DecodingFailed`] when decoding fails.
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -154,7 +154,7 @@ pub fn decode_image(data: &[u8]) -> Result<DecodedImage, CodecError> {
 ///
 /// Returns [`CodecError::DecodingFailed`] when decoding fails.
 #[cfg(not(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 )))]
@@ -321,7 +321,7 @@ fn is_avif_brand(brand: [u8; 4]) -> bool {
 }
 
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -330,7 +330,7 @@ fn is_avif(data: &[u8]) -> bool {
 }
 
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -395,7 +395,7 @@ fn decode_avif_software(data: &[u8]) -> Result<DecodedImage, CodecError> {
 }
 
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -411,7 +411,7 @@ fn decode_av1_item(data: &[u8], item_name: &str) -> Result<CpuFrame, CodecError>
 }
 
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -465,7 +465,7 @@ fn apply_avif_alpha(
 }
 
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -523,7 +523,7 @@ fn decode_avif_linear_rgba(frame: &CpuFrame) -> Result<Vec<f32>, CodecError> {
 }
 
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -609,7 +609,7 @@ fn decode_avif_yuv(frame: &CpuFrame, pixel_count: usize) -> Result<Vec<f32>, Cod
 }
 
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -634,7 +634,7 @@ fn normalized_primaries(value: u8) -> Result<CicpColorPrimaries, CodecError> {
 }
 
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -662,7 +662,7 @@ fn normalized_transfer(value: u8) -> Result<TransferCharacteristics, CodecError>
 }
 
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -674,7 +674,7 @@ const fn is_hdr_transfer(transfer: TransferCharacteristics) -> bool {
 }
 
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -688,7 +688,7 @@ fn normalized_matrix(value: u8) -> Result<CicpMatrix, CodecError> {
 }
 
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -701,7 +701,7 @@ fn encode_linear_rgba16f(rgba: &[f32]) -> Vec<u8> {
 }
 
 #[cfg(all(
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]
@@ -756,7 +756,7 @@ fn encode_rgba16f(image: DynamicImage, color: ColorType) -> (Vec<u8>, bool) {
 
 #[cfg(all(
     test,
-    feature = "software-fallback",
+    feature = "software-decode",
     not(any(target_os = "android", target_arch = "wasm32")),
     any(test, not(target_vendor = "apple"))
 ))]

@@ -42,7 +42,7 @@ waterkit-fs = { workspace = true, optional = true }
 waterkit-secret = { workspace = true, optional = true }
 waterkit-camera = { workspace = true, optional = true }
 waterkit-sensor = { workspace = true, optional = true }
-waterkit-codec = { workspace = true, features = ["gpu", "software-fallback"], optional = true }
+waterkit-codec = { workspace = true, features = ["gpu", "software-encode"], optional = true }
 waterkit-screen = { workspace = true, optional = true }
 waterkit-system = { workspace = true, optional = true }
 waterkit-video = { workspace = true, optional = true }
@@ -150,9 +150,10 @@ waterkit-secret = { path = "platform/secret", version = "0.1.4" }
 waterkit-camera = { path = "device/camera", version = "0.1.4" }
 waterkit-sensor = { path = "device/sensor", version = "0.1.4" }
 # No default features: consumers opt into `gpu` (decoded-frame upload),
-# `software-fallback` (rav1e/rav1d + image decoding) and `vaapi` explicitly.
+# `software-decode` (rav1d + image decoding), `software-encode` (adds rav1e)
+# and `vaapi` explicitly.
 waterkit-codec = { path = "multimedia/codec", version = "0.1.4", default-features = false }
-shaderloom = "0.1.2"
+shaderloom = { version = "0.1.2", default-features = false }
 waterkit-screen = { path = "platform/screen", version = "0.1.4" }
 waterkit-system = { path = "platform/system", version = "0.1.4" }
 waterkit-video = { path = "multimedia/video", version = "0.1.4" }
@@ -323,3 +324,8 @@ filtrate = { git = "https://github.com/water-rs/cherenkov", rev = "193e0fae22c35
 filtrate-core = { git = "https://github.com/water-rs/cherenkov", rev = "193e0fae22c35f160b2dd311f91a9b6d6999c8f4" }
 filtrate-derive = { git = "https://github.com/water-rs/cherenkov", rev = "193e0fae22c35f160b2dd311f91a9b6d6999c8f4" }
 cherenkov-shader = { git = "https://github.com/water-rs/cherenkov", rev = "193e0fae22c35f160b2dd311f91a9b6d6999c8f4" }
+
+# shaderloom's packaged-artifact API (`shaderloom::packaged`, used by
+# waterkit-codec's build script) is not on crates.io yet; pin the rev that
+# carries it, as other water-rs consumers do.
+shaderloom = { git = "https://github.com/water-rs/shaderloom", rev = "fec1801849979239097cabbf2ad813e56a91132d" }

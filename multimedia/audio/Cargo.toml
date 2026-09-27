@@ -100,8 +100,6 @@ rodio = { workspace = true, optional = true }
 swift-bridge = { workspace = true, optional = true }
 zenwave = { version = "0.6.1", default-features = false, features = ["hyper-native-tls", "ws"], optional = true }
 
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
-
 # Android - use rustls with ring backend (avoids aws-lc-rs CMake issues)
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true, optional = true }

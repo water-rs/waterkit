@@ -24,8 +24,6 @@ waterkit-build.workspace = true
 futures.workspace = true
 swift-bridge.workspace = true
 
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
-
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true

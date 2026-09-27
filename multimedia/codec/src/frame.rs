@@ -80,7 +80,7 @@ enum DecodedFrameInner {
         layout: DecodedPixelLayout,
     },
     /// Software-decoded frame with NV12 data.
-    /// Available on non-Apple platforms, or desktop Apple platforms with software-fallback.
+    /// Available on non-Apple platforms, or desktop Apple platforms with `software-decode`.
     #[cfg(waterkit_software_frames)]
     Software {
         data: Vec<u8>,

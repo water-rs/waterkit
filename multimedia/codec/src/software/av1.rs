@@ -1,6 +1,8 @@
 //! AV1 software encoding (rav1e) and decoding (rav1d).
 
-use crate::{CodecError, DecodePacket, DecodedPixelLayout, EncoderProfile};
+#[cfg(waterkit_av1_software_encode)]
+use crate::EncoderProfile;
+use crate::{CodecError, DecodePacket, DecodedPixelLayout};
 use rav1d::include::dav1d::data::Dav1dData;
 use rav1d::include::dav1d::dav1d::{Dav1dContext, Dav1dSettings};
 use rav1d::include::dav1d::headers::{
@@ -9,6 +11,7 @@ use rav1d::include::dav1d::headers::{
 };
 use rav1d::include::dav1d::picture::Dav1dPicture;
 use rav1d::src::lib as rav1d_lib;
+#[cfg(waterkit_av1_software_encode)]
 use rav1e::prelude::*;
 use std::fmt;
 use std::mem::MaybeUninit;
@@ -60,12 +63,14 @@ pub struct Av1ColorDescription {
 }
 
 /// AV1 software encoder using rav1e.
+#[cfg(waterkit_av1_software_encode)]
 pub struct Av1Encoder {
     ctx: Context<u8>,
     width: usize,
     height: usize,
 }
 
+#[cfg(waterkit_av1_software_encode)]
 impl fmt::Debug for Av1Encoder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Av1Encoder")
@@ -75,6 +80,7 @@ impl fmt::Debug for Av1Encoder {
     }
 }
 
+#[cfg(waterkit_av1_software_encode)]
 impl Av1Encoder {
     pub fn new(width: usize, height: usize, profile: EncoderProfile) -> Result<Self, CodecError> {
         let realtime = matches!(profile, EncoderProfile::Realtime);

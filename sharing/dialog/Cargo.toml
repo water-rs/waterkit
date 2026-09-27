@@ -34,5 +34,3 @@ rfd = { workspace = true }
 
 [build-dependencies]
 waterkit-build.workspace = true
-
-[target.'cfg(target_os = "ios")'.build-dependencies]

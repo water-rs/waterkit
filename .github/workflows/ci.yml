@@ -101,9 +101,9 @@ jobs:
       # and must link no `wgpu`. Nothing in `--all-features` exercises that
       # shape, so check and lint it explicitly.
       - name: Check waterkit-codec without GPU output
-        run: cargo check -p waterkit-codec --no-default-features --features software-fallback
+        run: cargo check -p waterkit-codec --no-default-features --features software-encode
       - name: Clippy waterkit-codec without GPU output
-        run: cargo clippy -p waterkit-codec --all-targets --no-default-features --features software-fallback -- -D warnings
+        run: cargo clippy -p waterkit-codec --all-targets --no-default-features --features software-encode -- -D warnings
 
   cross-clippy:
     name: Clippy (${{ matrix.target }})

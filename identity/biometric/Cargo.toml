@@ -22,8 +22,6 @@ tokio = { workspace = true, features = ["sync", "rt", "macros"] }
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 swift-bridge.workspace = true
 
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
-
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 waterkit-build.workspace = true

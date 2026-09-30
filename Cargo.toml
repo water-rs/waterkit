@@ -320,10 +320,10 @@ nami-core = { git = "https://github.com/water-rs/nami", rev = "5dc2d92e4ee9a236a
 
 # waterkit#96: filtrate moved into water-rs/cherenkov ahead of a release.
 # Drop these entries once a filtrate release carries the new executor API.
-filtrate = { git = "https://github.com/water-rs/cherenkov", rev = "193e0fae22c35f160b2dd311f91a9b6d6999c8f4" }
-filtrate-core = { git = "https://github.com/water-rs/cherenkov", rev = "193e0fae22c35f160b2dd311f91a9b6d6999c8f4" }
-filtrate-derive = { git = "https://github.com/water-rs/cherenkov", rev = "193e0fae22c35f160b2dd311f91a9b6d6999c8f4" }
-cherenkov-shader = { git = "https://github.com/water-rs/cherenkov", rev = "193e0fae22c35f160b2dd311f91a9b6d6999c8f4" }
+filtrate = { git = "https://github.com/water-rs/cherenkov", rev = "6290638cfb60637156c4ab23e46b72a99700a18e" }
+filtrate-core = { git = "https://github.com/water-rs/cherenkov", rev = "6290638cfb60637156c4ab23e46b72a99700a18e" }
+filtrate-derive = { git = "https://github.com/water-rs/cherenkov", rev = "6290638cfb60637156c4ab23e46b72a99700a18e" }
+cherenkov-shader = { git = "https://github.com/water-rs/cherenkov", rev = "6290638cfb60637156c4ab23e46b72a99700a18e" }
 
 # shaderloom's packaged-artifact API (`shaderloom::packaged`, used by
 # waterkit-codec's build script) is not on crates.io yet; pin the rev that

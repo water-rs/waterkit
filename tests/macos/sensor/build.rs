@@ -5,13 +5,11 @@
 
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
-    if target_os != "macos" && target_os != "ios" {
-        return;
+    if target_os == "macos" || target_os == "ios" {
+        // swift-bridge-build and swiftc are only available on macOS host
+        #[cfg(target_os = "macos")]
+        apple_build();
     }
-
-    // swift-bridge-build and swiftc are only available on macOS host
-    #[cfg(target_os = "macos")]
-    apple_build();
 }
 
 #[cfg(target_os = "macos")]

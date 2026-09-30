@@ -329,4 +329,4 @@ cherenkov-shader = { git = "https://github.com/water-rs/cherenkov", rev = "8d009
 # waterkit-codec's build script) is not on crates.io yet; pin the rev that
 # carries it, as other water-rs consumers do. The pinned rev is the head of
 # water-rs/shaderloom#21 (`build/wgpu-30`), which ports shaderloom to wgpu 30.
-shaderloom = { git = "https://github.com/water-rs/shaderloom", rev = "8e94d05151a837cfa8a1445f39613a6182e2cc7d" }
+shaderloom = { git = "https://github.com/water-rs/shaderloom", rev = "84c37c8314f1bb6d228fce30f78d94872247a18f" }

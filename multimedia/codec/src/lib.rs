@@ -349,10 +349,10 @@ impl Decoder {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (config, width, height);
-            let _unsupported = DecoderInner::Unsupported;
-            return Err(CodecError::Unsupported(format!(
+            let _ = DecoderInner::Unsupported;
+            Err(CodecError::Unsupported(format!(
                 "{codec:?} decoding is not supported by waterkit-codec on WebAssembly"
-            )));
+            )))
         }
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -418,14 +418,20 @@ impl Decoder {
         }
     }
 
-    fn decode_inner(&mut self, packet: DecodePacket<'_>) -> Result<Vec<DecodedFrame>, CodecError> {
-        #[cfg(any(target_arch = "wasm32", not(waterkit_any_codec)))]
+    #[cfg(not(waterkit_any_codec))]
+    fn decode_inner(&self, packet: DecodePacket<'_>) -> Result<Vec<DecodedFrame>, CodecError> {
         let _ = packet;
         match self.inner {
             #[cfg(target_arch = "wasm32")]
             DecoderInner::Unsupported => Err(CodecError::Unsupported(String::from(
                 "video decoding is not supported by waterkit-codec on WebAssembly",
             ))),
+        }
+    }
+
+    #[cfg(waterkit_any_codec)]
+    fn decode_inner(&mut self, packet: DecodePacket<'_>) -> Result<Vec<DecodedFrame>, CodecError> {
+        match self.inner {
             #[cfg(waterkit_hw_codec_apple)]
             DecoderInner::Apple(ref mut dec) => Ok(dec
                 .decode_to_iosurface(packet)?
@@ -517,12 +523,19 @@ impl Decoder {
         }
     }
 
-    fn drain_inner(&mut self) -> Result<Vec<DecodedFrame>, CodecError> {
+    #[cfg(not(waterkit_any_codec))]
+    fn drain_inner(&self) -> Result<Vec<DecodedFrame>, CodecError> {
         match self.inner {
             #[cfg(target_arch = "wasm32")]
             DecoderInner::Unsupported => Err(CodecError::Unsupported(String::from(
                 "video decoding is not supported by waterkit-codec on WebAssembly",
             ))),
+        }
+    }
+
+    #[cfg(waterkit_any_codec)]
+    fn drain_inner(&mut self) -> Result<Vec<DecodedFrame>, CodecError> {
+        match self.inner {
             #[cfg(waterkit_hw_codec_apple)]
             DecoderInner::Apple(ref mut decoder) => Ok(decoder
                 .drain()?
@@ -604,18 +617,28 @@ impl Decoder {
         }
     }
 
+    #[cfg(not(waterkit_any_codec))]
     fn decode_into_inner(
-        &mut self,
+        &self,
         packet: DecodePacket<'_>,
         output: &mut [u8],
     ) -> Result<Vec<FrameInfo>, CodecError> {
-        #[cfg(any(target_arch = "wasm32", not(waterkit_any_codec)))]
         let _ = (packet, output);
         match self.inner {
             #[cfg(target_arch = "wasm32")]
             DecoderInner::Unsupported => Err(CodecError::Unsupported(String::from(
                 "video decoding is not supported by waterkit-codec on WebAssembly",
             ))),
+        }
+    }
+
+    #[cfg(waterkit_any_codec)]
+    fn decode_into_inner(
+        &mut self,
+        packet: DecodePacket<'_>,
+        output: &mut [u8],
+    ) -> Result<Vec<FrameInfo>, CodecError> {
+        match self.inner {
             #[cfg(waterkit_hw_codec_apple)]
             DecoderInner::Apple(ref mut dec) => {
                 let surfaces = dec.decode_to_iosurface(packet)?;
@@ -794,10 +817,10 @@ impl Encoder {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (width, height, profile);
-            let _unsupported = EncoderInner::Unsupported;
-            return Err(CodecError::Unsupported(format!(
+            let _ = EncoderInner::Unsupported;
+            Err(CodecError::Unsupported(format!(
                 "{codec:?} encoding is not supported by waterkit-codec on WebAssembly"
-            )));
+            )))
         }
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -864,17 +887,20 @@ impl Encoder {
         }
     }
 
-    fn encode_nv12_inner(&mut self, data: &[u8]) -> Result<Vec<u8>, CodecError> {
-        #[cfg(any(
-            target_arch = "wasm32",
-            not(any(waterkit_hw_codec, waterkit_av1_software_encode))
-        ))]
+    #[cfg(not(any(waterkit_hw_codec, waterkit_av1_software_encode)))]
+    fn encode_nv12_inner(&self, data: &[u8]) -> Result<Vec<u8>, CodecError> {
         let _ = data;
         match self.inner {
             #[cfg(target_arch = "wasm32")]
             EncoderInner::Unsupported => Err(CodecError::Unsupported(String::from(
                 "video encoding is not supported by waterkit-codec on WebAssembly",
             ))),
+        }
+    }
+
+    #[cfg(any(waterkit_hw_codec, waterkit_av1_software_encode))]
+    fn encode_nv12_inner(&mut self, data: &[u8]) -> Result<Vec<u8>, CodecError> {
+        match self.inner {
             #[cfg(waterkit_hw_codec_apple)]
             EncoderInner::Apple(ref mut enc) => enc.encode_nv12(data),
 

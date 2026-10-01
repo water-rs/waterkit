@@ -24,8 +24,8 @@ use crate::{
     TrackProtection,
 };
 
-const SAMPLE_FLAG_IS_NON_SYNC: u32 = 0x0001_0000;
-const TFHD_DEFAULT_BASE_IS_MOOF: u32 = 0x0002_0000;
+pub const SAMPLE_FLAG_IS_NON_SYNC: u32 = 0x0001_0000;
+pub const TFHD_DEFAULT_BASE_IS_MOOF: u32 = 0x0002_0000;
 const MPEG_TIMESTAMP_TIMESCALE: NonZeroU32 = NonZeroU32::new(90_000).unwrap();
 
 /// Stable, non-zero track identity within one presentation.

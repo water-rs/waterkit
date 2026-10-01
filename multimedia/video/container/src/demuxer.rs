@@ -1396,6 +1396,12 @@ mod tests {
             &[0xF0; 4],
         ));
 
+        // An intervening `free` box keeps the second moof's offset from
+        // equalling the first segment's data end, so a stale cross-moof base
+        // would read the wrong bytes.
+        bytes.extend_from_slice(&8_u32.to_be_bytes());
+        bytes.extend_from_slice(b"free");
+
         bytes.extend_from_slice(&media_segment_multi(
             2,
             vec![

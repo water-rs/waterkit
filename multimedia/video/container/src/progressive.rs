@@ -300,14 +300,17 @@ impl ProgressiveTrackReader {
             .metas;
         // Find the sample presented at or before the target (presentation
         // order is nonmonotonic), then rewind to the latest keyframe ahead of
-        // it in decode order.
+        // it in decode order. An empty track has no target sample and no
+        // keyframe: the cursor stays at zero and reports no discontinuity.
         let target_index = metadata
             .iter()
             .enumerate()
             .filter(|(_, sample)| sample.presentation_time <= target_ticks)
             .max_by_key(|(_, sample)| sample.presentation_time)
             .map_or(0, |(index, _)| index);
-        self.sample_index = metadata[..=target_index]
+        self.sample_index = metadata
+            .get(..=target_index)
+            .unwrap_or(&[])
             .iter()
             .rposition(|sample| sample.is_keyframe)
             .unwrap_or(0);
@@ -603,5 +606,31 @@ mod tests {
             },
         );
         Track::new(spec, samples)
+    }
+
+    #[test]
+    fn seeks_empty_video_track_to_track_duration() {
+        let media = Media::new(vec![video_track(4, Vec::new())], 1_000);
+        let bytes = ProgressiveMux::new(true)
+            .package(&media)
+            .expect("empty-track fixture must mux");
+        let mut file = NamedTempFile::new().expect("temporary media file must open");
+        file.write_all(&bytes)
+            .expect("temporary media fixture must write");
+
+        let mut reader = ProgressiveTrackReader::open(file.path(), TrackKind::Video)
+            .expect("empty-track file must open");
+
+        let landed = reader
+            .seek_to_keyframe(Duration::from_secs(1))
+            .expect("empty-track keyframe seek must not fail");
+        assert_eq!(landed, reader.tracks()[0].duration());
+        assert_eq!(landed, Duration::ZERO);
+        assert!(
+            reader
+                .read_sample()
+                .expect("empty-track read must not fail")
+                .is_none()
+        );
     }
 }

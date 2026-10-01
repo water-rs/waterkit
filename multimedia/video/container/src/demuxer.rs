@@ -494,11 +494,13 @@ pub fn index_track_samples(
     if track.trafs.is_empty() {
         return index_progressive_samples(track);
     }
-    index_fragment_samples(path, track.track_id())
+    index_fragment_samples(path, track)
 }
 
 fn index_progressive_samples(track: &mp4::Mp4Track) -> Result<IndexedTrackSamples, VideoError> {
-    let sample_count = track.sample_count();
+    // `stsz` counts only `moov`-declared samples; `track.sample_count()`
+    // adds fragment sample counts that the `stts`/`ctts` tables do not cover.
+    let sample_count = track.trak.mdia.minf.stbl.stsz.sample_count;
     let capacity = usize::try_from(sample_count).map_err(|_| {
         VideoError::Container(format!(
             "sample count {sample_count} exceeds the current architecture"
@@ -538,6 +540,8 @@ fn index_progressive_samples(track: &mp4::Mp4Track) -> Result<IndexedTrackSample
     if let Some(composition_offsets) = &track.trak.mdia.minf.stbl.ctts {
         let mut sample_index = 0_usize;
         for entry in &composition_offsets.entries {
+            let offset =
+                composition_time_offset_i64(entry.sample_offset, composition_offsets.version);
             for _ in 0..entry.sample_count {
                 let meta = metas.get_mut(sample_index).ok_or_else(|| {
                     VideoError::Container(String::from(
@@ -546,7 +550,7 @@ fn index_progressive_samples(track: &mp4::Mp4Track) -> Result<IndexedTrackSample
                 })?;
                 meta.presentation_time = meta
                     .decode_time
-                    .checked_add_signed(i64::from(entry.sample_offset))
+                    .checked_add_signed(offset)
                     .ok_or_else(|| {
                         VideoError::Container(format!(
                             "MP4 sample {sample_index} has a negative or overflowing presentation timestamp"
@@ -569,7 +573,85 @@ fn index_progressive_samples(track: &mp4::Mp4Track) -> Result<IndexedTrackSample
     })
 }
 
-fn index_fragment_samples(path: &Path, track_id: u32) -> Result<IndexedTrackSamples, VideoError> {
+/// Resolves the byte ranges of `moov`-declared samples from the `stsz`,
+/// `stsc`, and `stco`/`co64` chunk tables.
+///
+/// `mp4` cannot do this once a track carries `traf`s — it routes every
+/// `sample_offset` lookup through fragment data — so the chunk tables are
+/// walked here directly.
+fn stbl_sample_locations(track: &mp4::Mp4Track) -> Result<Vec<SampleLocation>, VideoError> {
+    let stbl = &track.trak.mdia.minf.stbl;
+    let stsz = &stbl.stsz;
+    let sample_count = usize::try_from(stsz.sample_count).map_err(|_| {
+        VideoError::Container(String::from(
+            "stsz sample count exceeds the current architecture",
+        ))
+    })?;
+    let chunk_offsets: Vec<u64> = stbl.stco.as_ref().map_or_else(
+        || {
+            stbl.co64
+                .as_ref()
+                .map_or_else(Vec::new, |co64| co64.entries.clone())
+        },
+        |stco| {
+            stco.entries
+                .iter()
+                .map(|offset| u64::from(*offset))
+                .collect()
+        },
+    );
+
+    let mut locations = Vec::with_capacity(sample_count);
+    for (chunk_index, chunk_offset) in chunk_offsets.iter().enumerate() {
+        let chunk_id = u32::try_from(chunk_index + 1)
+            .map_err(|_| VideoError::Container(String::from("chunk index exceeds u32")))?;
+        let stsc_index = stbl
+            .stsc
+            .entries
+            .partition_point(|entry| entry.first_chunk <= chunk_id)
+            .saturating_sub(1);
+        let samples_per_chunk = stbl
+            .stsc
+            .entries
+            .get(stsc_index)
+            .map_or(0, |entry| entry.samples_per_chunk);
+        let mut offset = *chunk_offset;
+        for _ in 0..samples_per_chunk {
+            if locations.len() == sample_count {
+                break;
+            }
+            let size = if stsz.sample_size > 0 {
+                stsz.sample_size
+            } else {
+                stsz.sample_sizes
+                    .get(locations.len())
+                    .copied()
+                    .ok_or_else(|| {
+                        VideoError::Container(String::from(
+                            "stsz declares fewer sizes than its sample count",
+                        ))
+                    })?
+            };
+            locations.push(SampleLocation { offset, size });
+            offset = offset.checked_add(u64::from(size)).ok_or_else(|| {
+                VideoError::Container(String::from("stbl sample byte range overflow"))
+            })?;
+        }
+    }
+    if locations.len() != sample_count {
+        return Err(VideoError::Container(format!(
+            "chunk tables cover {} of {sample_count} declared samples",
+            locations.len()
+        )));
+    }
+    Ok(locations)
+}
+
+fn index_fragment_samples(
+    path: &Path,
+    track: &mp4::Mp4Track,
+) -> Result<IndexedTrackSamples, VideoError> {
+    let track_id = track.track_id();
     let spans = scan_top_level_boxes(path)?;
     let mut file = std::fs::File::open(path)?;
     let file_len = file.metadata()?.len();
@@ -593,38 +675,43 @@ fn index_fragment_samples(path: &Path, track_id: u32) -> Result<IndexedTrackSamp
             VideoError::Container(format!("fragmented track {track_id} has no trex defaults"))
         })?;
 
-    let mut metas = Vec::new();
-    let mut locations = Vec::new();
-    let mut next_decode_time = None;
-    let mut previous_traf_data_end = None;
+    // `moov`-declared samples come first in decode order; fragments without
+    // `tfdt` continue the timeline from their end.
+    let mut metas = index_progressive_samples(track)?.metas;
+    let mut locations = stbl_sample_locations(track)?;
+    let mut next_decode_time = metas
+        .last()
+        .map(|meta| meta.decode_time + u64::from(meta.duration));
     for span in spans.iter().filter(|span| span.kind == *b"moof") {
         let fragment = MovieFragmentBox::parse_body(&read_span_body(&mut file, span)?)
             .map_err(|error| VideoError::Container(error.to_string()))?;
+        let mut traf_data_end = None;
         for traf in &fragment.traf {
             let base_data_offset = traf.tfhd.base_data_offset.unwrap_or_else(|| {
                 if traf.tfhd.flags & TFHD_DEFAULT_BASE_IS_MOOF != 0 {
                     span.offset
                 } else {
-                    previous_traf_data_end.unwrap_or(span.offset)
+                    traf_data_end.unwrap_or(span.offset)
                 }
             });
             if traf.tfhd.track_id == track_id {
                 let traf_samples = collect_traf_samples(
                     traf,
+                    extends,
                     track_defaults,
                     base_data_offset,
                     next_decode_time,
                     file_len,
                 )?;
                 next_decode_time = Some(traf_samples.next_decode_time);
-                previous_traf_data_end = traf_samples.data_end.or(previous_traf_data_end);
+                traf_data_end = traf_samples.data_end.or(traf_data_end);
                 for sample in traf_samples.samples {
                     metas.push(sample.meta);
                     locations.push(sample.location);
                 }
             } else {
-                previous_traf_data_end = foreign_traf_data_end(traf, extends, base_data_offset)
-                    .or(previous_traf_data_end);
+                traf_data_end =
+                    foreign_traf_data_end(traf, extends, base_data_offset)?.or(traf_data_end);
             }
         }
     }
@@ -650,14 +737,65 @@ struct IndexedSample {
     location: SampleLocation,
 }
 
+/// Decodes a composition-time offset according to its box version: version 0
+/// stores an unsigned `u32` (which both `mp4`'s `ctts` and `transmux`'s `trun`
+/// expose through an `i32` field), while version 1 is a signed `i32`.
+fn composition_time_offset_i64(raw: i32, version: u8) -> i64 {
+    if version == 0 {
+        i64::from(raw.cast_unsigned())
+    } else {
+        i64::from(raw)
+    }
+}
+
+/// Resolves a `traf`'s default sample size — `tfhd` first, then that track's
+/// `trex` — treating zero defaults as absent.
+fn traf_default_size(traf: &TrackFragmentBox, extends: &transmux::MovieExtendsBox) -> Option<u32> {
+    traf.tfhd
+        .default_sample_size
+        .or_else(|| {
+            extends
+                .trex
+                .iter()
+                .find(|defaults| defaults.track_id == traf.tfhd.track_id)
+                .map(|defaults| defaults.default_sample_size)
+        })
+        .filter(|size| *size != 0)
+}
+
+/// Resolves every run's per-sample sizes: `trun` fields, falling back to the
+/// resolved default.
+fn traf_run_sizes(
+    traf: &TrackFragmentBox,
+    default_size: Option<u32>,
+) -> Result<Vec<Vec<u32>>, VideoError> {
+    traf.trun
+        .iter()
+        .map(|run| {
+            run.samples
+                .iter()
+                .map(|sample| {
+                    sample.sample_size.or(default_size).ok_or_else(|| {
+                        VideoError::Container(format!(
+                            "fragmented sample in track {} has no size",
+                            traf.tfhd.track_id
+                        ))
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// Resolves one `traf`'s samples in decode order.
 ///
 /// Per-sample `trun` fields take precedence over `tfhd` defaults, which take
 /// precedence over `trex` defaults. `tfdt` resets the decode-time base when
-/// present; without it the first fragment's base comes from the preceding
-/// fragments for this track.
+/// present; otherwise the timeline continues from the preceding samples
+/// (`moov`-declared or earlier fragments), starting at zero.
 fn collect_traf_samples(
     traf: &TrackFragmentBox,
+    extends: &transmux::MovieExtendsBox,
     defaults: &TrackExtendsBox,
     base_data_offset: u64,
     next_decode_time: Option<u64>,
@@ -668,33 +806,25 @@ fn collect_traf_samples(
         .as_ref()
         .map(transmux::TrackFragmentBaseMediaDecodeTimeBox::base_media_decode_time)
         .or(next_decode_time)
-        .ok_or_else(|| {
-            VideoError::Container(format!(
-                "first fragment for track {} has no tfdt",
-                traf.tfhd.track_id
-            ))
-        })?;
+        .unwrap_or(0);
     let default_duration = traf
         .tfhd
         .default_sample_duration
         .unwrap_or(defaults.default_sample_duration);
-    let default_size = traf
-        .tfhd
-        .default_sample_size
-        .unwrap_or(defaults.default_sample_size);
     let default_flags = traf
         .tfhd
         .default_sample_flags
         .unwrap_or(defaults.default_sample_flags);
+    let run_sizes = traf_run_sizes(traf, traf_default_size(traf, extends))?;
 
     let mut samples = Vec::new();
     let mut run_data_end = None;
-    for run in &traf.trun {
+    for (run, sizes) in traf.trun.iter().zip(run_sizes) {
         let mut data_offset = match run.data_offset {
             Some(relative) => checked_add_signed(base_data_offset, relative)?,
             None => run_data_end.unwrap_or(base_data_offset),
         };
-        for (index, sample) in run.samples.iter().enumerate() {
+        for (index, (sample, size)) in run.samples.iter().zip(sizes).enumerate() {
             let duration = sample.sample_duration.unwrap_or(default_duration);
             if duration == 0 {
                 return Err(VideoError::Container(format!(
@@ -702,7 +832,6 @@ fn collect_traf_samples(
                     traf.tfhd.track_id
                 )));
             }
-            let size = sample.sample_size.unwrap_or(default_size);
             let flags = sample
                 .sample_flags
                 .or_else(|| (index == 0).then_some(run.first_sample_flags).flatten())
@@ -717,8 +846,9 @@ fn collect_traf_samples(
                 )));
             }
             let presentation_time = decode_time
-                .checked_add_signed(i64::from(
+                .checked_add_signed(composition_time_offset_i64(
                     sample.sample_composition_time_offset.unwrap_or(0),
+                    run.version,
                 ))
                 .ok_or_else(|| {
                     VideoError::Container(String::from(
@@ -755,37 +885,34 @@ fn collect_traf_samples(
     })
 }
 
-/// Computes the end of a foreign track's fragment data so a later `traf`
-/// without an explicit `tfhd` base can still chain off it.
+/// Computes the end of a foreign track's fragment data so a later `traf` in
+/// the same `moof` without an explicit `tfhd` base can chain off it.
 ///
-/// Returns `None` when the foreign fragment's sample sizes cannot be resolved;
-/// callers then fall back to the enclosing `moof` offset, matching the CMAF
-/// demuxer's implicit-base behavior.
+/// # Errors
+///
+/// Returns a container error when the foreign fragment's sample sizes or
+/// offsets are malformed — an unresolvable size or an overflowing offset
+/// cannot be treated as "no data" without silently corrupting later bases.
 fn foreign_traf_data_end(
     traf: &TrackFragmentBox,
     extends: &transmux::MovieExtendsBox,
     base_data_offset: u64,
-) -> Option<u64> {
-    let default_size = traf.tfhd.default_sample_size.or_else(|| {
-        extends
-            .trex
-            .iter()
-            .find(|defaults| defaults.track_id == traf.tfhd.track_id)
-            .map(|defaults| defaults.default_sample_size)
-    });
+) -> Result<Option<u64>, VideoError> {
+    let run_sizes = traf_run_sizes(traf, traf_default_size(traf, extends))?;
     let mut run_data_end = None;
-    for run in &traf.trun {
+    for (run, sizes) in traf.trun.iter().zip(run_sizes) {
         let mut data_offset = match run.data_offset {
-            Some(relative) => base_data_offset.checked_add_signed(i64::from(relative))?,
+            Some(relative) => checked_add_signed(base_data_offset, relative)?,
             None => run_data_end.unwrap_or(base_data_offset),
         };
-        for sample in &run.samples {
-            let size = sample.sample_size.or(default_size)?;
-            data_offset = data_offset.checked_add(u64::from(size))?;
+        for size in sizes {
+            data_offset = data_offset.checked_add(u64::from(size)).ok_or_else(|| {
+                VideoError::Container(String::from("fragmented sample byte range overflow"))
+            })?;
         }
         run_data_end = Some(data_offset);
     }
-    run_data_end
+    Ok(run_data_end)
 }
 
 fn checked_add_signed(base: u64, relative: i32) -> Result<u64, VideoError> {
@@ -1074,13 +1201,23 @@ mod tests {
         }
     }
 
-    /// Serializes a `moof` + `mdat` pair, placing the first `trun`'s
+    /// Serializes a `moof` + `mdat` pair, pointing the first `trun`'s
     /// `data_offset` at the mdat payload that follows the `moof`.
-    fn media_segment(sequence_number: u32, mut traf: TrackFragmentBox, payload: &[u8]) -> Vec<u8> {
-        traf.trun[0].data_offset = Some(0);
+    fn media_segment(sequence_number: u32, traf: TrackFragmentBox, payload: &[u8]) -> Vec<u8> {
+        media_segment_multi(sequence_number, vec![traf], payload)
+    }
+
+    /// Serializes a `moof` + `mdat` pair holding several `traf`s. The first
+    /// `trun` of the first `traf` gets an explicit `data_offset` pointing at
+    /// the mdat payload; later runs or `traf`s resolve implicitly.
+    fn media_segment_multi(
+        sequence_number: u32,
+        trafs: Vec<TrackFragmentBox>,
+        payload: &[u8],
+    ) -> Vec<u8> {
         let mut moof = MovieFragmentBox {
             mfhd: MovieFragmentHeaderBox::new(sequence_number),
-            traf: vec![traf],
+            traf: trafs,
         };
         let moof_len = i32::try_from(moof.serialized_len()).expect("moof fits in i32");
         moof.traf[0].trun[0].data_offset = Some(moof_len + 8);
@@ -1232,6 +1369,204 @@ mod tests {
         write_fixture(&bytes)
     }
 
+    /// Two `moof`s without `default-base-is-moof`: each first `traf`
+    /// resolves its implicit base to the enclosing `moof`, and a second
+    /// `traf` inside one `moof` chains off the first `traf`'s data end.
+    /// The first fragment carries no `tfdt` (timeline starts at zero); the
+    /// second `moof`'s first `traf` resets it via `tfdt`.
+    fn implicit_base_fixture() -> NamedTempFile {
+        let mut bytes = build_init_segment(&[video_spec(TRACK_ID)], TIMESCALE)
+            .expect("init segment must serialize");
+
+        bytes.extend_from_slice(&media_segment(
+            1,
+            traf(
+                TFHD_DEFAULT_SAMPLE_DURATION_PRESENT,
+                None,
+                Some(1_000),
+                None,
+                None,
+                vec![trun(
+                    0,
+                    TRUN_DATA_OFFSET_PRESENT | TRUN_SAMPLE_SIZE_PRESENT | TRUN_SAMPLE_FLAGS_PRESENT,
+                    None,
+                    vec![sample(None, Some(4), Some(SYNC_FLAGS), None)],
+                )],
+            ),
+            &[0xF0; 4],
+        ));
+
+        bytes.extend_from_slice(&media_segment_multi(
+            2,
+            vec![
+                traf(
+                    TFHD_DEFAULT_SAMPLE_DURATION_PRESENT,
+                    Some(TrackFragmentBaseMediaDecodeTimeBox::new_v1(5_000)),
+                    Some(1_000),
+                    None,
+                    None,
+                    vec![trun(
+                        0,
+                        TRUN_DATA_OFFSET_PRESENT
+                            | TRUN_SAMPLE_SIZE_PRESENT
+                            | TRUN_SAMPLE_FLAGS_PRESENT,
+                        None,
+                        vec![sample(None, Some(4), Some(NON_SYNC_FLAGS), None)],
+                    )],
+                ),
+                traf(
+                    TFHD_DEFAULT_SAMPLE_DURATION_PRESENT,
+                    None,
+                    Some(1_000),
+                    None,
+                    None,
+                    vec![trun(
+                        0,
+                        TRUN_SAMPLE_SIZE_PRESENT | TRUN_SAMPLE_FLAGS_PRESENT,
+                        None,
+                        vec![sample(None, Some(4), Some(SYNC_FLAGS), None)],
+                    )],
+                ),
+            ],
+            &[0xF1; 4].into_iter().chain([0xF2; 4]).collect::<Vec<_>>(),
+        ));
+        write_fixture(&bytes)
+    }
+
+    /// Appends an `mvex` box holding one zeroed `trex` for `track_id` to the
+    /// `moov` box inside a generated file.
+    fn inject_mvex(bytes: &mut Vec<u8>, track_id: u32) {
+        let moov_position = bytes
+            .windows(4)
+            .position(|window| window == b"moov")
+            .expect("fixture must contain a moov box");
+        let size_position = moov_position - 4;
+        let moov_size = usize::try_from(u32::from_be_bytes(
+            bytes[size_position..size_position + 4]
+                .try_into()
+                .expect("moov size"),
+        ))
+        .expect("moov size fits usize");
+        let mut mvex = Vec::with_capacity(40);
+        mvex.extend_from_slice(&40_u32.to_be_bytes());
+        mvex.extend_from_slice(b"mvex");
+        mvex.extend_from_slice(&32_u32.to_be_bytes());
+        mvex.extend_from_slice(b"trex");
+        mvex.extend_from_slice(&0_u32.to_be_bytes());
+        mvex.extend_from_slice(&track_id.to_be_bytes());
+        mvex.extend_from_slice(&1_u32.to_be_bytes());
+        mvex.extend_from_slice(&0_u32.to_be_bytes());
+        mvex.extend_from_slice(&0_u32.to_be_bytes());
+        mvex.extend_from_slice(&0_u32.to_be_bytes());
+        let body_end = size_position + moov_size;
+        bytes.splice(body_end..body_end, mvex);
+        let new_size = u32::try_from(moov_size + 40).expect("moov fits in u32");
+        bytes[size_position..size_position + 4].copy_from_slice(&new_size.to_be_bytes());
+
+        // The injected box pushes `mdat` back by 40 bytes, so every chunk
+        // offset declared in `stco`/`co64` moves with it.
+        for marker in [b"stco", b"co64"] {
+            let mut offset = 0;
+            while let Some(position) = bytes[offset..]
+                .windows(4)
+                .position(|window| window == marker.as_slice())
+            {
+                let table = offset + position + 4;
+                let entry_count = u32::from_be_bytes(
+                    bytes[table + 4..table + 8].try_into().expect("entry count"),
+                ) as usize;
+                let entry_width = if marker == b"stco" { 4 } else { 8 };
+                for entry in 0..entry_count {
+                    let start = table + 8 + entry * entry_width;
+                    let range = start..start + entry_width;
+                    let value = match entry_width {
+                        4 => u64::from(u32::from_be_bytes(
+                            bytes[range.clone()].try_into().expect("stco entry"),
+                        )),
+                        _ => {
+                            u64::from_be_bytes(bytes[range.clone()].try_into().expect("co64 entry"))
+                        }
+                    };
+                    bytes[range].copy_from_slice(&(value + 40).to_be_bytes()[8 - entry_width..]);
+                }
+                offset = table;
+            }
+        }
+    }
+
+    /// A `moov` that declares one stbl sample followed by a `moof` fragment
+    /// without `tfdt`, so the fragment's decode timeline continues from the
+    /// initial sample tables.
+    fn mixed_stbl_fragment_fixture() -> NamedTempFile {
+        let media = Media::new(
+            vec![Track::new(
+                video_spec(TRACK_ID),
+                vec![Sample::new(vec![0xE8; 4], 1_000, true, 0)],
+            )],
+            TIMESCALE,
+        );
+        let mut bytes = ProgressiveMux::new(true)
+            .package(&media)
+            .expect("progressive fixture must mux");
+        inject_mvex(&mut bytes, TRACK_ID);
+
+        bytes.extend_from_slice(&media_segment(
+            1,
+            traf(
+                TFHD_DEFAULT_BASE_IS_MOOF | TFHD_DEFAULT_SAMPLE_DURATION_PRESENT,
+                None,
+                Some(1_000),
+                None,
+                None,
+                vec![trun(
+                    0,
+                    TRUN_DATA_OFFSET_PRESENT | TRUN_SAMPLE_SIZE_PRESENT | TRUN_SAMPLE_FLAGS_PRESENT,
+                    None,
+                    vec![sample(None, Some(4), Some(SYNC_FLAGS), None)],
+                )],
+            ),
+            &[0xE9; 4],
+        ));
+        write_fixture(&bytes)
+    }
+
+    /// One fragment with a version-0 `trun` (unsigned composition offsets)
+    /// and a version-1 `trun` (signed) sharing a `tfdt` decode base.
+    fn composition_offset_version_fixture() -> NamedTempFile {
+        let mut bytes = build_init_segment(&[video_spec(TRACK_ID)], TIMESCALE)
+            .expect("init segment must serialize");
+        bytes.extend_from_slice(&media_segment(
+            1,
+            traf(
+                TFHD_DEFAULT_BASE_IS_MOOF
+                    | TFHD_DEFAULT_SAMPLE_DURATION_PRESENT
+                    | TFHD_DEFAULT_SAMPLE_FLAGS_PRESENT,
+                Some(TrackFragmentBaseMediaDecodeTimeBox::new_v1(1_000)),
+                Some(500),
+                None,
+                Some(NON_SYNC_FLAGS),
+                vec![
+                    trun(
+                        0,
+                        TRUN_DATA_OFFSET_PRESENT
+                            | TRUN_SAMPLE_SIZE_PRESENT
+                            | TRUN_SAMPLE_COMPOSITION_TIME_OFFSET_PRESENT,
+                        None,
+                        vec![sample(None, Some(4), None, Some(-2_147_483_648))],
+                    ),
+                    trun(
+                        1,
+                        TRUN_SAMPLE_SIZE_PRESENT | TRUN_SAMPLE_COMPOSITION_TIME_OFFSET_PRESENT,
+                        None,
+                        vec![sample(None, Some(4), None, Some(-50))],
+                    ),
+                ],
+            ),
+            &[0xC7; 4].into_iter().chain([0xC8; 4]).collect::<Vec<_>>(),
+        ));
+        write_fixture(&bytes)
+    }
+
     #[test]
     fn fragmented_reader_respects_fragment_timing_flags_and_locations() {
         let file = fragmented_fixture();
@@ -1347,5 +1682,130 @@ mod tests {
             assert_eq!(data, vec![byte; 4]);
             assert_eq!((read_pts, read_keyframe), (pts, is_keyframe));
         }
+    }
+
+    #[test]
+    fn fragmented_reader_resolves_implicit_bases_per_moof() {
+        let file = implicit_base_fixture();
+        let mut reader = VideoReader::open(file.path()).expect("fragmented file must open");
+
+        assert_eq!(reader.sample_count(), 3);
+        // First moof has no tfdt (decode starts at zero); moof two's first
+        // traf resets to 5000 via tfdt, and its second traf continues the
+        // decode timeline while its bytes chain inside the same mdat.
+        let expected = [
+            (0_u64, 0_u64, 1_000_u32, true, 0xF0_u8),
+            (5_000, 5_000, 1_000, false, 0xF1),
+            (6_000, 6_000, 1_000, true, 0xF2),
+        ];
+        for (index, &(decode_time, pts, duration, is_keyframe, byte)) in expected.iter().enumerate()
+        {
+            let (meta_pts, meta_duration, meta_keyframe) = reader
+                .sample_info(index)
+                .expect("sample metadata must exist");
+            assert_eq!(
+                (meta_pts, meta_duration, meta_keyframe),
+                (pts, duration, is_keyframe)
+            );
+            let (data, read_pts, read_keyframe) = reader
+                .read_sample()
+                .expect("sample must read")
+                .expect("sample must exist");
+            assert_eq!(data, vec![byte; 4]);
+            assert_eq!((read_pts, read_keyframe), (pts, is_keyframe));
+            let _ = decode_time;
+        }
+    }
+
+    #[test]
+    fn fragmented_reader_indexes_initial_samples_before_fragments() {
+        let file = mixed_stbl_fragment_fixture();
+        let mut reader = VideoReader::open(file.path()).expect("fragmented file must open");
+
+        assert_eq!(reader.sample_count(), 2);
+        let expected = [(0_u64, true, 0xE8_u8), (1_000, true, 0xE9)];
+        for (index, &(pts, is_keyframe, byte)) in expected.iter().enumerate() {
+            let (meta_pts, meta_duration, meta_keyframe) = reader
+                .sample_info(index)
+                .expect("sample metadata must exist");
+            assert_eq!(
+                (meta_pts, meta_duration, meta_keyframe),
+                (pts, 1_000, is_keyframe)
+            );
+            let (data, read_pts, read_keyframe) = reader
+                .read_sample()
+                .expect("sample must read")
+                .expect("sample must exist");
+            assert_eq!(data, vec![byte; 4]);
+            assert_eq!((read_pts, read_keyframe), (pts, is_keyframe));
+        }
+    }
+
+    #[test]
+    fn fragmented_reader_decodes_composition_offsets_by_trun_version() {
+        let file = composition_offset_version_fixture();
+        let mut reader = VideoReader::open(file.path()).expect("fragmented file must open");
+
+        assert_eq!(reader.sample_count(), 2);
+        // Version 0 trun stores an unsigned u32 (0x8000_0000 widens to
+        // 2147483648, not a negative offset); version 1 stores a signed i32.
+        let expected = [(2_147_484_648_u64, 0xC7_u8), (1_450, 0xC8)];
+        for (index, &(pts, byte)) in expected.iter().enumerate() {
+            let (meta_pts, _, _) = reader
+                .sample_info(index)
+                .expect("sample metadata must exist");
+            assert_eq!(meta_pts, pts);
+            let (data, read_pts, _) = reader
+                .read_sample()
+                .expect("sample must read")
+                .expect("sample must exist");
+            assert_eq!(data, vec![byte; 4]);
+            assert_eq!(read_pts, pts);
+        }
+    }
+
+    #[test]
+    fn progressive_reader_seeks_by_pts_across_decode_reordering() {
+        let file = fragmented_fixture();
+        let mut reader =
+            crate::progressive::ProgressiveTrackReader::open(file.path(), crate::TrackKind::Video)
+                .expect("fragmented file must open");
+
+        // Decode-order PTS is 50000, 49000, 50000, ... so a target of 49 s
+        // must land on the reordered sample (decode index 1), not index 0.
+        let landed = reader
+            .seek_to(std::time::Duration::from_secs(49))
+            .expect("seek must succeed");
+        assert_eq!(landed, std::time::Duration::from_secs(49));
+        let sample = reader
+            .read_sample()
+            .expect("sample must read")
+            .expect("sample must exist");
+        assert_eq!(sample.data()[..], [0xA1; 4]);
+        assert_eq!(sample.presentation_time().ticks(), 49_000);
+        assert!(sample.is_keyframe());
+    }
+
+    #[test]
+    fn progressive_reader_seeks_keyframe_by_pts_across_decode_reordering() {
+        let file = fragmented_fixture();
+        let mut reader =
+            crate::progressive::ProgressiveTrackReader::open(file.path(), crate::TrackKind::Video)
+                .expect("fragmented file must open");
+
+        // The only sample presented at or before 49 s is decode index 1
+        // (a keyframe); decode index 0 presents at 50 s and is not a sync
+        // sample, so it must not be selected.
+        let landed = reader
+            .seek_to_keyframe(std::time::Duration::from_secs(49))
+            .expect("seek must succeed");
+        assert_eq!(landed, std::time::Duration::from_secs(49));
+        let sample = reader
+            .read_sample()
+            .expect("sample must read")
+            .expect("sample must exist");
+        assert_eq!(sample.data()[..], [0xA1; 4]);
+        assert_eq!(sample.presentation_time().ticks(), 49_000);
+        assert!(sample.is_keyframe());
     }
 }

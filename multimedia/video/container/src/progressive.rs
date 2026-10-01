@@ -249,8 +249,15 @@ impl ProgressiveTrackReader {
                 ))
             })?
             .metas;
-        self.sample_index =
-            metadata.partition_point(|sample| sample.presentation_time < target_ticks);
+        // Metadata is decode-ordered; presentation order may be nonmonotonic
+        // (B-frames / signed composition offsets), so select the sample with
+        // the smallest presentation time at or after the target.
+        self.sample_index = metadata
+            .iter()
+            .enumerate()
+            .filter(|(_, sample)| sample.presentation_time >= target_ticks)
+            .min_by_key(|(_, sample)| sample.presentation_time)
+            .map_or(metadata.len(), |(index, _)| index);
         self.discontinuity = self.sample_index < metadata.len();
         Ok(metadata
             .get(self.sample_index)
@@ -291,8 +298,16 @@ impl ProgressiveTrackReader {
                 ))
             })?
             .metas;
-        let after = metadata.partition_point(|sample| sample.presentation_time <= target_ticks);
-        self.sample_index = metadata[..after]
+        // Find the sample presented at or before the target (presentation
+        // order is nonmonotonic), then rewind to the latest keyframe ahead of
+        // it in decode order.
+        let target_index = metadata
+            .iter()
+            .enumerate()
+            .filter(|(_, sample)| sample.presentation_time <= target_ticks)
+            .max_by_key(|(_, sample)| sample.presentation_time)
+            .map_or(0, |(index, _)| index);
+        self.sample_index = metadata[..=target_index]
             .iter()
             .rposition(|sample| sample.is_keyframe)
             .unwrap_or(0);

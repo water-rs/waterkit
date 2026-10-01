@@ -139,9 +139,7 @@ impl VideoWriter {
             offsets: Vec::with_capacity(samples.len()),
             sync: Vec::new(),
         };
-        // The mdat header widens to 16 bytes for payloads too large for a
-        // 32-bit box size, so the first sample offset must account for it.
-        let mut current_offset = FTYP_BOX_LEN + box_header_len(mdat_data_size);
+        let mut current_offset = first_sample_offset(mdat_data_size);
 
         for (index, (data, is_keyframe)) in samples.iter().enumerate() {
             w.write_all(data)?;
@@ -591,6 +589,13 @@ fn box_header_len(size_content: u64) -> u64 {
     }
 }
 
+/// Absolute byte offset of the first `mdat` payload byte: the `ftyp` box plus
+/// the `mdat` header, which widens to 16 bytes once the payload no longer fits
+/// the 32-bit box size field.
+fn first_sample_offset(mdat_data_size: u64) -> u64 {
+    FTYP_BOX_LEN + box_header_len(mdat_data_size)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -598,17 +603,6 @@ mod tests {
 
     /// Largest payload a box can carry with a compact 8-byte header.
     const MAX_COMPACT_CONTENT: u64 = u32::MAX as u64 - 8;
-
-    fn temp_path(name: &str) -> std::path::PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock is after the Unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "waterkit-muxer-{name}-{}-{nanos}.mp4",
-            std::process::id()
-        ))
-    }
 
     /// Opaque stand-in for an `hvcC` payload; the muxer copies it verbatim and
     /// the HEVC read path extracts the box without parsing its contents.
@@ -636,9 +630,24 @@ mod tests {
         sync_samples: &[u32],
     ) {
         let mut file = File::create(path).expect("create sparse output");
+        // NTFS only keeps seek holes for files explicitly marked sparse;
+        // without the flag the multi-GiB seeks below would materialize
+        // gigabytes on disk. `fsutil` is Windows' own mechanism for it.
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("fsutil")
+                .args(["sparse", "setflag"])
+                .arg(path)
+                .status()
+                .expect("fsutil must be available on Windows");
+            assert!(
+                status.success(),
+                "fsutil sparse setflag failed for {path:?}"
+            );
+        }
         write_ftyp(&mut file).expect("write ftyp");
         write_box_header(&mut file, b"mdat", mdat_data_size).expect("write mdat header");
-        let mdat_end = FTYP_BOX_LEN + box_header_len(mdat_data_size) + mdat_data_size;
+        let mdat_end = first_sample_offset(mdat_data_size) + mdat_data_size;
 
         for &(offset, data) in samples {
             file.seek(SeekFrom::Start(offset)).expect("seek to sample");
@@ -718,7 +727,8 @@ mod tests {
 
     #[test]
     fn small_recording_roundtrips_through_reader() {
-        let path = temp_path("small");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("small.mp4");
         let mut writer =
             VideoWriter::new(&path, 64, 48, 30, CodecType::H265).expect("create writer");
         writer.set_codec_config(fake_codec_config());
@@ -743,22 +753,22 @@ mod tests {
             .expect("sample 2 exists");
         assert_eq!(data, b"second");
         assert!(!keyframe);
-        std::fs::remove_file(&path).ok();
     }
 
     #[test]
     fn sparse_file_at_u32_boundary_stays_compact() {
-        // mdat payload sized so the box size field is at most u32::MAX, with
-        // the last chunk offset exactly at u32::MAX — the largest stco entry.
-        let mdat_header = 8_u64;
-        let first_offset = FTYP_BOX_LEN + mdat_header;
-        let offset_b = u64::from(u32::MAX);
+        // mdat payload sized so the box size field still fits u32, with the
+        // last chunk offset exactly at u32::MAX — the largest stco entry.
+        let mdat_data_size = MAX_COMPACT_CONTENT;
+        let first_offset = first_sample_offset(mdat_data_size);
+        assert_eq!(first_offset, FTYP_BOX_LEN + 8);
         let sample_a = b"0123456789abcdef";
-        let sample_b = b"at-boundary";
-        let mdat_data_size = offset_b - first_offset + sample_b.len() as u64;
-        assert_eq!(box_header_len(mdat_data_size), mdat_header);
+        let sample_b = b"at_boundary_offset_!";
+        let offset_b = first_offset + mdat_data_size - sample_b.len() as u64;
+        assert_eq!(offset_b, u64::from(u32::MAX));
 
-        let path = temp_path("boundary");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("boundary.mp4");
         write_sparse_file(
             &path,
             mdat_data_size,
@@ -772,22 +782,22 @@ mod tests {
         assert_eq!(data, sample_a);
         let (data, _, _) = reader.read_sample().expect("read").expect("sample 2");
         assert_eq!(data, sample_b);
-        std::fs::remove_file(&path).ok();
     }
 
     #[test]
     fn sparse_file_above_u32_boundary_uses_largesize_and_co64() {
         // mdat payload past the 32-bit box size: extended header and a chunk
         // offset beyond u32::MAX.
-        let mdat_header = 16_u64;
-        let first_offset = FTYP_BOX_LEN + mdat_header;
-        let offset_b = first_offset + u64::from(u32::MAX) + 16;
+        let mdat_data_size = MAX_COMPACT_CONTENT + 16;
+        let first_offset = first_sample_offset(mdat_data_size);
+        assert_eq!(first_offset, FTYP_BOX_LEN + 16);
         let sample_a = b"0123456789abcdef";
         let sample_b = b"beyond-4gb";
-        let mdat_data_size = offset_b - first_offset + sample_b.len() as u64;
-        assert_eq!(box_header_len(mdat_data_size), mdat_header);
+        let offset_b = first_offset + mdat_data_size - sample_b.len() as u64;
+        assert!(offset_b > u64::from(u32::MAX));
 
-        let path = temp_path("large");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("large.mp4");
         write_sparse_file(
             &path,
             mdat_data_size,
@@ -801,6 +811,5 @@ mod tests {
         assert_eq!(data, sample_a);
         let (data, _, _) = reader.read_sample().expect("read").expect("sample 2");
         assert_eq!(data, sample_b);
-        std::fs::remove_file(&path).ok();
     }
 }

@@ -83,7 +83,19 @@ impl DecodedFrameUploader {
     /// share the `IOSurface` storage, nothing is copied. Software frames are
     /// written to freshly created textures exactly once.
     #[must_use]
-    pub fn upload(&mut self, decoded: DecodedFrame, device: &Device, queue: &Queue) -> GpuFrame {
+    pub fn upload(
+        &mut self,
+        decoded: DecodedFrame,
+        device: &Device,
+        #[cfg_attr(
+            all(waterkit_any_codec, not(waterkit_software_frames)),
+            expect(
+                unused_variables,
+                reason = "hardware-only builds import IOSurface frames in place and never upload through the queue"
+            )
+        )]
+        queue: &Queue,
+    ) -> GpuFrame {
         #[cfg(waterkit_any_codec)]
         {
             let width = decoded.width();

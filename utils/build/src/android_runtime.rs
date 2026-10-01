@@ -90,7 +90,14 @@ where
         // `Context` that outlives this attachment, and `as_cast_raw` only
         // borrows it.
         let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-        Ok(f(env, &context))
+        let result = f(env, &context);
+        if result.is_err() && env.exception_check() {
+            // A Java exception throws by staying pending on the thread; a
+            // failure converted into `E` must not leave it behind or the next
+            // JNI call on this thread misreports.
+            env.exception_clear();
+        }
+        Ok(result)
     });
 
     match attached {
@@ -148,26 +155,42 @@ impl DexHelper {
         env: &mut Env<'_>,
         context: &JObject<'_>,
     ) -> Result<Global<JClass<'static>>, AndroidError> {
-        let class_loader = env
-            .call_method(
-                context,
-                jni_str!("getClassLoader"),
-                jni_sig!("()Ljava/lang/ClassLoader;"),
-                &[],
-            )?
-            .l()?;
+        let loaded = (|| -> jni::errors::Result<Global<JClass<'static>>> {
+            let class_loader = env
+                .call_method(
+                    context,
+                    jni_str!("getClassLoader"),
+                    jni_sig!("()Ljava/lang/ClassLoader;"),
+                    &[],
+                )?
+                .l()?;
 
-        let class_name = env.new_string(self.class_name)?;
-        let class = env
-            .call_method(
-                &class_loader,
-                jni_str!("loadClass"),
-                jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-                &[JValue::Object(&class_name)],
-            )?
-            .l()?;
-        let class = env.cast_local::<JClass>(class)?;
-        Ok(env.new_global_ref(class)?)
+            let class_name = env.new_string(self.class_name)?;
+            let class = env
+                .call_method(
+                    &class_loader,
+                    jni_str!("loadClass"),
+                    jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
+                    &[JValue::Object(&class_name)],
+                )?
+                .l()?;
+            let class = env.cast_local::<JClass>(class)?;
+            env.new_global_ref(class)
+        })();
+        match loaded {
+            Ok(class) => Ok(class),
+            Err(error) => {
+                // `ClassLoader.loadClass` throws a `ClassNotFoundException` for
+                // an un-staged helper, and the exception stays pending on the
+                // thread after the error converts. Clear it: the callers map
+                // this to a Rust error, so the thread must stay usable for the
+                // next JNI call.
+                if env.exception_check() {
+                    env.exception_clear();
+                }
+                Err(error.into())
+            }
+        }
     }
 }
 

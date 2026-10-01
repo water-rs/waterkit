@@ -47,7 +47,7 @@
 //!     mapped_at_creation: true,
 //! });
 //!
-//! let slice = buffer.slice(..).get_mapped_range_mut();
+//! let mut slice = buffer.slice(..).get_mapped_range_mut()?;
 //! for info in decoder.decode_into(data, &mut slice) {
 //!     let info = info?;
 //!     // Process frame info...

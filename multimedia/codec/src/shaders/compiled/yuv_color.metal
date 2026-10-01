@@ -365,7 +365,7 @@ vertex vs_mainOutput vs_main(
 
 
 struct fs_mainInput {
-    metal::float2 uv [[user(loc0), center_perspective]];
+    metal::float2 uv_2 [[user(loc0), center_perspective]];
 };
 struct fs_mainOutput {
     metal::float4 member_1 [[color(0)]];
@@ -378,13 +378,9 @@ fragment fs_mainOutput fs_main(
 , metal::sampler video_sampler [[sampler(0)]]
 , constant ColorParams& color_params [[buffer(0)]]
 ) {
-    const VertexOutput input = { position_1, varyings_1.uv };
+    const VertexOutput input = { position_1, varyings_1.uv_2 };
     metal::float4 _e2 = render_yuv_sample(input.uv, y_texture, uv_texture, video_sampler, color_params);
     return fs_mainOutput { _e2 };
-}
-
-uint naga_div(uint lhs, uint rhs) {
-    return lhs / metal::select(rhs, 1u, rhs == 0u);
 }
 
 
@@ -409,7 +405,7 @@ kernel void convert_to_linear_rgba(
         return;
     }
     metal::int2 y_coordinates = static_cast<metal::int2>(global_id.xy);
-    metal::int2 uv_coordinates = metal::int2(static_cast<int>(naga_div(global_id.x, 2u)), static_cast<int>(naga_div(global_id.y, 2u)));
+    metal::int2 uv_coordinates = metal::int2(static_cast<int>(global_id.x / 2u), static_cast<int>(global_id.y / 2u));
     metal::float4 _e27 = y_texture.read(metal::uint2(y_coordinates), 0);
     float y_4 = _e27.x;
     metal::float4 _e31 = uv_texture.read(metal::uint2(uv_coordinates), 0);

@@ -184,8 +184,8 @@ num-traits = "0.2"
 blocking = "1"
 async-io = "2"
 async-process = "2"
-wgpu = "29.0.4"
-wgpu-hal = { version = "29.0.4", features = ["metal"] }
+wgpu = "30.0.1"
+wgpu-hal = { version = "30.0.1", features = ["metal"] }
 
 # Common
 log = "0.4"
@@ -320,12 +320,13 @@ nami-core = { git = "https://github.com/water-rs/nami", rev = "5dc2d92e4ee9a236a
 
 # waterkit#96: filtrate moved into water-rs/cherenkov ahead of a release.
 # Drop these entries once a filtrate release carries the new executor API.
-filtrate = { git = "https://github.com/water-rs/cherenkov", rev = "6290638cfb60637156c4ab23e46b72a99700a18e" }
-filtrate-core = { git = "https://github.com/water-rs/cherenkov", rev = "6290638cfb60637156c4ab23e46b72a99700a18e" }
-filtrate-derive = { git = "https://github.com/water-rs/cherenkov", rev = "6290638cfb60637156c4ab23e46b72a99700a18e" }
-cherenkov-shader = { git = "https://github.com/water-rs/cherenkov", rev = "6290638cfb60637156c4ab23e46b72a99700a18e" }
+filtrate = { git = "https://github.com/water-rs/cherenkov", rev = "8d00976e5a68f3ac2e99d9265d3246b1a7c29ad6" }
+filtrate-core = { git = "https://github.com/water-rs/cherenkov", rev = "8d00976e5a68f3ac2e99d9265d3246b1a7c29ad6" }
+filtrate-derive = { git = "https://github.com/water-rs/cherenkov", rev = "8d00976e5a68f3ac2e99d9265d3246b1a7c29ad6" }
+cherenkov-shader = { git = "https://github.com/water-rs/cherenkov", rev = "8d00976e5a68f3ac2e99d9265d3246b1a7c29ad6" }
 
 # shaderloom's packaged-artifact API (`shaderloom::packaged`, used by
 # waterkit-codec's build script) is not on crates.io yet; pin the rev that
-# carries it, as other water-rs consumers do.
-shaderloom = { git = "https://github.com/water-rs/shaderloom", rev = "fec1801849979239097cabbf2ad813e56a91132d" }
+# carries it, as other water-rs consumers do. The pinned rev is the head of
+# water-rs/shaderloom#21 (`build/wgpu-30`), which ports shaderloom to wgpu 30.
+shaderloom = { git = "https://github.com/water-rs/shaderloom", rev = "84c37c8314f1bb6d228fce30f78d94872247a18f" }

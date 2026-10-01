@@ -472,7 +472,10 @@ fn create_video_color_uniform_buffer(
         mapped_at_creation: true,
     });
     {
-        let mut mapped = buffer.slice(..).get_mapped_range_mut();
+        let mut mapped = buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .expect("a mapped-at-creation buffer exposes its full range");
         mapped.copy_from_slice(&bytes);
     }
     buffer.unmap();

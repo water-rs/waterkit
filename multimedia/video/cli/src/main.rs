@@ -162,6 +162,7 @@ impl GpuUploadBenchmark {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))?;
         let required_features = adapter.features() & wgpu::Features::TEXTURE_FORMAT_16BIT_NORM;
         let (device, queue) =

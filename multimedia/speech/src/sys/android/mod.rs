@@ -5,7 +5,7 @@ use jni::{Env, EnvUnowned, JavaVM, NativeMethod, jni_sig, jni_str};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use waterkit_build::{AndroidError, jvm_and_context};
+use waterkit_build::{AndroidError, DexHelper, dex_helper, jvm_and_context};
 
 impl From<AndroidError> for SpeechError {
     fn from(error: AndroidError) -> Self {
@@ -15,9 +15,9 @@ impl From<AndroidError> for SpeechError {
 
 type InitTx = tokio::sync::oneshot::Sender<bool>;
 
-static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
-static HELPER_CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
-static CALLBACK_CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
+static HELPER: DexHelper = dex_helper!("waterkit.speech.SpeechHelper");
+static CALLBACK: DexHelper = dex_helper!("waterkit.speech.SpeechInitCallback");
+static NATIVES_REGISTERED: OnceLock<()> = OnceLock::new();
 static CONTEXT: OnceLock<Global<JObject<'static>>> = OnceLock::new();
 static VM: OnceLock<Arc<JavaVM>> = OnceLock::new();
 static RECOGNITION_SESSIONS: OnceLock<
@@ -31,14 +31,9 @@ fn recognition_sessions() -> &'static Mutex<BTreeMap<i64, async_channel::Sender<
 }
 
 fn ensure_runtime_initialized() -> Result<(), SpeechError> {
-    if VM.get().is_some() && CONTEXT.get().is_some() && HELPER_CLASS.get().is_some() {
+    if VM.get().is_some() && CONTEXT.get().is_some() && NATIVES_REGISTERED.get().is_some() {
         return Ok(());
     }
-
-    // `SpeechHelper` and `SpeechInitCallback` must come from the *same* class
-    // loader - `initTts` takes the callback as a parameter, and classes loaded by
-    // different loaders are distinct types to the JVM - so this crate keeps its
-    // own two-class loader rather than one `DexHelper` per class.
     let (vm, context) = jvm_and_context()?;
     vm.attach_current_thread(
         |env| -> Result<Result<(), SpeechError>, jni::errors::Error> {
@@ -70,94 +65,27 @@ fn ensure_context() -> Result<&'static Global<JObject<'static>>, SpeechError> {
     })
 }
 
-/// Loads the embedded DEX, caches both helper classes and registers their
-/// native callbacks. Runs at most once.
-fn init_dex(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), SpeechError> {
-    if HELPER_CLASS.get().is_some() {
+/// Resolves the helper classes on the application's classpath and registers
+/// their native callbacks. Runs at most once - `SpeechHelper` and
+/// `SpeechInitCallback` come from the same loader (the app's own), which is
+/// what `initTts` requires of the callback type.
+fn init_helpers(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), SpeechError> {
+    if NATIVES_REGISTERED.get().is_some() {
         return Ok(());
     }
-
-    let parent_loader = env
-        .call_method(
-            context,
-            jni_str!("getClassLoader"),
-            jni_sig!("()Ljava/lang/ClassLoader;"),
-            &[],
-        )
-        .and_then(jni::objects::JValueOwned::l)
-        .map_err(|e| SpeechError::Platform(format!("getClassLoader: {e}")))?;
-
-    let dex_bytes = env
-        .byte_array_from_slice(DEX_BYTES)
-        .map_err(|e| SpeechError::Platform(format!("byte_array_from_slice DEX: {e}")))?;
-    let dex_bytes = JObject::from(dex_bytes);
-    let dex_buffer = env
-        .call_static_method(
-            jni_str!("java/nio/ByteBuffer"),
-            jni_str!("wrap"),
-            jni_sig!("([B)Ljava/nio/ByteBuffer;"),
-            &[JValue::Object(&dex_bytes)],
-        )
-        .and_then(jni::objects::JValueOwned::l)
-        .map_err(|e| SpeechError::Platform(format!("ByteBuffer.wrap DEX: {e}")))?;
-    let loader = env
-        .new_object(
-            jni_str!("dalvik/system/InMemoryDexClassLoader"),
-            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
-            &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
-        )
-        .map_err(|e| SpeechError::Platform(format!("new InMemoryDexClassLoader: {e}")))?;
-
-    let helper = load_class(env, &loader, "waterkit.speech.SpeechHelper")?;
-    let callback = load_class(env, &loader, "waterkit.speech.SpeechInitCallback")?;
-
-    let helper = HELPER_CLASS.get_or_init(|| helper);
-    let callback = CALLBACK_CLASS.get_or_init(|| callback);
-    register_callback_natives(env, helper, callback)
+    register_callback_natives(env, context)?;
+    let _ = NATIVES_REGISTERED.set(());
+    Ok(())
 }
 
-fn load_class(
-    env: &mut Env<'_>,
-    loader: &JObject<'_>,
-    class_name: &str,
-) -> Result<Global<JClass<'static>>, SpeechError> {
-    let class_name_java = env
-        .new_string(class_name)
-        .map_err(|e| SpeechError::Platform(format!("new_string {class_name}: {e}")))?;
-    let class = env
-        .call_method(
-            loader,
-            jni_str!("loadClass"),
-            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-            &[JValue::Object(&class_name_java)],
-        )
-        .and_then(jni::objects::JValueOwned::l)
-        .map_err(|e| SpeechError::Platform(format!("loadClass {class_name}: {e}")))?;
-    let class = env
-        .cast_local::<JClass>(class)
-        .map_err(|e| SpeechError::Platform(format!("loadClass {class_name} non-class: {e}")))?;
-
-    env.new_global_ref(class)
-        .map_err(|e| SpeechError::Platform(format!("global_ref {class_name}: {e}")))
+fn helper_class(env: &mut Env<'_>) -> Result<&'static Global<JClass<'static>>, SpeechError> {
+    let context = ensure_context()?;
+    Ok(HELPER.class(env, context.as_obj())?)
 }
 
-fn helper_class() -> Result<&'static Global<JClass<'static>>, SpeechError> {
-    HELPER_CLASS
-        .get()
-        .ok_or_else(|| SpeechError::Platform("SpeechHelper class not initialized".into()))
-}
-
-fn callback_class() -> Result<&'static Global<JClass<'static>>, SpeechError> {
-    CALLBACK_CLASS
-        .get()
-        .ok_or_else(|| SpeechError::Platform("SpeechInitCallback class not initialized".into()))
-}
-
-fn register_callback_natives(
-    env: &mut Env<'_>,
-    helper: &Global<JClass<'static>>,
-    callback: &Global<JClass<'static>>,
-) -> Result<(), SpeechError> {
+fn register_callback_natives(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), SpeechError> {
+    let callback = CALLBACK.class(env, context)?;
+    let helper = HELPER.class(env, context)?;
     // SAFETY: `onTtsInit` is an instance native method, so its Rust counterpart
     // takes `EnvUnowned` and the receiver `JObject` as the first two parameters.
     let callback_natives = [unsafe {
@@ -203,8 +131,8 @@ fn register_callback_natives(
 ///
 /// # Errors
 ///
-/// Returns `SpeechError::Platform` if JVM/context caching, DEX loading,
-/// or JNI native registration fails.
+/// Returns `SpeechError::Platform` if JVM/context caching, helper class
+/// resolution or JNI native registration fails.
 pub fn init_with_context(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), SpeechError> {
     if VM.get().is_none() {
         let vm = env
@@ -220,7 +148,7 @@ pub fn init_with_context(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(),
         let _ = CONTEXT.set(global);
     }
 
-    init_dex(env, context)
+    init_helpers(env, context)
 }
 
 #[derive(Debug)]
@@ -259,7 +187,7 @@ impl TtsInner {
         self.vm
             .attach_current_thread(
                 |env| -> Result<Result<Vec<Voice>, SpeechError>, jni::errors::Error> {
-                    Ok(read_available_voices(env))
+                    Ok(read_available_voices(env, self.context.as_obj()))
                 },
             )
             .map_err(|e| SpeechError::Platform(format!("attach_current_thread: {e}")))?
@@ -270,7 +198,7 @@ impl TtsInner {
             self.vm
                 .attach_current_thread(
                     |env| -> Result<Result<(), SpeechError>, jni::errors::Error> {
-                        Ok(speak_with_env(env, text, config))
+                        Ok(speak_with_env(env, self.context.as_obj(), text, config))
                     },
                 )
                 .map_err(|e| SpeechError::Platform(format!("attach_current_thread: {e}")))?,
@@ -281,8 +209,8 @@ impl TtsInner {
     pub fn stop(&self) {
         self.vm
             .attach_current_thread(|env| -> jni::errors::Result<()> {
-                let helper = helper_class().unwrap_or_else(|e| {
-                    panic!("Android speech bridge invariant violated: helper_class failed in TtsInner::stop: {e}")
+                let helper = HELPER.class(env, self.context.as_obj()).unwrap_or_else(|e| {
+                    panic!("Android speech bridge invariant violated: HELPER.class failed in TtsInner::stop: {e}")
                 });
                 env.call_static_method(helper, jni_str!("stop"), jni_sig!("()V"), &[])
                     .unwrap_or_else(|e| {
@@ -300,8 +228,8 @@ impl TtsInner {
     pub fn is_speaking(&self) -> bool {
         self.vm
             .attach_current_thread(|env| -> jni::errors::Result<bool> {
-                let helper = helper_class().unwrap_or_else(|e| {
-                    panic!("Android speech bridge invariant violated: helper_class failed in TtsInner::is_speaking: {e}")
+                let helper = HELPER.class(env, self.context.as_obj()).unwrap_or_else(|e| {
+                    panic!("Android speech bridge invariant violated: HELPER.class failed in TtsInner::is_speaking: {e}")
                 });
                 let result = env
                     .call_static_method(helper, jni_str!("isSpeaking"), jni_sig!("()Z"), &[])
@@ -328,8 +256,8 @@ fn start_tts_init(
     env: &mut Env<'_>,
     context: &Global<JObject<'static>>,
 ) -> Result<tokio::sync::oneshot::Receiver<bool>, SpeechError> {
-    let helper = helper_class()?;
-    let callback_cls = callback_class()?;
+    let helper = HELPER.class(env, context.as_obj())?;
+    let callback_cls = CALLBACK.class(env, context.as_obj())?;
 
     let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
 
@@ -353,8 +281,11 @@ fn start_tts_init(
     Ok(rx)
 }
 
-fn read_available_voices(env: &mut Env<'_>) -> Result<Vec<Voice>, SpeechError> {
-    let helper = helper_class()?;
+fn read_available_voices(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+) -> Result<Vec<Voice>, SpeechError> {
+    let helper = HELPER.class(env, context)?;
     let voices = env
         .call_static_method(
             helper,
@@ -391,8 +322,13 @@ fn read_available_voices(env: &mut Env<'_>) -> Result<Vec<Voice>, SpeechError> {
     Ok(out)
 }
 
-fn speak_with_env(env: &mut Env<'_>, text: &str, config: &TtsConfig) -> Result<(), SpeechError> {
-    let helper = helper_class()?;
+fn speak_with_env(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+    text: &str,
+    config: &TtsConfig,
+) -> Result<(), SpeechError> {
+    let helper = HELPER.class(env, context)?;
     let text_j = env
         .new_string(text)
         .map_err(|e| SpeechError::Platform(format!("new_string text: {e}")))?;
@@ -426,7 +362,7 @@ impl Drop for TtsInner {
         let _ = self
             .vm
             .attach_current_thread(|env| -> jni::errors::Result<()> {
-                if let Ok(helper) = helper_class() {
+                if let Ok(helper) = HELPER.class(env, self.context.as_obj()) {
                     let _ =
                         env.call_static_method(helper, jni_str!("shutdown"), jni_sig!("()V"), &[]);
                 }
@@ -445,7 +381,7 @@ pub fn recognition_is_available() -> bool {
     });
 
     vm.attach_current_thread(|env| -> jni::errors::Result<bool> {
-        let helper = helper_class().unwrap_or_else(|error| {
+        let helper = HELPER.class(env, context.as_obj()).unwrap_or_else(|error| {
             panic!(
                 "waterkit-speech: failed to load SpeechHelper for recognition availability: {error}"
             )
@@ -539,7 +475,7 @@ impl SpeechRecognizerInner {
     pub fn stop(&self) {
         self.vm
             .attach_current_thread(|env| -> jni::errors::Result<()> {
-                let helper = helper_class().unwrap_or_else(|error| {
+                let helper = helper_class(env).unwrap_or_else(|error| {
                     panic!(
                         "waterkit-speech: failed to load SpeechHelper in SpeechRecognizerInner::stop: {error}"
                     )
@@ -570,7 +506,7 @@ fn start_recognition(
     partial_results: bool,
     session_id: i64,
 ) -> Result<bool, SpeechError> {
-    let helper = helper_class()?;
+    let helper = helper_class(env)?;
     let language_j = env
         .new_string(language)
         .map_err(|e| SpeechError::Platform(format!("new_string language: {e}")))?;
@@ -600,7 +536,7 @@ impl Drop for SpeechRecognizerInner {
         let _ = self
             .vm
             .attach_current_thread(|env| -> jni::errors::Result<()> {
-                if let Ok(helper) = helper_class() {
+                if let Ok(helper) = helper_class(env) {
                     let _ = env.call_static_method(
                         helper,
                         jni_str!("stopRecognition"),

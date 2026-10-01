@@ -56,3 +56,8 @@ pollster = "1.0"
 # an activity backend; it is desktop-only here.
 [target.'cfg(not(target_os = "android"))'.dev-dependencies]
 winit = "0.30"
+
+# Android helper classes the packager compiles into the application's
+# classpath (see water-rs/cli's android backend).
+[package.metadata.waterui.android]
+kotlin-sources = ["src/sys/android/ScreenHelper.kt"]

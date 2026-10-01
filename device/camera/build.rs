@@ -25,8 +25,4 @@ fn main() {
 
         waterkit_build::compile_swift("src/sys/apple/mod.rs", &config);
     }
-
-    if target_os == "android" {
-        waterkit_build::build_kotlin(&["src/sys/android/CameraHelper.kt"]);
-    }
 }

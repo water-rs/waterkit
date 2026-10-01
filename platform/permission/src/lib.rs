@@ -11,7 +11,7 @@
 //!
 //! On Android, the async [`check`] and [`request`] functions automatically
 //! use `ndk-context` to resolve the current `Activity`. For advanced JNI
-//! integration, see [`android::init_with_activity`] etc.
+//! integration, see [`android::check_with_activity`] etc.
 
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
@@ -26,7 +26,7 @@ pub use waterkit_core::permission::{
 /// Android-specific JNI helpers for permission handling.
 #[cfg(target_os = "android")]
 pub mod android {
-    pub use crate::sys::android::{check_with_activity, init_with_activity, request_with_activity};
+    pub use crate::sys::android::{check_with_activity, request_with_activity};
 }
 
 /// Checks the current status of a permission without prompting the user.

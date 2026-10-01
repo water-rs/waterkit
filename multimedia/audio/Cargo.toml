@@ -37,6 +37,7 @@ streaming = [
 he-aac = ["streaming", "dep:symphonia-adapter-fdk-aac"]
 media-session = [
     "dep:tracing",
+    "dep:waterkit-build",
     "dep:swift-bridge",
     "dep:jni",
     "dep:ndk-context",
@@ -103,6 +104,7 @@ zenwave = { version = "0.6.1", default-features = false, features = ["hyper-nati
 # Android - use rustls with ring backend (avoids aws-lc-rs CMake issues)
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true, optional = true }
+waterkit-build = { workspace = true, optional = true }
 ndk-context = { workspace = true, optional = true }
 ndk = { version = "0.9", features = ["media", "api-level-29"], optional = true }
 ndk-sys = { version = "0.6", optional = true }
@@ -121,3 +123,9 @@ zenwave = { version = "0.6.1", default-features = false, features = ["hyper-rust
 smol = { version = "2", optional = true }
 tempfile = { version = "3", optional = true }
 url = { version = "2", optional = true }
+
+# Android helper classes the packager compiles into the application's
+# classpath (see water-rs/cli's android backend).
+[package.metadata.waterui.android]
+kotlin-sources = ["src/sys/android/MediaSessionHelper.kt"]
+required-feature = "media-session"

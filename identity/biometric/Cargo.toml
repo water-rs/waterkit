@@ -40,3 +40,8 @@ windows = { workspace = true, features = ["Security_Credentials_UI", "Foundation
 zbus.workspace = true
 futures.workspace = true
 tokio = { workspace = true, features = ["time"] }
+
+# Android helper classes the packager compiles into the application's
+# classpath (see water-rs/cli's android backend).
+[package.metadata.waterui.android]
+kotlin-sources = ["src/sys/android/BiometricHelper.kt"]

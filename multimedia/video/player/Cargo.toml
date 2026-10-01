@@ -41,8 +41,14 @@ transmux.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
+waterkit-build.workspace = true
 ndk-context.workspace = true
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 swift-bridge.workspace = true
 waterkit-audio = { workspace = true, features = ["apple-artwork"] }
+
+# Android helper classes the packager compiles into the application's
+# classpath (see water-rs/cli's android backend).
+[package.metadata.waterui.android]
+kotlin-sources = ["src/sys/android/PictureInPictureHelper.kt"]

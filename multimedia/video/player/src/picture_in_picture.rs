@@ -162,24 +162,15 @@ pub type ApplePictureInPictureRenderFrame =
 pub type ApplePictureInPictureSetExternalRendering = unsafe extern "C" fn(*mut c_void, bool);
 
 /// Instance-scoped platform picture-in-picture controller.
-///
-/// Keeping platform loader state on the player prevents hidden process-global
-/// state and makes multiple player lifetimes independent.
 pub struct PictureInPictureController {
     host_id: PictureInPictureHostId,
-    #[cfg(target_os = "android")]
-    platform: android::Controller,
 }
 
 impl PictureInPictureController {
     /// Creates a controller for one stable render host.
     #[must_use]
     pub const fn new(host_id: PictureInPictureHostId) -> Self {
-        Self {
-            host_id,
-            #[cfg(target_os = "android")]
-            platform: android::Controller::new(),
-        }
+        Self { host_id }
     }
 
     /// Requests picture in picture using the displayed video aspect ratio.
@@ -191,7 +182,7 @@ impl PictureInPictureController {
     pub fn enter(&mut self, aspect_ratio: Option<(u32, u32)>) -> Result<(), VideoError> {
         #[cfg(target_os = "android")]
         {
-            self.platform.enter(aspect_ratio)
+            android::enter(aspect_ratio)
         }
 
         #[cfg(any(target_os = "ios", target_os = "macos"))]
@@ -230,7 +221,7 @@ impl PictureInPictureController {
 
         #[cfg(target_os = "android")]
         {
-            self.platform.sync(state)
+            android::sync(state)
         }
 
         #[cfg(any(target_os = "ios", target_os = "macos"))]
@@ -259,7 +250,7 @@ impl PictureInPictureController {
     pub fn is_active(&mut self) -> Result<bool, VideoError> {
         #[cfg(target_os = "android")]
         {
-            self.platform.is_active()
+            android::is_active()
         }
 
         #[cfg(any(target_os = "ios", target_os = "macos"))]
@@ -322,16 +313,16 @@ mod android {
     use crate::android_surface::with_attached_env;
     use jni::{
         Env, JavaVM, jni_sig, jni_str,
-        objects::{Global, JClass, JObject, JValue},
+        objects::{JObject, JValue},
     };
     use std::convert::TryFrom;
+    use waterkit_build::{DexHelper, dex_helper};
     use waterkit_video_core::Error as VideoError;
 
-    type GlobalObjectRef = Global<JObject<'static>>;
+    /// `waterkit.video.PictureInPictureHelper`, compiled into the app's DEX by
+    /// the packager and resolved through the application's `ClassLoader`.
+    static HELPER: DexHelper = dex_helper!("waterkit.video.PictureInPictureHelper");
 
-    const DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
-
-    const PICTURE_IN_PICTURE_HELPER_CLASS: &str = "waterkit.video.PictureInPictureHelper";
     const RESULT_ENTERED: i32 = 0;
     const RESULT_PLATFORM_UNSUPPORTED: i32 = 1;
     const RESULT_DEVICE_UNSUPPORTED: i32 = 2;
@@ -339,247 +330,115 @@ mod android {
     const RESULT_ACTIVITY_NOT_DECLARED: i32 = 4;
     const RESULT_ENTER_FAILED: i32 = 5;
 
-    pub(super) struct Controller {
-        helper_class: Option<GlobalObjectRef>,
+    pub(super) fn sync(state: PictureInPictureControllerState) -> Result<(), VideoError> {
+        with_android_context(|env, context| {
+            let helper_class = helper_class(env, context)?;
+            let (aspect_width, aspect_height) = aspect_ratio_components(state.aspect_ratio)?;
+
+            env.call_static_method(
+                helper_class,
+                jni_str!("updateControllerState"),
+                jni_sig!("(Landroid/content/Context;ZZII)V"),
+                &[
+                    JValue::Object(context),
+                    JValue::Bool(state.active),
+                    JValue::Bool(state.playing),
+                    JValue::Int(aspect_width),
+                    JValue::Int(aspect_height),
+                ],
+            )
+            .map_err(|error| {
+                VideoError::Unsupported(format!(
+                    "Android picture in picture controller sync failed: {error}"
+                ))
+            })?;
+
+            Ok(())
+        })
     }
 
-    impl Controller {
-        pub(super) const fn new() -> Self {
-            Self { helper_class: None }
-        }
+    pub(super) fn enter(aspect_ratio: Option<(u32, u32)>) -> Result<(), VideoError> {
+        with_android_context(|env, context| {
+            let helper_class = helper_class(env, context)?;
+            let (aspect_width, aspect_height) = aspect_ratio_components(aspect_ratio)?;
 
-        pub(super) fn sync(
-            &mut self,
-            state: PictureInPictureControllerState,
-        ) -> Result<(), VideoError> {
-            with_android_context(|env, context| {
-                let helper_class = self.helper_class(env, context)?;
-                let (aspect_width, aspect_height) = aspect_ratio_components(state.aspect_ratio)?;
-
-                env.call_static_method(
+            let result = env
+                .call_static_method(
                     helper_class,
-                    jni_str!("updateControllerState"),
-                    jni_sig!("(Landroid/content/Context;ZZII)V"),
+                    jni_str!("enterPictureInPicture"),
+                    jni_sig!("(Landroid/content/Context;II)I"),
                     &[
                         JValue::Object(context),
-                        JValue::Bool(state.active),
-                        JValue::Bool(state.playing),
                         JValue::Int(aspect_width),
                         JValue::Int(aspect_height),
                     ],
                 )
                 .map_err(|error| {
                     VideoError::Unsupported(format!(
-                        "Android picture in picture controller sync failed: {error}"
-                    ))
-                })?;
-
-                Ok(())
-            })
-        }
-
-        pub(super) fn enter(&mut self, aspect_ratio: Option<(u32, u32)>) -> Result<(), VideoError> {
-            with_android_context(|env, context| {
-                let helper_class = self.helper_class(env, context)?;
-                let (aspect_width, aspect_height) = aspect_ratio_components(aspect_ratio)?;
-
-                let result = env
-                    .call_static_method(
-                        helper_class,
-                        jni_str!("enterPictureInPicture"),
-                        jni_sig!("(Landroid/content/Context;II)I"),
-                        &[
-                            JValue::Object(context),
-                            JValue::Int(aspect_width),
-                            JValue::Int(aspect_height),
-                        ],
-                    )
-                    .map_err(|error| {
-                        VideoError::Unsupported(format!(
-                            "Android picture in picture helper call failed: {error}"
-                        ))
-                    })?
-                    .i()
-                    .map_err(|error| {
-                        VideoError::Unsupported(format!(
-                            "Android picture in picture helper returned invalid result: {error}"
-                        ))
-                    })?;
-
-                match result {
-                    RESULT_ENTERED => Ok(()),
-                    RESULT_PLATFORM_UNSUPPORTED => Err(VideoError::Unsupported(
-                        "picture in picture requires Android 8.0 or newer".into(),
-                    )),
-                    RESULT_DEVICE_UNSUPPORTED => Err(VideoError::Unsupported(
-                        "device does not support picture in picture".into(),
-                    )),
-                    RESULT_ACTIVITY_UNAVAILABLE => Err(VideoError::Unsupported(
-                        "no active Android activity is available for picture in picture".into(),
-                    )),
-                    RESULT_ACTIVITY_NOT_DECLARED => Err(VideoError::Unsupported(
-                        "host Android activity must declare supportsPictureInPicture=true".into(),
-                    )),
-                    RESULT_ENTER_FAILED => Err(VideoError::Unsupported(
-                        "Android activity rejected the picture in picture request".into(),
-                    )),
-                    _ => Err(VideoError::Unsupported(format!(
-                        "Android picture in picture helper returned unknown result code {result}"
-                    ))),
-                }
-            })
-        }
-
-        pub(super) fn is_active(&mut self) -> Result<bool, VideoError> {
-            with_android_context(|env, context| {
-                let helper_class = self.helper_class(env, context)?;
-                env.call_static_method(
-                    helper_class,
-                    jni_str!("isPictureInPictureActive"),
-                    jni_sig!("(Landroid/content/Context;)Z"),
-                    &[JValue::Object(context)],
-                )
-                .map_err(|error| {
-                    VideoError::Unsupported(format!(
-                        "Android picture in picture state query failed: {error}"
+                        "Android picture in picture helper call failed: {error}"
                     ))
                 })?
-                .z()
+                .i()
                 .map_err(|error| {
                     VideoError::Unsupported(format!(
-                        "Android picture in picture state query returned invalid result: {error}"
-                    ))
-                })
-            })
-        }
-
-        fn helper_class<'env>(
-            &mut self,
-            env: &mut Env<'env>,
-            context: &JObject<'_>,
-        ) -> Result<JClass<'env>, VideoError> {
-            if self.helper_class.is_none() {
-                self.helper_class = Some(load_helper_class(env, context)?);
-            }
-            let helper_class = self
-                .helper_class
-                .as_ref()
-                .expect("initialized Android picture-in-picture class must exist");
-            let local_class = env.new_local_ref(helper_class.as_obj()).map_err(|error| {
-                VideoError::Unsupported(format!(
-                    "Android picture in picture helper class local ref failed: {error}"
-                ))
-            })?;
-            env.cast_local::<JClass>(local_class).map_err(|error| {
-                VideoError::Unsupported(format!(
-                    "Android picture in picture helper class cast failed: {error}"
-                ))
-            })
-        }
-    }
-
-    fn load_helper_class(
-        env: &mut Env<'_>,
-        context: &JObject<'_>,
-    ) -> Result<GlobalObjectRef, VideoError> {
-        let parent_loader = env
-            .call_method(
-                context,
-                jni_str!("getClassLoader"),
-                jni_sig!("()Ljava/lang/ClassLoader;"),
-                &[],
-            )
-            .map_err(|error| {
-                VideoError::Unsupported(format!(
-                    "Android picture in picture parent class loader failed: {error}"
-                ))
-            })?
-            .l()
-            .map_err(|error| {
-                VideoError::Unsupported(format!(
-                    "Android picture in picture parent class loader result failed: {error}"
-                ))
-            })?;
-
-        let dex_bytes = env.byte_array_from_slice(DEX_BYTES).map_err(|error| {
-            VideoError::Unsupported(format!(
-                "Android picture in picture DEX byte array failed: {error}"
-            ))
-        })?;
-        let byte_buffer_class =
-            env.find_class(jni_str!("java/nio/ByteBuffer"))
-                .map_err(|error| {
-                    VideoError::Unsupported(format!(
-                        "Android picture in picture ByteBuffer lookup failed: {error}"
+                        "Android picture in picture helper returned invalid result: {error}"
                     ))
                 })?;
-        let dex_buffer = env
-            .call_static_method(
-                byte_buffer_class,
-                jni_str!("wrap"),
-                jni_sig!("([B)Ljava/nio/ByteBuffer;"),
-                &[JValue::Object(&dex_bytes)],
+
+            match result {
+                RESULT_ENTERED => Ok(()),
+                RESULT_PLATFORM_UNSUPPORTED => Err(VideoError::Unsupported(
+                    "picture in picture requires Android 8.0 or newer".into(),
+                )),
+                RESULT_DEVICE_UNSUPPORTED => Err(VideoError::Unsupported(
+                    "device does not support picture in picture".into(),
+                )),
+                RESULT_ACTIVITY_UNAVAILABLE => Err(VideoError::Unsupported(
+                    "no active Android activity is available for picture in picture".into(),
+                )),
+                RESULT_ACTIVITY_NOT_DECLARED => Err(VideoError::Unsupported(
+                    "host Android activity must declare supportsPictureInPicture=true".into(),
+                )),
+                RESULT_ENTER_FAILED => Err(VideoError::Unsupported(
+                    "Android activity rejected the picture in picture request".into(),
+                )),
+                _ => Err(VideoError::Unsupported(format!(
+                    "Android picture in picture helper returned unknown result code {result}"
+                ))),
+            }
+        })
+    }
+
+    pub(super) fn is_active() -> Result<bool, VideoError> {
+        with_android_context(|env, context| {
+            let helper_class = helper_class(env, context)?;
+            env.call_static_method(
+                helper_class,
+                jni_str!("isPictureInPictureActive"),
+                jni_sig!("(Landroid/content/Context;)Z"),
+                &[JValue::Object(context)],
             )
             .map_err(|error| {
                 VideoError::Unsupported(format!(
-                    "Android picture in picture DEX ByteBuffer construction failed: {error}"
+                    "Android picture in picture state query failed: {error}"
                 ))
             })?
-            .l()
+            .z()
             .map_err(|error| {
                 VideoError::Unsupported(format!(
-                    "Android picture in picture DEX ByteBuffer result failed: {error}"
+                    "Android picture in picture state query returned invalid result: {error}"
                 ))
-            })?;
+            })
+        })
+    }
 
-        let dex_class_loader_class = env
-            .find_class(jni_str!("dalvik/system/InMemoryDexClassLoader"))
-            .map_err(|error| {
-                VideoError::Unsupported(format!(
-                    "picture in picture requires Android 8.0 or newer: {error}"
-                ))
-            })?;
-
-        let class_loader = env
-            .new_object(
-                dex_class_loader_class,
-                jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
-                &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
-            )
-            .map_err(|error| {
-                VideoError::Unsupported(format!(
-                    "Android picture in picture in-memory class loader construction failed: {error}"
-                ))
-            })?;
-
-        let class_name = env
-            .new_string(PICTURE_IN_PICTURE_HELPER_CLASS)
-            .map_err(|error| {
-                VideoError::Unsupported(format!(
-                    "Android picture in picture helper class name failed: {error}"
-                ))
-            })?;
-        let helper_class = env
-            .call_method(
-                &class_loader,
-                jni_str!("loadClass"),
-                jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-                &[JValue::Object(&class_name)],
-            )
-            .map_err(|error| {
-                VideoError::Unsupported(format!(
-                    "Android picture in picture helper loadClass failed: {error}"
-                ))
-            })?
-            .l()
-            .map_err(|error| {
-                VideoError::Unsupported(format!(
-                    "Android picture in picture helper loadClass result failed: {error}"
-                ))
-            })?;
-        env.new_global_ref(helper_class).map_err(|error| {
+    fn helper_class(
+        env: &mut Env<'_>,
+        context: &JObject<'_>,
+    ) -> Result<&'static jni::objects::Global<jni::objects::JClass<'static>>, VideoError> {
+        HELPER.class(env, context).map_err(|error| {
             VideoError::Unsupported(format!(
-                "Android picture in picture helper class global ref failed: {error}"
+                "Android picture in picture helper class unavailable: {error}"
             ))
         })
     }

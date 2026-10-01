@@ -6,13 +6,4 @@ fn main() {
     if target_os == "ios" || target_os == "macos" {
         waterkit_build::build_apple_bridge(["src/sys/apple/mod.rs"]);
     }
-
-    if target_os == "android" {
-        waterkit_build::build_kotlin(&[
-            "src/sys/android/BluetoothHelper.kt",
-            "src/sys/android/BleScanBridgeCallback.kt",
-            "src/sys/android/BleGattBridgeCallback.kt",
-            "src/sys/android/ClassicDiscoveryBridgeCallback.kt",
-        ]);
-    }
 }

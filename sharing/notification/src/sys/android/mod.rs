@@ -8,8 +8,8 @@ use serde::Serialize;
 use crate::{InterruptionLevel, Notification, NotificationError};
 use waterkit_build::{AndroidError, DexHelper, dex_helper};
 
-/// `waterkit.notification.NotificationHelper`, embedded as a DEX by this crate's build script and
-/// loaded on first use.
+/// `waterkit.notification.NotificationHelper`, compiled into the app's DEX by the
+/// packager and resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.notification.NotificationHelper");
 
 impl From<AndroidError> for NotificationError {

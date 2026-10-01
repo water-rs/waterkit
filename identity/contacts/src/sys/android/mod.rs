@@ -5,8 +5,8 @@ use jni::{Env, jni_sig, jni_str};
 use std::fmt::Display;
 use waterkit_build::{AndroidError, DexHelper, dex_helper, with_android_context};
 
-/// `waterkit.contacts.ContactsHelper`, embedded as a DEX by this crate's build script and
-/// loaded on first use.
+/// `waterkit.contacts.ContactsHelper`, compiled into the app's DEX by the
+/// packager and resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.contacts.ContactsHelper");
 
 impl From<AndroidError> for ContactsError {

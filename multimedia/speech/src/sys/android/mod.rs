@@ -1,7 +1,7 @@
 use crate::{RecognitionConfig, RecognitionResult, SpeechError, TtsConfig, Voice};
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{Global, JClass, JObject, JObjectArray, JString, JValue};
-use jni::{Env, EnvUnowned, JavaVM, NativeMethod, jni_sig, jni_str};
+use jni::{Env, EnvUnowned, JavaVM, jni_sig, jni_str};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -17,7 +17,6 @@ type InitTx = tokio::sync::oneshot::Sender<bool>;
 
 static HELPER: DexHelper = dex_helper!("waterkit.speech.SpeechHelper");
 static CALLBACK: DexHelper = dex_helper!("waterkit.speech.SpeechInitCallback");
-static NATIVES_REGISTERED: OnceLock<()> = OnceLock::new();
 static CONTEXT: OnceLock<Global<JObject<'static>>> = OnceLock::new();
 static VM: OnceLock<Arc<JavaVM>> = OnceLock::new();
 static RECOGNITION_SESSIONS: OnceLock<
@@ -31,7 +30,7 @@ fn recognition_sessions() -> &'static Mutex<BTreeMap<i64, async_channel::Sender<
 }
 
 fn ensure_runtime_initialized() -> Result<(), SpeechError> {
-    if VM.get().is_some() && CONTEXT.get().is_some() && NATIVES_REGISTERED.get().is_some() {
+    if VM.get().is_some() && CONTEXT.get().is_some() {
         return Ok(());
     }
     let (vm, context) = jvm_and_context()?;
@@ -65,16 +64,13 @@ fn ensure_context() -> Result<&'static Global<JObject<'static>>, SpeechError> {
     })
 }
 
-/// Resolves the helper classes on the application's classpath and registers
-/// their native callbacks. Runs at most once - `SpeechHelper` and
-/// `SpeechInitCallback` come from the same loader (the app's own), which is
-/// what `initTts` requires of the callback type.
+/// Resolves the helper classes on the application's classpath. `SpeechHelper`
+/// and `SpeechInitCallback` share the app's class loader - which `initTts`
+/// requires of the callback type - and their `external fun`s bind to the
+/// `Java_waterkit_speech_*` exports by symbol name.
 fn init_helpers(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), SpeechError> {
-    if NATIVES_REGISTERED.get().is_some() {
-        return Ok(());
-    }
-    register_callback_natives(env, context)?;
-    let _ = NATIVES_REGISTERED.set(());
+    HELPER.class(env, context)?;
+    CALLBACK.class(env, context)?;
     Ok(())
 }
 
@@ -83,56 +79,12 @@ fn helper_class(env: &mut Env<'_>) -> Result<&'static Global<JClass<'static>>, S
     Ok(HELPER.class(env, context.as_obj())?)
 }
 
-fn register_callback_natives(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), SpeechError> {
-    let callback = CALLBACK.class(env, context)?;
-    let helper = HELPER.class(env, context)?;
-    // SAFETY: `onTtsInit` is an instance native method, so its Rust counterpart
-    // takes `EnvUnowned` and the receiver `JObject` as the first two parameters.
-    let callback_natives = [unsafe {
-        NativeMethod::from_raw_parts(
-            jni_str!("onTtsInit"),
-            jni_str!("(Z)V"),
-            Java_waterkit_speech_SpeechInitCallback_onTtsInit as *mut _,
-        )
-    }];
-    // SAFETY: the descriptor above matches the exported function's signature.
-    unsafe { env.register_native_methods(callback, &callback_natives) }.map_err(|e| {
-        SpeechError::Platform(format!(
-            "register_native_methods SpeechInitCallback failed: {e}"
-        ))
-    })?;
-
-    // SAFETY: both recognition callbacks are static native methods, so their
-    // Rust counterparts take `EnvUnowned` and `JClass` as the first two
-    // parameters.
-    let helper_natives = unsafe {
-        [
-            NativeMethod::from_raw_parts(
-                jni_str!("onRecognitionResult"),
-                jni_str!("(JLjava/lang/String;ZF)V"),
-                Java_waterkit_speech_SpeechHelper_onRecognitionResult as *mut _,
-            ),
-            NativeMethod::from_raw_parts(
-                jni_str!("onRecognitionError"),
-                jni_str!("(JI)V"),
-                Java_waterkit_speech_SpeechHelper_onRecognitionError as *mut _,
-            ),
-        ]
-    };
-    // SAFETY: the descriptors above match the exported functions' signatures.
-    unsafe { env.register_native_methods(helper, &helper_natives) }.map_err(|e| {
-        SpeechError::Platform(format!("register_native_methods SpeechHelper failed: {e}"))
-    })?;
-
-    Ok(())
-}
-
 /// Initialize Android speech runtime with JNI environment and app context.
 ///
 /// # Errors
 ///
-/// Returns `SpeechError::Platform` if JVM/context caching, helper class
-/// resolution or JNI native registration fails.
+/// Returns `SpeechError::Platform` if JVM/context caching or helper class
+/// resolution fails.
 pub fn init_with_context(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), SpeechError> {
     if VM.get().is_none() {
         let vm = env

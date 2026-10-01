@@ -9,7 +9,7 @@ use jni::objects::{Global, JByteArray, JObject, JObjectArray, JString, JValue};
 use jni::strings::JNIStr;
 use jni::{Env, EnvUnowned, JavaVM, jni_sig, jni_str};
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use waterkit_build::{AndroidError, DexHelper, dex_helper};
 
@@ -18,7 +18,6 @@ static SCAN_CALLBACK: DexHelper = dex_helper!("waterkit.bluetooth.BleScanBridgeC
 static GATT_CALLBACK: DexHelper = dex_helper!("waterkit.bluetooth.BleGattBridgeCallback");
 static CLASSIC_CALLBACK: DexHelper =
     dex_helper!("waterkit.bluetooth.ClassicDiscoveryBridgeCallback");
-static NATIVES_REGISTERED: OnceLock<()> = OnceLock::new();
 const BOND_BONDED: i32 = 12;
 type GattResultSender<T> = oneshot::Sender<Result<T, BluetoothError>>;
 type CharacteristicKey = (String, String);
@@ -167,97 +166,6 @@ where
         env.new_global_ref(&*context).map_err(BluetoothError::from)
     })?;
     vm.attach_current_thread(|env| f(env, context.as_obj()))
-}
-
-fn register_callback_natives(
-    env: &mut Env<'_>,
-    context: &JObject<'_>,
-) -> Result<(), BluetoothError> {
-    if NATIVES_REGISTERED.get().is_some() {
-        return Ok(());
-    }
-    let scan_callback_class = SCAN_CALLBACK.class(env, context)?;
-    let scan_natives = [unsafe {
-        jni::NativeMethod::from_raw_parts(
-            jni_str!("onScanResultNative"),
-            jni_str!("(Ljava/lang/String;Ljava/lang/String;I[Ljava/lang/String;)V"),
-            Java_waterkit_bluetooth_BleScanBridgeCallback_onScanResultNative as *mut _,
-        )
-    }];
-    // SAFETY: every descriptor above names the exact Kotlin instance method
-    // signature implemented by its corresponding `extern "system"` function.
-    unsafe { env.register_native_methods(scan_callback_class, &scan_natives) }.map_err(|e| {
-        BluetoothError::Platform(format!(
-            "register_native_methods BleScanBridgeCallback failed: {e}"
-        ))
-    })?;
-
-    let gatt_callback_class = GATT_CALLBACK.class(env, context)?;
-    let gatt_natives = [
-        unsafe {
-            jni::NativeMethod::from_raw_parts(
-                jni_str!("onConnectionStateNative"),
-                jni_str!("(Ljava/lang/String;ZI)V"),
-                Java_waterkit_bluetooth_BleGattBridgeCallback_onConnectionStateNative as *mut _,
-            )
-        },
-        unsafe {
-            jni::NativeMethod::from_raw_parts(
-                jni_str!("onServicesDiscoveredNative"),
-                jni_str!("(Ljava/lang/String;Ljava/lang/String;I)V"),
-                Java_waterkit_bluetooth_BleGattBridgeCallback_onServicesDiscoveredNative as *mut _,
-            )
-        },
-        unsafe {
-            jni::NativeMethod::from_raw_parts(
-                jni_str!("onCharacteristicReadNative"),
-                jni_str!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[BI)V"),
-                Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicReadNative as *mut _,
-            )
-        },
-        unsafe {
-            jni::NativeMethod::from_raw_parts(
-                jni_str!("onCharacteristicWriteNative"),
-                jni_str!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V"),
-                Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicWriteNative as *mut _,
-            )
-        },
-        unsafe {
-            jni::NativeMethod::from_raw_parts(
-                jni_str!("onCharacteristicChangedNative"),
-                jni_str!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)V"),
-                Java_waterkit_bluetooth_BleGattBridgeCallback_onCharacteristicChangedNative
-                    as *mut _,
-            )
-        },
-    ];
-    // SAFETY: each GATT descriptor matches the parameter and return types of
-    // the paired `extern "system"` callback.
-    unsafe { env.register_native_methods(gatt_callback_class, &gatt_natives) }.map_err(|e| {
-        BluetoothError::Platform(format!(
-            "register_native_methods BleGattBridgeCallback failed: {e}"
-        ))
-    })?;
-
-    let classic_callback_class = CLASSIC_CALLBACK.class(env, context)?;
-    let classic_natives = [unsafe {
-        jni::NativeMethod::from_raw_parts(
-            jni_str!("onDeviceFoundNative"),
-            jni_str!("(Ljava/lang/String;Ljava/lang/String;IZ)V"),
-            Java_waterkit_bluetooth_ClassicDiscoveryBridgeCallback_onDeviceFoundNative as *mut _,
-        )
-    }];
-    // SAFETY: the descriptor matches the Classic discovery callback ABI.
-    unsafe { env.register_native_methods(classic_callback_class, &classic_natives) }.map_err(
-        |e| {
-            BluetoothError::Platform(format!(
-                "register_native_methods ClassicDiscoveryBridgeCallback failed: {e}"
-            ))
-        },
-    )?;
-
-    let _ = NATIVES_REGISTERED.set(());
-    Ok(())
 }
 
 pub async fn adapter_state() -> Result<AdapterState, BluetoothError> {
@@ -467,7 +375,6 @@ impl BleScannerInner {
             .collect();
 
         let session = with_android_context(|env, context| {
-            register_callback_natives(env, context)?;
             let helper_class = HELPER.class(env, context)?;
             let callback_class = SCAN_CALLBACK.class(env, context)?;
             let callback = env
@@ -1133,7 +1040,6 @@ impl BleConnectionInner {
             *connect_slot = Some(connect_tx);
         }
         let setup = with_android_context(|env, context| {
-            register_callback_natives(env, context)?;
             let helper_class = HELPER.class(env, context)?;
             let callback_class = GATT_CALLBACK.class(env, context)?;
             let callback = env
@@ -1695,7 +1601,6 @@ impl ClassicBluetoothInner {
         let callback_state = Arc::new(tx);
         let callback_state_handle = callback_state_handle(&callback_state)?;
         let session = with_android_context(|env, context| {
-            register_callback_natives(env, context)?;
             let helper_class = HELPER.class(env, context)?;
             let callback_class = CLASSIC_CALLBACK.class(env, context)?;
             let callback = env

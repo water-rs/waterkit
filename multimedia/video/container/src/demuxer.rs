@@ -1155,7 +1155,7 @@ mod tests {
         default_sample_duration: Option<u32>,
         default_sample_size: Option<u32>,
         default_sample_flags: Option<u32>,
-        truns: Vec<TrackFragmentRunBox>,
+        runs: Vec<TrackFragmentRunBox>,
     ) -> TrackFragmentBox {
         TrackFragmentBox {
             tfhd: TrackFragmentHeaderBox {
@@ -1168,7 +1168,7 @@ mod tests {
                 default_sample_flags,
             },
             tfdt,
-            trun: truns,
+            trun: runs,
         }
     }
 

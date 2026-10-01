@@ -112,7 +112,10 @@ android {
     sourceSets {
         getByName("main") {
             jniLibs.directories.add("src/main/jniLibs")
-            java.directories.add(stagedHelpers.absolutePath)
+            // .kt files compile from the `kotlin` source set, not `java` —
+            // adding the staged dir to `java.directories` leaves the helpers
+            // out of the DEX and every runtime loadClass fails.
+            kotlin.directories.add(stagedHelpers.absolutePath)
         }
     }
 }

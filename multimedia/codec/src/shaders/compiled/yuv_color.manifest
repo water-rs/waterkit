@@ -1,16 +1,6 @@
 msl_version = [1, 0]
 
 [[dxil]]
-stem = "yuv_color_vertex_vs_main"
-profile = "vs_6_0"
-entry_name = "vs_main"
-
-[[dxil]]
-stem = "yuv_color_fragment_fs_main"
-profile = "ps_6_0"
-entry_name = "fs_main"
-
-[[dxil]]
 stem = "yuv_color_compute_convert_to_linear_rgba"
 profile = "cs_6_0"
 entry_name = "convert_to_linear_rgba"

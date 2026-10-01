@@ -39,28 +39,33 @@ impl DecodedFrame {
     }
 }
 
-/// Reusable decoded-frame uploader that retains GPU plane textures across frames.
+/// Reusable decoded-frame uploader.
+///
+/// Every call produces a fresh [`GpuFrame`]: hardware frames are imported in
+/// place from their `IOSurface` planes and software frames are uploaded once
+/// into their own textures, so a frame's planes stay valid for as long as a
+/// consumer retains them.
 #[derive(Debug)]
 pub struct DecodedFrameUploader {
-    #[cfg(waterkit_any_codec)]
-    cached: Option<GpuFrame>,
     #[cfg(waterkit_hw_codec_apple)]
     apple: Option<apple::AppleFrameUploader>,
 }
 
 impl DecodedFrameUploader {
-    /// Creates an uploader with no allocated textures.
+    /// Creates an uploader.
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            #[cfg(waterkit_any_codec)]
-            cached: None,
             #[cfg(waterkit_hw_codec_apple)]
             apple: None,
         }
     }
 
-    /// Uploads a decoded frame, reusing textures while dimensions and layout remain stable.
+    /// Turns a decoded frame into a [`GpuFrame`] on `device`.
+    ///
+    /// Apple hardware frames are imported in place — the returned textures
+    /// share the `IOSurface` storage, nothing is copied. Software frames are
+    /// written to freshly created textures exactly once.
     #[must_use]
     pub fn upload(&mut self, decoded: DecodedFrame, device: &Device, queue: &Queue) -> GpuFrame {
         #[cfg(waterkit_any_codec)]
@@ -68,46 +73,20 @@ impl DecodedFrameUploader {
             let width = decoded.width();
             let height = decoded.height();
             let layout = decoded.pixel_layout();
-            let replace = self.cached.as_ref().is_some_and(|cached| {
-                cached.width != width || cached.height != height || cached.layout != layout
-            });
-            if replace {
-                self.cached = None;
-            }
-            let cached = self
-                .cached
-                .get_or_insert_with(|| GpuFrame::initialized(device, queue, width, height, layout));
             match decoded.inner {
                 #[cfg(waterkit_hw_codec_apple)]
                 DecodedFrameInner::Hardware {
                     pixel_buffer,
                     timestamp_ns,
                     ..
-                } => {
-                    self.apple
-                        .get_or_insert_with(|| apple::AppleFrameUploader::new(queue))
-                        .copy_surface_planes(
-                            queue,
-                            apple::SurfacePlaneCopy {
-                                pixel_buffer: &pixel_buffer,
-                                y_target: &cached.y_texture,
-                                uv_target: &cached.uv_texture,
-                                width,
-                                height,
-                                layout,
-                            },
-                        );
-                    cached.timestamp_ns = timestamp_ns;
-                    cached.clone()
-                }
+                } => self
+                    .apple
+                    .get_or_insert_with(|| apple::AppleFrameUploader::new(device))
+                    .import_frame(device, &pixel_buffer, width, height, layout, timestamp_ns),
                 #[cfg(waterkit_software_frames)]
                 DecodedFrameInner::Software {
                     data, timestamp_ns, ..
-                } => {
-                    cached.write_biplanar(queue, &data);
-                    cached.timestamp_ns = timestamp_ns;
-                    cached.clone()
-                }
+                } => GpuFrame::uploaded(device, queue, width, height, layout, &data, timestamp_ns),
             }
         }
         #[cfg(not(waterkit_any_codec))]
@@ -126,7 +105,11 @@ impl Default for DecodedFrameUploader {
 
 /// A decoded video frame backed by YUV textures on GPU.
 ///
-/// The frame is stored in its native bi-planar NV12 or P010 layout.
+/// The frame is stored in its native bi-planar NV12 or P010 layout, as
+/// `R8Uint`/`Rg8Uint` or `R16Uint`/`Rg16Uint` integer textures — the formats
+/// the engine's external-frame contract takes. Hardware-decoded frames are
+/// imported in place: their textures share the `IOSurface` storage, so
+/// dropping this frame releases the planes back to the decoder's pool.
 /// Use [`to_linear_rgba`](Self::to_linear_rgba) to convert to RGBA via compute shader.
 #[derive(Clone)]
 pub struct GpuFrame {
@@ -149,52 +132,41 @@ impl std::fmt::Debug for GpuFrame {
 }
 
 impl GpuFrame {
-    #[cfg(waterkit_any_codec)]
-    fn initialized(
-        device: &Device,
-        queue: &Queue,
+    /// Wraps plane textures imported from a decoded frame's native storage.
+    #[cfg(waterkit_hw_codec_apple)]
+    pub(super) fn imported(
+        y_texture: Texture,
+        uv_texture: Texture,
         width: u32,
         height: u32,
         layout: DecodedPixelLayout,
+        timestamp_ns: u64,
     ) -> Self {
-        let (y_texture, uv_texture) = Self::create_biplanar_textures(device, width, height, layout);
-        let zero_pixel = match layout {
-            DecodedPixelLayout::Nv12 => &[0_u8; 2][..],
-            DecodedPixelLayout::P010 => &[0_u8; 4][..],
-        };
-        for texture in [&y_texture, &uv_texture] {
-            queue.write_texture(
-                texture.as_image_copy(),
-                zero_pixel,
-                wgpu::TexelCopyBufferLayout::default(),
-                Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
-        queue.submit([]);
         Self {
             y_texture: Arc::new(y_texture),
             uv_texture: Arc::new(uv_texture),
             width,
             height,
-            timestamp_ns: 0,
+            timestamp_ns,
             layout,
         }
     }
 
-    #[cfg(waterkit_any_codec)]
-    fn create_biplanar_textures(
+    /// Creates the plane textures and writes a software-decoded frame into
+    /// them exactly once.
+    #[cfg(waterkit_software_frames)]
+    fn uploaded(
         device: &Device,
+        queue: &Queue,
         width: u32,
         height: u32,
         layout: DecodedPixelLayout,
-    ) -> (Texture, Texture) {
+        data: &[u8],
+        timestamp_ns: u64,
+    ) -> Self {
         let (y_format, uv_format) = match layout {
-            DecodedPixelLayout::Nv12 => (TextureFormat::R8Unorm, TextureFormat::Rg8Unorm),
-            DecodedPixelLayout::P010 => (TextureFormat::R16Unorm, TextureFormat::Rg16Unorm),
+            DecodedPixelLayout::Nv12 => (TextureFormat::R8Uint, TextureFormat::Rg8Uint),
+            DecodedPixelLayout::P010 => (TextureFormat::R16Uint, TextureFormat::Rg16Uint),
         };
         let texture = |label, texture_width, texture_height, format| {
             device.create_texture(&TextureDescriptor {
@@ -212,41 +184,42 @@ impl GpuFrame {
                 view_formats: &[],
             })
         };
-        (
-            texture("GpuFrame Y", width, height, y_format),
-            texture(
-                "GpuFrame UV",
-                (width / 2).max(1),
-                (height / 2).max(1),
-                uv_format,
-            ),
-        )
-    }
+        let y_texture = texture("GpuFrame Y", width, height, y_format);
+        let uv_width = width.div_ceil(2).max(1);
+        let uv_height = height.div_ceil(2).max(1);
+        let uv_texture = texture("GpuFrame UV", uv_width, uv_height, uv_format);
 
-    #[cfg(waterkit_software_frames)]
-    fn write_biplanar(&self, queue: &Queue, data: &[u8]) {
-        let row_bytes = self.layout.bytes_per_row(self.width);
-        let y_size = row_bytes * self.height as usize;
+        let row_bytes = layout.bytes_per_row(width);
+        let y_size = row_bytes * height as usize;
         queue.write_texture(
-            self.y_texture.as_image_copy(),
+            y_texture.as_image_copy(),
             &data[..y_size],
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(u32::try_from(row_bytes).expect("row bytes must fit in u32")),
-                rows_per_image: Some(self.height),
+                rows_per_image: Some(height),
             },
-            self.y_texture.size(),
+            y_texture.size(),
         );
         queue.write_texture(
-            self.uv_texture.as_image_copy(),
+            uv_texture.as_image_copy(),
             &data[y_size..],
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(u32::try_from(row_bytes).expect("row bytes must fit in u32")),
-                rows_per_image: Some((self.height / 2).max(1)),
+                rows_per_image: Some(uv_height),
             },
-            self.uv_texture.size(),
+            uv_texture.size(),
         );
+
+        Self {
+            y_texture: Arc::new(y_texture),
+            uv_texture: Arc::new(uv_texture),
+            width,
+            height,
+            timestamp_ns,
+            layout,
+        }
     }
 
     /// Get the Y plane texture.
@@ -329,7 +302,7 @@ impl LinearRgbaConverter {
                     binding: 0,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: false },
+                        sample_type: TextureSampleType::Uint,
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -339,7 +312,7 @@ impl LinearRgbaConverter {
                     binding: 1,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: false },
+                        sample_type: TextureSampleType::Uint,
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },

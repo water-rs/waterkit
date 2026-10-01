@@ -164,11 +164,9 @@ impl GpuUploadBenchmark {
             compatible_surface: None,
             apply_limit_buckets: false,
         }))?;
-        let required_features = adapter.features() & wgpu::Features::TEXTURE_FORMAT_16BIT_NORM;
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("WaterKit video benchmark device"),
-                required_features,
                 ..Default::default()
             }))?;
         Ok(Self {
@@ -178,32 +176,17 @@ impl GpuUploadBenchmark {
         })
     }
 
-    fn upload(
-        &mut self,
-        frame: waterkit_codec::DecodedFrame,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        if frame.pixel_layout() == DecodedPixelLayout::P010
-            && !self
-                .device
-                .features()
-                .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM)
-        {
-            return Err(io::Error::other(
-                "P010 GPU upload requires TEXTURE_FORMAT_16BIT_NORM on the selected adapter",
-            )
-            .into());
-        }
+    fn upload(&mut self, frame: waterkit_codec::DecodedFrame) {
         let uploaded = self.uploader.upload(frame, &self.device, &self.queue);
         assert_eq!(
             uploaded.pixel_layout(),
-            if uploaded.y_texture().format() == wgpu::TextureFormat::R16Unorm {
+            if uploaded.y_texture().format() == wgpu::TextureFormat::R16Uint {
                 DecodedPixelLayout::P010
             } else {
                 DecodedPixelLayout::Nv12
             },
             "uploaded texture format must preserve the decoded pixel layout"
         );
-        Ok(())
     }
 
     fn finish(self) -> Result<(), Box<dyn std::error::Error>> {
@@ -350,7 +333,7 @@ fn benchmark_decode(
         }
         previous_presentation_time = Some(presentation_time);
         if let Some(gpu) = gpu.as_mut() {
-            gpu.upload(frame.into_frame())?;
+            gpu.upload(frame.into_frame());
         }
         decoded_frames = decoded_frames.saturating_add(1);
         if max_frames.is_some_and(|limit| decoded_frames >= limit) {

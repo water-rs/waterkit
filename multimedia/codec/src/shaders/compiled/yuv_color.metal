@@ -4,11 +4,6 @@
 
 using metal::uint;
 
-struct VertexOutput {
-    metal::float4 position;
-    metal::float2 uv;
-    char _pad2[8];
-};
 struct ColorParams {
     uint matrix_mode;
     uint range_mode;
@@ -33,45 +28,15 @@ constant uint PRIMARIES_BT2020_ = 3u;
 constant uint TRANSFER_SDR = 0u;
 constant uint TRANSFER_PQ = 1u;
 constant uint TRANSFER_HLG = 2u;
-constant uint TARGET_GAMMA_SDR = 0u;
-constant uint TARGET_LINEAR_SDR = 1u;
-constant uint TARGET_LINEAR_HDR = 2u;
 constant float SDR_REFERENCE_WHITE_NITS = 203.0;
 
-float srgb_to_linear(
+float bt709_to_linear(
     float c
 ) {
-    if (c <= 0.04045) {
-        return c / 12.92;
+    if (c < 0.081) {
+        return c / 4.5;
     }
-    return metal::pow((c + 0.055) / 1.055, 2.4);
-}
-
-float linear_to_srgb(
-    float c_1
-) {
-    if (c_1 <= 0.0031308) {
-        return c_1 * 12.92;
-    }
-    return (1.055 * metal::pow(c_1, 0.41666666)) - 0.055;
-}
-
-float bt709_to_linear(
-    float c_2
-) {
-    if (c_2 < 0.081) {
-        return c_2 / 4.5;
-    }
-    return metal::pow((c_2 + 0.099) / 1.099, 2.2222223);
-}
-
-float linear_to_bt709_(
-    float c_3
-) {
-    if (c_3 < 0.018) {
-        return c_3 * 4.5;
-    }
-    return (1.099 * metal::pow(c_3, 0.45)) - 0.099;
+    return metal::pow((c + 0.099) / 1.099, 2.2222223);
 }
 
 float pq_to_linear(
@@ -158,18 +123,6 @@ metal::float3 convert_primaries_to_srgb(
         return metal::float3(((1.2249 * linear_rgb.x) - (0.2247 * linear_rgb.y)) - (0.0002 * linear_rgb.z), ((-0.042 * linear_rgb.x) + (1.0419 * linear_rgb.y)) + (0.0001 * linear_rgb.z), ((-0.0197 * linear_rgb.x) - (0.0786 * linear_rgb.y)) + (1.0983 * linear_rgb.z));
     }
     return linear_rgb;
-}
-
-metal::float3 tone_map_hdr_to_sdr(
-    metal::float3 linear_rgb_1,
-    constant ColorParams& color_params
-) {
-    metal::float3 safe_1 = metal::max(linear_rgb_1, metal::float3(0.0));
-    float _e6 = color_params.max_content_light_nits;
-    float source_peak = metal::max(_e6 / SDR_REFERENCE_WHITE_NITS, 1.0);
-    float shoulder = metal::max((source_peak - 0.75) / 4.0, 0.25);
-    metal::float3 compressed = metal::float3(0.75 + ((1.0 - 0.75) * (1.0 - metal::exp(-((safe_1.x - 0.75)) / shoulder))), 0.75 + ((1.0 - 0.75) * (1.0 - metal::exp(-((safe_1.y - 0.75)) / shoulder))), 0.75 + ((1.0 - 0.75) * (1.0 - metal::exp(-((safe_1.z - 0.75)) / shoulder))));
-    return metal::float3((safe_1.x > 0.75) ? compressed.x : safe_1.x, (safe_1.y > 0.75) ? compressed.y : safe_1.y, (safe_1.z > 0.75) ? compressed.z : safe_1.z);
 }
 
 metal::float3 normalize_yuv(
@@ -268,128 +221,44 @@ metal::float3 bt2020_constant_luminance_to_linear(
     uint _e30 = color_params.transfer_mode;
     float _e31 = decode_transfer_scalar(b_gamma, _e30);
     float g_linear = ((_e23 - (0.2627 * _e27)) - (0.0593 * _e31)) / 0.678;
-    metal::float3 linear_rgb_4 = metal::max(metal::float3(_e27, g_linear, _e31), metal::float3(0.0));
+    metal::float3 linear_rgb_2 = metal::max(metal::float3(_e27, g_linear, _e31), metal::float3(0.0));
     uint _e46 = color_params.transfer_mode;
     if (_e46 == TRANSFER_HLG) {
-        metal::float3 _e49 = hlg_scene_to_display_linear(linear_rgb_4);
+        metal::float3 _e49 = hlg_scene_to_display_linear(linear_rgb_2);
         return _e49;
     }
-    return linear_rgb_4;
+    return linear_rgb_2;
 }
 
 metal::float3 decode_yuv_to_linear(
     float y_1,
-    metal::float2 uv_1,
+    metal::float2 uv,
     constant ColorParams& color_params
 ) {
-    metal::float3 linear_rgb_2 = metal::float3(0.0);
-    metal::float3 _e2 = normalize_yuv(y_1, uv_1, color_params);
+    metal::float3 linear_rgb_1 = metal::float3(0.0);
+    metal::float3 _e2 = normalize_yuv(y_1, uv, color_params);
     uint _e8 = color_params.matrix_mode;
     if (_e8 == MATRIX_BT2020_CONSTANT_LUMINANCE) {
         metal::float3 _e11 = bt2020_constant_luminance_to_linear(_e2, color_params);
-        linear_rgb_2 = _e11;
+        linear_rgb_1 = _e11;
     } else {
         metal::float3 _e12 = yuv_to_gamma_rgb(_e2, color_params);
         uint _e15 = color_params.transfer_mode;
         metal::float3 _e16 = decode_transfer_to_linear(_e12, _e15);
-        linear_rgb_2 = _e16;
+        linear_rgb_1 = _e16;
     }
-    metal::float3 _e17 = linear_rgb_2;
+    metal::float3 _e17 = linear_rgb_1;
     uint _e20 = color_params.primaries_mode;
     metal::float3 _e21 = convert_primaries_to_srgb(_e17, _e20);
     return _e21;
 }
 
-metal::float4 render_yuv_sample(
-    metal::float2 sample_coordinates,
-    metal::texture2d<float, metal::access::sample> y_texture,
-    metal::texture2d<float, metal::access::sample> uv_texture,
-    metal::sampler video_sampler,
-    constant ColorParams& color_params
-) {
-    metal::float3 linear_rgb_3 = {};
-    metal::float4 _e3 = y_texture.sample(video_sampler, sample_coordinates);
-    float y_3 = _e3.x;
-    metal::float4 _e7 = uv_texture.sample(video_sampler, sample_coordinates);
-    metal::float2 uv_2 = _e7.xy;
-    metal::float3 _e9 = decode_yuv_to_linear(y_3, uv_2, color_params);
-    linear_rgb_3 = _e9;
-    uint _e13 = color_params.target_mode;
-    if (_e13 == TARGET_LINEAR_HDR) {
-        metal::float3 _e16 = linear_rgb_3;
-        return metal::float4(metal::max(_e16, metal::float3(0.0)), 1.0);
-    }
-    uint _e24 = color_params.transfer_mode;
-    if (_e24 != TRANSFER_SDR) {
-        metal::float3 _e27 = linear_rgb_3;
-        metal::float3 _e28 = tone_map_hdr_to_sdr(_e27, color_params);
-        linear_rgb_3 = _e28;
-    }
-    metal::float3 _e29 = linear_rgb_3;
-    metal::float3 clamped_linear = metal::clamp(_e29, metal::float3(0.0), metal::float3(1.0));
-    uint _e37 = color_params.target_mode;
-    if (_e37 == TARGET_LINEAR_SDR) {
-        return metal::float4(clamped_linear, 1.0);
-    }
-    float _e43 = linear_to_bt709_(clamped_linear.x);
-    float _e45 = linear_to_bt709_(clamped_linear.y);
-    float _e47 = linear_to_bt709_(clamped_linear.z);
-    metal::float3 gamma_sdr = metal::float3(_e43, _e45, _e47);
-    uint _e51 = color_params.target_mode;
-    if (_e51 == TARGET_GAMMA_SDR) {
-        return metal::float4(gamma_sdr, 1.0);
-    }
-    return metal::float4(clamped_linear, 1.0);
-}
-
-struct vs_mainInput {
-    metal::float2 position [[attribute(0)]];
-    metal::float2 uv [[attribute(1)]];
-};
-struct vs_mainOutput {
-    metal::float4 position [[position]];
-    metal::float2 uv [[user(loc0), center_perspective]];
-};
-vertex vs_mainOutput vs_main(
-  vs_mainInput varyings [[stage_in]]
-) {
-    const auto position = varyings.position;
-    const auto uv = varyings.uv;
-    VertexOutput output = {};
-    output.position = metal::float4(position, 0.0, 1.0);
-    output.uv = uv;
-    VertexOutput _e8 = output;
-    const auto _tmp = _e8;
-    return vs_mainOutput { _tmp.position, _tmp.uv };
-}
-
-
-struct fs_mainInput {
-    metal::float2 uv_2 [[user(loc0), center_perspective]];
-};
-struct fs_mainOutput {
-    metal::float4 member_1 [[color(0)]];
-};
-fragment fs_mainOutput fs_main(
-  fs_mainInput varyings_1 [[stage_in]]
-, metal::float4 position_1 [[position]]
-, metal::texture2d<float, metal::access::sample> y_texture [[texture(0)]]
-, metal::texture2d<float, metal::access::sample> uv_texture [[texture(1)]]
-, metal::sampler video_sampler [[sampler(0)]]
-, constant ColorParams& color_params [[buffer(0)]]
-) {
-    const VertexOutput input = { position_1, varyings_1.uv_2 };
-    metal::float4 _e2 = render_yuv_sample(input.uv, y_texture, uv_texture, video_sampler, color_params);
-    return fs_mainOutput { _e2 };
-}
-
-
 struct convert_to_linear_rgbaInput {
 };
 kernel void convert_to_linear_rgba(
   metal::uint3 global_id [[thread_position_in_grid]]
-, metal::texture2d<float, metal::access::sample> y_texture [[texture(0)]]
-, metal::texture2d<float, metal::access::sample> uv_texture [[texture(1)]]
+, metal::texture2d<uint, metal::access::sample> y_texture [[texture(0)]]
+, metal::texture2d<uint, metal::access::sample> uv_texture [[texture(1)]]
 , constant ColorParams& color_params [[buffer(0)]]
 , metal::texture2d<float, metal::access::write> linear_rgba_output [[texture(2)]]
 ) {
@@ -406,11 +275,14 @@ kernel void convert_to_linear_rgba(
     }
     metal::int2 y_coordinates = static_cast<metal::int2>(global_id.xy);
     metal::int2 uv_coordinates = metal::int2(static_cast<int>(global_id.x / 2u), static_cast<int>(global_id.y / 2u));
-    metal::float4 _e27 = y_texture.read(metal::uint2(y_coordinates), 0);
-    float y_4 = _e27.x;
-    metal::float4 _e31 = uv_texture.read(metal::uint2(uv_coordinates), 0);
-    metal::float2 uv_3 = _e31.xy;
-    metal::float3 _e33 = decode_yuv_to_linear(y_4, uv_3, color_params);
-    linear_rgba_output.write(metal::float4(metal::max(_e33, metal::float3(0.0)), 1.0), metal::uint2(y_coordinates));
+    uint _e27 = color_params.sample_mode;
+    float code_scale = (_e27 == SAMPLE_P010_) ? 0.000015259022 : 0.003921569;
+    metal::uint4 _e35 = y_texture.read(metal::uint2(y_coordinates), 0);
+    float y_3 = static_cast<float>(_e35.x) * code_scale;
+    metal::uint4 _e41 = uv_texture.read(metal::uint2(uv_coordinates), 0);
+    metal::uint2 uv_raw = _e41.xy;
+    metal::float2 uv_1 = metal::float2(static_cast<float>(uv_raw.x), static_cast<float>(uv_raw.y)) * code_scale;
+    metal::float3 _e49 = decode_yuv_to_linear(y_3, uv_1, color_params);
+    linear_rgba_output.write(metal::float4(metal::max(_e49, metal::float3(0.0)), 1.0), metal::uint2(y_coordinates));
     return;
 }

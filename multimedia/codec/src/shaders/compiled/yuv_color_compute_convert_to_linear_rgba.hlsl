@@ -5,11 +5,6 @@ struct NagaConstants {
 };
 ConstantBuffer<NagaConstants> _NagaConstants: register(b1);
 
-struct VertexOutput {
-    float4 position : SV_Position;
-    float2 uv : LOC0;
-};
-
 struct ColorParams {
     uint matrix_mode;
     uint range_mode;
@@ -35,50 +30,19 @@ static const uint PRIMARIES_BT2020_ = 3u;
 static const uint TRANSFER_SDR = 0u;
 static const uint TRANSFER_PQ = 1u;
 static const uint TRANSFER_HLG = 2u;
-static const uint TARGET_GAMMA_SDR = 0u;
-static const uint TARGET_LINEAR_SDR = 1u;
-static const uint TARGET_LINEAR_HDR = 2u;
 static const float SDR_REFERENCE_WHITE_NITS = 203.0;
 
-Texture2D<float4> y_texture : register(t0);
-Texture2D<float4> uv_texture : register(t1);
-SamplerState nagaSamplerHeap[2048]: register(s0, space0);
-SamplerComparisonState nagaComparisonSamplerHeap[2048]: register(s2048, space0);
-StructuredBuffer<uint> nagaGroup0SamplerIndexArray : register(t2, space0);
-static const SamplerState video_sampler = nagaSamplerHeap[nagaGroup0SamplerIndexArray[0]];
+Texture2D<uint4> y_texture : register(t0);
+Texture2D<uint4> uv_texture : register(t1);
 cbuffer color_params : register(b0) { ColorParams color_params; }
 RWTexture2D<float4> linear_rgba_output : register(u0);
 
-float srgb_to_linear(float c)
+float bt709_to_linear(float c)
 {
-    if ((c <= 0.04045)) {
-        return (c / 12.92);
+    if ((c < 0.081)) {
+        return (c / 4.5);
     }
-    return pow(((c + 0.055) / 1.055), 2.4);
-}
-
-float linear_to_srgb(float c_1)
-{
-    if ((c_1 <= 0.0031308)) {
-        return (c_1 * 12.92);
-    }
-    return ((1.055 * pow(c_1, 0.41666666)) - 0.055);
-}
-
-float bt709_to_linear(float c_2)
-{
-    if ((c_2 < 0.081)) {
-        return (c_2 / 4.5);
-    }
-    return pow(((c_2 + 0.099) / 1.099), 2.2222223);
-}
-
-float linear_to_bt709_(float c_3)
-{
-    if ((c_3 < 0.018)) {
-        return (c_3 * 4.5);
-    }
-    return ((1.099 * pow(c_3, 0.45)) - 0.099);
+    return pow(((c + 0.099) / 1.099), 2.2222223);
 }
 
 float pq_to_linear(float value)
@@ -157,16 +121,6 @@ float3 convert_primaries_to_srgb(float3 linear_rgb, uint primaries_mode)
         return float3((((1.2249 * linear_rgb.x) - (0.2247 * linear_rgb.y)) - (0.0002 * linear_rgb.z)), (((-0.042 * linear_rgb.x) + (1.0419 * linear_rgb.y)) + (0.0001 * linear_rgb.z)), (((-0.0197 * linear_rgb.x) - (0.0786 * linear_rgb.y)) + (1.0983 * linear_rgb.z)));
     }
     return linear_rgb;
-}
-
-float3 tone_map_hdr_to_sdr(float3 linear_rgb_1)
-{
-    float3 safe_1 = max(linear_rgb_1, (0.0).xxx);
-    float _e6 = color_params.max_content_light_nits;
-    float source_peak = max((_e6 / SDR_REFERENCE_WHITE_NITS), 1.0);
-    float shoulder = max(((source_peak - 0.75) / 4.0), 0.25);
-    float3 compressed = float3((0.75 + ((1.0 - 0.75) * (1.0 - exp((-((safe_1.x - 0.75)) / shoulder))))), (0.75 + ((1.0 - 0.75) * (1.0 - exp((-((safe_1.y - 0.75)) / shoulder))))), (0.75 + ((1.0 - 0.75) * (1.0 - exp((-((safe_1.z - 0.75)) / shoulder))))));
-    return float3(((safe_1.x > 0.75) ? compressed.x : safe_1.x), ((safe_1.y > 0.75) ? compressed.y : safe_1.y), ((safe_1.z > 0.75) ? compressed.z : safe_1.z));
 }
 
 float3 normalize_yuv(float y_sample, float2 uv_sample)
@@ -260,72 +214,34 @@ float3 bt2020_constant_luminance_to_linear(float3 yuv_1)
     uint _e30 = color_params.transfer_mode;
     const float _e31 = decode_transfer_scalar(b_gamma, _e30);
     float g_linear = (((_e23 - (0.2627 * _e27)) - (0.0593 * _e31)) / 0.678);
-    float3 linear_rgb_4 = max(float3(_e27, g_linear, _e31), (0.0).xxx);
+    float3 linear_rgb_2 = max(float3(_e27, g_linear, _e31), (0.0).xxx);
     uint _e46 = color_params.transfer_mode;
     if ((_e46 == TRANSFER_HLG)) {
-        const float3 _e49 = hlg_scene_to_display_linear(linear_rgb_4);
+        const float3 _e49 = hlg_scene_to_display_linear(linear_rgb_2);
         return _e49;
     }
-    return linear_rgb_4;
+    return linear_rgb_2;
 }
 
-float3 decode_yuv_to_linear(float y_1, float2 uv_1)
+float3 decode_yuv_to_linear(float y_1, float2 uv)
 {
-    float3 linear_rgb_2 = (0.0).xxx;
+    float3 linear_rgb_1 = (0.0).xxx;
 
-    const float3 _e2 = normalize_yuv(y_1, uv_1);
+    const float3 _e2 = normalize_yuv(y_1, uv);
     uint _e8 = color_params.matrix_mode;
     if ((_e8 == MATRIX_BT2020_CONSTANT_LUMINANCE)) {
         const float3 _e11 = bt2020_constant_luminance_to_linear(_e2);
-        linear_rgb_2 = _e11;
+        linear_rgb_1 = _e11;
     } else {
         const float3 _e12 = yuv_to_gamma_rgb(_e2);
         uint _e15 = color_params.transfer_mode;
         const float3 _e16 = decode_transfer_to_linear(_e12, _e15);
-        linear_rgb_2 = _e16;
+        linear_rgb_1 = _e16;
     }
-    float3 _e17 = linear_rgb_2;
+    float3 _e17 = linear_rgb_1;
     uint _e20 = color_params.primaries_mode;
     const float3 _e21 = convert_primaries_to_srgb(_e17, _e20);
     return _e21;
-}
-
-float4 render_yuv_sample(float2 sample_coordinates)
-{
-    float3 linear_rgb_3 = (float3)0;
-
-    float4 _e3 = y_texture.Sample(video_sampler, sample_coordinates);
-    float y_3 = _e3.x;
-    float4 _e7 = uv_texture.Sample(video_sampler, sample_coordinates);
-    float2 uv_2 = _e7.xy;
-    const float3 _e9 = decode_yuv_to_linear(y_3, uv_2);
-    linear_rgb_3 = _e9;
-    uint _e13 = color_params.target_mode;
-    if ((_e13 == TARGET_LINEAR_HDR)) {
-        float3 _e16 = linear_rgb_3;
-        return float4(max(_e16, (0.0).xxx), 1.0);
-    }
-    uint _e24 = color_params.transfer_mode;
-    if ((_e24 != TRANSFER_SDR)) {
-        float3 _e27 = linear_rgb_3;
-        const float3 _e28 = tone_map_hdr_to_sdr(_e27);
-        linear_rgb_3 = _e28;
-    }
-    float3 _e29 = linear_rgb_3;
-    float3 clamped_linear = clamp(_e29, (0.0).xxx, (1.0).xxx);
-    uint _e37 = color_params.target_mode;
-    if ((_e37 == TARGET_LINEAR_SDR)) {
-        return float4(clamped_linear, 1.0);
-    }
-    const float _e43 = linear_to_bt709_(clamped_linear.x);
-    const float _e45 = linear_to_bt709_(clamped_linear.y);
-    const float _e47 = linear_to_bt709_(clamped_linear.z);
-    float3 gamma_sdr = float3(_e43, _e45, _e47);
-    uint _e51 = color_params.target_mode;
-    if ((_e51 == TARGET_GAMMA_SDR)) {
-        return float4(gamma_sdr, 1.0);
-    }
-    return float4(clamped_linear, 1.0);
 }
 
 uint naga_div(uint lhs, uint rhs) {
@@ -356,11 +272,14 @@ void convert_to_linear_rgba(uint3 global_id : SV_DispatchThreadID)
     }
     int2 y_coordinates = int2(global_id.xy);
     int2 uv_coordinates = int2(int(naga_div(global_id.x, 2u)), int(naga_div(global_id.y, 2u)));
-    float4 _e27 = y_texture.Load(int3(y_coordinates, int(0)));
-    float y_4 = _e27.x;
-    float4 _e31 = uv_texture.Load(int3(uv_coordinates, int(0)));
-    float2 uv_3 = _e31.xy;
-    const float3 _e33 = decode_yuv_to_linear(y_4, uv_3);
-    linear_rgba_output[y_coordinates] = float4(max(_e33, (0.0).xxx), 1.0);
+    uint _e27 = color_params.sample_mode;
+    float code_scale = ((_e27 == SAMPLE_P010_) ? 1.5259022e-5 : 0.003921569);
+    uint4 _e35 = y_texture.Load(int3(y_coordinates, int(0)));
+    float y_3 = (float(_e35.x) * code_scale);
+    uint4 _e41 = uv_texture.Load(int3(uv_coordinates, int(0)));
+    uint2 uv_raw = _e41.xy;
+    float2 uv_1 = (float2(float(uv_raw.x), float(uv_raw.y)) * code_scale);
+    const float3 _e49 = decode_yuv_to_linear(y_3, uv_1);
+    linear_rgba_output[y_coordinates] = float4(max(_e49, (0.0).xxx), 1.0);
     return;
 }

@@ -49,6 +49,8 @@ impl DecodedFrame {
 pub struct DecodedFrameUploader {
     #[cfg(waterkit_hw_codec_apple)]
     apple: Option<apple::AppleFrameUploader>,
+    imported_frames: u64,
+    uploaded_frames: u64,
 }
 
 impl DecodedFrameUploader {
@@ -58,7 +60,21 @@ impl DecodedFrameUploader {
         Self {
             #[cfg(waterkit_hw_codec_apple)]
             apple: None,
+            imported_frames: 0,
+            uploaded_frames: 0,
         }
+    }
+
+    /// Frames imported in place from native storage with no copy.
+    #[must_use]
+    pub const fn imported_frames(&self) -> u64 {
+        self.imported_frames
+    }
+
+    /// Software frames written into newly created textures.
+    #[must_use]
+    pub const fn uploaded_frames(&self) -> u64 {
+        self.uploaded_frames
     }
 
     /// Turns a decoded frame into a [`GpuFrame`] on `device`.
@@ -79,14 +95,19 @@ impl DecodedFrameUploader {
                     pixel_buffer,
                     timestamp_ns,
                     ..
-                } => self
-                    .apple
-                    .get_or_insert_with(|| apple::AppleFrameUploader::new(device))
-                    .import_frame(device, &pixel_buffer, width, height, layout, timestamp_ns),
+                } => {
+                    self.imported_frames += 1;
+                    self.apple
+                        .get_or_insert_with(|| apple::AppleFrameUploader::new(device))
+                        .import_frame(device, &pixel_buffer, width, height, layout, timestamp_ns)
+                }
                 #[cfg(waterkit_software_frames)]
                 DecodedFrameInner::Software {
                     data, timestamp_ns, ..
-                } => GpuFrame::uploaded(device, queue, width, height, layout, &data, timestamp_ns),
+                } => {
+                    self.uploaded_frames += 1;
+                    GpuFrame::uploaded(device, queue, width, height, layout, &data, timestamp_ns)
+                }
             }
         }
         #[cfg(not(waterkit_any_codec))]

@@ -36,4 +36,4 @@ waterkit-build.workspace = true
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/HealthHelper.kt"]
-jars = ["third_party/health_connect"]
+maven = ["androidx.health.connect:connect-client:1.1.0"]

@@ -98,7 +98,6 @@ impl DecodedFrameUploader {
                             },
                         );
                     cached.timestamp_ns = timestamp_ns;
-                    cached.clone()
                 }
                 #[cfg(waterkit_software_frames)]
                 DecodedFrameInner::Software {
@@ -106,9 +105,9 @@ impl DecodedFrameUploader {
                 } => {
                     cached.write_biplanar(queue, &data);
                     cached.timestamp_ns = timestamp_ns;
-                    cached.clone()
                 }
             }
+            cached.clone()
         }
         #[cfg(not(waterkit_any_codec))]
         {

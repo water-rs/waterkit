@@ -11,6 +11,9 @@ import java.util.concurrent.Executor
 
 class BiometricHelper {
     companion object {
+        // Outcomes raised outside of BiometricPrompt (unsupported API level, exceptions).
+        private const val ERROR_GENERIC = -1
+
         @JvmStatic
         fun isAvailable(context: Context): Boolean {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
@@ -41,7 +44,7 @@ class BiometricHelper {
         @JvmStatic
         fun authenticate(context: Context, reason: String, callbackPtr: Long) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-                onResult(callbackPtr, false, "Android version not supported (requires API 28+)")
+                onResult(callbackPtr, false, ERROR_GENERIC, "Android version not supported (requires API 28+)")
                 return
             }
 
@@ -54,7 +57,7 @@ class BiometricHelper {
                         .setTitle("Authentication Required")
                         .setDescription(reason)
                         .setNegativeButton("Cancel", executor) { _, _ ->
-                            onResult(callbackPtr, false, "Cancelled by user")
+                            onResult(callbackPtr, false, BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED, "Cancelled by user")
                         }
                         .build()
 
@@ -64,12 +67,12 @@ class BiometricHelper {
                         object : BiometricPrompt.AuthenticationCallback() {
                             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                                 super.onAuthenticationSucceeded(result)
-                                onResult(callbackPtr, true, null)
+                                onResult(callbackPtr, true, 0, null)
                             }
 
                             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                                 super.onAuthenticationError(errorCode, errString)
-                                onResult(callbackPtr, false, errString.toString())
+                                onResult(callbackPtr, false, errorCode, errString.toString())
                             }
 
                             override fun onAuthenticationFailed() {
@@ -82,13 +85,13 @@ class BiometricHelper {
                         }
                     )
                 } catch (e: Exception) {
-                    onResult(callbackPtr, false, e.message ?: "Unknown error")
+                    onResult(callbackPtr, false, ERROR_GENERIC, e.message ?: "Unknown error")
                 }
             }
         }
 
         // Native method to call back to Rust
         @JvmStatic
-        external fun onResult(callbackPtr: Long, success: Boolean, error: String?)
+        external fun onResult(callbackPtr: Long, success: Boolean, errorCode: Int, error: String?)
     }
 }

@@ -4,12 +4,11 @@ use crate::{BiometricError, BiometricType};
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{Global, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jlong};
-use jni::{Env, EnvUnowned, NativeMethod, jni_sig, jni_str};
-use std::sync::OnceLock;
+use jni::{Env, EnvUnowned, jni_sig, jni_str};
 use waterkit_build::{AndroidError, DexHelper, dex_helper, with_android_context};
 
-/// `waterkit.biometric.BiometricHelper`, embedded as a DEX by this crate's build script and
-/// loaded on first use.
+/// `waterkit.biometric.BiometricHelper`, compiled into the app's DEX by the
+/// packager and resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.biometric.BiometricHelper");
 
 impl From<AndroidError> for BiometricError {
@@ -26,58 +25,25 @@ impl From<AndroidError> for BiometricError {
 /// Type of callback: `tokio::sync::oneshot::Sender<Result<(), BiometricError>>`
 type BiometricSender = tokio::sync::oneshot::Sender<Result<(), BiometricError>>;
 
-/// Initialize Android biometric support by loading helper classes and JNI bindings.
+/// Initialize Android biometric support by resolving the helper class.
 ///
 /// # Errors
 ///
-/// Returns [`BiometricError`] when JNI setup, DEX loading, or native registration fails.
+/// Returns [`BiometricError`] when JNI setup or helper class resolution fails.
 pub fn init(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), BiometricError> {
     helper_class(env, context)?;
     Ok(())
 }
 
-/// Returns the helper class, registering its native callbacks on first use.
+/// Returns the helper class from the application's class loader.
 ///
-/// The helper lives in a DEX loaded at runtime, so the JVM cannot resolve its
-/// native methods by symbol name - they have to be registered against the loaded
-/// class explicitly. `RegisterNatives` just re-sets the same function pointers,
-/// so a racing second registration is harmless.
+/// The helper is on the application's classpath, so its `external fun`s bind
+/// to the `Java_waterkit_biometric_*` exports by symbol name.
 fn helper_class(
     env: &mut Env<'_>,
     context: &JObject<'_>,
 ) -> Result<&'static Global<JClass<'static>>, BiometricError> {
-    {
-        static NATIVES_REGISTERED: OnceLock<()> = OnceLock::new();
-
-        let class = HELPER.class(env, context)?;
-        if NATIVES_REGISTERED.get().is_none() {
-            {
-                register_natives(env, class)?;
-                let _ = NATIVES_REGISTERED.set(());
-            }
-        }
-        Ok(class)
-    }
-}
-
-fn register_natives(
-    env: &mut Env<'_>,
-    class: &Global<JClass<'static>>,
-) -> Result<(), BiometricError> {
-    // SAFETY: `onResult` is a static native method, so its Rust counterpart
-    // takes `EnvUnowned` and `JClass` as its first two parameters, and the
-    // remaining parameters match the descriptor below.
-    let native_methods = [unsafe {
-        NativeMethod::from_raw_parts(
-            jni_str!("onResult"),
-            jni_str!("(JZLjava/lang/String;)V"),
-            Java_waterkit_biometric_BiometricHelper_onResult as *mut _,
-        )
-    }];
-
-    // SAFETY: the descriptor above matches the exported function's signature.
-    unsafe { env.register_native_methods(class, &native_methods) }
-        .map_err(|e| BiometricError::Platform(format!("register_native_methods: {e}")))
+    Ok(HELPER.class(env, context)?)
 }
 
 #[unsafe(no_mangle)]

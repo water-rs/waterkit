@@ -24,6 +24,7 @@ swift-bridge.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
+waterkit-build.workspace = true
 ndk-context.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -47,3 +48,8 @@ zbus.workspace = true
 
 [build-dependencies]
 waterkit-build.workspace = true
+
+# Android helper classes the packager compiles into the application's
+# classpath (see water-rs/cli's android backend).
+[package.metadata.waterui.android]
+kotlin-sources = ["src/sys/android/BluetoothHelper.kt", "src/sys/android/BleScanBridgeCallback.kt", "src/sys/android/BleGattBridgeCallback.kt", "src/sys/android/ClassicDiscoveryBridgeCallback.kt"]

@@ -1,10 +1,9 @@
 //! Runtime half of the Android bridge.
 //!
-//! [`build_kotlin`](crate::build_kotlin) compiles a crate's Kotlin helper into
-//! `$OUT_DIR/classes.dex` at build time; this module loads that DEX back into
-//! the JVM at run time and hands out the helper class. Both halves of that
-//! contract live here so the `$OUT_DIR` layout stays an implementation detail
-//! of this crate rather than something every capability crate has to restate.
+//! A crate's Kotlin helper ships on the application's classpath: the packager
+//! compiles the crate's declared Kotlin sources into the app's DEX, and this
+//! module resolves the helper class through the application `ClassLoader` at
+//! run time.
 //!
 //! Only compiled when the crate is built *for* Android. Build scripts compile
 //! for the host, so a `[build-dependencies]` copy of this crate never sees this
@@ -91,7 +90,14 @@ where
         // `Context` that outlives this attachment, and `as_cast_raw` only
         // borrows it.
         let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-        Ok(f(env, &context))
+        let result = f(env, &context);
+        if result.is_err() && env.exception_check() {
+            // A Java exception throws by staying pending on the thread; a
+            // failure converted into `E` must not leave it behind or the next
+            // JNI call on this thread misreports.
+            env.exception_clear();
+        }
+        Ok(result)
     });
 
     match attached {
@@ -100,40 +106,37 @@ where
     }
 }
 
-/// A Kotlin helper class shipped with a crate as an embedded DEX.
+/// A Kotlin helper class shipped with a crate on the application's classpath.
 ///
 /// Declare one with [`dex_helper!`](crate::dex_helper) and reach for
-/// [`DexHelper::class`] at each call site. On first use the DEX goes to an
-/// `InMemoryDexClassLoader` - nothing is written to disk - and the loaded class
-/// is kept as a global reference, which also keeps its defining loader alive, so
-/// every later call is a plain lookup.
+/// [`DexHelper::class`] at each call site. The class is resolved through the
+/// application `Context`'s `ClassLoader` - the same loader the app's own code
+/// uses - and kept as a global reference, so every later call is a plain
+/// lookup.
 #[derive(Debug)]
 pub struct DexHelper {
-    dex: &'static [u8],
     class_name: &'static str,
     class: OnceLock<Global<JClass<'static>>>,
 }
 
 impl DexHelper {
-    /// Declares the helper class a crate loads from its embedded DEX.
+    /// Declares the helper class a crate resolves at run time.
     ///
-    /// Prefer [`dex_helper!`](crate::dex_helper), which fills in the DEX that
-    /// [`build_kotlin`](crate::build_kotlin) produced.
+    /// Prefer [`dex_helper!`](crate::dex_helper).
     #[must_use]
-    pub const fn new(dex: &'static [u8], class_name: &'static str) -> Self {
+    pub const fn new(class_name: &'static str) -> Self {
         Self {
-            dex,
             class_name,
             class: OnceLock::new(),
         }
     }
 
-    /// Returns the helper class, loading the embedded DEX on first use.
+    /// Returns the helper class, loading it on first use.
     ///
     /// # Errors
     ///
-    /// Returns [`AndroidError`] if the DEX cannot be loaded or does not contain
-    /// the class.
+    /// Returns [`AndroidError`] if the class is not on the application's
+    /// classpath.
     pub fn class(
         &self,
         env: &mut Env<'_>,
@@ -152,49 +155,51 @@ impl DexHelper {
         env: &mut Env<'_>,
         context: &JObject<'_>,
     ) -> Result<Global<JClass<'static>>, AndroidError> {
-        let parent_loader = env
-            .call_method(
-                context,
-                jni_str!("getClassLoader"),
-                jni_sig!("()Ljava/lang/ClassLoader;"),
-                &[],
-            )?
-            .l()?;
+        let loaded = (|| -> jni::errors::Result<Global<JClass<'static>>> {
+            let class_loader = env
+                .call_method(
+                    context,
+                    jni_str!("getClassLoader"),
+                    jni_sig!("()Ljava/lang/ClassLoader;"),
+                    &[],
+                )?
+                .l()?;
 
-        let dex_bytes = JObject::from(env.byte_array_from_slice(self.dex)?);
-        let dex_buffer = env
-            .call_static_method(
-                jni_str!("java/nio/ByteBuffer"),
-                jni_str!("wrap"),
-                jni_sig!("([B)Ljava/nio/ByteBuffer;"),
-                &[JValue::Object(&dex_bytes)],
-            )?
-            .l()?;
-        let class_loader = env.new_object(
-            jni_str!("dalvik/system/InMemoryDexClassLoader"),
-            jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
-            &[JValue::Object(&dex_buffer), JValue::Object(&parent_loader)],
-        )?;
-
-        let class_name = env.new_string(self.class_name)?;
-        let class = env
-            .call_method(
-                &class_loader,
-                jni_str!("loadClass"),
-                jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-                &[JValue::Object(&class_name)],
-            )?
-            .l()?;
-        let class = env.cast_local::<JClass>(class)?;
-        Ok(env.new_global_ref(class)?)
+            let class_name = env.new_string(self.class_name)?;
+            let class = env
+                .call_method(
+                    &class_loader,
+                    jni_str!("loadClass"),
+                    jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
+                    &[JValue::Object(&class_name)],
+                )?
+                .l()?;
+            let class = env.cast_local::<JClass>(class)?;
+            env.new_global_ref(class)
+        })();
+        match loaded {
+            Ok(class) => Ok(class),
+            Err(error) => {
+                // `ClassLoader.loadClass` throws a `ClassNotFoundException` for
+                // an un-staged helper, and the exception stays pending on the
+                // thread after the error converts. Clear it: the callers map
+                // this to a Rust error, so the thread must stay usable for the
+                // next JNI call.
+                if env.exception_check() {
+                    env.exception_clear();
+                }
+                Err(error.into())
+            }
+        }
     }
 }
 
-/// Declares the [`DexHelper`] for the DEX this crate's build script produced.
+/// Declares the [`DexHelper`] for a Kotlin helper class the crate ships on the
+/// application's classpath.
 ///
-/// Pairs with [`build_kotlin`](crate::build_kotlin): the build script writes
-/// `$OUT_DIR/classes.dex`, and this macro embeds exactly that file, so the path
-/// convention never leaks into capability crates.
+/// The crate's manifest lists the helper's sources under
+/// `[package.metadata.waterui.android]`; the packager compiles them into the
+/// application's DEX, and this macro names the class to resolve.
 ///
 /// ```ignore
 /// use waterkit_build::{DexHelper, dex_helper};
@@ -204,10 +209,7 @@ impl DexHelper {
 #[macro_export]
 macro_rules! dex_helper {
     ($class_name:literal) => {
-        $crate::DexHelper::new(
-            include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex")),
-            $class_name,
-        )
+        $crate::DexHelper::new($class_name)
     };
 }
 

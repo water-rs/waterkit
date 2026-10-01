@@ -12,12 +12,17 @@ use jni::{Env, EnvUnowned, JavaVM, jni_sig, jni_str};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+use waterkit_build::{AndroidError, DexHelper, dex_helper};
 
-/// Embedded DEX bytecode containing `DialogHelper` class.
-static DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
+/// `waterkit.dialog.DialogHelper`, compiled into the app's DEX by the packager
+/// and resolved through the application's `ClassLoader`.
+static HELPER: DexHelper = dex_helper!("waterkit.dialog.DialogHelper");
 
-/// Cached class loader.
-static CLASS_LOADER: OnceLock<Global<JObject<'static>>> = OnceLock::new();
+impl From<AndroidError> for DialogError {
+    fn from(error: AndroidError) -> Self {
+        Self::PlatformError(error.to_string())
+    }
+}
 
 /// Opaque handle to a selected media item (URI string).
 #[derive(Debug, Clone)]
@@ -152,113 +157,6 @@ pub extern "system" fn Java_waterkit_dialog_DialogHelper_onFilePickerMultipleRes
     .resolve::<ThrowRuntimeExAndDefault>();
 }
 
-/// Initialize the DEX class loader. Must be called with a valid Context.
-///
-/// # Errors
-/// Returns an error if JNI operations fail.
-pub fn init_with_context(env: &mut Env<'_>, context: &JObject) -> Result<(), DialogError> {
-    if CLASS_LOADER.get().is_some() {
-        return Ok(());
-    }
-
-    let cache_dir = env
-        .call_method(
-            context,
-            jni_str!("getCacheDir"),
-            jni_sig!("()Ljava/io/File;"),
-            &[],
-        )?
-        .l()
-        .map_err(|e| DialogError::PlatformError(format!("getCacheDir: {e}")))?;
-
-    let cache_path = env
-        .call_method(
-            &cache_dir,
-            jni_str!("getAbsolutePath"),
-            jni_sig!("()Ljava/lang/String;"),
-            &[],
-        )?
-        .l()
-        .map_err(|e| DialogError::PlatformError(format!("getAbsolutePath: {e}")))?;
-
-    let cache_path_string = env
-        .as_cast::<JString>(&cache_path)
-        .and_then(|path| path.try_to_string(env))
-        .map_err(|e| DialogError::PlatformError(format!("decode cache path: {e}")))?;
-    let dex_path = format!("{cache_path_string}/waterkit_dialog.dex");
-
-    std::fs::write(&dex_path, DEX_BYTES)
-        .map_err(|e| DialogError::PlatformError(format!("write DEX: {e}")))?;
-
-    let dex_path_jstring = env
-        .new_string(&dex_path)
-        .map_err(|e| DialogError::PlatformError(format!("new_string: {e}")))?;
-
-    let parent_loader = env
-        .call_method(
-            context,
-            jni_str!("getClassLoader"),
-            jni_sig!("()Ljava/lang/ClassLoader;"),
-            &[],
-        )?
-        .l()
-        .map_err(|e| DialogError::PlatformError(format!("getClassLoader: {e}")))?;
-
-    let dex_class_loader_class = env
-        .find_class(jni_str!("dalvik/system/DexClassLoader"))
-        .map_err(|e| DialogError::PlatformError(format!("find_class: {e}")))?;
-
-    let class_loader = env
-        .new_object(
-            dex_class_loader_class,
-            jni_sig!(
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V"
-            ),
-            &[
-                JValue::Object(&dex_path_jstring),
-                JValue::Object(&cache_path),
-                JValue::Object(&JObject::null()),
-                JValue::Object(&parent_loader),
-            ],
-        )
-        .map_err(|e| DialogError::PlatformError(format!("new_object: {e}")))?;
-
-    let global_ref = env
-        .new_global_ref(class_loader)
-        .map_err(|e| DialogError::PlatformError(format!("new_global_ref: {e}")))?;
-
-    if CLASS_LOADER.set(global_ref).is_err() {
-        debug_assert!(
-            CLASS_LOADER.get().is_some(),
-            "Class loader set failed but loader is still uninitialized"
-        );
-    }
-    Ok(())
-}
-
-fn get_helper_class<'local>(env: &mut Env<'local>) -> Result<JClass<'local>, DialogError> {
-    let class_loader = CLASS_LOADER
-        .get()
-        .ok_or_else(|| DialogError::PlatformError("Class loader not initialized".into()))?;
-
-    let helper_class_name = env
-        .new_string("waterkit.dialog.DialogHelper")
-        .map_err(|e| DialogError::PlatformError(format!("new_string: {e}")))?;
-
-    let loaded_class = env
-        .call_method(
-            class_loader.as_obj(),
-            jni_str!("loadClass"),
-            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-            &[JValue::Object(&helper_class_name)],
-        )?
-        .l()
-        .map_err(|e| DialogError::PlatformError(format!("loadClass: {e}")))?;
-
-    env.cast_local::<JClass>(loaded_class)
-        .map_err(DialogError::from)
-}
-
 fn ensure_context_global() -> Result<(JavaVM, Global<JObject<'static>>), DialogError> {
     let android_context = ndk_context::android_context();
     let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
@@ -287,8 +185,7 @@ fn launch_photo_picker_with_context(
     context: &JObject,
     media_type: crate::MediaType,
 ) -> Result<oneshot::Receiver<Option<String>>, DialogError> {
-    init_with_context(env, context)?;
-    let helper_class = get_helper_class(env)?;
+    let helper_class = HELPER.class(env, context)?;
 
     let type_int = match media_type {
         crate::MediaType::Image | crate::MediaType::LivePhoto => 0,
@@ -329,8 +226,7 @@ fn launch_file_picker_with_context(
     context: &JObject,
     dialog: &FileDialog,
 ) -> Result<oneshot::Receiver<Option<String>>, DialogError> {
-    init_with_context(env, context)?;
-    let helper_class = get_helper_class(env)?;
+    let helper_class = HELPER.class(env, context)?;
 
     let request_id = NEXT_PICKER_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let request_id_jlong = jlong_from_request_id(request_id)?;
@@ -371,8 +267,7 @@ fn launch_multiple_file_picker_with_context(
     context: &JObject,
     dialog: &FileDialog,
 ) -> Result<oneshot::Receiver<Option<Vec<String>>>, DialogError> {
-    init_with_context(env, context)?;
-    let helper_class = get_helper_class(env)?;
+    let helper_class = HELPER.class(env, context)?;
 
     let request_id = NEXT_PICKER_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let request_id_jlong = jlong_from_request_id(request_id)?;
@@ -423,9 +318,7 @@ pub fn show_alert_with_context(
     context: &JObject,
     dialog: &Dialog,
 ) -> Result<(), DialogError> {
-    init_with_context(env, context)?;
-
-    let helper_class = get_helper_class(env)?;
+    let helper_class = HELPER.class(env, context)?;
 
     let title = env
         .new_string(&dialog.title)
@@ -458,9 +351,7 @@ pub fn show_confirm_with_context(
     context: &JObject,
     dialog: &Dialog,
 ) -> Result<bool, DialogError> {
-    init_with_context(env, context)?;
-
-    let helper_class = get_helper_class(env)?;
+    let helper_class = HELPER.class(env, context)?;
 
     let title = env
         .new_string(&dialog.title)
@@ -514,8 +405,7 @@ pub fn load_media_with_context(
     context: &JObject,
     handle: &Selection,
 ) -> Result<std::path::PathBuf, DialogError> {
-    init_with_context(env, context)?;
-    let helper_class = get_helper_class(env)?;
+    let helper_class = HELPER.class(env, context)?;
 
     let uri_jstr = env
         .new_string(&handle.0)

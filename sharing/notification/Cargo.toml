@@ -40,3 +40,8 @@ serde_json.workspace = true
 
 [build-dependencies]
 waterkit-build.workspace = true
+
+# Android helper classes the packager compiles into the application's
+# classpath (see water-rs/cli's android backend).
+[package.metadata.waterui.android]
+kotlin-sources = ["src/sys/android/NotificationHelper.kt"]

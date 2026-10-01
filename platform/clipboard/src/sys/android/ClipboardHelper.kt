@@ -258,6 +258,42 @@ object ClipboardHelper {
         }
     }
 
+    // ============== Watch Operations ==============
+
+    /**
+     * Register a primary-clip-change listener.
+     *
+     * `OnPrimaryClipChangedListener` is available on every Android version
+     * WaterKit supports (API 11+), and `ClipboardManager` delivers each clip
+     * notification on the main thread — including changes whose MIME type set
+     * matches the previous clip.
+     *
+     * Returns false when the clipboard service is unavailable.
+     */
+    @JvmStatic
+    fun startWatching(
+        context: Context,
+        listener: ClipboardManager.OnPrimaryClipChangedListener
+    ): Boolean {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            ?: return false
+        clipboard.addPrimaryClipChangedListener(listener)
+        return true
+    }
+
+    /**
+     * Unregister a listener previously registered by [startWatching].
+     */
+    @JvmStatic
+    fun stopWatching(
+        context: Context,
+        listener: ClipboardManager.OnPrimaryClipChangedListener
+    ) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            ?: return
+        clipboard.removePrimaryClipChangedListener(listener)
+    }
+
     // ============== Control Operations ==============
 
     @JvmStatic

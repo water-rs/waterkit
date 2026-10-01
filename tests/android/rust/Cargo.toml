@@ -9,7 +9,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 jni.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
+futures.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
 android_logger = "0.15"
 log.workspace = true
 waterkit_content = { path = "../../..", package = "waterkit", default-features = false }

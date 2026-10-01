@@ -145,7 +145,7 @@ fn run_android_awake(crate_path: &Path, toolchain: &AndroidToolchain) -> Result<
 
     info!("{}", "Android libraries built successfully.".green().bold());
 
-    build_android_apk(&root_dir, toolchain)?;
+    build_android_apk(&root_dir, toolchain, feature)?;
     install_android_apk(&root_dir, toolchain)?;
     grant_android_permissions_for_feature(feature, toolchain)?;
     launch_android_test(toolchain)?;
@@ -706,7 +706,7 @@ fn sdk_root_from_adb(adb: &Path) -> Option<PathBuf> {
     platform_tools.parent().map(Path::to_path_buf)
 }
 
-fn build_android_apk(root_dir: &Path, toolchain: &AndroidToolchain) -> Result<()> {
+fn build_android_apk(root_dir: &Path, toolchain: &AndroidToolchain, feature: &str) -> Result<()> {
     info!("{}", "Building Android APK...".yellow().bold());
     let android_dir = root_dir.join("tests/android");
     let gradlew = android_dir.join("gradlew");
@@ -715,6 +715,11 @@ fn build_android_apk(root_dir: &Path, toolchain: &AndroidToolchain) -> Result<()
         .env("ANDROID_HOME", &toolchain.sdk_root)
         .env("ANDROID_SDK_ROOT", &toolchain.sdk_root)
         .arg(":app:assembleDebug")
+        // The app module resolves each crate's
+        // [package.metadata.waterui.android] declarations through cargo
+        // metadata for exactly this feature set (the same channel the water
+        // CLI's classpath staging consumes).
+        .arg(format!("-PwaterkitFeatures={feature}"))
         .status()
         .context("Failed to run Android Gradle build")?;
 

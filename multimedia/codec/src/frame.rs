@@ -212,14 +212,13 @@ impl DecodedFrame {
                 ..
             } => {
                 Self::copy_iosurface_to_buffer(surface, width, height, *layout, output);
-                required_size
             }
             #[cfg(waterkit_software_frames)]
             DecodedFrameInner::Software { ref data, .. } => {
                 output[..data.len()].copy_from_slice(data);
-                required_size
             }
         }
+        required_size
     }
 
     /// Copy `IOSurface` data to a buffer.

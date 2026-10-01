@@ -11,8 +11,8 @@ use std::thread;
 use std::time::Duration;
 use waterkit_build::{AndroidError, DexHelper, decode_string, dex_helper, jvm_and_context};
 
-/// `waterkit.clipboard.ClipboardHelper`, embedded as a DEX by this crate's build script and
-/// loaded on first use.
+/// `waterkit.clipboard.ClipboardHelper`, compiled into the app's DEX by the
+/// packager and resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.clipboard.ClipboardHelper");
 
 impl From<AndroidError> for ClipboardError {
@@ -71,7 +71,7 @@ impl ClipboardInner {
     pub fn new() -> Result<Self, ClipboardError> {
         let (vm, context) = jvm_and_context()?;
 
-        // Load the helper DEX up front so later calls are plain lookups.
+        // Resolve the helper class up front so later calls are plain lookups.
         vm.attach_current_thread(
             |env| -> Result<Result<(), ClipboardError>, jni::errors::Error> {
                 Ok(HELPER

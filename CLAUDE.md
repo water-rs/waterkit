@@ -38,7 +38,7 @@ cargo machete
 
 - **Root crate (`waterkit`)**: Facade that re-exports all modules via feature flags
 - **Functional crates**: `audio`, `biometric`, `camera`, `clipboard`, `codec`, `dialog`, `fs`, `haptic`, `location`, `notification`, `permission`, `screen`, `secret`, `sensor`, `system`, `video`
-- **`waterkit-build`**: Shared build utilities for Swift/Kotlin compilation
+- **`waterkit-build`**: Shared build utilities for Swift compilation and Android helper resolution
 - **`tests/`**: Platform-specific test harnesses (`macos/`, `ios/`, `android/`)
 
 ### Crate Internal Structure
@@ -53,13 +53,13 @@ src/
 │   ├── android/     # JNI/Kotlin
 │   ├── windows/     # windows-rs
 │   └── linux/       # zbus/D-Bus
-└── build.rs         # Swift/Kotlin compilation (if needed)
+└── build.rs         # Swift compilation (if needed)
 ```
 
 ### Platform Bridges
 
 - **Apple (iOS/macOS)**: `swift-bridge` for Swift interop, compiled via `waterkit-build::build_apple_bridge()`
-- **Android**: JNI with Kotlin helpers, compiled via `waterkit-build::build_kotlin()`
+- **Android**: JNI with Kotlin helpers declared in `[package.metadata.waterui.android]` and compiled into the app by the packager
 - **Windows**: `windows-rs` crate for Win32 APIs
 - **Linux**: `zbus` for D-Bus communication
 

@@ -38,3 +38,8 @@ futures = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
 futures.workspace = true
+
+# Android helper classes the packager compiles into the application's
+# classpath (see water-rs/cli's android backend).
+[package.metadata.waterui.android]
+kotlin-sources = ["src/sys/android/HapticHelper.kt"]

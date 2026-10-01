@@ -9,8 +9,4 @@ fn main() {
             println!("cargo:rustc-link-lib=framework=IOKit");
         }
     }
-
-    if target_os == "android" {
-        waterkit_build::build_kotlin(&["src/sys/android/SensorHelper.kt"]);
-    }
 }

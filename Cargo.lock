@@ -8281,6 +8281,7 @@ name = "waterkit-test-android"
 version = "0.1.0"
 dependencies = [
  "android_logger",
+ "futures",
  "jni 0.22.4",
  "log",
  "ndk-context",

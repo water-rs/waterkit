@@ -2,26 +2,27 @@
 
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
+use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{Global, JByteArray, JObject, JValue};
-use jni::{Env, JavaVM, jni_sig, jni_str};
+use jni::{Env, EnvUnowned, JavaVM, jni_sig, jni_str};
+use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::Duration;
 use waterkit_build::{AndroidError, DexHelper, decode_string, dex_helper, jvm_and_context};
 
 /// `waterkit.clipboard.ClipboardHelper`, compiled into the app's DEX by the
 /// packager and resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.clipboard.ClipboardHelper");
 
+/// `waterkit.clipboard.ClipboardWatchCallback`, the per-watcher
+/// `OnPrimaryClipChangedListener` bridge, resolved the same way.
+static WATCH_CALLBACK: DexHelper = dex_helper!("waterkit.clipboard.ClipboardWatchCallback");
+
 impl From<AndroidError> for ClipboardError {
     fn from(error: AndroidError) -> Self {
         Self::Platform(error.to_string())
     }
 }
-
-type ClipboardPresence = (bool, bool, bool, bool);
 
 /// Reads one `(Landroid/content/Context;)Z` probe on the helper.
 fn probe(env: &mut Env<'_>, context: &JObject<'_>, name: &jni::strings::JNIStr) -> bool {
@@ -36,15 +37,6 @@ fn probe(env: &mut Env<'_>, context: &JObject<'_>, name: &jni::strings::JNIStr) 
     )
     .and_then(jni::objects::JValueOwned::z)
     .unwrap_or(false)
-}
-
-fn query_clipboard_presence(env: &mut Env<'_>, context: &JObject<'_>) -> ClipboardPresence {
-    (
-        probe(env, context, jni_str!("hasText")),
-        probe(env, context, jni_str!("hasHtml")),
-        probe(env, context, jni_str!("hasFiles")),
-        probe(env, context, jni_str!("hasImage")),
-    )
 }
 
 fn read_byte_array(env: &Env<'_>, value: JObject<'_>) -> Result<Vec<u8>, ClipboardError> {
@@ -447,58 +439,325 @@ impl ClipboardInner {
     }
 }
 
+/// Rust-side state shared with one registered `ClipboardWatchCallback`.
+///
+/// The Kotlin object holds this address in its `waterkit_watch_state` field
+/// and dereferences it inside `onPrimaryClipChanged`, which is serialized
+/// with `releaseNativeState` on the object's monitor: once release returns,
+/// no queued clip notification can take another reference.
+#[derive(Debug)]
+struct WatchCallbackState {
+    sender: async_channel::Sender<ClipboardEvent>,
+}
+
+// JNI longs transport pointer bits, including Android's high-bit memory tags.
+fn watch_state_handle(state: &Arc<WatchCallbackState>) -> i64 {
+    Arc::as_ptr(state) as i64
+}
+
+/// Reborrows the callback's shared state from its `waterkit_watch_state`
+/// field. Callable only inside `onPrimaryClipChanged`, which holds the
+/// callback object's monitor.
+fn watch_state(env: &mut Env<'_>, callback: &JObject) -> Arc<WatchCallbackState> {
+    let value = env
+        .get_field(callback, jni_str!("waterkit_watch_state"), jni_sig!("J"))
+        .unwrap_or_else(|error| {
+            panic!("waterkit-clipboard: read waterkit_watch_state failed in clip callback: {error}")
+        });
+    let state_handle = value.j().unwrap_or_else(|error| {
+        panic!("waterkit-clipboard: decode waterkit_watch_state failed in clip callback: {error}")
+    });
+    // The private callback receives exactly the pointer bits written at
+    // registration. On 32-bit Android, narrowing restores the original
+    // pointer width; on 64-bit Android, it preserves the memory tag too.
+    let state = state_handle as *const WatchCallbackState;
+    // SAFETY: `onPrimaryClipChanged` runs under the callback object's
+    // monitor, serialized with `releaseNativeState`; the owning
+    // `WatchSession` keeps the original Arc alive until that synchronized
+    // release returns.
+    unsafe {
+        Arc::increment_strong_count(state);
+        Arc::from_raw(state)
+    }
+}
+
+/// Owns one registered `OnPrimaryClipChangedListener` and the Rust state it
+/// reports to.
+///
+/// Dropping the session unregisters the listener and releases the callback
+/// state, so the stream's channel closes once `stop()` runs or the owning
+/// `WatcherShutdown` is dropped.
+#[derive(Debug)]
+pub struct WatchSession {
+    vm: JavaVM,
+    context: Global<JObject<'static>>,
+    registration: Option<WatchRegistration>,
+}
+
+/// Owns the allocation while Java may dereference it. `state` becomes `None`
+/// immediately after synchronized native release, independently of listener
+/// removal or attachment-scope completion. Until then, unwinding must retain
+/// the allocation, even if the caller catches the cleanup panic.
+#[derive(Debug)]
+struct WatchRegistration {
+    callback: Global<JObject<'static>>,
+    state: Option<ManuallyDrop<Arc<WatchCallbackState>>>,
+}
+
+/// Preserve a Java throwable's diagnostics and clear it before further JNI
+/// work. Querying the throwable can itself throw, so clear that exception too.
+fn watch_jni_error(env: &Env<'_>, operation: &str, error: &jni::errors::Error) -> ClipboardError {
+    let caught = env.exception_catch().err();
+    env.exception_clear();
+    let detail = caught.map_or_else(
+        || error.to_string(),
+        |caught| format!("{error}; {caught:?}"),
+    );
+    ClipboardError::Platform(format!("{operation}: {detail}"))
+}
+
+/// Tear down a watch's Java side while `state` is still owned.
+///
+/// Order is load-bearing: `releaseNativeState` zeroes `waterkit_watch_state`
+/// under the same callback monitor that serializes
+/// `onPrimaryClipChanged`, so once it returns no queued clip notification
+/// can take another reference into `state`. Only then may `state` be
+/// dropped. Unregistering the listener comes last.
+///
+/// If release fails, the registration retains its allocation through unwind;
+/// callers report cleanup failures by panic. If removal fails after release,
+/// the listener is inert and the allocation has already been dropped.
+fn teardown_watch(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+    registration: &mut WatchRegistration,
+) -> Result<(), ClipboardError> {
+    env.call_method(
+        registration.callback.as_obj(),
+        jni_str!("releaseNativeState"),
+        jni_sig!("()V"),
+        &[],
+    )
+    .map_err(|error| watch_jni_error(env, "releaseNativeState", &error))?;
+    drop(registration.state.take().map(ManuallyDrop::into_inner));
+
+    let helper = HELPER.class(env, context).map_err(|error| {
+        ClipboardError::Platform(format!(
+            "resolve clipboard helper for listener removal: {error}"
+        ))
+    })?;
+    env.call_static_method(
+        helper,
+        jni_str!("stopWatching"),
+        jni_sig!(
+            "(Landroid/content/Context;Landroid/content/ClipboardManager$OnPrimaryClipChangedListener;)V"
+        ),
+        &[
+            JValue::Object(context),
+            JValue::Object(registration.callback.as_obj()),
+        ],
+    )
+    .map_err(|error| watch_jni_error(env, "stopWatching", &error))?;
+    Ok(())
+}
+
+impl WatchSession {
+    /// Stop watching: release the callback's native state under its monitor,
+    /// unregister the listener, and drop our JNI references.
+    pub fn stop(mut self) {
+        self.shutdown();
+    }
+
+    fn shutdown(&mut self) {
+        let Some(mut registration) = self.registration.take() else {
+            return;
+        };
+
+        // Keep the operation result outside the closure: attachment-scope
+        // completion may fail after teardown has already run.
+        let mut teardown = None;
+        let attachment = self
+            .vm
+            .attach_current_thread(|env| -> jni::errors::Result<()> {
+                teardown = Some(teardown_watch(
+                    env,
+                    self.context.as_obj(),
+                    &mut registration,
+                ));
+                Ok(())
+            });
+        if let Err(error) = attachment {
+            let phase = if registration.state.is_some() {
+                "before native state release; allocation retained"
+            } else {
+                "after native state release"
+            };
+            panic!(
+                "waterkit-clipboard: JVM attachment scope for watch teardown failed {phase}: {error}; teardown result: {teardown:?}"
+            );
+        }
+        if let Some(Err(error)) = teardown {
+            panic!("waterkit-clipboard: watch teardown failed: {error}");
+        }
+    }
+}
+
+impl Drop for WatchSession {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+fn register_watch(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+    state: Arc<WatchCallbackState>,
+) -> Result<WatchRegistration, ClipboardError> {
+    let helper = HELPER.class(env, context)?;
+    let callback_class = WATCH_CALLBACK.class(env, context)?;
+
+    let callback = env
+        .new_object(
+            callback_class,
+            jni_sig!("(Landroid/content/Context;)V"),
+            &[JValue::Object(context)],
+        )
+        .map_err(|error| watch_jni_error(env, "new ClipboardWatchCallback", &error))?;
+
+    env.set_field(
+        &callback,
+        jni_str!("waterkit_watch_state"),
+        jni_sig!("J"),
+        JValue::Long(watch_state_handle(&state)),
+    )
+    .map_err(|error| watch_jni_error(env, "set waterkit_watch_state", &error))?;
+
+    // Globalize before registering: once `startWatching` succeeds the
+    // listener is armed and every later failure must still reach this
+    // callback for teardown.
+    let callback = env
+        .new_global_ref(&callback)
+        .map_err(|error| watch_jni_error(env, "new_global_ref callback", &error))?;
+
+    // From this point Java may publish the pointer even if registration
+    // throws. Only confirmed release (or false before registration) permits
+    // dropping this Arc, including on Rust unwind.
+    let mut registration = WatchRegistration {
+        callback,
+        state: Some(ManuallyDrop::new(state)),
+    };
+
+    match env
+        .call_static_method(
+            helper,
+            jni_str!("startWatching"),
+            jni_sig!(
+                "(Landroid/content/Context;Landroid/content/ClipboardManager$OnPrimaryClipChangedListener;)Z"
+            ),
+            &[
+                JValue::Object(context),
+                JValue::Object(registration.callback.as_obj()),
+            ],
+        )
+        .and_then(jni::objects::JValueOwned::z)
+    {
+        Ok(true) => Ok(registration),
+        // `startWatching` returns false only before adding the listener, so
+        // the armed pointer is unreachable and `state` drops normally.
+        Ok(false) => {
+            drop(registration.state.take().map(ManuallyDrop::into_inner));
+            Err(ClipboardError::Unavailable)
+        }
+        Err(error) => {
+            // The call may have registered the listener before throwing:
+            // capture and clear the throwable before making any cleanup call.
+            let error = watch_jni_error(env, "startWatching", &error);
+            if let Err(cleanup) = teardown_watch(env, context, &mut registration) {
+                panic!(
+                    "waterkit-clipboard: registration failed: {error}; watch teardown also failed: {cleanup}"
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
 /// Start watching clipboard changes.
 ///
-/// Uses polling since Android doesn't have a native clipboard change listener
-/// that works across all API levels.
-/// Returns a receiver and a stop flag.
+/// Registers a `ClipboardManager.OnPrimaryClipChangedListener` (available on
+/// every API level `WaterKit` supports; callbacks arrive on the main thread).
+/// Every clip notification emits a [`ClipboardEvent`], including changes
+/// whose type set matches the previous clip.
+///
+/// Returns a receiver that yields `ClipboardEvent`s and the session that
+/// owns the registered listener.
+///
+/// # Errors
+///
+/// Returns [`ClipboardError::Unavailable`] if the clipboard service cannot be
+/// reached, or [`ClipboardError::Platform`] if the JNI bridge fails.
 ///
 /// # Panics
 ///
 /// Panics if the Android context is not available via `ndk_context`.
-pub fn start_watch() -> (async_channel::Receiver<ClipboardEvent>, Arc<AtomicBool>) {
-    let (sender, receiver) = async_channel::unbounded();
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_clone = Arc::clone(&stop);
-
-    // Get context for the watcher thread
+pub fn start_watch()
+-> Result<(async_channel::Receiver<ClipboardEvent>, WatchSession), ClipboardError> {
     let (vm, context) = jvm_and_context().unwrap_or_else(|error| {
         panic!("waterkit-clipboard: failed to resolve the Android context for watching: {error}")
     });
 
-    thread::spawn(move || {
-        let _ = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
-            let mut last_has_text = false;
-            let mut last_has_html = false;
-            let mut last_has_files = false;
-            let mut last_has_image = false;
+    let (sender, receiver) = async_channel::unbounded();
+    let state = Arc::new(WatchCallbackState { sender });
 
-            while !stop_clone.load(Ordering::SeqCst) {
-                thread::sleep(Duration::from_millis(500));
-
-                let (has_text, has_html, has_files, has_image) =
-                    query_clipboard_presence(env, context.as_obj());
-
-                // Only send event if types changed
-                if has_text != last_has_text
-                    || has_html != last_has_html
-                    || has_files != last_has_files
-                    || has_image != last_has_image
-                {
-                    last_has_text = has_text;
-                    last_has_html = has_html;
-                    last_has_files = has_files;
-                    last_has_image = has_image;
-
-                    let event = ClipboardEvent::new(has_text, has_html, has_files, has_image);
-                    if sender.try_send(event).is_err() {
-                        break;
-                    }
-                }
+    let mut session = WatchSession {
+        vm,
+        context,
+        registration: None,
+    };
+    let mut registration_error = None;
+    let attachment = session
+        .vm
+        .attach_current_thread(|env| -> jni::errors::Result<()> {
+            match register_watch(env, session.context.as_obj(), state) {
+                Ok(registration) => session.registration = Some(registration),
+                Err(error) => registration_error = Some(error),
             }
             Ok(())
         });
-    });
+    // The session owns a successful registration before attachment-scope
+    // completion. If that completion fails or unwinds, Drop still tears it
+    // down instead of dropping an Arc whose address Java can still reach.
+    if let Err(error) = attachment {
+        return Err(ClipboardError::Platform(format!(
+            "JVM attachment scope for watch registration failed: {error}; registration error: {registration_error:?}"
+        )));
+    }
+    if let Some(error) = registration_error {
+        return Err(error);
+    }
+    Ok((receiver, session))
+}
 
-    (receiver, stop)
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_waterkit_clipboard_ClipboardWatchCallback_onPrimaryClipChangedNative<
+    'caller,
+>(
+    mut env: EnvUnowned<'caller>,
+    callback: JObject<'caller>,
+    has_text: jni::sys::jboolean,
+    has_html: jni::sys::jboolean,
+    has_files: jni::sys::jboolean,
+    has_image: jni::sys::jboolean,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let state = watch_state(env, &callback);
+        // A failed send means the receiver is gone; the session's stop path
+        // releases this state shortly after, so dropping the event is the
+        // extent of the failure.
+        let _ = state.sender.try_send(ClipboardEvent::new(
+            has_text, has_html, has_files, has_image,
+        ));
+        Ok(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>();
 }

@@ -30,12 +30,11 @@ import kotlinx.coroutines.runBlocking
 object HealthHelper {
     @JvmStatic
     fun isAvailable(): Boolean {
-        return try {
-            Class.forName("androidx.health.connect.client.HealthConnectClient")
-            true
-        } catch (e: ClassNotFoundException) {
-            false
-        }
+        // The Health Connect client is the crate's declared Maven dependency:
+        // the helper references it statically, so its presence in the dex is a
+        // compile-time fact — a `Class.forName` probe would report false under
+        // R8 obfuscation even though the class ships in the APK.
+        return true
     }
 
     @JvmStatic

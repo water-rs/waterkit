@@ -1,9 +1,10 @@
 //! Android biometric authentication implementation using JNI.
 
+use crate::sys::android_result::authenticate_result;
 use crate::{BiometricError, BiometricType};
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{Global, JClass, JObject, JString, JValue};
-use jni::sys::{jboolean, jlong};
+use jni::sys::{jboolean, jint, jlong};
 use jni::{Env, EnvUnowned, jni_sig, jni_str};
 use waterkit_build::{AndroidError, DexHelper, dex_helper, with_android_context};
 
@@ -52,22 +53,24 @@ pub extern "system" fn Java_waterkit_biometric_BiometricHelper_onResult<'local>(
     _class: JClass<'local>,
     callback_ptr: jlong,
     success: jboolean,
+    error_code: jint,
     error_msg: JString<'local>,
 ) {
     env.with_env(|env| -> jni::errors::Result<()> {
-        let sender_ptr = callback_ptr as *mut BiometricSender;
         // SAFETY: `authenticate_with_context` leaked exactly one `Box` per call
         // and Java hands that same pointer back exactly once.
-        let sender = unsafe { Box::from_raw(sender_ptr) };
-
-        if success {
-            let error = error_msg
-                .try_to_string(env)
-                .unwrap_or_else(|_| String::from("Unknown JNI error"));
-            let _ = sender.send(Err(BiometricError::Failed(error)));
+        let sender = unsafe { Box::from_raw(callback_ptr as *mut BiometricSender) };
+        let result = if success {
+            authenticate_result(success, error_code, None)
         } else {
-            let _ = sender.send(Ok(()));
-        }
+            match error_msg.try_to_string(env) {
+                Ok(message) => authenticate_result(success, error_code, Some(message)),
+                Err(jni_error) => Err(BiometricError::Platform(format!(
+                    "biometric failure message decode: {jni_error}"
+                ))),
+            }
+        };
+        let _ = sender.send(result);
         Ok(())
     })
     .resolve::<ThrowRuntimeExAndDefault>();
@@ -142,13 +145,13 @@ pub fn authenticate_with_context(
 ) -> Result<tokio::sync::oneshot::Receiver<Result<(), BiometricError>>, BiometricError> {
     let class = helper_class(env, context)?;
 
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let sender_box = Box::new(tx);
-    let sender_ptr = Box::into_raw(sender_box) as jlong;
-
     let reason_jstr = env
         .new_string(reason)
         .map_err(|e| BiometricError::Platform(format!("new_string: {e}")))?;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let sender_box = Box::new(tx);
+    let sender_ptr = Box::into_raw(sender_box) as jlong;
 
     env.call_static_method(
         class,

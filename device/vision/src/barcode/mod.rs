@@ -19,6 +19,7 @@
 //! non-symbol content produce no diagnostics.
 
 mod ean;
+mod qr;
 
 use std::fmt;
 
@@ -72,8 +73,10 @@ impl Formats {
     /// UPC-A. Decoded through the EAN-13 pipeline; results whose first
     /// digit is `0` are reported as [`Symbology::UpcA`].
     pub const UPCA: Self = Self(1 << 1);
+    /// QR Code Model 2 (ISO/IEC 18004), versions 1-10.
+    pub const QR: Self = Self(1 << 2);
     /// Every implemented format.
-    pub const ALL: Self = Self(Self::EAN13.0 | Self::UPCA.0);
+    pub const ALL: Self = Self(Self::EAN13.0 | Self::UPCA.0 | Self::QR.0);
 
     /// Empty set.
     #[must_use]
@@ -104,7 +107,11 @@ impl fmt::Debug for Formats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut first = true;
         f.write_str("Formats(")?;
-        for (bits, name) in [(Self::EAN13.0, "EAN13"), (Self::UPCA.0, "UPCA")] {
+        for (bits, name) in [
+            (Self::EAN13.0, "EAN13"),
+            (Self::UPCA.0, "UPCA"),
+            (Self::QR.0, "QR"),
+        ] {
             if self.0 & bits != 0 {
                 if !first {
                     f.write_str(" | ")?;
@@ -218,6 +225,25 @@ pub enum RejectReason {
         /// Where the mismatch occurred.
         stage: Stage,
     },
+    /// Reed-Solomon correction failed on at least one block.
+    ErrorCorrectionFailed {
+        /// Number of blocks the symbol was split into.
+        blocks: u8,
+    },
+    /// A segment-mode identifier with no decoder path (Kanji, Hanzi,
+    /// or a reserved mode).
+    ModeInvalid {
+        /// Bit offset of the mode indicator in the stream.
+        bit: u32,
+        /// The 4-bit mode value.
+        mode: u8,
+    },
+    /// Payload bytes failed interpretation (bad charset data or an
+    /// out-of-range group value).
+    DataUndecodable {
+        /// Bit offset of the failing segment.
+        bit: u32,
+    },
 }
 
 /// Quiet-zone side for [`RejectReason::QuietZone`].
@@ -228,6 +254,10 @@ pub enum QuietSide {
     Left,
     /// Right (or bottom) margin.
     Right,
+    /// Top margin (matrix codes).
+    Top,
+    /// Bottom margin (matrix codes).
+    Bottom,
 }
 
 /// Decode stage for stage-scoped rejections.
@@ -244,6 +274,20 @@ pub enum Stage {
     RightDigits,
     /// End guard.
     EndGuard,
+    /// Symbol dimension estimation (matrix codes).
+    Dimension,
+    /// Alignment-pattern search.
+    Alignment,
+    /// Timing-pattern check.
+    Timing,
+    /// Format information decode.
+    FormatInfo,
+    /// Version information decode.
+    VersionInfo,
+    /// Codeword extraction.
+    Codewords,
+    /// Segment stream parsing.
+    Segments,
 }
 
 /// One rejected decode candidate with its reason.
@@ -352,6 +396,9 @@ impl BarcodeEngine {
 
     /// Run all enabled decoders over `bits`, appending to `report`.
     fn decode_bits(&self, bits: &BitImage, frame: &CpuFrame<'_>, report: &mut DecodeReport) {
+        if self.formats.contains(Formats::QR) {
+            qr::decode(bits, self.options.axes, frame, report);
+        }
         let axes = self.options.axes;
         let mut hits: Vec<(u32, ean::RowHit, bool)> = Vec::new(); // (line, hit, vertical)
 
@@ -414,6 +461,7 @@ impl Symbology {
         match self {
             Self::Ean13 => Formats::EAN13,
             Self::UpcA => Formats::UPCA,
+            Self::QrCode => Formats::QR,
             _ => Formats::empty(),
         }
     }

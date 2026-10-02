@@ -10,6 +10,11 @@
 //!   mod-10 checksum validation, multi-code results deterministically
 //!   ordered by source geometry. No heuristic fallbacks: a row that fails
 //!   validation is rejected with a structured [`RejectReason`].
+//! * **QR Code Model 2** — versions 1-10, all four error-correction
+//!   levels, numeric/alphanumeric/byte modes: scanline finder detection
+//!   with cross-checks, perspective rectification through
+//!   [`Homography`], BCH format/version information, mask evaluation,
+//!   Reed-Solomon correction and quiet-zone validation, all in-crate.
 //! * **Frame types** — [`CpuFrame`]: a borrowed, typed CPU plane view with
 //!   stride, format, dimensions, timestamp and orientation metadata.
 //! * **Stream API** — [`BarcodeScanner`]: bounded in-flight work (latest
@@ -18,7 +23,7 @@
 //!
 //! ## Not implemented (explicit)
 //!
-//! QR Code, Data Matrix, Aztec, PDF417, EAN-8, UPC-E, Code 128, Code 39,
+//! Data Matrix, Aztec, PDF417, EAN-8, UPC-E, Code 128, Code 39,
 //! ITF and all other symbologies are **not** decoded: they are absent from
 //! [`Formats`], so they cannot be requested. GPU frame input, the
 //! `waterkit-camera` adapter and the OCR pipeline are not part of this

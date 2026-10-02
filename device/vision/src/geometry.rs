@@ -3,6 +3,13 @@
 //! All coordinates are floating-point pixels in the coordinate space of the
 //! frame they were measured in (buffer space unless documented otherwise).
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::similar_names,
+    clippy::suboptimal_flops,
+    clippy::needless_range_loop
+)]
+
 use std::ops::{Add, Div, Mul, Sub};
 
 /// A 2D point in pixel coordinates.
@@ -154,7 +161,7 @@ impl Quadrilateral {
 
     /// Minimum x coordinate of the quadrilateral.
     #[must_use]
-    pub fn min_x(&self) -> f64 {
+    pub const fn min_x(&self) -> f64 {
         self.top_left
             .x
             .min(self.top_right.x)
@@ -164,7 +171,7 @@ impl Quadrilateral {
 
     /// Minimum y coordinate of the quadrilateral.
     #[must_use]
-    pub fn min_y(&self) -> f64 {
+    pub const fn min_y(&self) -> f64 {
         self.top_left
             .y
             .min(self.top_right.y)
@@ -174,7 +181,7 @@ impl Quadrilateral {
 
     /// Maximum x coordinate of the quadrilateral.
     #[must_use]
-    pub fn max_x(&self) -> f64 {
+    pub const fn max_x(&self) -> f64 {
         self.top_left
             .x
             .max(self.top_right.x)
@@ -184,7 +191,7 @@ impl Quadrilateral {
 
     /// Maximum y coordinate of the quadrilateral.
     #[must_use]
-    pub fn max_y(&self) -> f64 {
+    pub const fn max_y(&self) -> f64 {
         self.top_left
             .y
             .max(self.top_right.y)

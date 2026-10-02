@@ -1,14 +1,16 @@
 //! Internal raster types: luminance extraction, adaptive binarization and
 //! a packed bit image with run-length row access.
 
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use crate::{CpuFrame, FrameFormat};
 
 /// A single-channel 8-bit luminance image.
 #[derive(Debug, Clone)]
-pub(crate) struct GrayImage {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) data: Vec<u8>,
+pub struct GrayImage {
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>,
 }
 
 impl GrayImage {
@@ -17,7 +19,7 @@ impl GrayImage {
     /// Packed RGB formats are converted with integer BT.601 weights;
     /// planar YUV formats reuse the luma plane directly (subsampled chroma
     /// is ignored).
-    pub(crate) fn from_cpu_frame(frame: &CpuFrame<'_>) -> Self {
+    pub fn from_cpu_frame(frame: &CpuFrame<'_>) -> Self {
         let (w, h) = (frame.width() as usize, frame.height() as usize);
         let plane = frame.plane0();
         let mut data = vec![0u8; w * h];
@@ -31,15 +33,18 @@ impl GrayImage {
             FrameFormat::Rgb8 | FrameFormat::Bgr8 | FrameFormat::Rgba8 | FrameFormat::Bgra8 => {
                 let bpp = frame.format().plane0_bytes_per_pixel();
                 let red_first = frame.format().is_red_first();
-                let (ri, bi) = if red_first { (0usize, 2usize) } else { (2usize, 0usize) };
+                let (ri, bi) = if red_first {
+                    (0usize, 2usize)
+                } else {
+                    (2usize, 0usize)
+                };
                 for (y, row) in data.chunks_exact_mut(w).enumerate() {
                     let src = &plane.data[y * plane.stride..y * plane.stride + w * bpp];
                     for (x, px) in row.iter_mut().enumerate() {
                         let p = &src[x * bpp..x * bpp + bpp];
                         // BT.601: 0.299 R + 0.587 G + 0.114 B in fixed point.
-                        let luma = u32::from(p[ri]) * 77
-                            + u32::from(p[1]) * 150
-                            + u32::from(p[bi]) * 29;
+                        let luma =
+                            u32::from(p[ri]) * 77 + u32::from(p[1]) * 150 + u32::from(p[bi]) * 29;
                         *px = (luma >> 8) as u8;
                     }
                 }
@@ -51,27 +56,19 @@ impl GrayImage {
             data,
         }
     }
-
-    /// Luminance at `(x, y)`; `0` out of bounds.
-    pub(crate) fn get(&self, x: u32, y: u32) -> u8 {
-        if x >= self.width || y >= self.height {
-            return 0;
-        }
-        self.data[y as usize * self.width as usize + x as usize]
-    }
 }
 
 /// A packed binary image (`true` = dark module / bar).
 #[derive(Debug, Clone)]
-pub(crate) struct BitImage {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
+pub struct BitImage {
+    pub width: u32,
+    pub height: u32,
     row_words: usize,
     words: Vec<u64>,
 }
 
 impl BitImage {
-    pub(crate) fn new(width: u32, height: u32) -> Self {
+    pub fn new(width: u32, height: u32) -> Self {
         let row_words = (width as usize).div_ceil(64);
         Self {
             width,
@@ -82,7 +79,7 @@ impl BitImage {
     }
 
     /// Bit at `(x, y)`; `false` out of bounds.
-    pub(crate) fn get(&self, x: u32, y: u32) -> bool {
+    pub fn get(&self, x: u32, y: u32) -> bool {
         if x >= self.width || y >= self.height {
             return false;
         }
@@ -90,7 +87,7 @@ impl BitImage {
         (word >> (63 - x % 64)) & 1 == 1
     }
 
-    pub(crate) fn set(&mut self, x: u32, y: u32, v: bool) {
+    pub fn set(&mut self, x: u32, y: u32, v: bool) {
         let idx = y as usize * self.row_words + x as usize / 64;
         let mask = 1u64 << (63 - x % 64);
         if v {
@@ -102,7 +99,7 @@ impl BitImage {
 
     /// Run-length profile of row `y`: one [`Run`] per maximal same-value
     /// span, in column order, starting with whatever the first pixel is.
-    pub(crate) fn row_runs(&self, y: u32) -> Vec<Run> {
+    pub fn row_runs(&self, y: u32) -> Vec<Run> {
         let mut runs = Vec::new();
         if y >= self.height {
             return runs;
@@ -130,7 +127,7 @@ impl BitImage {
     }
 
     /// Run-length profile of column `x`, top to bottom.
-    pub(crate) fn column_runs(&self, x: u32) -> Vec<Run> {
+    pub fn column_runs(&self, x: u32) -> Vec<Run> {
         let mut runs = Vec::new();
         if x >= self.width {
             return runs;
@@ -160,13 +157,13 @@ impl BitImage {
 
 /// One maximal same-value run along a scanline.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Run {
+pub struct Run {
     /// `true` when the run is dark (a bar).
-    pub(crate) dark: bool,
+    pub dark: bool,
     /// Pixel offset of the run's first pixel along the axis.
-    pub(crate) start: u32,
+    pub start: u32,
     /// Run length in pixels.
-    pub(crate) len: u32,
+    pub len: u32,
 }
 
 /// Adaptive local-mean binarization.
@@ -176,12 +173,12 @@ pub(crate) struct Run {
 /// A pixel is dark when `lum < mean * (1 - bias)`; `bias` defaults to 0.15
 /// here. Low-variance windows fall back to the global mean, which keeps
 /// uniform backgrounds quiet.
-pub(crate) fn binarize(gray: &GrayImage) -> BitImage {
+pub fn binarize(gray: &GrayImage) -> BitImage {
     binarize_with_bias(gray, 0.15)
 }
 
 /// Binarize with an explicit contrast bias.
-pub(crate) fn binarize_with_bias(gray: &GrayImage, bias: f64) -> BitImage {
+pub fn binarize_with_bias(gray: &GrayImage, bias: f64) -> BitImage {
     let (w, h) = (gray.width as usize, gray.height as usize);
     // Summed-area table in u64: sat[y][x] = sum of pixels with x' < x, y' < y.
     let mut sat = vec![0u64; (w + 1) * (h + 1)];
@@ -213,7 +210,10 @@ pub(crate) fn binarize_with_bias(gray: &GrayImage, bias: f64) -> BitImage {
             } else {
                 mean
             };
-            let dark = f64::from(gray.data[y * w + x]) < threshold * (1.0 - bias);
+            // A uniformly dark window pulls the mean down to the pixel
+            // value itself; floor the threshold at the global mean so a
+            // bar interior stays dark.
+            let dark = f64::from(gray.data[y * w + x]) < threshold.max(global_mean) * (1.0 - bias);
             out.set(x as u32, y as u32, dark);
         }
     }
@@ -221,7 +221,7 @@ pub(crate) fn binarize_with_bias(gray: &GrayImage, bias: f64) -> BitImage {
 }
 
 /// Inverted copy of a bit image (dark <-> light).
-pub(crate) fn invert(src: &BitImage) -> BitImage {
+pub fn invert(src: &BitImage) -> BitImage {
     let mut out = src.clone();
     for w in &mut out.words {
         *w = !*w;
@@ -260,14 +260,9 @@ mod tests {
         img.set(3, 1, true);
         img.set(7, 1, true);
         let runs = img.row_runs(1);
-        assert_eq!(runs.len(), 4);
-        assert_eq!(
-            (runs[1].dark, runs[1].start, runs[1].len),
-            (true, 2, 2)
-        );
-        assert_eq!(
-            (runs[3].dark, runs[3].start, runs[3].len),
-            (true, 7, 1)
-        );
+        // light[0..2] dark[2..4] light[4..7] dark[7..8] light[8..10]
+        assert_eq!(runs.len(), 5);
+        assert_eq!((runs[1].dark, runs[1].start, runs[1].len), (true, 2, 2));
+        assert_eq!((runs[3].dark, runs[3].start, runs[3].len), (true, 7, 1));
     }
 }

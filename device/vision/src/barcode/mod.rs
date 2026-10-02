@@ -20,8 +20,6 @@
 
 mod ean;
 
-pub(crate) use ean::SymbologyRef;
-
 use std::fmt;
 
 use waterkit_core::Timestamp;
@@ -106,10 +104,7 @@ impl fmt::Debug for Formats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut first = true;
         f.write_str("Formats(")?;
-        for (bits, name) in [
-            (Self::EAN13.0, "EAN13"),
-            (Self::UPCA.0, "UPCA"),
-        ] {
+        for (bits, name) in [(Self::EAN13.0, "EAN13"), (Self::UPCA.0, "UPCA")] {
             if self.0 & bits != 0 {
                 if !first {
                     f.write_str(" | ")?;
@@ -127,20 +122,15 @@ impl fmt::Debug for Formats {
 
 /// Scanline directions the decoder walks.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ScanAxes {
     /// Horizontal scanlines only.
     Horizontal,
     /// Vertical scanlines only (codes rotated 90°).
     Vertical,
     /// Both axes (default).
+    #[default]
     Both,
-}
-
-impl Default for ScanAxes {
-    fn default() -> Self {
-        Self::Both
-    }
 }
 
 /// Options controlling a single decode pass.
@@ -260,8 +250,8 @@ pub enum Stage {
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct DecodeAttempt {
-    /// Symbology the candidate was decoded as (internal tag).
-    pub(crate) symbology: SymbologyRef,
+    /// Symbology the candidate was being decoded as.
+    pub symbology: Symbology,
     /// Why it was rejected.
     pub reason: RejectReason,
 }
@@ -341,11 +331,7 @@ impl BarcodeEngine {
             let mut inv_report = DecodeReport::default();
             self.decode_bits(&inv, frame, &mut inv_report);
             // Merge: only keep inverted-only payloads not already found.
-            let seen: Vec<Vec<u8>> = report
-                .barcodes
-                .iter()
-                .map(|b| b.raw.clone())
-                .collect();
+            let seen: Vec<Vec<u8>> = report.barcodes.iter().map(|b| b.raw.clone()).collect();
             for b in inv_report.barcodes {
                 if !seen.contains(&b.raw) {
                     report.barcodes.push(b);
@@ -398,7 +384,9 @@ impl BarcodeEngine {
                 if !self.formats.contains(sym.formats_bit()) {
                     continue;
                 }
-                report.barcodes.push(group_to_barcode(&group, sym, vertical, bits, frame));
+                report
+                    .barcodes
+                    .push(group_to_barcode(&group, sym, vertical, bits, frame));
             }
         }
     }
@@ -412,7 +400,7 @@ impl Default for BarcodeEngine {
 
 /// Map decoded digits to their symbology: a leading zero is the UPC-A
 /// subset of EAN-13.
-fn hit_symbology(digits: &[u8; 13]) -> Symbology {
+const fn hit_symbology(digits: &[u8; 13]) -> Symbology {
     if digits[0] == 0 {
         Symbology::UpcA
     } else {
@@ -422,10 +410,10 @@ fn hit_symbology(digits: &[u8; 13]) -> Symbology {
 
 impl Symbology {
     /// The [`Formats`] bit selecting results of this symbology.
-    fn formats_bit(self) -> Formats {
+    const fn formats_bit(self) -> Formats {
         match self {
-            Symbology::Ean13 => Formats::EAN13,
-            Symbology::UpcA => Formats::UPCA,
+            Self::Ean13 => Formats::EAN13,
+            Self::UpcA => Formats::UPCA,
             _ => Formats::empty(),
         }
     }
@@ -464,7 +452,7 @@ fn group_to_barcode(
         &digits[..]
     };
     let text: String = payload.iter().map(|d| (b'0' + d) as char).collect();
-    let rows_matched = group.rows.len() as u32;
+    let rows_matched = u32::try_from(group.rows.len()).unwrap_or(u32::MAX);
     let rows_scanned = if vertical { bits.width } else { bits.height };
     Barcode {
         raw: text.as_bytes().to_vec(),
@@ -483,11 +471,12 @@ fn group_to_barcode(
 /// Confidence from cross-scanline agreement: one scanline is evidence of
 /// a real symbol, three or more independent lines is strong.
 fn confidence(rows_matched: u32) -> f32 {
-    (0.4 + 0.15 * f32::from(rows_matched.min(4))).min(1.0)
+    let n = f32::from(u16::try_from(rows_matched.min(4)).unwrap_or(4));
+    0.15f32.mul_add(n, 0.4).min(1.0)
 }
 
 /// Deterministic order: top-to-bottom, then left-to-right.
-fn sort_barcodes(v: &mut Vec<Barcode>) {
+fn sort_barcodes(v: &mut [Barcode]) {
     v.sort_by(|a, b| {
         a.quad
             .min_y()

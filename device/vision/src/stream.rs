@@ -114,7 +114,7 @@ pub enum ScanEvent {
 impl ScanEvent {
     /// The tracked barcode this event concerns.
     #[must_use]
-    pub fn tracked(&self) -> &TrackedBarcode {
+    pub const fn tracked(&self) -> &TrackedBarcode {
         match self {
             Self::Detected(t) | Self::Updated(t) | Self::Lost(t) => t,
         }
@@ -129,6 +129,9 @@ impl ScanEvent {
 #[derive(Debug)]
 pub struct BarcodeScanner {
     tx: Sender<FrameBuf>,
+    /// Second receiver on the frame channel, used only to evict a stale
+    /// pending frame in `submit` (latest-wins).
+    pending: Receiver<FrameBuf>,
     events: Receiver<ScanEvent>,
     worker: Option<JoinHandle<()>>,
 }
@@ -141,16 +144,21 @@ impl BarcodeScanner {
     }
 
     /// Start a scanner with explicit configuration.
+    ///
+    /// # Panics
+    /// If the scanner worker thread cannot be spawned.
     #[must_use]
     pub fn with_config(engine: BarcodeEngine, config: ScanConfig) -> Self {
         let (tx, rx) = async_channel::bounded::<FrameBuf>(IN_FLIGHT);
         let (ev_tx, ev_rx) = async_channel::bounded::<ScanEvent>(EVENT_CAPACITY);
+        let worker_rx = rx.clone();
         let worker = std::thread::Builder::new()
             .name("waterkit-vision-scanner".into())
-            .spawn(move || worker_loop(rx, ev_tx, engine, config))
+            .spawn(move || worker_loop(&worker_rx, &ev_tx, &engine, config))
             .expect("failed to spawn vision scanner thread");
         Self {
             tx,
+            pending: rx,
             events: ev_rx,
             worker: Some(worker),
         }
@@ -169,16 +177,15 @@ impl BarcodeScanner {
         }
         // Drop a stale pending frame so the newest one is processed.
         if self.tx.is_full() {
-            let _ = self.tx.try_recv();
+            let _ = self.pending.try_recv();
         }
         self.tx
             .try_send(frame)
             .map_err(|_| VisionError::ScannerClosed)
     }
 
-    /// Stream of scan events. Additional calls return new receivers over
-    /// the same broadcast channel (cloned receivers see all events).
-    #[must_use]
+    /// Stream of scan events. Each call returns another receiver over the
+    /// shared channel — receivers distribute events among themselves.
     pub fn events(&self) -> impl Stream<Item = ScanEvent> + Send + 'static {
         self.events.clone()
     }
@@ -229,26 +236,29 @@ impl Track {
 }
 
 fn worker_loop(
-    rx: Receiver<FrameBuf>,
-    events: Sender<ScanEvent>,
-    engine: BarcodeEngine,
+    rx: &Receiver<FrameBuf>,
+    events: &Sender<ScanEvent>,
+    engine: &BarcodeEngine,
     config: ScanConfig,
 ) {
     let mut tracks: HashMap<(Symbology, Vec<u8>), Track> = HashMap::new();
     let mut next_id = 1u64;
-    let mut last_decode = std::time::Instant::now() - config.min_interval;
+    let mut last_decode = std::time::Instant::now()
+        .checked_sub(config.min_interval)
+        .unwrap_or_else(std::time::Instant::now);
 
     while let Ok(frame) = rx.recv_blocking() {
         // Pacing: sleep off the remainder of the interval.
         let elapsed = last_decode.elapsed();
-        if elapsed < config.min_interval {
-            std::thread::sleep(config.min_interval - elapsed);
+        if let Some(remaining) = config.min_interval.checked_sub(elapsed)
+            && remaining > Duration::ZERO
+        {
+            std::thread::sleep(remaining);
         }
         let now_ts = frame.timestamp();
         let cpu = frame.as_cpu_frame();
-        let report = match engine.decode_report(&cpu) {
-            Ok(r) => r,
-            Err(_) => continue,
+        let Ok(report) = engine.decode_report(&cpu) else {
+            continue;
         };
         last_decode = std::time::Instant::now();
 
@@ -256,29 +266,26 @@ fn worker_loop(
         for barcode in report.barcodes {
             let key = (barcode.symbology, barcode.raw.clone());
             seen_keys.push(key.clone());
-            match tracks.get_mut(&key) {
-                Some(track) => {
-                    let moved = track.barcode.quad.center().distance(barcode.quad.center())
-                        > config.move_threshold;
-                    track.barcode = barcode;
-                    track.last_seen = now_ts;
-                    track.sightings += 1;
-                    if moved {
-                        let _ = events.send_blocking(ScanEvent::Updated(track.view()));
-                    }
+            if let Some(track) = tracks.get_mut(&key) {
+                let moved = track.barcode.quad.center().distance(barcode.quad.center())
+                    > config.move_threshold;
+                track.barcode = barcode;
+                track.last_seen = now_ts;
+                track.sightings += 1;
+                if moved {
+                    let _ = events.send_blocking(ScanEvent::Updated(track.view()));
                 }
-                None => {
-                    let track = Track {
-                        id: TrackId(next_id),
-                        barcode,
-                        first_seen: now_ts,
-                        last_seen: now_ts,
-                        sightings: 1,
-                    };
-                    next_id += 1;
-                    let _ = events.send_blocking(ScanEvent::Detected(track.view()));
-                    tracks.insert(key, track);
-                }
+            } else {
+                let track = Track {
+                    id: TrackId(next_id),
+                    barcode,
+                    first_seen: now_ts,
+                    last_seen: now_ts,
+                    sightings: 1,
+                };
+                next_id += 1;
+                let _ = events.send_blocking(ScanEvent::Detected(track.view()));
+                tracks.insert(key, track);
             }
         }
 
@@ -306,5 +313,5 @@ fn worker_loop(
 /// `last` precedes `now` by more than `ttl` (frame-timestamp space).
 fn stale(now: Timestamp, last: Timestamp, ttl: Duration) -> bool {
     let diff_ns = now.as_nanosecond() - last.as_nanosecond();
-    diff_ns > ttl.as_nanos() as i128
+    diff_ns > i128::try_from(ttl.as_nanos()).unwrap_or(i128::MAX)
 }

@@ -17,7 +17,13 @@
 //! results are reported with [`Symbology::UpcA`] and the 12-digit payload
 //! (leading zero dropped).
 
-use super::{DecodeAttempt, RejectReason};
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::suboptimal_flops
+)]
+
+use super::{DecodeAttempt, QuietSide, RejectReason, Stage, Symbology};
 use crate::image::Run;
 
 /// Left-parity (L) digit patterns as `[white, black, white, black]`
@@ -61,13 +67,13 @@ const DIGIT_TOLERANCE: f32 = 1.8;
 
 /// A successfully decoded row hit, before cross-row merging.
 #[derive(Debug, Clone)]
-pub(crate) struct RowHit {
+pub struct RowHit {
     /// First dark pixel of the start guard.
-    pub(crate) x0: u32,
+    pub x0: u32,
     /// One past the last dark pixel of the end guard.
-    pub(crate) x1: u32,
+    pub x1: u32,
     /// Thirteen decoded digits (EAN-13 form; first digit from parity).
-    pub(crate) digits: [u8; 13],
+    pub digits: [u8; 13],
 }
 
 /// Decode every EAN-13 candidate along one scanline's run list.
@@ -75,7 +81,7 @@ pub(crate) struct RowHit {
 /// `diagnostics` receives one [`DecodeAttempt`] per candidate that matched
 /// a start guard but failed a later stage — rows with no plausible start
 /// guard produce no diagnostics (they are not candidate codes).
-pub(crate) fn decode_runs(runs: &[Run], diagnostics: &mut Vec<DecodeAttempt>) -> Vec<RowHit> {
+pub fn decode_runs(runs: &[Run], diagnostics: &mut Vec<DecodeAttempt>) -> Vec<RowHit> {
     let mut hits = Vec::new();
     let mut i = 0usize;
     while i + 3 <= runs.len() {
@@ -95,7 +101,7 @@ pub(crate) fn decode_runs(runs: &[Run], diagnostics: &mut Vec<DecodeAttempt>) ->
             }
             Err(Some(reason)) => {
                 diagnostics.push(DecodeAttempt {
-                    symbology: SymbologyRef::Ean13,
+                    symbology: Symbology::Ean13,
                     reason,
                 });
                 i += 1;
@@ -106,17 +112,11 @@ pub(crate) fn decode_runs(runs: &[Run], diagnostics: &mut Vec<DecodeAttempt>) ->
     hits
 }
 
-/// Symbology tag used in diagnostics (this decoder only produces EAN-13
-/// candidates; UPC-A is resolved at merge time).
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum SymbologyRef {
-    Ean13,
-}
-
 /// Attempt a full symbol decode with the start guard beginning at `runs[i]`.
 ///
 /// `Err(None)` means the candidate is not plausible enough to report
 /// (guard shape mismatch); `Err(Some(reason))` is a real reject.
+#[allow(clippy::too_many_lines)]
 fn decode_at(runs: &[Run], i: usize) -> Result<RowHit, Option<RejectReason>> {
     // --- start guard: three runs [dark, light, dark] each ~1 module ---
     let g = &runs[i..i + 3];
@@ -169,8 +169,8 @@ fn decode_at(runs: &[Run], i: usize) -> Result<RowHit, Option<RejectReason>> {
             }
             None => {
                 return Err(Some(RejectReason::DigitUndecodable {
-                    position: 1 + d,
-                }))
+                    position: (1 + d) as u8,
+                }));
             }
         }
         pos += 4;
@@ -178,7 +178,7 @@ fn decode_at(runs: &[Run], i: usize) -> Result<RowHit, Option<RejectReason>> {
     let Some(first) = FIRST_DIGIT_PARITY
         .iter()
         .position(|&p| p == parity)
-        .map(|p| p as u8)
+        .map(|p| u8::try_from(p).unwrap_or_default())
     else {
         return Err(Some(RejectReason::FirstDigitParity { parity }));
     };
@@ -224,8 +224,8 @@ fn decode_at(runs: &[Run], i: usize) -> Result<RowHit, Option<RejectReason>> {
             Some((digit, _is_g, _err)) => digits[7 + d] = digit,
             None => {
                 return Err(Some(RejectReason::DigitUndecodable {
-                    position: 7 + d,
-                }))
+                    position: (7 + d) as u8,
+                }));
             }
         }
         pos += 4;
@@ -238,9 +238,8 @@ fn decode_at(runs: &[Run], i: usize) -> Result<RowHit, Option<RejectReason>> {
         }));
     }
     let eg = &runs[pos..pos + 3];
-    if !(eg[0].dark && !eg[1].dark && eg[2].dark)
-        || !guard_match(&[eg[0].len, eg[1].len, eg[2].len], m)
-    {
+    let end_ok = eg[0].dark && !eg[1].dark && eg[2].dark;
+    if !end_ok || !guard_match(&[eg[0].len, eg[1].len, eg[2].len], m) {
         return Err(Some(RejectReason::GuardMismatch {
             stage: Stage::EndGuard,
         }));
@@ -271,7 +270,7 @@ fn decode_at(runs: &[Run], i: usize) -> Result<RowHit, Option<RejectReason>> {
             w * u32::from(d)
         })
         .sum();
-    if sum % 10 != 0 {
+    if !sum.is_multiple_of(10) {
         let payload: u32 = digits[..12]
             .iter()
             .enumerate()
@@ -320,11 +319,11 @@ fn match_digit(group: &[Run], m: f32, parity: Parity) -> Option<(u8, bool, f32)>
     let _ = m;
     let mut best: Option<(u8, bool, f32)> = None;
     for (d, pat) in L_RUNS.iter().enumerate() {
-        let err_l = run_error(group, pat, scale);
+        let err_l = run_error(group, *pat, scale);
         consider(&mut best, d as u8, false, err_l, scale);
         if matches!(parity, Parity::Both) {
             let rev = [pat[3], pat[2], pat[1], pat[0]];
-            let err_g = run_error(group, &rev, scale);
+            let err_g = run_error(group, rev, scale);
             consider(&mut best, d as u8, true, err_g, scale);
         }
     }
@@ -332,38 +331,38 @@ fn match_digit(group: &[Run], m: f32, parity: Parity) -> Option<(u8, bool, f32)>
 }
 
 fn consider(best: &mut Option<(u8, bool, f32)>, d: u8, g: bool, err: f32, _scale: f32) {
-    if best.is_none_or(|&(_, _, e)| err < e) {
+    if best.is_none_or(|(_, _, e)| err < e) {
         *best = Some((d, g, err));
     }
 }
 
 /// Summed absolute deviation of run lengths from `pattern * scale`.
-fn run_error(group: &[Run], pattern: &[u8; 4], scale: f32) -> f32 {
+fn run_error(group: &[Run], pattern: [u8; 4], scale: f32) -> f32 {
     group
         .iter()
         .zip(pattern)
-        .map(|(r, &p)| (r.len as f32 - f32::from(p) * scale).abs())
+        .map(|(r, p)| (r.len as f32 - f32::from(p) * scale).abs())
         .sum()
 }
 
 /// Merge row hits into groups keyed by digit content; each group becomes
 /// one logical symbol with a vertical extent.
-pub(crate) struct HitGroup {
-    pub(crate) digits: [u8; 13],
-    pub(crate) x0: u32,
-    pub(crate) x1: u32,
+pub struct HitGroup {
+    pub digits: [u8; 13],
+    pub x0: u32,
+    pub x1: u32,
     /// Row indices (or column indices for vertical scans) contributing.
-    pub(crate) rows: Vec<u32>,
+    pub rows: Vec<u32>,
 }
 
 /// Group hits from multiple scanlines by identical digit content, only
 /// merging hits whose horizontal extents substantially overlap.
-pub(crate) fn group_hits(hits: &[(u32, RowHit)]) -> Vec<HitGroup> {
+pub fn group_hits(hits: &[(u32, RowHit)]) -> Vec<HitGroup> {
     let mut groups: Vec<HitGroup> = Vec::new();
-    for &(line, hit) in hits {
-        let overlapping = groups.iter_mut().find(|g| {
-            g.digits == hit.digits && ranges_overlap(g.x0, g.x1, hit.x0, hit.x1)
-        });
+    for &(line, ref hit) in hits {
+        let overlapping = groups
+            .iter_mut()
+            .find(|g| g.digits == hit.digits && ranges_overlap(g.x0, g.x1, hit.x0, hit.x1));
         match overlapping {
             Some(g) => {
                 g.x0 = g.x0.min(hit.x0);
@@ -386,13 +385,13 @@ pub(crate) fn group_hits(hits: &[(u32, RowHit)]) -> Vec<HitGroup> {
 fn ranges_overlap(a0: u32, a1: u32, b0: u32, b1: u32) -> bool {
     let shared = a1.min(b1).saturating_sub(a0.max(b0));
     let narrow = (a1 - a0).min(b1 - b0);
-    narrow == 0 || shared as f64 >= 0.6 * f64::from(narrow)
+    narrow == 0 || f64::from(shared) >= 0.6 * f64::from(narrow)
 }
 
 /// Mod-10 check digit for the first 12 digits of an EAN-13 payload.
 /// Exposed for tests and fixture renderers.
 #[cfg(test)]
-pub(crate) fn check_digit(first12: &[u8; 12]) -> u8 {
+pub fn check_digit(first12: &[u8; 12]) -> u8 {
     let sum: u32 = first12
         .iter()
         .enumerate()

@@ -107,7 +107,7 @@ pub struct Plane<'a> {
     pub height: u32,
 }
 
-impl<'a> Plane<'a> {
+impl Plane<'_> {
     /// Access the pixel byte at `(x, y)` in byte granularity.
     ///
     /// Returns `None` when out of bounds.
@@ -193,8 +193,7 @@ impl<'a> CpuFrame<'a> {
                     plane.width, plane.height
                 )));
             }
-            let needed =
-                plane.stride * (plane.height as usize - 1) + plane.width as usize;
+            let needed = plane.stride * (plane.height as usize - 1) + plane.width as usize;
             if plane.data.len() < needed {
                 return Err(VisionError::InvalidFrame(format!(
                     "plane {i}: {} bytes < required {needed}",
@@ -251,7 +250,10 @@ impl<'a> CpuFrame<'a> {
         height: u32,
         stride: usize,
     ) -> Result<Self, VisionError> {
-        if matches!(format, FrameFormat::Nv12 | FrameFormat::I420 | FrameFormat::Luma8) {
+        if matches!(
+            format,
+            FrameFormat::Nv12 | FrameFormat::I420 | FrameFormat::Luma8
+        ) {
             return Err(VisionError::InvalidFrame(format!(
                 "{format:?} is not a packed RGB format; use `luma`, `nv12` or `new`"
             )));
@@ -287,14 +289,14 @@ impl<'a> CpuFrame<'a> {
 
     /// Set the frame timestamp.
     #[must_use]
-    pub fn with_timestamp(mut self, timestamp: Timestamp) -> Self {
+    pub const fn with_timestamp(mut self, timestamp: Timestamp) -> Self {
         self.timestamp = timestamp;
         self
     }
 
     /// Set the buffer orientation.
     #[must_use]
-    pub fn with_orientation(mut self, orientation: Orientation) -> Self {
+    pub const fn with_orientation(mut self, orientation: Orientation) -> Self {
         self.orientation = orientation;
         self
     }
@@ -354,7 +356,11 @@ impl<'a> CpuFrame<'a> {
         let mut planes = Vec::with_capacity(self.planes.len());
         for (i, plane) in self.planes.iter().enumerate() {
             // Chroma planes describe their width in bytes-as-pixels (bpp 1).
-            let bpp = if i == 0 { format_plane_bpp(self.format) } else { 1 };
+            let bpp = if i == 0 {
+                format_plane_bpp(self.format)
+            } else {
+                1
+            };
             let row_bytes = plane.width as usize * bpp;
             let mut data = Vec::with_capacity(row_bytes * plane.height as usize);
             for y in 0..plane.height as usize {
@@ -379,7 +385,7 @@ impl<'a> CpuFrame<'a> {
     }
 }
 
-fn format_plane_bpp(format: FrameFormat) -> usize {
+const fn format_plane_bpp(format: FrameFormat) -> usize {
     match format {
         FrameFormat::Luma8 | FrameFormat::Nv12 | FrameFormat::I420 => 1,
         FrameFormat::Rgb8 | FrameFormat::Bgr8 => 3,
@@ -508,14 +514,14 @@ impl FrameBuf {
 
     /// Set the timestamp.
     #[must_use]
-    pub fn with_timestamp(mut self, timestamp: Timestamp) -> Self {
+    pub const fn with_timestamp(mut self, timestamp: Timestamp) -> Self {
         self.timestamp = timestamp;
         self
     }
 
     /// Set the orientation.
     #[must_use]
-    pub fn with_orientation(mut self, orientation: Orientation) -> Self {
+    pub const fn with_orientation(mut self, orientation: Orientation) -> Self {
         self.orientation = orientation;
         self
     }

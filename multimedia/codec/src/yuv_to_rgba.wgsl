@@ -1,22 +1,11 @@
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
+// Decoded bi-planar YUV to linear RGBA16F conversion.
+//
+// Plane textures are integer formats (`R8Uint`/`Rg8Uint` for NV12,
+// `R16Uint`/`Rg16Uint` for P010), sampled with textureLoad and normalized
+// to code space before the range/matrix/transfer decode.
 
-@vertex
-fn vs_main(
-    @location(0) position: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-) -> VertexOutput {
-    var output: VertexOutput;
-    output.position = vec4<f32>(position, 0.0, 1.0);
-    output.uv = uv;
-    return output;
-}
-
-@group(0) @binding(0) var y_texture: texture_2d<f32>;
-@group(0) @binding(1) var uv_texture: texture_2d<f32>;
-@group(0) @binding(2) var video_sampler: sampler;
+@group(0) @binding(0) var y_texture: texture_2d<u32>;
+@group(0) @binding(1) var uv_texture: texture_2d<u32>;
 
 struct ColorParams {
     matrix_mode: u32,
@@ -50,37 +39,13 @@ const TRANSFER_SDR: u32 = 0u;
 const TRANSFER_PQ: u32 = 1u;
 const TRANSFER_HLG: u32 = 2u;
 
-const TARGET_GAMMA_SDR: u32 = 0u;
-const TARGET_LINEAR_SDR: u32 = 1u;
-const TARGET_LINEAR_HDR: u32 = 2u;
 const SDR_REFERENCE_WHITE_NITS: f32 = 203.0;
-
-fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        return c / 12.92;
-    }
-    return pow((c + 0.055) / 1.055, 2.4);
-}
-
-fn linear_to_srgb(c: f32) -> f32 {
-    if c <= 0.0031308 {
-        return c * 12.92;
-    }
-    return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
-}
 
 fn bt709_to_linear(c: f32) -> f32 {
     if c < 0.081 {
         return c / 4.5;
     }
     return pow((c + 0.099) / 1.099, 1.0 / 0.45);
-}
-
-fn linear_to_bt709(c: f32) -> f32 {
-    if c < 0.018 {
-        return c * 4.5;
-    }
-    return 1.099 * pow(c, 0.45) - 0.099;
 }
 
 fn pq_to_linear(value: f32) -> f32 {
@@ -177,26 +142,6 @@ fn convert_primaries_to_srgb(linear_rgb: vec3<f32>, primaries_mode: u32) -> vec3
     return linear_rgb;
 }
 
-fn tone_map_hdr_to_sdr(linear_rgb: vec3<f32>) -> vec3<f32> {
-    let safe = max(linear_rgb, vec3<f32>(0.0));
-    let source_peak = max(
-        color_params.max_content_light_nits / SDR_REFERENCE_WHITE_NITS,
-        1.0,
-    );
-    let knee = 0.75;
-    let shoulder = max((source_peak - knee) / 4.0, 0.25);
-    let compressed = vec3<f32>(
-        knee + (1.0 - knee) * (1.0 - exp(-(safe.r - knee) / shoulder)),
-        knee + (1.0 - knee) * (1.0 - exp(-(safe.g - knee) / shoulder)),
-        knee + (1.0 - knee) * (1.0 - exp(-(safe.b - knee) / shoulder)),
-    );
-    return vec3<f32>(
-        select(safe.r, compressed.r, safe.r > knee),
-        select(safe.g, compressed.g, safe.g > knee),
-        select(safe.b, compressed.b, safe.b > knee),
-    );
-}
-
 fn normalize_yuv(y_sample: f32, uv_sample: vec2<f32>) -> vec3<f32> {
     var y = y_sample;
     var u = uv_sample.x;
@@ -281,42 +226,6 @@ fn decode_yuv_to_linear(y: f32, uv: vec2<f32>) -> vec3<f32> {
     return convert_primaries_to_srgb(linear_rgb, color_params.primaries_mode);
 }
 
-fn render_yuv_sample(sample_coordinates: vec2<f32>) -> vec4<f32> {
-    let y = textureSample(y_texture, video_sampler, sample_coordinates).r;
-    let uv = textureSample(uv_texture, video_sampler, sample_coordinates).rg;
-    var linear_rgb = decode_yuv_to_linear(y, uv);
-
-    if color_params.target_mode == TARGET_LINEAR_HDR {
-        return vec4<f32>(max(linear_rgb, vec3<f32>(0.0)), 1.0);
-    }
-
-    if color_params.transfer_mode != TRANSFER_SDR {
-        linear_rgb = tone_map_hdr_to_sdr(linear_rgb);
-    }
-
-    let clamped_linear = clamp(linear_rgb, vec3<f32>(0.0), vec3<f32>(1.0));
-
-    if color_params.target_mode == TARGET_LINEAR_SDR {
-        return vec4<f32>(clamped_linear, 1.0);
-    }
-
-    let gamma_sdr = vec3<f32>(
-        linear_to_bt709(clamped_linear.r),
-        linear_to_bt709(clamped_linear.g),
-        linear_to_bt709(clamped_linear.b),
-    );
-    if color_params.target_mode == TARGET_GAMMA_SDR {
-        return vec4<f32>(gamma_sdr, 1.0);
-    }
-
-    return vec4<f32>(clamped_linear, 1.0);
-}
-
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    return render_yuv_sample(input.uv);
-}
-
 @compute @workgroup_size(8, 8)
 fn convert_to_linear_rgba(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let dimensions = textureDimensions(linear_rgba_output);
@@ -329,8 +238,10 @@ fn convert_to_linear_rgba(@builtin(global_invocation_id) global_id: vec3<u32>) {
         i32(global_id.x / 2u),
         i32(global_id.y / 2u),
     );
-    let y = textureLoad(y_texture, y_coordinates, 0).r;
-    let uv = textureLoad(uv_texture, uv_coordinates, 0).rg;
+    let code_scale = select(1.0 / 255.0, 1.0 / 65535.0, color_params.sample_mode == SAMPLE_P010);
+    let y = f32(textureLoad(y_texture, y_coordinates, 0).r) * code_scale;
+    let uv_raw = textureLoad(uv_texture, uv_coordinates, 0).rg;
+    let uv = vec2<f32>(f32(uv_raw.x), f32(uv_raw.y)) * code_scale;
     let linear_rgb = decode_yuv_to_linear(y, uv);
     textureStore(
         linear_rgba_output,

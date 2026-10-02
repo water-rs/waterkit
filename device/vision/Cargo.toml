@@ -1,0 +1,23 @@
+[package]
+name = "waterkit-vision"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "On-device barcode scanning for Waterkit"
+keywords = ["barcode", "ean13", "upca", "vision", "scanner"]
+categories = ["multimedia::images", "os", "gui"]
+
+[lints]
+workspace = true
+
+[features]
+default = []
+
+[dependencies]
+waterkit-core = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+async-channel = { workspace = true }

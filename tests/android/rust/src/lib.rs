@@ -417,34 +417,213 @@ fn record_android_camera(report: &mut TestReport) {
 
 #[cfg(feature = "clipboard")]
 async fn record_android_clipboard(report: &mut TestReport) {
-    match waterkit_content::clipboard::Clipboard::new() {
-        Ok(mut clipboard) => {
-            if let Err(error) = clipboard.set_text("WaterKit Test") {
+    let mut clipboard = match waterkit_content::clipboard::Clipboard::new() {
+        Ok(clipboard) => clipboard,
+        Err(error) => {
+            report.push(TestCase::failed(
+                "clipboard.init",
+                format!("clipboard init failed: {error}"),
+            ));
+            return;
+        }
+    };
+
+    if let Err(error) = clipboard.set_text("WaterKit Test") {
+        report.push(TestCase::failed(
+            "clipboard.set_text",
+            format!("set_text failed: {error}"),
+        ));
+        return;
+    }
+
+    match clipboard.text().await {
+        Ok(text) if text.as_deref() == Some("WaterKit Test") => {
+            report.push(TestCase::passed("clipboard.round_trip"));
+        }
+        Ok(_text) => report.push(TestCase::failed(
+            "clipboard.round_trip",
+            "round-trip text did not match the synthetic clip (contents not printed)",
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "clipboard.round_trip",
+            format!("get_text failed: {error}"),
+        )),
+    }
+
+    record_android_clipboard_watch(report, &mut clipboard).await;
+}
+
+/// Outcome of waiting on a clipboard stream, with a bound so a broken
+/// watcher fails the case instead of hanging the harness.
+#[cfg(feature = "clipboard")]
+enum ClipWait {
+    Event(waterkit_content::clipboard::ClipboardEvent),
+    Closed,
+    TimedOut,
+}
+
+#[cfg(feature = "clipboard")]
+impl std::fmt::Debug for ClipWait {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Event(event) => f.debug_tuple("Event").field(event).finish(),
+            Self::Closed => f.write_str("Closed"),
+            Self::TimedOut => f.write_str("TimedOut"),
+        }
+    }
+}
+
+#[cfg(feature = "clipboard")]
+async fn next_clipboard_event(
+    stream: &mut waterkit_content::clipboard::ClipboardStream,
+) -> ClipWait {
+    use futures::StreamExt;
+
+    match tokio::time::timeout(std::time::Duration::from_secs(10), stream.next()).await {
+        Ok(Some(event)) => ClipWait::Event(event),
+        Ok(None) => ClipWait::Closed,
+        Err(_) => ClipWait::TimedOut,
+    }
+}
+
+#[cfg(feature = "clipboard")]
+async fn record_android_clipboard_watch(
+    report: &mut TestReport,
+    clipboard: &mut waterkit_content::clipboard::Clipboard,
+) {
+    const FIRST: &str = "WaterKit Watch First";
+    const SECOND: &str = "WaterKit Watch Second";
+    const AFTER_LIFECYCLE: &str = "WaterKit Watch After Lifecycle";
+
+    let mut primary_stream = match clipboard.watch() {
+        Ok(stream) => stream,
+        Err(error) => {
+            report.push(TestCase::failed(
+                "clipboard.watch_start",
+                format!("watch failed: {error}"),
+            ));
+            return;
+        }
+    };
+    // A second subscriber on the same clipboard: watchers must be
+    // independent, each registering its own listener.
+    let mut second_stream = match clipboard.watch() {
+        Ok(stream) => stream,
+        Err(error) => {
+            primary_stream.stop();
+            report.push(TestCase::failed(
+                "clipboard.watch_start",
+                format!("second watch failed: {error}"),
+            ));
+            return;
+        }
+    };
+
+    // Two successive same-type writes must produce two separate events on
+    // every subscriber. Regression coverage for waterkit#113: the old
+    // polling watcher only emitted when the type-presence bitmask changed,
+    // so the second text write never reached the stream.
+    if let Err(error) = clipboard.set_text(FIRST) {
+        report.push(TestCase::failed(
+            "clipboard.watch_same_type",
+            format!("set_text failed: {error}"),
+        ));
+        return;
+    }
+    let (primary_first, second_first) = tokio::join!(
+        next_clipboard_event(&mut primary_stream),
+        next_clipboard_event(&mut second_stream)
+    );
+
+    if let Err(error) = clipboard.set_text(SECOND) {
+        report.push(TestCase::failed(
+            "clipboard.watch_same_type",
+            format!("set_text failed: {error}"),
+        ));
+        return;
+    }
+    let (primary_second, second_second) = tokio::join!(
+        next_clipboard_event(&mut primary_stream),
+        next_clipboard_event(&mut second_stream)
+    );
+
+    match (primary_first, primary_second) {
+        (ClipWait::Event(first), ClipWait::Event(second))
+            if first.has_text() && second.has_text() =>
+        {
+            report.push(TestCase::passed("clipboard.watch_same_type"));
+        }
+        (first, second) => report.push(TestCase::failed(
+            "clipboard.watch_same_type",
+            format!("expected two text events, got {first:?} then {second:?}"),
+        )),
+    }
+
+    match (second_first, second_second) {
+        (ClipWait::Event(first), ClipWait::Event(second))
+            if first.has_text() && second.has_text() =>
+        {
+            report.push(TestCase::passed("clipboard.watch_independent_subscribers"));
+        }
+        (first, second) => report.push(TestCase::failed(
+            "clipboard.watch_independent_subscribers",
+            format!("expected two text events, got {first:?} then {second:?}"),
+        )),
+    }
+
+    // Dropping a stream must unregister its listener and release the
+    // callback state without a use-after-free; a fresh watcher receiving a
+    // clip event proves the clipboard stays observable through the same
+    // callback path afterwards.
+    drop(second_stream);
+    match clipboard.watch() {
+        Ok(mut fresh_stream) => {
+            if let Err(error) = clipboard.set_text(FIRST) {
                 report.push(TestCase::failed(
-                    "clipboard.set_text",
+                    "clipboard.watch_drop",
                     format!("set_text failed: {error}"),
                 ));
                 return;
             }
-
-            match clipboard.text().await {
-                Ok(text) if text.as_deref() == Some("WaterKit Test") => {
-                    report.push(TestCase::passed("clipboard.round_trip"));
+            match next_clipboard_event(&mut fresh_stream).await {
+                ClipWait::Event(event) if event.has_text() => {
+                    report.push(TestCase::passed("clipboard.watch_drop"));
                 }
-                Ok(text) => report.push(TestCase::failed(
-                    "clipboard.round_trip",
-                    format!("expected WaterKit Test, got {text:?}"),
-                )),
-                Err(error) => report.push(TestCase::failed(
-                    "clipboard.round_trip",
-                    format!("get_text failed: {error}"),
+                wait => report.push(TestCase::failed(
+                    "clipboard.watch_drop",
+                    format!("fresh watcher after drop produced {wait:?}"),
                 )),
             }
         }
         Err(error) => report.push(TestCase::failed(
-            "clipboard.init",
-            format!("clipboard init failed: {error}"),
+            "clipboard.watch_drop",
+            format!("watch after drop failed: {error}"),
         )),
+    }
+
+    // stop() unregisters the listener and releases the callback state; the
+    // channel then completes once events buffered before the stop have
+    // drained — async-channel's documented termination — so the wait ends
+    // only on `Closed`, not on an arbitrary event budget.
+    primary_stream.stop();
+    if let Err(error) = clipboard.set_text(AFTER_LIFECYCLE) {
+        report.push(TestCase::failed(
+            "clipboard.watch_stop",
+            format!("set_text failed: {error}"),
+        ));
+        return;
+    }
+    let mut wait = next_clipboard_event(&mut primary_stream).await;
+    while matches!(wait, ClipWait::Event(_)) {
+        wait = next_clipboard_event(&mut primary_stream).await;
+    }
+    if let ClipWait::Closed = wait {
+        report.push(TestCase::passed("clipboard.watch_stop"));
+    } else {
+        report.push(TestCase::failed(
+            "clipboard.watch_stop",
+            format!("channel ended with {wait:?}, not Closed"),
+        ));
     }
 }
 

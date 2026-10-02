@@ -422,7 +422,8 @@ impl Clipboard {
     ///
     /// - **Desktop (Windows/Linux/macOS)**: Uses native clipboard change notifications.
     /// - **iOS**: Uses polling with `UIPasteboard.changeCount` (500ms interval).
-    /// - **Android**: Uses polling with `ClipboardManager.getPrimaryClipDescription` (500ms interval).
+    /// - **Android**: Uses `ClipboardManager.OnPrimaryClipChangedListener`; every clip
+    ///   notification emits an event, including same-type content updates.
     ///
     /// # Errors
     ///

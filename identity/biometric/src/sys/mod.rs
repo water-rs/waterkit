@@ -3,6 +3,10 @@ pub mod apple;
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 pub use apple::*;
 
+/// Outcome conversion shared by the Android JNI callback and host tests.
+#[cfg(any(target_os = "android", test))]
+mod android_result;
+
 #[cfg(target_os = "android")]
 pub mod android;
 #[cfg(target_os = "android")]

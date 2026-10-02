@@ -1,8 +1,12 @@
 package com.waterkit.test
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import org.json.JSONObject
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -186,11 +190,72 @@ class MainActivity : AppCompatActivity() {
     private fun runNativeTest() {
         log("Running native test...")
         android.util.Log.i("waterkit", "Native test started with window focus")
+        // Native clipboard cases write synthetic clips; hold the user's
+        // original primary clip inside the process and hand it back after
+        // the run so a real device's clipboard survives the harness. The
+        // clip's contents are never read, logged, or exported.
+        val savedClip = snapshotPrimaryClip()
         Thread {
-            val report = runTestReport(this)
-            writeReport(report)
-            runOnUiThread { log("Native test report written") }
+            var restoreFailure: Throwable? = null
+            val report = try {
+                runTestReport(this)
+            } finally {
+                try {
+                    restorePrimaryClip(savedClip)
+                } catch (t: Throwable) {
+                    restoreFailure = t
+                    android.util.Log.e("waterkit", "primaryClip restore failed after native test", t)
+                }
+            }
+            // Completion is only reported once the user's clip has been
+            // restored (or the restore failure surfaced) — never while
+            // synthetic clips could still be on the device clipboard. A
+            // failed restore lands in the structured report so the result
+            // cannot read as a clean pass.
+            val failure = restoreFailure
+            val finalReport = if (failure == null) {
+                report
+            } else {
+                appendRestoreFailureCase(report, failure)
+            }
+            writeReport(finalReport)
+            runOnUiThread {
+                if (failure == null) {
+                    log("Native test report written")
+                } else {
+                    log("Native test done; clipboard restore FAILED (${failure.javaClass.simpleName})")
+                }
+            }
         }.start()
+    }
+
+    private fun appendRestoreFailureCase(report: String, failure: Throwable): String {
+        val json = JSONObject(report)
+        val cases = json.getJSONArray("cases")
+        val case = JSONObject()
+        case.put("name", "clipboard.restore_primary_clip")
+        case.put("status", "failed")
+        case.put("message", "primaryClip restore failed: ${failure.javaClass.simpleName}")
+        cases.put(case)
+        return json.toString(2)
+    }
+
+    private fun snapshotPrimaryClip(): ClipData? {
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager
+            ?: error("ClipboardManager unavailable — cannot preserve the device clipboard")
+        return clipboard.primaryClip
+    }
+
+    private fun restorePrimaryClip(savedClip: ClipData?) {
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager
+            ?: error("ClipboardManager unavailable — cannot restore the device clipboard")
+        if (savedClip != null) {
+            clipboard.setPrimaryClip(savedClip)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            clipboard.clearPrimaryClip()
+        } else {
+            clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
+        }
     }
 
     private fun writeReport(report: String) {

@@ -57,8 +57,14 @@ impl WatcherShutdown {
                 stop_flag.store(true, std::sync::atomic::Ordering::SeqCst);
             }
             #[cfg(target_os = "android")]
-            ShutdownInner::Android(stop_flag) => {
-                stop_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            ShutdownInner::Android(session) => {
+                let session = match session.lock() {
+                    Ok(mut guard) => guard.take(),
+                    Err(poisoned) => poisoned.into_inner().take(),
+                };
+                if let Some(session) = session {
+                    session.stop();
+                }
             }
             #[cfg(target_arch = "wasm32")]
             ShutdownInner::Web => {}
@@ -73,7 +79,7 @@ enum ShutdownInner {
     #[cfg(target_os = "ios")]
     Apple(Arc<std::sync::atomic::AtomicBool>),
     #[cfg(target_os = "android")]
-    Android(Arc<std::sync::atomic::AtomicBool>),
+    Android(std::sync::Mutex<Option<android::WatchSession>>),
     #[cfg(target_arch = "wasm32")]
     #[expect(
         dead_code,
@@ -134,10 +140,6 @@ pub fn start_watch() -> Result<
 
 /// Start watching for clipboard changes.
 #[cfg(target_os = "android")]
-#[allow(
-    clippy::unnecessary_wraps,
-    reason = "The platform-neutral clipboard watcher API is fallible; Android's polling watcher currently cannot fail during construction."
-)]
 pub fn start_watch() -> Result<
     (
         async_channel::Receiver<ClipboardEvent>,
@@ -145,11 +147,11 @@ pub fn start_watch() -> Result<
     ),
     ClipboardError,
 > {
-    let (receiver, stop_flag) = android::start_watch();
+    let (receiver, session) = android::start_watch()?;
     Ok((
         receiver,
         Arc::new(WatcherShutdown {
-            inner: ShutdownInner::Android(stop_flag),
+            inner: ShutdownInner::Android(std::sync::Mutex::new(Some(session))),
         }),
     ))
 }

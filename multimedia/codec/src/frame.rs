@@ -204,21 +204,28 @@ impl DecodedFrame {
             output.len()
         );
 
-        match self.inner {
-            #[cfg(waterkit_hw_codec_apple)]
-            DecodedFrameInner::Hardware {
-                ref surface,
-                ref layout,
-                ..
-            } => {
-                Self::copy_iosurface_to_buffer(surface, width, height, *layout, output);
+        #[cfg(waterkit_any_codec)]
+        {
+            match self.inner {
+                #[cfg(waterkit_hw_codec_apple)]
+                DecodedFrameInner::Hardware {
+                    ref surface,
+                    ref layout,
+                    ..
+                } => {
+                    Self::copy_iosurface_to_buffer(surface, width, height, *layout, output);
+                }
+                #[cfg(waterkit_software_frames)]
+                DecodedFrameInner::Software { ref data, .. } => {
+                    output[..data.len()].copy_from_slice(data);
+                }
             }
-            #[cfg(waterkit_software_frames)]
-            DecodedFrameInner::Software { ref data, .. } => {
-                output[..data.len()].copy_from_slice(data);
-            }
+            required_size
         }
-        required_size
+        #[cfg(not(waterkit_any_codec))]
+        {
+            match self.inner {}
+        }
     }
 
     /// Copy `IOSurface` data to a buffer.

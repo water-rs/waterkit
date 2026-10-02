@@ -87,7 +87,10 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.waterkit.test"
+        // Overridable for parallel installs of the harness (e.g. a focused
+        // single-feature build next to the full harness on one device):
+        // ./gradlew :app:assembleDebug -PwaterkitApplicationId=com.example.other
+        applicationId = providers.gradleProperty("waterkitApplicationId").getOrElse("com.waterkit.test")
         minSdk = 26
         targetSdk = 37
         versionCode = 1

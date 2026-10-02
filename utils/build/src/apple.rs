@@ -146,6 +146,54 @@ impl AppleTargetOs {
     }
 }
 
+/// Swift build settings resolved from a Cargo `TARGET` triple.
+///
+/// The SDK name doubles as the toolchain's `usr/lib/swift/<dir>` runtime
+/// directory, so a single field covers both uses.
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AppleSwiftTarget {
+    /// `xcrun --sdk`/`swiftc -sdk` platform name.
+    sdk: &'static str,
+    /// `swiftc -target` triple carrying the deployment version.
+    swift_target: String,
+}
+
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+impl AppleSwiftTarget {
+    /// Classify a Cargo `TARGET` triple into the SDK and Swift target triple
+    /// used to compile the embedded Swift bridge.
+    ///
+    /// `x86_64-apple-ios` is the Intel *simulator* triple — no iOS device ever
+    /// shipped on x86, and rustc marks it `target_abi = "sim"`. Only
+    /// `*-apple-ios-sim` triples carry the simulator marker in their name.
+    fn for_cargo_target(target: &str) -> Self {
+        let arch = if target.starts_with("x86_64") {
+            "x86_64"
+        } else {
+            "arm64"
+        };
+        if target.contains("ios") {
+            if target.ends_with("-sim") || target == "x86_64-apple-ios" {
+                Self {
+                    sdk: "iphonesimulator",
+                    swift_target: format!("{arch}-apple-ios14.0-simulator"),
+                }
+            } else {
+                Self {
+                    sdk: "iphoneos",
+                    swift_target: format!("{arch}-apple-ios14.0"),
+                }
+            }
+        } else {
+            Self {
+                sdk: "macosx",
+                swift_target: format!("{arch}-apple-macos12.3"),
+            }
+        }
+    }
+}
+
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
 #[derive(Debug, Clone, Copy)]
 struct SwiftConditionalFrame {
@@ -538,31 +586,8 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
     let obj_file = out_dir.join(format!("{}.o", config.lib_name));
 
     let target = env::var("TARGET").unwrap();
-    let (sdk, swift_target, swift_runtime_dir) = if target.contains("ios") {
-        let is_simulator = target.contains("ios-sim") || target.contains("apple-ios-sim");
-        let arch = if target.contains("x86_64") {
-            "x86_64"
-        } else {
-            "arm64"
-        };
-        if is_simulator {
-            (
-                "iphonesimulator",
-                format!("{arch}-apple-ios14.0-simulator"),
-                "iphonesimulator",
-            )
-        } else {
-            ("iphoneos", format!("{arch}-apple-ios14.0"), "iphoneos")
-        }
-    } else {
-        // macOS
-        let arch = if target.contains("aarch64") || target.contains("arm64") {
-            "arm64"
-        } else {
-            "x86_64"
-        };
-        ("macosx", format!("{arch}-apple-macos12.3"), "macosx")
-    };
+    let apple_target = AppleSwiftTarget::for_cargo_target(&target);
+    let sdk = apple_target.sdk;
 
     let sdk_path = String::from_utf8(
         Command::new("xcrun")
@@ -590,7 +615,7 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
         .arg(&combined_swift);
 
     // Add target triple for cross-compilation
-    swiftc.arg("-target").arg(&swift_target);
+    swiftc.arg("-target").arg(&apple_target.swift_target);
     if has_ios26_background_task_apis(sdk, &target) {
         swiftc.arg("-D").arg("WATERKIT_HAS_IOS26_BACKGROUND_TASKS");
     }
@@ -623,7 +648,7 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
     println!("cargo:rustc-link-lib=static={}", config.lib_name);
 
     // Link Swift runtime
-    link_swift_runtime(swift_runtime_dir);
+    link_swift_runtime(apple_target.sdk);
 
     // Link required frameworks
     for framework in &config.frameworks {
@@ -732,30 +757,8 @@ pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = Swif
 
     // Get SDK path
     let target = env::var("TARGET").unwrap();
-    let (sdk, swift_target, swift_runtime_dir) = if target.contains("ios") {
-        let is_simulator = target.contains("ios-sim") || target.contains("apple-ios-sim");
-        let arch = if target.contains("x86_64") {
-            "x86_64"
-        } else {
-            "arm64"
-        };
-        if is_simulator {
-            (
-                "iphonesimulator",
-                format!("{arch}-apple-ios14.0-simulator"),
-                "iphonesimulator",
-            )
-        } else {
-            ("iphoneos", format!("{arch}-apple-ios14.0"), "iphoneos")
-        }
-    } else {
-        let arch = if target.contains("aarch64") || target.contains("arm64") {
-            "arm64"
-        } else {
-            "x86_64"
-        };
-        ("macosx", format!("{arch}-apple-macos12.3"), "macosx")
-    };
+    let apple_target = AppleSwiftTarget::for_cargo_target(&target);
+    let sdk = apple_target.sdk;
 
     let sdk_path = String::from_utf8(
         Command::new("xcrun")
@@ -786,7 +789,7 @@ pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = Swif
         .arg(&combined_swift);
 
     // Add target triple
-    swiftc.arg("-target").arg(&swift_target);
+    swiftc.arg("-target").arg(&apple_target.swift_target);
     if has_ios26_background_task_apis(sdk, &target) {
         swiftc.arg("-D").arg("WATERKIT_HAS_IOS26_BACKGROUND_TASKS");
     }
@@ -819,7 +822,7 @@ pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = Swif
     println!("cargo:rustc-link-lib=static={lib_name}");
 
     // Link Swift runtime
-    link_swift_runtime(swift_runtime_dir);
+    link_swift_runtime(apple_target.sdk);
 
     // Collect and deduplicate frameworks, always include Foundation
     use std::collections::HashSet;
@@ -843,8 +846,8 @@ pub fn compile_multi_swift(_lib_name: &str, _crates: impl IntoIterator<Item = Sw
 #[cfg(test)]
 mod tests {
     use super::{
-        AppleTargetOs, discover_swift_bridge_crates, infer_swift_frameworks_from_source,
-        swift_bridge_static_lib_name,
+        AppleSwiftTarget, AppleTargetOs, discover_swift_bridge_crates,
+        infer_swift_frameworks_from_source, swift_bridge_static_lib_name,
     };
 
     #[test]
@@ -905,6 +908,36 @@ import OSLog
         assert!(discovered[0].frameworks.contains(&String::from("UIKit")));
 
         std::fs::remove_dir_all(&root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn selects_iphonesimulator_sdk_for_simulator_triples() {
+        let arm_sim = AppleSwiftTarget::for_cargo_target("aarch64-apple-ios-sim");
+        assert_eq!(arm_sim.sdk, "iphonesimulator");
+        assert_eq!(arm_sim.swift_target, "arm64-apple-ios14.0-simulator");
+
+        // The Intel simulator keeps the bare `x86_64-apple-ios` triple.
+        let intel_sim = AppleSwiftTarget::for_cargo_target("x86_64-apple-ios");
+        assert_eq!(intel_sim.sdk, "iphonesimulator");
+        assert_eq!(intel_sim.swift_target, "x86_64-apple-ios14.0-simulator");
+    }
+
+    #[test]
+    fn selects_iphoneos_sdk_for_device_triple() {
+        let device = AppleSwiftTarget::for_cargo_target("aarch64-apple-ios");
+        assert_eq!(device.sdk, "iphoneos");
+        assert_eq!(device.swift_target, "arm64-apple-ios14.0");
+    }
+
+    #[test]
+    fn selects_macosx_sdk_for_darwin_triples() {
+        let arm = AppleSwiftTarget::for_cargo_target("aarch64-apple-darwin");
+        assert_eq!(arm.sdk, "macosx");
+        assert_eq!(arm.swift_target, "arm64-apple-macos12.3");
+
+        let intel = AppleSwiftTarget::for_cargo_target("x86_64-apple-darwin");
+        assert_eq!(intel.sdk, "macosx");
+        assert_eq!(intel.swift_target, "x86_64-apple-macos12.3");
     }
 
     #[test]

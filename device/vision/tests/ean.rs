@@ -251,3 +251,25 @@ fn blank_frame_decodes_nothing() {
     let codes = BarcodeEngine::new().decode(&frame(&img, 100, 60)).unwrap();
     assert!(codes.is_empty());
 }
+
+#[test]
+fn qr_only_formats_skip_ean_scanline_diagnostics() {
+    // Issue #125: a QR-only selection must not run the EAN scanline
+    // path at all — no EAN rejects in the report, no EAN CPU spent.
+    // A checksum-bad row is what makes the leak observable: ungated,
+    // every scanned row would record a ChecksumMismatch attempt.
+    let digits = [5, 9, 0, 1, 2, 3, 4, 1, 2, 3, 4, 5, 9];
+    let (img, w, h) = ean13_image(&digits);
+    let report = BarcodeEngine::with_formats(Formats::QR)
+        .decode_report(&frame(&img, w, h))
+        .unwrap();
+    assert!(report.barcodes.is_empty());
+    assert!(
+        report
+            .attempts
+            .iter()
+            .all(|a| a.symbology == Symbology::QrCode),
+        "EAN attempts leaked into a QR-only report: {:?}",
+        report.attempts
+    );
+}

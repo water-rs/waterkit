@@ -11,6 +11,13 @@ slice: an in-crate linear-barcode engine with a bounded stream API.
   deterministically by source geometry. No false-positive fallbacks —
   rejected candidates surface structured `RejectReason` diagnostics via
   `BarcodeEngine::decode_report`.
+- **QR Code Model 2** decoding, versions 1-10, all four
+  error-correction levels: finder-pattern detection with geometric
+  trio scoring, version/format BCH information, module-space alignment
+  matching, perspective rectification, mask handling, Reed-Solomon
+  correction over GF(2^8), numeric/alphanumeric/byte segment decode,
+  and quiet-zone validation. Rejected triples surface structured
+  `RejectReason` diagnostics via `BarcodeEngine::decode_report`.
 - **`CpuFrame`**: borrowed typed CPU plane view — stride, format
   (Luma8, RGB/BGR, RGBA/BGRA, NV12, I420), dimensions, timestamp,
   orientation. Owned counterpart `FrameBuf`.
@@ -22,7 +29,7 @@ slice: an in-crate linear-barcode engine with a bounded stream API.
 
 ## Not implemented (explicit)
 
-QR Code, Data Matrix, Aztec, PDF417, EAN-8, UPC-E, Code 128, Code 39,
+Data Matrix, Aztec, PDF417, EAN-8, UPC-E, Code 128, Code 39,
 ITF and all other symbologies are not decoded: they are absent from
 `Formats`, so they cannot be requested. GPU frame input, a
 `waterkit-camera` adapter and OCR are not part of this build.

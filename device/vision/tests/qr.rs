@@ -269,6 +269,7 @@ enum Segment {
     Numeric(String),
     Alphanumeric(String),
     Byte(Vec<u8>),
+    Fnc1,
 }
 
 fn char_count_bits(mode: u8, version: u8) -> usize {
@@ -337,6 +338,7 @@ fn encode_matrix(version: u8, level: Ec, segments: &[Segment], mask: u8) -> Vec<
                     bb.push(u32::from(b), 8);
                 }
             }
+            Segment::Fnc1 => bb.push(5, 4), // FNC1 first position
         }
     }
     // Terminator + pad to capacity.
@@ -778,4 +780,33 @@ fn blank_frame_decodes_nothing() {
         .unwrap();
     assert!(report.barcodes.is_empty());
     assert!(report.attempts.is_empty());
+}
+
+#[test]
+fn decodes_fnc1_percent_markers_and_preserves_byte_segment_raw() {
+    // Regression (panic): raw was once sliced by UTF-8 char lengths, so
+    // a multi-byte char after '%' read out of bounds and panicked. FNC1
+    // '%' substitution belongs to the alphanumeric layer only — the
+    // byte segment's literal 0x25 and multi-byte octets stay exact.
+    let segs = [
+        Segment::Fnc1,
+        Segment::Alphanumeric("A%%B%A".into()),
+        Segment::Byte("é%".as_bytes().to_vec()),
+    ];
+    let (img, w, h) = qr_image(1, Ec::L, &segs, 0, 4, 6);
+    let codes = BarcodeEngine::new().decode(&frame(&img, w, h)).unwrap();
+    assert_eq!(codes.len(), 1, "expected one barcode, got {codes:?}");
+    let c = &codes[0];
+    assert_eq!(c.text, "A%B\u{001D}Aé%");
+    assert_eq!(
+        c.raw,
+        [b'A', b'%', b'B', 0x1D, b'A', 0xC3, 0xA9, b'%'].as_slice()
+    );
+
+    // Deterministic across decodes.
+    let f = frame(&img, w, h);
+    let again = BarcodeEngine::new().decode(&f).unwrap();
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].text, codes[0].text);
+    assert_eq!(again[0].raw, codes[0].raw);
 }

@@ -399,6 +399,16 @@ impl BarcodeEngine {
         if self.formats.contains(Formats::QR) {
             qr::decode(bits, self.options.axes, frame, report);
         }
+        // The scanline path serves both linear symbologies (UPC-A is the
+        // zero-leading subset of EAN-13); skip it entirely when neither
+        // is selected so QR-only decodes pay no EAN CPU or diagnostics.
+        if self.formats.contains(Formats::EAN13) || self.formats.contains(Formats::UPCA) {
+            self.decode_linear(bits, frame, report);
+        }
+    }
+
+    /// Scanline decode for the linear symbologies over `bits`.
+    fn decode_linear(&self, bits: &BitImage, frame: &CpuFrame<'_>, report: &mut DecodeReport) {
         let axes = self.options.axes;
         let mut hits: Vec<(u32, ean::RowHit, bool)> = Vec::new(); // (line, hit, vertical)
 

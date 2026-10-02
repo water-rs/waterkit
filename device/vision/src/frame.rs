@@ -193,7 +193,12 @@ impl<'a> CpuFrame<'a> {
                     plane.width, plane.height
                 )));
             }
-            let needed = plane.stride * (plane.height as usize - 1) + plane.width as usize;
+            let row_bytes = if i == 0 {
+                plane.width as usize * bpp
+            } else {
+                plane.width as usize
+            };
+            let needed = plane.stride * (plane.height as usize - 1) + row_bytes;
             if plane.data.len() < needed {
                 return Err(VisionError::InvalidFrame(format!(
                     "plane {i}: {} bytes < required {needed}",
@@ -524,5 +529,24 @@ impl FrameBuf {
     pub const fn with_orientation(mut self, orientation: Orientation) -> Self {
         self.orientation = orientation;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packed_requires_full_last_row_bytes() {
+        // Issue #124: the required length is stride * (height - 1) +
+        // width * bytes_per_pixel — the final row is measured in BYTES,
+        // so a buffer that ends after `width` bytes of the last row
+        // (enough for a luma plane, not for RGBA) must be rejected.
+        let (w, h) = (4u32, 2u32);
+        let stride = (w * 4) as usize;
+        let short = vec![0u8; stride * (h as usize - 1) + w as usize];
+        assert!(CpuFrame::packed(FrameFormat::Rgba8, &short, w, h, stride).is_err());
+        let full = vec![0u8; stride * h as usize];
+        assert!(CpuFrame::packed(FrameFormat::Rgba8, &full, w, h, stride).is_ok());
     }
 }

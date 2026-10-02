@@ -194,6 +194,11 @@ pub fn parse_segments(data: &[u8], version: u8) -> Result<(String, Vec<u8>), Rej
                     let v = reader.read(width as usize).ok_or(RejectReason::Truncated {
                         stage: Stage::Segments,
                     })?;
+                    if v >= 10u32.pow(group) {
+                        return Err(RejectReason::DataUndecodable {
+                            bit: reader.pos as u32,
+                        });
+                    }
                     for d in (0..group).rev() {
                         let place = 10u32.pow(d);
                         let digit = v / place % 10;
@@ -209,6 +214,8 @@ pub fn parse_segments(data: &[u8], version: u8) -> Result<(String, Vec<u8>), Rej
                 let count = reader.read(bits).ok_or(RejectReason::Truncated {
                     stage: Stage::Segments,
                 })?;
+                let mut seg_text = String::new();
+                let mut seg_raw = Vec::new();
                 let mut i = 0u32;
                 while i < count {
                     if count - i >= 2 {
@@ -223,8 +230,8 @@ pub fn parse_segments(data: &[u8], version: u8) -> Result<(String, Vec<u8>), Rej
                         }
                         for c in [a, b] {
                             let ch = tables::ALPHANUMERIC[c as usize];
-                            text.push(ch as char);
-                            raw.push(ch);
+                            seg_text.push(ch as char);
+                            seg_raw.push(ch);
                         }
                         i += 2;
                     } else {
@@ -237,11 +244,18 @@ pub fn parse_segments(data: &[u8], version: u8) -> Result<(String, Vec<u8>), Rej
                             });
                         }
                         let ch = tables::ALPHANUMERIC[v as usize];
-                        text.push(ch as char);
-                        raw.push(ch);
+                        seg_text.push(ch as char);
+                        seg_raw.push(ch);
                         i += 1;
                     }
                 }
+                // The '%'→GS substitution belongs to the alphanumeric
+                // alphabet only; byte-segment octets stay exact.
+                if fnc1 {
+                    apply_fnc1(&mut seg_text, &mut seg_raw);
+                }
+                text.push_str(&seg_text);
+                raw.extend_from_slice(&seg_raw);
             }
             4 => {
                 // Byte mode.
@@ -312,11 +326,6 @@ pub fn parse_segments(data: &[u8], version: u8) -> Result<(String, Vec<u8>), Rej
         }
     }
 
-    if fnc1 {
-        // AIM-style GS handling inside alphanumeric output: '%%' is a
-        // literal '%', a lone '%' is the GS separator (0x1D).
-        apply_fnc1(&mut text, &mut raw);
-    }
     Ok((text, raw))
 }
 
@@ -356,39 +365,44 @@ fn decode_bytes(
 
 /// Apply the FNC1 substitution: in the alphanumeric alphabet '%' is a
 /// separator marker — '%%' collapses to '%', a lone '%' becomes GS
-/// (U+001D). Applied over the decoded text/raw in place.
+/// (U+001D / 0x1D). Text is transformed by characters and raw by raw
+/// bytes independently; a '%' always occupies one char and one byte
+/// (0x25), so the two layers never index into each other.
 fn apply_fnc1(text: &mut String, raw: &mut Vec<u8>) {
     if !text.contains('%') {
         return;
     }
     let mut out = String::with_capacity(text.len());
-    let mut out_raw = Vec::with_capacity(raw.len());
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0usize;
-    let mut raw_pos = 0usize;
-    while i < chars.len() {
-        let c = chars[i];
-        let c_len = c.len_utf8();
+    let mut iter = text.chars().peekable();
+    while let Some(c) = iter.next() {
         if c == '%' {
-            if i + 1 < chars.len() && chars[i + 1] == '%' {
+            if iter.next_if_eq(&'%').is_some() {
                 out.push('%');
-                out_raw.extend_from_slice(&raw[raw_pos..=raw_pos]);
-                i += 2;
-                raw_pos += 2;
             } else {
                 out.push('\u{001D}');
-                out_raw.push(0x1D);
-                i += 1;
-                raw_pos += 1;
             }
         } else {
             out.push(c);
-            out_raw.extend_from_slice(&raw[raw_pos..raw_pos + c_len]);
-            raw_pos += c_len;
-            i += 1;
         }
     }
     *text = out;
+
+    let mut out_raw = Vec::with_capacity(raw.len());
+    let mut i = 0usize;
+    while i < raw.len() {
+        if raw[i] == b'%' {
+            if i + 1 < raw.len() && raw[i + 1] == b'%' {
+                out_raw.push(b'%');
+                i += 2;
+            } else {
+                out_raw.push(0x1D);
+                i += 1;
+            }
+        } else {
+            out_raw.push(raw[i]);
+            i += 1;
+        }
+    }
     *raw = out_raw;
 }
 
@@ -405,5 +419,37 @@ mod tests {
         assert_eq!(r.read(5), None);
         assert_eq!(r.read(4), Some(0b0100));
         assert_eq!(r.remaining(), 0);
+    }
+
+    #[test]
+    fn numeric_group_above_its_digit_count_is_rejected() {
+        // Numeric, count = 3, then a 10-bit group holding 1000 — one more
+        // than the 999 a 3-digit group may encode (ISO/IEC 18004 8.4.2).
+        let data = [0b0001_0000, 0b0000_1111, 0b1110_1000];
+        let err = parse_segments(&data, 1).unwrap_err();
+        assert!(
+            matches!(err, RejectReason::DataUndecodable { .. }),
+            "expected DataUndecodable, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn fnc1_marks_percent_in_each_layer_independently() {
+        // Regression: raw slicing once used UTF-8 char lengths, so a
+        // multi-byte char after '%' read past the end and panicked.
+        // Text transforms by char, raw by byte — the layers never
+        // index into each other.
+        let mut text = String::from("A%B%C");
+        let mut raw = vec![b'A', b'%', b'B', b'%', b'C'];
+        apply_fnc1(&mut text, &mut raw);
+        assert_eq!(text, "A\u{001D}B\u{001D}C");
+        assert_eq!(raw, [b'A', 0x1D, b'B', 0x1D, b'C']);
+
+        // '%%' collapses to a literal '%' in both layers.
+        let mut text = String::from("A%%B");
+        let mut raw = vec![b'A', b'%', b'%', b'B'];
+        apply_fnc1(&mut text, &mut raw);
+        assert_eq!(text, "A%B");
+        assert_eq!(raw, [b'A', b'%', b'B']);
     }
 }

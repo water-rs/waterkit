@@ -7648,6 +7648,7 @@ dependencies = [
  "waterkit-speech",
  "waterkit-system",
  "waterkit-video",
+ "waterkit-vision",
 ]
 
 [[package]]
@@ -8450,6 +8451,16 @@ dependencies = [
  "waterkit-video-core",
  "windows 0.62.2",
  "zenwave",
+]
+
+[[package]]
+name = "waterkit-vision"
+version = "0.1.4"
+dependencies = [
+ "async-channel",
+ "futures",
+ "thiserror 2.0.20",
+ "waterkit-core",
 ]
 
 [[package]]

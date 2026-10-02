@@ -40,7 +40,7 @@ const fn build() -> Tables {
     Tables { exp, log }
 }
 
-static GF: Tables = build();
+const GF: Tables = build();
 
 /// `αⁱ` (exponent may exceed 254 — the doubled table absorbs one wrap).
 pub fn exp(i: u32) -> u8 {

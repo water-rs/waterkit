@@ -1,5 +1,8 @@
 use waterkit_test_report::{TestCase, TestReport, to_json_pretty};
 
+#[cfg(feature = "camera")]
+mod camera;
+
 #[swift_bridge::bridge]
 mod ffi {
     extern "Rust" {
@@ -35,7 +38,7 @@ fn build_report() -> TestReport {
         record_permission(&mut report).await;
 
         #[cfg(feature = "camera")]
-        record_camera(&mut report);
+        camera::record(&mut report).await;
 
         #[cfg(feature = "clipboard")]
         record_clipboard(&mut report);
@@ -252,20 +255,6 @@ async fn record_permission(report: &mut TestReport) {
         "permission.location",
         format!("status={status:?}"),
     ));
-}
-
-#[cfg(feature = "camera")]
-fn record_camera(report: &mut TestReport) {
-    match waterkit::camera::Camera::list() {
-        Ok(cameras) => report.push(TestCase::passed_with_message(
-            "camera.list",
-            format!("count={}", cameras.len()),
-        )),
-        Err(error) => report.push(TestCase::failed(
-            "camera.list",
-            format!("camera list failed: {error}"),
-        )),
-    }
 }
 
 #[cfg(feature = "clipboard")]

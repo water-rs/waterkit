@@ -47,7 +47,7 @@ struct ContentView: View {
                 List {
                     Section(header: Text("Tests")) {
                         Button("Run All Tests") {
-                            runAndPersistTests(shouldExit: false)
+                            runAndPersistTests(runID: "manual", shouldExit: false)
                         }
                     }
                 }
@@ -61,20 +61,47 @@ struct ContentView: View {
             }
             autoRunStarted = true
 
-            if CommandLine.arguments.contains("--waterkit-run-test") {
-                runAndPersistTests(shouldExit: true)
+            if let runID = harnessRunID() {
+                // A device run can take minutes (camera prompts, frame
+                // streams); keep the screen from locking under it, which
+                // would interrupt the capture session.
+                UIApplication.shared.isIdleTimerDisabled = true
+                runAndPersistTests(runID: runID, shouldExit: true)
             }
         }
     }
 
-    private func runAndPersistTests(shouldExit: Bool) {
+    /// The run ID the `waterkit-test` runner passes as
+    /// `--waterkit-run-test <run-id>`; `nil` when the app was launched by hand.
+    private func harnessRunID() -> String? {
+        let arguments = CommandLine.arguments
+        guard let flag = arguments.firstIndex(of: "--waterkit-run-test") else {
+            return nil
+        }
+        let value = arguments.index(after: flag)
+        guard value < arguments.endIndex else {
+            fatalError("--waterkit-run-test needs a run ID")
+        }
+        return arguments[value]
+    }
+
+    /// Runs every case and writes the report atomically to
+    /// `Documents/waterkit-test-reports/<run-id>.json`. The run ID ties the
+    /// file to the launch that asked for it; reports of earlier runs are
+    /// removed first so they do not pile up in the container.
+    private func runAndPersistTests(runID: String, shouldExit: Bool) {
         logger.log("Executing run_tests_json()...")
         DispatchQueue.global(qos: .userInitiated).async {
-            let report = run_tests_json().toString()
-
             do {
                 let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                let reportURL = documents.appendingPathComponent("waterkit-test-report.json")
+                let reports = documents.appendingPathComponent("waterkit-test-reports", isDirectory: true)
+                if FileManager.default.fileExists(atPath: reports.path) {
+                    try FileManager.default.removeItem(at: reports)
+                }
+                try FileManager.default.createDirectory(at: reports, withIntermediateDirectories: true)
+
+                let report = run_tests_json().toString()
+                let reportURL = reports.appendingPathComponent("\(runID).json")
                 try report.write(to: reportURL, atomically: true, encoding: .utf8)
                 logger.log("✓ Wrote structured report")
                 if shouldExit {

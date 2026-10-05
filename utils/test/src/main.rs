@@ -2,13 +2,15 @@ use clap::{Parser, Subcommand};
 use eyre::{Context, Result};
 use owo_colors::OwoColorize;
 use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use toml_edit::DocumentMut;
 use tracing::{info, warn};
 use wait_timeout::ChildExt;
 use waterkit_test_report::{TestReport, from_json, parse_report_block};
+
+mod ios;
 
 const MACOS_HEADERPAD_RUSTFLAGS: &str = "-C link-arg=-Wl,-headerpad_max_install_names";
 
@@ -50,11 +52,8 @@ enum Commands {
         /// Path to the crate to run
         crate_path: PathBuf,
     },
-    /// Run a crate on iOS
-    Ios {
-        /// Path to the crate to run
-        crate_path: PathBuf,
-    },
+    /// Run a crate on the booted iOS simulator, or on a paired device
+    Ios(ios::IosArgs),
 }
 
 fn main() -> Result<()> {
@@ -68,7 +67,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Android { crate_path } => run_android(&crate_path),
         Commands::Macos { crate_path } => run_macos(&crate_path),
-        Commands::Ios { crate_path } => run_ios(&crate_path),
+        Commands::Ios(args) => ios::run(args),
     }
 }
 
@@ -80,41 +79,11 @@ fn run_android(crate_path: &Path) -> Result<()> {
 }
 
 fn run_android_awake(crate_path: &Path, toolchain: &AndroidToolchain) -> Result<()> {
-    // 1. Verify crate path
-    let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
-
-    if !crate_path.join("Cargo.toml").exists() {
-        eyre::bail!("No Cargo.toml found at {}", crate_path.display());
-    }
-
-    info!("Target crate: {}", crate_path.display());
-
-    // 2. Resolve workspace root
-    let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap() // tools
-        .parent()
-        .unwrap() // kit (root)
-        .to_path_buf();
+    let feature = harness_feature(crate_path)?;
+    let root_dir = workspace_root();
     let android_api = android_min_sdk(&root_dir)?;
 
-    // 3. Get feature
-    let content_cargo_path = crate_path.join("Cargo.toml");
-    let content_toml_str =
-        std::fs::read_to_string(&content_cargo_path).context("Read content toml")?;
-    let content_doc = content_toml_str
-        .parse::<DocumentMut>()
-        .context("Parse content toml")?;
-    let package_name = content_doc
-        .get("package")
-        .and_then(|package| package.get("name"))
-        .and_then(|name| name.as_str())
-        .unwrap_or("");
-    let feature = get_crate_feature(package_name).ok_or_else(|| {
-        eyre::eyre!("Unsupported crate package name for harness features: {package_name}")
-    })?;
-
-    // 4. Run cargo ndk build
+    // Run cargo ndk build
     info!("{}", "Building Android test library...".yellow().bold());
     let mut args = vec![
         "ndk",
@@ -215,199 +184,6 @@ fn run_macos(crate_path: &Path) -> Result<()> {
     };
 
     let report = parse_process_report("macOS", &metadata.package_name, &output)?;
-    ensure_report_success(&report)?;
-
-    Ok(())
-}
-
-fn run_ios(crate_path: &Path) -> Result<()> {
-    info!("{}", "Preparing iOS test environment...".green().bold());
-
-    // 1. Verify crate path
-    let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
-
-    if !crate_path.join("Cargo.toml").exists() {
-        eyre::bail!("No Cargo.toml found at {}", crate_path.display());
-    }
-
-    info!("Target crate: {}", crate_path.display());
-
-    // 2. Resolve workspace root
-    let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap() // tools
-        .parent()
-        .unwrap() // kit (root)
-        .to_path_buf();
-
-    // 2.5 Get feature
-    let content_cargo_path = crate_path.join("Cargo.toml");
-    let content_toml_str =
-        std::fs::read_to_string(&content_cargo_path).context("Read content toml")?;
-    let content_doc = content_toml_str
-        .parse::<DocumentMut>()
-        .context("Parse content toml")?;
-    let package_name = content_doc
-        .get("package")
-        .and_then(|package| package.get("name"))
-        .and_then(|name| name.as_str())
-        .unwrap_or("");
-    let feature = get_crate_feature(package_name).ok_or_else(|| {
-        eyre::eyre!("Unsupported crate package name for harness features: {package_name}")
-    })?;
-
-    // 3. Build for iOS Simulator
-    info!("{}", "Building iOS test library...".yellow().bold());
-    let mut args = vec![
-        "build",
-        "--target",
-        "aarch64-apple-ios-sim",
-        "-p",
-        "waterkit-test-ios",
-    ];
-    args.push("--features");
-    args.push(feature);
-
-    let status = std::process::Command::new("cargo")
-        .current_dir(&root_dir)
-        .args(&args)
-        .status()
-        .context("Failed to run cargo build")?;
-
-    if !status.success() {
-        eyre::bail!("iOS build failed");
-    }
-
-    // 4. Swift Compile
-    info!("{}", "Compiling Swift app...".yellow().bold());
-
-    // The app only compiles its own generated bridge; every component crate's
-    // `sys/apple` Swift bridge is already compiled into the static lib by that
-    // crate's own build script.
-
-    // 4.1 Get SDK Path
-    let sdk_path_output = std::process::Command::new("xcrun")
-        .args(["--sdk", "iphonesimulator", "--show-sdk-path"])
-        .output()
-        .context("Failed to get SDK path")?;
-    let sdk_path = String::from_utf8(sdk_path_output.stdout)?
-        .trim()
-        .to_string();
-
-    let mut swiftc_cmd = std::process::Command::new("xcrun");
-    swiftc_cmd
-        .current_dir(&root_dir)
-        .arg("swiftc")
-        .arg("-target")
-        .arg("arm64-apple-ios17.0-simulator") // Target iOS 17 (Sim)
-        .arg("-sdk")
-        .arg(&sdk_path)
-        .arg("-I")
-        .arg("tests/ios/app/WaterKitTest/Generated")
-        .arg("-import-objc-header")
-        .arg("tests/ios/app/WaterKitTest/Generated/Bridging-Header.h")
-        .arg("-L")
-        .arg("target/aarch64-apple-ios-sim/debug")
-        .arg("-lwaterkit_test_ios")
-        .arg("-framework")
-        .arg("CoreFoundation")
-        .arg("-framework")
-        .arg("Security")
-        .arg("-framework")
-        .arg("Foundation")
-        .arg("-framework")
-        .arg("SwiftUI")
-        .arg("tests/ios/app/WaterKitTest/WaterKitTestApp.swift")
-        .arg("tests/ios/app/WaterKitTest/ContentView.swift")
-        .arg("tests/ios/app/WaterKitTest/Generated/SwiftBridgeCore.swift")
-        .arg("tests/ios/app/WaterKitTest/Generated/waterkit-test-ios/waterkit-test-ios.swift");
-
-    let status = swiftc_cmd
-        .arg("-o")
-        .arg("WaterKitTestBinary")
-        .status()
-        .context("Failed to compile Swift app")?;
-
-    if !status.success() {
-        eyre::bail!("Swift compilation failed");
-    }
-
-    // 5. Bundle
-    info!("{}", "Bundling app...".yellow().bold());
-    let app_dir = root_dir.join("WaterKitTest.app");
-    if app_dir.exists() {
-        std::fs::remove_dir_all(&app_dir)?;
-    }
-    std::fs::create_dir_all(&app_dir)?;
-
-    std::fs::rename(
-        root_dir.join("WaterKitTestBinary"),
-        app_dir.join("WaterKitTest"),
-    )?;
-
-    std::fs::copy(
-        root_dir.join("tests/ios/app/Info.plist"),
-        app_dir.join("Info.plist"),
-    )?;
-
-    // 6. Codesign
-    // Plain ad-hoc signing: the simulator rejects launches when an ad-hoc
-    // signature carries entitlements.
-    info!("{}", "Codesigning...".yellow().bold());
-    let status = std::process::Command::new("codesign")
-        .args(["-s", "-", "WaterKitTest.app"])
-        .current_dir(&root_dir)
-        .status()
-        .context("Failed to codesign")?;
-
-    if !status.success() {
-        eyre::bail!("Codesign failed");
-    }
-
-    // 7. Install & Launch
-    info!("{}", "Installing to Simulator (booted)...".yellow().bold());
-    let simulator_id = "booted"; // Use "booted" to target the active simulator automatically!
-
-    let status = std::process::Command::new("xcrun")
-        .args(["simctl", "install", simulator_id, "WaterKitTest.app"])
-        .current_dir(&root_dir)
-        .status()
-        .context("Failed to install to simulator")?;
-
-    if !status.success() {
-        eyre::bail!("Installation failed (ensure a simulator is booted)");
-    }
-
-    grant_ios_permissions(feature, simulator_id)?;
-
-    let report_path = ios_report_path(simulator_id)?;
-    if report_path.exists() {
-        std::fs::remove_file(&report_path)
-            .with_context(|| format!("Failed to remove stale {}", report_path.display()))?;
-    }
-
-    info!("{}", "Launching app...".green().bold());
-    let status = std::process::Command::new("xcrun")
-        .args([
-            "simctl",
-            "launch",
-            "--console",
-            simulator_id,
-            "com.waterkit.test",
-            "--waterkit-run-test",
-        ])
-        .current_dir(&root_dir)
-        .status()
-        .context("Failed to launch app")?;
-
-    if !status.success() {
-        eyre::bail!("Launch failed");
-    }
-
-    let report_json = std::fs::read_to_string(&report_path)
-        .with_context(|| format!("iOS app did not write {}", report_path.display()))?;
-    let report = from_json(&report_json)
-        .with_context(|| format!("Failed to parse {}", report_path.display()))?;
     ensure_report_success(&report)?;
 
     Ok(())
@@ -865,30 +641,12 @@ fn run_adb_with_timeout(
     timeout: Duration,
     description: &str,
 ) -> Result<Output> {
-    let mut child = std::process::Command::new(&toolchain.adb)
+    let mut command = Command::new(&toolchain.adb);
+    command
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("Failed to run adb to {description}"))?;
-
-    if child
-        .wait_timeout(timeout)
-        .with_context(|| format!("Failed to wait for adb to {description}"))?
-        .is_none()
-    {
-        child
-            .kill()
-            .with_context(|| format!("Failed to kill the adb command that should {description}"))?;
-        child
-            .wait()
-            .with_context(|| format!("Failed to reap the adb command that should {description}"))?;
-        eyre::bail!("adb did not {description} within {timeout:?}");
-    }
-
-    child
-        .wait_with_output()
-        .with_context(|| format!("Failed to read the output of the adb command that {description}"))
+        .stderr(Stdio::piped());
+    run_with_timeout(command, timeout, description)
 }
 
 fn wait_for_android_report(timeout: Duration, toolchain: &AndroidToolchain) -> Result<TestReport> {
@@ -954,68 +712,52 @@ fn run_adb<const N: usize>(toolchain: &AndroidToolchain, args: [&str; N]) -> Res
     Ok(())
 }
 
-/// Grants the TCC permissions the harness can set without the system prompt
-/// once the app is installed, then plants a deterministic simulated location
-/// so `Location::get()` has a fix to return. Notification authorization is not
-/// a `simctl privacy` service, so that case skips instead.
-fn grant_ios_permissions(feature: &str, simulator_id: &str) -> Result<()> {
-    if !matches!(feature, "full" | "location" | "permission") {
-        return Ok(());
+/// Resolves the harness feature that exercises the crate at `crate_path`.
+fn harness_feature(crate_path: &Path) -> Result<&'static str> {
+    let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
+    let manifest_path = crate_path.join("Cargo.toml");
+    if !manifest_path.exists() {
+        eyre::bail!("No Cargo.toml found at {}", crate_path.display());
     }
+    info!("Target crate: {}", crate_path.display());
 
-    for service in ["location", "location-always"] {
-        let status = std::process::Command::new("xcrun")
-            .args([
-                "simctl",
-                "privacy",
-                simulator_id,
-                "grant",
-                service,
-                "com.waterkit.test",
-            ])
-            .status()
-            .context("Failed to grant simulator privacy permission")?;
-        if !status.success() {
-            eyre::bail!("simctl privacy grant {service} failed");
-        }
-    }
-
-    let status = std::process::Command::new("xcrun")
-        .args([
-            "simctl",
-            "location",
-            simulator_id,
-            "set",
-            "37.3349,-122.0090",
-        ])
-        .status()
-        .context("Failed to set simulated location")?;
-    if !status.success() {
-        eyre::bail!("simctl location set failed");
-    }
-
-    Ok(())
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("Read {}", manifest_path.display()))?
+        .parse::<DocumentMut>()
+        .with_context(|| format!("Parse {}", manifest_path.display()))?;
+    let package_name = manifest
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(|name| name.as_str())
+        .ok_or_else(|| eyre::eyre!("Missing package.name in {}", manifest_path.display()))?;
+    get_crate_feature(package_name).ok_or_else(|| {
+        eyre::eyre!("Unsupported crate package name for harness features: {package_name}")
+    })
 }
 
-fn ios_report_path(simulator_id: &str) -> Result<PathBuf> {
-    let output = std::process::Command::new("xcrun")
-        .args([
-            "simctl",
-            "get_app_container",
-            simulator_id,
-            "com.waterkit.test",
-            "data",
-        ])
-        .output()
-        .context("Failed to query iOS app data container")?;
+/// Runs `command` to completion, killing it when it outlives `timeout`.
+fn run_with_timeout(mut command: Command, timeout: Duration, description: &str) -> Result<Output> {
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("Failed to start the command that should {description}"))?;
 
-    if !output.status.success() {
-        eyre::bail!("Failed to query iOS app data container");
+    if child
+        .wait_timeout(timeout)
+        .with_context(|| format!("Failed to wait for the command that should {description}"))?
+        .is_none()
+    {
+        child
+            .kill()
+            .with_context(|| format!("Failed to kill the command that should {description}"))?;
+        child
+            .wait()
+            .with_context(|| format!("Failed to reap the command that should {description}"))?;
+        eyre::bail!("Did not {description} within {timeout:?}");
     }
 
-    let container = String::from_utf8(output.stdout)
-        .context("iOS app data container path was not valid UTF-8")?;
-    Ok(PathBuf::from(container.trim()).join("Documents/waterkit-test-report.json"))
+    child.wait_with_output().with_context(|| {
+        format!("Failed to read the output of the command that should {description}")
+    })
 }
 
 fn parse_process_report(platform: &str, package_name: &str, output: &str) -> Result<TestReport> {
@@ -1041,6 +783,13 @@ fn ensure_report_success(report: &TestReport) -> Result<()> {
         report.skipped_count(),
         report.failed_count()
     );
+
+    for case in &report.cases {
+        match &case.message {
+            Some(message) => info!("  {:?} {}: {message}", case.status, case.name),
+            None => info!("  {:?} {}", case.status, case.name),
+        }
+    }
 
     if report.has_failures() {
         eyre::bail!("WaterKit test failures: {}", report.failure_summary());

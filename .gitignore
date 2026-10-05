@@ -8,9 +8,9 @@
 **/DerivedData/
 tests/android/app/src/main/jniLibs/
 tests/android/gradle_debug.log
-tests/ios/app/WaterKitTest.app/
+tests/ios/app/WaterKitTest.xcodeproj/project.xcworkspace/
+tests/ios/app/WaterKitTest.xcodeproj/xcuserdata/
 tests/ios/app/WaterKitTest/Generated/
-WaterKitTest.app/
 tests/app/
 .idea/
 .vscode/

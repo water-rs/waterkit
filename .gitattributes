@@ -3,3 +3,7 @@
 # multimedia/codec/tests/packaged_shaders.rs; never convert their line endings.
 *.wgsl text eol=lf
 multimedia/codec/src/shaders/compiled/** -text
+
+# Test fixtures are embedded verbatim by include_str! and must keep LF endings
+# on every checkout so their contents parse byte for byte.
+multimedia/audio/src/fixtures/*.hex text eol=lf

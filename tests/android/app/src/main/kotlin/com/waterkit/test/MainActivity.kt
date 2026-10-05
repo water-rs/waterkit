@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import org.json.JSONObject
 import android.widget.Button
 import android.widget.LinearLayout
@@ -176,6 +177,11 @@ class MainActivity : AppCompatActivity() {
     private fun checkIntent(intent: android.content.Intent) {
         if (intent.getBooleanExtra("run_test", false)) {
             intent.removeExtra("run_test")
+            // The runner wakes the device just before launch. From here until
+            // the report is written this window keeps the screen on, so the
+            // screen timeout cannot take focus away mid-run. The flag belongs
+            // to this window alone and changes no device setting.
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             pendingNativeTest = true
             runPendingNativeTest()
         }
@@ -220,6 +226,7 @@ class MainActivity : AppCompatActivity() {
             }
             writeReport(finalReport)
             runOnUiThread {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 if (failure == null) {
                     log("Native test report written")
                 } else {

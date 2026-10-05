@@ -5,18 +5,22 @@
 use clap::{Parser, Subcommand};
 use eyre::{Context, Result};
 use owo_colors::OwoColorize;
+use process_control::{ChildExt, Control};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use toml_edit::DocumentMut;
 use tracing::{info, warn};
-use wait_timeout::ChildExt;
 use waterkit_test_report::{TestReport, from_json, parse_report_block};
 
+mod android_device;
 mod ios;
 
 const MACOS_HEADERPAD_RUSTFLAGS: &str = "-C link-arg=-Wl,-headerpad_max_install_names";
+
+/// Package name of the Android harness application.
+const ANDROID_HARNESS_PACKAGE: &str = "com.waterkit.test";
 
 /// How long the harness allows Android to bring the test activity to its first
 /// frame, measured by `am start -W`.
@@ -79,10 +83,6 @@ fn run_android(crate_path: &Path) -> Result<()> {
     info!("{}", "Preparing Android test environment...".green().bold());
 
     let toolchain = AndroidToolchain::resolve()?;
-    with_android_device_awake(&toolchain, || run_android_awake(crate_path, &toolchain))
-}
-
-fn run_android_awake(crate_path: &Path, toolchain: &AndroidToolchain) -> Result<()> {
     let feature = harness_feature(crate_path)?;
     let root_dir = workspace_root();
     let android_api = android_min_sdk(&root_dir)?;
@@ -118,11 +118,16 @@ fn run_android_awake(crate_path: &Path, toolchain: &AndroidToolchain) -> Result<
 
     info!("{}", "Android libraries built successfully.".green().bold());
 
-    build_android_apk(&root_dir, toolchain, feature)?;
-    install_android_apk(&root_dir, toolchain)?;
-    grant_android_permissions_for_feature(feature, toolchain)?;
-    launch_android_test(toolchain)?;
-    let report = wait_for_android_report(ANDROID_REPORT_TIMEOUT, toolchain)?;
+    build_android_apk(&root_dir, &toolchain, feature)?;
+    install_android_apk(&root_dir, &toolchain)?;
+    grant_android_permissions_for_feature(feature, &toolchain)?;
+    // Wake the device only now: the build and install above take minutes, long
+    // enough for the screen to time out again. The harness window keeps the
+    // screen on from its first frame.
+    android_device::wake_and_unlock(&toolchain)?;
+    launch_android_test(&toolchain)?;
+    android_device::wait_for_harness_focus(&toolchain)?;
+    let report = wait_for_android_report(ANDROID_REPORT_TIMEOUT, &toolchain)?;
     ensure_report_success(&report)?;
 
     Ok(())
@@ -406,71 +411,6 @@ impl AndroidToolchain {
     }
 }
 
-fn with_android_device_awake<T>(
-    toolchain: &AndroidToolchain,
-    run: impl FnOnce() -> Result<T>,
-) -> Result<T> {
-    let original = android_stay_awake_setting(toolchain)?;
-    set_android_stay_awake(toolchain, original | 2)?;
-
-    let run_result =
-        run_adb(toolchain, ["shell", "input", "keyevent", "KEYCODE_WAKEUP"]).and_then(|()| run());
-    let restore_result = set_android_stay_awake(toolchain, original);
-    match (run_result, restore_result) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), Ok(())) => Err(error),
-        (Ok(_), Err(error)) => Err(error).context("Android tests passed, but restoring the device stay-awake setting failed"),
-        (Err(error), Err(restore_error)) => Err(error).with_context(|| {
-            format!(
-                "Android test failed and restoring the device stay-awake setting also failed: {restore_error:#}"
-            )
-        }),
-    }
-}
-
-fn android_stay_awake_setting(toolchain: &AndroidToolchain) -> Result<u32> {
-    let output = std::process::Command::new(&toolchain.adb)
-        .args([
-            "shell",
-            "settings",
-            "get",
-            "global",
-            "stay_on_while_plugged_in",
-        ])
-        .output()
-        .context("Failed to read Android stay-awake setting with adb")?;
-    if !output.status.success() {
-        eyre::bail!(
-            "adb could not read Android stay-awake setting: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-
-    String::from_utf8(output.stdout)
-        .context("Android stay-awake setting was not valid UTF-8")?
-        .trim()
-        .parse()
-        .context("Android stay-awake setting was not an integer bitmask")
-}
-
-fn set_android_stay_awake(toolchain: &AndroidToolchain, setting: u32) -> Result<()> {
-    let status = std::process::Command::new(&toolchain.adb)
-        .args([
-            "shell",
-            "settings",
-            "put",
-            "global",
-            "stay_on_while_plugged_in",
-        ])
-        .arg(setting.to_string())
-        .status()
-        .context("Failed to set Android stay-awake setting with adb")?;
-    if !status.success() {
-        eyre::bail!("adb could not set Android stay-awake setting to {setting}");
-    }
-    Ok(())
-}
-
 fn configured_android_sdk_root() -> Option<PathBuf> {
     ["ANDROID_SDK_ROOT", "ANDROID_HOME"]
         .into_iter()
@@ -560,7 +500,7 @@ fn grant_android_permissions_for_feature(
     for permission in permissions {
         run_adb(
             toolchain,
-            ["shell", "pm", "grant", "com.waterkit.test", permission],
+            ["shell", "pm", "grant", ANDROID_HARNESS_PACKAGE, permission],
         )?;
     }
 
@@ -570,14 +510,14 @@ fn grant_android_permissions_for_feature(
 fn launch_android_test(toolchain: &AndroidToolchain) -> Result<()> {
     run_adb(
         toolchain,
-        ["shell", "am", "force-stop", "com.waterkit.test"],
+        ["shell", "am", "force-stop", ANDROID_HARNESS_PACKAGE],
     )?;
     run_adb(
         toolchain,
         [
             "shell",
             "run-as",
-            "com.waterkit.test",
+            ANDROID_HARNESS_PACKAGE,
             "rm",
             "-f",
             "files/waterkit-test-report.json",
@@ -600,7 +540,7 @@ fn launch_android_test(toolchain: &AndroidToolchain) -> Result<()> {
             "start",
             "-W",
             "-n",
-            "com.waterkit.test/.MainActivity",
+            &format!("{ANDROID_HARNESS_PACKAGE}/.MainActivity"),
             "--ez",
             "run_test",
             "true",
@@ -661,7 +601,7 @@ fn wait_for_android_report(timeout: Duration, toolchain: &AndroidToolchain) -> R
             .args([
                 "exec-out",
                 "run-as",
-                "com.waterkit.test",
+                ANDROID_HARNESS_PACKAGE,
                 "sh",
                 "-c",
                 "test -s files/waterkit-test-report.json && cat files/waterkit-test-report.json",
@@ -740,28 +680,21 @@ fn harness_feature(crate_path: &Path) -> Result<&'static str> {
 }
 
 /// Runs `command` to completion, killing it when it outlives `timeout`.
+///
+/// Its piped stdout and stderr are drained while it runs: a child whose output
+/// outgrows the pipe buffer would otherwise block on the write and be killed at
+/// the deadline with its work already done.
 fn run_with_timeout(mut command: Command, timeout: Duration, description: &str) -> Result<Output> {
-    let mut child = command
+    let output = command
         .spawn()
-        .with_context(|| format!("Failed to start the command that should {description}"))?;
-
-    if child
-        .wait_timeout(timeout)
+        .with_context(|| format!("Failed to start the command that should {description}"))?
+        .controlled_with_output()
+        .time_limit(timeout)
+        .terminate_for_timeout()
+        .wait()
         .with_context(|| format!("Failed to wait for the command that should {description}"))?
-        .is_none()
-    {
-        child
-            .kill()
-            .with_context(|| format!("Failed to kill the command that should {description}"))?;
-        child
-            .wait()
-            .with_context(|| format!("Failed to reap the command that should {description}"))?;
-        eyre::bail!("Did not {description} within {timeout:?}");
-    }
-
-    child.wait_with_output().with_context(|| {
-        format!("Failed to read the output of the command that should {description}")
-    })
+        .ok_or_else(|| eyre::eyre!("Did not {description} within {timeout:?}"))?;
+    Ok(output.into_std_lossy())
 }
 
 fn parse_process_report(platform: &str, package_name: &str, output: &str) -> Result<TestReport> {

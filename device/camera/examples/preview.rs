@@ -152,11 +152,9 @@ impl App {
             .is_none_or(|texture| texture.size() != size)
         {
             let upright = FrameConverter::create_output(device, frame);
-            // The surface is sRGB, so sample the converted frame linearized.
-            let view = upright.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(wgpu::TextureFormat::Rgba8UnormSrgb),
-                ..Default::default()
-            });
+            // The converted frame holds display-ready gamma values, and the
+            // surface is not sRGB, so they reach the screen unchanged.
+            let view = upright.create_view(&wgpu::TextureViewDescriptor::default());
             self.current_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Camera Bind Group"),
                 layout,
@@ -281,9 +279,9 @@ impl ApplicationHandler for App {
         let surface_format = surface_caps
             .formats
             .iter()
-            .find(|f| f.is_srgb())
+            .find(|f| !f.is_srgb())
             .copied()
-            .expect("the window surface offers no sRGB format");
+            .expect("the window surface offers no non-sRGB format");
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

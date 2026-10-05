@@ -176,14 +176,14 @@ impl State {
         let queue = Arc::new(queue);
 
         let caps = surface.get_capabilities(&adapter);
-        // The converted frames are sampled linearized, so they need an sRGB
-        // target to come out with their original values.
+        // The converted frames hold display-ready gamma values, which a
+        // non-sRGB target shows unchanged.
         let format = caps
             .formats
             .iter()
             .copied()
-            .find(wgpu::TextureFormat::is_srgb)
-            .ok_or("the window surface offers no sRGB format")?;
+            .find(|format| !format.is_srgb())
+            .ok_or("the window surface offers no non-sRGB format")?;
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -309,10 +309,9 @@ impl State {
             .is_none_or(|(texture, _)| texture.size() != size)
         {
             let texture = FrameConverter::create_output(&self.device, frame);
-            let view = texture.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(wgpu::TextureFormat::Rgba8UnormSrgb),
-                ..Default::default()
-            });
+            // The converted frame holds display-ready gamma values, and the
+            // surface is not sRGB, so they reach the screen unchanged.
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("texture_bind_group"),
                 layout: &self.bind_group_layout,

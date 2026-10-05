@@ -22,8 +22,10 @@ pub const UPRIGHT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 ///
 /// The output holds the frame's non-linear R'G'B' code values: YCbCr frames
 /// go through their matrix and range, and keep their transfer function and
-/// primaries. Textures from [`Self::create_output`] also allow an
-/// `Rgba8UnormSrgb` view, which samples them linearized.
+/// primaries, so the texture displays correctly when drawn to a non-sRGB
+/// target. To sample it linearized, create the output from
+/// [`Self::output_descriptor`] with `Rgba8UnormSrgb` among its view formats,
+/// on devices whose downlevel capabilities include view formats.
 ///
 /// The converter's shaders are compiled ahead of time, so the device must be
 /// created with [`FrameConverter::required_features`].
@@ -199,11 +201,12 @@ impl FrameConverter {
         }
     }
 
-    /// Creates a texture that [`Self::encode`] can write `frame` into.
-    /// Reuse it for every frame of the same upright size.
+    /// Describes a texture that [`Self::encode`] can write `frame` into: the
+    /// upright size in [`UPRIGHT_FORMAT`], usable as a storage target,
+    /// sampled texture and copy source, with no extra view formats.
     #[must_use]
-    pub fn create_output(device: &wgpu::Device, frame: &Frame) -> wgpu::Texture {
-        device.create_texture(&wgpu::TextureDescriptor {
+    pub const fn output_descriptor(frame: &Frame) -> wgpu::TextureDescriptor<'static> {
+        wgpu::TextureDescriptor {
             label: Some("waterkit-camera upright frame"),
             size: Self::upright_size(frame),
             mip_level_count: 1,
@@ -211,10 +214,17 @@ impl FrameConverter {
             dimension: wgpu::TextureDimension::D2,
             format: UPRIGHT_FORMAT,
             usage: wgpu::TextureUsages::STORAGE_BINDING
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[wgpu::TextureFormat::Rgba8UnormSrgb],
-        })
+                .union(wgpu::TextureUsages::TEXTURE_BINDING)
+                .union(wgpu::TextureUsages::COPY_SRC),
+            view_formats: &[],
+        }
+    }
+
+    /// Creates a texture from [`Self::output_descriptor`]. Reuse it for every
+    /// frame of the same upright size.
+    #[must_use]
+    pub fn create_output(device: &wgpu::Device, frame: &Frame) -> wgpu::Texture {
+        device.create_texture(&Self::output_descriptor(frame))
     }
 
     /// Records the conversion of `frame` into `output` on `encoder`.

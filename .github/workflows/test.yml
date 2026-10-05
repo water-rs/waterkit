@@ -31,6 +31,9 @@ jobs:
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         uses: ./.github/actions/setup-linux-deps
+      - name: Start an X server for the clipboard tests
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/setup-x11-display
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

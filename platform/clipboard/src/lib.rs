@@ -77,20 +77,8 @@
 //! Linux desktops also have a PRIMARY selection holding the text last
 //! selected; it is pasted with the middle mouse button. [`PrimarySelection`]
 //! reads and writes it under both X11 and Wayland (via the data-control
-//! protocol's primary-selection support):
-//!
-//! ```no_run
-//! use waterkit_clipboard::PrimarySelection;
-//!
-//! # async fn example() -> Result<(), waterkit_clipboard::ClipboardError> {
-//! let mut primary = PrimarySelection::new()?;
-//! primary.set_text("selected text")?;
-//! if let Some(text) = primary.text().await? {
-//!     println!("PRIMARY: {text}");
-//! }
-//! # Ok(())
-//! # }
-//! ```
+//! protocol's primary-selection support); its own documentation carries the
+//! example.
 //!
 //! PRIMARY exists only on Linux desktops, so this API is compiled only for
 //! `target_os = "linux"`; other platforms do not get it at all.

@@ -14,7 +14,10 @@ jobs:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: true
+      # Each OS runs a different set of platform backends, so one OS failing
+      # says nothing about the others; cancelling them would hide their
+      # failures until the first one is fixed.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
@@ -51,8 +54,10 @@ jobs:
           shared-key: test-${{ matrix.os }}
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest list --workspace --all-targets
-      - run: cargo nextest run --workspace --all-features
-      - run: cargo test --doc --workspace --all-features
+      # `--no-fail-fast`: report every failing test and doctest of the run, not
+      # only the first one.
+      - run: cargo nextest run --workspace --all-features --no-fail-fast
+      - run: cargo test --doc --workspace --all-features --no-fail-fast
       - name: Run macOS sensor integration harness
         if: runner.os == 'macOS'
         run: cargo run -p waterkit-test -- macos tests/macos/sensor

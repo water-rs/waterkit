@@ -238,17 +238,34 @@ async fn record_permission(report: &mut TestReport) {
 
 #[cfg(feature = "clipboard")]
 fn record_clipboard(report: &mut TestReport) {
-    match waterkit::clipboard::Clipboard::new() {
-        Ok(mut clipboard) => match clipboard.set_text("WaterKit Test") {
-            Ok(()) => report.push(TestCase::passed("clipboard.set_text")),
-            Err(error) => report.push(TestCase::failed(
-                "clipboard.set_text",
-                format!("set_text failed: {error}"),
-            )),
-        },
+    let mut clipboard = match waterkit::clipboard::Clipboard::new() {
+        Ok(clipboard) => clipboard,
+        Err(error) => {
+            report.push(TestCase::failed(
+                "clipboard.init",
+                format!("clipboard init failed: {error}"),
+            ));
+            return;
+        }
+    };
+    if let Err(error) = clipboard.set_text("WaterKit Test") {
+        report.push(TestCase::failed(
+            "clipboard.set_text",
+            format!("set_text failed: {error}"),
+        ));
+        return;
+    }
+    report.push(TestCase::passed("clipboard.set_text"));
+
+    match clipboard.has_text() {
+        Ok(true) => report.push(TestCase::passed("clipboard.has_text")),
+        Ok(false) => report.push(TestCase::failed(
+            "clipboard.has_text",
+            "has_text reported no text right after set_text",
+        )),
         Err(error) => report.push(TestCase::failed(
-            "clipboard.init",
-            format!("clipboard init failed: {error}"),
+            "clipboard.has_text",
+            format!("has_text failed: {error}"),
         )),
     }
 }

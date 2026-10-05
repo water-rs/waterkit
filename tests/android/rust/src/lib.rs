@@ -429,6 +429,18 @@ async fn record_android_clipboard(report: &mut TestReport) {
         return;
     }
 
+    match clipboard.has_text() {
+        Ok(true) => report.push(TestCase::passed("clipboard.has_text")),
+        Ok(false) => report.push(TestCase::failed(
+            "clipboard.has_text",
+            "has_text reported no text right after set_text",
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "clipboard.has_text",
+            format!("has_text failed: {error}"),
+        )),
+    }
+
     match clipboard.text().await {
         Ok(text) if text.as_deref() == Some("WaterKit Test") => {
             report.push(TestCase::passed("clipboard.round_trip"));

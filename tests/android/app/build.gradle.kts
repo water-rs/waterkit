@@ -99,6 +99,11 @@ android {
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
+
+        // The manifest's hand-declared clipboard file provider exists only
+        // when waterkit-clipboard's helpers compile into the DEX.
+        manifestPlaceholders["waterkitClipboardProvider"] =
+            kotlinSources.containsKey("ClipboardFileProvider.kt").toString()
     }
 
     buildTypes {

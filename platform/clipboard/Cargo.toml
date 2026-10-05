@@ -36,7 +36,6 @@ x11rb = { workspace = true, features = ["xfixes"] }
 # Apple platforms (iOS only - macOS uses clipboard-rs)
 [target.'cfg(target_os = "ios")'.dependencies]
 swift-bridge.workspace = true
-percent-encoding.workspace = true
 
 [target.'cfg(target_os = "ios")'.build-dependencies]
 waterkit-build.workspace = true
@@ -46,7 +45,6 @@ waterkit-build.workspace = true
 waterkit-build.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
-percent-encoding.workspace = true
 
 [target.'cfg(target_os = "android")'.build-dependencies]
 waterkit-build.workspace = true
@@ -65,4 +63,4 @@ tokio = { workspace = true }
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
-kotlin-sources = ["src/sys/android/ClipboardHelper.kt", "src/sys/android/ClipboardWatchCallback.kt"]
+kotlin-sources = ["src/sys/android/ClipboardHelper.kt", "src/sys/android/ClipboardFileProvider.kt", "src/sys/android/ClipboardWatchCallback.kt"]

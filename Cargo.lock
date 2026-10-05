@@ -7764,7 +7764,6 @@ dependencies = [
  "image",
  "jni 0.22.4",
  "ndk-context",
- "percent-encoding",
  "rustix 1.1.4",
  "swift-bridge",
  "thiserror 2.0.20",
@@ -8225,6 +8224,7 @@ dependencies = [
  "ndk-context",
  "tokio",
  "waterkit",
+ "waterkit-build",
  "waterkit-test-report",
 ]
 

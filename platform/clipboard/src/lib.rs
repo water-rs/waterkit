@@ -281,7 +281,10 @@ impl Clipboard {
     /// Get file paths from the clipboard.
     ///
     /// On Linux the paths come from the clipboard's `text/uri-list`; URIs of a
-    /// scheme other than `file` name no local file and are left out.
+    /// scheme other than `file` name no local file and are left out. On iOS
+    /// they are the pasteboard's file URLs. On Android they are the clip's
+    /// `file://` URIs and the `content://` URIs this app's
+    /// `ClipboardFileProvider` serves; other `content://` URIs name no path.
     ///
     /// # Errors
     ///
@@ -399,11 +402,30 @@ impl Clipboard {
 
     /// Set file paths to the clipboard.
     ///
+    /// # Platform Notes
+    ///
+    /// - **iOS**: Each file is an item provider carrying its contents, which
+    ///   other apps paste, and its file URL.
+    /// - **Android**: Each file is a `content://` URI that other apps open
+    ///   through the read access the clipboard grants them. The URI is served
+    ///   by `waterkit.clipboard.ClipboardFileProvider`, which the app's
+    ///   manifest must declare, under any authority:
+    ///
+    ///   ```xml
+    ///   <provider
+    ///       android:name="waterkit.clipboard.ClipboardFileProvider"
+    ///       android:authorities="${applicationId}.waterkit.clipboard"
+    ///       android:exported="false"
+    ///       android:grantUriPermissions="true" />
+    ///   ```
+    ///
     /// # Errors
     ///
-    /// Returns an error if the clipboard cannot be accessed. On Linux,
-    /// [`ClipboardError::Encode`] when a path is not absolute, which a file
-    /// URI needs.
+    /// Returns an error if the clipboard cannot be accessed. On Linux, iOS and
+    /// Android, [`ClipboardError::Encode`] when a path is not absolute, which a
+    /// file URL needs, or on iOS and Android is not Unicode. On Android,
+    /// [`ClipboardError::Platform`] when the manifest does not declare the
+    /// provider as above.
     pub fn set_files(&mut self, files: &[PathBuf]) -> Result<(), ClipboardError> {
         self.inner.set_files(files)
     }
@@ -415,7 +437,9 @@ impl Clipboard {
     /// # Errors
     ///
     /// Returns an error if the clipboard cannot be accessed or if
-    /// the image cannot be read.
+    /// the image cannot be read. On Android the image goes on the clipboard
+    /// as a file, which needs the provider [`set_files`](Self::set_files)
+    /// describes.
     pub fn set_image(&mut self, path: &Path) -> Result<(), ClipboardError> {
         self.inner.set_image_from_path(path)
     }
@@ -428,7 +452,8 @@ impl Clipboard {
     /// # Errors
     ///
     /// Returns an error if the clipboard cannot be accessed or if
-    /// encoding fails.
+    /// encoding fails. On Android the data goes on the clipboard as a file,
+    /// which needs the provider [`set_files`](Self::set_files) describes.
     pub fn set_data<T: ClipboardData>(&mut self, data: &T) -> Result<(), ClipboardError> {
         let bytes = data.encode()?;
         self.inner.set_binary(&bytes, T::MIME_TYPE)
@@ -440,7 +465,9 @@ impl Clipboard {
     ///
     /// # Errors
     ///
-    /// Returns an error if the clipboard cannot be accessed.
+    /// Returns an error if the clipboard cannot be accessed. On Android the
+    /// data goes on the clipboard as a file, which needs the provider
+    /// [`set_files`](Self::set_files) describes.
     pub fn set_binary(&mut self, data: &[u8], mime: &str) -> Result<(), ClipboardError> {
         self.inner.set_binary(data, mime)
     }

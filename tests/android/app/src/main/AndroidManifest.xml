@@ -32,6 +32,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- waterkit-clipboard serves copied files through this provider.
+             Crate metadata cannot declare manifest components yet
+             (water-rs/waterui#1873), so the harness declares it by hand,
+             enabled only when the clipboard's helpers are in the DEX. -->
+        <provider
+            android:name="waterkit.clipboard.ClipboardFileProvider"
+            android:authorities="${applicationId}.waterkit.clipboard"
+            android:enabled="${waterkitClipboardProvider}"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 
 </manifest>

@@ -59,11 +59,6 @@ class MainActivity : AppCompatActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // The runner wakes the device just before launch; this window then keeps
-        // the screen on for as long as it is visible, so the screen timeout cannot
-        // take focus away mid-run. The flag belongs to this window alone and
-        // changes no device setting.
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         
         val scroll = ScrollView(this)
         val layout = LinearLayout(this).apply {
@@ -182,6 +177,11 @@ class MainActivity : AppCompatActivity() {
     private fun checkIntent(intent: android.content.Intent) {
         if (intent.getBooleanExtra("run_test", false)) {
             intent.removeExtra("run_test")
+            // The runner wakes the device just before launch. From here until
+            // the report is written this window keeps the screen on, so the
+            // screen timeout cannot take focus away mid-run. The flag belongs
+            // to this window alone and changes no device setting.
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             pendingNativeTest = true
             runPendingNativeTest()
         }
@@ -226,6 +226,7 @@ class MainActivity : AppCompatActivity() {
             }
             writeReport(finalReport)
             runOnUiThread {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 if (failure == null) {
                     log("Native test report written")
                 } else {

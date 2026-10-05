@@ -14,7 +14,7 @@ mod sys;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ConnectionType {
-    /// WiFi connection.
+    /// Wi-Fi connection.
     Wifi,
     /// Cellular data connection.
     Cellular,

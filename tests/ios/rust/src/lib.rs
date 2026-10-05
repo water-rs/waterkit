@@ -1,3 +1,6 @@
+//! The Rust half of the iOS test harness: runs the enabled `WaterKit` cases
+//! and returns their structured report to the Swift app.
+
 use waterkit_test_report::{TestCase, TestReport, to_json_pretty};
 
 #[cfg(feature = "camera")]
@@ -139,40 +142,16 @@ fn build_report() -> TestReport {
 
         #[cfg(feature = "deeplink")]
         report.push(TestCase::passed("deeplink.linked"));
+    });
 
-        #[cfg(not(any(
-            feature = "sensor",
-            feature = "biometric",
-            feature = "location",
-            feature = "audio",
-            feature = "camera",
-            feature = "clipboard",
-            feature = "codec",
-            feature = "dialog",
-            feature = "fs",
-            feature = "haptic",
-            feature = "notification",
-            feature = "permission",
-            feature = "secret",
-            feature = "system",
-            feature = "video",
-            feature = "screen",
-            feature = "bluetooth",
-            feature = "nfc",
-            feature = "share",
-            feature = "speech",
-            feature = "contacts",
-            feature = "calendar",
-            feature = "health",
-            feature = "deeplink",
-            feature = "background",
-            feature = "passkey"
-        )))]
+    // Every enabled feature records at least one case, so an empty report
+    // means the harness was built without any feature.
+    if report.cases.is_empty() {
         report.push(TestCase::failed(
             "harness.feature",
             "no WaterKit feature was enabled for the iOS harness",
         ));
-    });
+    }
 
     report
 }
@@ -390,7 +369,7 @@ async fn record_passkey(report: &mut TestReport) {
                     availability.supports_user_verification,
                     availability.supports_discoverable_credentials
                 ),
-            ))
+            ));
         }
         Ok(_) => report.push(TestCase::failed(
             "passkey.availability",

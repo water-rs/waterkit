@@ -39,7 +39,7 @@ const fn yuv_encoding(encoding: YCbCrEncoding) -> (YuvRange, YuvStandardMatrix) 
     )
 }
 
-fn yuv_error(error: yuv::YuvError) -> CameraError {
+fn yuv_error(error: &yuv::YuvError) -> CameraError {
     CameraError::RecordingError(format!("pixel layout conversion: {error}"))
 }
 
@@ -146,7 +146,7 @@ impl RecordingPipeline {
                     YuvStandardMatrix::Bt709,
                     YuvConversionMode::Balanced,
                 )
-                .map_err(yuv_error)?;
+                .map_err(|error| yuv_error(&error))?;
                 self.nv12.clear();
                 self.nv12.extend_from_slice(nv12.y_plane.borrow());
                 self.nv12.extend_from_slice(nv12.uv_plane.borrow());
@@ -513,7 +513,7 @@ impl RawVideoWriter {
                     matrix,
                     YuvConversionMode::Balanced,
                 )
-                .map_err(yuv_error)?;
+                .map_err(|error| yuv_error(&error))?;
             }
             CapturedPixels::Yuyv(yuyv) => {
                 self.rgba.resize(rgba_len, 0);
@@ -529,7 +529,7 @@ impl RawVideoWriter {
                     range,
                     matrix,
                 )
-                .map_err(yuv_error)?;
+                .map_err(|error| yuv_error(&error))?;
             }
         }
         let rgba = std::mem::take(&mut self.rgba);
@@ -569,7 +569,7 @@ fn yuyv_to_nv12(yuyv: &[u8], width: u32, height: u32) -> Result<Vec<u8>, CameraE
             height,
         },
     )
-    .map_err(yuv_error)?;
+    .map_err(|error| yuv_error(&error))?;
     let mut nv12 = Vec::with_capacity(width as usize * height as usize * 3 / 2);
     nv12.extend_from_slice(planar.y_plane.borrow());
     for (u, v) in planar.u_plane.borrow().iter().zip(planar.v_plane.borrow()) {

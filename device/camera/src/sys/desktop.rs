@@ -365,7 +365,10 @@ impl CameraInner {
                 ))
             })?;
         camera
-            .set_camera_format(format)
+            .set_camera_requset(RequestedFormat::with_formats(
+                RequestedFormatType::Exact(format),
+                &DELIVERED_FORMATS,
+            ))
             .map_err(|e| CameraError::OpenFailed(e.to_string()))?;
 
         let resolution = camera.resolution();

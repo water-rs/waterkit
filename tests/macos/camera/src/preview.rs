@@ -280,6 +280,8 @@ impl State {
             cache: None,
         });
 
+        let converter = FrameConverter::new(&device);
+
         Ok(Self {
             window,
             surface,
@@ -290,7 +292,7 @@ impl State {
             bind_group_layout,
             sampler,
             pipeline,
-            converter: FrameConverter::new(&device),
+            converter,
             upright: None,
             last_fps_update: Instant::now(),
             frame_count: 0,

@@ -1,0 +1,198 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		C0FFEE000000000000000101 /* WaterKitTestApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000201 /* WaterKitTestApp.swift */; };
+		C0FFEE000000000000000102 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000202 /* ContentView.swift */; };
+		C0FFEE000000000000000103 /* SwiftBridgeCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000203 /* SwiftBridgeCore.swift */; };
+		C0FFEE000000000000000104 /* waterkit-test-ios.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000204 /* waterkit-test-ios.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		C0FFEE000000000000000200 /* WaterKitTest.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WaterKitTest.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0FFEE000000000000000201 /* WaterKitTestApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaterKitTestApp.swift; sourceTree = "<group>"; };
+		C0FFEE000000000000000202 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		C0FFEE000000000000000203 /* SwiftBridgeCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Generated/SwiftBridgeCore.swift; sourceTree = "<group>"; };
+		C0FFEE000000000000000204 /* waterkit-test-ios.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Generated/waterkit-test-ios/waterkit-test-ios.swift"; sourceTree = "<group>"; };
+		C0FFEE000000000000000205 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C0FFEE000000000000000301 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		C0FFEE000000000000000401 = {
+			isa = PBXGroup;
+			children = (
+				C0FFEE000000000000000402 /* WaterKitTest */,
+				C0FFEE000000000000000205 /* Info.plist */,
+				C0FFEE000000000000000403 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		C0FFEE000000000000000402 /* WaterKitTest */ = {
+			isa = PBXGroup;
+			children = (
+				C0FFEE000000000000000201 /* WaterKitTestApp.swift */,
+				C0FFEE000000000000000202 /* ContentView.swift */,
+				C0FFEE000000000000000203 /* SwiftBridgeCore.swift */,
+				C0FFEE000000000000000204 /* waterkit-test-ios.swift */,
+			);
+			path = WaterKitTest;
+			sourceTree = "<group>";
+		};
+		C0FFEE000000000000000403 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C0FFEE000000000000000200 /* WaterKitTest.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		C0FFEE000000000000000501 /* WaterKitTest */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0FFEE000000000000000701 /* Build configuration list for PBXNativeTarget "WaterKitTest" */;
+			buildPhases = (
+				C0FFEE000000000000000502 /* Sources */,
+				C0FFEE000000000000000301 /* Frameworks */,
+				C0FFEE000000000000000503 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = WaterKitTest;
+			productName = WaterKitTest;
+			productReference = C0FFEE000000000000000200 /* WaterKitTest.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		C0FFEE000000000000000601 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					C0FFEE000000000000000501 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+				};
+			};
+			buildConfigurationList = C0FFEE000000000000000702 /* Build configuration list for PBXProject "WaterKitTest" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = C0FFEE000000000000000401;
+			productRefGroup = C0FFEE000000000000000403 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				C0FFEE000000000000000501 /* WaterKitTest */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		C0FFEE000000000000000503 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		C0FFEE000000000000000502 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C0FFEE000000000000000101 /* WaterKitTestApp.swift in Sources */,
+				C0FFEE000000000000000102 /* ContentView.swift in Sources */,
+				C0FFEE000000000000000103 /* SwiftBridgeCore.swift in Sources */,
+				C0FFEE000000000000000104 /* waterkit-test-ios.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		C0FFEE000000000000000801 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		C0FFEE000000000000000802 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/WaterKitTest/Generated";
+				INFOPLIST_FILE = Info.plist;
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(WATERKIT_RUST_LIBRARY)",
+					"-framework",
+					CoreFoundation,
+					"-framework",
+					Security,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.waterkit.test;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = "WaterKitTest/Generated/Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		C0FFEE000000000000000701 /* Build configuration list for PBXNativeTarget "WaterKitTest" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0FFEE000000000000000802 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C0FFEE000000000000000702 /* Build configuration list for PBXProject "WaterKitTest" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0FFEE000000000000000801 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = C0FFEE000000000000000601 /* Project object */;
+}

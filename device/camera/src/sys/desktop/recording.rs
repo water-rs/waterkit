@@ -684,7 +684,7 @@ mod tests {
         assert_eq!(samples.len(), frames);
         for sample in samples {
             let (data, _, _) = sample.expect("every recorded sample must read back");
-            assert!(!data.is_empty());
+            assert_ne!(data, [] as [u8; 0]);
         }
         std::fs::remove_file(&path).ok();
     }

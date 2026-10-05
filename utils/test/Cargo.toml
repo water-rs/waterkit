@@ -5,6 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+cargo_metadata = "0.23"
 clap = { version = "4", features = ["derive"] }
 toml_edit = "0.25"
 eyre = "0.6"

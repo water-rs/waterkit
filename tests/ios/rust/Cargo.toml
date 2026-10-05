@@ -11,8 +11,9 @@ crate-type = ["staticlib"]
 ignored = ["waterkit"]
 
 [dependencies]
+futures = { workspace = true, optional = true }
 swift-bridge.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
 waterkit = { path = "../../..", default-features = false }
 waterkit-test-report.workspace = true
 
@@ -51,7 +52,9 @@ sensor = ["waterkit/sensor"]
 biometric = ["waterkit/biometric"]
 location = ["waterkit/location"]
 audio = ["waterkit/audio"]
-camera = ["waterkit/camera"]
+# The camera case asks for camera access through waterkit-permission before
+# it opens a camera.
+camera = ["dep:futures", "waterkit/camera", "waterkit/permission"]
 clipboard = ["waterkit/clipboard"]
 codec = ["waterkit/codec"]
 dialog = ["waterkit/dialog"]

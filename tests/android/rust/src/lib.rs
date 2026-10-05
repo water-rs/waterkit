@@ -738,15 +738,30 @@ fn record_android_secret(report: &mut TestReport, env: &mut Env<'_>, activity: &
 
 #[cfg(feature = "system")]
 fn record_android_system(report: &mut TestReport) {
-    let connectivity = waterkit_content::system::connectivity();
-    let thermal = waterkit_content::system::thermal_state();
-    report.push(TestCase::passed_with_message(
-        "system.snapshot",
-        format!(
-            "connectivity={:?} thermal={thermal:?}",
-            connectivity.connection_type()
+    use waterkit_content::system;
+
+    report.push(match system::connectivity() {
+        Ok(info) => TestCase::passed_with_message(
+            "system.connectivity",
+            format!(
+                "type={:?} connected={}",
+                info.connection_type(),
+                info.is_connected()
+            ),
         ),
-    ));
+        Err(error) => TestCase::failed("system.connectivity", error.to_string()),
+    });
+    report.push(match system::thermal_state() {
+        Ok(state) => TestCase::passed_with_message("system.thermal_state", format!("{state:?}")),
+        Err(error) => TestCase::failed("system.thermal_state", error.to_string()),
+    });
+    report.push(match system::load() {
+        Ok(load) if load.memory_total() > 0 && load.memory_used() <= load.memory_total() => {
+            TestCase::passed_with_message("system.load", format!("{load:?}"))
+        }
+        Ok(load) => TestCase::failed("system.load", format!("implausible memory: {load:?}")),
+        Err(error) => TestCase::failed("system.load", error.to_string()),
+    });
 }
 
 #[cfg(feature = "background")]

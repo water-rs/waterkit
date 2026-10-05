@@ -1,13 +1,13 @@
 //! Desktop clipboard implementation using clipboard-rs.
 //!
-//! Supports Windows, Linux, and macOS.
+//! Supports Windows and macOS; Linux has its own implementation.
 
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{
-    Clipboard, ClipboardContext, ClipboardHandler, ClipboardWatcher, ClipboardWatcherContext,
-    WatcherShutdown,
+    Clipboard, ClipboardContent, ClipboardContext, ClipboardHandler, ClipboardWatcher,
+    ClipboardWatcherContext, WatcherShutdown,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -136,14 +136,17 @@ impl ClipboardInner {
             .map_err(|e| ClipboardError::Platform(e.to_string()))
     }
 
-    /// Set HTML content.
+    /// Set HTML content, with `alt_text` as its plain-text form.
+    ///
+    /// One write carries both: every write replaces the whole clipboard.
     pub fn set_html(&self, html: &str, alt_text: Option<&str>) -> Result<(), ClipboardError> {
-        let ctx = self.lock_ctx();
-        // Set plain text first if alt_text provided
-        if let Some(alt) = alt_text {
-            let _ = ctx.set_text(alt.to_string());
-        }
-        ctx.set_html(html.to_string())
+        let contents = alt_text
+            .map(|alt| ClipboardContent::Text(alt.to_owned()))
+            .into_iter()
+            .chain([ClipboardContent::Html(html.to_owned())])
+            .collect();
+        self.lock_ctx()
+            .set(contents)
             .map_err(|e| ClipboardError::Platform(e.to_string()))
     }
 

@@ -30,7 +30,7 @@ waterkit = { version = "0.1", features = ["clipboard"] }
 | **iOS** | `UIPasteboard` (Swift Bridge) |
 | **Android** | `ClipboardManager` (Kotlin/JNI) |
 | **Windows** | `clipboard-rs` (Win32) |
-| **Linux** | `clipboard-rs` (X11) for CLIPBOARD; for PRIMARY, `wl-clipboard-rs` (Wayland data-control) in a Wayland session and `x11-clipboard` otherwise |
+| **Linux** | `wl-clipboard-rs` (Wayland data-control) in a Wayland session, `x11rb` (X11) otherwise, for CLIPBOARD and PRIMARY alike |
 
 ## Usage
 
@@ -50,6 +50,21 @@ async fn copy_paste() -> Result<(), waterkit_clipboard::ClipboardError> {
     Ok(())
 }
 ```
+
+## Linux display server
+
+`Clipboard::new` and `PrimarySelection::new` each choose the display server
+once, from the session: Wayland when `WAYLAND_DISPLAY` is set, X11 when only
+`DISPLAY` is. Wayland needs a compositor with a data-control protocol
+(`ext_data_control_manager_v1` or `zwlr_data_control_manager_v1`; PRIMARY
+needs one offering a primary selection: `ext_data_control_manager_v1`, or
+`zwlr_data_control_manager_v1` version 2+), which `new` checks by binding the
+compositor's registry. Without it, `new` returns `ClipboardError::Platform`
+naming the reason; it never falls through to X11, even when Xwayland is
+running. Watching uses the chosen display server too.
+
+Both display servers carry the same formats: text, HTML, PNG images, files
+(as a `text/uri-list`) and custom MIME types.
 
 ## Primary Selection (Linux only)
 
@@ -71,19 +86,10 @@ async fn primary() -> Result<(), waterkit_clipboard::ClipboardError> {
 }
 ```
 
-`PrimarySelection::new` chooses the display server once, from the session:
-Wayland when `WAYLAND_DISPLAY` is set, X11 when only `DISPLAY` is. Wayland
-needs a compositor with a data-control protocol offering a primary selection
-(`ext_data_control_manager_v1`, or `zwlr_data_control_manager_v1` version
-2+), which `new` checks by binding the compositor's registry. Without one,
-`new` returns `ClipboardError::Platform` naming the reason; it never falls
-through to X11, even when Xwayland is running.
-
-After `set_text` the crate owns the selection and keeps serving paste
-requests: on X11 an in-process worker thread answers `SelectionRequest`s
-until another client claims PRIMARY or the handle is dropped; on Wayland an
-in-process thread serves data-control requests until another client claims
-PRIMARY or the process exits.
+After a write the crate owns the selection and keeps serving paste requests
+until another client claims it: on X11 an in-process thread answers
+`SelectionRequest`s while the handle (or a clone) lives; on Wayland an
+in-process thread serves data-control requests until the process exits.
 
 The API is `cfg`-gated to `target_os = "linux"`: other platforms do not get
 it at all — there is no stub and no CLIPBOARD emulation.

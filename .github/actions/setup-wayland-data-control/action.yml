@@ -1,0 +1,45 @@
+name: Start a Wayland compositor with data-control
+description: >
+  Installs sway and wl-clipboard and starts sway with the headless backend.
+  Sway offers the wlr data-control protocol with a primary selection, which
+  `waterkit-clipboard`'s Wayland round trips need for CLIPBOARD and PRIMARY;
+  `wl-clipboard` cross-checks them from outside the crate. The socket is
+  returned as the `wayland-display` output and deliberately not exported to
+  the job's environment, because the other tests pick their display server
+  from WAYLAND_DISPLAY and must keep running against X11.
+outputs:
+  wayland-display:
+    description: Absolute path of the compositor's socket, a value for WAYLAND_DISPLAY.
+    value: ${{ steps.sway.outputs.wayland-display }}
+runs:
+  using: composite
+  steps:
+    # Sway runs the config's `exec` commands once it listens on its socket,
+    # with WAYLAND_DISPLAY set to the socket's name. The script writes that
+    # name into a FIFO, which is the readiness handshake, like Xvfb's
+    # `-displayfd`; the read is bounded so a sway that dies never hangs the job.
+    - name: Start sway
+      id: sway
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends sway wl-clipboard
+        runtime_dir="$RUNNER_TEMP/sway-runtime"
+        mkdir -m 0700 "$runtime_dir"
+        ready="$RUNNER_TEMP/sway-ready"
+        mkfifo "$ready"
+        announce="$RUNNER_TEMP/sway-announce.sh"
+        printf '#!/bin/sh\nprintf "%%s\\n" "$WAYLAND_DISPLAY" > %s\n' "$ready" > "$announce"
+        chmod +x "$announce"
+        config="$RUNNER_TEMP/sway-config"
+        printf 'xwayland disable\nexec %s\n' "$announce" > "$config"
+        XDG_RUNTIME_DIR="$runtime_dir" WLR_BACKENDS=headless WLR_RENDERER=pixman \
+          WLR_HEADLESS_OUTPUTS=1 WLR_LIBINPUT_NO_DEVICES=1 \
+          sway --config "$config" >"$RUNNER_TEMP/sway.log" 2>&1 &
+        # Opening the FIFO read-write does not wait for a writer.
+        exec 3<>"$ready"
+        if ! read -r -t 60 display <&3; then
+          cat "$RUNNER_TEMP/sway.log"
+          exit 1
+        fi
+        echo "wayland-display=$runtime_dir/$display" >> "$GITHUB_OUTPUT"

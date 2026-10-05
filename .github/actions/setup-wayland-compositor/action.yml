@@ -1,9 +1,9 @@
 name: Start a Wayland compositor without data-control
 description: >
   Installs weston and starts it with the headless backend. Weston offers no
-  data-control protocol, which is what `waterkit-clipboard`'s Wayland test
-  needs: in that session PRIMARY must fail with the documented error even
-  though the job's X server is reachable. The socket is returned as the
+  data-control protocol, which is what `waterkit-clipboard`'s Wayland
+  error-path tests need: in that session CLIPBOARD and PRIMARY must fail with
+  the documented error even though the job's X server is reachable. The socket is returned as the
   `wayland-display` output and deliberately not exported to the job's
   environment, because the other tests pick their display server from
   WAYLAND_DISPLAY and must keep running against X11.

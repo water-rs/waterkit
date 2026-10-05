@@ -1,10 +1,10 @@
 name: Start an X server
 description: >
   Installs Xvfb and xclip, starts a virtual X server and exports DISPLAY to the
-  job's later steps through GITHUB_ENV. `waterkit-clipboard`'s PRIMARY
-  round-trip test needs an X server and cross-checks the selection with
-  `xclip`; it fails without them, so every job that runs the workspace tests
-  on Linux uses this action.
+  job's later steps through GITHUB_ENV. `waterkit-clipboard`'s CLIPBOARD and
+  PRIMARY round-trip tests need an X server and cross-check the selections
+  with `xclip`; they fail without them, so every job that runs the workspace
+  tests on Linux uses this action.
 runs:
   using: composite
   steps:

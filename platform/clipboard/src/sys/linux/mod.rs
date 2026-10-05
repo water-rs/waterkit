@@ -1,59 +1,129 @@
-//! Linux PRIMARY selection.
+//! Linux selections: CLIPBOARD and PRIMARY.
 //!
-//! The display server is chosen once, when the handle is created (see
+//! Each handle chooses its display server once, when it is created (see
 //! [`session`]): a Wayland compositor's data-control protocol through
-//! `wl-clipboard-rs` in a Wayland session, an X server through `x11-clipboard`
-//! otherwise. A Wayland session whose compositor offers no primary selection
-//! to data-control clients is an error; it never falls through to X11.
+//! `wl-clipboard-rs` in a Wayland session, an X server otherwise. A Wayland
+//! session whose compositor does not offer the selection to data-control
+//! clients is an error; neither selection ever falls through to X11.
+//!
+//! On each display server both selections share one implementation, generic
+//! over the [`Selection`]: [`wayland`] through `wl-clipboard-rs`, [`x11`]
+//! through `x11rb`. Both implement [`Backend`].
+//!
+//! The formats a write offers and how a read is decoded live in [`formats`],
+//! once for both display servers.
 
+mod clipboard;
+mod formats;
+mod primary;
 mod session;
 mod wayland;
 mod x11;
 
-use session::{DisplayServer, Session};
-use x11::X11Primary;
+pub use clipboard::ClipboardInner;
+pub use primary::PrimaryInner;
 
+use wl_clipboard_rs::paste;
+
+use crate::content::ClipboardEvent;
 use crate::error::ClipboardError;
+use formats::{Offered, Representation};
 
-/// Handle to the Linux PRIMARY selection.
-#[derive(Debug)]
-pub struct Primary {
-    backend: Backend,
+/// A Linux selection, as the type parameter of everything shared between
+/// CLIPBOARD and PRIMARY.
+pub trait Selection: 'static {
+    /// The selection's name in messages.
+    const NAME: &'static str;
+    /// The selection on a Wayland data-control protocol.
+    const WAYLAND: paste::ClipboardType;
 }
 
+/// The regular clipboard, written by copy and read by paste.
 #[derive(Debug)]
-enum Backend {
-    /// Each operation connects to the compositor on its own.
-    Wayland,
-    /// Boxed: the X11 handle is large, the Wayland variant empty.
-    X11(Box<X11Primary>),
+pub struct Clipboard;
+
+impl Selection for Clipboard {
+    const NAME: &'static str = "CLIPBOARD";
+    const WAYLAND: paste::ClipboardType = paste::ClipboardType::Regular;
 }
 
-impl Primary {
-    /// Choose the display server from the session and connect to it.
-    pub fn new() -> Result<Self, ClipboardError> {
-        let display_server = session::select(Session::current(), wayland::probe_data_control)?;
-        tracing::debug!(?display_server, "PRIMARY selection backend chosen");
-        let backend = match display_server {
-            DisplayServer::Wayland => Backend::Wayland,
-            DisplayServer::X11 => Backend::X11(Box::new(X11Primary::connect()?)),
+/// The PRIMARY selection, written by selecting text and read by a middle
+/// click.
+#[derive(Debug)]
+pub struct Primary;
+
+impl Selection for Primary {
+    const NAME: &'static str = "PRIMARY";
+    const WAYLAND: paste::ClipboardType = paste::ClipboardType::Primary;
+}
+
+/// A selection on one display server, offering and reading formats by MIME
+/// type (on X11, by target name).
+pub trait Backend: std::fmt::Debug + Send + Sync {
+    /// The formats the selection's owner offers, empty when it has no owner.
+    fn mime_types(&self) -> Result<Vec<String>, ClipboardError>;
+
+    /// Read the selection as `mime`, which its owner offered. `None` when the
+    /// selection changed since and no longer offers it.
+    fn read(&self, mime: &str) -> Result<Option<Vec<u8>>, ClipboardError>;
+
+    /// Claim the selection with `representations`, each offered under its
+    /// own MIME type.
+    fn offer(&self, representations: Vec<Representation>) -> Result<(), ClipboardError>;
+
+    /// Empty the selection.
+    fn clear(&self) -> Result<(), ClipboardError>;
+
+    /// Send an event to `sender` every time the selection changes, until the
+    /// returned guard stops the watch or the receiver is dropped.
+    fn watch(
+        &self,
+        sender: async_channel::Sender<ClipboardEvent>,
+    ) -> Result<WatchGuard, ClipboardError>;
+
+    /// The formats the selection offers.
+    fn offered(&self) -> Result<Offered, ClipboardError> {
+        self.mime_types().map(Offered::new)
+    }
+
+    /// Read the selection as `mime`, or `None` when it does not offer it.
+    fn read_if_offered(&self, mime: &str) -> Result<Option<Vec<u8>>, ClipboardError> {
+        if self.offered()?.has(mime) {
+            self.read(mime)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Read the selection's text, or `None` when it offers no plain text.
+    fn text(&self) -> Result<Option<String>, ClipboardError> {
+        let offered = self.offered()?;
+        let Some(target) = offered.text_target() else {
+            return Ok(None);
         };
-        Ok(Self { backend })
+        self.read(target)?.map(formats::decode_text).transpose()
     }
+}
 
-    /// Read the PRIMARY selection text, or `None` if it holds none.
-    pub fn get_text(&self) -> Result<Option<String>, ClipboardError> {
-        match &self.backend {
-            Backend::Wayland => wayland::get_text(),
-            Backend::X11(primary) => primary.get_text(),
-        }
+/// Ends a running selection watch.
+pub trait StopWatch: Send {
+    /// End the watch. Its thread exits; a watch that already ended is left as
+    /// it is.
+    fn stop(&self);
+}
+
+/// Stops a selection watch when dropped.
+pub struct WatchGuard(Box<dyn StopWatch>);
+
+impl WatchGuard {
+    /// A guard that runs `stop` when dropped.
+    pub fn new(stop: impl StopWatch + 'static) -> Self {
+        Self(Box::new(stop))
     }
+}
 
-    /// Write the PRIMARY selection text.
-    pub fn set_text(&self, text: &str) -> Result<(), ClipboardError> {
-        match &self.backend {
-            Backend::Wayland => wayland::set_text(text),
-            Backend::X11(primary) => primary.set_text(text),
-        }
+impl Drop for WatchGuard {
+    fn drop(&mut self) {
+        self.0.stop();
     }
 }

@@ -30,7 +30,7 @@ waterkit = { version = "0.1", features = ["clipboard"] }
 | **iOS** | `UIPasteboard` (Swift Bridge) |
 | **Android** | `ClipboardManager` (Kotlin/JNI) |
 | **Windows** | `clipboard-rs` (Win32) |
-| **Linux** | `clipboard-rs` for CLIPBOARD; `arboard` (X11 + Wayland data-control) for PRIMARY |
+| **Linux** | `clipboard-rs` (X11) for CLIPBOARD; for PRIMARY, `wl-clipboard-rs` (Wayland data-control) in a Wayland session and `x11-clipboard` otherwise |
 
 ## Usage
 
@@ -71,14 +71,19 @@ async fn primary() -> Result<(), waterkit_clipboard::ClipboardError> {
 }
 ```
 
+`PrimarySelection::new` chooses the display server once, from the session:
+Wayland when `WAYLAND_DISPLAY` is set, X11 when only `DISPLAY` is. Wayland
+needs a compositor with a data-control protocol offering a primary selection
+(`ext_data_control_manager_v1`, or `zwlr_data_control_manager_v1` version
+2+), which `new` checks by binding the compositor's registry. Without one,
+`new` returns `ClipboardError::Platform` naming the reason; it never falls
+through to X11, even when Xwayland is running.
+
 After `set_text` the crate owns the selection and keeps serving paste
 requests: on X11 an in-process worker thread answers `SelectionRequest`s
-until another client claims PRIMARY or the handle is dropped; on Wayland a
-forked child serves data-control requests until another client claims it.
-Wayland needs a compositor with a data-control protocol offering a primary
-selection (`zwlr_data_control_manager_v1` version 2+, or
-`ext_data_control_manager_v1`); compositors without one expose no PRIMARY and
-operations error.
+until another client claims PRIMARY or the handle is dropped; on Wayland an
+in-process thread serves data-control requests until another client claims
+PRIMARY or the process exits.
 
 The API is `cfg`-gated to `target_os = "linux"`: other platforms do not get
 it at all — there is no stub and no CLIPBOARD emulation.

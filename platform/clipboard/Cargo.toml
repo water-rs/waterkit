@@ -25,9 +25,11 @@ tracing.workspace = true
 clipboard-rs = { workspace = true }
 image = { workspace = true }
 
-# Linux only: PRIMARY selection on X11 and Wayland (data-control)
+# Linux only: PRIMARY selection, Wayland (data-control) and X11
 [target.'cfg(target_os = "linux")'.dependencies]
-arboard = { workspace = true, default-features = false, features = ["wayland-data-control"] }
+wl-clipboard-rs.workspace = true
+x11-clipboard.workspace = true
+x11rb.workspace = true
 
 # Apple platforms (iOS only - macOS uses clipboard-rs)
 [target.'cfg(target_os = "ios")'.dependencies]

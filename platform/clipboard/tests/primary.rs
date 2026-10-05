@@ -1,7 +1,7 @@
-//! Linux PRIMARY selection round-trip test.
+//! Linux PRIMARY selection tests.
 //!
-//! The test needs a display server and that display server's clipboard CLI,
-//! which it uses to check the selection from outside the crate:
+//! The round trip needs a display server and that display server's clipboard
+//! CLI, which it uses to check the selection from outside the crate:
 //!
 //! - X11: `DISPLAY` pointing at an X server and `xclip` installed. On a
 //!   machine without a desktop session, run the suite under `xvfb-run`
@@ -12,8 +12,14 @@
 //!
 //! A missing display server or tool fails the test with a message naming
 //! what to install; it never passes without exercising PRIMARY.
+//!
+//! The ignored test checks that a Wayland session without data-control never
+//! falls through to X11. It needs `WAYLAND_DISPLAY` at a compositor without a
+//! data-control protocol (headless weston) and `DISPLAY` at an X server; CI
+//! runs it with `--run-ignored only` against those two.
 #![cfg(target_os = "linux")]
 
+use std::ffi::OsString;
 use std::io::{ErrorKind, Write};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -40,9 +46,9 @@ enum External {
 
 impl External {
     fn detect() -> Self {
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        if display_variable("WAYLAND_DISPLAY").is_some() {
             Self::WlClipboard
-        } else if std::env::var_os("DISPLAY").is_some() {
+        } else if display_variable("DISPLAY").is_some() {
             Self::Xclip
         } else {
             panic!(
@@ -158,6 +164,12 @@ impl External {
     }
 }
 
+/// The value of a display-server variable, with an empty value counting as
+/// unset as it does for the crate.
+fn display_variable(name: &str) -> Option<OsString> {
+    std::env::var_os(name).filter(|value| !value.is_empty())
+}
+
 /// Read PRIMARY through the crate until it holds `expected` or the deadline
 /// passes, and return the last text read.
 fn read_until(
@@ -194,4 +206,29 @@ fn primary_selection_round_trip() -> Result<(), ClipboardError> {
     assert_eq!(seeded.as_deref(), Some(EXTERNAL));
 
     Ok(())
+}
+
+/// In a Wayland session whose compositor offers no data-control protocol,
+/// creating the handle fails with the documented error even though an X
+/// server is reachable through `DISPLAY`.
+#[test]
+#[ignore = "needs WAYLAND_DISPLAY at a compositor without data-control and DISPLAY at an X server"]
+fn wayland_without_data_control_never_uses_x11() {
+    for name in ["WAYLAND_DISPLAY", "DISPLAY"] {
+        assert!(
+            display_variable(name).is_some(),
+            "wayland_without_data_control_never_uses_x11 needs {name}: WAYLAND_DISPLAY at a \
+             compositor without data-control (such as headless weston) and DISPLAY at an X server"
+        );
+    }
+    match PrimarySelection::new() {
+        Err(ClipboardError::Platform(reason)) => assert!(
+            reason.contains("Wayland session") && reason.contains("data-control"),
+            "the error does not name the missing data-control protocol: {reason}"
+        ),
+        Err(error) => panic!("expected ClipboardError::Platform, got {error:?}"),
+        Ok(_) => {
+            panic!("PrimarySelection::new succeeded in a Wayland session without data-control")
+        }
+    }
 }

@@ -76,9 +76,9 @@
 //!
 //! Linux desktops also have a PRIMARY selection holding the text last
 //! selected; it is pasted with the middle mouse button. [`PrimarySelection`]
-//! reads and writes it under both X11 and Wayland (via the data-control
-//! protocol's primary-selection support); its own documentation carries the
-//! example.
+//! reads and writes it under X11, and under Wayland through the data-control
+//! protocol's primary-selection support. Its own documentation says how the
+//! display server is chosen and carries the example.
 //!
 //! PRIMARY exists only on Linux desktops, so this API is compiled only for
 //! `target_os = "linux"`; other platforms do not get it at all.
@@ -429,6 +429,23 @@ impl Clipboard {
 /// selection has no equivalent on other platforms and is never emulated with
 /// CLIPBOARD.
 ///
+/// # Display server
+///
+/// [`new`](Self::new) chooses the display server once, from the session, and
+/// every later operation uses it:
+///
+/// - **Wayland** when `WAYLAND_DISPLAY` is set. The compositor must offer a
+///   data-control protocol with a primary selection
+///   (`ext_data_control_manager_v1`, or `zwlr_data_control_manager_v1`
+///   version 2+); `new` checks by binding the compositor's registry. Without
+///   one, `new` returns [`ClipboardError::Platform`] naming the reason. It
+///   never falls through to X11, even when an X server such as Xwayland is
+///   reachable: that server's PRIMARY is not the Wayland session's.
+/// - **X11** when only `DISPLAY` is set.
+///
+/// A variable set to the empty string counts as unset, so
+/// `WAYLAND_DISPLAY= app` uses X11.
+///
 /// # Serving lifetime
 ///
 /// A [`PrimarySelection`] owns the selection after [`set_text`](Self::set_text)
@@ -436,14 +453,9 @@ impl Clipboard {
 ///
 /// - **X11**: a worker thread inside the crate serves `SelectionRequest`s
 ///   until another client claims PRIMARY or this handle is dropped.
-/// - **Wayland**: the data is handed to a forked child process serving
-///   data-control requests until another client claims PRIMARY, independent
-///   of this handle's lifetime.
-///
-/// Wayland support needs a data-control protocol offering a primary selection
-/// (`zwlr_data_control_manager_v1` version 2+, or `ext_data_control_manager_v1`).
-/// Compositors without one expose no PRIMARY to Wayland clients; operations
-/// then return [`ClipboardError::Platform`].
+/// - **Wayland**: the text is handed to a thread inside the process that
+///   serves data-control requests until another client claims PRIMARY or the
+///   process exits, independent of this handle's lifetime.
 ///
 /// # Example
 ///
@@ -465,13 +477,17 @@ pub struct PrimarySelection {
 impl PrimarySelection {
     /// Create a new PRIMARY selection handle.
     ///
-    /// Connects to X11, or to a Wayland data-control protocol when
-    /// `WAYLAND_DISPLAY` is set and the compositor supports it.
+    /// Chooses the display server as the type-level docs describe: the
+    /// Wayland compositor when `WAYLAND_DISPLAY` is set, the X server when
+    /// only `DISPLAY` is.
     ///
     /// # Errors
     ///
-    /// Returns an error if no selection backend can be reached (no X11
-    /// display and no Wayland data-control compositor).
+    /// Returns [`ClipboardError::Platform`] when the session is a Wayland
+    /// session whose compositor offers no primary selection to data-control
+    /// clients (whether or not an X server is also reachable), when the
+    /// chosen display server cannot be reached, and when neither
+    /// `WAYLAND_DISPLAY` nor `DISPLAY` is set.
     pub fn new() -> Result<Self, ClipboardError> {
         Ok(Self {
             inner: Arc::new(sys::Primary::new()?),
@@ -480,12 +496,16 @@ impl PrimarySelection {
 
     /// Get text content from the PRIMARY selection.
     ///
-    /// Returns `None` when no client currently owns a PRIMARY selection.
+    /// Returns `None` when no client currently owns a PRIMARY selection, and
+    /// on Wayland also when its owner offers no text type. On X11 an owner
+    /// that refuses to convert PRIMARY to `UTF8_STRING` reads as an empty
+    /// string.
     ///
     /// # Errors
     ///
-    /// Returns an error if the selection backend cannot be reached (no X11
-    /// display, or a Wayland compositor without data-control support).
+    /// Returns [`ClipboardError::Platform`] if the display server fails the
+    /// read or, on X11, the owner does not answer in time, and
+    /// [`ClipboardError::Decode`] if the text is not UTF-8.
     pub async fn text(&self) -> Result<Option<String>, ClipboardError> {
         let inner = Arc::clone(&self.inner);
         blocking::unblock(move || inner.get_text()).await
@@ -498,8 +518,8 @@ impl PrimarySelection {
     ///
     /// # Errors
     ///
-    /// Returns an error if the selection backend cannot be reached (no X11
-    /// display, or a Wayland compositor without data-control support).
+    /// Returns [`ClipboardError::Platform`] if the display server refuses the
+    /// selection or cannot be reached.
     pub fn set_text(&mut self, text: &str) -> Result<(), ClipboardError> {
         self.inner.set_text(text)
     }

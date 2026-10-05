@@ -1,6 +1,6 @@
 //! Build script for waterkit-sensor-test.
 //!
-//! Compiles the Swift code from the sensor crate and links CoreMotion.
+//! Compiles the Swift code from the sensor crate and links `CoreMotion`.
 //! Only compiles on macOS host when targeting Apple platforms.
 
 fn main() {

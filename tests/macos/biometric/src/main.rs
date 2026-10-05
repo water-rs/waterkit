@@ -1,3 +1,6 @@
+//! Manual macOS check of `waterkit-biometric`: probes the capabilities and
+//! requests one authentication.
+
 use waterkit_biometric as biometric;
 
 #[tokio::main]
@@ -8,7 +11,7 @@ async fn main() {
 
     if caps.available {
         if let Some(bio_type) = caps.kind {
-            println!("Biometric type: {:?}", bio_type);
+            println!("Biometric type: {bio_type:?}");
         }
 
         println!("Requesting authentication...");

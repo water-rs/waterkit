@@ -105,6 +105,13 @@ impl Location {
     /// [`LocationError::Timeout`] when the request times out,
     /// [`LocationError::InvalidCoordinate`] when the OS returns invalid
     /// coordinates, or [`LocationError::Platform`] for other OS failures.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "the browser answers through JS callbacks, which are bound to the thread that created them"
+        )
+    )]
     pub async fn get() -> Result<Self, LocationError> {
         sys::get_location().await
     }

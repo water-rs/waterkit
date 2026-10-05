@@ -41,6 +41,13 @@ pub struct WatcherShutdown {
 
 impl WatcherShutdown {
     /// Stop the clipboard watcher.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::missing_const_for_fn,
+            reason = "the browser's only arm is the never-constructed `Web` shim; every other platform stops its watcher at run time"
+        )
+    )]
     pub fn stop(&self) {
         match &self.inner {
             #[cfg(any(target_os = "windows", target_os = "macos"))]

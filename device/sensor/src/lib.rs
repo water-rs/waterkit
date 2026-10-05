@@ -51,6 +51,19 @@ pub struct SensorData {
 impl SensorData {
     /// Creates a new `SensorData` instance.
     #[must_use]
+    #[cfg_attr(
+        not(any(
+            target_os = "ios",
+            target_os = "macos",
+            target_os = "android",
+            target_os = "windows",
+            target_os = "linux"
+        )),
+        expect(
+            dead_code,
+            reason = "only the platform backends produce samples; the unsupported-platform shim produces none"
+        )
+    )]
     pub(crate) const fn new(x: f64, y: f64, z: f64, timestamp: Timestamp) -> Self {
         Self { x, y, z, timestamp }
     }
@@ -91,6 +104,19 @@ pub struct ScalarData {
 impl ScalarData {
     /// Creates a new `ScalarData` instance.
     #[must_use]
+    #[cfg_attr(
+        not(any(
+            target_os = "ios",
+            target_os = "macos",
+            target_os = "android",
+            target_os = "windows",
+            target_os = "linux"
+        )),
+        expect(
+            dead_code,
+            reason = "only the platform backends produce samples; the unsupported-platform shim produces none"
+        )
+    )]
     pub(crate) const fn new(value: f64, timestamp: Timestamp) -> Self {
         Self { value, timestamp }
     }

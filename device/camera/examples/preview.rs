@@ -243,6 +243,13 @@ impl ApplicationHandler for App {
         }))
         .expect("Failed to create device");
 
+        #[cfg_attr(
+            target_arch = "wasm32",
+            expect(
+                clippy::arc_with_non_send_sync,
+                reason = "`Camera::open` takes the device in an `Arc` on every platform; on wasm32 `wgpu::Device` is neither `Send` nor `Sync`"
+            )
+        )]
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 

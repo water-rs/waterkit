@@ -10,6 +10,9 @@ categories = ["os", "gui"]
 readme = "README.md"
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 
 # Desktop (System Info & Thermal)

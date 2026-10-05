@@ -29,6 +29,9 @@ categories = ["gui", "development-tools"]
 [package.metadata.docs.rs]
 all-features = true
 
+[lints]
+workspace = true
+
 [dependencies]
 waterkit-permission = { workspace = true, optional = true }
 waterkit-location = { workspace = true, optional = true }

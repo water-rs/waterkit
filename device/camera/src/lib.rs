@@ -781,9 +781,11 @@ impl Camera {
     /// produced once they are dropped.
     ///
     /// The stream ends, with the reason logged, when capture fails, and on
-    /// Android when the device cannot import the camera's buffers: a driver
-    /// that describes them only through an external format needs a device
-    /// with Vulkan 1.4 or `VK_KHR_maintenance6` for their conversion.
+    /// Android when the device cannot import the camera's buffers: buffers a
+    /// driver describes only through an external format are converted, which
+    /// needs `VK_KHR_push_descriptor`. `request_device` enables it where the
+    /// adapter offers it; whether the camera's buffers need it shows only on
+    /// the first frame.
     pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
         self.inner.frames()
     }

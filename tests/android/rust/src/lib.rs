@@ -497,7 +497,6 @@ async fn record_android_camera_frames(
             return;
         }
     };
-    let conversion = external_format_conversion(&adapter);
     // Camera frames are imported AHardwareBuffers, so the device carries the
     // import's extensions; NV12 lets a driver that maps camera buffers to a
     // Vulkan format alias them directly.
@@ -547,7 +546,7 @@ async fn record_android_camera_frames(
             Ok(Some(frame)) => frame,
             Ok(None)
                 if count == 0
-                    && let Err(gpu) = &conversion =>
+                    && let Some(missing) = missing_conversion_extension(&device) =>
             {
                 // The camera's buffers have only a driver-private format here,
                 // and this GPU cannot run the conversion that imports them.
@@ -555,7 +554,7 @@ async fn record_android_camera_frames(
                     case,
                     format!(
                         "no frame could be imported: converting external-format camera buffers \
-                         needs Vulkan 1.4 or VK_KHR_maintenance6, and this GPU has {gpu}"
+                         needs {missing:?}, which this GPU does not offer"
                     ),
                 ));
                 return;
@@ -630,28 +629,23 @@ async fn record_android_camera_frames(
     ));
 }
 
-/// Whether `adapter` can run `wgpu-external-frame`'s conversion of
-/// external-format buffers, which needs Vulkan 1.4 or `VK_KHR_maintenance6`;
-/// otherwise the Vulkan version it has, for the report.
+/// The conversion extension `device` lacks, if any: without it, camera
+/// buffers the driver describes only through an external format cannot be
+/// imported.
 #[cfg(feature = "camera")]
-fn external_format_conversion(
-    adapter: &waterkit_content::camera::wgpu::Adapter,
-) -> Result<(), String> {
+fn missing_conversion_extension(
+    device: &waterkit_content::camera::wgpu::Device,
+) -> Option<&'static std::ffi::CStr> {
     use waterkit_content::camera::wgpu;
-    // SAFETY: the guard names the adapter's real backend, Vulkan, which the
+    use waterkit_content::camera::wgpu_external_frame::ahardware_buffer::CONVERSION_DEVICE_EXTENSIONS;
+    // SAFETY: the guard names the device's real backend, Vulkan, which the
     // instance was limited to, and is only read.
-    let hal = unsafe { adapter.as_hal::<wgpu::hal::api::Vulkan>() }
-        .expect("the instance offers only Vulkan adapters");
-    let capabilities = hal.physical_device_capabilities();
-    let version = capabilities.properties().api_version;
-    let (major, minor) = ((version >> 22) & 0x7f, (version >> 12) & 0x3ff);
-    if (major, minor) >= (1, 4) || capabilities.supports_extension(c"VK_KHR_maintenance6") {
-        Ok(())
-    } else {
-        Err(format!(
-            "Vulkan {major}.{minor} without VK_KHR_maintenance6"
-        ))
-    }
+    let hal = unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() }
+        .expect("the instance offers only Vulkan devices");
+    let enabled = hal.enabled_device_extensions();
+    CONVERSION_DEVICE_EXTENSIONS
+        .into_iter()
+        .find(|extension| !enabled.contains(extension))
 }
 
 /// Reads an upright `Rgba8Unorm` frame back and writes it as a PNG; the

@@ -12,16 +12,25 @@ use std::time::Duration;
 
 use jni::objects::{Global, JObject};
 use wgpu_external_frame::ahardware_buffer::{
-    DEVICE_EXTENSIONS, HardwareBuffer, HardwareBufferFrame, HardwareBufferImportError,
-    HardwareBufferImporter, HardwareBufferLease, ImportedHardwareBuffer,
+    CONVERSION_DEVICE_EXTENSIONS, DEVICE_EXTENSIONS, HardwareBuffer, HardwareBufferFrame,
+    HardwareBufferImportError, HardwareBufferImporter, HardwareBufferLease, ImportedHardwareBuffer,
 };
 
 use super::{AndroidBridge, SensorMounting};
 use crate::frame::{Frame, FramePlanes, FrameStorage};
 use crate::{CameraError, Orientation};
 
-/// Fails unless `device` was opened with the extensions an `AHardwareBuffer`
-/// import needs, which `wgpu` never enables on its own.
+/// Fails unless `device` was opened with the extensions every
+/// `AHardwareBuffer` import needs, which `wgpu` never enables on its own, as
+/// the importer itself checks.
+///
+/// Whether the camera's buffers also need the conversion, and with it the
+/// [`CONVERSION_DEVICE_EXTENSIONS`], is not knowable here: the reader's
+/// `PRIVATE` format is the camera HAL's choice, and only the driver's reading
+/// of the first buffer says whether it maps to a Vulkan format. A device
+/// without those extensions is therefore accepted, with a warning, and a
+/// buffer that needs the conversion ends the stream with the importer's error
+/// naming the missing extension.
 pub fn check_device(device: &wgpu::Device) -> Result<(), CameraError> {
     // SAFETY: the guard names the device's real backend or yields `None`, and
     // is only read for its enabled extensions.
@@ -29,6 +38,15 @@ pub fn check_device(device: &wgpu::Device) -> Result<(), CameraError> {
         CameraError::GpuError("Android camera frames need a Vulkan wgpu device".into())
     })?;
     let enabled = hal_device.enabled_device_extensions();
+    if let Some(missing) = CONVERSION_DEVICE_EXTENSIONS
+        .into_iter()
+        .find(|extension| !enabled.contains(extension))
+    {
+        tracing::warn!(
+            "the wgpu device does not enable {missing:?}; camera buffers the driver describes \
+             only through an external format cannot be imported on it"
+        );
+    }
     DEVICE_EXTENSIONS
         .into_iter()
         .find(|extension| !enabled.contains(extension))
@@ -104,8 +122,8 @@ impl RawFrame {
     /// # Errors
     ///
     /// Returns the importer's error when the device cannot import the
-    /// buffer, such as an external-format buffer on a device without the
-    /// Vulkan 1.4 or `VK_KHR_maintenance6` its conversion needs.
+    /// buffer, such as an external-format buffer on a device opened without
+    /// the [`CONVERSION_DEVICE_EXTENSIONS`] its conversion needs.
     pub fn import(
         self,
         importer: &mut HardwareBufferImporter,

@@ -209,9 +209,9 @@ objc2-metal = "0.3"
 objc = "0.2"
 # Zero-copy import of platform frame buffers into wgpu textures. Pinned to the
 # dev commit carrying multi-plane IOSurface import (wgpu-external-frame#11) and
-# AHardwareBuffer import with its YCbCr conversion (#12, #16) until a release
-# carries them.
-wgpu-external-frame = { git = "https://github.com/water-rs/wgpu-external-frame", rev = "e5381a3f27826f4f6a8a29d2bebe9dfd6530f4bd" }
+# AHardwareBuffer import with its push-descriptor YCbCr conversion (#12, #16,
+# #20) until a release carries them.
+wgpu-external-frame = { git = "https://github.com/water-rs/wgpu-external-frame", rev = "5c0772827b80b44f76bbf0bada4e83ea8b9322d7" }
 
 # Security
 keyring = "4"

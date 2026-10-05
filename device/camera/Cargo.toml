@@ -42,10 +42,14 @@ required-features = ["preview-example"]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 pollster = "1.0"
 
-# winit pulls in `android-activity`, which only builds once an application picks
-# an activity backend; the preview example it serves is desktop-only.
+# winit serves the preview example's window. On Android it pulls in
+# `android-activity`, which only builds once an activity backend is selected, so
+# the example selects one there; it still opens its window only on desktop.
 [target.'cfg(not(target_os = "android"))'.dev-dependencies]
 winit.workspace = true
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+winit = { workspace = true, features = ["android-native-activity"] }
 
 # Desktop platforms (Windows, Linux) - use nokhwa. Recording encodes through
 # waterkit-codec (hardware encoders plus the software AV1 fallback) and muxes

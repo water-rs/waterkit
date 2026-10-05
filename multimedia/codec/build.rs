@@ -4,19 +4,7 @@
 #![recursion_limit = "2048"]
 
 fn main() {
-    // The YUV-to-RGBA compute shader ships pre-translated under
-    // src/shaders/compiled (regenerate with package-shaders.sh), so the host
-    // runs no `naga`; only xcrun/dxc run on Apple/Windows targets.
-    #[cfg(feature = "gpu")]
-    {
-        const PACKAGED_SHADERS: &str = "src/shaders/compiled";
-        if std::env::var("CARGO_CFG_TARGET_VENDOR").as_deref() == Ok("apple") {
-            shaderloom::packaged::compile_packaged_metallib(PACKAGED_SHADERS, "yuv_color");
-        }
-        if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-            shaderloom::packaged::compile_packaged_dxil(PACKAGED_SHADERS, "yuv_color");
-        }
-    }
+    compose_yuv_shader();
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
@@ -76,4 +64,28 @@ fn main() {
 
         waterkit_build::compile_swift("src/image_apple.rs", &config);
     }
+}
+
+/// Composes the YUV-to-RGBA shader, the codec's source after
+/// waterkit-video-core's shared YCbCr fragment, into `OUT_DIR` for
+/// `YUV_COLOR_SHADER_WGSL`, and with the `gpu` feature compiles it to the
+/// target's native shader format.
+fn compose_yuv_shader() {
+    use std::io::Write as _;
+
+    const SOURCE: &str = "src/yuv_to_rgba.wgsl";
+    writeln!(std::io::stdout().lock(), "cargo:rerun-if-changed={SOURCE}")
+        .expect("failed to emit the shader source tracking directive");
+    let codec = std::fs::read_to_string(SOURCE)
+        .unwrap_or_else(|error| panic!("failed to read {SOURCE}: {error}"));
+    let composed = format!("{}{codec}", waterkit_video_core::YCBCR_WGSL);
+    let out_dir = std::env::var("OUT_DIR").expect("cargo sets OUT_DIR for build scripts");
+    std::fs::write(
+        std::path::Path::new(&out_dir).join("yuv_color_source.wgsl"),
+        &composed,
+    )
+    .expect("failed to write the composed YUV shader");
+
+    #[cfg(feature = "gpu")]
+    shaderloom::build::compile_wgsl_source(SOURCE, &composed, "yuv_color");
 }

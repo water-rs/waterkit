@@ -6,8 +6,11 @@ use waterkit_video_core::{
 
 use crate::DecodedPixelLayout;
 
-/// Unified GPU shader used by `WaterKit` conversion and presentation pipelines.
-pub const YUV_COLOR_SHADER_WGSL: &str = include_str!("yuv_to_rgba.wgsl");
+/// Unified GPU shader used by `WaterKit` conversion and presentation pipelines:
+/// the complete module, `waterkit-video-core`'s shared YCbCr fragment followed
+/// by the codec's YUV source.
+pub const YUV_COLOR_SHADER_WGSL: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/yuv_color_source.wgsl"));
 
 /// `WaterUI`'s linear-light value for diffuse SDR white, in nits.
 pub const SDR_REFERENCE_WHITE_NITS: f32 = 203.0;

@@ -16,6 +16,14 @@ pub use protection::{
 
 use std::{num::NonZeroU32, time::Duration};
 
+/// WGSL fragment holding the YCbCr to RGB range and matrix math that every
+/// `WaterKit` GPU colour converter shares.
+///
+/// It declares constants and functions but no bindings. A converter prepends
+/// it to its own shader source before compiling, so the decoder's YUV path
+/// and the camera's frame converter evaluate the same coefficients.
+pub const YCBCR_WGSL: &str = include_str!("ycbcr.wgsl");
+
 /// Error returned by `WaterKit` video operations.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

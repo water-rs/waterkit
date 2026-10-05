@@ -276,7 +276,6 @@ wayland-sys = { version = "0.31.11", features = ["dlopen"] }
 xcap = "0.9.8"
 notify-rust = "4"
 futures-timer = "3"
-netdev = "0.45"
 swift-rs = "1.0.7"
 sys-locale = "0.3"
 iana-time-zone = "0.1"

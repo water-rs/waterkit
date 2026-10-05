@@ -18,8 +18,44 @@ use std::sync::OnceLock;
 ///
 /// Capability crates convert this into their own `Platform` variant.
 #[derive(Debug, thiserror::Error)]
-#[error("Android JNI call failed: {0}")]
+#[error("Android JNI call failed: {}", summarize(.0))]
 pub struct AndroidError(#[from] jni::errors::Error);
+
+/// Renders a JNI error on one line; a caught Java exception is its class name
+/// and message rather than the multi-line report with the stack trace.
+fn summarize(error: &jni::errors::Error) -> String {
+    match error {
+        jni::errors::Error::CaughtJavaException { name, msg, .. } => format!("{name}: {msg}"),
+        other => other.to_string(),
+    }
+}
+
+/// Describes a failed JNI call, taking the Java exception it left pending.
+///
+/// `error` is what the call returned. When the call threw, the throwable is
+/// still pending on the thread: it is caught and cleared, so the thread stays
+/// usable for the next JNI call, and the description is its class name and
+/// message. Otherwise `error` describes itself.
+#[must_use]
+pub fn describe_jni_error(env: &Env<'_>, error: jni::errors::Error) -> String {
+    summarize(&take_pending_exception(env, error))
+}
+
+/// Replaces `error` with the Java exception pending on the thread, as a
+/// [`jni::errors::Error::CaughtJavaException`], and clears it. Without a pending
+/// exception, `error` is returned as is.
+fn take_pending_exception(env: &Env<'_>, error: jni::errors::Error) -> jni::errors::Error {
+    if !env.exception_check() {
+        return error;
+    }
+    let caught = env
+        .exception_catch()
+        .expect_err("exception_check reported a pending throwable");
+    // `exception_catch` clears the throwable before inspecting it, and the
+    // inspection can throw in turn; leave nothing pending.
+    env.exception_clear();
+    caught
+}
 
 /// Returns the application's JVM together with a global reference to its Android
 /// `Context`, both published by `ndk_context`.
@@ -179,17 +215,12 @@ impl DexHelper {
         })();
         match loaded {
             Ok(class) => Ok(class),
-            Err(error) => {
-                // `ClassLoader.loadClass` throws a `ClassNotFoundException` for
-                // an un-staged helper, and the exception stays pending on the
-                // thread after the error converts. Clear it: the callers map
-                // this to a Rust error, so the thread must stay usable for the
-                // next JNI call.
-                if env.exception_check() {
-                    env.exception_clear();
-                }
-                Err(error.into())
-            }
+            // `ClassLoader.loadClass` throws a `ClassNotFoundException` for an
+            // un-staged helper, and the exception stays pending on the thread.
+            // Take it off the thread with its class and message: the callers
+            // map this to a Rust error, so the thread must stay usable for the
+            // next JNI call and the error must say why.
+            Err(error) => Err(take_pending_exception(env, error).into()),
         }
     }
 }

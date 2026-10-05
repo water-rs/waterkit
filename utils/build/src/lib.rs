@@ -35,6 +35,6 @@ pub use apple::{
 
 #[cfg(target_os = "android")]
 pub use android_runtime::{
-    AndroidError, DexHelper, decode_optional_string, decode_string, jvm_and_context,
-    with_android_context,
+    AndroidError, DexHelper, decode_optional_string, decode_string, describe_jni_error,
+    jvm_and_context, with_android_context,
 };

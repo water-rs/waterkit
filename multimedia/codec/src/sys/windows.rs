@@ -1,7 +1,8 @@
 //! Windows Media Foundation hardware encoding and decoding.
 
 use crate::{
-    CodecError, DecodePacket, DecodedPixelLayout, bitstream::NalStreamConverter,
+    CodecError, DecodePacket, DecodedPixelLayout,
+    bitstream::{NalStreamConverter, build_h264_avcc_from_annex_b, build_h265_hvcc_from_annex_b},
     config::decoded_pixel_layout,
 };
 use std::collections::BTreeMap;
@@ -450,6 +451,12 @@ impl WindowsEncoder {
                 .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
                 .ok();
 
+            // The encoder publishes its parameter sets on the output media
+            // type as soon as the types are negotiated; read them right away
+            // and keep re-reading lazily for transforms that fill the
+            // attribute only once encoding has started.
+            let codec_config = codec_config_from_media_type(&transform, codec_type);
+
             Ok(Self {
                 transform,
                 codec_type,
@@ -457,7 +464,7 @@ impl WindowsEncoder {
                 height,
                 frame_count: 0,
                 output_stream_info,
-                codec_config: None,
+                codec_config,
                 _media_foundation: media_foundation,
             })
         }
@@ -491,7 +498,47 @@ impl WindowsEncoder {
                 .map_err(|e| CodecError::EncodingFailed(format!("ProcessInput: {e}")))?;
 
             let mut encoded_data = Vec::new();
+            for packet in self.pump_output_samples()? {
+                encoded_data.extend_from_slice(&packet);
+            }
 
+            if self.codec_config.is_none() {
+                self.codec_config = codec_config_from_media_type(&self.transform, self.codec_type);
+            }
+
+            Ok(encoded_data)
+        }
+    }
+
+    /// Notify end-of-stream, drain the access units the encoder still buffers
+    /// for lookahead, and return each drained sample as its own packet.
+    ///
+    /// Media Foundation encoders emit with several frames of delay, so the
+    /// tail of a recording only ever arrives here; each entry is one access
+    /// unit and becomes one container sample.
+    pub fn drain(&mut self) -> Result<Vec<Vec<u8>>, CodecError> {
+        unsafe {
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)
+                .map_err(|e| CodecError::EncodingFailed(format!("encoder end-of-stream: {e}")))?;
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)
+                .map_err(|e| CodecError::EncodingFailed(format!("encoder drain: {e}")))?;
+        }
+
+        let packets = self.pump_output_samples()?;
+        if self.codec_config.is_none() {
+            self.codec_config = codec_config_from_media_type(&self.transform, self.codec_type);
+        }
+        Ok(packets)
+    }
+
+    /// Pump every output sample the transform can currently produce,
+    /// returning each sample's bytes as a separate entry (one access unit per
+    /// element). Returns when the transform asks for more input.
+    fn pump_output_samples(&mut self) -> Result<Vec<Vec<u8>>, CodecError> {
+        let mut packets = Vec::new();
+        unsafe {
             loop {
                 let output_sample = if self.output_stream_info.dwFlags & 0x100 != 0 {
                     None
@@ -521,7 +568,7 @@ impl WindowsEncoder {
                         if let Some(sample) = output_sample.as_ref()
                             && let Ok(data) = extract_sample_data(sample)
                         {
-                            encoded_data.extend_from_slice(&data);
+                            packets.push(data);
                         }
                     }
                     Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => break,
@@ -530,9 +577,8 @@ impl WindowsEncoder {
                     }
                 }
             }
-
-            Ok(encoded_data)
         }
+        Ok(packets)
     }
 
     /// Get the codec configuration data if available.
@@ -641,6 +687,29 @@ fn activate_hardware_transform(
         activate.ActivateObject().map_err(|error| {
             CodecError::InitializationFailed(format!("hardware {kind} activation failed: {error}"))
         })
+    }
+}
+
+/// Read the codec configuration the encoder publishes on its output media
+/// type: `MF_MT_MPEG_SEQUENCE_HEADER` carries the Annex-B parameter sets
+/// (SPS/PPS for H.264, plus VPS for H.265), which convert to the avcC/hvcC
+/// record the container stores. `None` while the transform has not exposed
+/// the attribute yet.
+fn codec_config_from_media_type(
+    transform: &IMFTransform,
+    codec_type: CodecType,
+) -> Option<Vec<u8>> {
+    unsafe {
+        let media_type = transform.GetOutputCurrentType(0).ok()?;
+        let size = media_type.GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER).ok()?;
+        let mut annex_b = vec![0u8; usize::try_from(size).ok()?];
+        media_type
+            .GetBlob(&MF_MT_MPEG_SEQUENCE_HEADER, &mut annex_b, None)
+            .ok()?;
+        match codec_type {
+            CodecType::H264 => build_h264_avcc_from_annex_b(&annex_b),
+            CodecType::H265 => build_h265_hvcc_from_annex_b(&annex_b),
+        }
     }
 }
 

@@ -77,7 +77,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: clippy-${{ matrix.os }}
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      # The root manifest is both the workspace and the `waterkit` package, so
+      # without `--workspace` cargo lints only the facade and compiles every
+      # member as a mere dependency. `--keep-going` makes one run report the
+      # lints of every member instead of stopping at the first crate that fails.
+      - run: cargo clippy --workspace --all-targets --all-features --keep-going -- -D warnings
       # The `web` backends sit behind `cfg(target_arch = "wasm32")`, so no other
       # job in this workflow compiles a line of them and a dependency can change
       # its API out from under them while everything stays green. Build every
@@ -155,7 +159,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: cross-${{ matrix.target }}
-      - run: cargo clippy --target ${{ matrix.target }} --all-features -- -D warnings
+      - run: cargo clippy --workspace --target ${{ matrix.target }} --all-targets --all-features --keep-going -- -D warnings
 
   coverage:
     name: Coverage

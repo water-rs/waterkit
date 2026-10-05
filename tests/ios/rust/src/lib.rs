@@ -309,33 +309,16 @@ fn record_haptic(report: &mut TestReport) {
 
 #[cfg(feature = "secret")]
 async fn record_secret(report: &mut TestReport) {
-    // SecItem queries need `keychain-access-groups`, which an ad-hoc signed
-    // harness app cannot carry: the simulator rejects launches for any
-    // entitlement-bearing ad-hoc signature.
     if let Err(error) =
         waterkit::secret::SecretManager::set("waterkit", "ios_test", "secret123").await
     {
-        if error.to_string().contains("entitlement") {
-            report.push(TestCase::skipped(
-                "secret.set",
-                format!("keychain unavailable without entitlements: {error}"),
-            ));
-            report.push(TestCase::skipped(
-                "secret.get",
-                "keychain unavailable without entitlements",
-            ));
-            report.push(TestCase::skipped(
-                "secret.delete",
-                "keychain unavailable without entitlements",
-            ));
-            return;
-        }
         report.push(TestCase::failed(
             "secret.set",
             format!("secret set failed: {error}"),
         ));
         return;
     }
+    report.push(TestCase::passed("secret.set"));
 
     match waterkit::secret::SecretManager::get("waterkit", "ios_test").await {
         Ok(value) if value == "secret123" => report.push(TestCase::passed("secret.get")),

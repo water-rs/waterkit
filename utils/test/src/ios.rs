@@ -292,9 +292,9 @@ impl Destination for Simulator {
         "iphonesimulator"
     }
 
-    /// None: Xcode signs a simulator build ad hoc and without entitlements,
-    /// and the simulator rejects launches of an ad-hoc signature that carries
-    /// any.
+    /// None: Xcode signs a simulator build ad hoc and embeds its entitlements
+    /// in the binary's `__entitlements` section, where the simulator reads
+    /// them, rather than in the signature.
     fn signing_arguments(&self) -> Vec<String> {
         Vec::new()
     }

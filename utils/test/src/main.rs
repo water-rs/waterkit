@@ -5,13 +5,13 @@
 use clap::{Parser, Subcommand};
 use eyre::{Context, Result};
 use owo_colors::OwoColorize;
+use process_control::{ChildExt, Control};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use toml_edit::DocumentMut;
 use tracing::{info, warn};
-use wait_timeout::ChildExt;
 use waterkit_test_report::{TestReport, from_json, parse_report_block};
 
 mod android_device;
@@ -680,28 +680,21 @@ fn harness_feature(crate_path: &Path) -> Result<&'static str> {
 }
 
 /// Runs `command` to completion, killing it when it outlives `timeout`.
+///
+/// Its piped stdout and stderr are drained while it runs: a child whose output
+/// outgrows the pipe buffer would otherwise block on the write and be killed at
+/// the deadline with its work already done.
 fn run_with_timeout(mut command: Command, timeout: Duration, description: &str) -> Result<Output> {
-    let mut child = command
+    let output = command
         .spawn()
-        .with_context(|| format!("Failed to start the command that should {description}"))?;
-
-    if child
-        .wait_timeout(timeout)
+        .with_context(|| format!("Failed to start the command that should {description}"))?
+        .controlled_with_output()
+        .time_limit(timeout)
+        .terminate_for_timeout()
+        .wait()
         .with_context(|| format!("Failed to wait for the command that should {description}"))?
-        .is_none()
-    {
-        child
-            .kill()
-            .with_context(|| format!("Failed to kill the command that should {description}"))?;
-        child
-            .wait()
-            .with_context(|| format!("Failed to reap the command that should {description}"))?;
-        eyre::bail!("Did not {description} within {timeout:?}");
-    }
-
-    child.wait_with_output().with_context(|| {
-        format!("Failed to read the output of the command that should {description}")
-    })
+        .ok_or_else(|| eyre::eyre!("Did not {description} within {timeout:?}"))?;
+    Ok(output.into_std_lossy())
 }
 
 fn parse_process_report(platform: &str, package_name: &str, output: &str) -> Result<TestReport> {

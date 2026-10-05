@@ -619,7 +619,8 @@ mod tests {
         // The channel still holds the first frame, so the second displaces it.
         fan_out(&mut subscribers, &frame);
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
-        receiver.try_recv().unwrap();
+        let pending = receiver.try_recv().expect("the newest frame is pending");
+        assert!(pending.is_ok(), "the pending item is a frame");
         fan_out(&mut subscribers, &frame);
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
         // A closed receiver is pruned from the list.

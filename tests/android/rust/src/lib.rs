@@ -20,6 +20,7 @@ const PERMISSION_GRANTED: i32 = 3;
 #[cfg(feature = "sensor")]
 const ANDROID_SENSOR_TYPE_ACCELEROMETER: i32 = 1;
 
+/// Runs the enabled cases and logs their report.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest<'local>(
     mut env: EnvUnowned<'local>,
@@ -36,6 +37,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest<'local>(
     .resolve::<ThrowRuntimeExAndDefault>();
 }
 
+/// Runs the enabled cases and returns their report as JSON.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_test_MainActivity_runTestReport<'local>(
     mut env: EnvUnowned<'local>,
@@ -72,7 +74,7 @@ struct AndroidContextOwner {
 }
 
 impl AndroidContextOwner {
-    fn new(env: &mut Env<'_>, activity: &JObject<'_>) -> jni::errors::Result<Self> {
+    fn new(env: &Env<'_>, activity: &JObject<'_>) -> jni::errors::Result<Self> {
         let java_vm = env.get_java_vm()?;
         let activity = env.new_global_ref(activity)?;
         // SAFETY: both pointers are retained for this owner's lifetime, and
@@ -105,7 +107,7 @@ fn init_logger() {
     );
 }
 
-fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport {
+fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
     let mut report = TestReport::new("android", "waterkit-test-android");
     #[cfg(any(
         feature = "sensor",
@@ -114,7 +116,7 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
         feature = "fs",
         feature = "secret"
     ))]
-    let activity_global = match _env.new_global_ref(_activity) {
+    let activity_global = match env.new_global_ref(activity) {
         Ok(value) => value,
         Err(error) => {
             report.push(TestCase::failed(
@@ -124,6 +126,14 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
             return report;
         }
     };
+    #[cfg(not(any(
+        feature = "sensor",
+        feature = "location",
+        feature = "permission",
+        feature = "fs",
+        feature = "secret"
+    )))]
+    let _ = (env, activity);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -140,13 +150,13 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
         let activity = activity_global.as_obj();
 
         #[cfg(feature = "sensor")]
-        record_android_sensor(&mut report, _env, activity);
+        record_android_sensor(&mut report, env, activity);
 
         #[cfg(feature = "location")]
-        record_android_location(&mut report, _env, activity);
+        record_android_location(&mut report, env, activity);
 
         #[cfg(feature = "permission")]
-        record_android_permission(&mut report, _env, activity);
+        record_android_permission(&mut report, env, activity);
 
         #[cfg(feature = "camera")]
         record_android_camera(&mut report);
@@ -155,7 +165,7 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
         record_android_clipboard(&mut report).await;
 
         #[cfg(feature = "fs")]
-        record_android_fs(&mut report, _env, activity);
+        record_android_fs(&mut report, env, activity);
 
         #[cfg(feature = "haptic")]
         record_android_haptic(&mut report);
@@ -164,7 +174,7 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
         record_android_notification(&mut report);
 
         #[cfg(feature = "secret")]
-        record_android_secret(&mut report, _env, activity);
+        record_android_secret(&mut report, env, activity);
 
         #[cfg(feature = "system")]
         record_android_system(&mut report);
@@ -175,56 +185,8 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
         #[cfg(feature = "passkey")]
         record_android_passkey(&mut report).await;
 
-        #[cfg(feature = "biometric")]
-        report.push(TestCase::skipped(
-            "biometric.authenticate",
-            "biometric authentication requires an interactive prompt",
-        ));
-
-        #[cfg(feature = "audio")]
-        report.push(TestCase::passed("audio.linked"));
-
         #[cfg(feature = "codec")]
-        {
-            report.push(TestCase::passed("codec.linked"));
-            record_android_avif_decode(&mut report);
-        }
-
-        #[cfg(feature = "dialog")]
-        report.push(TestCase::passed("dialog.linked"));
-
-        #[cfg(feature = "video")]
-        report.push(TestCase::passed("video.linked"));
-
-        #[cfg(feature = "bluetooth")]
-        report.push(TestCase::passed("bluetooth.linked"));
-
-        #[cfg(feature = "nfc")]
-        report.push(TestCase::passed("nfc.linked"));
-
-        #[cfg(feature = "share")]
-        report.push(TestCase::skipped(
-            "share.sheet",
-            "share sheet requires an interactive chooser",
-        ));
-
-        #[cfg(feature = "speech")]
-        report.push(TestCase::skipped(
-            "speech.tts",
-            "speech synthesis is audible and not asserted by this harness",
-        ));
-
-        #[cfg(feature = "contacts")]
-        report.push(TestCase::skipped(
-            "contacts.fetch_all",
-            "contacts access depends on runtime user data permissions",
-        ));
-
-        #[cfg(feature = "calendar")]
-        report.push(TestCase::skipped(
-            "calendar.list",
-            "calendar access depends on runtime user data permissions",
-        ));
+        record_android_avif_decode(&mut report);
 
         #[cfg(feature = "health")]
         report.push(TestCase::passed_with_message(
@@ -235,47 +197,78 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
             ),
         ));
 
-        #[cfg(feature = "deeplink")]
-        report.push(TestCase::passed("deeplink.linked"));
-
         #[cfg(feature = "screen")]
         record_android_screen(&mut report);
 
-        #[cfg(not(any(
-            feature = "sensor",
-            feature = "biometric",
-            feature = "location",
-            feature = "audio",
-            feature = "camera",
-            feature = "clipboard",
-            feature = "codec",
-            feature = "dialog",
-            feature = "fs",
-            feature = "haptic",
-            feature = "notification",
-            feature = "permission",
-            feature = "secret",
-            feature = "system",
-            feature = "video",
-            feature = "bluetooth",
-            feature = "nfc",
-            feature = "share",
-            feature = "speech",
-            feature = "deeplink",
-            feature = "contacts",
-            feature = "calendar",
-            feature = "health",
-            feature = "screen",
-            feature = "background",
-            feature = "passkey"
-        )))]
+        for case in unexercised_cases() {
+            report.push(case);
+        }
+    });
+
+    // Every enabled feature records at least one case, so an empty report
+    // means the harness was built without any feature.
+    if report.cases.is_empty() {
         report.push(TestCase::failed(
             "harness.feature",
             "no WaterKit feature was enabled for the Android harness",
         ));
-    });
+    }
 
     report
+}
+
+/// The cases of the features this harness only links, or cannot exercise
+/// without an interactive prompt or the user's data.
+fn unexercised_cases() -> impl Iterator<Item = TestCase> {
+    [
+        (
+            cfg!(feature = "biometric"),
+            TestCase::skipped(
+                "biometric.authenticate",
+                "biometric authentication requires an interactive prompt",
+            ),
+        ),
+        (cfg!(feature = "audio"), TestCase::passed("audio.linked")),
+        (cfg!(feature = "codec"), TestCase::passed("codec.linked")),
+        (cfg!(feature = "dialog"), TestCase::passed("dialog.linked")),
+        (cfg!(feature = "video"), TestCase::passed("video.linked")),
+        (
+            cfg!(feature = "bluetooth"),
+            TestCase::passed("bluetooth.linked"),
+        ),
+        (cfg!(feature = "nfc"), TestCase::passed("nfc.linked")),
+        (
+            cfg!(feature = "share"),
+            TestCase::skipped("share.sheet", "share sheet requires an interactive chooser"),
+        ),
+        (
+            cfg!(feature = "speech"),
+            TestCase::skipped(
+                "speech.tts",
+                "speech synthesis is audible and not asserted by this harness",
+            ),
+        ),
+        (
+            cfg!(feature = "contacts"),
+            TestCase::skipped(
+                "contacts.fetch_all",
+                "contacts access depends on runtime user data permissions",
+            ),
+        ),
+        (
+            cfg!(feature = "calendar"),
+            TestCase::skipped(
+                "calendar.list",
+                "calendar access depends on runtime user data permissions",
+            ),
+        ),
+        (
+            cfg!(feature = "deeplink"),
+            TestCase::passed("deeplink.linked"),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(enabled, case)| enabled.then_some(case))
 }
 
 fn log_report(report: &TestReport) {
@@ -493,7 +486,6 @@ async fn record_android_clipboard_watch(
 ) {
     const FIRST: &str = "WaterKit Watch First";
     const SECOND: &str = "WaterKit Watch Second";
-    const AFTER_LIFECYCLE: &str = "WaterKit Watch After Lifecycle";
 
     let mut primary_stream = match clipboard.watch() {
         Ok(stream) => stream,
@@ -547,29 +539,18 @@ async fn record_android_clipboard_watch(
         next_clipboard_event(&mut second_stream)
     );
 
-    match (primary_first, primary_second) {
-        (ClipWait::Event(first), ClipWait::Event(second))
-            if first.has_text() && second.has_text() =>
-        {
-            report.push(TestCase::passed("clipboard.watch_same_type"));
-        }
-        (first, second) => report.push(TestCase::failed(
-            "clipboard.watch_same_type",
-            format!("expected two text events, got {first:?} then {second:?}"),
-        )),
-    }
-
-    match (second_first, second_second) {
-        (ClipWait::Event(first), ClipWait::Event(second))
-            if first.has_text() && second.has_text() =>
-        {
-            report.push(TestCase::passed("clipboard.watch_independent_subscribers"));
-        }
-        (first, second) => report.push(TestCase::failed(
-            "clipboard.watch_independent_subscribers",
-            format!("expected two text events, got {first:?} then {second:?}"),
-        )),
-    }
+    record_two_text_events(
+        report,
+        "clipboard.watch_same_type",
+        primary_first,
+        primary_second,
+    );
+    record_two_text_events(
+        report,
+        "clipboard.watch_independent_subscribers",
+        second_first,
+        second_second,
+    );
 
     // Dropping a stream must unregister its listener and release the
     // callback state without a use-after-free; a fresh watcher receiving a
@@ -601,6 +582,38 @@ async fn record_android_clipboard_watch(
         )),
     }
 
+    record_watch_stop(report, clipboard, primary_stream).await;
+}
+
+/// Records a case that passes when both waits produced a text event.
+#[cfg(feature = "clipboard")]
+fn record_two_text_events(
+    report: &mut TestReport,
+    name: &'static str,
+    first: ClipWait,
+    second: ClipWait,
+) {
+    match (first, second) {
+        (ClipWait::Event(first), ClipWait::Event(second))
+            if first.has_text() && second.has_text() =>
+        {
+            report.push(TestCase::passed(name));
+        }
+        (first, second) => report.push(TestCase::failed(
+            name,
+            format!("expected two text events, got {first:?} then {second:?}"),
+        )),
+    }
+}
+
+#[cfg(feature = "clipboard")]
+async fn record_watch_stop(
+    report: &mut TestReport,
+    clipboard: &mut waterkit_content::clipboard::Clipboard,
+    mut primary_stream: waterkit_content::clipboard::ClipboardStream,
+) {
+    const AFTER_LIFECYCLE: &str = "WaterKit Watch After Lifecycle";
+
     // stop() unregisters the listener and releases the callback state; the
     // channel then completes once events buffered before the stop have
     // drained — async-channel's documented termination — so the wait ends
@@ -617,7 +630,7 @@ async fn record_android_clipboard_watch(
     while matches!(wait, ClipWait::Event(_)) {
         wait = next_clipboard_event(&mut primary_stream).await;
     }
-    if let ClipWait::Closed = wait {
+    if matches!(wait, ClipWait::Closed) {
         report.push(TestCase::passed("clipboard.watch_stop"));
     } else {
         report.push(TestCase::failed(
@@ -762,7 +775,7 @@ async fn record_android_passkey(report: &mut TestReport) {
                     availability.supports_user_verification,
                     availability.supports_discoverable_credentials
                 ),
-            ))
+            ));
         }
         Ok(_) => report.push(TestCase::failed(
             "passkey.availability",
@@ -789,24 +802,25 @@ fn record_android_screen(report: &mut TestReport) {
     }
 }
 
+/// Checks one permission and returns its status code.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_test_MainActivity_testCheckPermission<'local>(
-    mut unowned_env: EnvUnowned<'local>,
+    mut unownedenv: EnvUnowned<'local>,
     _this: JObject<'local>,
     activity: JObject<'local>,
-    _permission_type: i32,
+    permission_type: i32,
 ) -> i32 {
-    unowned_env
+    unownedenv
         .with_env(|env| -> jni::errors::Result<i32> {
-            Ok(check_permission(env, &activity, _permission_type))
+            Ok(check_permission(env, &activity, permission_type))
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-fn check_permission(_env: &mut Env<'_>, _activity: &JObject<'_>, _permission_type: i32) -> i32 {
+fn check_permission(env: &mut Env<'_>, activity: &JObject<'_>, permission_type: i32) -> i32 {
     #[cfg(feature = "permission")]
     {
-        let permission = match _permission_type {
+        let permission = match permission_type {
             0 => waterkit_content::permission::Permission::Location,
             1 => waterkit_content::permission::Permission::Camera,
             2 => waterkit_content::permission::Permission::Microphone,
@@ -814,14 +828,13 @@ fn check_permission(_env: &mut Env<'_>, _activity: &JObject<'_>, _permission_typ
             4 => waterkit_content::permission::Permission::Contacts,
             5 => waterkit_content::permission::Permission::Calendar,
             _ => {
-                log::error!("Unknown permission type: {_permission_type}");
+                log::error!("Unknown permission type: {permission_type}");
                 return PERMISSION_NOT_DETERMINED;
             }
         };
 
-        match waterkit_content::permission::android::check_with_activity(
-            _env, _activity, permission,
-        ) {
+        match waterkit_content::permission::android::check_with_activity(env, activity, permission)
+        {
             Ok(waterkit_content::permission::PermissionStatus::NotDetermined) => {
                 PERMISSION_NOT_DETERMINED
             }
@@ -841,27 +854,28 @@ fn check_permission(_env: &mut Env<'_>, _activity: &JObject<'_>, _permission_typ
 
     #[cfg(not(feature = "permission"))]
     {
-        let _ = (_env, _activity);
+        let _ = (env, activity, permission_type);
         log::error!("testCheckPermission called without enabling permission feature");
         PERMISSION_NOT_DETERMINED
     }
 }
 
+/// Reads the location as `[ok, latitude, longitude, altitude, accuracy]`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_test_MainActivity_testGetLocation<'local>(
-    mut unowned_env: EnvUnowned<'local>,
+    mut unownedenv: EnvUnowned<'local>,
     _this: JObject<'local>,
     activity: JObject<'local>,
 ) -> jdoubleArray {
-    unowned_env
+    unownedenv
         .with_env(|env| -> jni::errors::Result<jdoubleArray> { Ok(get_location(env, &activity)) })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-fn get_location(_env: &mut Env<'_>, _activity: &JObject<'_>) -> jdoubleArray {
+fn get_location(env: &mut Env<'_>, activity: &JObject<'_>) -> jdoubleArray {
     #[cfg(feature = "location")]
     {
-        match waterkit_content::location::android::get_location_with_context(_env, _activity) {
+        match waterkit_content::location::android::get_location_with_context(env, activity) {
             Ok(location) => {
                 let altitude = location.altitude().unwrap_or(0.0);
                 let accuracy = location.horizontal_accuracy().unwrap_or(0.0);
@@ -873,7 +887,7 @@ fn get_location(_env: &mut Env<'_>, _activity: &JObject<'_>) -> jdoubleArray {
                     accuracy,
                 ];
 
-                let array = match JDoubleArray::new(_env, payload.len()) {
+                let array = match JDoubleArray::new(env, payload.len()) {
                     Ok(arr) => arr,
                     Err(error) => {
                         log::error!("JDoubleArray::new failed: {error}");
@@ -881,7 +895,7 @@ fn get_location(_env: &mut Env<'_>, _activity: &JObject<'_>) -> jdoubleArray {
                     }
                 };
 
-                if let Err(error) = array.set_region(_env, 0, &payload) {
+                if let Err(error) = array.set_region(env, 0, &payload) {
                     log::error!("set_region failed: {error}");
                     return std::ptr::null_mut();
                 }
@@ -897,7 +911,7 @@ fn get_location(_env: &mut Env<'_>, _activity: &JObject<'_>) -> jdoubleArray {
 
     #[cfg(not(feature = "location"))]
     {
-        let _ = (_env, _activity);
+        let _ = (env, activity);
         log::error!("testGetLocation called without enabling location feature");
         std::ptr::null_mut()
     }
@@ -953,13 +967,13 @@ fn record_android_avif_decode(report: &mut TestReport) {
                 .filter(|((x, y), expected)| !close(px(*x, *y), *expected))
                 .map(|((x, y), expected)| format!("({x},{y})={:?}!={:?}", px(*x, *y), expected))
                 .collect::<Vec<_>>();
-            if !bad.is_empty() {
+            if bad.is_empty() {
+                report.push(TestCase::passed("codec.decode_avif_platform"));
+            } else {
                 report.push(TestCase::failed(
                     "codec.decode_avif_platform",
                     format!("quadrant pixels mismatch: {}", bad.join(" ")),
                 ));
-            } else {
-                report.push(TestCase::passed("codec.decode_avif_platform"));
             }
         }
         Err(error) => report.push(TestCase::failed(

@@ -390,29 +390,7 @@ mod tests {
 
     impl Gpu {
         fn new(extra_features: wgpu::Features) -> Self {
-            let instance =
-                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-            let adapter =
-                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    compatible_surface: None,
-                    force_fallback_adapter: false,
-                    apply_limit_buckets: false,
-                }))
-                .expect("the frame converter tests need a GPU adapter");
-            assert!(
-                adapter.features().contains(extra_features),
-                "the adapter lacks {extra_features:?}"
-            );
-            let (device, queue) =
-                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                    required_features: FrameConverter::required_features(adapter.features())
-                        | extra_features,
-                    ..Default::default()
-                }))
-                .expect("the frame converter tests need a GPU device");
-            let device = Arc::new(device);
-            let queue = Arc::new(queue);
+            let (device, queue) = crate::test_support::gpu(extra_features);
             Self {
                 converter: FrameConverter::new(&device),
                 pool: FramePool::new(Arc::clone(&device), Arc::clone(&queue)),
@@ -429,50 +407,8 @@ mod tests {
         /// Converts `frame` and reads the upright result back.
         fn convert(&self, frame: &Frame) -> RgbaImage {
             let texture = self.converter.convert(&self.device, &self.queue, frame);
-            let size = texture.size();
-            let padded_row = (size.width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("frame converter test readback"),
-                size: u64::from(padded_row * size.height),
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            encoder.copy_texture_to_buffer(
-                texture.as_image_copy(),
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &buffer,
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(padded_row),
-                        rows_per_image: Some(size.height),
-                    },
-                },
-                size,
-            );
-            self.queue.submit([encoder.finish()]);
-            buffer.slice(..).map_async(wgpu::MapMode::Read, |result| {
-                result.expect("mapping the readback buffer");
-            });
-            self.device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: Some(Duration::from_secs(30)),
-                })
-                .expect("the conversion finishes on the GPU");
-            let mapped = buffer
-                .slice(..)
-                .get_mapped_range()
-                .expect("the readback buffer is mapped");
-            let row_bytes = (size.width * 4) as usize;
-            let pixels = mapped
-                .chunks(padded_row as usize)
-                .flat_map(|row| &row[..row_bytes])
-                .copied()
-                .collect();
-            RgbaImage::from_raw(size.width, size.height, pixels).expect("readback size")
+            let pixels = crate::test_support::read_texture(&self.device, &self.queue, &texture);
+            RgbaImage::from_raw(texture.width(), texture.height(), pixels).expect("readback size")
         }
     }
 

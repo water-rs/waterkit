@@ -34,8 +34,13 @@
 
 mod converter;
 mod frame;
+// Apple frames alias their capture buffers; every other platform, and the
+// tests everywhere, upload frames from CPU memory.
+#[cfg(any(not(any(target_os = "ios", target_os = "macos")), test))]
 mod pool;
 mod sys;
+#[cfg(test)]
+mod test_support;
 
 pub use converter::{FrameConverter, UPRIGHT_FORMAT};
 pub use frame::{Frame, FramePlanes, Orientation, YCbCrEncoding, YCbCrMatrix, YCbCrRange};
@@ -257,11 +262,12 @@ pub enum RawPhotoFormat {
 }
 
 /// RAW video frame stream format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RawVideoFormat {
-    /// Frame stream where each frame is BGRA8 pixels.
-    #[default]
-    Bgra8Frames,
+    /// Frame stream where each frame is biplanar 4:2:0 YCbCr as captured: the
+    /// luma rows, then the interleaved Cb/Cr rows, without padding. The
+    /// header's pixel-format byte is 3 for video range and 4 for full range.
+    Nv12Frames,
     /// Frame stream where each frame is RGBA8 pixels.
     Rgba8Frames,
 }

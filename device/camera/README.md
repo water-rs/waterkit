@@ -53,14 +53,16 @@ What each platform delivers today:
 
 | Platform | Planes | Orientation |
 | :--- | :--- | :--- |
-| iOS / macOS | `Rgb` (BGRA) | capture connection rotation and mirroring |
+| iOS / macOS | `YCbCr420`: the capture buffer's `IOSurface` planes (`420f`, else `420v`), no copy | capture connection rotation and mirroring |
 | Android | `Rgb` (RGBA) | sensor orientation, lens facing, display rotation |
 | Windows / Linux | `YCbCr420` (NV12), `YCbCr422` (YUYV), or `Rgb` from MJPEG | always `Up` |
 
-Every platform still copies each frame from CPU memory into a pooled texture:
-Apple asks the capture pipeline for BGRA buffers, and Android converts its
-YUV images to RGBA on the CPU first. Importing the platform buffers without a
-copy is tracked in water-rs/waterkit#136.
+On Apple platforms a frame's textures alias the capture buffer, so no pixel
+is copied; the buffer returns to the camera's small pool only when the frame
+drops (and the GPU work submitted until then finishes), so a consumer that
+holds frames makes the camera drop new ones. Android still converts its YUV
+images to RGBA on the CPU and uploads them, and desktop uploads the planes
+the webcam delivers, both into pooled textures.
 
 ## RAW Outputs
 
@@ -68,8 +70,9 @@ copy is tracked in water-rs/waterkit#136.
 - RAW video: uncompressed frame stream file (`WKRV` container):
   - Header: magic/version/pixel-format/width/height/fps
   - Per frame: `timestamp_ns(u64 LE) + payload_len(u32 LE) + raw pixels`
-  - Android: `RGBA8` frames
-  - Apple: `BGRA8` frames
+  - Android and desktop: `RGBA8` frames (pixel format 2)
+  - Apple: biplanar 4:2:0 frames as captured, luma rows then chroma rows
+    (pixel format 3 for video range, 4 for full range)
 
 ## Example: Capability Probe
 

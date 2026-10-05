@@ -3,7 +3,21 @@
 
 use std::time::Duration;
 
-use crate::pool::PoolLease;
+/// What keeps a frame's planes valid while the frame lives, and what happens
+/// to their storage when it drops.
+#[derive(Debug)]
+pub enum FrameStorage {
+    /// Textures uploaded from CPU memory; dropping returns them to their pool.
+    #[cfg(any(not(any(target_os = "ios", target_os = "macos")), test))]
+    Pooled { _lease: crate::pool::PoolLease },
+    /// The captured `CVPixelBuffer` whose `IOSurface` planes the textures
+    /// alias; dropping hands it back to the capture pool once the GPU work
+    /// submitted so far has finished.
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    Captured {
+        _buffer: crate::sys::apple::CapturedBuffer,
+    },
+}
 
 /// The GPU planes of one camera frame, in the layout the platform delivered.
 ///
@@ -180,9 +194,15 @@ impl Orientation {
 
 /// A GPU-backed camera frame.
 ///
-/// The planes stay valid while the frame is alive. Frames uploaded from CPU
-/// memory recycle their textures once the frame is dropped, so a consumer
-/// that needs the pixels longer converts or copies them first.
+/// The planes stay valid while the frame is alive, and their storage is
+/// reused once it drops, so a consumer that needs the pixels longer converts
+/// or copies them first.
+///
+/// On Apple platforms the planes alias the capture buffer itself, which
+/// comes from a small pool the camera owns. Every frame a consumer holds
+/// keeps one of those buffers out of the pool, and when none is left the
+/// camera drops new frames until one comes back. Drop each frame as soon as
+/// its work is submitted.
 #[derive(Debug)]
 pub struct Frame {
     planes: FramePlanes,
@@ -190,13 +210,13 @@ pub struct Frame {
     width: u32,
     height: u32,
     timestamp: Duration,
-    _storage: PoolLease,
+    _storage: FrameStorage,
 }
 
 impl Frame {
     pub(crate) const fn new(
         planes: FramePlanes,
-        storage: PoolLease,
+        storage: FrameStorage,
         width: u32,
         height: u32,
         orientation: Orientation,

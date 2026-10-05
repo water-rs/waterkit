@@ -11,7 +11,7 @@ use std::time::Duration;
 
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 use crate::frame::YCbCrEncoding;
-use crate::frame::{Frame, FramePlanes, Orientation};
+use crate::frame::{Frame, FramePlanes, FrameStorage, Orientation};
 
 /// One frame's pixels in CPU memory, in the layout the platform delivered.
 pub enum CpuPlanes<'a> {
@@ -199,7 +199,14 @@ impl FramePool {
             textures,
             free: self.free_tx.clone(),
         };
-        Frame::new(planes, lease, width, height, orientation, timestamp)
+        Frame::new(
+            planes,
+            FrameStorage::Pooled { _lease: lease },
+            width,
+            height,
+            orientation,
+            timestamp,
+        )
     }
 
     /// Writes `planes` into a free texture set of the same shape, or into a

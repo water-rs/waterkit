@@ -1,18 +1,25 @@
 //! Apple platform (iOS/macOS) camera implementation using `AVCaptureSession`.
 //!
-//! The capture output delivers 32-bit BGRA pixel buffers. Each buffer is
-//! copied into a pooled `Bgra8Unorm` texture; the frame's orientation comes
-//! from the capture connection's rotation and mirroring.
+//! The capture output keeps the camera's native biplanar 4:2:0 format
+//! (`420f` where offered, otherwise `420v`), and each frame's planes are the
+//! capture buffer's `IOSurface` planes imported into wgpu without a copy (see
+//! [`capture`]). The frame's orientation comes from the capture connection's
+//! rotation and mirroring.
 
-use crate::pool::{CpuPlanes, FramePool};
+mod capture;
+
+pub use capture::CapturedBuffer;
+use capture::{CapturedPixelBuffer, RawFrame};
+
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
-    ExposureControl, ExposureMode, FlashMode, FocusControl, FocusMode, Frame, Orientation, Photo,
-    RawPhoto, RawPhotoFormat, RawVideoFormat, Resolution, StabilizationMode, WhiteBalanceControl,
+    ExposureControl, ExposureMode, FlashMode, FocusControl, FocusMode, Frame, Photo, RawPhoto,
+    RawPhotoFormat, RawVideoFormat, Resolution, StabilizationMode, WhiteBalanceControl,
     WhiteBalanceMode,
 };
 use std::num::NonZeroU8;
 use std::path::Path;
+use std::ptr::NonNull;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -125,10 +132,9 @@ mod ffi {
 unsafe extern "C" {
     fn camera_set_frame_callback(
         context: *mut std::ffi::c_void,
-        callback: extern "C" fn(*mut std::ffi::c_void, u64, u32, u32, u64, u32, bool),
+        callback: extern "C" fn(*mut std::ffi::c_void, u64, u64, u32, bool),
     );
     fn camera_clear_frame_callback();
-    fn camera_release_pixelbuffer(handle: u64);
     fn camera_copy_photo_data(buffer: *mut u8, size: u64);
     fn camera_copy_raw_photo_data(buffer: *mut u8, size: u64);
 }
@@ -147,19 +153,6 @@ fn convert_result(result: ffi::CameraResultFFI, context: &str) -> Result<(), Cam
         ffi::CameraResultFFI::PermissionDenied => Err(CameraError::PermissionDenied),
         ffi::CameraResultFFI::AlreadyInUse => Err(CameraError::AlreadyInUse),
     }
-}
-
-/// Internal frame data sent from Swift callback.
-struct RawFrame {
-    pixelbuffer_handle: u64,
-    width: u32,
-    height: u32,
-    timestamp_ns: u64,
-    /// Clockwise rotation, in degrees, that makes the (unmirrored) buffer
-    /// upright.
-    rotation_degrees: u32,
-    /// Whether the connection mirrored the buffer.
-    mirrored: bool,
 }
 
 struct FrameCallbackContext {
@@ -188,106 +181,30 @@ impl Drop for OpenCameraGuard {
     }
 }
 
-/// Callback invoked from Swift for each camera frame.
+/// Callback invoked from Swift for each camera frame. `pixelbuffer_handle`
+/// carries one reference on the buffer, which the frame now owns.
 extern "C" fn frame_callback(
     context: *mut std::ffi::c_void,
     pixelbuffer_handle: u64,
-    width: u32,
-    height: u32,
     timestamp_ns: u64,
     rotation_degrees: u32,
     mirrored: bool,
 ) {
     let context = unsafe { &*context.cast::<FrameCallbackContext>() };
+    let buffer = NonNull::new(pixelbuffer_handle as *mut objc2_core_video::CVPixelBuffer)
+        .expect("Swift hands over a retained, non-null CVPixelBuffer");
     let frame = RawFrame {
-        pixelbuffer_handle,
-        width,
-        height,
-        timestamp_ns,
+        // SAFETY: Swift passes the buffer with `Unmanaged.passRetained`,
+        // transferring that reference here.
+        pixel_buffer: unsafe { CapturedPixelBuffer::from_owned(buffer) },
+        timestamp: Duration::from_nanos(timestamp_ns),
         rotation_degrees,
         mirrored,
     };
-    // Non-blocking send. force_send keeps latency low by replacing stale queued frames.
-    match context.sender.force_send(frame) {
-        Ok(Some(evicted)) => unsafe {
-            camera_release_pixelbuffer(evicted.pixelbuffer_handle);
-        },
-        Ok(None) => {}
-        Err(error) => unsafe {
-            camera_release_pixelbuffer(error.0.pixelbuffer_handle);
-        },
-    }
-}
-
-// Raw FFI for CVPixelBuffer (Core Video type)
-#[allow(non_camel_case_types)]
-type CVPixelBufferRef = *const std::ffi::c_void;
-type CVReturn = i32;
-const K_CV_RETURN_SUCCESS: CVReturn = 0;
-
-unsafe extern "C" {
-    fn CVPixelBufferLockBaseAddress(pixelBuffer: CVPixelBufferRef, lockFlags: u64) -> CVReturn;
-    fn CVPixelBufferUnlockBaseAddress(pixelBuffer: CVPixelBufferRef, lockFlags: u64) -> CVReturn;
-    fn CVPixelBufferGetBaseAddress(pixelBuffer: CVPixelBufferRef) -> *mut std::ffi::c_void;
-    fn CVPixelBufferGetBytesPerRow(pixelBuffer: CVPixelBufferRef) -> usize;
-}
-
-// Lock flag for read-only access
-const K_CV_PIXEL_BUFFER_LOCK_READ_ONLY: u64 = 0x0000_0001;
-
-/// Copies one `CVPixelBuffer` into a pooled texture and wraps it as a frame.
-///
-/// The capture output is configured for 32-bit BGRA, so the buffer is a
-/// single interleaved plane.
-fn upload_pixelbuffer(pool: &FramePool, raw: &RawFrame) -> Result<Frame, CameraError> {
-    struct PixelBufferReadLockGuard(CVPixelBufferRef);
-
-    impl Drop for PixelBufferReadLockGuard {
-        fn drop(&mut self) {
-            unsafe {
-                CVPixelBufferUnlockBaseAddress(self.0, K_CV_PIXEL_BUFFER_LOCK_READ_ONLY);
-            }
-        }
-    }
-
-    // The handle is a raw pointer to the CVPixelBuffer, retained by Swift.
-    let pixelbuffer = raw.pixelbuffer_handle as CVPixelBufferRef;
-    if pixelbuffer.is_null() {
-        return Err(CameraError::GpuError("null CVPixelBuffer handle".into()));
-    }
-
-    let lock_result =
-        unsafe { CVPixelBufferLockBaseAddress(pixelbuffer, K_CV_PIXEL_BUFFER_LOCK_READ_ONLY) };
-    if lock_result != K_CV_RETURN_SUCCESS {
-        return Err(CameraError::GpuError(format!(
-            "failed to lock CVPixelBuffer: {lock_result}"
-        )));
-    }
-    let _lock_guard = PixelBufferReadLockGuard(pixelbuffer);
-
-    let base_address = unsafe { CVPixelBufferGetBaseAddress(pixelbuffer) };
-    if base_address.is_null() {
-        return Err(CameraError::GpuError(
-            "CVPixelBuffer base address is null".into(),
-        ));
-    }
-    let bytes_per_row = unsafe { CVPixelBufferGetBytesPerRow(pixelbuffer) };
-    let data_size = bytes_per_row * raw.height as usize;
-    let pixels = unsafe { std::slice::from_raw_parts(base_address.cast::<u8>(), data_size) };
-    let stride = u32::try_from(bytes_per_row)
-        .map_err(|_| CameraError::GpuError("CVPixelBuffer row stride exceeds u32".into()))?;
-
-    Ok(pool.upload(
-        &CpuPlanes::Rgb {
-            format: wgpu::TextureFormat::Bgra8Unorm,
-            data: pixels,
-            stride,
-        },
-        raw.width,
-        raw.height,
-        Orientation::from_rotation(raw.rotation_degrees, raw.mirrored),
-        Duration::from_nanos(raw.timestamp_ns),
-    ))
+    // Newest wins: a frame the consumer has not taken yet is displaced, and
+    // dropping it returns its buffer to the capture pool at once, so the
+    // channel never holds more than one buffer.
+    let _ = context.sender.force_send(frame);
 }
 
 /// Internal camera backend for Apple platforms.
@@ -463,7 +380,7 @@ impl CameraInner {
             },
             supports_raw_video: ffi::camera_supports_raw_video(),
             raw_video_formats: if ffi::camera_supports_raw_video() {
-                vec![RawVideoFormat::Bgra8Frames]
+                vec![RawVideoFormat::Nv12Frames]
             } else {
                 Vec::new()
             },
@@ -705,22 +622,18 @@ impl CameraInner {
     }
 
     pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
-        let pool = FramePool::new(Arc::clone(&self.device), Arc::clone(&self.queue));
+        let device = Arc::clone(&self.device);
+        let queue = Arc::clone(&self.queue);
         let receiver = self.frame_receiver.clone();
 
-        futures::stream::unfold((pool, receiver), |(pool, receiver)| async move {
-            let raw_frame = receiver.recv().await.ok()?;
-            let frame = upload_pixelbuffer(&pool, &raw_frame);
-            // The pixels are on the GPU queue now; the buffer goes back to the
-            // capture pool whatever the upload's outcome.
-            unsafe {
-                camera_release_pixelbuffer(raw_frame.pixelbuffer_handle);
-            }
-            let frame = frame.unwrap_or_else(|error| {
-                panic!("camera frame from AVFoundation could not be uploaded: {error}")
-            });
-            Some((frame, (pool, receiver)))
-        })
+        futures::stream::unfold(
+            (device, queue, receiver),
+            |(device, queue, receiver)| async move {
+                let raw = receiver.recv().await.ok()?;
+                let frame = capture::build_frame(&device, &queue, raw);
+                Some((frame, (device, queue, receiver)))
+            },
+        )
     }
 
     pub async fn capture_photo(&self) -> Result<Photo, CameraError> {

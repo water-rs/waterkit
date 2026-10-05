@@ -66,6 +66,18 @@ yuv = "0.8.16"
 swift-bridge.workspace = true
 objc.workspace = true
 core-graphics-types = "0.2"
+wgpu-external-frame.workspace = true
+objc2-core-foundation = { workspace = true, features = ["CFString"] }
+objc2-core-video = { workspace = true, features = [
+    "CVBase",
+    "CVBuffer",
+    "CVImageBuffer",
+    "CVPixelBuffer",
+    "CVPixelBufferIOSurface",
+    "CVReturn",
+    "objc2-io-surface",
+] }
+objc2-io-surface.workspace = true
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]

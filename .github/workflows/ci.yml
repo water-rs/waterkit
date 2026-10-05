@@ -53,23 +53,6 @@ jobs:
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         uses: ./.github/actions/setup-linux-deps
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        run: |
-          brew install dav1d nasm ffmpeg
-      - name: Install Windows dependencies
-        if: runner.os == 'Windows'
-        run: |
-          choco install pkgconfiglite -y
-          vcpkg install dav1d:x64-windows
-        env:
-          VCPKG_ROOT: C:\vcpkg
-      - name: Set Windows pkg-config paths
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          echo "PKG_CONFIG_PATH=C:/vcpkg/installed/x64-windows/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "C:/vcpkg/installed/x64-windows/bin" >> "$GITHUB_PATH"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -148,10 +131,6 @@ jobs:
             echo "AR_aarch64-linux-android=${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
           } >> "$GITHUB_ENV"
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        run: |
-          brew install dav1d nasm ffmpeg
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}

@@ -47,7 +47,7 @@ pub fn jvm_and_context() -> Result<(JavaVM, Global<JObject<'static>>), AndroidEr
     Ok((vm, context))
 }
 
-/// Reads the process' JavaVM and Android `Context` out of `ndk_context`.
+/// Reads the process' `JavaVM` and Android `Context` out of `ndk_context`.
 fn published_vm_and_context() -> (JavaVM, jni::sys::jobject) {
     let android_context = ndk_context::android_context();
     let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();

@@ -936,18 +936,24 @@ impl Encoder {
 
     /// Drain frames the encoder still holds after the last `encode_nv12`.
     ///
-    /// Hardware backends in this crate emit bitstream synchronously per
-    /// `encode_nv12` call, so flushing them yields no packets. The software
-    /// AV1 encoder queues input internally and only emits the held frames
-    /// here; each returned packet is one encoded frame.
+    /// Most hardware backends in this crate emit bitstream synchronously per
+    /// `encode_nv12` call, so flushing them yields no packets. The Media
+    /// Foundation encoder buffers frames for lookahead and only emits its
+    /// tail here, and the software AV1 encoder queues input internally and
+    /// emits the held frames here as well; each returned packet is one
+    /// encoded frame.
     ///
     /// # Errors
     /// Returns [`CodecError::EncodingFailed`] when the drain fails.
     #[cfg_attr(
-        not(any(waterkit_av1_software_encode, target_arch = "wasm32")),
+        not(any(
+            waterkit_av1_software_encode,
+            waterkit_hw_codec_windows,
+            target_arch = "wasm32"
+        )),
         expect(
             clippy::missing_const_for_fn,
-            reason = "only the software AV1 and wasm32 arms are non-const; the hardware-only builds reduce to `Ok(Vec::new())`"
+            reason = "only the software AV1, Windows and wasm32 arms are non-const; the other hardware-only builds reduce to `Ok(Vec::new())`"
         )
     )]
     pub fn flush(&mut self) -> Result<Vec<Vec<u8>>, CodecError> {
@@ -961,7 +967,7 @@ impl Encoder {
             #[cfg(waterkit_hw_codec_android)]
             EncoderInner::Android(_) => Ok(Vec::new()),
             #[cfg(waterkit_hw_codec_windows)]
-            EncoderInner::Windows(_) => Ok(Vec::new()),
+            EncoderInner::Windows(ref mut enc) => enc.drain(),
             #[cfg(waterkit_hw_codec_vaapi)]
             EncoderInner::Linux(_) => Ok(Vec::new()),
             #[cfg(waterkit_av1_software_encode)]

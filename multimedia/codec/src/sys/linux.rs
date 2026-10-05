@@ -2,7 +2,10 @@
 //!
 //! This backend uses pure VA-API via `cros-codecs`.
 
-use crate::{CodecError, DecodePacket, DecodedPixelLayout, bitstream::NalStreamConverter};
+use crate::{
+    CodecError, DecodePacket, DecodedPixelLayout,
+    bitstream::{NalStreamConverter, build_h264_avcc_from_annex_b},
+};
 use cros_codecs::decoder::stateless::h264::H264;
 use cros_codecs::decoder::stateless::h265::H265;
 use cros_codecs::decoder::stateless::{
@@ -558,83 +561,6 @@ fn write_nv12_into_frame(
     }
 
     Ok(())
-}
-
-fn build_h264_avcc_from_annex_b(bitstream: &[u8]) -> Option<Vec<u8>> {
-    let mut sps = None;
-    let mut pps = None;
-
-    for nalu in annex_b_nalus(bitstream) {
-        if nalu.is_empty() {
-            continue;
-        }
-        match nalu[0] & 0x1f {
-            7 if sps.is_none() => sps = Some(nalu.to_vec()),
-            8 if pps.is_none() => pps = Some(nalu.to_vec()),
-            _ => {}
-        }
-        if sps.is_some() && pps.is_some() {
-            break;
-        }
-    }
-
-    let sps = sps?;
-    let pps = pps?;
-    if sps.len() < 4 {
-        return None;
-    }
-    let sps_len = u16::try_from(sps.len()).ok()?;
-    let pps_len = u16::try_from(pps.len()).ok()?;
-
-    let mut avcc = Vec::with_capacity(11 + sps.len() + pps.len());
-    avcc.push(1);
-    avcc.push(sps[1]);
-    avcc.push(sps[2]);
-    avcc.push(sps[3]);
-    avcc.push(0xFC | 0x03);
-    avcc.push(0xE0 | 1);
-    avcc.extend_from_slice(&sps_len.to_be_bytes());
-    avcc.extend_from_slice(&sps);
-    avcc.push(1);
-    avcc.extend_from_slice(&pps_len.to_be_bytes());
-    avcc.extend_from_slice(&pps);
-
-    Some(avcc)
-}
-
-fn annex_b_nalus(data: &[u8]) -> Vec<&[u8]> {
-    let mut nalus = Vec::new();
-    let mut cursor = 0;
-
-    while let Some((start_idx, start_len)) = find_start_code(data, cursor) {
-        let nalu_start = start_idx + start_len;
-        let end_idx = find_start_code(data, nalu_start).map_or(data.len(), |(idx, _)| idx);
-        if nalu_start < end_idx {
-            nalus.push(&data[nalu_start..end_idx]);
-        }
-        cursor = end_idx;
-    }
-
-    nalus
-}
-
-const fn find_start_code(data: &[u8], from: usize) -> Option<(usize, usize)> {
-    let mut i = from;
-    while i + 3 <= data.len() {
-        if i + 4 <= data.len()
-            && data[i] == 0
-            && data[i + 1] == 0
-            && data[i + 2] == 0
-            && data[i + 3] == 1
-        {
-            return Some((i, 4));
-        }
-        if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
-            return Some((i, 3));
-        }
-        i += 1;
-    }
-    None
 }
 
 const fn align_16(value: u32) -> u32 {

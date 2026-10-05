@@ -1149,6 +1149,6 @@ mod tests {
 
         let payload = result.to_webauthn_json();
         assert_eq!(payload.credential_type, "public-key");
-        assert!(!payload.id.is_empty());
+        assert_ne!(payload.id, "");
     }
 }

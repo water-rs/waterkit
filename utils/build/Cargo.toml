@@ -10,6 +10,9 @@ description = "Shared build utilities and Android runtime bridge for waterkit cr
 keywords = ["build", "swift", "kotlin", "automation"]
 categories = ["development-tools::build-utils"]
 
+[lints]
+workspace = true
+
 # The build-time half. Build scripts are compiled for the host, so these cfgs
 # match the build host, not the app's target: Swift bridge generation compiles
 # only on an Apple host, the one place Swift can be built, and Linux and

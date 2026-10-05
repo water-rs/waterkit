@@ -479,11 +479,12 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        AacDecoderConfig, AacPacketDecoder, EncodedAudioPacket, PacketAudioDecoder,
-        PacketAudioError,
+        AacDecoderConfig, AacPacketDecoder, DecodedAudioFrame, EncodedAudioPacket,
+        PacketAudioDecoder, PacketAudioError,
     };
 
     const AAC_LC_44K_STEREO_PACKET: &str = include_str!("fixtures/aac-lc-44k-stereo.hex");
+    const AAC_LC_44K_STEREO_STREAM: &str = include_str!("fixtures/aac-lc-44k-stereo-stream.hex");
 
     fn decoder() -> AacPacketDecoder {
         AacPacketDecoder::new(AacDecoderConfig::new(
@@ -498,17 +499,26 @@ mod tests {
     fn decodes_real_aac_lc_access_unit_to_interleaved_pcm() {
         let packet =
             hex::decode(AAC_LC_44K_STEREO_PACKET.trim()).expect("fixture must be valid hex");
-        let frames = decoder()
+        let mut decoder = decoder();
+        // Platform decoders may buffer the access unit, so the frame is
+        // collected across `decode` and `finish`.
+        let mut frames = decoder
             .decode(EncodedAudioPacket::new(
                 Duration::from_secs(7),
                 Duration::from_millis(23),
                 packet,
             ))
             .expect("AAC-LC access unit must decode");
+        frames.extend(
+            decoder
+                .finish()
+                .expect("AAC decoder must drain its buffered access units"),
+        );
         let frame = frames
             .first()
-            .expect("software AAC decoder must emit one frame per access unit");
+            .expect("one access unit must produce exactly one PCM frame");
 
+        assert_eq!(frames.len(), 1);
         assert_eq!(frame.presentation_time(), Duration::from_secs(7));
         assert_eq!(frame.channels().get(), 2);
         assert_eq!(frame.sample_rate().get(), 44_100);
@@ -528,12 +538,15 @@ mod tests {
         ))
         .expect("AAC decoder uses AudioSpecificConfig");
 
+        // The format change may be reported while pumping the unit or while
+        // draining it at `finish`; either call must surface it.
         let error = decoder
             .decode(EncodedAudioPacket::new(
                 Duration::ZERO,
                 Duration::from_millis(23),
                 packet,
             ))
+            .and_then(|_| decoder.finish())
             .expect_err("declared mono must not accept decoded stereo");
         assert!(matches!(
             error,
@@ -560,20 +573,96 @@ mod tests {
         ))
         .expect("valid HE-AAC configuration must initialize");
 
-        let frames = decoder
+        let mut frames = decoder
             .decode(EncodedAudioPacket::new(
                 Duration::ZERO,
                 Duration::from_micros(42_667),
                 packet,
             ))
             .expect("HE-AAC access unit must decode with SBR");
+        frames.extend(
+            decoder
+                .finish()
+                .expect("HE-AAC decoder must drain its buffered access units"),
+        );
         let frame = frames
             .first()
-            .expect("software HE-AAC decoder must emit one frame per access unit");
+            .expect("one access unit must produce exactly one PCM frame");
 
+        assert_eq!(frames.len(), 1);
         assert_eq!(frame.channels().get(), 2);
         assert_eq!(frame.sample_rate().get(), 48_000);
         assert_eq!(frame.sample_frames(), 2_048);
         assert!(frame.samples().iter().all(|sample| sample.is_finite()));
+    }
+
+    /// Consecutive access units must decode as one continuous PCM run. A
+    /// decoder that resets its prediction state between units breaks AAC's
+    /// MDCT overlap-add (and the HE-AAC SBR tool's state), which shows up as
+    /// a sample jump at every frame boundary that the continuous signal
+    /// itself never reaches.
+    #[test]
+    fn decodes_consecutive_access_units_without_boundary_discontinuities() {
+        let packets: Vec<Vec<u8>> = AAC_LC_44K_STEREO_STREAM
+            .trim()
+            .lines()
+            .map(|line| hex::decode(line).expect("stream fixture must be valid hex"))
+            .collect();
+        assert!(
+            packets.len() >= 10,
+            "the stream fixture must hold a run of at least ten access units"
+        );
+
+        let unit_duration = Duration::from_nanos(1_024_u64 * 1_000_000_000 / 44_100);
+        let mut decoder = decoder();
+        let mut frames = Vec::new();
+        for (index, data) in packets.iter().enumerate() {
+            frames.extend(
+                decoder
+                    .decode(EncodedAudioPacket::new(
+                        unit_duration * u32::try_from(index).expect("stream index fits u32"),
+                        unit_duration,
+                        data.clone(),
+                    ))
+                    .expect("every access unit must decode"),
+            );
+        }
+        frames.extend(
+            decoder
+                .finish()
+                .expect("the decoder must drain its buffered tail"),
+        );
+
+        let channels = usize::from(
+            frames
+                .first()
+                .expect("the stream must decode to PCM frames")
+                .channels()
+                .get(),
+        );
+        let total: usize = frames.iter().map(DecodedAudioFrame::sample_frames).sum();
+        assert_eq!(total, packets.len() * 1_024);
+
+        // The largest same-channel sample-to-sample jump inside the emitted
+        // frames sets the signal's own scale; a continuous decoder's jump at
+        // each frame boundary stays within it.
+        let mut max_step = 0.0_f32;
+        for frame in &frames {
+            let samples = frame.samples();
+            for (previous, next) in samples.iter().zip(&samples[channels..]) {
+                max_step = max_step.max((next - previous).abs());
+            }
+        }
+        for (previous, next) in frames.iter().zip(frames.iter().skip(1)) {
+            for channel in 0..channels {
+                let boundary = (next.samples()[channel]
+                    - previous.samples()[previous.samples().len() - channels + channel])
+                    .abs();
+                assert!(
+                    boundary <= max_step,
+                    "frame boundary jump {boundary} on channel {channel} exceeds the signal's own sample-to-sample range {max_step}"
+                );
+            }
+        }
     }
 }

@@ -41,11 +41,22 @@ mod fallback {
 
     pub struct CameraInner;
 
+    #[expect(
+        clippy::unused_self,
+        clippy::unused_async,
+        clippy::needless_pass_by_ref_mut,
+        clippy::missing_const_for_fn,
+        reason = "this shim answers `Unsupported` through the signatures every platform's `CameraInner` shares with `Camera`"
+    )]
     impl CameraInner {
         pub fn list() -> Result<Vec<CameraInfo>, CameraError> {
             Err(CameraError::Unsupported)
         }
 
+        #[expect(
+            clippy::future_not_send,
+            reason = "on wasm32 `wgpu::Device` and `wgpu::Queue` are not `Send`, so neither is a future holding them"
+        )]
         pub async fn open(
             _camera_id: &str,
             _config: CameraConfig,

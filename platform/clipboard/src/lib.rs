@@ -249,6 +249,13 @@ impl Clipboard {
     /// # Errors
     ///
     /// Returns an error if the clipboard cannot be accessed.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "the browser reads text through a `JsFuture`, which is bound to the thread that created it"
+        )
+    )]
     pub async fn text(&self) -> Result<Option<String>, ClipboardError> {
         #[cfg(target_arch = "wasm32")]
         {

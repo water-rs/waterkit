@@ -26,6 +26,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     }))?;
 
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::arc_with_non_send_sync,
+            reason = "screen streams take the device in an `Arc` on every platform; on wasm32 `wgpu::Device` is neither `Send` nor `Sync`"
+        )
+    )]
     let device: Arc<wgpu::Device> = Arc::new(device);
     let queue: Arc<wgpu::Queue> = Arc::new(queue);
 

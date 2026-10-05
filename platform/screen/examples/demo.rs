@@ -8,8 +8,11 @@ use waterkit_screen::{
     Brightness, ImageFormat, brightness, screens, screenshot_primary, set_brightness,
 };
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    pollster::block_on(demo())
+}
+
+async fn demo() -> Result<(), Box<dyn std::error::Error>> {
     println!("WaterKit Screen Demo\n");
 
     let screen_list = screens()?;

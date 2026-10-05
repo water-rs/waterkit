@@ -478,6 +478,22 @@ impl Default for CameraCapabilities {
 }
 
 impl CameraCapabilities {
+    #[cfg_attr(
+        all(
+            not(test),
+            not(any(
+                target_os = "ios",
+                target_os = "macos",
+                target_os = "android",
+                target_os = "windows",
+                target_os = "linux"
+            ))
+        ),
+        expect(
+            dead_code,
+            reason = "the platform backends validate the capabilities they report; the unsupported-platform shim reports none"
+        )
+    )]
     pub(crate) fn validate(&self) -> Result<(), CameraError> {
         if self.dynamic_ranges.is_empty() {
             return Err(CameraError::PlatformError(
@@ -799,6 +815,13 @@ impl Camera {
     ///
     /// # Errors
     /// Returns [`CameraError::OpenFailed`] if the camera cannot be opened.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "on wasm32 `wgpu::Device` and `wgpu::Queue` are not `Send`, so neither is a future holding them"
+        )
+    )]
     pub async fn open(
         camera_id: &str,
         config: CameraConfig,
@@ -817,6 +840,13 @@ impl Camera {
     ///
     /// # Errors
     /// Returns [`CameraError::NotFound`] if no camera is available.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "on wasm32 `wgpu::Device` and `wgpu::Queue` are not `Send`, so neither is a future holding them"
+        )
+    )]
     pub async fn open_default(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,

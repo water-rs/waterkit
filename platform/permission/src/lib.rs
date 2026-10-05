@@ -30,6 +30,13 @@ pub mod android {
 }
 
 /// Checks the current status of a permission without prompting the user.
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        clippy::future_not_send,
+        reason = "the browser answers through `JsFuture`s and JS callbacks, which are bound to the thread that created them"
+    )
+)]
 pub async fn check(permission: Permission) -> PermissionStatus {
     sys::check(permission).await
 }
@@ -46,6 +53,13 @@ pub async fn check(permission: Permission) -> PermissionStatus {
 /// Returns [`PermissionError::Unsupported`] if the permission has no
 /// platform mapping; [`PermissionError::Platform`] for OS-specific
 /// failures (JNI errors, D-Bus errors, ...).
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        clippy::future_not_send,
+        reason = "the browser answers through `JsFuture`s and JS callbacks, which are bound to the thread that created them"
+    )
+)]
 pub async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
     sys::request(permission).await
 }

@@ -54,10 +54,12 @@ jobs:
           shared-key: test-${{ matrix.os }}
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest list --workspace --all-targets
-      # `--no-fail-fast`: report every failing test and doctest of the run, not
-      # only the first one.
-      - run: cargo nextest run --workspace --all-features --no-fail-fast
-      - run: cargo test --doc --workspace --all-features --no-fail-fast
+      # `--no-fail-fast`, and running the doctests even when a unit test failed:
+      # report every failing test and doctest of the run, not only the first.
+      - id: unit_tests
+        run: cargo nextest run --workspace --all-features --no-fail-fast
+      - if: ${{ success() || steps.unit_tests.outcome == 'failure' }}
+        run: cargo test --doc --workspace --all-features --no-fail-fast
       - name: Run macOS sensor integration harness
         if: runner.os == 'macOS'
         run: cargo run -p waterkit-test -- macos tests/macos/sensor

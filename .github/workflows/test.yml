@@ -51,8 +51,8 @@ jobs:
           shared-key: test-${{ matrix.os }}
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest list --workspace --all-targets
-      - run: cargo nextest run --all-features
-      - run: cargo test --doc --all-features
+      - run: cargo nextest run --workspace --all-features
+      - run: cargo test --doc --workspace --all-features
       - name: Run macOS sensor integration harness
         if: runner.os == 'macOS'
         run: cargo run -p waterkit-test -- macos tests/macos/sensor

@@ -668,9 +668,16 @@ pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
     }
 }
 
-/// No-op on non-Apple platforms.
+/// Swift is compiled with the Xcode toolchain, which only a macOS host has.
+///
+/// # Panics
+///
+/// Always: a build script reaches this only when it targets an Apple platform
+/// from a host that cannot build for one.
 #[cfg(not(any(target_os = "ios", target_os = "macos")))]
-pub fn compile_swift(_bridge_rs: &str, _config: &AppleSwiftConfig) {}
+pub fn compile_swift(bridge_rs: &str, _config: &AppleSwiftConfig) {
+    panic!("compiling the Swift bridge {bridge_rs} requires a macOS host with Xcode");
+}
 
 /// Compile multiple Swift bridge crates into a single static library.
 ///
@@ -749,9 +756,16 @@ pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = Swif
     }
 }
 
-/// No-op on non-Apple platforms.
+/// Swift is compiled with the Xcode toolchain, which only a macOS host has.
+///
+/// # Panics
+///
+/// Always: a build script reaches this only when it targets an Apple platform
+/// from a host that cannot build for one.
 #[cfg(not(any(target_os = "ios", target_os = "macos")))]
-pub fn compile_multi_swift(_lib_name: &str, _crates: impl IntoIterator<Item = SwiftBridgeCrate>) {}
+pub fn compile_multi_swift(lib_name: &str, _crates: impl IntoIterator<Item = SwiftBridgeCrate>) {
+    panic!("compiling the Swift library {lib_name} requires a macOS host with Xcode");
+}
 
 #[cfg(test)]
 mod tests {

@@ -149,7 +149,7 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
         record_android_permission(&mut report, _env, activity);
 
         #[cfg(feature = "camera")]
-        record_android_camera(&mut report);
+        record_android_camera(&mut report).await;
 
         #[cfg(feature = "clipboard")]
         record_android_clipboard(&mut report).await;
@@ -402,17 +402,118 @@ fn record_android_permission(report: &mut TestReport, env: &mut Env<'_>, activit
 }
 
 #[cfg(feature = "camera")]
-fn record_android_camera(report: &mut TestReport) {
+async fn record_android_camera(report: &mut TestReport) {
     match waterkit_content::camera::Camera::list() {
-        Ok(cameras) => report.push(TestCase::passed_with_message(
-            "camera.list",
-            format!("count={}", cameras.len()),
-        )),
+        Ok(cameras) => {
+            report.push(TestCase::passed_with_message(
+                "camera.list",
+                format!("count={}", cameras.len()),
+            ));
+            for camera in cameras {
+                record_android_camera_frames(report, &camera).await;
+            }
+        }
         Err(error) => report.push(TestCase::failed(
             "camera.list",
             format!("camera list failed: {error}"),
         )),
     }
+}
+
+/// Streams a few frames from `camera`, converts the last one upright on the
+/// GPU, and reports the frames' plane layout, orientation and sizes.
+#[cfg(feature = "camera")]
+async fn record_android_camera_frames(
+    report: &mut TestReport,
+    camera: &waterkit_content::camera::CameraInfo,
+) {
+    use futures::StreamExt;
+    use std::sync::Arc;
+    use waterkit_content::camera::{Camera, CameraConfig, FrameConverter, FramePlanes, wgpu};
+
+    const FRAMES: usize = 5;
+    let case = format!("camera.frames.{}", camera.id);
+
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = match instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+    {
+        Ok(adapter) => adapter,
+        Err(error) => {
+            report.push(TestCase::failed(case, format!("no GPU adapter: {error}")));
+            return;
+        }
+    };
+    let (device, queue) = match adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            required_features: FrameConverter::required_features(adapter.features()),
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(pair) => pair,
+        Err(error) => {
+            report.push(TestCase::failed(case, format!("no GPU device: {error}")));
+            return;
+        }
+    };
+    let device = Arc::new(device);
+    let queue = Arc::new(queue);
+
+    let camera_handle = match Camera::open(
+        &camera.id,
+        CameraConfig::default(),
+        Arc::clone(&device),
+        Arc::clone(&queue),
+    )
+    .await
+    {
+        Ok(handle) => handle,
+        Err(error) => {
+            report.push(TestCase::failed(case, format!("open failed: {error}")));
+            return;
+        }
+    };
+
+    let frames = camera_handle.frames().take(FRAMES).collect::<Vec<_>>();
+    let frames = match tokio::time::timeout(std::time::Duration::from_secs(15), frames).await {
+        Ok(frames) if frames.len() == FRAMES => frames,
+        Ok(frames) => {
+            report.push(TestCase::failed(
+                case,
+                format!("stream ended after {} of {FRAMES} frames", frames.len()),
+            ));
+            return;
+        }
+        Err(_) => {
+            report.push(TestCase::failed(
+                case,
+                format!("no {FRAMES} frames within 15 s"),
+            ));
+            return;
+        }
+    };
+
+    let orientations: Vec<_> = frames.iter().map(|frame| frame.orientation()).collect();
+    let last = frames.last().expect("FRAMES frames were collected");
+    let layout = match last.planes() {
+        FramePlanes::Rgb(_) => "rgb",
+        FramePlanes::YCbCr420 { .. } => "ycbcr420",
+        FramePlanes::YCbCr422 { .. } => "ycbcr422",
+    };
+    let upright = FrameConverter::new(&device).convert(&device, &queue, last);
+    report.push(TestCase::passed_with_message(
+        case,
+        format!(
+            "front={} layout={layout} stored={}x{} orientations={orientations:?} upright={}x{}",
+            camera.is_front_facing,
+            last.width(),
+            last.height(),
+            upright.width(),
+            upright.height(),
+        ),
+    ));
 }
 
 #[cfg(feature = "clipboard")]

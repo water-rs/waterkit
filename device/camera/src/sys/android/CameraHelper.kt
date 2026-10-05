@@ -245,8 +245,16 @@ class CameraHelper(private val appContext: Context) {
 
             previewImageReader = ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.YUV_420_888, 3)
             stillImageReader = ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.JPEG, 2)
+            // RAW_SENSOR streams only come in the sizes the sensor reads
+            // out, normally just its full array; a reader at the preview size
+            // makes the whole capture session fail to configure.
             rawImageReader = if (snapshot.supportsRawPhoto) {
-                ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.RAW_SENSOR, 2)
+                val rawSize = characteristics
+                    .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                    ?.getOutputSizes(ImageFormat.RAW_SENSOR)
+                    ?.maxByOrNull { size -> size.width.toLong() * size.height }
+                    ?: throw IllegalStateException("camera $cameraId reports RAW without a RAW_SENSOR size")
+                ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 2)
             } else {
                 null
             }
@@ -795,6 +803,11 @@ class CameraHelper(private val appContext: Context) {
         cameraDevice?.close()
         cameraDevice = null
 
+        // The readers' listeners run on the background thread and read their
+        // images' buffers there; closing a reader frees those buffers, so the
+        // thread must have finished with them first.
+        stopBackgroundThread()
+
         previewImageReader?.close()
         previewImageReader = null
         stillImageReader?.close()
@@ -824,8 +837,6 @@ class CameraHelper(private val appContext: Context) {
         cameraManager = null
         recordingStartElapsedRealtimeMs = 0L
         isRecording = false
-
-        stopBackgroundThread()
     }
 
     // -------------------------------------------------------------------------

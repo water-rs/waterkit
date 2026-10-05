@@ -23,8 +23,10 @@ mod ffi {
 
     extern "Swift" {
         fn check_permission(permission: PermissionType) -> PermissionResult;
-        fn request_permission(permission: PermissionType) -> PermissionResult;
-        fn request_location_permission(callback: Box<dyn FnOnce(PermissionResult) -> ()>);
+        fn request_permission(
+            permission: PermissionType,
+            callback: Box<dyn FnOnce(PermissionResult) -> ()>,
+        );
     }
 }
 
@@ -72,24 +74,27 @@ pub async fn check(permission: Permission) -> PermissionStatus {
 
 /// Requests a permission on Apple platforms.
 ///
+/// The system request runs on its own completion handler; this future only
+/// awaits the answer, so the calling thread is never blocked while a prompt
+/// is waiting for the user.
+///
 /// # Errors
 ///
 /// Returns [`PermissionError::Unsupported`] for permissions that have no
-/// Apple bridge.
+/// Apple bridge, and [`PermissionError::Platform`] when the system drops the
+/// completion handler without answering.
 pub async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
-    if matches!(
-        permission,
-        Permission::Location | Permission::LocationWhenInUse | Permission::LocationAlways
-    ) {
-        let (sender, receiver) = futures::channel::oneshot::channel();
-        ffi::request_location_permission(Box::new(move |result| {
-            let _ = sender.send(result);
-        }));
-        return receiver
-            .await
-            .map(status_from_ffi)
-            .map_err(|_| PermissionError::Platform("location permission callback dropped".into()));
-    }
     let permission_type = permission_to_ffi(permission).ok_or(PermissionError::Unsupported)?;
-    Ok(status_from_ffi(ffi::request_permission(permission_type)))
+    let (sender, receiver) = futures::channel::oneshot::channel();
+    ffi::request_permission(
+        permission_type,
+        Box::new(move |result| {
+            // The receiver is gone only when the caller stopped waiting
+            // (for example a timeout); the answer then has no reader.
+            let _ = sender.send(result);
+        }),
+    );
+    receiver.await.map(status_from_ffi).map_err(|_| {
+        PermissionError::Platform(format!("{permission:?} permission callback dropped"))
+    })
 }

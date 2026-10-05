@@ -17,3 +17,5 @@ COSE = "COSE"
 formatable = "formatable"
 NdefFormatable = "NdefFormatable"
 cros = "cros"
+# Apple's Unique Device Identifier, as `devicectl` and Xcode name it.
+UDID = "UDID"

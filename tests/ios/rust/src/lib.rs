@@ -1,5 +1,8 @@
 use waterkit_test_report::{TestCase, TestReport, to_json_pretty};
 
+#[cfg(feature = "camera")]
+mod camera;
+
 #[swift_bridge::bridge]
 mod ffi {
     extern "Rust" {
@@ -35,7 +38,7 @@ fn build_report() -> TestReport {
         record_permission(&mut report).await;
 
         #[cfg(feature = "camera")]
-        record_camera(&mut report);
+        camera::record(&mut report).await;
 
         #[cfg(feature = "clipboard")]
         record_clipboard(&mut report);
@@ -254,20 +257,6 @@ async fn record_permission(report: &mut TestReport) {
     ));
 }
 
-#[cfg(feature = "camera")]
-fn record_camera(report: &mut TestReport) {
-    match waterkit::camera::Camera::list() {
-        Ok(cameras) => report.push(TestCase::passed_with_message(
-            "camera.list",
-            format!("count={}", cameras.len()),
-        )),
-        Err(error) => report.push(TestCase::failed(
-            "camera.list",
-            format!("camera list failed: {error}"),
-        )),
-    }
-}
-
 #[cfg(feature = "clipboard")]
 fn record_clipboard(report: &mut TestReport) {
     match waterkit::clipboard::Clipboard::new() {
@@ -320,33 +309,16 @@ fn record_haptic(report: &mut TestReport) {
 
 #[cfg(feature = "secret")]
 async fn record_secret(report: &mut TestReport) {
-    // SecItem queries need `keychain-access-groups`, which an ad-hoc signed
-    // harness app cannot carry: the simulator rejects launches for any
-    // entitlement-bearing ad-hoc signature.
     if let Err(error) =
         waterkit::secret::SecretManager::set("waterkit", "ios_test", "secret123").await
     {
-        if error.to_string().contains("entitlement") {
-            report.push(TestCase::skipped(
-                "secret.set",
-                format!("keychain unavailable without entitlements: {error}"),
-            ));
-            report.push(TestCase::skipped(
-                "secret.get",
-                "keychain unavailable without entitlements",
-            ));
-            report.push(TestCase::skipped(
-                "secret.delete",
-                "keychain unavailable without entitlements",
-            ));
-            return;
-        }
         report.push(TestCase::failed(
             "secret.set",
             format!("secret set failed: {error}"),
         ));
         return;
     }
+    report.push(TestCase::passed("secret.set"));
 
     match waterkit::secret::SecretManager::get("waterkit", "ios_test").await {
         Ok(value) if value == "secret123" => report.push(TestCase::passed("secret.get")),

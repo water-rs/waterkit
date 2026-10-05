@@ -25,24 +25,47 @@ func check_permission(permission: PermissionType) -> PermissionResult {
     }
 }
 
-func request_permission(permission: PermissionType) -> PermissionResult {
+/// Starts the system request flow for `permission` and reports the outcome
+/// through `callback` once the user answers (or immediately, when the status
+/// is already decided). Never blocks the calling thread: the Rust side awaits
+/// the callback, so a caller can bound the wait on a prompt nobody answers.
+func request_permission(permission: PermissionType, callback: @escaping (PermissionResult) -> Void) {
     switch permission {
     case .Location:
-        return checkLocationPermission()
+        DispatchQueue.main.async {
+            LocationPermissionRequest(callback: callback).start()
+        }
     case .Camera:
-        return requestCameraPermission()
+        AVCaptureDevice.requestAccess(for: .video) { granted in
+            callback(granted ? .Granted : .Denied)
+        }
     case .Microphone:
-        return requestMicrophonePermission()
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            callback(granted ? .Granted : .Denied)
+        }
     case .Photos:
-        return requestPhotosPermission()
+        PHPhotoLibrary.requestAuthorization { _ in
+            callback(checkPhotosPermission())
+        }
     case .Contacts:
-        return requestContactsPermission()
+        CNContactStore().requestAccess(for: .contacts) { granted, _ in
+            callback(granted ? .Granted : .Denied)
+        }
     case .Calendar:
-        return requestCalendarPermission()
+        let store = EKEventStore()
+        if #available(macOS 14.0, iOS 17.0, *) {
+            store.requestFullAccessToEvents { granted, _ in
+                callback(granted ? .Granted : .Denied)
+            }
+        } else {
+            store.requestAccess(to: .event) { granted, _ in
+                callback(granted ? .Granted : .Denied)
+            }
+        }
     }
 }
 
-// MARK: - Request Implementations
+// MARK: - Location request
 
 private final class LocationPermissionRequest: NSObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
@@ -78,12 +101,6 @@ private final class LocationPermissionRequest: NSObject, CLLocationManagerDelega
     }
 }
 
-func request_location_permission(callback: @escaping (PermissionResult) -> Void) {
-    DispatchQueue.main.async {
-        LocationPermissionRequest(callback: callback).start()
-    }
-}
-
 private func statusFromCLAuthorizationStatus(_ status: CLAuthorizationStatus) -> PermissionResult {
     switch status {
     case .notDetermined:
@@ -97,81 +114,6 @@ private func statusFromCLAuthorizationStatus(_ status: CLAuthorizationStatus) ->
     @unknown default:
         return .NotDetermined
     }
-}
-
-private func requestCameraPermission() -> PermissionResult {
-    let semaphore = DispatchSemaphore(value: 0)
-    var result: PermissionResult = .NotDetermined
-    AVCaptureDevice.requestAccess(for: .video) { granted in
-        result = granted ? .Granted : .Denied
-        semaphore.signal()
-    }
-    semaphore.wait()
-    return result
-}
-
-private func requestMicrophonePermission() -> PermissionResult {
-    let semaphore = DispatchSemaphore(value: 0)
-    var result: PermissionResult = .NotDetermined
-    AVCaptureDevice.requestAccess(for: .audio) { granted in
-        result = granted ? .Granted : .Denied
-        semaphore.signal()
-    }
-    semaphore.wait()
-    return result
-}
-
-private func requestPhotosPermission() -> PermissionResult {
-    let semaphore = DispatchSemaphore(value: 0)
-    var result: PermissionResult = .NotDetermined
-    PHPhotoLibrary.requestAuthorization { status in
-        switch status {
-        case .authorized, .limited:
-            result = .Granted
-        case .denied:
-            result = .Denied
-        case .restricted:
-            result = .Restricted
-        case .notDetermined:
-            result = .NotDetermined
-        @unknown default:
-            result = .NotDetermined
-        }
-        semaphore.signal()
-    }
-    semaphore.wait()
-    return result
-}
-
-private func requestContactsPermission() -> PermissionResult {
-    let semaphore = DispatchSemaphore(value: 0)
-    var result: PermissionResult = .NotDetermined
-    let store = CNContactStore()
-    store.requestAccess(for: .contacts) { granted, _ in
-        result = granted ? .Granted : .Denied
-        semaphore.signal()
-    }
-    semaphore.wait()
-    return result
-}
-
-private func requestCalendarPermission() -> PermissionResult {
-    let semaphore = DispatchSemaphore(value: 0)
-    var result: PermissionResult = .NotDetermined
-    let store = EKEventStore()
-    if #available(macOS 14.0, iOS 17.0, *) {
-        store.requestFullAccessToEvents { granted, _ in
-            result = granted ? .Granted : .Denied
-            semaphore.signal()
-        }
-    } else {
-        store.requestAccess(to: .event) { granted, _ in
-            result = granted ? .Granted : .Denied
-            semaphore.signal()
-        }
-    }
-    semaphore.wait()
-    return result
 }
 
 // MARK: - Location

@@ -2,7 +2,8 @@
 //!
 //! Run with: cargo run -p waterkit-audio-test --bin audio-recorder-test
 
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
+use std::io::Write;
 use std::time::Duration;
 use waterkit_audio::AudioRecorder;
 
@@ -29,12 +30,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let stream = recorder.stream();
             futures::pin_mut!(stream);
 
-            let mut packet_count = 0;
+            let mut packet_count: usize = 0;
             let mut total_samples: usize = 0;
             let start = std::time::Instant::now();
 
             loop {
-                use futures::FutureExt;
                 let mut next_packet = stream.next().fuse();
                 let mut timeout = futures_timer::Delay::new(
                     Duration::from_secs(3).saturating_sub(start.elapsed()),
@@ -51,38 +51,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(buffer) = packet {
                             packet_count += 1;
                             total_samples += buffer.len();
-                            if packet_count % 10 == 0 {
+                            if packet_count.is_multiple_of(10) {
                                 print!(".");
-                                use std::io::Write;
                                 let _ = std::io::stdout().flush();
                             }
                         } else {
                             break; // Stream ended
                         }
                      },
-                     _ = timeout => {
+                     () = timeout => {
                          println!("\nTime's up!");
                          break;
                      }
                 }
             }
-            println!(
-                "\nCaptured {} packets, {} total samples",
-                packet_count, total_samples
-            );
-            println!(
-                "Average packet size: {:.1} samples",
-                total_samples as f64
-                    / if packet_count > 0 {
-                        packet_count as f64
-                    } else {
-                        1.0
-                    }
-            );
-
+            println!("\nCaptured {packet_count} packets, {total_samples} total samples");
             if packet_count == 0 {
                 return Err("No audio data received".into());
             }
+            println!(
+                "Average packet size: {} samples",
+                total_samples / packet_count
+            );
         }
 
         // 4. Stop Recording

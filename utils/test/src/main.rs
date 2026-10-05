@@ -1,3 +1,7 @@
+//! `waterkit-test`, the runner that builds, launches and collects the
+//! structured report of a `WaterKit` integration-test harness on macOS, iOS
+//! and Android.
+
 use clap::{Parser, Subcommand};
 use eyre::{Context, Result};
 use owo_colors::OwoColorize;
@@ -785,9 +789,10 @@ fn ensure_report_success(report: &TestReport) -> Result<()> {
     );
 
     for case in &report.cases {
-        match &case.message {
-            Some(message) => info!("  {:?} {}: {message}", case.status, case.name),
-            None => info!("  {:?} {}", case.status, case.name),
+        if let Some(message) = &case.message {
+            info!("  {:?} {}: {message}", case.status, case.name);
+        } else {
+            info!("  {:?} {}", case.status, case.name);
         }
     }
 

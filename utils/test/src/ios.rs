@@ -1,7 +1,7 @@
 //! The iOS runner.
 //!
 //! It builds the harness's Rust library for the destination, builds and signs
-//! the SwiftUI app around it with `xcodebuild`, installs and launches the app,
+//! the `SwiftUI` app around it with `xcodebuild`, installs and launches the app,
 //! and reads back the structured report the app writes into its data
 //! container.
 //!

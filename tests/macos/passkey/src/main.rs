@@ -18,7 +18,7 @@ async fn main() -> ExitCode {
                     availability.supports_user_verification,
                     availability.supports_discoverable_credentials
                 ),
-            ))
+            ));
         }
         Ok(_) => report.push(TestCase::failed(
             "passkey.availability",

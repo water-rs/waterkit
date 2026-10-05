@@ -1,6 +1,6 @@
 //! Screen recording test with H.265 encoding.
 //!
-//! Captures screen at 30fps, encodes to H.265 (HEVC) using VideoToolbox,
+//! Captures screen at 30fps, encodes to H.265 (HEVC) using `VideoToolbox`,
 //! saves raw H.265 bitstream to disk, and monitors performance.
 
 use std::fs::File;
@@ -12,23 +12,36 @@ use std::time::{Duration, Instant};
 use waterkit_codec::{CodecType, Encoder, EncoderProfile};
 use waterkit_screen::{ScreenStream, StreamConfig, screens};
 
-const TARGET_FPS: f64 = 30.0;
-const FRAME_INTERVAL: Duration = Duration::from_nanos((1_000_000_000.0 / TARGET_FPS) as u64);
+const TARGET_FPS: u64 = 30;
+const FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / TARGET_FPS);
 const RECORDING_DURATION: Duration = Duration::from_secs(30);
 const OUTPUT_FILE: &str = "screen_recording.h265";
 const BUFFER_SIZE: usize = 4;
 
 struct CapturedFrame {
     nv12_data: Vec<u8>,
-    capture_time_ms: f64,
+    capture_time: Duration,
 }
 
 struct PerformanceStats {
-    total_frames: usize,
-    successful_frames: usize,
+    total_frames: u32,
+    successful_frames: u32,
     total_bytes: usize,
-    capture_time_ms: Vec<f64>,
-    encode_time_ms: Vec<f64>,
+    capture_times: Vec<Duration>,
+    encode_times: Vec<Duration>,
+}
+
+/// Converts a byte count to megabytes for a printed size or bitrate.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a recording's encoded byte total stays far below 2^52, where the conversion is exact"
+)]
+fn megabytes(bytes: usize) -> f64 {
+    bytes as f64 / 1_000_000.0
+}
+
+fn millis(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
 }
 
 impl PerformanceStats {
@@ -37,75 +50,73 @@ impl PerformanceStats {
             total_frames: 0,
             successful_frames: 0,
             total_bytes: 0,
-            capture_time_ms: Vec::with_capacity(1000),
-            encode_time_ms: Vec::with_capacity(1000),
+            capture_times: Vec::with_capacity(1000),
+            encode_times: Vec::with_capacity(1000),
         }
     }
 
-    fn avg(times: &[f64]) -> f64 {
+    fn avg(times: &[Duration]) -> Duration {
         if times.is_empty() {
-            0.0
-        } else {
-            times.iter().sum::<f64>() / times.len() as f64
+            return Duration::ZERO;
         }
+        let count = u32::try_from(times.len()).expect("a recording holds fewer than 2^32 samples");
+        times.iter().sum::<Duration>() / count
     }
 
-    fn max(times: &[f64]) -> f64 {
-        times.iter().cloned().fold(0.0, f64::max)
+    fn max(times: &[Duration]) -> Duration {
+        times.iter().copied().max().unwrap_or(Duration::ZERO)
     }
 
-    fn percentile(times: &[f64], p: usize) -> f64 {
+    fn percentile(times: &[Duration], p: usize) -> Duration {
         if times.is_empty() {
-            return 0.0;
+            return Duration::ZERO;
         }
         let mut sorted = times.to_vec();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted.sort_unstable();
         let idx = (sorted.len() * p / 100).min(sorted.len() - 1);
         sorted[idx]
     }
 
     fn print_summary(&self, elapsed: Duration) {
-        let actual_fps = self.successful_frames as f64 / elapsed.as_secs_f64();
-        let bitrate_mbps = (self.total_bytes as f64 * 8.0) / (elapsed.as_secs_f64() * 1_000_000.0);
+        let seconds = elapsed.as_secs_f64();
+        let actual_fps = f64::from(self.successful_frames) / seconds;
+        let output_mb = megabytes(self.total_bytes);
+        let bitrate_mbps = output_mb * 8.0 / seconds;
 
         println!("\n=================================================");
         println!("             RECORDING COMPLETE");
         println!("=================================================");
-        println!("Duration:       {:.1}s", elapsed.as_secs_f64());
+        println!("Duration:       {seconds:.1}s");
         println!("Total frames:   {}", self.total_frames);
         println!("Successful:     {}", self.successful_frames);
-        println!("Actual FPS:     {:.2}", actual_fps);
-        println!(
-            "Output size:    {:.2} MB",
-            self.total_bytes as f64 / 1_000_000.0
-        );
-        println!("Bitrate:        {:.2} Mbps", bitrate_mbps);
+        println!("Actual FPS:     {actual_fps:.2}");
+        println!("Output size:    {output_mb:.2} MB");
+        println!("Bitrate:        {bitrate_mbps:.2} Mbps");
         println!("\n-- Capture Times --");
-        println!("  Average:      {:.2} ms", Self::avg(&self.capture_time_ms));
-        println!(
-            "  P95:          {:.2} ms",
-            Self::percentile(&self.capture_time_ms, 95)
-        );
-        println!("  Max:          {:.2} ms", Self::max(&self.capture_time_ms));
+        Self::print_times(&self.capture_times);
         println!("\n-- Encode Times --");
-        println!("  Average:      {:.2} ms", Self::avg(&self.encode_time_ms));
-        println!(
-            "  P95:          {:.2} ms",
-            Self::percentile(&self.encode_time_ms, 95)
-        );
-        println!("  Max:          {:.2} ms", Self::max(&self.encode_time_ms));
+        Self::print_times(&self.encode_times);
         println!("\n-- Throughput --");
-        let total_pipeline = Self::avg(&self.capture_time_ms) + Self::avg(&self.encode_time_ms);
+        let total_pipeline = millis(Self::avg(&self.capture_times) + Self::avg(&self.encode_times));
         println!(
             "  Max theoretical FPS (sequential): {:.1}",
             1000.0 / total_pipeline.max(0.001)
         );
         println!("=================================================");
     }
+
+    fn print_times(times: &[Duration]) {
+        println!("  Average:      {:.2} ms", millis(Self::avg(times)));
+        println!(
+            "  P95:          {:.2} ms",
+            millis(Self::percentile(times, 95))
+        );
+        println!("  Max:          {:.2} ms", millis(Self::max(times)));
+    }
 }
 
 fn capture_thread(
-    tx: mpsc::SyncSender<CapturedFrame>,
+    tx: &mpsc::SyncSender<CapturedFrame>,
     width: u32,
     height: u32,
     duration: Duration,
@@ -145,7 +156,7 @@ fn capture_thread(
         let capture_start = Instant::now();
 
         if let Some(frame) = stream.try_next_frame() {
-            let capture_time = capture_start.elapsed().as_secs_f64() * 1000.0;
+            let capture_time = capture_start.elapsed();
 
             if frame.width() != width || frame.height() != height {
                 continue; // Skip if dimensions changed
@@ -155,15 +166,12 @@ fn capture_thread(
             let y_size = (width * height) as usize;
             let nv12_data = vec![128u8; y_size + y_size / 2];
 
-            // Non-blocking send
+            // Non-blocking send; a full buffer drops the frame.
             match tx.try_send(CapturedFrame {
                 nv12_data,
-                capture_time_ms: capture_time,
+                capture_time,
             }) {
-                Ok(_) => {}
-                Err(mpsc::TrySendError::Full(_)) => {
-                    // Buffer full, skip frame
-                }
+                Ok(()) | Err(mpsc::TrySendError::Full(_)) => {}
                 Err(mpsc::TrySendError::Disconnected(_)) => break,
             }
         }
@@ -185,7 +193,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=================================================");
     println!("   Screen Recording Test");
     println!(
-        "   H.265 @ 30fps for {} seconds",
+        "   H.265 @ {TARGET_FPS}fps for {} seconds",
         RECORDING_DURATION.as_secs()
     );
     println!("   Using async capture pipeline");
@@ -199,7 +207,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(&displays[0]);
     let width = primary.width();
     let height = primary.height();
-    println!("Screen: {} ({}x{})", primary.name(), width, height);
+    println!("Screen: {} ({width}x{height})", primary.name());
 
     // Create encoder
     println!("Creating H.265 encoder...");
@@ -208,7 +216,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create output file
     let mut output_file = File::create(OUTPUT_FILE)?;
-    println!("Output: {}", OUTPUT_FILE);
+    println!("Output: {OUTPUT_FILE}");
 
     // Create bounded channel for frame buffer
     let (tx, rx): (mpsc::SyncSender<CapturedFrame>, Receiver<CapturedFrame>) =
@@ -222,7 +230,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start capture thread
     let capture_handle = thread::spawn(move || {
-        capture_thread(tx, width, height, RECORDING_DURATION);
+        capture_thread(&tx, width, height, RECORDING_DURATION);
     });
 
     // Main thread: encode loop
@@ -232,15 +240,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(captured) => {
                 stats.total_frames += 1;
-                stats.capture_time_ms.push(captured.capture_time_ms);
+                stats.capture_times.push(captured.capture_time);
 
                 // Encode
                 let encode_start = Instant::now();
                 for result in encoder.encode_nv12(&captured.nv12_data) {
                     match result {
                         Ok(data) => {
-                            let encode_time = encode_start.elapsed().as_secs_f64() * 1000.0;
-                            stats.encode_time_ms.push(encode_time);
+                            stats.encode_times.push(encode_start.elapsed());
 
                             if !data.is_empty() {
                                 output_file.write_all(&data)?;
@@ -249,7 +256,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         Err(e) => {
-                            eprintln!("\rEncode error: {:?}", e);
+                            eprintln!("\rEncode error: {e:?}");
                         }
                     }
                 }
@@ -261,18 +268,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Print progress periodically
         if last_progress_print.elapsed() > Duration::from_secs(1) {
             let elapsed = start_time.elapsed();
-            let progress =
-                (elapsed.as_secs_f64() / RECORDING_DURATION.as_secs_f64() * 100.0) as usize;
-            let bar_filled = (progress / 2).min(50);
+            let progress = (elapsed.as_millis() * 100 / RECORDING_DURATION.as_millis()).min(100);
+            let bar_filled =
+                usize::try_from(progress / 2).expect("a progress of at most 100% fits in usize");
             let bar = "█".repeat(bar_filled);
             let remaining = " ".repeat(50 - bar_filled);
             print!(
-                "\rProgress: [{}{}] {}%  FPS: {:.1}  Size: {:.1}MB  ",
-                bar,
-                remaining,
-                progress.min(100),
-                stats.successful_frames as f64 / elapsed.as_secs_f64(),
-                stats.total_bytes as f64 / 1_000_000.0
+                "\rProgress: [{bar}{remaining}] {progress}%  FPS: {:.1}  Size: {:.1}MB  ",
+                f64::from(stats.successful_frames) / elapsed.as_secs_f64(),
+                megabytes(stats.total_bytes)
             );
             std::io::stdout().flush()?;
             last_progress_print = Instant::now();
@@ -287,8 +291,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     stats.print_summary(total_elapsed);
 
-    println!("\nRecording saved to: {}", OUTPUT_FILE);
-    println!("You can play it with: ffplay {}", OUTPUT_FILE);
+    println!("\nRecording saved to: {OUTPUT_FILE}");
+    println!("You can play it with: ffplay {OUTPUT_FILE}");
 
     Ok(())
 }

@@ -1,3 +1,6 @@
+//! Checks that the facade's feature set, its optional dependencies and its
+//! re-exports stay in step with each other.
+
 use std::collections::BTreeSet;
 use std::path::Path;
 

@@ -149,21 +149,15 @@ impl WindowsAacDecoder {
             self.transform.ProcessInput(0, &input, 0).map_err(|error| {
                 decode_message(presentation_time, format!("ProcessInput: {error}"))
             })?;
-            // The AAC decoder holds back one access unit: it emits a unit only
-            // once the next unit's timestamp bounds its duration. Draining after
-            // every packet forces the queued unit out so each packet produces
-            // its PCM frame.
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)
-                .map_err(|error| {
-                    decode_message(presentation_time, format!("drain AAC decoder: {error}"))
-                })?;
         }
-        let frames = self.collect_output(presentation_time);
-        // Drop the decoder's lookahead state so the drained access unit is not
-        // emitted a second time when the next packet arrives.
-        self.reset();
-        frames
+        // The transform keeps a one-access-unit lookahead: it emits a unit's
+        // PCM once the following unit's timestamp bounds it, so most calls
+        // return the previous unit's frame and the first returns none. The
+        // decoder must run continuously across access units — AAC's MDCT
+        // overlap-add and the HE-AAC SBR tool carry state between frames, so
+        // this only pumps whatever output is already available; `finish`
+        // drains the held unit.
+        self.collect_output(presentation_time)
     }
 
     pub(super) fn finish(&mut self) -> Result<Vec<DecodedAudioFrame>, PacketAudioError> {

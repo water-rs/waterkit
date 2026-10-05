@@ -17,10 +17,10 @@ use objc2_core_video::{
     kCVImageBufferYCbCrMatrix_ITU_R_709_2, kCVImageBufferYCbCrMatrix_ITU_R_2020,
     kCVImageBufferYCbCrMatrixKey,
 };
-use wgpu_external_frame::io_surface::{Ycbcr420IoSurfaceFrame, Ycbcr420Plane, YcbcrRange};
+use wgpu_external_frame::io_surface::{Ycbcr420IoSurfaceFrame, Ycbcr420Plane};
 
 use crate::frame::{Frame, FramePlanes, FrameStorage};
-use crate::{Orientation, YCbCrEncoding, YCbCrMatrix, YCbCrRange};
+use crate::{Orientation, YcbcrEncoding, YcbcrMatrix};
 
 /// A retained `CVPixelBuffer` that may cross threads.
 ///
@@ -116,12 +116,9 @@ pub fn build_frame(device: &wgpu::Device, queue: &Arc<wgpu::Queue>, raw: RawFram
         unsafe { Ycbcr420IoSurfaceFrame::retain(NonNull::from(&*surface).cast::<c_void>()) };
     let luma = surface.import(device, Ycbcr420Plane::Luma);
     let chroma = surface.import(device, Ycbcr420Plane::Chroma);
-    let encoding = YCbCrEncoding {
+    let encoding = YcbcrEncoding {
         matrix: ycbcr_matrix(pixel_buffer),
-        range: match surface.format().range {
-            YcbcrRange::Video => YCbCrRange::Video,
-            YcbcrRange::Full => YCbCrRange::Full,
-        },
+        range: surface.format().range,
     };
     let (width, height) = (
         surface.width(Ycbcr420Plane::Luma),
@@ -153,7 +150,7 @@ pub fn build_frame(device: &wgpu::Device, queue: &Arc<wgpu::Queue>, raw: RawFram
 
 /// The matrix named by the buffer's `kCVImageBufferYCbCrMatrixKey`
 /// attachment, which `AVFoundation` sets on every YCbCr capture buffer.
-fn ycbcr_matrix(pixel_buffer: &CVPixelBuffer) -> YCbCrMatrix {
+fn ycbcr_matrix(pixel_buffer: &CVPixelBuffer) -> YcbcrMatrix {
     // SAFETY: the keys and values are Core Video's own immutable constants.
     let (key, bt601, bt709, bt2020) = unsafe {
         (
@@ -174,11 +171,11 @@ fn ycbcr_matrix(pixel_buffer: &CVPixelBuffer) -> YCbCrMatrix {
         .downcast_ref::<CFString>()
         .expect("the YCbCr matrix attachment is a string");
     if name == bt601 {
-        YCbCrMatrix::Bt601
+        YcbcrMatrix::Bt601
     } else if name == bt709 {
-        YCbCrMatrix::Bt709
+        YcbcrMatrix::Bt709
     } else if name == bt2020 {
-        YCbCrMatrix::Bt2020
+        YcbcrMatrix::Bt2020
     } else {
         panic!("capture buffer uses the unsupported YCbCr matrix {name}")
     }
@@ -201,7 +198,7 @@ mod tests {
 
     use super::{CapturedPixelBuffer, RawFrame, build_frame};
     use crate::test_support::{gpu, read_texture, wait_idle};
-    use crate::{FramePlanes, Orientation, YCbCrEncoding, YCbCrMatrix, YCbCrRange};
+    use crate::{FramePlanes, Orientation, YcbcrEncoding, YcbcrMatrix, YcbcrRange};
 
     const WIDTH: usize = 64;
     const HEIGHT: usize = 48;
@@ -303,15 +300,15 @@ mod tests {
         for (pixel_format, range, matrix_name, matrix) in [
             (
                 kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-                YCbCrRange::Video,
+                YcbcrRange::Video,
                 bt709,
-                YCbCrMatrix::Bt709,
+                YcbcrMatrix::Bt709,
             ),
             (
                 kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-                YCbCrRange::Full,
+                YcbcrRange::Full,
                 bt601,
-                YCbCrMatrix::Bt601,
+                YcbcrMatrix::Bt601,
             ),
         ] {
             let buffer = capture_buffer(pixel_format, matrix_name);
@@ -342,7 +339,7 @@ mod tests {
             else {
                 panic!("a 4:2:0 capture buffer imports as YCbCr420");
             };
-            assert_eq!(*encoding, YCbCrEncoding { matrix, range });
+            assert_eq!(*encoding, YcbcrEncoding { matrix, range });
             let (luma_texture, chroma_texture) = (luma_view.texture(), chroma_view.texture());
             assert_eq!(luma_texture.format(), wgpu::TextureFormat::R8Unorm);
             assert_eq!((luma_texture.width(), luma_texture.height()), (64, 48));

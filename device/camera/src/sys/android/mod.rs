@@ -1,15 +1,20 @@
 //! Android camera implementation using Camera2 + `MediaRecorder` via JNI/Kotlin bridge.
 //!
-//! The Kotlin helper converts each `YUV_420_888` preview image to RGBA bytes,
-//! which upload into a pooled `Rgba8Unorm` texture. A frame's orientation
+//! The preview `ImageReader` produces GPU-sampled `PRIVATE` buffers. Each
+//! image's `AHardwareBuffer` is imported into wgpu through
+//! `wgpu-external-frame` with no CPU access to its pixels, and the image goes
+//! back to the reader once the GPU no longer reads it. A frame's orientation
 //! combines the sensor orientation, the lens facing and the display rotation
 //! at the time the frame arrived.
 
-use crate::pool::{CpuPlanes, FramePool};
+mod frames;
+
+use frames::{ImageLease, RawFrame};
+
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
-    ExposureMode, FlashMode, FocusMode, Frame, Orientation, Photo, RawPhoto, RawPhotoFormat,
-    RawVideoFormat, Resolution, StabilizationMode,
+    ExposureMode, FlashMode, FocusMode, Frame, Photo, RawPhoto, RawPhotoFormat, RawVideoFormat,
+    Resolution, StabilizationMode,
 };
 use jni::objects::{
     Global, JByteArray, JFloatArray, JIntArray, JObject, JObjectArray, JString, JValue,
@@ -51,16 +56,6 @@ const STABILIZATION_CINEMATIC: i32 = 2;
 enum RecordingMode {
     Standard,
     Raw,
-}
-
-#[derive(Debug)]
-struct RawFrame {
-    data: Vec<u8>,
-    width: u32,
-    height: u32,
-    /// Display rotation in degrees when the frame arrived.
-    display_rotation: u32,
-    timestamp: Duration,
 }
 
 /// What fixes a camera's frame orientation besides the display rotation.
@@ -573,7 +568,7 @@ impl AndroidBridge {
             },
             supports_raw_video,
             raw_video_formats: if supports_raw_video {
-                vec![RawVideoFormat::Rgba8Frames]
+                vec![RawVideoFormat::Nv12Frames]
             } else {
                 Vec::new()
             },
@@ -679,8 +674,11 @@ impl AndroidBridge {
         self.with_env(|env| self.frame_size_internal(env))
     }
 
+    /// Takes the next preview image, if one arrives within `timeout_ms`, as a
+    /// frame ready for import: a reference on its `AHardwareBuffer` and a
+    /// lease that closes the image once the GPU no longer reads it.
     fn wait_for_frame(
-        &self,
+        self: &Arc<Self>,
         start_instant: Instant,
         timeout_ms: i32,
     ) -> Result<Option<RawFrame>, CameraError> {
@@ -701,45 +699,78 @@ impl AndroidBridge {
                 return Ok(None);
             }
 
-            let int_field = |env: &mut Env<'_>, getter: &JNIStr| -> Result<u32, CameraError> {
-                let value = env
-                    .call_method(&frame_obj, getter, jni_sig!("()I"), &[])
-                    .and_then(jni::objects::JValueOwned::i)
-                    .map_err(|error| CameraError::CaptureFailed(format!("{getter}: {error}")))?;
-                u32::try_from(value)
-                    .map_err(|_| CameraError::CaptureFailed(format!("{getter} returned {value}")))
-            };
-            let width = int_field(env, jni_str!("getWidth"))?;
-            let height = int_field(env, jni_str!("getHeight"))?;
-            let display_rotation = int_field(env, jni_str!("getDisplayRotation"))?;
-
-            let rgba_obj = env
-                .call_method(&frame_obj, jni_str!("getRgba"), jni_sig!("()[B"), &[])
+            let image = env
+                .call_method(
+                    &frame_obj,
+                    jni_str!("getImage"),
+                    jni_sig!("()Landroid/media/Image;"),
+                    &[],
+                )
                 .and_then(jni::objects::JValueOwned::l)
-                .map_err(|error| CameraError::CaptureFailed(format!("getRgba: {error}")))?;
-            let rgba_array = env.cast_local::<JByteArray>(rgba_obj).map_err(|error| {
-                CameraError::CaptureFailed(format!("frame is not a byte array: {error}"))
-            })?;
-            let data = env.convert_byte_array(&rgba_array).map_err(|error| {
-                CameraError::CaptureFailed(format!("convert_byte_array(frame): {error}"))
+                .map_err(|error| CameraError::CaptureFailed(format!("getImage: {error}")))?;
+            let hardware_buffer = env
+                .call_method(
+                    &frame_obj,
+                    jni_str!("getHardwareBuffer"),
+                    jni_sig!("()Landroid/hardware/HardwareBuffer;"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::l)
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("getHardwareBuffer: {error}"))
+                })?;
+            let display_rotation = env
+                .call_method(
+                    &frame_obj,
+                    jni_str!("getDisplayRotation"),
+                    jni_sig!("()I"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::i)
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("getDisplayRotation: {error}"))
+                })?;
+            let display_rotation = u32::try_from(display_rotation).map_err(|_| {
+                CameraError::CaptureFailed(format!("display rotation {display_rotation}"))
             })?;
 
-            let expected = width as usize * height as usize * 4;
-            if data.len() != expected {
-                return Err(CameraError::CaptureFailed(format!(
-                    "invalid frame byte length {}, expected {expected} ({width}x{height}x4)",
-                    data.len(),
-                )));
-            }
-
-            Ok(Some(RawFrame {
-                data,
-                width,
-                height,
-                display_rotation,
-                timestamp: start_instant.elapsed(),
-            }))
+            let lease = ImageLease::new(
+                Arc::clone(self),
+                env.new_global_ref(&image).map_err(|error| {
+                    CameraError::CaptureFailed(format!("new_global_ref(image): {error}"))
+                })?,
+            );
+            // SAFETY: `env` is this thread's attached JNI environment and
+            // `hardware_buffer` a live `android.hardware.HardwareBuffer`; the
+            // NDK handle borrows its buffer only until the frame below takes
+            // its own reference.
+            let buffer = unsafe {
+                ndk::hardware_buffer::HardwareBuffer::from_jni(
+                    env.get_raw().cast(),
+                    hardware_buffer.as_raw().cast(),
+                )
+            };
+            // Java's ImageReader waits for the camera's write fence before it
+            // hands an image out, so the buffer is ready as it arrives.
+            let frame = RawFrame::new(&buffer, lease, display_rotation, start_instant.elapsed());
+            env.call_method(&hardware_buffer, jni_str!("close"), jni_sig!("()V"), &[])
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("HardwareBuffer.close: {error}"))
+                })?;
+            Ok(Some(frame))
         })
+    }
+
+    /// Closes a preview image, returning its buffer to the reader.
+    fn close_image(&self, image: &Global<JObject<'static>>) {
+        let closed = self.with_env(|env| {
+            env.call_method(image.as_obj(), jni_str!("close"), jni_sig!("()V"), &[])
+                .map(drop)
+                .map_err(|error| CameraError::PlatformError(format!("Image.close: {error}")))
+        });
+        if let Err(error) = closed {
+            panic!("a camera image could not be returned to its reader: {error}");
+        }
     }
 
     fn sensor_mounting(&self, camera_id: &str) -> Result<SensorMounting, CameraError> {
@@ -1067,6 +1098,7 @@ impl CameraInner {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
     ) -> Result<Self, CameraError> {
+        frames::check_device(&device)?;
         let bridge = Arc::new(AndroidBridge::new()?);
 
         let cameras = bridge.list_cameras()?;
@@ -1273,29 +1305,21 @@ impl CameraInner {
     }
 
     pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
-        let pool = FramePool::new(Arc::clone(&self.device), Arc::clone(&self.queue));
+        let importer = wgpu_external_frame::ahardware_buffer::HardwareBufferImporter::new(
+            &self.device,
+            &self.queue,
+        );
         let receiver = self.frame_receiver.clone();
         let mounting = self.mounting;
 
-        futures::stream::unfold((pool, receiver), move |(pool, receiver)| async move {
-            let raw = receiver.recv().await.ok()?;
-            let frame = pool.upload(
-                &CpuPlanes::Rgb {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    data: &raw.data,
-                    stride: raw.width * 4,
-                },
-                raw.width,
-                raw.height,
-                Orientation::from_camera2(
-                    mounting.sensor_orientation,
-                    mounting.lens_faces_back,
-                    raw.display_rotation,
-                ),
-                raw.timestamp,
-            );
-            Some((frame, (pool, receiver)))
-        })
+        futures::stream::unfold(
+            (importer, receiver),
+            move |(mut importer, receiver)| async move {
+                let raw = receiver.recv().await.ok()?;
+                let frame = raw.import(&mut importer, mounting);
+                Some((frame, (importer, receiver)))
+            },
+        )
     }
 
     #[allow(

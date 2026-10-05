@@ -3,12 +3,14 @@
 
 use std::time::Duration;
 
+use wgpu_external_frame::YcbcrEncoding;
+
 /// What keeps a frame's planes valid while the frame lives, and what happens
 /// to their storage when it drops.
 #[derive(Debug)]
 pub enum FrameStorage {
     /// Textures uploaded from CPU memory; dropping returns them to their pool.
-    #[cfg(any(not(any(target_os = "ios", target_os = "macos")), test))]
+    #[cfg(any(target_os = "windows", target_os = "linux", test))]
     Pooled { _lease: crate::pool::PoolLease },
     /// The captured `CVPixelBuffer` whose `IOSurface` planes the textures
     /// alias; dropping hands it back to the capture pool once the GPU work
@@ -17,6 +19,11 @@ pub enum FrameStorage {
     Captured {
         _buffer: crate::sys::apple::CapturedBuffer,
     },
+    /// Planes imported from an `AHardwareBuffer`: the importer itself returns
+    /// the buffer to the camera once the GPU no longer reads it, so the frame
+    /// holds nothing more than its textures.
+    #[cfg(target_os = "android")]
+    Imported,
 }
 
 /// The GPU planes of one camera frame, in the layout the platform delivered.
@@ -41,7 +48,7 @@ pub enum FramePlanes {
         /// Half-resolution interleaved Cb/Cr plane.
         chroma: wgpu::TextureView,
         /// How the samples map to R'G'B'.
-        encoding: YCbCrEncoding,
+        encoding: YcbcrEncoding,
     },
     /// Packed 4:2:2 YCbCr in YUYV byte order: one `Rgba8Unorm` texture half
     /// the frame's width, each texel holding two horizontally adjacent pixels
@@ -54,38 +61,8 @@ pub enum FramePlanes {
         /// The packed YUYV texture.
         yuyv: wgpu::TextureView,
         /// How the samples map to R'G'B'.
-        encoding: YCbCrEncoding,
+        encoding: YcbcrEncoding,
     },
-}
-
-/// How a YCbCr frame's samples map to non-linear R'G'B'.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct YCbCrEncoding {
-    /// The YCbCr to R'G'B' matrix.
-    pub matrix: YCbCrMatrix,
-    /// The range the samples occupy.
-    pub range: YCbCrRange,
-}
-
-/// YCbCr to R'G'B' matrix coefficients.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum YCbCrMatrix {
-    /// ITU-R BT.601.
-    Bt601,
-    /// ITU-R BT.709.
-    Bt709,
-    /// ITU-R BT.2020, non-constant luminance.
-    Bt2020,
-}
-
-/// The range a frame's YCbCr samples occupy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum YCbCrRange {
-    /// Video ("limited", "studio") range: luma 16–235 and chroma 16–240 in
-    /// 8-bit codes, scaled for deeper samples.
-    Video,
-    /// Full range: every code is used.
-    Full,
 }
 
 /// How the stored pixels relate to upright (EXIF orientations 1–8).

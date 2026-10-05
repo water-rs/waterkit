@@ -34,16 +34,19 @@
 
 mod converter;
 mod frame;
-// Apple frames alias their capture buffers; every other platform, and the
-// tests everywhere, upload frames from CPU memory.
-#[cfg(any(not(any(target_os = "ios", target_os = "macos")), test))]
+// Apple and Android frames are imported from the platform's buffers; desktop
+// frames, and the tests everywhere, are uploaded from CPU memory.
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod pool;
 mod sys;
 #[cfg(test)]
 mod test_support;
 
 pub use converter::{FrameConverter, UPRIGHT_FORMAT};
-pub use frame::{Frame, FramePlanes, Orientation, YCbCrEncoding, YCbCrMatrix, YCbCrRange};
+pub use frame::{Frame, FramePlanes, Orientation};
+/// How YCbCr samples map to R'G'B'. These are `wgpu-external-frame`'s types,
+/// which its imports report, so frames carry them without a translation.
+pub use wgpu_external_frame::{YcbcrEncoding, YcbcrMatrix, YcbcrRange};
 
 use std::num::NonZeroU8;
 use std::path::Path;
@@ -52,6 +55,10 @@ use std::time::Duration;
 
 // Re-export wgpu types for convenience
 pub use wgpu;
+/// The zero-copy import layer under the platform backends. On Android, open
+/// the device passed to [`Camera::open`] with its
+/// `ahardware_buffer::request_device` or `ahardware_buffer::DeviceRequirements`.
+pub use wgpu_external_frame;
 
 // ============================================================================
 // Resolution
@@ -692,11 +699,21 @@ impl Camera {
 
     /// Open a camera by its ID with configuration and GPU device.
     ///
-    /// The camera owns references to the wgpu device and queue for creating
-    /// GPU textures from camera frames.
+    /// The camera owns references to the wgpu device and queue it imports or
+    /// uploads frames on.
+    ///
+    /// On Android, frames are imported `AHardwareBuffer`s, which needs device
+    /// extensions and a feature `wgpu` never enables by itself: open `device`
+    /// with `wgpu_external_frame::ahardware_buffer::request_device`, or
+    /// apply `ahardware_buffer::DeviceRequirements` when opening it yourself.
+    /// Request `wgpu::Features::TEXTURE_FORMAT_NV12` too where the adapter
+    /// offers it, so drivers that map camera buffers to a Vulkan format can
+    /// alias them.
     ///
     /// # Errors
-    /// Returns [`CameraError::OpenFailed`] if the camera cannot be opened.
+    /// Returns [`CameraError::OpenFailed`] if the camera cannot be opened, and
+    /// on Android [`CameraError::GpuError`] when `device` lacks the import's
+    /// extensions.
     pub async fn open(
         camera_id: &str,
         config: CameraConfig,

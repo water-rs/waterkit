@@ -7805,6 +7805,7 @@ dependencies = [
  "futures",
  "image",
  "jni 0.22.4",
+ "ndk",
  "ndk-context",
  "nokhwa",
  "objc",
@@ -8305,6 +8306,7 @@ version = "0.1.0"
 dependencies = [
  "android_logger",
  "futures",
+ "image",
  "jni 0.22.4",
  "log",
  "ndk-context",
@@ -8737,7 +8739,7 @@ dependencies = [
 [[package]]
 name = "wgpu-external-frame"
 version = "0.1.0"
-source = "git+https://github.com/water-rs/wgpu-external-frame?rev=0c715a4de01d1a6ef3b5d15fb881412a686a0080#0c715a4de01d1a6ef3b5d15fb881412a686a0080"
+source = "git+https://github.com/water-rs/wgpu-external-frame?rev=e5381a3f27826f4f6a8a29d2bebe9dfd6530f4bd#e5381a3f27826f4f6a8a29d2bebe9dfd6530f4bd"
 dependencies = [
  "ash",
  "glow",

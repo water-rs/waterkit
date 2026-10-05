@@ -18,7 +18,7 @@ use crate::pool::{CpuPlanes, FramePool};
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
     Frame, FrameConverter, Orientation, Photo, RawPhoto, RawVideoFormat, Resolution,
-    StabilizationMode, YCbCrEncoding, YCbCrMatrix, YCbCrRange,
+    StabilizationMode, YcbcrEncoding, YcbcrMatrix, YcbcrRange,
 };
 use nokhwa::Camera as NokhwaCamera;
 use nokhwa::pixel_format::RgbAFormat;
@@ -45,9 +45,9 @@ const DELIVERED_FORMATS: [NokhwaFrameFormat; 3] = [
 /// otherwise: BT.601 (SMPTE 170M) coefficients in video range. Neither nokhwa
 /// backend reports a camera's descriptor, so this is the encoding every
 /// desktop YCbCr frame carries.
-const WEBCAM_ENCODING: YCbCrEncoding = YCbCrEncoding {
-    matrix: YCbCrMatrix::Bt601,
-    range: YCbCrRange::Video,
+const WEBCAM_ENCODING: YcbcrEncoding = YcbcrEncoding {
+    matrix: YcbcrMatrix::Bt601,
+    range: YcbcrRange::Video,
 };
 
 /// One captured frame in the layout the camera delivered, with its capture

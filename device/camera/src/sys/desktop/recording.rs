@@ -22,19 +22,19 @@ use yuv::{
 };
 
 use super::{CapturedPixels, FrameSubscription, RawFrame, WEBCAM_ENCODING};
-use crate::{CameraError, YCbCrEncoding, YCbCrMatrix, YCbCrRange};
+use crate::{CameraError, YcbcrEncoding, YcbcrMatrix, YcbcrRange};
 
 /// The `yuv` crate's names for a frame's YCbCr encoding.
-const fn yuv_encoding(encoding: YCbCrEncoding) -> (YuvRange, YuvStandardMatrix) {
+const fn yuv_encoding(encoding: YcbcrEncoding) -> (YuvRange, YuvStandardMatrix) {
     (
         match encoding.range {
-            YCbCrRange::Video => YuvRange::Limited,
-            YCbCrRange::Full => YuvRange::Full,
+            YcbcrRange::Video => YuvRange::Limited,
+            YcbcrRange::Full => YuvRange::Full,
         },
         match encoding.matrix {
-            YCbCrMatrix::Bt601 => YuvStandardMatrix::Bt601,
-            YCbCrMatrix::Bt709 => YuvStandardMatrix::Bt709,
-            YCbCrMatrix::Bt2020 => YuvStandardMatrix::Bt2020,
+            YcbcrMatrix::Bt601 => YuvStandardMatrix::Bt601,
+            YcbcrMatrix::Bt709 => YuvStandardMatrix::Bt709,
+            YcbcrMatrix::Bt2020 => YuvStandardMatrix::Bt2020,
         },
     )
 }

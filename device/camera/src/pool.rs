@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
-use crate::frame::YCbCrEncoding;
+use crate::YcbcrEncoding;
 use crate::frame::{Frame, FramePlanes, FrameStorage, Orientation};
 
 /// One frame's pixels in CPU memory, in the layout the platform delivered.
@@ -27,13 +27,13 @@ pub enum CpuPlanes<'a> {
     #[cfg(any(target_os = "windows", target_os = "linux", test))]
     Nv12 {
         data: &'a [u8],
-        encoding: YCbCrEncoding,
+        encoding: YcbcrEncoding,
     },
     /// Packed YUYV 4:2:2, tightly packed rows.
     #[cfg(any(target_os = "windows", target_os = "linux", test))]
     Yuyv {
         data: &'a [u8],
-        encoding: YCbCrEncoding,
+        encoding: YcbcrEncoding,
     },
     /// P010: NV12's layout with 16-bit little-endian samples holding 10-bit
     /// codes in their top bits. Only the converter tests upload it, on the
@@ -42,7 +42,7 @@ pub enum CpuPlanes<'a> {
     #[cfg(all(test, target_vendor = "apple"))]
     P010 {
         data: &'a [u8],
-        encoding: YCbCrEncoding,
+        encoding: YcbcrEncoding,
     },
 }
 

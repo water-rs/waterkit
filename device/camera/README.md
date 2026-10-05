@@ -41,7 +41,7 @@ A `Frame` exposes what it holds rather than a hidden RGBA texture:
 
 - `Frame::planes()` returns `FramePlanes`: one 8-bit RGBA/BGRA texture
   (`Rgb`), biplanar 4:2:0 YCbCr (`YCbCr420`, luma plus interleaved chroma) or
-  packed 4:2:2 YUYV (`YCbCr422`), with the `YCbCrEncoding` (matrix and range)
+  packed 4:2:2 YUYV (`YCbCr422`), with the `YcbcrEncoding` (matrix and range)
   of the YCbCr layouts.
 - `Frame::orientation()` says how the stored pixels relate to upright, with
   EXIF 1–8 semantics. Upright is the scene as the lens sees it, unmirrored.
@@ -54,15 +54,19 @@ What each platform delivers today:
 | Platform | Planes | Orientation |
 | :--- | :--- | :--- |
 | iOS / macOS | `YCbCr420`: the capture buffer's `IOSurface` planes (`420f`, else `420v`), no copy | capture connection rotation and mirroring |
-| Android | `Rgb` (RGBA) | sensor orientation, lens facing, display rotation |
+| Android | `YCbCr420`: the camera's GPU-sampled `AHardwareBuffer`, imported (driver-private formats are converted into plane textures on the GPU) | sensor orientation, lens facing, display rotation |
 | Windows / Linux | `YCbCr420` (NV12), `YCbCr422` (YUYV), or `Rgb` from MJPEG | always `Up` |
 
-On Apple platforms a frame's textures alias the capture buffer, so no pixel
-is copied; the buffer returns to the camera's small pool only when the frame
-drops (and the GPU work submitted until then finishes), so a consumer that
-holds frames makes the camera drop new ones. Android still converts its YUV
-images to RGBA on the CPU and uploads them, and desktop uploads the planes
-the webcam delivers, both into pooled textures.
+On Apple and Android no pixel of a frame passes through the CPU. On Apple a
+frame's textures alias the capture buffer, which returns to the camera's small
+pool only when the frame drops and the GPU work submitted until then
+finishes; a consumer that holds frames makes the camera drop new ones. On
+Android the camera's `AHardwareBuffer` is imported through
+`wgpu-external-frame`, which returns it to the reader as soon as the GPU no
+longer reads it; open the device with
+`wgpu_external_frame::ahardware_buffer::request_device` (re-exported as
+`waterkit_camera::wgpu_external_frame`). Desktop uploads the planes the webcam
+delivers into pooled textures.
 
 ## RAW Outputs
 
@@ -70,9 +74,10 @@ the webcam delivers, both into pooled textures.
 - RAW video: uncompressed frame stream file (`WKRV` container):
   - Header: magic/version/pixel-format/width/height/fps
   - Per frame: `timestamp_ns(u64 LE) + payload_len(u32 LE) + raw pixels`
-  - Android and desktop: `RGBA8` frames (pixel format 2)
-  - Apple: biplanar 4:2:0 frames as captured, luma rows then chroma rows
-    (pixel format 3 for video range, 4 for full range)
+  - Desktop: `RGBA8` frames (pixel format 2)
+  - Apple and Android: biplanar 4:2:0 frames as captured, luma rows then
+    chroma rows (pixel format 3 for video range, 4 for full range; Android's
+    `YUV_420_888` output is full range)
 
 ## Example: Capability Probe
 

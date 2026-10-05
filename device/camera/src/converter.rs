@@ -3,7 +3,8 @@
 use shaderloom::{CompiledShader, ShaderStage};
 use wgpu::util::DeviceExt as _;
 
-use crate::frame::{Frame, FramePlanes, YCbCrEncoding, YCbCrMatrix, YCbCrRange};
+use crate::frame::{Frame, FramePlanes};
+use crate::{YcbcrEncoding, YcbcrMatrix, YcbcrRange};
 
 const CONVERT_RGB: CompiledShader = include!(concat!(env!("OUT_DIR"), "/frame_convert_rgb.rs"));
 const CONVERT_YCBCR420: CompiledShader =
@@ -95,17 +96,17 @@ impl ConvertParams {
     }
 
     /// Adds how the YCbCr samples decode.
-    const fn ycbcr(self, encoding: YCbCrEncoding, sample: SampleDepth) -> Self {
+    const fn ycbcr(self, encoding: YcbcrEncoding, sample: SampleDepth) -> Self {
         Self {
             // YCBCR_MATRIX_* / YCBCR_RANGE_* in waterkit-video-core's ycbcr.wgsl.
             matrix_mode: match encoding.matrix {
-                YCbCrMatrix::Bt709 => 0,
-                YCbCrMatrix::Bt601 => 1,
-                YCbCrMatrix::Bt2020 => 2,
+                YcbcrMatrix::Bt709 => 0,
+                YcbcrMatrix::Bt601 => 1,
+                YcbcrMatrix::Bt2020 => 2,
             },
             range_mode: match encoding.range {
-                YCbCrRange::Video => 0,
-                YCbCrRange::Full => 1,
+                YcbcrRange::Video => 0,
+                YcbcrRange::Full => 1,
             },
             bit_depth: sample.bit_depth,
             code_scale: sample.code_scale,
@@ -347,8 +348,9 @@ mod tests {
     use image::{DynamicImage, RgbaImage};
 
     use super::FrameConverter;
-    use crate::frame::{Frame, Orientation, YCbCrEncoding, YCbCrMatrix, YCbCrRange};
+    use crate::frame::{Frame, Orientation};
     use crate::pool::{CpuPlanes, FramePool};
+    use crate::{YcbcrEncoding, YcbcrMatrix, YcbcrRange};
 
     /// Stored frame size: even, as 4:2:0 and 4:2:2 need, and not square, so a
     /// wrong quarter turn changes the output size.
@@ -371,13 +373,13 @@ mod tests {
         Orientation::Left,
     ];
 
-    fn encodings() -> impl Iterator<Item = YCbCrEncoding> {
-        [YCbCrMatrix::Bt601, YCbCrMatrix::Bt709, YCbCrMatrix::Bt2020]
+    fn encodings() -> impl Iterator<Item = YcbcrEncoding> {
+        [YcbcrMatrix::Bt601, YcbcrMatrix::Bt709, YcbcrMatrix::Bt2020]
             .into_iter()
             .flat_map(|matrix| {
-                [YCbCrRange::Video, YCbCrRange::Full]
+                [YcbcrRange::Video, YcbcrRange::Full]
                     .into_iter()
-                    .map(move |range| YCbCrEncoding { matrix, range })
+                    .map(move |range| YcbcrEncoding { matrix, range })
             })
     }
 
@@ -496,11 +498,11 @@ mod tests {
 
     /// Kr and Kb of each matrix, as ITU-R BT.601, BT.709 and BT.2020 define
     /// them; the reference derives every coefficient from these.
-    const fn luma_weights(matrix: YCbCrMatrix) -> (f64, f64) {
+    const fn luma_weights(matrix: YcbcrMatrix) -> (f64, f64) {
         match matrix {
-            YCbCrMatrix::Bt601 => (0.299, 0.114),
-            YCbCrMatrix::Bt709 => (0.2126, 0.0722),
-            YCbCrMatrix::Bt2020 => (0.2627, 0.0593),
+            YcbcrMatrix::Bt601 => (0.299, 0.114),
+            YcbcrMatrix::Bt709 => (0.2126, 0.0722),
+            YcbcrMatrix::Bt2020 => (0.2627, 0.0593),
         }
     }
 
@@ -514,18 +516,18 @@ mod tests {
     fn reference_pixel(
         [y, cb, cr]: [u16; 3],
         bits: u32,
-        encoding: YCbCrEncoding,
+        encoding: YcbcrEncoding,
     ) -> image::Rgba<u8> {
         let max_code = f64::from((1_u32 << bits) - 1);
         let step = f64::from(1_u32 << (bits - 8));
         let (y, cb, cr) = (f64::from(y), f64::from(cb), f64::from(cr));
         let (luma, blue, red) = match encoding.range {
-            YCbCrRange::Video => (
+            YcbcrRange::Video => (
                 16.0f64.mul_add(-step, y) / (219.0 * step),
                 128.0f64.mul_add(-step, cb) / (224.0 * step),
                 128.0f64.mul_add(-step, cr) / (224.0 * step),
             ),
-            YCbCrRange::Full => (
+            YcbcrRange::Full => (
                 y / max_code,
                 128.0f64.mul_add(-step, cb) / max_code,
                 128.0f64.mul_add(-step, cr) / max_code,
@@ -543,7 +545,7 @@ mod tests {
     fn reference_420(
         samples: impl Fn(u32, u32) -> [u16; 3],
         bits: u32,
-        encoding: YCbCrEncoding,
+        encoding: YcbcrEncoding,
     ) -> RgbaImage {
         RgbaImage::from_fn(WIDTH, HEIGHT, |x, y| {
             reference_pixel(samples(x, y), bits, encoding)
@@ -686,9 +688,9 @@ mod tests {
     fn pool_reuses_the_textures_of_dropped_frames() {
         let gpu = Gpu::new(wgpu::Features::empty());
         let data = nv12();
-        let encoding = YCbCrEncoding {
-            matrix: YCbCrMatrix::Bt601,
-            range: YCbCrRange::Video,
+        let encoding = YcbcrEncoding {
+            matrix: YcbcrMatrix::Bt601,
+            range: YcbcrRange::Video,
         };
         let pixels = CpuPlanes::Nv12 {
             data: &data,

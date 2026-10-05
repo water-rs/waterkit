@@ -141,4 +141,6 @@ fn main() {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn main() {}
+fn main() {
+    eprintln!("waterkit-notification-test is a macOS-only harness; nothing to run on this target.");
+}

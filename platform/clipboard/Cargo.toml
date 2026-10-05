@@ -20,16 +20,19 @@ async-channel.workspace = true
 blocking.workspace = true
 tracing.workspace = true
 
-# Desktop (Windows, Linux, macOS)
+# Desktop (Windows, Linux, macOS). On Linux, clipboard-rs serves only X11's
+# CLIPBOARD: its `wayland` feature stays off, because with it clipboard-rs
+# falls back from Wayland to X11 on its own.
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 clipboard-rs = { workspace = true }
 image = { workspace = true }
 
-# Linux only: PRIMARY selection, Wayland (data-control) and X11
+# Linux only: Wayland (data-control) for CLIPBOARD and PRIMARY, X11 for PRIMARY
 [target.'cfg(target_os = "linux")'.dependencies]
+url.workspace = true
 wl-clipboard-rs.workspace = true
 x11-clipboard.workspace = true
-x11rb.workspace = true
+x11rb = { workspace = true, features = ["xfixes"] }
 
 # Apple platforms (iOS only - macOS uses clipboard-rs)
 [target.'cfg(target_os = "ios")'.dependencies]

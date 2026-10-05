@@ -1,12 +1,15 @@
-//! Choosing the display server that serves PRIMARY.
+//! Choosing the display server that serves a selection.
 //!
 //! The choice is made once, before any operation, from what the session
 //! provides. It never falls from one display server to the other: in a
-//! Wayland session PRIMARY is the compositor's, and an X server reachable
-//! beside it (such as Xwayland) holds a different selection.
+//! Wayland session the selections are the compositor's, and an X server
+//! reachable beside it (such as Xwayland) holds different ones.
 
 use std::ffi::OsStr;
 
+use wl_clipboard_rs::paste;
+
+use super::Selection;
 use crate::error::ClipboardError;
 
 /// The display-server variables of a process environment.
@@ -38,7 +41,18 @@ impl Session {
     }
 }
 
-/// The display server PRIMARY is read and written through.
+/// The data-control protocol a Wayland compositor offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataControl {
+    /// Data-control for the regular clipboard only (`zwlr_data_control_manager_v1`
+    /// version 1).
+    Regular,
+    /// Data-control with a primary selection (`ext_data_control_manager_v1`,
+    /// or `zwlr_data_control_manager_v1` version 2+).
+    WithPrimary,
+}
+
+/// The display server a selection is read and written through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayServer {
     /// A Wayland compositor's data-control protocol.
@@ -47,46 +61,61 @@ pub enum DisplayServer {
     X11,
 }
 
-/// Choose the display server for `session`.
+/// Choose the display server that serves the selection `S` in `session`.
 ///
 /// `probe_data_control` binds the Wayland compositor's registry and reports
-/// whether it offers a data-control protocol with a primary selection, or why
-/// it does not. It runs only in a Wayland session.
+/// the data-control protocol it offers, or why it offers none. It runs only in
+/// a Wayland session.
 ///
 /// # Errors
 ///
 /// [`ClipboardError::Platform`] when the session is a Wayland session whose
-/// compositor offers no primary selection to data-control clients, whether or
-/// not an X server is also reachable, and when the session has no display
-/// server at all.
-pub fn select(
+/// compositor does not offer `S` to data-control clients, whether or not an X
+/// server is also reachable, and when the session has no display server at
+/// all.
+pub fn select<S: Selection>(
     session: Session,
-    probe_data_control: impl FnOnce() -> Result<(), String>,
+    probe_data_control: impl FnOnce() -> Result<DataControl, String>,
 ) -> Result<DisplayServer, ClipboardError> {
     if session.wayland {
         return probe_data_control()
-            .map(|()| DisplayServer::Wayland)
+            .and_then(|data_control| {
+                if S::WAYLAND == paste::ClipboardType::Primary
+                    && data_control == DataControl::Regular
+                {
+                    Err(
+                        "the compositor's data-control protocol does not provide a primary \
+                         selection"
+                            .to_owned(),
+                    )
+                } else {
+                    Ok(DisplayServer::Wayland)
+                }
+            })
             .map_err(|reason| {
                 ClipboardError::Platform(format!(
-                    "PRIMARY is unavailable in this Wayland session: {reason}; X11 is never \
-                     used while WAYLAND_DISPLAY is set"
+                    "{} is unavailable in this Wayland session: {reason}; X11 is never used \
+                     while WAYLAND_DISPLAY is set",
+                    S::NAME
                 ))
             });
     }
     if session.x11 {
         return Ok(DisplayServer::X11);
     }
-    Err(ClipboardError::Platform(
-        "PRIMARY needs a display server, but neither WAYLAND_DISPLAY nor DISPLAY is set".into(),
-    ))
+    Err(ClipboardError::Platform(format!(
+        "{} needs a display server, but neither WAYLAND_DISPLAY nor DISPLAY is set",
+        S::NAME
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;
 
-    use super::{DisplayServer, Session, select};
+    use super::{DataControl, DisplayServer, Session, select};
     use crate::error::ClipboardError;
+    use crate::sys::linux::{Clipboard, Primary, Selection};
 
     const WAYLAND: Option<&str> = Some("wayland-0");
     const X11: Option<&str> = Some(":0");
@@ -96,11 +125,11 @@ mod tests {
         Session::new(wayland_display.map(OsStr::new), display.map(OsStr::new))
     }
 
-    fn no_data_control() -> Result<(), String> {
+    fn no_data_control() -> Result<DataControl, String> {
         Err("no data-control protocol".into())
     }
 
-    fn not_probed() -> Result<(), String> {
+    fn not_probed() -> Result<DataControl, String> {
         panic!("the Wayland compositor was probed outside a Wayland session")
     }
 
@@ -111,38 +140,76 @@ mod tests {
         }
     }
 
-    #[test]
-    fn wayland_with_data_control_selects_wayland() {
-        for display in [None, X11] {
-            let session = session(WAYLAND, display);
-            assert_eq!(select(session, || Ok(())).unwrap(), DisplayServer::Wayland);
-        }
+    /// Declare a test that runs `$check` for every selection.
+    macro_rules! for_each_selection {
+        ($name:ident, $check:ident) => {
+            #[test]
+            fn $name() {
+                $check::<Clipboard>();
+                $check::<Primary>();
+            }
+        };
     }
 
-    #[test]
-    fn wayland_without_data_control_never_selects_x11() {
+    fn wayland_with_full_data_control<S: Selection>() {
         for display in [None, X11] {
-            let reason = platform_reason(select(session(WAYLAND, display), no_data_control));
+            let selected = select::<S>(session(WAYLAND, display), || Ok(DataControl::WithPrimary));
+            assert_eq!(selected.unwrap(), DisplayServer::Wayland);
+        }
+    }
+    for_each_selection!(
+        wayland_with_full_data_control_selects_wayland,
+        wayland_with_full_data_control
+    );
+
+    fn wayland_without_data_control<S: Selection>() {
+        for display in [None, X11] {
+            let reason = platform_reason(select::<S>(session(WAYLAND, display), no_data_control));
+            assert!(reason.starts_with(S::NAME), "{reason}");
             assert!(reason.contains("no data-control protocol"), "{reason}");
         }
     }
+    for_each_selection!(
+        wayland_without_data_control_never_selects_x11,
+        wayland_without_data_control
+    );
 
     #[test]
-    fn x11_alone_selects_x11_without_probing_wayland() {
-        for wayland_display in [None, EMPTY] {
-            let session = session(wayland_display, X11);
-            assert_eq!(select(session, not_probed).unwrap(), DisplayServer::X11);
+    fn data_control_without_primary_serves_only_clipboard() {
+        let regular_only = || Ok(DataControl::Regular);
+        for display in [None, X11] {
+            let session = session(WAYLAND, display);
+            assert_eq!(
+                select::<Clipboard>(session, regular_only).unwrap(),
+                DisplayServer::Wayland
+            );
+            let reason = platform_reason(select::<Primary>(session, regular_only));
+            assert!(reason.starts_with("PRIMARY"), "{reason}");
+            assert!(
+                reason.contains("does not provide a primary selection"),
+                "{reason}"
+            );
         }
     }
 
-    #[test]
-    fn no_display_server_is_an_error() {
+    fn x11_alone<S: Selection>() {
+        for wayland_display in [None, EMPTY] {
+            let selected = select::<S>(session(wayland_display, X11), not_probed);
+            assert_eq!(selected.unwrap(), DisplayServer::X11);
+        }
+    }
+    for_each_selection!(x11_alone_selects_x11_without_probing_wayland, x11_alone);
+
+    fn no_display_server<S: Selection>() {
         for (wayland_display, display) in [(None, None), (EMPTY, EMPTY), (None, EMPTY)] {
-            let reason = platform_reason(select(session(wayland_display, display), not_probed));
+            let reason =
+                platform_reason(select::<S>(session(wayland_display, display), not_probed));
+            assert!(reason.starts_with(S::NAME), "{reason}");
             assert!(
                 reason.contains("neither WAYLAND_DISPLAY nor DISPLAY"),
                 "{reason}"
             );
         }
     }
+    for_each_selection!(no_display_server_is_an_error, no_display_server);
 }

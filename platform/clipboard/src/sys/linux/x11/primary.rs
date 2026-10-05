@@ -8,9 +8,9 @@
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use x11rb::protocol::xproto::ConnectionExt as _;
-
+use super::{owned, platform};
 use crate::error::ClipboardError;
+use crate::sys::linux::formats;
 
 /// How long a read waits for the owner of PRIMARY to answer. The ICCCM sets no
 /// deadline, so an owner that never answers would otherwise block the read
@@ -54,14 +54,7 @@ impl X11Primary {
         let bytes = {
             let clipboard = self.lock();
             let reader = &clipboard.getter;
-            let owner = reader
-                .connection
-                .get_selection_owner(reader.atoms.primary)
-                .map_err(|error| platform(&error))?
-                .reply()
-                .map_err(|error| platform(&error))?
-                .owner;
-            if owner == x11rb::NONE {
+            if !owned(&reader.connection, reader.atoms.primary)? {
                 return Ok(None);
             }
             clipboard
@@ -78,9 +71,7 @@ impl X11Primary {
                     error => platform(&error),
                 })?
         };
-        String::from_utf8(bytes)
-            .map(Some)
-            .map_err(|error| ClipboardError::Decode(error.to_string()))
+        formats::decode_text(bytes).map(Some)
     }
 
     /// Claim PRIMARY with `text`.
@@ -91,8 +82,4 @@ impl X11Primary {
             .store(atoms.primary, atoms.utf8_string, text.as_bytes())
             .map_err(|error| platform(&error))
     }
-}
-
-fn platform(error: &dyn std::error::Error) -> ClipboardError {
-    ClipboardError::Platform(error.to_string())
 }

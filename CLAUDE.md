@@ -12,7 +12,7 @@ cargo check --all-features
 cargo build --all-features
 
 # Run clippy with all features
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Format code
 cargo fmt --all
@@ -200,4 +200,4 @@ written justification.
 
 ## Linting
 
-Workspace enforces strict clippy lints (all categories at warn level). Run `cargo clippy --all-targets --all-features -- -D warnings` before committing.
+Workspace enforces strict clippy lints (all categories at warn level). Run `cargo clippy --workspace --all-targets --all-features -- -D warnings` before committing.

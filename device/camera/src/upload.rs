@@ -173,13 +173,7 @@ impl FrameUploader {
                 }
             }
         };
-        Frame::new(
-            planes,
-            width,
-            height,
-            orientation,
-            timestamp,
-        )
+        Frame::new(planes, width, height, orientation, timestamp)
     }
 
     /// Creates a texture for each plane and writes the plane into it.

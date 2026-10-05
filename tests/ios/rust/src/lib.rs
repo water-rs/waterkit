@@ -322,11 +322,16 @@ async fn record_secret(report: &mut TestReport) {
 
 #[cfg(feature = "system")]
 fn record_system(report: &mut TestReport) {
-    let connectivity = waterkit::system::connectivity();
-    report.push(TestCase::passed_with_message(
-        "system.connectivity",
-        format!("connection_type={:?}", connectivity.connection_type()),
-    ));
+    match waterkit::system::connectivity() {
+        Ok(connectivity) => report.push(TestCase::passed_with_message(
+            "system.connectivity",
+            format!("connection_type={:?}", connectivity.connection_type()),
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "system.connectivity",
+            format!("connectivity query failed: {error}"),
+        )),
+    }
 }
 
 #[cfg(feature = "screen")]

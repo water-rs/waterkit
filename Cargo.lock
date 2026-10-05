@@ -8329,6 +8329,7 @@ dependencies = [
  "swift-bridge",
  "swift-rs",
  "sysinfo",
+ "thiserror 2.0.20",
  "waterkit-build",
  "windows 0.62.2",
 ]

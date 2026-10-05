@@ -97,10 +97,9 @@ impl ApplicationHandler for App {
                 .unwrap(),
         );
 
-        let state = self.rt.block_on(State::new(
-            window.clone(),
-            &self.cameras[self.selected_camera].id,
-        ));
+        let state = self
+            .rt
+            .block_on(State::new(window, &self.cameras[self.selected_camera].id));
 
         match state {
             Ok(s) => self.state = Some(s),
@@ -154,7 +153,7 @@ impl State {
 
         let surface = instance
             .create_surface(window.clone())
-            .map_err(|e| format!("Surface: {}", e))?;
+            .map_err(|e| format!("Surface: {e}"))?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -170,7 +169,7 @@ impl State {
                 ..Default::default()
             })
             .await
-            .map_err(|e| format!("Device: {}", e))?;
+            .map_err(|e| format!("Device: {e}"))?;
 
         let device = Arc::new(device);
         let queue = Arc::new(queue);
@@ -202,7 +201,7 @@ impl State {
         let camera_config = CameraConfig::default();
         let camera = Camera::open(camera_id, camera_config, device.clone(), queue.clone())
             .await
-            .map_err(|e| format!("Camera: {}", e))?;
+            .map_err(|e| format!("Camera: {e}"))?;
 
         let res = camera.resolution();
         log::info!("Camera resolution: {}x{}", res.width, res.height);
@@ -228,64 +227,7 @@ impl State {
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
 
-        // Create bind group layout
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("texture_bind_group_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        // Create shader and pipeline
-        let (vertex_shader, fragment_shader) =
-            CAMERA_TEST_SHADER.create_render_stages(&device, "vs_main", "fs_main");
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("pipeline_layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("render_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: vertex_shader.module(),
-                entry_point: Some(vertex_shader.entry_point()),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: fragment_shader.module(),
-                entry_point: Some(fragment_shader.entry_point()),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let (bind_group_layout, pipeline) = create_pipeline(&device, format);
 
         let converter = FrameConverter::new(&device);
 
@@ -358,9 +300,9 @@ impl State {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_fps_update);
         if elapsed.as_secs_f32() >= 1.0 {
-            let fps = self.frame_count as f32 / elapsed.as_secs_f32();
+            let fps = f64::from(self.frame_count) / elapsed.as_secs_f64();
             self.window
-                .set_title(&format!("Camera Preview - {:.1} FPS", fps));
+                .set_title(&format!("Camera Preview - {fps:.1} FPS"));
             self.frame_count = 0;
             self.last_fps_update = now;
         }
@@ -414,4 +356,72 @@ impl State {
         self.queue.submit(std::iter::once(encoder.finish()));
         self.queue.present(output);
     }
+}
+
+/// Creates the bind group layout that samples a camera frame, and the render
+/// pipeline that draws it full-screen into a `format` target.
+fn create_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+    // Create bind group layout
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("texture_bind_group_layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+
+    // Create shader and pipeline
+    let (vertex_shader, fragment_shader) =
+        CAMERA_TEST_SHADER.create_render_stages(device, "vs_main", "fs_main");
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("pipeline_layout"),
+        bind_group_layouts: &[Some(&bind_group_layout)],
+        immediate_size: 0,
+    });
+
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("render_pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: vertex_shader.module(),
+            entry_point: Some(vertex_shader.entry_point()),
+            buffers: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: fragment_shader.module(),
+            entry_point: Some(fragment_shader.entry_point()),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+
+    (bind_group_layout, pipeline)
 }

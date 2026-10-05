@@ -10,23 +10,35 @@ categories = ["os", "gui"]
 readme = "README.md"
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
+thiserror.workspace = true
 
 # Desktop (System Info & Thermal)
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 sysinfo.workspace = true
 
-# Windows Connectivity
+# Windows connectivity: the Network List Manager reports internet
+# connectivity, and the IP Helper adapter table names the transport.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
-    "Networking_Connectivity",
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_NetworkListManager",
+    "Win32_Networking_WinSock",
+    "Win32_System_Com",
 ] }
 
-# Linux Connectivity (Using netdev for now as fallback/helper if needed, but maybe just sysinfo is enough for some?)
-# Actually netdev is good for interface listing. 
-# We'll see if we need it. Let's add it for Linux mainly.
+# Linux connectivity: NetworkManager over the system bus where it runs, the
+# kernel's interface and route tables otherwise.
 [target.'cfg(target_os = "linux")'.dependencies]
-netdev.workspace = true
+zbus.workspace = true
+
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+tracing.workspace = true
 
 # Apple (iOS/macOS)
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]

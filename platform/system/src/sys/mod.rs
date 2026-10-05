@@ -10,6 +10,9 @@ pub use android::*;
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod desktop;
+
+#[cfg(any(test, target_os = "windows", target_os = "linux"))]
+mod network;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub use desktop::*;
 
@@ -29,7 +32,7 @@ compile_error!("waterkit-system supports only macOS, iOS, Android, Windows, and 
     target_os = "windows",
     target_os = "linux"
 )))]
-pub(crate) fn get_connectivity_info() -> crate::ConnectivityInfo {
+pub(crate) fn connectivity() -> Result<crate::ConnectivityInfo, crate::SystemError> {
     panic!("waterkit-system supports only macOS, iOS, Android, Windows, and Linux.")
 }
 
@@ -40,7 +43,7 @@ pub(crate) fn get_connectivity_info() -> crate::ConnectivityInfo {
     target_os = "windows",
     target_os = "linux"
 )))]
-pub(crate) fn get_thermal_state() -> crate::ThermalState {
+pub(crate) fn thermal_state() -> Result<Option<crate::ThermalState>, crate::SystemError> {
     panic!("waterkit-system supports only macOS, iOS, Android, Windows, and Linux.")
 }
 
@@ -51,6 +54,6 @@ pub(crate) fn get_thermal_state() -> crate::ThermalState {
     target_os = "windows",
     target_os = "linux"
 )))]
-pub(crate) fn get_system_load() -> crate::SystemLoad {
+pub(crate) fn load() -> Result<crate::SystemLoad, crate::SystemError> {
     panic!("waterkit-system supports only macOS, iOS, Android, Windows, and Linux.")
 }

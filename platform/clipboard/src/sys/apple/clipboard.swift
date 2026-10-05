@@ -33,19 +33,31 @@ public func clipboard_get_text() -> Optional<String> {
     return UIPasteboard.general.string
 }
 
-public func clipboard_get_html() -> Optional<String> {
+public func clipboard_get_html() -> SwiftBinaryData {
     guard let data = UIPasteboard.general.data(forPasteboardType: UTType.html.identifier) else {
-        return nil
+        return SwiftBinaryData(bytes: RustVec(), is_valid: false)
     }
-    return String(data: data, encoding: .utf8)
+    // Decoded on the Rust side, which reports bytes that are not UTF-8.
+    return SwiftBinaryData(bytes: rustVec(data), is_valid: true)
+}
+
+/// No image on the pasteboard.
+private func noImage() -> SwiftImageData {
+    return SwiftImageData(width: 0, height: 0, bytes: RustVec(), is_valid: false, error: nil)
+}
+
+/// An image on the pasteboard that could not be converted to RGBA pixels.
+private func unreadableImage(_ reason: String) -> SwiftImageData {
+    return SwiftImageData(
+        width: 0, height: 0, bytes: RustVec(), is_valid: false, error: reason.intoRustString())
 }
 
 public func clipboard_get_image() -> SwiftImageData {
     guard let image = UIPasteboard.general.image else {
-        return SwiftImageData(width: 0, height: 0, bytes: RustVec(), is_valid: false)
+        return noImage()
     }
     guard let cgImage = image.cgImage else {
-        return SwiftImageData(width: 0, height: 0, bytes: RustVec(), is_valid: false)
+        return unreadableImage("the pasteboard image has no bitmap (CGImage) representation")
     }
 
     let width = cgImage.width
@@ -67,17 +79,14 @@ public func clipboard_get_image() -> SwiftImageData {
                                   bytesPerRow: bytesPerRow,
                                   space: colorSpace,
                                   bitmapInfo: bitmapInfo.rawValue) else {
-        return SwiftImageData(width: 0, height: 0, bytes: RustVec(), is_valid: false)
+        return unreadableImage(
+            "failed to create a \(width)x\(height) RGBA bitmap context for the pasteboard image")
     }
 
     context.draw(cgImage, in: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
 
-    let rustVec = RustVec<UInt8>()
-    for byte in rawData {
-        rustVec.push(value: byte)
-    }
-
-    return SwiftImageData(width: UInt(width), height: UInt(height), bytes: rustVec, is_valid: true)
+    return SwiftImageData(
+        width: UInt(width), height: UInt(height), bytes: rustVec(rawData), is_valid: true, error: nil)
 }
 
 public func clipboard_get_file_url() -> Optional<String> {
@@ -95,12 +104,16 @@ public func clipboard_get_binary(mime: RustString) -> SwiftBinaryData {
         return SwiftBinaryData(bytes: RustVec(), is_valid: false)
     }
 
-    let rustVec = RustVec<UInt8>()
-    for byte in data {
-        rustVec.push(value: byte)
-    }
+    return SwiftBinaryData(bytes: rustVec(data), is_valid: true)
+}
 
-    return SwiftBinaryData(bytes: rustVec, is_valid: true)
+/// `bytes` copied into a vector Rust owns.
+private func rustVec<Bytes: Sequence>(_ bytes: Bytes) -> RustVec<UInt8> where Bytes.Element == UInt8 {
+    let vec = RustVec<UInt8>()
+    for byte in bytes {
+        vec.push(value: byte)
+    }
+    return vec
 }
 
 // MARK: - Write Operations

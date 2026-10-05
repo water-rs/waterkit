@@ -1,3 +1,6 @@
+//! The Rust half of the iOS test harness: runs the enabled `WaterKit` cases
+//! and returns their structured report to the Swift app.
+
 use waterkit_test_report::{TestCase, TestReport, to_json_pretty};
 
 #[cfg(feature = "camera")]
@@ -139,40 +142,16 @@ fn build_report() -> TestReport {
 
         #[cfg(feature = "deeplink")]
         report.push(TestCase::passed("deeplink.linked"));
+    });
 
-        #[cfg(not(any(
-            feature = "sensor",
-            feature = "biometric",
-            feature = "location",
-            feature = "audio",
-            feature = "camera",
-            feature = "clipboard",
-            feature = "codec",
-            feature = "dialog",
-            feature = "fs",
-            feature = "haptic",
-            feature = "notification",
-            feature = "permission",
-            feature = "secret",
-            feature = "system",
-            feature = "video",
-            feature = "screen",
-            feature = "bluetooth",
-            feature = "nfc",
-            feature = "share",
-            feature = "speech",
-            feature = "contacts",
-            feature = "calendar",
-            feature = "health",
-            feature = "deeplink",
-            feature = "background",
-            feature = "passkey"
-        )))]
+    // Every enabled feature records at least one case, so an empty report
+    // means the harness was built without any feature.
+    if report.cases.is_empty() {
         report.push(TestCase::failed(
             "harness.feature",
             "no WaterKit feature was enabled for the iOS harness",
         ));
-    });
+    }
 
     report
 }
@@ -259,17 +238,34 @@ async fn record_permission(report: &mut TestReport) {
 
 #[cfg(feature = "clipboard")]
 fn record_clipboard(report: &mut TestReport) {
-    match waterkit::clipboard::Clipboard::new() {
-        Ok(mut clipboard) => match clipboard.set_text("WaterKit Test") {
-            Ok(()) => report.push(TestCase::passed("clipboard.set_text")),
-            Err(error) => report.push(TestCase::failed(
-                "clipboard.set_text",
-                format!("set_text failed: {error}"),
-            )),
-        },
+    let mut clipboard = match waterkit::clipboard::Clipboard::new() {
+        Ok(clipboard) => clipboard,
+        Err(error) => {
+            report.push(TestCase::failed(
+                "clipboard.init",
+                format!("clipboard init failed: {error}"),
+            ));
+            return;
+        }
+    };
+    if let Err(error) = clipboard.set_text("WaterKit Test") {
+        report.push(TestCase::failed(
+            "clipboard.set_text",
+            format!("set_text failed: {error}"),
+        ));
+        return;
+    }
+    report.push(TestCase::passed("clipboard.set_text"));
+
+    match clipboard.has_text() {
+        Ok(true) => report.push(TestCase::passed("clipboard.has_text")),
+        Ok(false) => report.push(TestCase::failed(
+            "clipboard.has_text",
+            "has_text reported no text right after set_text",
+        )),
         Err(error) => report.push(TestCase::failed(
-            "clipboard.init",
-            format!("clipboard init failed: {error}"),
+            "clipboard.has_text",
+            format!("has_text failed: {error}"),
         )),
     }
 }
@@ -343,11 +339,16 @@ async fn record_secret(report: &mut TestReport) {
 
 #[cfg(feature = "system")]
 fn record_system(report: &mut TestReport) {
-    let connectivity = waterkit::system::connectivity();
-    report.push(TestCase::passed_with_message(
-        "system.connectivity",
-        format!("connection_type={:?}", connectivity.connection_type()),
-    ));
+    match waterkit::system::connectivity() {
+        Ok(connectivity) => report.push(TestCase::passed_with_message(
+            "system.connectivity",
+            format!("connection_type={:?}", connectivity.connection_type()),
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "system.connectivity",
+            format!("connectivity query failed: {error}"),
+        )),
+    }
 }
 
 #[cfg(feature = "screen")]
@@ -390,7 +391,7 @@ async fn record_passkey(report: &mut TestReport) {
                     availability.supports_user_verification,
                     availability.supports_discoverable_credentials
                 ),
-            ))
+            ));
         }
         Ok(_) => report.push(TestCase::failed(
             "passkey.availability",

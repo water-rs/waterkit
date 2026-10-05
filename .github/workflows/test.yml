@@ -14,7 +14,10 @@ jobs:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: true
+      # Each OS runs a different set of platform backends, so one OS failing
+      # says nothing about the others; cancelling them would hide their
+      # failures until the first one is fixed.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
@@ -28,31 +31,49 @@ jobs:
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         uses: ./.github/actions/setup-linux-deps
-      - name: Install macOS dependencies
-        if: runner.os == 'macOS'
-        run: |
-          brew install dav1d nasm ffmpeg
-      - name: Install Windows dependencies
-        if: runner.os == 'Windows'
-        run: |
-          choco install pkgconfiglite -y
-          vcpkg install dav1d:x64-windows
-        env:
-          VCPKG_ROOT: C:\vcpkg
-      - name: Set Windows pkg-config paths
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          echo "PKG_CONFIG_PATH=C:/vcpkg/installed/x64-windows/lib/pkgconfig" >> $GITHUB_ENV
-          echo "C:/vcpkg/installed/x64-windows/bin" >> $GITHUB_PATH
+      - name: Start an X server for the clipboard tests
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/setup-x11-display
+      - name: Start a Wayland compositor without data-control
+        id: weston
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/setup-wayland-compositor
+      - name: Start a Wayland compositor with data-control
+        id: sway
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/setup-wayland-data-control
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: test-${{ matrix.os }}
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest list --workspace --all-targets
-      - run: cargo nextest run --all-features
-      - run: cargo test --doc --all-features
+      # `--no-fail-fast`, and running the doctests even when a unit test failed:
+      # report every failing test and doctest of the run, not only the first.
+      - id: unit_tests
+        run: cargo nextest run --workspace --all-features --no-fail-fast
+      - if: ${{ success() || steps.unit_tests.outcome == 'failure' }}
+        run: cargo test --doc --workspace --all-features --no-fail-fast
+      # CLIPBOARD and PRIMARY in a Wayland session without data-control must
+      # fail even with the X server above reachable. Same build flags as the
+      # unit tests, so nothing is rebuilt.
+      - name: Check the selections never fall through from Wayland to X11
+        if: ${{ !cancelled() && steps.weston.outcome == 'success' }}
+        env:
+          WAYLAND_DISPLAY: ${{ steps.weston.outputs.wayland-display }}
+        run: >
+          cargo nextest run --workspace --all-features --run-ignored only
+          -E 'package(waterkit-clipboard) & test(=wayland_without_data_control_never_uses_x11)'
+      # The unit-test run above covers the selections on X11; this runs the
+      # same round trips through the compositor's data-control protocol, with
+      # the X server still reachable.
+      - name: Run the selection round trips on Wayland
+        if: ${{ !cancelled() && steps.sway.outcome == 'success' }}
+        env:
+          WAYLAND_DISPLAY: ${{ steps.sway.outputs.wayland-display }}
+        run: >
+          cargo nextest run --workspace --all-features
+          -E 'package(waterkit-clipboard) & (test(=clipboard_round_trip) | test(=primary_selection_round_trip))'
       - name: Run macOS sensor integration harness
         if: runner.os == 'macOS'
         run: cargo run -p waterkit-test -- macos tests/macos/sensor

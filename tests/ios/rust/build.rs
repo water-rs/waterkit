@@ -27,7 +27,7 @@ fn apple_build() {
 
     let bridges = vec!["src/lib.rs".to_string()];
 
-    let bridges_refs: Vec<&str> = bridges.iter().map(|s| s.as_str()).collect();
+    let bridges_refs: Vec<&str> = bridges.iter().map(String::as_str).collect();
 
     waterkit_build::build_apple_bridge(bridges_refs); // Keeps the cargo rerun logic
 
@@ -37,10 +37,8 @@ fn apple_build() {
 
     // Generate Bridging-Header.h
     let pkg_name = env!("CARGO_PKG_NAME");
-    let bridging_header = format!(
-        "#include \"SwiftBridgeCore.h\"\n#include \"{}/{}.h\"\n",
-        pkg_name, pkg_name
-    );
+    let bridging_header =
+        format!("#include \"SwiftBridgeCore.h\"\n#include \"{pkg_name}/{pkg_name}.h\"\n");
     std::fs::write(out_dir.join("Bridging-Header.h"), bridging_header).unwrap();
 
     println!("cargo:rerun-if-changed=build.rs");

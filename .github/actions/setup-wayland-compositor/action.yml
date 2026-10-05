@@ -1,0 +1,40 @@
+name: Start a Wayland compositor without data-control
+description: >
+  Installs weston and starts it with the headless backend. Weston offers no
+  data-control protocol, which is what `waterkit-clipboard`'s Wayland
+  error-path tests need: in that session CLIPBOARD and PRIMARY must fail with
+  the documented error even though the job's X server is reachable. The socket is returned as the
+  `wayland-display` output and deliberately not exported to the job's
+  environment, because the other tests pick their display server from
+  WAYLAND_DISPLAY and must keep running against X11.
+outputs:
+  wayland-display:
+    description: Absolute path of the compositor's socket, a value for WAYLAND_DISPLAY.
+    value: ${{ steps.weston.outputs.wayland-display }}
+runs:
+  using: composite
+  steps:
+    # Weston has no readiness handshake like Xvfb's `-displayfd`. It binds and
+    # listens on its socket in one step, so the socket existing is the
+    # readiness condition; the wait is bounded and checks weston is alive.
+    - name: Start weston
+      id: weston
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends weston
+        runtime_dir="$RUNNER_TEMP/weston-runtime"
+        mkdir -m 0700 "$runtime_dir"
+        socket="$runtime_dir/wayland-waterkit"
+        XDG_RUNTIME_DIR="$runtime_dir" weston --backend=headless --idle-time=0 \
+          --socket=wayland-waterkit >"$RUNNER_TEMP/weston.log" 2>&1 &
+        weston_pid=$!
+        deadline=$((SECONDS + 30))
+        until [ -S "$socket" ]; do
+          if ! kill -0 "$weston_pid" 2>/dev/null || [ "$SECONDS" -ge "$deadline" ]; then
+            cat "$RUNNER_TEMP/weston.log"
+            exit 1
+          fi
+          sleep 0.1
+        done
+        echo "wayland-display=$socket" >> "$GITHUB_OUTPUT"

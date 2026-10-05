@@ -1,0 +1,35 @@
+POWER MANAGER (dumpsys power)
+
+Power Manager State:
+  Settings power_manager_constants:
+    no_cached_wake_locks=true
+  mDirty=0x0
+  mWakefulness=Dozing
+  mWakefulnessChanging=false
+  mIsPowered=true
+  mPlugType=1
+  mBatteryLevel=78
+  mDreamsBatteryLevelDrain=0
+  mDockState=0
+  mStayOn=false
+  mProximityPositive=false
+  mBootCompleted=true
+  mSystemReady=true
+  mEnhancedDischargeTimeElapsed=842647945
+  mLastEnhancedDischargeTimeUpdatedElapsed=795912805
+  mEnhancedDischargePredictionIsPersonalized=true
+Power Group User Activity:
+groupId: 0
+userActivitySummary=0x4
+mWakeLockSummary=0x40
+lastUserActivityTime=903195475 (124316 ms ago)
+lastUserActivityTimeNoChangeLights=871577267 (31742524 ms ago)
+mLastWakeReason=6
+mLastSleepReason=2
+mDimDuration=-1
+mWakefulness=3
+mIsDefaultGroupAdjacent=false
+mSupportsSandman=true
+mDreamManagerAttemptedDozing=true
+mScreenOffTimeout=-1
+

@@ -947,7 +947,7 @@ mod tests {
     #[test]
     fn maps_supported_aac_profiles_without_guessing() {
         assert_eq!(
-            aac_encoding_field(&[0x12, 0x10]).unwrap(),
+            aac_encoding_field(&[0x12, 0x10]).unwrap().1,
             "ENCODING_AAC_LC"
         );
         assert!(aac_encoding_field(&[0x08, 0x00]).is_ok());

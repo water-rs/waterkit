@@ -1,93 +1,66 @@
 package com.waterkit.system
 
+import android.app.ActivityManager
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.PowerManager
-import android.app.ActivityManager
-import java.io.RandomAccessFile
 
+/**
+ * System queries for `waterkit-system`.
+ *
+ * Every method lets a platform failure throw, so the Rust side reports it as an
+ * error; a value the device does not offer is `null` instead.
+ */
 object SystemHelper {
-    // Previous CPU stats for delta calculation
-    private var prevCpuStats: LongArray? = null
-
+    /**
+     * The active network's transport: 0 none, 1 Wi-Fi, 2 cellular,
+     * 3 Ethernet, 4 Bluetooth, 5 VPN, 6 other.
+     */
+    @JvmStatic
     fun getConnectivity(context: Context): Int {
-        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        val network = cm?.activeNetwork ?: return 0 // None
+        val cm = checkNotNull(context.getSystemService(ConnectivityManager::class.java)) {
+            "ConnectivityManager service is unavailable"
+        }
+        val network = cm.activeNetwork ?: return 0
+        // The network can disconnect between the two calls.
         val caps = cm.getNetworkCapabilities(network) ?: return 0
 
-        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return 1 // Wifi
-        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) return 2 // Cellular
-        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) return 3 // Ethernet
-        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH)) return 4 // Bluetooth
-        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return 5 // Vpn
-        return 6 // Other
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return 1
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) return 2
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) return 3
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH)) return 4
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return 5
+        return 6
     }
 
-    fun getThermalState(context: Context): Int {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-            return pm?.currentThermalStatus ?: -1
+    /**
+     * `PowerManager.getCurrentThermalStatus()`, or `null` before API level 29,
+     * which has no thermal status.
+     */
+    @JvmStatic
+    fun getThermalState(context: Context): Int? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        val pm = checkNotNull(context.getSystemService(PowerManager::class.java)) {
+            "PowerManager service is unavailable"
         }
-        return -1 // Unknown
+        return pm.currentThermalStatus
     }
 
-    data class LoadInfo(val cpu: Float, val memUsed: Long, val memTotal: Long)
+    /** Used and total physical memory, in bytes. */
+    class MemoryLoad(
+        @JvmField val used: Long,
+        @JvmField val total: Long,
+    )
 
-    fun getSystemLoad(context: Context): LoadInfo {
-        val actManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+    @JvmStatic
+    fun getMemoryLoad(context: Context): MemoryLoad {
+        val am = checkNotNull(context.getSystemService(ActivityManager::class.java)) {
+            "ActivityManager service is unavailable"
+        }
         val memInfo = ActivityManager.MemoryInfo()
-        actManager?.getMemoryInfo(memInfo)
-
-        val cpuUsage = getCpuUsage()
-
-        return LoadInfo(cpuUsage, memInfo.totalMem - memInfo.availMem, memInfo.totalMem)
-    }
-
-    private fun getCpuUsage(): Float {
-        try {
-            val reader = RandomAccessFile("/proc/stat", "r")
-            val line = reader.readLine()
-            reader.close()
-
-            // Line format: cpu  user nice system idle iowait irq softirq steal guest guest_nice
-            val parts = line.split("\\s+".toRegex())
-            if (parts.size < 8) return 0.0f
-
-            val user = parts[1].toLongOrNull() ?: 0L
-            val nice = parts[2].toLongOrNull() ?: 0L
-            val system = parts[3].toLongOrNull() ?: 0L
-            val idle = parts[4].toLongOrNull() ?: 0L
-            val iowait = parts[5].toLongOrNull() ?: 0L
-            val irq = parts[6].toLongOrNull() ?: 0L
-            val softirq = parts[7].toLongOrNull() ?: 0L
-            val steal = if (parts.size > 8) parts[8].toLongOrNull() ?: 0L else 0L
-
-            val total = user + nice + system + idle + iowait + irq + softirq + steal
-            val used = user + nice + system + irq + softirq + steal
-
-            val currentStats = longArrayOf(total, used)
-            val prev = prevCpuStats
-
-            if (prev != null) {
-                val diffTotal = total - prev[0]
-                val diffUsed = used - prev[1]
-                prevCpuStats = currentStats
-                if (diffTotal > 0) {
-                    return (diffUsed.toFloat() / diffTotal.toFloat()) * 100.0f
-                }
-            }
-
-            prevCpuStats = currentStats
-            // First call - return instantaneous
-            if (total > 0) {
-                return (used.toFloat() / total.toFloat()) * 100.0f
-            }
-        } catch (e: Exception) {
-            // Ignore errors
-        }
-        return 0.0f
+        am.getMemoryInfo(memInfo)
+        return MemoryLoad(memInfo.totalMem - memInfo.availMem, memInfo.totalMem)
     }
 }
-

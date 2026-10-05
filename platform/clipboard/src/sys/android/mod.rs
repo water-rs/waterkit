@@ -3,12 +3,16 @@
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
 use jni::errors::ThrowRuntimeExAndDefault;
-use jni::objects::{Global, JByteArray, JObject, JValue};
+use jni::objects::{Global, JByteArray, JObject, JString, JValue, JValueOwned};
+use jni::signature::MethodSignature;
+use jni::strings::JNIStr;
 use jni::{Env, EnvUnowned, JavaVM, jni_sig, jni_str};
 use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use waterkit_build::{AndroidError, DexHelper, decode_string, dex_helper, jvm_and_context};
+use waterkit_build::{
+    AndroidError, DexHelper, decode_string, describe_jni_error, dex_helper, jvm_and_context,
+};
 
 /// `waterkit.clipboard.ClipboardHelper`, compiled into the app's DEX by the
 /// packager and resolved through the application's `ClassLoader`.
@@ -24,27 +28,92 @@ impl From<AndroidError> for ClipboardError {
     }
 }
 
-/// Reads one `(Landroid/content/Context;)Z` probe on the helper.
-fn probe(env: &mut Env<'_>, context: &JObject<'_>, name: &jni::strings::JNIStr) -> bool {
-    let Ok(helper_class) = HELPER.class(env, context) else {
-        return false;
-    };
-    env.call_static_method(
-        helper_class,
-        name,
-        jni_sig!("(Landroid/content/Context;)Z"),
-        &[JValue::Object(context)],
-    )
-    .and_then(jni::objects::JValueOwned::z)
-    .unwrap_or(false)
+/// Builds the error for the JNI call `call` failing with `error`, carrying the
+/// Java exception it threw, which leaves the thread usable for the next call.
+fn jni_error(env: &Env<'_>, call: &str, error: jni::errors::Error) -> ClipboardError {
+    ClipboardError::Platform(format!("{call}: {}", describe_jni_error(env, error)))
+}
+
+/// Calls the static `ClipboardHelper.<method>` with the application context
+/// followed by `args`.
+fn call_helper<'local>(
+    env: &mut Env<'local>,
+    context: &JObject<'_>,
+    method: &'static JNIStr,
+    signature: &MethodSignature<'_, '_>,
+    args: &[JValue<'_>],
+) -> Result<JValueOwned<'local>, ClipboardError> {
+    let helper = HELPER.class(env, context)?;
+    let args: Vec<JValue<'_>> = std::iter::once(JValue::Object(context))
+        .chain(args.iter().copied())
+        .collect();
+    env.call_static_method(helper, method, signature, &args)
+        .map_err(|error| jni_error(env, &format!("ClipboardHelper.{method}"), error))
+}
+
+/// Calls a `ClipboardHelper` method that returns an object, `None` for `null`.
+fn call_helper_object<'local>(
+    env: &mut Env<'local>,
+    context: &JObject<'_>,
+    method: &'static JNIStr,
+    signature: &MethodSignature<'_, '_>,
+    args: &[JValue<'_>],
+) -> Result<Option<JObject<'local>>, ClipboardError> {
+    let object = call_helper(env, context, method, signature, args)?
+        .l()
+        .map_err(|error| jni_error(env, &format!("ClipboardHelper.{method}"), error))?;
+    Ok((!object.is_null()).then_some(object))
+}
+
+/// Calls a `(Landroid/content/Context;)Z` query on the helper.
+fn probe(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+    method: &'static JNIStr,
+) -> Result<bool, ClipboardError> {
+    call_helper(
+        env,
+        context,
+        method,
+        &jni_sig!("(Landroid/content/Context;)Z"),
+        &[],
+    )?
+    .z()
+    .map_err(|error| jni_error(env, &format!("ClipboardHelper.{method}"), error))
+}
+
+/// Calls a `(Landroid/content/Context;)I` query on the helper.
+fn call_helper_int(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+    method: &'static JNIStr,
+) -> Result<i32, ClipboardError> {
+    call_helper(
+        env,
+        context,
+        method,
+        &jni_sig!("(Landroid/content/Context;)I"),
+        &[],
+    )?
+    .i()
+    .map_err(|error| jni_error(env, &format!("ClipboardHelper.{method}"), error))
 }
 
 fn read_byte_array(env: &Env<'_>, value: JObject<'_>) -> Result<Vec<u8>, ClipboardError> {
     let array = env
         .cast_local::<JByteArray>(value)
-        .map_err(|e| ClipboardError::Platform(format!("JNI error byte array cast: {e}")))?;
+        .map_err(|error| jni_error(env, "cast to byte[]", error))?;
     env.convert_byte_array(&array)
-        .map_err(|e| ClipboardError::Platform(format!("JNI error convert_byte_array: {e}")))
+        .map_err(|error| jni_error(env, "convert_byte_array", error))
+}
+
+/// Creates a `java.lang.String` holding `text`.
+fn new_string<'local>(
+    env: &mut Env<'local>,
+    text: &str,
+) -> Result<JString<'local>, ClipboardError> {
+    env.new_string(text)
+        .map_err(|error| jni_error(env, "new_string", error))
 }
 
 /// Android clipboard handle.
@@ -93,74 +162,75 @@ impl ClipboardInner {
     /// Calls a helper method that returns a nullable `java.lang.String`.
     fn read_optional_string(
         &self,
-        method: &'static jni::strings::JNIStr,
-        what: &'static str,
+        method: &'static JNIStr,
     ) -> Result<Option<String>, ClipboardError> {
         self.with_env(|env, context| {
-            let helper_class = HELPER.class(env, context)?;
+            let value = call_helper_object(
+                env,
+                context,
+                method,
+                &jni_sig!("(Landroid/content/Context;)Ljava/lang/String;"),
+                &[],
+            )?;
+            value
+                .map(|value| decode_string(env, &value).map_err(ClipboardError::from))
+                .transpose()
+        })
+    }
 
-            let value = env
-                .call_static_method(
-                    helper_class,
-                    method,
-                    jni_sig!("(Landroid/content/Context;)Ljava/lang/String;"),
-                    &[JValue::Object(context)],
-                )
-                .map_err(|e| ClipboardError::Platform(format!("JNI error {what}: {e}")))?
-                .l()
-                .map_err(|e| ClipboardError::Platform(format!("JNI error result: {e}")))?;
-
-            if value.is_null() {
-                Ok(None)
-            } else {
-                decode_string(env, &value)
-                    .map(Some)
-                    .map_err(ClipboardError::from)
-            }
+    /// Calls a helper method that takes the context and `args` and returns
+    /// nothing.
+    fn write(
+        &self,
+        method: &'static JNIStr,
+        signature: &MethodSignature<'_, '_>,
+        args: impl for<'local> FnOnce(&mut Env<'local>) -> Result<Vec<JObject<'local>>, ClipboardError>,
+    ) -> Result<(), ClipboardError> {
+        self.with_env(|env, context| {
+            let args = args(env)?;
+            let args: Vec<JValue<'_>> = args.iter().map(JValue::Object).collect();
+            call_helper(env, context, method, signature, &args)?;
+            Ok(())
         })
     }
 
     // ========== Query (sync) ==========
 
     /// Check if text is available.
-    pub fn has_text(&self) -> bool {
-        self.with_env(|env, context| Ok(probe(env, context, jni_str!("hasText"))))
-            .unwrap_or(false)
+    pub fn has_text(&self) -> Result<bool, ClipboardError> {
+        self.with_env(|env, context| probe(env, context, jni_str!("hasText")))
     }
 
     /// Check if HTML is available.
-    pub fn has_html(&self) -> bool {
-        self.with_env(|env, context| Ok(probe(env, context, jni_str!("hasHtml"))))
-            .unwrap_or(false)
+    pub fn has_html(&self) -> Result<bool, ClipboardError> {
+        self.with_env(|env, context| probe(env, context, jni_str!("hasHtml")))
     }
 
     /// Check if files are available.
-    pub fn has_files(&self) -> bool {
-        self.with_env(|env, context| Ok(probe(env, context, jni_str!("hasFiles"))))
-            .unwrap_or(false)
+    pub fn has_files(&self) -> Result<bool, ClipboardError> {
+        self.with_env(|env, context| probe(env, context, jni_str!("hasFiles")))
     }
 
     /// Check if image is available.
-    pub fn has_image(&self) -> bool {
-        self.with_env(|env, context| Ok(probe(env, context, jni_str!("hasImage"))))
-            .unwrap_or(false)
+    pub fn has_image(&self) -> Result<bool, ClipboardError> {
+        self.with_env(|env, context| probe(env, context, jni_str!("hasImage")))
     }
 
     // ========== Read (sync, called from blocking::unblock) ==========
 
     /// Get text content.
     pub fn get_text(&self) -> Result<Option<String>, ClipboardError> {
-        self.read_optional_string(jni_str!("getText"), "getText")
+        self.read_optional_string(jni_str!("getText"))
     }
 
     /// Get HTML content.
     pub fn get_html(&self) -> Result<Option<String>, ClipboardError> {
-        self.read_optional_string(jni_str!("getHtml"), "getHtml")
+        self.read_optional_string(jni_str!("getHtml"))
     }
 
     /// Get file paths.
     pub fn get_files(&self) -> Result<Vec<PathBuf>, ClipboardError> {
-        let Some(url) = self.read_optional_string(jni_str!("getFileUri"), "getFileUri")? else {
+        let Some(url) = self.read_optional_string(jni_str!("getFileUri"))? else {
             return Ok(Vec::new());
         };
 
@@ -177,51 +247,26 @@ impl ClipboardInner {
     /// Get image as RGBA.
     pub fn get_image(&self) -> Result<Option<Image>, ClipboardError> {
         self.with_env(|env, context| {
-            let helper_class = HELPER.class(env, context)?;
-
-            let width = env
-                .call_static_method(
-                    helper_class,
-                    jni_str!("getImageWidth"),
-                    jni_sig!("(Landroid/content/Context;)I"),
-                    &[JValue::Object(context)],
-                )
-                .and_then(jni::objects::JValueOwned::i)
-                .unwrap_or(-1);
-
+            // The helper answers -1 when the clipboard holds no image.
+            let width = call_helper_int(env, context, jni_str!("getImageWidth"))?;
             if width <= 0 {
                 return Ok(None);
             }
-
-            let height = env
-                .call_static_method(
-                    helper_class,
-                    jni_str!("getImageHeight"),
-                    jni_sig!("(Landroid/content/Context;)I"),
-                    &[JValue::Object(context)],
-                )
-                .and_then(jni::objects::JValueOwned::i)
-                .unwrap_or(-1);
-
+            let height = call_helper_int(env, context, jni_str!("getImageHeight"))?;
             if height <= 0 {
                 return Ok(None);
             }
 
-            let bytes = env
-                .call_static_method(
-                    helper_class,
-                    jni_str!("getImageRgba"),
-                    jni_sig!("(Landroid/content/Context;)[B"),
-                    &[JValue::Object(context)],
-                )
-                .map_err(|e| ClipboardError::Platform(format!("JNI error getImageRgba: {e}")))?
-                .l()
-                .map_err(|e| ClipboardError::Platform(format!("JNI error result: {e}")))?;
-
-            if bytes.is_null() {
+            let Some(bytes) = call_helper_object(
+                env,
+                context,
+                jni_str!("getImageRgba"),
+                &jni_sig!("(Landroid/content/Context;)[B"),
+                &[],
+            )?
+            else {
                 return Ok(None);
-            }
-
+            };
             let bytes = read_byte_array(env, bytes)?;
 
             Ok(Some(Image::new(
@@ -234,29 +279,18 @@ impl ClipboardInner {
 
     /// Get binary data by MIME type.
     pub fn get_binary(&self, mime: &str) -> Result<Option<Vec<u8>>, ClipboardError> {
-        let mime = mime.to_string();
         self.with_env(|env, context| {
-            let helper_class = HELPER.class(env, context)?;
-
-            let jmime = env
-                .new_string(&mime)
-                .map_err(|e| ClipboardError::Platform(format!("JNI error new_string: {e}")))?;
-
-            let value = env
-                .call_static_method(
-                    helper_class,
-                    jni_str!("getBinary"),
-                    jni_sig!("(Landroid/content/Context;Ljava/lang/String;)[B"),
-                    &[JValue::Object(context), JValue::Object(&jmime)],
-                )
-                .map_err(|e| ClipboardError::Platform(format!("JNI error getBinary: {e}")))?
-                .l()
-                .map_err(|e| ClipboardError::Platform(format!("JNI error result: {e}")))?;
-
-            if value.is_null() {
+            let jmime = new_string(env, mime)?;
+            let Some(value) = call_helper_object(
+                env,
+                context,
+                jni_str!("getBinary"),
+                &jni_sig!("(Landroid/content/Context;Ljava/lang/String;)[B"),
+                &[JValue::Object(&jmime)],
+            )?
+            else {
                 return Ok(None);
-            }
-
+            };
             read_byte_array(env, value).map(Some)
         })
     }
@@ -265,54 +299,25 @@ impl ClipboardInner {
 
     /// Set text content.
     pub fn set_text(&self, text: &str) -> Result<(), ClipboardError> {
-        let text = text.to_string();
-        self.with_env(|env, context| {
-            let helper_class = HELPER.class(env, context)?;
-
-            let jtext = env
-                .new_string(&text)
-                .map_err(|e| ClipboardError::Platform(format!("JNI error new_string: {e}")))?;
-
-            env.call_static_method(
-                helper_class,
-                jni_str!("setText"),
-                jni_sig!("(Landroid/content/Context;Ljava/lang/String;)V"),
-                &[JValue::Object(context), JValue::Object(&jtext)],
-            )
-            .map_err(|e| ClipboardError::Platform(format!("JNI error setText: {e}")))?;
-
-            Ok(())
-        })
+        self.write(
+            jni_str!("setText"),
+            &jni_sig!("(Landroid/content/Context;Ljava/lang/String;)V"),
+            |env| Ok(vec![new_string(env, text)?.into()]),
+        )
     }
 
     /// Set HTML content.
     pub fn set_html(&self, html: &str, alt_text: Option<&str>) -> Result<(), ClipboardError> {
-        let html = html.to_string();
-        let alt = alt_text.unwrap_or("").to_string();
-        self.with_env(|env, context| {
-            let helper_class = HELPER.class(env, context)?;
-
-            let jhtml = env
-                .new_string(&html)
-                .map_err(|e| ClipboardError::Platform(format!("JNI error new_string html: {e}")))?;
-            let jalt = env
-                .new_string(&alt)
-                .map_err(|e| ClipboardError::Platform(format!("JNI error new_string alt: {e}")))?;
-
-            env.call_static_method(
-                helper_class,
-                jni_str!("setHtml"),
-                jni_sig!("(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V"),
-                &[
-                    JValue::Object(context),
-                    JValue::Object(&jhtml),
-                    JValue::Object(&jalt),
-                ],
-            )
-            .map_err(|e| ClipboardError::Platform(format!("JNI error setHtml: {e}")))?;
-
-            Ok(())
-        })
+        self.write(
+            jni_str!("setHtml"),
+            &jni_sig!("(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V"),
+            |env| {
+                Ok(vec![
+                    new_string(env, html)?.into(),
+                    new_string(env, alt_text.unwrap_or(""))?.into(),
+                ])
+            },
+        )
     }
 
     /// Set file paths.
@@ -329,84 +334,50 @@ impl ClipboardInner {
                 percent_encoding::NON_ALPHANUMERIC
             )
         );
-
-        self.with_env(|env, context| {
-            let helper_class = HELPER.class(env, context)?;
-
-            let juri = env
-                .new_string(&url)
-                .map_err(|e| ClipboardError::Platform(format!("JNI error new_string: {e}")))?;
-
-            env.call_static_method(
-                helper_class,
-                jni_str!("setFileUri"),
-                jni_sig!("(Landroid/content/Context;Ljava/lang/String;)V"),
-                &[JValue::Object(context), JValue::Object(&juri)],
-            )
-            .map_err(|e| ClipboardError::Platform(format!("JNI error setFileUri: {e}")))?;
-
-            Ok(())
-        })
+        self.write(
+            jni_str!("setFileUri"),
+            &jni_sig!("(Landroid/content/Context;Ljava/lang/String;)V"),
+            |env| Ok(vec![new_string(env, &url)?.into()]),
+        )
     }
 
     /// Set image from a file path.
     pub fn set_image_from_path(&self, path: &Path) -> Result<(), ClipboardError> {
-        let path_str = path.to_string_lossy().to_string();
-        self.with_env(|env, context| {
-            let helper_class = HELPER.class(env, context)?;
-
-            let jpath = env
-                .new_string(&path_str)
-                .map_err(|e| ClipboardError::Platform(format!("JNI error new_string: {e}")))?;
-
-            let success = env
-                .call_static_method(
-                    helper_class,
-                    jni_str!("setImageFromPath"),
-                    jni_sig!("(Landroid/content/Context;Ljava/lang/String;)Z"),
-                    &[JValue::Object(context), JValue::Object(&jpath)],
-                )
-                .and_then(jni::objects::JValueOwned::z)
-                .unwrap_or(false);
-
-            if !success {
-                return Err(ClipboardError::InvalidImage(
-                    "failed to load image from path".into(),
-                ));
-            }
-
+        let set = self.with_env(|env, context| {
+            let jpath = new_string(env, &path.to_string_lossy())?;
+            call_helper(
+                env,
+                context,
+                jni_str!("setImageFromPath"),
+                &jni_sig!("(Landroid/content/Context;Ljava/lang/String;)Z"),
+                &[JValue::Object(&jpath)],
+            )?
+            .z()
+            .map_err(|error| jni_error(env, "ClipboardHelper.setImageFromPath", error))
+        })?;
+        // The helper answers false only when the file does not exist.
+        if set {
             Ok(())
-        })
+        } else {
+            Err(ClipboardError::InvalidImage(format!(
+                "failed to load image from {}: the file does not exist",
+                path.display()
+            )))
+        }
     }
 
     /// Set binary data with MIME type.
     pub fn set_binary(&self, data: &[u8], mime: &str) -> Result<(), ClipboardError> {
-        let data = data.to_vec();
-        let mime = mime.to_string();
-        self.with_env(|env, context| {
-            let helper_class = HELPER.class(env, context)?;
-
-            let jdata = env
-                .byte_array_from_slice(&data)
-                .map_err(|e| ClipboardError::Platform(format!("JNI error byte_array: {e}")))?;
-            let jmime = env
-                .new_string(&mime)
-                .map_err(|e| ClipboardError::Platform(format!("JNI error new_string: {e}")))?;
-
-            env.call_static_method(
-                helper_class,
-                jni_str!("setBinary"),
-                jni_sig!("(Landroid/content/Context;[BLjava/lang/String;)V"),
-                &[
-                    JValue::Object(context),
-                    JValue::Object(jdata.as_ref()),
-                    JValue::Object(&jmime),
-                ],
-            )
-            .map_err(|e| ClipboardError::Platform(format!("JNI error setBinary: {e}")))?;
-
-            Ok(())
-        })
+        self.write(
+            jni_str!("setBinary"),
+            &jni_sig!("(Landroid/content/Context;[BLjava/lang/String;)V"),
+            |env| {
+                let jdata = env
+                    .byte_array_from_slice(data)
+                    .map_err(|error| jni_error(env, "byte_array_from_slice", error))?;
+                Ok(vec![jdata.into(), new_string(env, mime)?.into()])
+            },
+        )
     }
 
     /// Set file promise.
@@ -423,19 +394,11 @@ impl ClipboardInner {
 
     /// Clear clipboard.
     pub fn clear(&self) -> Result<(), ClipboardError> {
-        self.with_env(|env, context| {
-            let helper_class = HELPER.class(env, context)?;
-
-            env.call_static_method(
-                helper_class,
-                jni_str!("clear"),
-                jni_sig!("(Landroid/content/Context;)V"),
-                &[JValue::Object(context)],
-            )
-            .map_err(|e| ClipboardError::Platform(format!("JNI error clear: {e}")))?;
-
-            Ok(())
-        })
+        self.write(
+            jni_str!("clear"),
+            &jni_sig!("(Landroid/content/Context;)V"),
+            |_| Ok(Vec::new()),
+        )
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::{ConnectionType, ConnectivityInfo, SystemLoad, ThermalState};
+use crate::{ConnectionType, ConnectivityInfo, SystemError, SystemLoad, ThermalState};
 
 #[swift_bridge::bridge]
 mod ffi {
@@ -12,21 +12,16 @@ mod ffi {
         None,
     }
 
-    pub enum ThermalState {
-        Nominal,
-        Fair,
-        Serious,
-        Critical,
-        Unknown,
-    }
-
     #[swift_bridge(swift_repr = "struct")]
     pub struct RustConnectivityInfo {
         pub connection_type: ConnectionType,
         pub is_connected: bool,
     }
 
-    // RustThermalState no longer needed as we return enum directly
+    pub enum ConnectivityResult {
+        Reported(RustConnectivityInfo),
+        Failed(String),
+    }
 
     #[swift_bridge(swift_repr = "struct")]
     pub struct RustSystemLoad {
@@ -35,18 +30,24 @@ mod ffi {
         pub memory_total: u64,
     }
 
+    pub enum SystemLoadResult {
+        Measured(RustSystemLoad),
+        Failed(String),
+    }
+
     extern "Swift" {
-        fn get_apple_connectivity() -> RustConnectivityInfo;
-        fn get_apple_thermal_state() -> ThermalState;
-        fn get_apple_system_load() -> RustSystemLoad;
+        fn get_apple_connectivity() -> ConnectivityResult;
+        fn get_apple_thermal_state() -> isize;
+        fn get_apple_system_load() -> SystemLoadResult;
     }
 }
 
-// ... existing helpers ...
-
-pub fn get_connectivity_info() -> ConnectivityInfo {
-    let info = ffi::get_apple_connectivity();
-    let ct = match info.connection_type {
+pub fn connectivity() -> Result<ConnectivityInfo, SystemError> {
+    let info = match ffi::get_apple_connectivity() {
+        ffi::ConnectivityResult::Reported(info) => info,
+        ffi::ConnectivityResult::Failed(message) => return Err(SystemError::Platform(message)),
+    };
+    let connection_type = match info.connection_type {
         ffi::ConnectionType::Wifi => ConnectionType::Wifi,
         ffi::ConnectionType::Cellular => ConnectionType::Cellular,
         ffi::ConnectionType::Ethernet => ConnectionType::Ethernet,
@@ -55,20 +56,29 @@ pub fn get_connectivity_info() -> ConnectivityInfo {
         ffi::ConnectionType::Other => ConnectionType::Other,
         ffi::ConnectionType::None => ConnectionType::None,
     };
-    ConnectivityInfo::new(ct, info.is_connected)
+    Ok(ConnectivityInfo::new(connection_type, info.is_connected))
 }
 
-pub fn get_thermal_state() -> ThermalState {
+pub fn thermal_state() -> Result<Option<ThermalState>, SystemError> {
+    // `ProcessInfo.ThermalState` raw values.
     match ffi::get_apple_thermal_state() {
-        ffi::ThermalState::Nominal => ThermalState::Nominal,
-        ffi::ThermalState::Fair => ThermalState::Fair,
-        ffi::ThermalState::Serious => ThermalState::Serious,
-        ffi::ThermalState::Critical => ThermalState::Critical,
-        ffi::ThermalState::Unknown => ThermalState::Unknown,
+        0 => Ok(Some(ThermalState::Nominal)),
+        1 => Ok(Some(ThermalState::Fair)),
+        2 => Ok(Some(ThermalState::Serious)),
+        3 => Ok(Some(ThermalState::Critical)),
+        other => Err(SystemError::Platform(format!(
+            "ProcessInfo reported unknown thermal state {other}"
+        ))),
     }
 }
 
-pub fn get_system_load() -> SystemLoad {
-    let load = ffi::get_apple_system_load();
-    SystemLoad::new(load.cpu_usage, load.memory_used, load.memory_total)
+pub fn load() -> Result<SystemLoad, SystemError> {
+    match ffi::get_apple_system_load() {
+        ffi::SystemLoadResult::Measured(load) => Ok(SystemLoad::new(
+            Some(load.cpu_usage),
+            load.memory_used,
+            load.memory_total,
+        )),
+        ffi::SystemLoadResult::Failed(message) => Err(SystemError::Platform(message)),
+    }
 }

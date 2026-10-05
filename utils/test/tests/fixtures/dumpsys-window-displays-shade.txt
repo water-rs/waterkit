@@ -1,0 +1,2 @@
+  mCurrentFocus=Window{4ad28a7 u0 NotificationShade}
+  mFocusedApp=ActivityRecord{60991692 u0 com.waterkit.test/.MainActivity t4703}

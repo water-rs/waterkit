@@ -1,109 +1,151 @@
-use crate::{ConnectionType, ConnectivityInfo, SystemLoad, ThermalState};
-use jni::objects::{JObject, JValue};
+use crate::{ConnectionType, ConnectivityInfo, SystemError, SystemLoad, ThermalState};
+use jni::objects::{JObject, JValue, JValueOwned};
+use jni::signature::MethodSignature;
+use jni::strings::JNIStr;
 use jni::{Env, jni_sig, jni_str};
-use waterkit_build::{AndroidError, with_android_context};
+use waterkit_build::{
+    AndroidError, DexHelper, describe_jni_error, dex_helper, with_android_context,
+};
 
-/// Runs `f` with the calling thread attached to the application's JVM and the
-/// Android `Context`.
-///
-/// System probes report "unknown" rather than failing, so an unavailable JVM and
-/// a JNI failure collapse to the same `None`.
-fn with_jni<T, F>(f: F) -> Option<T>
-where
-    F: FnOnce(&mut Env<'_>, &JObject<'_>) -> Option<T>,
-{
-    with_android_context(|env, context| -> Result<Option<T>, AndroidError> { Ok(f(env, context)) })
-        .ok()
-        .flatten()
+/// `com.waterkit.system.SystemHelper`, compiled into the app's DEX by the
+/// packager and resolved through the application's `ClassLoader`.
+static HELPER: DexHelper = dex_helper!("com.waterkit.system.SystemHelper");
+
+impl From<AndroidError> for SystemError {
+    fn from(error: AndroidError) -> Self {
+        Self::Platform(error.to_string())
+    }
 }
 
-pub fn get_connectivity_info() -> ConnectivityInfo {
-    let result = with_jni(|env, context| {
-        env.call_static_method(
-            jni_str!("com/waterkit/system/SystemHelper"),
-            jni_str!("getConnectivity"),
-            jni_sig!("(Landroid/content/Context;)I"),
-            &[JValue::Object(context)],
-        )
-        .ok()?
-        .i()
-        .ok()
-    });
+/// Builds the error for the JNI call `call` failing with `error`, carrying the
+/// Java exception it threw.
+fn jni_error(env: &Env<'_>, call: &str, error: jni::errors::Error) -> SystemError {
+    SystemError::Platform(format!("{call}: {}", describe_jni_error(env, error)))
+}
 
-    let connection_type = match result.unwrap_or(0) {
+/// Calls the static `SystemHelper.<method>(Context)`.
+fn call_helper<'local>(
+    env: &mut Env<'local>,
+    context: &JObject<'_>,
+    method: &'static JNIStr,
+    signature: &MethodSignature<'_, '_>,
+) -> Result<JValueOwned<'local>, SystemError> {
+    let helper = HELPER
+        .class(env, context)
+        .map_err(|error| SystemError::Platform(format!("SystemHelper.{method}: {error}")))?;
+    env.call_static_method(helper, method, signature, &[JValue::Object(context)])
+        .map_err(|error| jni_error(env, &format!("SystemHelper.{method}"), error))
+}
+
+/// Calls a `SystemHelper` method that returns an object, failing on `null`.
+fn call_helper_object<'local>(
+    env: &mut Env<'local>,
+    context: &JObject<'_>,
+    method: &'static JNIStr,
+    signature: &MethodSignature<'_, '_>,
+) -> Result<Option<JObject<'local>>, SystemError> {
+    let value = call_helper(env, context, method, signature)?;
+    let object = value
+        .l()
+        .map_err(|error| jni_error(env, &format!("SystemHelper.{method}"), error))?;
+    Ok((!object.is_null()).then_some(object))
+}
+
+pub fn connectivity() -> Result<ConnectivityInfo, SystemError> {
+    let transport = with_android_context(|env, context| {
+        let value = call_helper(
+            env,
+            context,
+            jni_str!("getConnectivity"),
+            &jni_sig!("(Landroid/content/Context;)I"),
+        )?;
+        value
+            .i()
+            .map_err(|error| jni_error(env, "SystemHelper.getConnectivity", error))
+    })?;
+
+    let connection_type = match transport {
+        0 => ConnectionType::None,
         1 => ConnectionType::Wifi,
         2 => ConnectionType::Cellular,
         3 => ConnectionType::Ethernet,
         4 => ConnectionType::Bluetooth,
         5 => ConnectionType::Vpn,
         6 => ConnectionType::Other,
-        _ => ConnectionType::None,
+        other => {
+            return Err(SystemError::Platform(format!(
+                "SystemHelper.getConnectivity returned unknown transport {other}"
+            )));
+        }
     };
-
-    ConnectivityInfo::new(connection_type, !matches!(result.unwrap_or(0), 0))
+    Ok(ConnectivityInfo::new(
+        connection_type,
+        connection_type != ConnectionType::None,
+    ))
 }
 
-pub fn get_thermal_state() -> ThermalState {
-    let result = with_jni(|env, context| {
-        env.call_static_method(
-            jni_str!("com/waterkit/system/SystemHelper"),
+pub fn thermal_state() -> Result<Option<ThermalState>, SystemError> {
+    let status = with_android_context(|env, context| {
+        let Some(status) = call_helper_object(
+            env,
+            context,
             jni_str!("getThermalState"),
-            jni_sig!("(Landroid/content/Context;)I"),
-            &[JValue::Object(context)],
-        )
-        .ok()?
-        .i()
-        .ok()
-    });
+            &jni_sig!("(Landroid/content/Context;)Ljava/lang/Integer;"),
+        )?
+        else {
+            return Ok(None);
+        };
+        env.call_method(&status, jni_str!("intValue"), jni_sig!("()I"), &[])
+            .and_then(JValueOwned::i)
+            .map(Some)
+            .map_err(|error| jni_error(env, "Integer.intValue", error))
+    })?;
 
-    // Android thermal statuses map: 0=None, 1=Light, 2=Moderate, 3=Severe, 4=Critical, 5=Emergency, 6=Shutdown
-    match result.unwrap_or(-1) {
-        0 => ThermalState::Nominal,
-        1 | 2 => ThermalState::Fair,
-        3 => ThermalState::Serious,
-        4..=6 => ThermalState::Critical,
-        _ => ThermalState::Unknown,
-    }
+    // `PowerManager.THERMAL_STATUS_*`.
+    status
+        .map(|status| match status {
+            0 => Ok(ThermalState::Nominal),
+            1 | 2 => Ok(ThermalState::Fair),
+            3 => Ok(ThermalState::Serious),
+            4..=6 => Ok(ThermalState::Critical),
+            other => Err(SystemError::Platform(format!(
+                "PowerManager reported unknown thermal status {other}"
+            ))),
+        })
+        .transpose()
 }
 
-pub fn get_system_load() -> SystemLoad {
-    let result = with_jni(|env, context| {
-        let load_info = env
-            .call_static_method(
-                jni_str!("com/waterkit/system/SystemHelper"),
-                jni_str!("getSystemLoad"),
-                jni_sig!("(Landroid/content/Context;)Lcom/waterkit/system/SystemHelper$LoadInfo;"),
-                &[JValue::Object(context)],
-            )
-            .ok()?
-            .l()
-            .ok()?;
+pub fn load() -> Result<SystemLoad, SystemError> {
+    let (used, total) = with_android_context(|env, context| {
+        let memory = call_helper_object(
+            env,
+            context,
+            jni_str!("getMemoryLoad"),
+            &jni_sig!("(Landroid/content/Context;)Lcom/waterkit/system/SystemHelper$MemoryLoad;"),
+        )?
+        .ok_or_else(|| {
+            SystemError::Platform(String::from("SystemHelper.getMemoryLoad returned null"))
+        })?;
+        let mut field = |name: &'static JNIStr| {
+            env.get_field(&memory, name, jni_sig!("J"))
+                .and_then(JValueOwned::j)
+                .map_err(|error| jni_error(env, &format!("SystemHelper$MemoryLoad.{name}"), error))
+        };
+        Ok::<_, SystemError>((field(jni_str!("used"))?, field(jni_str!("total"))?))
+    })?;
 
-        let cpu = env
-            .get_field(&load_info, jni_str!("cpu"), jni_sig!("F"))
-            .ok()?
-            .f()
-            .ok()?;
-        let mem_used = env
-            .get_field(&load_info, jni_str!("memUsed"), jni_sig!("J"))
-            .ok()?
-            .j()
-            .ok()?;
-        let mem_total = env
-            .get_field(&load_info, jni_str!("memTotal"), jni_sig!("J"))
-            .ok()?
-            .j()
-            .ok()?;
-
-        Some((
-            cpu,
-            u64::try_from(mem_used).ok()?,
-            u64::try_from(mem_total).ok()?,
-        ))
-    });
-
-    match result {
-        Some((cpu, mem_used, mem_total)) => SystemLoad::new(cpu, mem_used, mem_total),
-        None => SystemLoad::new(0.0, 0, 0),
-    }
+    let bytes = |value: i64, what: &str| {
+        u64::try_from(value).map_err(|_| {
+            SystemError::Platform(format!(
+                "ActivityManager reported negative {what} memory {value}"
+            ))
+        })
+    };
+    // Android does not expose system-wide CPU statistics to applications:
+    // `/proc/stat` has been closed to them since Android 8.
+    Ok(SystemLoad::new(
+        None,
+        bytes(used, "used")?,
+        bytes(total, "total")?,
+    ))
 }

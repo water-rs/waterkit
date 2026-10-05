@@ -7,15 +7,19 @@ async fn main() -> Result<(), waterkit_clipboard::ClipboardError> {
     let clipboard = waterkit_clipboard::Clipboard::new()?;
 
     // Show available types
+    let has_text = clipboard.has_text()?;
+    let has_html = clipboard.has_html()?;
+    let has_files = clipboard.has_files()?;
+    let has_image = clipboard.has_image()?;
     println!("Available types:");
-    println!("  has_text:  {}", clipboard.has_text());
-    println!("  has_html:  {}", clipboard.has_html());
-    println!("  has_files: {}", clipboard.has_files());
-    println!("  has_image: {}", clipboard.has_image());
+    println!("  has_text:  {has_text}");
+    println!("  has_html:  {has_html}");
+    println!("  has_files: {has_files}");
+    println!("  has_image: {has_image}");
     println!();
 
     // Try to get text
-    if clipboard.has_text() {
+    if has_text {
         match clipboard.text().await? {
             Some(text) => println!("Text content:\n{text}\n"),
             None => println!("No text content.\n"),
@@ -23,7 +27,7 @@ async fn main() -> Result<(), waterkit_clipboard::ClipboardError> {
     }
 
     // Try to get HTML
-    if clipboard.has_html() {
+    if has_html {
         match clipboard.html().await? {
             Some(html) => println!("HTML content:\n{html}\n"),
             None => println!("No HTML content.\n"),
@@ -31,7 +35,7 @@ async fn main() -> Result<(), waterkit_clipboard::ClipboardError> {
     }
 
     // Try to get files
-    if clipboard.has_files() {
+    if has_files {
         let files = clipboard.files().await?;
         if files.is_empty() {
             println!("No file content.\n");
@@ -45,7 +49,7 @@ async fn main() -> Result<(), waterkit_clipboard::ClipboardError> {
     }
 
     // Try to get image
-    if clipboard.has_image() {
+    if has_image {
         match clipboard.image().await? {
             Some(image) => {
                 println!(

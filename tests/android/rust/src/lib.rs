@@ -20,6 +20,7 @@ const PERMISSION_GRANTED: i32 = 3;
 #[cfg(feature = "sensor")]
 const ANDROID_SENSOR_TYPE_ACCELEROMETER: i32 = 1;
 
+/// Runs the enabled cases and logs their report.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest<'local>(
     mut env: EnvUnowned<'local>,
@@ -36,6 +37,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest<'local>(
     .resolve::<ThrowRuntimeExAndDefault>();
 }
 
+/// Runs the enabled cases and returns their report as JSON.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_test_MainActivity_runTestReport<'local>(
     mut env: EnvUnowned<'local>,
@@ -72,7 +74,7 @@ struct AndroidContextOwner {
 }
 
 impl AndroidContextOwner {
-    fn new(env: &mut Env<'_>, activity: &JObject<'_>) -> jni::errors::Result<Self> {
+    fn new(env: &Env<'_>, activity: &JObject<'_>) -> jni::errors::Result<Self> {
         let java_vm = env.get_java_vm()?;
         let activity = env.new_global_ref(activity)?;
         // SAFETY: both pointers are retained for this owner's lifetime, and
@@ -109,7 +111,7 @@ fn init_logger() {
     std::panic::set_hook(Box::new(|info| log::error!("Rust panic: {info}")));
 }
 
-fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport {
+fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
     let mut report = TestReport::new("android", "waterkit-test-android");
     #[cfg(any(
         feature = "sensor",
@@ -118,7 +120,7 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
         feature = "fs",
         feature = "secret"
     ))]
-    let activity_global = match _env.new_global_ref(_activity) {
+    let activity_global = match env.new_global_ref(activity) {
         Ok(value) => value,
         Err(error) => {
             report.push(TestCase::failed(
@@ -129,13 +131,22 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
         }
     };
     #[cfg(feature = "camera")]
-    let files_dir = match files_dir(_env, _activity) {
+    let files_dir = match files_dir(env, activity) {
         Ok(dir) => dir,
         Err(error) => {
             report.push(TestCase::failed("harness.files_dir", error.to_string()));
             return report;
         }
     };
+    #[cfg(not(any(
+        feature = "sensor",
+        feature = "location",
+        feature = "permission",
+        feature = "fs",
+        feature = "secret",
+        feature = "camera"
+    )))]
+    let _ = (env, activity);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -152,13 +163,13 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
         let activity = activity_global.as_obj();
 
         #[cfg(feature = "sensor")]
-        record_android_sensor(&mut report, _env, activity);
+        record_android_sensor(&mut report, env, activity);
 
         #[cfg(feature = "location")]
-        record_android_location(&mut report, _env, activity);
+        record_android_location(&mut report, env, activity);
 
         #[cfg(feature = "permission")]
-        record_android_permission(&mut report, _env, activity);
+        record_android_permission(&mut report, env, activity);
 
         #[cfg(feature = "camera")]
         record_android_camera(&mut report, &files_dir).await;
@@ -167,7 +178,7 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
         record_android_clipboard(&mut report).await;
 
         #[cfg(feature = "fs")]
-        record_android_fs(&mut report, _env, activity);
+        record_android_fs(&mut report, env, activity);
 
         #[cfg(feature = "haptic")]
         record_android_haptic(&mut report);
@@ -176,7 +187,7 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
         record_android_notification(&mut report);
 
         #[cfg(feature = "secret")]
-        record_android_secret(&mut report, _env, activity);
+        record_android_secret(&mut report, env, activity);
 
         #[cfg(feature = "system")]
         record_android_system(&mut report);
@@ -187,56 +198,8 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
         #[cfg(feature = "passkey")]
         record_android_passkey(&mut report).await;
 
-        #[cfg(feature = "biometric")]
-        report.push(TestCase::skipped(
-            "biometric.authenticate",
-            "biometric authentication requires an interactive prompt",
-        ));
-
-        #[cfg(feature = "audio")]
-        report.push(TestCase::passed("audio.linked"));
-
         #[cfg(feature = "codec")]
-        {
-            report.push(TestCase::passed("codec.linked"));
-            record_android_avif_decode(&mut report);
-        }
-
-        #[cfg(feature = "dialog")]
-        report.push(TestCase::passed("dialog.linked"));
-
-        #[cfg(feature = "video")]
-        report.push(TestCase::passed("video.linked"));
-
-        #[cfg(feature = "bluetooth")]
-        report.push(TestCase::passed("bluetooth.linked"));
-
-        #[cfg(feature = "nfc")]
-        report.push(TestCase::passed("nfc.linked"));
-
-        #[cfg(feature = "share")]
-        report.push(TestCase::skipped(
-            "share.sheet",
-            "share sheet requires an interactive chooser",
-        ));
-
-        #[cfg(feature = "speech")]
-        report.push(TestCase::skipped(
-            "speech.tts",
-            "speech synthesis is audible and not asserted by this harness",
-        ));
-
-        #[cfg(feature = "contacts")]
-        report.push(TestCase::skipped(
-            "contacts.fetch_all",
-            "contacts access depends on runtime user data permissions",
-        ));
-
-        #[cfg(feature = "calendar")]
-        report.push(TestCase::skipped(
-            "calendar.list",
-            "calendar access depends on runtime user data permissions",
-        ));
+        record_android_avif_decode(&mut report);
 
         #[cfg(feature = "health")]
         report.push(TestCase::passed_with_message(
@@ -247,47 +210,78 @@ fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport 
             ),
         ));
 
-        #[cfg(feature = "deeplink")]
-        report.push(TestCase::passed("deeplink.linked"));
-
         #[cfg(feature = "screen")]
         record_android_screen(&mut report);
 
-        #[cfg(not(any(
-            feature = "sensor",
-            feature = "biometric",
-            feature = "location",
-            feature = "audio",
-            feature = "camera",
-            feature = "clipboard",
-            feature = "codec",
-            feature = "dialog",
-            feature = "fs",
-            feature = "haptic",
-            feature = "notification",
-            feature = "permission",
-            feature = "secret",
-            feature = "system",
-            feature = "video",
-            feature = "bluetooth",
-            feature = "nfc",
-            feature = "share",
-            feature = "speech",
-            feature = "deeplink",
-            feature = "contacts",
-            feature = "calendar",
-            feature = "health",
-            feature = "screen",
-            feature = "background",
-            feature = "passkey"
-        )))]
+        for case in unexercised_cases() {
+            report.push(case);
+        }
+    });
+
+    // Every enabled feature records at least one case, so an empty report
+    // means the harness was built without any feature.
+    if report.cases.is_empty() {
         report.push(TestCase::failed(
             "harness.feature",
             "no WaterKit feature was enabled for the Android harness",
         ));
-    });
+    }
 
     report
+}
+
+/// The cases of the features this harness only links, or cannot exercise
+/// without an interactive prompt or the user's data.
+fn unexercised_cases() -> impl Iterator<Item = TestCase> {
+    [
+        (
+            cfg!(feature = "biometric"),
+            TestCase::skipped(
+                "biometric.authenticate",
+                "biometric authentication requires an interactive prompt",
+            ),
+        ),
+        (cfg!(feature = "audio"), TestCase::passed("audio.linked")),
+        (cfg!(feature = "codec"), TestCase::passed("codec.linked")),
+        (cfg!(feature = "dialog"), TestCase::passed("dialog.linked")),
+        (cfg!(feature = "video"), TestCase::passed("video.linked")),
+        (
+            cfg!(feature = "bluetooth"),
+            TestCase::passed("bluetooth.linked"),
+        ),
+        (cfg!(feature = "nfc"), TestCase::passed("nfc.linked")),
+        (
+            cfg!(feature = "share"),
+            TestCase::skipped("share.sheet", "share sheet requires an interactive chooser"),
+        ),
+        (
+            cfg!(feature = "speech"),
+            TestCase::skipped(
+                "speech.tts",
+                "speech synthesis is audible and not asserted by this harness",
+            ),
+        ),
+        (
+            cfg!(feature = "contacts"),
+            TestCase::skipped(
+                "contacts.fetch_all",
+                "contacts access depends on runtime user data permissions",
+            ),
+        ),
+        (
+            cfg!(feature = "calendar"),
+            TestCase::skipped(
+                "calendar.list",
+                "calendar access depends on runtime user data permissions",
+            ),
+        ),
+        (
+            cfg!(feature = "deeplink"),
+            TestCase::passed("deeplink.linked"),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(enabled, case)| enabled.then_some(case))
 }
 
 fn log_report(report: &TestReport) {
@@ -470,58 +464,20 @@ async fn record_android_camera_frames(
     files_dir: &std::path::Path,
 ) {
     use futures::StreamExt;
-    use std::collections::BTreeSet;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
-    use waterkit_content::camera::wgpu_external_frame::ahardware_buffer::{
-        self, HardwareBufferImportError,
-    };
-    use waterkit_content::camera::{
-        Camera, CameraConfig, CameraError, FrameConverter, FramePlanes, wgpu,
-    };
+    use waterkit_content::camera::{Camera, CameraConfig, FrameConverter, wgpu};
 
     const STREAM: Duration = Duration::from_secs(3);
     let case = format!("camera.frames.{}", camera.id);
 
-    // Camera frames are imported AHardwareBuffers, which only Vulkan can take.
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::VULKAN,
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
-    });
-    let adapter = match instance
-        .request_adapter(&wgpu::RequestAdapterOptions::default())
-        .await
-    {
-        Ok(adapter) => adapter,
+    let (device, queue) = match camera_gpu().await {
+        Ok(gpu) => gpu,
         Err(error) => {
-            report.push(TestCase::failed(
-                case,
-                format!("no Vulkan adapter: {error}"),
-            ));
+            report.push(TestCase::failed(case, error));
             return;
         }
     };
-    // Camera frames are imported AHardwareBuffers, so the device carries the
-    // import's extensions and NV12, which drivers that map camera buffers to a
-    // Vulkan format alias them as.
-    let features =
-        FrameConverter::required_features(adapter.features()) | wgpu::Features::TEXTURE_FORMAT_NV12;
-    let (device, queue) = match ahardware_buffer::request_device(
-        &adapter,
-        &wgpu::DeviceDescriptor {
-            required_features: features,
-            ..Default::default()
-        },
-    ) {
-        Ok(pair) => pair,
-        Err(error) => {
-            report.push(TestCase::failed(case, format!("no GPU device: {error}")));
-            return;
-        }
-    };
-    let device = Arc::new(device);
-    let queue = Arc::new(queue);
-
     let camera_handle = match Camera::open(
         &camera.id,
         CameraConfig::default(),
@@ -539,70 +495,19 @@ async fn record_android_camera_frames(
 
     let mut converter = FrameConverter::new(&device);
     let mut frames = std::pin::pin!(camera_handle.frames());
-    let mut layouts = BTreeSet::new();
-    let mut orientations = BTreeSet::new();
-    let mut count = 0_u32;
+    let mut summary = FrameSummary::default();
     let mut upright = None;
-    let mut stored = (0, 0);
     let started = Instant::now();
     while started.elapsed() < STREAM {
-        let frame = match tokio::time::timeout(Duration::from_secs(5), frames.next()).await {
-            Ok(Some(Ok(frame))) => frame,
-            Ok(Some(Err(CameraError::FrameImport(error))))
-                if matches!(
-                    *error,
-                    HardwareBufferImportError::ConversionUnavailable { .. }
-                ) =>
-            {
-                // The camera's buffers have only a driver-private format here,
-                // and this GPU cannot run the conversion that imports them.
-                report.push(TestCase::skipped(
-                    case,
-                    format!("after {count} frames: {error}"),
-                ));
-                return;
-            }
-            Ok(Some(Err(error))) => {
-                report.push(TestCase::failed(
-                    case,
-                    format!("stream failed after {count} frames: {error}"),
-                ));
-                return;
-            }
-            Ok(None) => {
-                report.push(TestCase::failed(
-                    case,
-                    format!("stream ended after {count} frames"),
-                ));
-                return;
-            }
-            Err(_) => {
-                report.push(TestCase::failed(
-                    case,
-                    format!("no frame within 5 s after {count}"),
-                ));
+        let next = tokio::time::timeout(Duration::from_secs(5), frames.next()).await;
+        let frame = match next_frame(&case, summary.count, next) {
+            Ok(frame) => frame,
+            Err(outcome) => {
+                report.push(outcome);
                 return;
             }
         };
-        count += 1;
-        layouts.insert(match frame.planes() {
-            FramePlanes::Rgb(_) => "rgb",
-            FramePlanes::YCbCr420 { .. } => "ycbcr420",
-            FramePlanes::YCbCr422 { .. } => "ycbcr422",
-        });
-        if let FramePlanes::YCbCr420 { encoding, .. } = frame.planes() {
-            layouts.insert(match encoding.matrix {
-                waterkit_content::camera::YcbcrMatrix::Bt601 => "bt601",
-                waterkit_content::camera::YcbcrMatrix::Bt709 => "bt709",
-                waterkit_content::camera::YcbcrMatrix::Bt2020 => "bt2020",
-            });
-            layouts.insert(match encoding.range {
-                waterkit_content::camera::YcbcrRange::Video => "video-range",
-                waterkit_content::camera::YcbcrRange::Full => "full-range",
-            });
-        }
-        orientations.insert(format!("{:?}", frame.orientation()));
-        stored = (frame.width(), frame.height());
+        summary.record(&frame);
         let output = upright
             .take()
             .filter(|texture: &wgpu::Texture| {
@@ -624,6 +529,12 @@ async fn record_android_camera_frames(
         ));
         return;
     }
+    let FrameSummary {
+        layouts,
+        orientations,
+        count,
+        stored,
+    } = summary;
     report.push(TestCase::passed_with_message(
         case,
         format!(
@@ -637,6 +548,126 @@ async fn record_android_camera_frames(
             png.display(),
         ),
     ));
+}
+
+/// The Vulkan device camera frames are imported on: Android camera frames are
+/// `AHardwareBuffer`s, which only Vulkan can take, so the device carries the
+/// import's extensions and NV12, which drivers that map camera buffers to a
+/// Vulkan format alias them as.
+#[cfg(feature = "camera")]
+async fn camera_gpu() -> Result<
+    (
+        std::sync::Arc<waterkit_content::camera::wgpu::Device>,
+        std::sync::Arc<waterkit_content::camera::wgpu::Queue>,
+    ),
+    String,
+> {
+    use std::sync::Arc;
+    use waterkit_content::camera::wgpu_external_frame::ahardware_buffer;
+    use waterkit_content::camera::{FrameConverter, wgpu};
+
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::VULKAN,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .map_err(|error| format!("no Vulkan adapter: {error}"))?;
+    let features =
+        FrameConverter::required_features(adapter.features()) | wgpu::Features::TEXTURE_FORMAT_NV12;
+    let (device, queue) = ahardware_buffer::request_device(
+        &adapter,
+        &wgpu::DeviceDescriptor {
+            required_features: features,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| format!("no GPU device: {error}"))?;
+    Ok((Arc::new(device), Arc::new(queue)))
+}
+
+/// The next frame of a camera stream, or the outcome that ends the case after
+/// `count` frames: skipped when this GPU cannot convert the camera's
+/// driver-private buffers, failed for any other end of the stream.
+#[cfg(feature = "camera")]
+fn next_frame(
+    case: &str,
+    count: u32,
+    next: Result<
+        Option<Result<waterkit_content::camera::Frame, waterkit_content::camera::CameraError>>,
+        tokio::time::error::Elapsed,
+    >,
+) -> Result<waterkit_content::camera::Frame, TestCase> {
+    use waterkit_content::camera::CameraError;
+    use waterkit_content::camera::wgpu_external_frame::ahardware_buffer::HardwareBufferImportError;
+
+    match next {
+        Ok(Some(Ok(frame))) => Ok(frame),
+        Ok(Some(Err(CameraError::FrameImport(error))))
+            if matches!(
+                *error,
+                HardwareBufferImportError::ConversionUnavailable { .. }
+            ) =>
+        {
+            Err(TestCase::skipped(
+                case,
+                format!("after {count} frames: {error}"),
+            ))
+        }
+        Ok(Some(Err(error))) => Err(TestCase::failed(
+            case,
+            format!("stream failed after {count} frames: {error}"),
+        )),
+        Ok(None) => Err(TestCase::failed(
+            case,
+            format!("stream ended after {count} frames"),
+        )),
+        Err(_) => Err(TestCase::failed(
+            case,
+            format!("no frame within 5 s after {count}"),
+        )),
+    }
+}
+
+/// What a camera's frames showed while the harness streamed them.
+#[cfg(feature = "camera")]
+#[derive(Default)]
+struct FrameSummary {
+    /// Plane layouts, matrices and ranges seen.
+    layouts: std::collections::BTreeSet<&'static str>,
+    orientations: std::collections::BTreeSet<String>,
+    count: u32,
+    /// The stored size of the last frame.
+    stored: (u32, u32),
+}
+
+#[cfg(feature = "camera")]
+impl FrameSummary {
+    fn record(&mut self, frame: &waterkit_content::camera::Frame) {
+        use waterkit_content::camera::{FramePlanes, YcbcrMatrix, YcbcrRange};
+
+        self.count += 1;
+        self.layouts.insert(match frame.planes() {
+            FramePlanes::Rgb(_) => "rgb",
+            FramePlanes::YCbCr420 { .. } => "ycbcr420",
+            FramePlanes::YCbCr422 { .. } => "ycbcr422",
+        });
+        if let FramePlanes::YCbCr420 { encoding, .. } = frame.planes() {
+            self.layouts.insert(match encoding.matrix {
+                YcbcrMatrix::Bt601 => "bt601",
+                YcbcrMatrix::Bt709 => "bt709",
+                YcbcrMatrix::Bt2020 => "bt2020",
+            });
+            self.layouts.insert(match encoding.range {
+                YcbcrRange::Video => "video-range",
+                YcbcrRange::Full => "full-range",
+            });
+        }
+        self.orientations
+            .insert(format!("{:?}", frame.orientation()));
+        self.stored = (frame.width(), frame.height());
+    }
 }
 
 /// Reads an upright `Rgba8Unorm` frame back and writes it as a PNG; the
@@ -715,6 +746,18 @@ async fn record_android_clipboard(report: &mut TestReport) {
         return;
     }
 
+    match clipboard.has_text() {
+        Ok(true) => report.push(TestCase::passed("clipboard.has_text")),
+        Ok(false) => report.push(TestCase::failed(
+            "clipboard.has_text",
+            "has_text reported no text right after set_text",
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "clipboard.has_text",
+            format!("has_text failed: {error}"),
+        )),
+    }
+
     match clipboard.text().await {
         Ok(text) if text.as_deref() == Some("WaterKit Test") => {
             report.push(TestCase::passed("clipboard.round_trip"));
@@ -772,7 +815,6 @@ async fn record_android_clipboard_watch(
 ) {
     const FIRST: &str = "WaterKit Watch First";
     const SECOND: &str = "WaterKit Watch Second";
-    const AFTER_LIFECYCLE: &str = "WaterKit Watch After Lifecycle";
 
     let mut primary_stream = match clipboard.watch() {
         Ok(stream) => stream,
@@ -826,29 +868,18 @@ async fn record_android_clipboard_watch(
         next_clipboard_event(&mut second_stream)
     );
 
-    match (primary_first, primary_second) {
-        (ClipWait::Event(first), ClipWait::Event(second))
-            if first.has_text() && second.has_text() =>
-        {
-            report.push(TestCase::passed("clipboard.watch_same_type"));
-        }
-        (first, second) => report.push(TestCase::failed(
-            "clipboard.watch_same_type",
-            format!("expected two text events, got {first:?} then {second:?}"),
-        )),
-    }
-
-    match (second_first, second_second) {
-        (ClipWait::Event(first), ClipWait::Event(second))
-            if first.has_text() && second.has_text() =>
-        {
-            report.push(TestCase::passed("clipboard.watch_independent_subscribers"));
-        }
-        (first, second) => report.push(TestCase::failed(
-            "clipboard.watch_independent_subscribers",
-            format!("expected two text events, got {first:?} then {second:?}"),
-        )),
-    }
+    record_two_text_events(
+        report,
+        "clipboard.watch_same_type",
+        primary_first,
+        primary_second,
+    );
+    record_two_text_events(
+        report,
+        "clipboard.watch_independent_subscribers",
+        second_first,
+        second_second,
+    );
 
     // Dropping a stream must unregister its listener and release the
     // callback state without a use-after-free; a fresh watcher receiving a
@@ -880,6 +911,38 @@ async fn record_android_clipboard_watch(
         )),
     }
 
+    record_watch_stop(report, clipboard, primary_stream).await;
+}
+
+/// Records a case that passes when both waits produced a text event.
+#[cfg(feature = "clipboard")]
+fn record_two_text_events(
+    report: &mut TestReport,
+    name: &'static str,
+    first: ClipWait,
+    second: ClipWait,
+) {
+    match (first, second) {
+        (ClipWait::Event(first), ClipWait::Event(second))
+            if first.has_text() && second.has_text() =>
+        {
+            report.push(TestCase::passed(name));
+        }
+        (first, second) => report.push(TestCase::failed(
+            name,
+            format!("expected two text events, got {first:?} then {second:?}"),
+        )),
+    }
+}
+
+#[cfg(feature = "clipboard")]
+async fn record_watch_stop(
+    report: &mut TestReport,
+    clipboard: &mut waterkit_content::clipboard::Clipboard,
+    mut primary_stream: waterkit_content::clipboard::ClipboardStream,
+) {
+    const AFTER_LIFECYCLE: &str = "WaterKit Watch After Lifecycle";
+
     // stop() unregisters the listener and releases the callback state; the
     // channel then completes once events buffered before the stop have
     // drained — async-channel's documented termination — so the wait ends
@@ -896,7 +959,7 @@ async fn record_android_clipboard_watch(
     while matches!(wait, ClipWait::Event(_)) {
         wait = next_clipboard_event(&mut primary_stream).await;
     }
-    if let ClipWait::Closed = wait {
+    if matches!(wait, ClipWait::Closed) {
         report.push(TestCase::passed("clipboard.watch_stop"));
     } else {
         report.push(TestCase::failed(
@@ -1004,15 +1067,30 @@ fn record_android_secret(report: &mut TestReport, env: &mut Env<'_>, activity: &
 
 #[cfg(feature = "system")]
 fn record_android_system(report: &mut TestReport) {
-    let connectivity = waterkit_content::system::connectivity();
-    let thermal = waterkit_content::system::thermal_state();
-    report.push(TestCase::passed_with_message(
-        "system.snapshot",
-        format!(
-            "connectivity={:?} thermal={thermal:?}",
-            connectivity.connection_type()
+    use waterkit_content::system;
+
+    report.push(match system::connectivity() {
+        Ok(info) => TestCase::passed_with_message(
+            "system.connectivity",
+            format!(
+                "type={:?} connected={}",
+                info.connection_type(),
+                info.is_connected()
+            ),
         ),
-    ));
+        Err(error) => TestCase::failed("system.connectivity", error.to_string()),
+    });
+    report.push(match system::thermal_state() {
+        Ok(state) => TestCase::passed_with_message("system.thermal_state", format!("{state:?}")),
+        Err(error) => TestCase::failed("system.thermal_state", error.to_string()),
+    });
+    report.push(match system::load() {
+        Ok(load) if load.memory_total() > 0 && load.memory_used() <= load.memory_total() => {
+            TestCase::passed_with_message("system.load", format!("{load:?}"))
+        }
+        Ok(load) => TestCase::failed("system.load", format!("implausible memory: {load:?}")),
+        Err(error) => TestCase::failed("system.load", error.to_string()),
+    });
 }
 
 #[cfg(feature = "background")]
@@ -1041,7 +1119,7 @@ async fn record_android_passkey(report: &mut TestReport) {
                     availability.supports_user_verification,
                     availability.supports_discoverable_credentials
                 ),
-            ))
+            ));
         }
         Ok(_) => report.push(TestCase::failed(
             "passkey.availability",
@@ -1068,24 +1146,25 @@ fn record_android_screen(report: &mut TestReport) {
     }
 }
 
+/// Checks one permission and returns its status code.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_test_MainActivity_testCheckPermission<'local>(
-    mut unowned_env: EnvUnowned<'local>,
+    mut unownedenv: EnvUnowned<'local>,
     _this: JObject<'local>,
     activity: JObject<'local>,
-    _permission_type: i32,
+    permission_type: i32,
 ) -> i32 {
-    unowned_env
+    unownedenv
         .with_env(|env| -> jni::errors::Result<i32> {
-            Ok(check_permission(env, &activity, _permission_type))
+            Ok(check_permission(env, &activity, permission_type))
         })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-fn check_permission(_env: &mut Env<'_>, _activity: &JObject<'_>, _permission_type: i32) -> i32 {
+fn check_permission(env: &mut Env<'_>, activity: &JObject<'_>, permission_type: i32) -> i32 {
     #[cfg(feature = "permission")]
     {
-        let permission = match _permission_type {
+        let permission = match permission_type {
             0 => waterkit_content::permission::Permission::Location,
             1 => waterkit_content::permission::Permission::Camera,
             2 => waterkit_content::permission::Permission::Microphone,
@@ -1093,14 +1172,13 @@ fn check_permission(_env: &mut Env<'_>, _activity: &JObject<'_>, _permission_typ
             4 => waterkit_content::permission::Permission::Contacts,
             5 => waterkit_content::permission::Permission::Calendar,
             _ => {
-                log::error!("Unknown permission type: {_permission_type}");
+                log::error!("Unknown permission type: {permission_type}");
                 return PERMISSION_NOT_DETERMINED;
             }
         };
 
-        match waterkit_content::permission::android::check_with_activity(
-            _env, _activity, permission,
-        ) {
+        match waterkit_content::permission::android::check_with_activity(env, activity, permission)
+        {
             Ok(waterkit_content::permission::PermissionStatus::NotDetermined) => {
                 PERMISSION_NOT_DETERMINED
             }
@@ -1120,27 +1198,28 @@ fn check_permission(_env: &mut Env<'_>, _activity: &JObject<'_>, _permission_typ
 
     #[cfg(not(feature = "permission"))]
     {
-        let _ = (_env, _activity);
+        let _ = (env, activity, permission_type);
         log::error!("testCheckPermission called without enabling permission feature");
         PERMISSION_NOT_DETERMINED
     }
 }
 
+/// Reads the location as `[ok, latitude, longitude, altitude, accuracy]`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_test_MainActivity_testGetLocation<'local>(
-    mut unowned_env: EnvUnowned<'local>,
+    mut unownedenv: EnvUnowned<'local>,
     _this: JObject<'local>,
     activity: JObject<'local>,
 ) -> jdoubleArray {
-    unowned_env
+    unownedenv
         .with_env(|env| -> jni::errors::Result<jdoubleArray> { Ok(get_location(env, &activity)) })
         .resolve::<ThrowRuntimeExAndDefault>()
 }
 
-fn get_location(_env: &mut Env<'_>, _activity: &JObject<'_>) -> jdoubleArray {
+fn get_location(env: &mut Env<'_>, activity: &JObject<'_>) -> jdoubleArray {
     #[cfg(feature = "location")]
     {
-        match waterkit_content::location::android::get_location_with_context(_env, _activity) {
+        match waterkit_content::location::android::get_location_with_context(env, activity) {
             Ok(location) => {
                 let altitude = location.altitude().unwrap_or(0.0);
                 let accuracy = location.horizontal_accuracy().unwrap_or(0.0);
@@ -1152,7 +1231,7 @@ fn get_location(_env: &mut Env<'_>, _activity: &JObject<'_>) -> jdoubleArray {
                     accuracy,
                 ];
 
-                let array = match JDoubleArray::new(_env, payload.len()) {
+                let array = match JDoubleArray::new(env, payload.len()) {
                     Ok(arr) => arr,
                     Err(error) => {
                         log::error!("JDoubleArray::new failed: {error}");
@@ -1160,7 +1239,7 @@ fn get_location(_env: &mut Env<'_>, _activity: &JObject<'_>) -> jdoubleArray {
                     }
                 };
 
-                if let Err(error) = array.set_region(_env, 0, &payload) {
+                if let Err(error) = array.set_region(env, 0, &payload) {
                     log::error!("set_region failed: {error}");
                     return std::ptr::null_mut();
                 }
@@ -1176,7 +1255,7 @@ fn get_location(_env: &mut Env<'_>, _activity: &JObject<'_>) -> jdoubleArray {
 
     #[cfg(not(feature = "location"))]
     {
-        let _ = (_env, _activity);
+        let _ = (env, activity);
         log::error!("testGetLocation called without enabling location feature");
         std::ptr::null_mut()
     }
@@ -1232,13 +1311,13 @@ fn record_android_avif_decode(report: &mut TestReport) {
                 .filter(|((x, y), expected)| !close(px(*x, *y), *expected))
                 .map(|((x, y), expected)| format!("({x},{y})={:?}!={:?}", px(*x, *y), expected))
                 .collect::<Vec<_>>();
-            if !bad.is_empty() {
+            if bad.is_empty() {
+                report.push(TestCase::passed("codec.decode_avif_platform"));
+            } else {
                 report.push(TestCase::failed(
                     "codec.decode_avif_platform",
                     format!("quadrant pixels mismatch: {}", bad.join(" ")),
                 ));
-            } else {
-                report.push(TestCase::passed("codec.decode_avif_platform"));
             }
         }
         Err(error) => report.push(TestCase::failed(

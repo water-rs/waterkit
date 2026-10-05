@@ -4,17 +4,39 @@
 //! the current value at the moment of the call. A future revision will
 //! pair each with a `Subscribed<T>`-returning variant once platform
 //! change-listeners are wired in.
+//!
+//! Every query returns [`SystemError`] when the platform bridge fails. A value
+//! the device does not offer at all is a typed outcome instead: an `Option`
+//! that is `None`, such as [`thermal_state`] on a device without a thermal
+//! service or [`SystemLoad::cpu_usage`] where the OS hides system-wide CPU
+//! statistics from applications.
+//!
+//! # Android
+//!
+//! [`connectivity`] reads the active network, which requires the application
+//! manifest to declare `android.permission.ACCESS_NETWORK_STATE`; without it the
+//! query fails with [`SystemError::Platform`].
 
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 
 mod sys;
 
+/// Failure while querying system information.
+#[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
+pub enum SystemError {
+    /// The platform bridge failed; the message names the failing call and the
+    /// platform's own description of the failure.
+    #[error("system query failed: {0}")]
+    Platform(String),
+}
+
 /// Type of network connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ConnectionType {
-    /// WiFi connection.
+    /// Wi-Fi connection.
     Wifi,
     /// Cellular data connection.
     Cellular,
@@ -73,15 +95,13 @@ pub enum ThermalState {
     Serious,
     /// Critical temperature, performance is significantly throttled.
     Critical,
-    /// Thermal state is unknown.
-    Unknown,
 }
 
 /// Information about system load.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct SystemLoad {
-    cpu_usage: f32,
+    cpu_usage: Option<f32>,
     memory_used: u64,
     memory_total: u64,
 }
@@ -89,7 +109,7 @@ pub struct SystemLoad {
 impl SystemLoad {
     /// Create a new `SystemLoad`.
     #[must_use]
-    pub(crate) const fn new(cpu_usage: f32, memory_used: u64, memory_total: u64) -> Self {
+    pub(crate) const fn new(cpu_usage: Option<f32>, memory_used: u64, memory_total: u64) -> Self {
         Self {
             cpu_usage,
             memory_used,
@@ -97,9 +117,13 @@ impl SystemLoad {
         }
     }
 
-    /// CPU usage percentage (0.0 - 100.0).
+    /// System-wide CPU usage percentage (0.0 - 100.0).
+    ///
+    /// `None` when the platform does not expose system-wide CPU statistics to
+    /// applications. That is always the case on Android, which has closed
+    /// `/proc/stat` to applications since Android 8.
     #[must_use]
-    pub const fn cpu_usage(&self) -> f32 {
+    pub const fn cpu_usage(&self) -> Option<f32> {
         self.cpu_usage
     }
 
@@ -117,19 +141,35 @@ impl SystemLoad {
 }
 
 /// Snapshot of the current network connectivity.
-#[must_use]
-pub fn connectivity() -> ConnectivityInfo {
-    sys::get_connectivity_info()
+///
+/// # Errors
+///
+/// Returns [`SystemError::Platform`] if the platform's network service cannot
+/// be queried.
+pub fn connectivity() -> Result<ConnectivityInfo, SystemError> {
+    sys::connectivity()
 }
 
 /// Snapshot of the current thermal state.
-#[must_use]
-pub fn thermal_state() -> ThermalState {
-    sys::get_thermal_state()
+///
+/// `None` when the device reports no thermal state: Android before API level 29
+/// has no thermal status, and a desktop without temperature sensors has nothing
+/// to derive one from.
+///
+/// # Errors
+///
+/// Returns [`SystemError::Platform`] if the platform's thermal service cannot be
+/// queried or reports a state this crate does not know.
+pub fn thermal_state() -> Result<Option<ThermalState>, SystemError> {
+    sys::thermal_state()
 }
 
 /// Snapshot of the current CPU / memory load.
-#[must_use]
-pub fn load() -> SystemLoad {
-    sys::get_system_load()
+///
+/// # Errors
+///
+/// Returns [`SystemError::Platform`] if the platform's CPU or memory statistics
+/// cannot be read.
+pub fn load() -> Result<SystemLoad, SystemError> {
+    sys::load()
 }

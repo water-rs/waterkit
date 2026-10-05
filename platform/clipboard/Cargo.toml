@@ -20,14 +20,18 @@ async-channel.workspace = true
 blocking.workspace = true
 tracing.workspace = true
 
-# Desktop (Windows, Linux, macOS)
-[target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
+# Windows and macOS
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 clipboard-rs = { workspace = true }
 image = { workspace = true }
 
-# Linux only: PRIMARY selection on X11 and Wayland (data-control)
+# Linux: CLIPBOARD and PRIMARY through Wayland data-control or an X server
 [target.'cfg(target_os = "linux")'.dependencies]
-arboard = { workspace = true, default-features = false, features = ["wayland-data-control"] }
+image = { workspace = true }
+rustix = { workspace = true, features = ["event"] }
+url.workspace = true
+wl-clipboard-rs.workspace = true
+x11rb = { workspace = true, features = ["xfixes"] }
 
 # Apple platforms (iOS only - macOS uses clipboard-rs)
 [target.'cfg(target_os = "ios")'.dependencies]

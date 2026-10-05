@@ -1,0 +1,3 @@
+# Test fixtures are embedded verbatim by include_str! and must keep LF endings
+# on every checkout so their contents parse byte for byte.
+multimedia/audio/src/fixtures/*.hex text eol=lf

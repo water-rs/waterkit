@@ -18,6 +18,7 @@ android_logger = "0.15"
 log.workspace = true
 waterkit_content = { path = "../../..", package = "waterkit", default-features = false }
 waterkit-test-report.workspace = true
+waterkit-build.workspace = true
 
 [features]
 full = [

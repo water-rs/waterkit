@@ -20,11 +20,7 @@ public func clipboard_has_image() -> Bool {
 }
 
 public func clipboard_has_files() -> Bool {
-    // Check if there's a file:// URL
-    if let url = UIPasteboard.general.url {
-        return url.isFileURL
-    }
-    return false
+    return UIPasteboard.general.contains(pasteboardTypes: [UTType.fileURL.identifier])
 }
 
 // MARK: - Read Operations
@@ -89,11 +85,13 @@ public func clipboard_get_image() -> SwiftImageData {
         width: UInt(width), height: UInt(height), bytes: rustVec(rawData), is_valid: true, error: nil)
 }
 
-public func clipboard_get_file_url() -> Optional<String> {
-    if let url = UIPasteboard.general.url, url.isFileURL {
-        return url.absoluteString
+/// The paths of the file URLs on the pasteboard; `URL.path` decodes them.
+public func clipboard_get_file_paths() -> RustVec<RustString> {
+    let paths = RustVec<RustString>()
+    for url in UIPasteboard.general.urls ?? [] where url.isFileURL {
+        paths.push(value: url.path.intoRustString())
     }
-    return nil
+    return paths
 }
 
 public func clipboard_get_binary(mime: RustString) -> SwiftBinaryData {
@@ -150,9 +148,35 @@ public func clipboard_set_image_from_path(path: RustString) -> Bool {
     return true
 }
 
-public func clipboard_set_file_url(url: RustString) {
-    if let urlObj = URL(string: url.toString()) {
-        UIPasteboard.general.url = urlObj
+/// One item per absolute path: an item provider that carries the file's
+/// contents, for other apps, and its file URL. Returns why a file cannot be
+/// put on the pasteboard, leaving the pasteboard untouched.
+public func clipboard_set_file_paths(paths: RustVec<RustString>) -> Optional<RustString> {
+    var providers: [NSItemProvider] = []
+    for path in paths {
+        let url = fileURL(path.as_str().toString())
+        guard let provider = NSItemProvider(contentsOf: url) else {
+            return "NSItemProvider cannot carry the file \(url.path)".intoRustString()
+        }
+        providers.append(provider)
+    }
+    UIPasteboard.general.setItemProviders(providers, localOnly: false, expirationDate: nil)
+    return nil
+}
+
+/// The file URL of `path`, whose bytes it encodes as they are.
+///
+/// `URL(fileURLWithPath:)` converts the path to the decomposed (NFD) form
+/// Darwin's file system representation uses, so a name written precomposed
+/// would read back as different bytes, although it names the same file.
+/// Like `URL(fileURLWithPath:)`, it ends in a slash when `path` is a directory.
+private func fileURL(_ path: String) -> URL {
+    var isDirectory: ObjCBool = false
+    let exists = FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+    return path.withCString {
+        URL(
+            fileURLWithFileSystemRepresentation: $0, isDirectory: exists && isDirectory.boolValue,
+            relativeTo: nil)
     }
 }
 

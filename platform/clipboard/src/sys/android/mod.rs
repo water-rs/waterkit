@@ -2,8 +2,9 @@
 
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
+use crate::sys::file_path::unicode_paths;
 use jni::errors::ThrowRuntimeExAndDefault;
-use jni::objects::{Global, JByteArray, JObject, JString, JValue, JValueOwned};
+use jni::objects::{Global, JByteArray, JObject, JObjectArray, JString, JValue, JValueOwned};
 use jni::signature::MethodSignature;
 use jni::strings::JNIStr;
 use jni::{Env, EnvUnowned, JavaVM, jni_sig, jni_str};
@@ -228,20 +229,34 @@ impl ClipboardInner {
         self.read_optional_string(jni_str!("getHtml"))
     }
 
-    /// Get file paths.
+    /// Get the paths of the files the clip names, decoded by `Uri.getPath`.
     pub fn get_files(&self) -> Result<Vec<PathBuf>, ClipboardError> {
-        let Some(url) = self.read_optional_string(jni_str!("getFileUri"))? else {
-            return Ok(Vec::new());
-        };
-
-        if let Some(path) = url.strip_prefix("file://") {
-            let decoded = percent_encoding::percent_decode_str(path)
-                .decode_utf8()
-                .map_err(|e| ClipboardError::Platform(format!("Invalid URL encoding: {e}")))?;
-            Ok(vec![PathBuf::from(decoded.into_owned())])
-        } else {
-            Ok(Vec::new())
-        }
+        self.with_env(|env, context| {
+            let paths = call_helper_object(
+                env,
+                context,
+                jni_str!("getFiles"),
+                &jni_sig!("(Landroid/content/Context;)[Ljava/lang/String;"),
+                &[],
+            )?
+            .ok_or_else(|| {
+                ClipboardError::Platform("ClipboardHelper.getFiles returned null".into())
+            })?;
+            let paths = env
+                .cast_local::<JObjectArray<JString>>(paths)
+                .map_err(|error| jni_error(env, "cast to String[]", error))?;
+            let count = paths
+                .len(env)
+                .map_err(|error| jni_error(env, "String[].length", error))?;
+            (0..count)
+                .map(|index| {
+                    let path = paths
+                        .get_element(env, index)
+                        .map_err(|error| jni_error(env, "String[] element", error))?;
+                    Ok(PathBuf::from(decode_string(env, &path)?))
+                })
+                .collect()
+        })
     }
 
     /// Get image as RGBA.
@@ -320,24 +335,27 @@ impl ClipboardInner {
         )
     }
 
-    /// Set file paths.
+    /// Set file paths, one clip item per file, as `content://` URIs of the
+    /// app's `ClipboardFileProvider` that other apps can open.
     pub fn set_files(&self, files: &[PathBuf]) -> Result<(), ClipboardError> {
         if files.is_empty() {
             return Ok(());
         }
-        // Android only supports single file URI
-        let path = &files[0];
-        let url = format!(
-            "file://{}",
-            percent_encoding::utf8_percent_encode(
-                path.to_string_lossy().as_ref(),
-                percent_encoding::NON_ALPHANUMERIC
-            )
-        );
+        let paths = unicode_paths(files)?;
         self.write(
-            jni_str!("setFileUri"),
-            &jni_sig!("(Landroid/content/Context;Ljava/lang/String;)V"),
-            |env| Ok(vec![new_string(env, &url)?.into()]),
+            jni_str!("setFiles"),
+            &jni_sig!("(Landroid/content/Context;[Ljava/lang/String;)V"),
+            |env| {
+                let array = JObjectArray::<JString>::new(env, paths.len(), JString::null())
+                    .map_err(|error| jni_error(env, "new String[]", error))?;
+                for (index, path) in paths.iter().enumerate() {
+                    let path = new_string(env, path)?;
+                    array
+                        .set_element(env, index, &path)
+                        .map_err(|error| jni_error(env, "String[] element", error))?;
+                }
+                Ok(vec![array.into()])
+            },
         )
     }
 

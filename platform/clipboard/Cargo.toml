@@ -64,3 +64,11 @@ tokio = { workspace = true }
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/ClipboardHelper.kt", "src/sys/android/ClipboardFileProvider.kt", "src/sys/android/ClipboardWatchCallback.kt"]
+
+# Serves the files `set_files`, `set_image` and `set_binary` put on the
+# clipboard as `content://` URIs that readers of the clip are granted access to.
+[[package.metadata.waterui.android.provider]]
+name = "waterkit.clipboard.ClipboardFileProvider"
+authorities = ["${applicationId}.waterkit.clipboard"]
+exported = false
+grant-uri-permissions = true

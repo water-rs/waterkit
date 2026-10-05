@@ -30,7 +30,7 @@ waterkit = { version = "0.1", features = ["clipboard"] }
 | **iOS** | `UIPasteboard` (Swift Bridge) |
 | **Android** | `ClipboardManager` (Kotlin/JNI) |
 | **Windows** | `clipboard-rs` (Win32) |
-| **Linux** | `wl-clipboard-rs` (Wayland data-control) in a Wayland session; otherwise `clipboard-rs` (X11) for CLIPBOARD and `x11-clipboard` for PRIMARY |
+| **Linux** | `wl-clipboard-rs` (Wayland data-control) in a Wayland session, `x11rb` (X11) otherwise, for CLIPBOARD and PRIMARY alike |
 
 ## Usage
 
@@ -86,11 +86,10 @@ async fn primary() -> Result<(), waterkit_clipboard::ClipboardError> {
 }
 ```
 
-After `set_text` the crate owns the selection and keeps serving paste
-requests: on X11 an in-process worker thread answers `SelectionRequest`s
-until another client claims PRIMARY or the handle is dropped; on Wayland an
-in-process thread serves data-control requests until another client claims
-PRIMARY or the process exits.
+After a write the crate owns the selection and keeps serving paste requests
+until another client claims it: on X11 an in-process thread answers
+`SelectionRequest`s while the handle (or a clone) lives; on Wayland an
+in-process thread serves data-control requests until the process exits.
 
 The API is `cfg`-gated to `target_os = "linux"`: other platforms do not get
 it at all — there is no stub and no CLIPBOARD emulation.

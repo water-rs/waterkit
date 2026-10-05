@@ -111,10 +111,13 @@
 //! data uses its MIME type, which on X11 is the target name.
 //!
 //! After a write the process owns the selection and keeps answering paste
-//! requests from other clients until another client claims it or the process
-//! exits, whether or not the handle that wrote it is still alive. The one
-//! exception is PRIMARY on X11, which a [`PrimarySelection`] serves only while
-//! it lives.
+//! requests from other clients until another client claims it, and:
+//!
+//! - **Wayland**: until the process exits, independent of the handle's
+//!   lifetime; a thread inside the process serves data-control requests.
+//! - **X11**: until the handle that wrote it, its clones and the watches
+//!   started from them are all dropped; a thread inside the crate answers
+//!   `SelectionRequest`s, sending large formats incrementally (`INCR`).
 //!
 //! # Platform Notes
 //!
@@ -488,16 +491,10 @@ impl Clipboard {
 /// [Linux Display Server](crate#linux-display-server) describes; a Wayland
 /// compositor must offer a primary selection to data-control clients.
 ///
-/// # Serving lifetime
-///
-/// A [`PrimarySelection`] owns the selection after [`set_text`](Self::set_text)
-/// and keeps answering paste requests from other clients:
-///
-/// - **X11**: a worker thread inside the crate serves `SelectionRequest`s
-///   until another client claims PRIMARY or this handle is dropped.
-/// - **Wayland**: the text is handed to a thread inside the process that
-///   serves data-control requests until another client claims PRIMARY or the
-///   process exits, independent of this handle's lifetime.
+/// After [`set_text`](Self::set_text) the process owns PRIMARY and serves it
+/// for as long as [Linux Display Server](crate#linux-display-server)
+/// describes: on X11 while this handle or a clone lives, on Wayland until the
+/// process exits.
 ///
 /// # Example
 ///

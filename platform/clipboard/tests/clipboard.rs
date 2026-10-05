@@ -46,26 +46,34 @@ const EXTERNAL_CUSTOM: &[u8] = &[9, 8, 7];
 /// How long a watch may take to report a change made by the external tool.
 const WATCH_DEADLINE: Duration = Duration::from_secs(5);
 
+/// A size above every display server's limit for one transfer (on X11 a
+/// quarter of the maximum request size), so the data moves incrementally.
+const LARGE_SIZE: usize = 5 * 1024 * 1024 + 7;
+
+/// One step of the round trip.
+type Step = fn(&External, &mut Clipboard) -> Result<(), ClipboardError>;
+
 /// Write every format through the crate and read it back through the crate
 /// and through the display server's clipboard tool; claim CLIPBOARD with each
 /// format through that tool and read it through the crate; watch a change;
-/// clear.
+/// clear. A failure names the step it happened in.
 #[test]
-fn clipboard_round_trip() -> Result<(), ClipboardError> {
+fn clipboard_round_trip() -> Result<(), String> {
     let external = External::detect("CLIPBOARD");
-    let mut clipboard = Clipboard::new()?;
-
-    text(&external, &mut clipboard)?;
-    html(&external, &mut clipboard)?;
-    files(&external, &mut clipboard)?;
-    image(&external, &mut clipboard)?;
-    custom(&external, &mut clipboard)?;
-    watch(&external, &mut clipboard)?;
-
-    clipboard.clear()?;
-    assert!(!clipboard.has_text());
-    assert_eq!(block_on(clipboard.text())?, None);
-    assert_eq!(block_on(clipboard.files())?, Vec::<PathBuf>::new());
+    let mut clipboard = Clipboard::new().map_err(|error| format!("Clipboard::new: {error:?}"))?;
+    let steps: [(&str, Step); 8] = [
+        ("text", text),
+        ("html", html),
+        ("files", files),
+        ("image", image),
+        ("custom", custom),
+        ("large", large),
+        ("watch", watch),
+        ("clear", clear),
+    ];
+    for (name, step) in steps {
+        step(&external, &mut clipboard).map_err(|error| format!("{name} step: {error:?}"))?;
+    }
     Ok(())
 }
 
@@ -208,6 +216,44 @@ fn custom(external: &External, clipboard: &mut Clipboard) -> Result<(), Clipboar
     let expected = Some(EXTERNAL_CUSTOM.to_vec());
     let read = common::read_until(&expected, || block_on(clipboard.binary(CUSTOM_MIME)))?;
     assert_eq!(read, expected);
+    Ok(())
+}
+
+/// [`LARGE_SIZE`] bytes counting up to `period` over and over; a period that
+/// does not divide the size catches a dropped or repeated increment.
+fn large_payload(period: u8) -> Vec<u8> {
+    (0..period).cycle().take(LARGE_SIZE).collect()
+}
+
+/// A payload too large for one transfer, in both directions.
+fn large(external: &External, clipboard: &mut Clipboard) -> Result<(), ClipboardError> {
+    let owned = large_payload(251);
+    clipboard.set_binary(&owned, CUSTOM_MIME)?;
+    assert!(
+        block_on(clipboard.binary(CUSTOM_MIME))?.as_deref() == Some(owned.as_slice()),
+        "the crate read back different bytes than it wrote"
+    );
+    assert!(
+        external.read(Some(CUSTOM_MIME)) == owned,
+        "the external tool read different bytes than the crate wrote"
+    );
+
+    let seeded = large_payload(239);
+    external.write(&seeded, Some(CUSTOM_MIME));
+    let expected = Some(seeded);
+    let read = common::read_until(&expected, || block_on(clipboard.binary(CUSTOM_MIME)))?;
+    assert!(
+        read == expected,
+        "the crate read different bytes than the external tool wrote"
+    );
+    Ok(())
+}
+
+fn clear(_: &External, clipboard: &mut Clipboard) -> Result<(), ClipboardError> {
+    clipboard.clear()?;
+    assert!(!clipboard.has_text());
+    assert_eq!(block_on(clipboard.text())?, None);
+    assert_eq!(block_on(clipboard.files())?, Vec::<PathBuf>::new());
     Ok(())
 }
 

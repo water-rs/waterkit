@@ -1,5 +1,4 @@
-//! Watching an X selection through `XFixes` selection notifications, via
-//! `x11rb`.
+//! Watching an X selection through `XFixes` selection notifications.
 //!
 //! The watch subscribes before [`watch`] returns, so no change made after it
 //! returns is missed. Its thread blocks on the connection until the X server
@@ -9,17 +8,13 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::thread;
 
-use x11rb::COPY_DEPTH_FROM_PARENT;
 use x11rb::connection::Connection as _;
 use x11rb::protocol::Event;
 use x11rb::protocol::xfixes::{self, ConnectionExt as _};
-use x11rb::protocol::xproto::{
-    AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateWindowAux, EventMask, Window,
-    WindowClass,
-};
+use x11rb::protocol::xproto::{EventMask, Window};
 use x11rb::rust_connection::RustConnection;
 
-use super::platform;
+use super::{connect, intern, platform, wake};
 use crate::error::ClipboardError;
 use crate::sys::linux::{StopWatch, WatchGuard};
 
@@ -33,37 +28,13 @@ pub fn watch(
     selection: &'static str,
     mut on_change: impl FnMut() -> ControlFlow<()> + Send + 'static,
 ) -> Result<WatchGuard, ClipboardError> {
-    let (connection, screen) = x11rb::connect(None).map_err(|error| platform(&error))?;
-    let root = connection.setup().roots[screen].root;
-    let selection_atom = connection
-        .intern_atom(false, selection.as_bytes())
-        .map_err(|error| platform(&error))?
-        .reply()
-        .map_err(|error| platform(&error))?
-        .atom;
+    // The notifications and the stop message are delivered to this window.
+    let (connection, window) = connect(EventMask::NO_EVENT)?;
+    let selection_atom = intern(&connection, selection)?;
     connection
         .xfixes_query_version(XFIXES_VERSION.0, XFIXES_VERSION.1)
         .map_err(|error| platform(&error))?
         .reply()
-        .map_err(|error| platform(&error))?;
-    // The notifications and the stop message are delivered to this window.
-    let window = connection.generate_id().map_err(|error| platform(&error))?;
-    connection
-        .create_window(
-            COPY_DEPTH_FROM_PARENT,
-            window,
-            root,
-            0,
-            0,
-            1,
-            1,
-            0,
-            WindowClass::INPUT_ONLY,
-            x11rb::COPY_FROM_PARENT,
-            &CreateWindowAux::new(),
-        )
-        .map_err(|error| platform(&error))?
-        .check()
         .map_err(|error| platform(&error))?;
     connection
         .xfixes_select_selection_input(
@@ -106,8 +77,7 @@ pub fn watch(
     Ok(WatchGuard::new(Stop { connection, window }))
 }
 
-/// Stops an X11 watch by sending its window a client message, which wakes
-/// the watch thread.
+/// Stops an X11 watch by waking its thread with a client message.
 struct Stop {
     connection: Arc<RustConnection>,
     window: Window,
@@ -115,12 +85,7 @@ struct Stop {
 
 impl StopWatch for Stop {
     fn stop(&self) {
-        let message = ClientMessageEvent::new(32, self.window, AtomEnum::NONE, [0; 5]);
-        let sent = self
-            .connection
-            .send_event(false, self.window, EventMask::NO_EVENT, message)
-            .and_then(|_| self.connection.flush());
-        if let Err(error) = sent {
+        if let Err(error) = wake(&self.connection, self.window) {
             // The connection is gone, and with it the watch thread.
             tracing::debug!(%error, "the X11 watch connection closed before the watch was stopped");
         }

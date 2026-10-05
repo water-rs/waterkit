@@ -6,13 +6,12 @@
 //! session whose compositor does not offer the selection to data-control
 //! clients is an error; neither selection ever falls through to X11.
 //!
-//! On Wayland both selections share one implementation, generic over the
-//! [`Selection`]. On X11, CLIPBOARD goes through `clipboard-rs`, which serves
-//! several formats at once, and PRIMARY, which only ever holds text, through
-//! `x11-clipboard`.
+//! On each display server both selections share one implementation, generic
+//! over the [`Selection`]: [`wayland`] through `wl-clipboard-rs`, [`x11`]
+//! through `x11rb`. Both implement [`Backend`].
 //!
-//! The formats a CLIPBOARD write offers and how a read is decoded live in
-//! [`formats`], once for both display servers.
+//! The formats a write offers and how a read is decoded live in [`formats`],
+//! once for both display servers.
 
 mod clipboard;
 mod formats;

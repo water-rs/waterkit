@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use super::formats::{self, Offered, Representation};
 use super::session::{self, DisplayServer, Session};
 use super::wayland::{self, WaylandSelection};
-use super::x11::X11Clipboard;
+use super::x11::X11Selection;
 use super::{Backend, Clipboard, WatchGuard};
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
@@ -23,7 +23,7 @@ impl ClipboardInner {
         tracing::debug!(?display_server, "CLIPBOARD backend chosen");
         let backend: Box<dyn Backend> = match display_server {
             DisplayServer::Wayland => Box::new(WaylandSelection::<Clipboard>::new()),
-            DisplayServer::X11 => Box::new(X11Clipboard::connect()?),
+            DisplayServer::X11 => Box::new(X11Selection::<Clipboard>::connect()?),
         };
         Ok(Self { backend })
     }

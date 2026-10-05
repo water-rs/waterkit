@@ -5,15 +5,14 @@ use std::{mem::ManuallyDrop, num::NonZeroU16, ptr, time::Duration};
 use windows::Win32::{
     Media::MediaFoundation::{
         CMSAACDecMFT, IMFMediaType, IMFSample, IMFTransform, MF_E_TRANSFORM_NEED_MORE_INPUT,
-        MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, MF_MT_AAC_PAYLOAD_TYPE,
-        MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_BLOCK_ALIGNMENT,
-        MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
-        MF_MT_USER_DATA, MF_VERSION, MFAudioFormat_AAC, MFAudioFormat_Float, MFCreateMediaType,
-        MFCreateMemoryBuffer, MFCreateSample, MFMediaType_Audio, MFSTARTUP_NOSOCKET, MFShutdown,
-        MFStartup, MFT_MESSAGE_COMMAND_DRAIN, MFT_MESSAGE_COMMAND_FLUSH,
-        MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_END_OF_STREAM,
-        MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
-        MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES, MFT_OUTPUT_STREAM_INFO,
+        MF_E_TRANSFORM_STREAM_CHANGE, MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION,
+        MF_MT_AAC_PAYLOAD_TYPE, MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND,
+        MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_MT_USER_DATA, MF_VERSION, MFAudioFormat_AAC,
+        MFAudioFormat_Float, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
+        MFMediaType_Audio, MFSTARTUP_NOSOCKET, MFShutdown, MFStartup, MFT_MESSAGE_COMMAND_DRAIN,
+        MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+        MFT_MESSAGE_NOTIFY_END_OF_STREAM, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
+        MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES, MFT_OUTPUT_STREAM_INFO,
         MFT_OUTPUT_STREAM_PROVIDES_SAMPLES,
     },
     System::Com::{
@@ -97,11 +96,22 @@ impl WindowsAacDecoder {
                     .map_err(|error| format!("create Media Foundation AAC decoder: {error}"))?;
             let input_type =
                 create_aac_input_type(&audio_specific_config, channels.get(), sample_rate.get())?;
-            let output_type = create_float_output_type(channels.get(), sample_rate.get())?;
 
             transform
                 .SetInputType(0, &input_type, 0)
                 .map_err(|error| format!("set AAC input type: {error}"))?;
+            // The transform rejects hand-built float PCM media types: its offered
+            // type carries attributes like MF_MT_ALL_SAMPLES_INDEPENDENT that a
+            // manual media type lacks. Negotiate the offered type instead.
+            let (output_type, offered_channels, offered_sample_rate) =
+                offered_float_output_type(&transform)?;
+            if offered_channels != channels.get() || offered_sample_rate != sample_rate.get() {
+                return Err(format!(
+                    "Media Foundation AAC decoder offered {offered_channels}ch/{offered_sample_rate}Hz float PCM for a declared {}ch/{}Hz stream",
+                    channels.get(),
+                    sample_rate.get(),
+                ));
+            }
             transform
                 .SetOutputType(0, &output_type, 0)
                 .map_err(|error| format!("set AAC float output type: {error}"))?;
@@ -140,6 +150,13 @@ impl WindowsAacDecoder {
                 decode_message(presentation_time, format!("ProcessInput: {error}"))
             })?;
         }
+        // The transform keeps a one-access-unit lookahead: it emits a unit's
+        // PCM once the following unit's timestamp bounds it, so most calls
+        // return the previous unit's frame and the first returns none. The
+        // decoder must run continuously across access units — AAC's MDCT
+        // overlap-add and the HE-AAC SBR tool carry state between frames, so
+        // this only pumps whatever output is already available; `finish`
+        // drains the held unit.
         self.collect_output(presentation_time)
     }
 
@@ -213,6 +230,9 @@ impl WindowsAacDecoder {
                     })?;
                     frames.push(self.decode_output_sample(&sample, submitted_time)?);
                 }
+                Err(error) if error.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
+                    self.renegotiate_output(submitted_time)?;
+                }
                 Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => {
                     return Ok(frames);
                 }
@@ -224,6 +244,40 @@ impl WindowsAacDecoder {
                 }
             }
         }
+    }
+
+    /// Handles a stream-change notification: the decoder re-offers the media
+    /// types for the format it actually decoded, and decoding may continue only
+    /// if that real format still matches the declared configuration.
+    fn renegotiate_output(&mut self, submitted_time: Duration) -> Result<(), PacketAudioError> {
+        let (output_type, actual_channels, actual_sample_rate) =
+            offered_float_output_type(&self.transform)
+                .map_err(|message| decode_message(submitted_time, message))?;
+        if actual_channels != self.channels.get() || actual_sample_rate != self.sample_rate.get() {
+            return Err(PacketAudioError::UnexpectedFormatChange {
+                expected_channels: self.channels.get(),
+                expected_sample_rate: self.sample_rate.get(),
+                actual_channels,
+                actual_sample_rate,
+            });
+        }
+        unsafe {
+            self.transform
+                .SetOutputType(0, &output_type, 0)
+                .map_err(|error| {
+                    decode_message(
+                        submitted_time,
+                        format!("renegotiate AAC output type: {error}"),
+                    )
+                })?;
+            self.output_stream_info = self.transform.GetOutputStreamInfo(0).map_err(|error| {
+                decode_message(
+                    submitted_time,
+                    format!("query renegotiated AAC output stream: {error}"),
+                )
+            })?;
+        }
+        Ok(())
     }
 
     fn decode_output_sample(
@@ -305,25 +359,35 @@ fn create_aac_input_type(
     }
 }
 
-fn create_float_output_type(channels: u16, sample_rate: u32) -> Result<IMFMediaType, String> {
-    let block_alignment = u32::from(channels)
-        .checked_mul(BYTES_PER_FLOAT_SAMPLE)
-        .expect("validated AAC channel count must fit PCM block alignment");
-    let bytes_per_second = sample_rate
-        .checked_mul(block_alignment)
-        .expect("validated AAC layout must fit PCM byte rate");
+/// Returns the first float-PCM media type the transform currently offers for
+/// its output stream, together with the channel count and sample rate that
+/// type carries. The offered set mirrors the declared input type before
+/// decoding starts, and the stream's real format after a stream change.
+fn offered_float_output_type(transform: &IMFTransform) -> Result<(IMFMediaType, u16, u32), String> {
     unsafe {
-        let media_type = audio_media_type(MFAudioFormat_Float, channels, sample_rate)?;
-        media_type
-            .SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 32)
-            .map_err(|error| format!("set float PCM bit depth: {error}"))?;
-        media_type
-            .SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, block_alignment)
-            .map_err(|error| format!("set float PCM block alignment: {error}"))?;
-        media_type
-            .SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, bytes_per_second)
-            .map_err(|error| format!("set float PCM byte rate: {error}"))?;
-        Ok(media_type)
+        for index in 0.. {
+            let Ok(media_type) = transform.GetOutputAvailableType(0, index) else {
+                break;
+            };
+            let subtype = media_type
+                .GetGUID(&MF_MT_SUBTYPE)
+                .map_err(|error| format!("read offered output subtype: {error}"))?;
+            if subtype != MFAudioFormat_Float {
+                continue;
+            }
+            let channels = media_type
+                .GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)
+                .map_err(|error| format!("read offered channel count: {error}"))?;
+            let sample_rate = media_type
+                .GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)
+                .map_err(|error| format!("read offered sample rate: {error}"))?;
+            let channels = u16::try_from(channels)
+                .map_err(|_| format!("offered channel count {channels} exceeds u16"))?;
+            return Ok((media_type, channels, sample_rate));
+        }
+        Err(String::from(
+            "Media Foundation AAC decoder offered no float PCM output type",
+        ))
     }
 }
 

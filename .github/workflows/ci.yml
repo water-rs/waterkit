@@ -174,6 +174,8 @@ jobs:
         uses: tracel-ai/github-actions/install-dxc@295f2fdbae5271f4f8ad56d634e4ff6a95daafc8
       - name: Install Linux dependencies
         uses: ./.github/actions/setup-linux-deps
+      - name: Start an X server for the clipboard tests
+        uses: ./.github/actions/setup-x11-display
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview

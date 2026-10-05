@@ -1316,8 +1316,18 @@ impl CameraInner {
             (importer, receiver),
             move |(mut importer, receiver)| async move {
                 let raw = receiver.recv().await.ok()?;
-                let frame = raw.import(&mut importer, mounting);
-                Some((frame, (importer, receiver)))
+                match raw.import(&mut importer, mounting) {
+                    Ok(frame) => Some((frame, (importer, receiver))),
+                    Err(error) => {
+                        // This device cannot take the camera's buffers;
+                        // ending the stream is how a capture failure reaches
+                        // consumers.
+                        tracing::error!(
+                            "camera frames stopped: a frame could not be imported: {error}"
+                        );
+                        None
+                    }
+                }
             },
         )
     }

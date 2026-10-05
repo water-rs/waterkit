@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use jni::objects::{Global, JObject};
 use wgpu_external_frame::ahardware_buffer::{
-    DEVICE_EXTENSIONS, HardwareBuffer, HardwareBufferFrame, HardwareBufferImporter,
-    HardwareBufferLease, ImportedHardwareBuffer,
+    DEVICE_EXTENSIONS, HardwareBuffer, HardwareBufferFrame, HardwareBufferImportError,
+    HardwareBufferImporter, HardwareBufferLease, ImportedHardwareBuffer,
 };
 
 use super::{AndroidBridge, SensorMounting};
@@ -101,15 +101,17 @@ impl RawFrame {
 
     /// Imports the buffer's planes on the importer's device.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics when the importer rejects the buffer. The reader is configured
-    /// for GPU-sampled `PRIVATE` buffers, which every Camera2 device delivers
-    /// as importable YCbCr, so a rejection is a platform defect.
-    pub fn import(self, importer: &mut HardwareBufferImporter, mounting: SensorMounting) -> Frame {
-        let buffer = importer
-            .import(self.frame)
-            .unwrap_or_else(|error| panic!("a camera frame could not be imported: {error}"));
+    /// Returns the importer's error when the device cannot import the
+    /// buffer, such as an external-format buffer on a device without the
+    /// Vulkan 1.4 or `VK_KHR_maintenance6` its conversion needs.
+    pub fn import(
+        self,
+        importer: &mut HardwareBufferImporter,
+        mounting: SensorMounting,
+    ) -> Result<Frame, HardwareBufferImportError> {
+        let buffer = importer.import(self.frame)?;
         let (planes, size) = match buffer {
             ImportedHardwareBuffer::Ycbcr420(ycbcr) => {
                 let size = ycbcr.luma.texture().size();
@@ -130,7 +132,7 @@ impl RawFrame {
                 )
             }
         };
-        Frame::new(
+        Ok(Frame::new(
             planes,
             FrameStorage::Imported,
             size.width,
@@ -141,6 +143,6 @@ impl RawFrame {
                 self.display_rotation,
             ),
             self.timestamp,
-        )
+        ))
     }
 }

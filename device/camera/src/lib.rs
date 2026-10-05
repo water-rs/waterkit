@@ -779,6 +779,11 @@ impl Camera {
     /// backpressure - if frames are not consumed fast enough, older frames
     /// will be dropped. Each stream recycles the GPU storage of the frames it
     /// produced once they are dropped.
+    ///
+    /// The stream ends, with the reason logged, when capture fails, and on
+    /// Android when the device cannot import the camera's buffers: a driver
+    /// that describes them only through an external format needs a device
+    /// with Vulkan 1.4 or `VK_KHR_maintenance6` for their conversion.
     pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
         self.inner.frames()
     }

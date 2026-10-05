@@ -39,7 +39,6 @@ name = "preview"
 required-features = ["preview-example"]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 pollster = "1.0"
 
 # winit serves the preview example's window. On Android it pulls in

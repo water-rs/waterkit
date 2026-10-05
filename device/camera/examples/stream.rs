@@ -7,8 +7,18 @@ use std::pin::pin;
 use std::sync::Arc;
 use waterkit_camera::{Camera, CameraError};
 
-#[tokio::main]
-async fn main() -> Result<(), CameraError> {
+fn main() -> Result<(), CameraError> {
+    pollster::block_on(stream())
+}
+
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        clippy::future_not_send,
+        reason = "on wasm32 `wgpu::Device` and `wgpu::Queue` are not `Send`, so neither is a future holding them"
+    )
+)]
+async fn stream() -> Result<(), CameraError> {
     // List available cameras
     println!("Available cameras:");
     let cameras = Camera::list()?;
@@ -36,6 +46,13 @@ async fn main() -> Result<(), CameraError> {
         .await
         .expect("Failed to create device");
 
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::arc_with_non_send_sync,
+            reason = "`Camera::open_default` takes the device in an `Arc` on every platform; on wasm32 `wgpu::Device` is neither `Send` nor `Sync`"
+        )
+    )]
     let device = Arc::new(device);
     let queue = Arc::new(queue);
 

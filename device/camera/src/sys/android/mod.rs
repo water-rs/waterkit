@@ -1,8 +1,14 @@
 //! Android camera implementation using Camera2 + `MediaRecorder` via JNI/Kotlin bridge.
+//!
+//! The Kotlin helper converts each `YUV_420_888` preview image to RGBA bytes,
+//! which upload into a pooled `Rgba8Unorm` texture. A frame's orientation
+//! combines the sensor orientation, the lens facing and the display rotation
+//! at the time the frame arrived.
 
+use crate::pool::{CpuPlanes, FramePool};
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
-    ExposureMode, FlashMode, FocusMode, Frame, Photo, PixelFormat, RawPhoto, RawPhotoFormat,
+    ExposureMode, FlashMode, FocusMode, Frame, Orientation, Photo, RawPhoto, RawPhotoFormat,
     RawVideoFormat, Resolution, StabilizationMode,
 };
 use jni::objects::{
@@ -52,7 +58,16 @@ struct RawFrame {
     data: Vec<u8>,
     width: u32,
     height: u32,
+    /// Display rotation in degrees when the frame arrived.
+    display_rotation: u32,
     timestamp: Duration,
+}
+
+/// What fixes a camera's frame orientation besides the display rotation.
+#[derive(Debug, Clone, Copy)]
+struct SensorMounting {
+    sensor_orientation: u32,
+    lens_faces_back: bool,
 }
 
 #[derive(Debug)]
@@ -668,14 +683,13 @@ impl AndroidBridge {
         &self,
         start_instant: Instant,
         timeout_ms: i32,
-        expected_size: Resolution,
     ) -> Result<Option<RawFrame>, CameraError> {
         self.with_env(|env| {
             let frame_obj = env
                 .call_method(
                     self.helper.as_obj(),
                     jni_str!("waitForNextFrame"),
-                    jni_sig!("(I)[B"),
+                    jni_sig!("(I)Lwaterkit/camera/CameraHelper$CapturedFrame;"),
                     &[JValue::Int(timeout_ms.max(0))],
                 )
                 .and_then(jni::objects::JValueOwned::l)
@@ -687,65 +701,57 @@ impl AndroidBridge {
                 return Ok(None);
             }
 
-            let frame_array = env.cast_local::<JByteArray>(frame_obj).map_err(|error| {
+            let int_field = |env: &mut Env<'_>, getter: &JNIStr| -> Result<u32, CameraError> {
+                let value = env
+                    .call_method(&frame_obj, getter, jni_sig!("()I"), &[])
+                    .and_then(jni::objects::JValueOwned::i)
+                    .map_err(|error| CameraError::CaptureFailed(format!("{getter}: {error}")))?;
+                u32::try_from(value)
+                    .map_err(|_| CameraError::CaptureFailed(format!("{getter} returned {value}")))
+            };
+            let width = int_field(env, jni_str!("getWidth"))?;
+            let height = int_field(env, jni_str!("getHeight"))?;
+            let display_rotation = int_field(env, jni_str!("getDisplayRotation"))?;
+
+            let rgba_obj = env
+                .call_method(&frame_obj, jni_str!("getRgba"), jni_sig!("()[B"), &[])
+                .and_then(jni::objects::JValueOwned::l)
+                .map_err(|error| CameraError::CaptureFailed(format!("getRgba: {error}")))?;
+            let rgba_array = env.cast_local::<JByteArray>(rgba_obj).map_err(|error| {
                 CameraError::CaptureFailed(format!("frame is not a byte array: {error}"))
             })?;
-            let data = env.convert_byte_array(&frame_array).map_err(|error| {
+            let data = env.convert_byte_array(&rgba_array).map_err(|error| {
                 CameraError::CaptureFailed(format!("convert_byte_array(frame): {error}"))
             })?;
 
-            let hinted_expected = usize::try_from(expected_size.width)
-                .ok()
-                .and_then(|width| {
-                    usize::try_from(expected_size.height)
-                        .ok()
-                        .and_then(move |height| width.checked_mul(height))
-                })
-                .and_then(|pixels| pixels.checked_mul(4))
-                .ok_or_else(|| {
-                    CameraError::CaptureFailed(format!(
-                        "frame size overflow: {}x{}",
-                        expected_size.width, expected_size.height
-                    ))
-                })?;
-
-            let size = if data.len() == hinted_expected {
-                expected_size
-            } else {
-                self.frame_size_internal(env)?
-            };
-
-            let expected = usize::try_from(size.width)
-                .ok()
-                .and_then(|width| {
-                    usize::try_from(size.height)
-                        .ok()
-                        .and_then(move |height| width.checked_mul(height))
-                })
-                .and_then(|pixels| pixels.checked_mul(4))
-                .ok_or_else(|| {
-                    CameraError::CaptureFailed(format!(
-                        "frame size overflow: {}x{}",
-                        size.width, size.height
-                    ))
-                })?;
-
+            let expected = width as usize * height as usize * 4;
             if data.len() != expected {
                 return Err(CameraError::CaptureFailed(format!(
-                    "invalid frame byte length {}, expected {} ({}x{}x4)",
+                    "invalid frame byte length {}, expected {expected} ({width}x{height}x4)",
                     data.len(),
-                    expected,
-                    size.width,
-                    size.height
                 )));
             }
 
             Ok(Some(RawFrame {
                 data,
-                width: size.width,
-                height: size.height,
+                width,
+                height,
+                display_rotation,
                 timestamp: start_instant.elapsed(),
             }))
+        })
+    }
+
+    fn sensor_mounting(&self, camera_id: &str) -> Result<SensorMounting, CameraError> {
+        let sensor_orientation =
+            self.call_int_with_camera(jni_str!("getSensorOrientation"), camera_id)?;
+        Ok(SensorMounting {
+            sensor_orientation: u32::try_from(sensor_orientation).map_err(|_| {
+                CameraError::PlatformError(format!(
+                    "SENSOR_ORIENTATION is negative: {sensor_orientation}"
+                ))
+            })?,
+            lens_faces_back: self.call_bool_with_camera(jni_str!("lensFacesBack"), camera_id)?,
         })
     }
 
@@ -1019,6 +1025,7 @@ pub struct CameraInner {
     capabilities: CameraCapabilities,
     controls: CameraControls,
     resolution: Resolution,
+    mounting: SensorMounting,
     frame_receiver: async_channel::Receiver<RawFrame>,
     running: Arc<AtomicBool>,
     bridge: Arc<AndroidBridge>,
@@ -1070,6 +1077,7 @@ impl CameraInner {
         let capabilities =
             bridge.query_capabilities(camera_id, config.resolution, config.frame_rate.max(1))?;
         capabilities.validate()?;
+        let mounting = bridge.sensor_mounting(camera_id)?;
 
         bridge.open_camera(camera_id, config.resolution, config.frame_rate)?;
 
@@ -1094,24 +1102,18 @@ impl CameraInner {
         let start_instant = Instant::now();
         let frame_wait_ms = i32::try_from((1_000_u64 / u64::from(config.frame_rate.max(1))).max(5))
             .unwrap_or(i32::MAX);
-        let mut frame_resolution = resolution;
 
         std::thread::spawn(move || {
             while running_for_thread.load(Ordering::SeqCst) {
-                match bridge_for_thread.wait_for_frame(
-                    start_instant,
-                    frame_wait_ms,
-                    frame_resolution,
-                ) {
+                match bridge_for_thread.wait_for_frame(start_instant, frame_wait_ms) {
                     Ok(Some(frame)) => {
-                        frame_resolution = Resolution {
-                            width: frame.width,
-                            height: frame.height,
-                        };
                         let _ = sender.force_send(frame);
                     }
                     Ok(None) => {}
-                    Err(_) => {
+                    Err(error) => {
+                        // Ending the thread closes the frame channel, so the
+                        // failure reaches consumers as the end of their frames.
+                        tracing::error!("camera capture stopped: {error}");
                         running_for_thread.store(false, Ordering::SeqCst);
                         break;
                     }
@@ -1128,6 +1130,7 @@ impl CameraInner {
             capabilities,
             controls: CameraControls::default(),
             resolution,
+            mounting,
             frame_receiver: receiver,
             running,
             bridge,
@@ -1270,61 +1273,29 @@ impl CameraInner {
     }
 
     pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
-        let device = Arc::clone(&self.device);
-        let queue = Arc::clone(&self.queue);
+        let pool = FramePool::new(Arc::clone(&self.device), Arc::clone(&self.queue));
         let receiver = self.frame_receiver.clone();
+        let mounting = self.mounting;
 
-        futures::stream::unfold(
-            (device, queue, receiver),
-            |(device, queue, receiver)| async move {
-                let raw = receiver.recv().await.ok()?;
-
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("AndroidCameraFrame"),
-                    size: wgpu::Extent3d {
-                        width: raw.width,
-                        height: raw.height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-
-                queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &raw.data,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(raw.width * 4),
-                        rows_per_image: Some(raw.height),
-                    },
-                    wgpu::Extent3d {
-                        width: raw.width,
-                        height: raw.height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-
-                let frame = Frame {
-                    texture,
-                    width: raw.width,
-                    height: raw.height,
-                    format: PixelFormat::Rgba8,
-                    timestamp: raw.timestamp,
-                };
-
-                Some((frame, (device, queue, receiver)))
-            },
-        )
+        futures::stream::unfold((pool, receiver), move |(pool, receiver)| async move {
+            let raw = receiver.recv().await.ok()?;
+            let frame = pool.upload(
+                &CpuPlanes::Rgb {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    data: &raw.data,
+                    stride: raw.width * 4,
+                },
+                raw.width,
+                raw.height,
+                Orientation::from_camera2(
+                    mounting.sensor_orientation,
+                    mounting.lens_faces_back,
+                    raw.display_rotation,
+                ),
+                raw.timestamp,
+            );
+            Some((frame, (pool, receiver)))
+        })
     }
 
     #[allow(

@@ -1,8 +1,10 @@
 //! Cross-platform camera streaming with GPU-first frame delivery.
 //!
 //! This crate provides a unified API for camera enumeration and streaming
-//! across iOS, macOS, Android, Windows, and Linux platforms. Frames are
-//! delivered as GPU textures for zero-copy rendering.
+//! across iOS, macOS, Android, Windows, and Linux platforms. Each [`Frame`]
+//! holds its pixels as GPU textures in the plane layout the platform
+//! delivered ([`FramePlanes`]) together with its [`Orientation`];
+//! [`FrameConverter`] renders any frame to one upright RGBA texture on the GPU.
 //!
 //! The camera API is fully RAII-based: cameras start streaming when opened
 //! and stop when dropped.
@@ -11,17 +13,18 @@
 //! # Example
 //!
 //! ```ignore
-//! use waterkit_camera::{Camera, CameraConfig};
+//! use waterkit_camera::{Camera, FrameConverter};
 //! use futures::StreamExt;
 //!
 //! async fn example(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) {
 //!     // Camera starts streaming immediately on open
-//!     let camera = Camera::open_default(device, queue).await.unwrap();
+//!     let camera = Camera::open_default(device.clone(), queue.clone()).await.unwrap();
 //!
+//!     let converter = FrameConverter::new(&device);
 //!     let mut frames = camera.frames();
 //!     while let Some(frame) = frames.next().await {
-//!         let view = frame.view();
-//!         // Use texture view for rendering...
+//!         let upright = converter.convert(&device, &queue, &frame);
+//!         // Sample `upright` for rendering...
 //!     }
 //!     // Camera stops when dropped
 //! }
@@ -29,7 +32,13 @@
 
 #![warn(missing_docs)]
 
+mod converter;
+mod frame;
+mod pool;
 mod sys;
+
+pub use converter::{FrameConverter, UPRIGHT_FORMAT};
+pub use frame::{Frame, FramePlanes, Orientation, YCbCrEncoding, YCbCrMatrix, YCbCrRange};
 
 use std::num::NonZeroU8;
 use std::path::Path;
@@ -38,118 +47,6 @@ use std::time::Duration;
 
 // Re-export wgpu types for convenience
 pub use wgpu;
-
-// ============================================================================
-// Pixel Format
-// ============================================================================
-
-/// Pixel format for camera frames.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum PixelFormat {
-    /// BGRA 8-bit per channel (native on Apple platforms).
-    #[default]
-    Bgra8,
-    /// RGBA 8-bit per channel.
-    Rgba8,
-    /// NV12 (YUV 4:2:0 bi-planar) - common camera format.
-    Nv12,
-}
-
-impl PixelFormat {
-    /// Get the corresponding wgpu texture format.
-    ///
-    /// For YUV formats, returns the format for the combined texture.
-    /// Use a shader to convert YUV to RGB.
-    #[must_use]
-    #[allow(clippy::match_same_arms)] // Nv12 converts to Bgra8, intentionally same
-    pub const fn wgpu_format(&self) -> wgpu::TextureFormat {
-        match self {
-            Self::Bgra8 | Self::Nv12 => wgpu::TextureFormat::Bgra8UnormSrgb,
-            Self::Rgba8 => wgpu::TextureFormat::Rgba8UnormSrgb,
-        }
-    }
-
-    /// Bytes per pixel for the format.
-    #[must_use]
-    pub const fn bytes_per_pixel(&self) -> u32 {
-        match self {
-            Self::Bgra8 | Self::Rgba8 => 4,
-            Self::Nv12 => 1, // 1.5 average, but luma plane is 1 bpp
-        }
-    }
-}
-
-// ============================================================================
-// Frame
-// ============================================================================
-
-/// A GPU-backed camera frame.
-///
-/// Contains a wgpu texture that can be used directly for rendering.
-/// On supported platforms (Apple), this is zero-copy from the camera hardware.
-pub struct Frame {
-    texture: wgpu::Texture,
-    width: u32,
-    height: u32,
-    format: PixelFormat,
-    timestamp: Duration,
-}
-
-impl Frame {
-    /// Get the underlying wgpu texture.
-    #[must_use]
-    pub const fn texture(&self) -> &wgpu::Texture {
-        &self.texture
-    }
-
-    /// Consume the frame and return the underlying texture.
-    #[must_use]
-    pub fn into_texture(self) -> wgpu::Texture {
-        self.texture
-    }
-
-    /// Create a texture view for rendering.
-    #[must_use]
-    pub fn view(&self) -> wgpu::TextureView {
-        self.texture
-            .create_view(&wgpu::TextureViewDescriptor::default())
-    }
-
-    /// Frame width in pixels.
-    #[must_use]
-    pub const fn width(&self) -> u32 {
-        self.width
-    }
-
-    /// Frame height in pixels.
-    #[must_use]
-    pub const fn height(&self) -> u32 {
-        self.height
-    }
-
-    /// Pixel format.
-    #[must_use]
-    pub const fn format(&self) -> PixelFormat {
-        self.format
-    }
-
-    /// Presentation timestamp since camera start.
-    #[must_use]
-    pub const fn timestamp(&self) -> Duration {
-        self.timestamp
-    }
-}
-
-impl std::fmt::Debug for Frame {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Frame")
-            .field("width", &self.width)
-            .field("height", &self.height)
-            .field("format", &self.format)
-            .field("timestamp", &self.timestamp)
-            .finish_non_exhaustive()
-    }
-}
 
 // ============================================================================
 // Resolution
@@ -199,8 +96,6 @@ pub struct CameraConfig {
     pub resolution: Resolution,
     /// Desired frame rate.
     pub frame_rate: u32,
-    /// Pixel format preference.
-    pub format: PixelFormat,
 }
 
 impl Default for CameraConfig {
@@ -208,7 +103,6 @@ impl Default for CameraConfig {
         Self {
             resolution: Resolution::FULL_HD,
             frame_rate: 30,
-            format: PixelFormat::Bgra8,
         }
     }
 }
@@ -216,21 +110,19 @@ impl Default for CameraConfig {
 impl CameraConfig {
     /// Create a 4K configuration.
     #[must_use]
-    pub fn uhd() -> Self {
+    pub const fn uhd() -> Self {
         Self {
             resolution: Resolution::UHD,
             frame_rate: 30,
-            ..Default::default()
         }
     }
 
     /// Create a high frame rate configuration (720p60).
     #[must_use]
-    pub fn high_fps() -> Self {
+    pub const fn high_fps() -> Self {
         Self {
             resolution: Resolution::HD,
             frame_rate: 60,
-            ..Default::default()
         }
     }
 }
@@ -862,7 +754,8 @@ impl Camera {
     ///
     /// Frames are delivered at the camera's frame rate. The stream implements
     /// backpressure - if frames are not consumed fast enough, older frames
-    /// will be dropped.
+    /// will be dropped. Each stream recycles the GPU storage of the frames it
+    /// produced once they are dropped.
     pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
         self.inner.frames()
     }

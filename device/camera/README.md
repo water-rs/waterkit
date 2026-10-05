@@ -28,11 +28,39 @@ These fields are validated internally to fail fast on inconsistent backend repor
 - Camera discovery: `Camera::list()`
 - Open camera: `Camera::open(...)`, `Camera::open_default(...)`
 - GPU frame stream: `Camera::frames()`
+- Upright RGBA on the GPU: `FrameConverter`
 - Controls: `Camera::apply_controls(...)`
 - Photo capture: `Camera::capture_photo()`
 - RAW photo capture: `Camera::capture_raw_photo()`
 - Video recording: `Camera::recording(path)`
 - RAW video recording: `Camera::raw_recording(path)`
+
+## Frames
+
+A `Frame` exposes what it holds rather than a hidden RGBA texture:
+
+- `Frame::planes()` returns `FramePlanes`: one 8-bit RGBA/BGRA texture
+  (`Rgb`), biplanar 4:2:0 YCbCr (`YCbCr420`, luma plus interleaved chroma) or
+  packed 4:2:2 YUYV (`YCbCr422`), with the `YCbCrEncoding` (matrix and range)
+  of the YCbCr layouts.
+- `Frame::orientation()` says how the stored pixels relate to upright, with
+  EXIF 1–8 semantics. Upright is the scene as the lens sees it, unmirrored.
+- `FrameConverter` renders any frame to an upright `Rgba8Unorm` texture in a
+  compute pass. Its shaders are compiled ahead of time with `shaderloom`, so
+  create the device with `FrameConverter::required_features(adapter.features())`.
+
+What each platform delivers today:
+
+| Platform | Planes | Orientation |
+| :--- | :--- | :--- |
+| iOS / macOS | `Rgb` (BGRA) | capture connection rotation and mirroring |
+| Android | `Rgb` (RGBA) | sensor orientation, lens facing, display rotation |
+| Windows / Linux | `YCbCr420` (NV12), `YCbCr422` (YUYV), or `Rgb` from MJPEG | always `Up` |
+
+Every platform still copies each frame from CPU memory into a pooled texture:
+Apple asks the capture pipeline for BGRA buffers, and Android converts its
+YUV images to RGBA on the CPU first. Importing the platform buffers without a
+copy is tracked in water-rs/waterkit#136.
 
 ## RAW Outputs
 

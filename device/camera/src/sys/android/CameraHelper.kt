@@ -13,6 +13,7 @@ import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.DynamicRangeProfiles
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
+import android.hardware.display.DisplayManager
 import android.media.Image
 import android.media.ImageReader
 import android.media.MediaCodecInfo
@@ -26,6 +27,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.util.Range
 import android.util.Size
+import android.view.Display
 import android.view.Surface
 import kotlin.math.roundToInt
 import java.io.ByteArrayOutputStream
@@ -92,7 +94,21 @@ class CameraHelper(private val appContext: Context) {
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
 
-    private val frameQueue: LinkedBlockingDeque<ByteArray> = LinkedBlockingDeque(1)
+    /**
+     * One preview frame: RGBA pixels and the display rotation, in degrees,
+     * when the frame arrived. Together with the sensor orientation and lens
+     * facing it gives the frame's orientation.
+     */
+    class CapturedFrame(
+        val rgba: ByteArray,
+        val width: Int,
+        val height: Int,
+        val displayRotation: Int,
+    )
+
+    private val frameQueue: LinkedBlockingDeque<CapturedFrame> = LinkedBlockingDeque(1)
+    private val displayManager: DisplayManager =
+        appContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
     private var latestPhotoData: ByteArray? = null
     private var latestRawPhotoData: ByteArray? = null
     private var latestRawImage: Image? = null
@@ -243,7 +259,9 @@ class CameraHelper(private val appContext: Context) {
                     val rgba = yuv420ToRgba(image)
                     val timestampNs = SystemClock.elapsedRealtimeNanos()
                     frameQueue.pollLast()
-                    frameQueue.offerLast(rgba)
+                    frameQueue.offerLast(
+                        CapturedFrame(rgba, image.width, image.height, displayRotationDegrees()),
+                    )
                     maybeWriteRawVideoFrame(rgba, image.width, image.height, timestampNs)
                 } catch (error: Exception) {
                     Log.e(TAG, "Failed to process camera frame", error)
@@ -711,18 +729,10 @@ class CameraHelper(private val appContext: Context) {
     }
 
     /**
-     * Get latest frame as RGBA bytes.
-     * Returns null if no new frame is available.
-     */
-    fun getFrame(): ByteArray? {
-        return frameQueue.pollFirst()
-    }
-
-    /**
      * Wait for the next available frame and consume it.
      * Returns null on timeout or if no frame is available.
      */
-    fun waitForNextFrame(timeoutMs: Int): ByteArray? {
+    fun waitForNextFrame(timeoutMs: Int): CapturedFrame? {
         return try {
             if (timeoutMs <= 0) {
                 frameQueue.pollFirst()
@@ -732,6 +742,39 @@ class CameraHelper(private val appContext: Context) {
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()
             null
+        }
+    }
+
+    /**
+     * Clockwise angle, in degrees, through which the sensor's output must be
+     * rotated to be upright in the device's natural orientation.
+     */
+    fun getSensorOrientation(cameraId: String): Int {
+        val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        return manager.getCameraCharacteristics(cameraId)
+            .get(CameraCharacteristics.SENSOR_ORIENTATION)
+            ?: throw IllegalStateException("camera $cameraId reports no SENSOR_ORIENTATION")
+    }
+
+    /**
+     * Whether the lens faces away from the display. Front and external lenses
+     * do not, so the display rotation turns their image the other way.
+     */
+    fun lensFacesBack(cameraId: String): Boolean {
+        val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        return manager.getCameraCharacteristics(cameraId)
+            .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+    }
+
+    private fun displayRotationDegrees(): Int {
+        val display = displayManager.getDisplay(Display.DEFAULT_DISPLAY)
+            ?: throw IllegalStateException("the default display is gone")
+        return when (val rotation = display.rotation) {
+            Surface.ROTATION_0 -> 0
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> throw IllegalStateException("unknown display rotation $rotation")
         }
     }
 

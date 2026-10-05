@@ -1,14 +1,16 @@
 //! Apple platform (iOS/macOS) camera implementation using `AVCaptureSession`.
 //!
-//! Uses Metal texture interop for zero-copy frame rendering with wgpu.
+//! The capture output delivers 32-bit BGRA pixel buffers. Each buffer is
+//! copied into a pooled `Bgra8Unorm` texture; the frame's orientation comes
+//! from the capture connection's rotation and mirroring.
 
+use crate::pool::{CpuPlanes, FramePool};
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
-    ExposureControl, ExposureMode, FlashMode, FocusControl, FocusMode, Frame, Photo, PixelFormat,
+    ExposureControl, ExposureMode, FlashMode, FocusControl, FocusMode, Frame, Orientation, Photo,
     RawPhoto, RawPhotoFormat, RawVideoFormat, Resolution, StabilizationMode, WhiteBalanceControl,
     WhiteBalanceMode,
 };
-use futures::StreamExt;
 use std::num::NonZeroU8;
 use std::path::Path;
 use std::sync::Arc;
@@ -123,7 +125,7 @@ mod ffi {
 unsafe extern "C" {
     fn camera_set_frame_callback(
         context: *mut std::ffi::c_void,
-        callback: extern "C" fn(*mut std::ffi::c_void, u64, u32, u32, u64),
+        callback: extern "C" fn(*mut std::ffi::c_void, u64, u32, u32, u64, u32, bool),
     );
     fn camera_clear_frame_callback();
     fn camera_release_pixelbuffer(handle: u64);
@@ -153,6 +155,11 @@ struct RawFrame {
     width: u32,
     height: u32,
     timestamp_ns: u64,
+    /// Clockwise rotation, in degrees, that makes the (unmirrored) buffer
+    /// upright.
+    rotation_degrees: u32,
+    /// Whether the connection mirrored the buffer.
+    mirrored: bool,
 }
 
 struct FrameCallbackContext {
@@ -188,6 +195,8 @@ extern "C" fn frame_callback(
     width: u32,
     height: u32,
     timestamp_ns: u64,
+    rotation_degrees: u32,
+    mirrored: bool,
 ) {
     let context = unsafe { &*context.cast::<FrameCallbackContext>() };
     let frame = RawFrame {
@@ -195,6 +204,8 @@ extern "C" fn frame_callback(
         width,
         height,
         timestamp_ns,
+        rotation_degrees,
+        mirrored,
     };
     // Non-blocking send. force_send keeps latency low by replacing stale queued frames.
     match context.sender.force_send(frame) {
@@ -219,23 +230,16 @@ unsafe extern "C" {
     fn CVPixelBufferUnlockBaseAddress(pixelBuffer: CVPixelBufferRef, lockFlags: u64) -> CVReturn;
     fn CVPixelBufferGetBaseAddress(pixelBuffer: CVPixelBufferRef) -> *mut std::ffi::c_void;
     fn CVPixelBufferGetBytesPerRow(pixelBuffer: CVPixelBufferRef) -> usize;
-    fn CVPixelBufferGetWidth(pixelBuffer: CVPixelBufferRef) -> usize;
-    fn CVPixelBufferGetHeight(pixelBuffer: CVPixelBufferRef) -> usize;
 }
 
 // Lock flag for read-only access
 const K_CV_PIXEL_BUFFER_LOCK_READ_ONLY: u64 = 0x0000_0001;
 
-/// Create a wgpu texture from a `CVPixelBuffer` handle.
+/// Copies one `CVPixelBuffer` into a pooled texture and wraps it as a frame.
 ///
-/// Copies pixel data from the pixel buffer to a GPU texture.
-fn create_texture_from_pixelbuffer(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    pixelbuffer_handle: u64,
-    width: u32,
-    height: u32,
-) -> Result<wgpu::Texture, CameraError> {
+/// The capture output is configured for 32-bit BGRA, so the buffer is a
+/// single interleaved plane.
+fn upload_pixelbuffer(pool: &FramePool, raw: &RawFrame) -> Result<Frame, CameraError> {
     struct PixelBufferReadLockGuard(CVPixelBufferRef);
 
     impl Drop for PixelBufferReadLockGuard {
@@ -246,15 +250,12 @@ fn create_texture_from_pixelbuffer(
         }
     }
 
-    // Get the CVPixelBuffer pointer
-    if pixelbuffer_handle == 0 {
+    // The handle is a raw pointer to the CVPixelBuffer, retained by Swift.
+    let pixelbuffer = raw.pixelbuffer_handle as CVPixelBufferRef;
+    if pixelbuffer.is_null() {
         return Err(CameraError::GpuError("null CVPixelBuffer handle".into()));
     }
 
-    // The handle is a raw pointer to the CVPixelBuffer (retained by Swift)
-    let pixelbuffer = pixelbuffer_handle as CVPixelBufferRef;
-
-    // Lock the CVPixelBuffer for reading
     let lock_result =
         unsafe { CVPixelBufferLockBaseAddress(pixelbuffer, K_CV_PIXEL_BUFFER_LOCK_READ_ONLY) };
     if lock_result != K_CV_RETURN_SUCCESS {
@@ -264,97 +265,29 @@ fn create_texture_from_pixelbuffer(
     }
     let _lock_guard = PixelBufferReadLockGuard(pixelbuffer);
 
-    // Get CVPixelBuffer properties
     let base_address = unsafe { CVPixelBufferGetBaseAddress(pixelbuffer) };
     if base_address.is_null() {
         return Err(CameraError::GpuError(
             "CVPixelBuffer base address is null".into(),
         ));
     }
-
     let bytes_per_row = unsafe { CVPixelBufferGetBytesPerRow(pixelbuffer) };
-    #[allow(clippy::cast_possible_truncation)]
-    let actual_width = unsafe { CVPixelBufferGetWidth(pixelbuffer) as u32 };
-    #[allow(clippy::cast_possible_truncation)]
-    let actual_height = unsafe { CVPixelBufferGetHeight(pixelbuffer) as u32 };
+    let data_size = bytes_per_row * raw.height as usize;
+    let pixels = unsafe { std::slice::from_raw_parts(base_address.cast::<u8>(), data_size) };
+    let stride = u32::try_from(bytes_per_row)
+        .map_err(|_| CameraError::GpuError("CVPixelBuffer row stride exceeds u32".into()))?;
 
-    let width = if actual_width > 0 {
-        actual_width
-    } else {
-        width
-    };
-    let height = if actual_height > 0 {
-        actual_height
-    } else {
-        height
-    };
-    if width == 0 || height == 0 {
-        return Err(CameraError::GpuError(
-            "CVPixelBuffer reported zero dimensions".into(),
-        ));
-    }
-
-    let min_bytes_per_row = usize::try_from(width)
-        .ok()
-        .and_then(|w| w.checked_mul(4))
-        .ok_or_else(|| CameraError::GpuError("frame width overflows row stride".into()))?;
-    if bytes_per_row < min_bytes_per_row {
-        return Err(CameraError::GpuError(format!(
-            "CVPixelBuffer bytes_per_row {bytes_per_row} is smaller than minimum {min_bytes_per_row}"
-        )));
-    }
-
-    // Copy pixel data
-    let data_size = bytes_per_row
-        .checked_mul(
-            usize::try_from(height)
-                .map_err(|_| CameraError::GpuError("frame height overflows usize".into()))?,
-        )
-        .ok_or_else(|| CameraError::GpuError("pixel buffer size overflows usize".into()))?;
-    let pixel_data = unsafe { std::slice::from_raw_parts(base_address as *const u8, data_size) };
-
-    // Create texture
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("CameraFrame"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
+    Ok(pool.upload(
+        &CpuPlanes::Rgb {
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            data: pixels,
+            stride,
         },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Bgra8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::COPY_DST
-            | wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-
-    // Upload to GPU
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        pixel_data,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            #[allow(clippy::cast_possible_truncation)]
-            bytes_per_row: Some(bytes_per_row as u32),
-            rows_per_image: Some(height),
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-
-    Ok(texture)
+        raw.width,
+        raw.height,
+        Orientation::from_rotation(raw.rotation_degrees, raw.mirrored),
+        Duration::from_nanos(raw.timestamp_ns),
+    ))
 }
 
 /// Internal camera backend for Apple platforms.
@@ -772,48 +705,22 @@ impl CameraInner {
     }
 
     pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
-        let device = self.device.clone();
-        let queue = self.queue.clone();
+        let pool = FramePool::new(Arc::clone(&self.device), Arc::clone(&self.queue));
         let receiver = self.frame_receiver.clone();
 
-        futures::stream::unfold(
-            (device, queue, receiver),
-            move |(device, queue, receiver)| async move {
-                let raw_frame = receiver.recv().await.ok()?;
-
-                // Create wgpu texture from CVPixelBuffer
-                let Ok(texture) = create_texture_from_pixelbuffer(
-                    &device,
-                    &queue,
-                    raw_frame.pixelbuffer_handle,
-                    raw_frame.width,
-                    raw_frame.height,
-                ) else {
-                    // Release CVPixelBuffer on error
-                    unsafe {
-                        camera_release_pixelbuffer(raw_frame.pixelbuffer_handle);
-                    }
-                    // Continue to next frame
-                    return Some((None, (device, queue, receiver)));
-                };
-
-                // Release the CVPixelBuffer now that we've created the texture
-                unsafe {
-                    camera_release_pixelbuffer(raw_frame.pixelbuffer_handle);
-                }
-
-                let frame = Frame {
-                    texture,
-                    width: raw_frame.width,
-                    height: raw_frame.height,
-                    format: PixelFormat::Bgra8,
-                    timestamp: Duration::from_nanos(raw_frame.timestamp_ns),
-                };
-
-                Some((Some(frame), (device, queue, receiver)))
-            },
-        )
-        .filter_map(|opt| async move { opt })
+        futures::stream::unfold((pool, receiver), |(pool, receiver)| async move {
+            let raw_frame = receiver.recv().await.ok()?;
+            let frame = upload_pixelbuffer(&pool, &raw_frame);
+            // The pixels are on the GPU queue now; the buffer goes back to the
+            // capture pool whatever the upload's outcome.
+            unsafe {
+                camera_release_pixelbuffer(raw_frame.pixelbuffer_handle);
+            }
+            let frame = frame.unwrap_or_else(|error| {
+                panic!("camera frame from AVFoundation could not be uploaded: {error}")
+            });
+            Some((frame, (pool, receiver)))
+        })
     }
 
     pub async fn capture_photo(&self) -> Result<Photo, CameraError> {

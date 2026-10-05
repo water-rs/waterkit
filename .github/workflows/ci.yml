@@ -56,7 +56,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: clippy-${{ matrix.os }}
@@ -65,25 +64,6 @@ jobs:
       # member as a mere dependency. `--keep-going` makes one run report the
       # lints of every member instead of stopping at the first crate that fails.
       - run: cargo clippy --workspace --all-targets --all-features --keep-going -- -D warnings
-      # The `web` backends sit behind `cfg(target_arch = "wasm32")`, so no other
-      # job in this workflow compiles a line of them and a dependency can change
-      # its API out from under them while everything stays green. Build every
-      # crate that has one. `--lib` because several of them carry
-      # dev-dependencies that do not support wasm.
-      - name: Check web backends on wasm32
-        if: runner.os == 'Linux'
-        run: >
-          cargo check --target wasm32-unknown-unknown --lib
-          -p waterkit-fs
-          -p waterkit-permission
-          -p waterkit-clipboard
-          -p waterkit-location
-          -p waterkit-screen
-          -p waterkit-codec
-          -p waterkit-video-streaming
-      - name: Clippy filesystem and dialog on wasm32
-        if: runner.os == 'Linux'
-        run: cargo clippy --locked -p waterkit-fs -p waterkit-dialog --target wasm32-unknown-unknown --all-targets -- -D warnings
       # A decode-only consumer takes `waterkit-codec` without its `gpu` feature
       # and must link no `wgpu`. Nothing in `--all-features` exercises that
       # shape, so check and lint it explicitly.
@@ -103,6 +83,40 @@ jobs:
             os: macos-latest
           - target: aarch64-linux-android
             os: ubuntu-latest
+          # The `web` backends and the unsupported-platform shims sit behind
+          # `cfg(target_arch = "wasm32")` or a `cfg` no other leg matches, so
+          # only this leg compiles them. It lints every member but these:
+          # - the crates with no browser implementation, which do not build
+          #   for wasm32: `waterkit-biometric` and `waterkit-passkey` take the
+          #   multi-threaded tokio runtime, `waterkit-notification` takes
+          #   `uuid` without a browser random source, and `waterkit-system`
+          #   rejects the target;
+          # - the test harnesses, each of which drives one native platform;
+          # - the facade, whose `full` default pulls in the crates above. It is
+          #   linted in the next step with every feature that builds.
+          - target: wasm32-unknown-unknown
+            os: ubuntu-latest
+            args: >-
+              --locked
+              --exclude waterkit
+              --exclude waterkit-biometric
+              --exclude waterkit-notification
+              --exclude waterkit-passkey
+              --exclude waterkit-system
+              --exclude waterkit-test
+              --exclude waterkit-test-android
+              --exclude waterkit-test-ios
+              --exclude waterkit-test-linux
+              --exclude waterkit-test-windows
+              --exclude waterkit-audio-test
+              --exclude waterkit-biometric-test
+              --exclude waterkit-camera-test
+              --exclude waterkit-codec-bench
+              --exclude waterkit-dialog-test
+              --exclude waterkit-location-test
+              --exclude waterkit-notification-test
+              --exclude waterkit-passkey-test
+              --exclude waterkit-sensor-test
     steps:
       - uses: actions/checkout@v4
       # `shaderloom` compiles WGSL to DXIL on Windows and shells out to `dxc`,
@@ -111,8 +125,9 @@ jobs:
       - name: Install DirectX Shader Compiler
         if: runner.os == 'Windows'
         uses: tracel-ai/github-actions/install-dxc@295f2fdbae5271f4f8ad56d634e4ff6a95daafc8
+      # Nothing in the wasm32 graph links a native library.
       - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.target != 'wasm32-unknown-unknown'
         uses: ./.github/actions/setup-linux-deps
       - name: Setup Android NDK
         if: contains(matrix.target, 'android')
@@ -138,7 +153,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: cross-${{ matrix.target }}
-      - run: cargo clippy --workspace --target ${{ matrix.target }} --all-targets --all-features --keep-going -- -D warnings
+      - run: cargo clippy --workspace ${{ matrix.args }} --target ${{ matrix.target }} --all-targets --all-features --keep-going -- -D warnings
+      # Every facade feature except `biometric`, `notification`, `passkey` and
+      # `system`, whose crates do not build for wasm32.
+      - name: Clippy the facade on wasm32
+        if: matrix.target == 'wasm32-unknown-unknown'
+        run: >
+          cargo clippy --locked -p waterkit --target wasm32-unknown-unknown --all-targets
+          --no-default-features
+          --features audio,background,bluetooth,calendar,camera,clipboard,codec,contacts,deeplink,dialog,fs,haptic,health,location,nfc,permission,regional,screen,secret,sensor,share,speech,vaapi,video
+          -- -D warnings
 
   coverage:
     name: Coverage

@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import org.json.JSONObject
 import android.widget.Button
 import android.widget.LinearLayout
@@ -58,6 +59,11 @@ class MainActivity : AppCompatActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The runner wakes the device just before launch; this window then keeps
+        // the screen on for as long as it is visible, so the screen timeout cannot
+        // take focus away mid-run. The flag belongs to this window alone and
+        // changes no device setting.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         
         val scroll = ScrollView(this)
         val layout = LinearLayout(this).apply {

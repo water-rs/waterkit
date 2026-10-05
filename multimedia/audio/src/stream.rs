@@ -545,10 +545,12 @@ mod tests {
     #[test]
     fn decodes_real_he_aac_access_unit_with_sbr() {
         let fixture = include_str!("fixtures/heaac-48k-stereo.hex");
-        let (configuration, packet) = fixture
-            .trim()
-            .split_once('\n')
-            .expect("HE-AAC fixture must contain configuration and packet lines");
+        // `lines` and not a split on '\n': a Windows checkout gives the
+        // fixture CRLF line endings.
+        let mut lines = fixture.lines();
+        let (Some(configuration), Some(packet)) = (lines.next(), lines.next()) else {
+            panic!("HE-AAC fixture must contain configuration and packet lines");
+        };
         let configuration = hex::decode(configuration).expect("HE-AAC config must be valid hex");
         let packet = hex::decode(packet).expect("HE-AAC packet must be valid hex");
         let mut decoder = AacPacketDecoder::new(AacDecoderConfig::new(

@@ -5,8 +5,8 @@
 //! resolution and frame rate when it offers one: NV12 frames upload as
 //! `YCbCr420` planes and YUYV frames as one packed `YCbCr422` texture, with no
 //! CPU colour conversion. A compressed MJPEG stream is decoded on the CPU and
-//! uploads as `Rgb`. Uploads go through a texture pool, and desktop frames are
-//! always upright.
+//! uploads as `Rgb`. Each frame's planes are uploaded into textures created
+//! for it, and desktop frames are always upright.
 //!
 //! Video recording runs the capture stream through `waterkit-codec` and
 //! `waterkit-video-container` on a dedicated worker thread; raw recording
@@ -14,7 +14,7 @@
 
 mod recording;
 
-use crate::pool::{CpuPlanes, FramePool};
+use crate::upload::{CpuPlanes, FrameUploader, nv12_len};
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
     Frame, FrameConverter, Orientation, Photo, RawPhoto, RawVideoFormat, Resolution,
@@ -30,7 +30,7 @@ use recording::RecordingSession;
 use std::num::NonZeroU8;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Frame formats the desktop backend runs a camera in, most preferred first:
@@ -78,7 +78,7 @@ impl RawFrame {
         let (data, expected) = match buffer.source_frame_format() {
             NokhwaFrameFormat::NV12 => (
                 CapturedPixels::Nv12(buffer.buffer().to_vec()),
-                pixels * 3 / 2,
+                nv12_len(width, height),
             ),
             NokhwaFrameFormat::YUYV => (CapturedPixels::Yuyv(buffer.buffer().to_vec()), pixels * 2),
             NokhwaFrameFormat::MJPEG => {
@@ -107,7 +107,7 @@ impl RawFrame {
         })
     }
 
-    fn upload(&self, pool: &FramePool) -> Frame {
+    fn upload(&self, uploader: &FrameUploader) -> Frame {
         let planes = match &self.pixels {
             CapturedPixels::Nv12(data) => CpuPlanes::Nv12 {
                 data,
@@ -123,7 +123,7 @@ impl RawFrame {
                 stride: self.width * 4,
             },
         };
-        pool.upload(
+        uploader.upload(
             &planes,
             self.width,
             self.height,
@@ -166,9 +166,13 @@ fn choose_format(
         .map(|(_, format)| format)
 }
 
+/// What the capture thread delivers: a frame, or the error that ended the
+/// capture, after which the subscription closes.
+pub(super) type Captured = Result<Arc<RawFrame>, CameraError>;
+
 /// One live frame subscription, owned by the capture thread.
 struct Subscriber {
-    sender: async_channel::Sender<Arc<RawFrame>>,
+    sender: async_channel::Sender<Captured>,
     /// Frames displaced by `force_send` before the receiver could read them.
     dropped: Arc<AtomicU64>,
 }
@@ -176,7 +180,7 @@ struct Subscriber {
 /// A capture-stream receiver plus the count of frames it missed because a
 /// newer frame displaced the pending one before it was read.
 pub(super) struct FrameSubscription {
-    pub receiver: async_channel::Receiver<Arc<RawFrame>>,
+    pub receiver: async_channel::Receiver<Captured>,
     pub dropped: Arc<AtomicU64>,
 }
 
@@ -203,9 +207,8 @@ pub struct CameraInner {
     streaming: Arc<AtomicBool>,
     frame_rate: u32,
     recording: Option<RecordingSession>,
-    /// Built on the first photo, so streaming alone never needs the
-    /// converter's device features.
-    photo_converter: OnceLock<FrameConverter>,
+    /// Converts the frame a photo is taken from upright.
+    photo_converter: FrameConverter,
 }
 
 /// Preview subscribers only ever need the newest frame.
@@ -271,10 +274,10 @@ fn build_desktop_capabilities(
 /// Deliver `frame` to every live subscriber. A lagging subscriber's pending
 /// frame is displaced by the newer one rather than applying backpressure to
 /// the capture thread; each displaced frame is counted on the subscription.
-fn fan_out(subscribers: &mut Vec<Subscriber>, frame: &Arc<RawFrame>) {
+fn fan_out(subscribers: &mut Vec<Subscriber>, frame: &Captured) {
     subscribers.retain(|sub| !sub.sender.is_closed());
     for sub in subscribers.iter() {
-        if let Ok(Some(_evicted)) = sub.sender.force_send(Arc::clone(frame)) {
+        if let Ok(Some(_evicted)) = sub.sender.force_send(frame.clone()) {
             sub.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -304,14 +307,12 @@ fn spawn_capture_thread(
                 .and_then(|buffer| {
                     RawFrame::capture(&buffer, Instant::now().duration_since(start_instant))
                 });
-            match captured {
-                Ok(raw) => fan_out(&mut subscribers, &Arc::new(raw)),
-                Err(error) => {
-                    // Ending the stream closes every subscription, so the
-                    // failure reaches consumers as the end of their frames.
-                    tracing::error!("camera capture stopped: {error}");
-                    break;
-                }
+            let failed = captured.is_err();
+            // A failure is delivered as the last item; the subscriptions
+            // close when this thread ends right after it.
+            fan_out(&mut subscribers, &captured.map(Arc::new));
+            if failed {
+                break;
             }
         }
 
@@ -346,6 +347,10 @@ impl CameraInner {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
     ) -> Result<Self, CameraError> {
+        // Photos are converted upright on the GPU, so the device must be able
+        // to run the converter before the camera opens.
+        FrameConverter::check_device(&device)?;
+        let photo_converter = FrameConverter::new(&device);
         let index = parse_camera_index(camera_id);
 
         // Open in any delivered format, then switch to the one closest to the
@@ -402,7 +407,7 @@ impl CameraInner {
             streaming,
             frame_rate: config.frame_rate.max(1),
             recording: None,
-            photo_converter: OnceLock::new(),
+            photo_converter,
         })
     }
 
@@ -461,31 +466,28 @@ impl CameraInner {
         self.resolution
     }
 
-    pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
-        let pool = FramePool::new(Arc::clone(&self.device), Arc::clone(&self.queue));
+    pub fn frames(&self) -> impl futures::Stream<Item = Result<Frame, CameraError>> + '_ {
+        let uploader = FrameUploader::new(Arc::clone(&self.device), Arc::clone(&self.queue));
         let receiver = self.subscribe_frames(PREVIEW_QUEUE).receiver;
 
-        futures::stream::unfold((pool, receiver), |(pool, receiver)| async move {
-            let raw = receiver.recv().await.ok()?;
-            let frame = raw.upload(&pool);
-            Some((frame, (pool, receiver)))
+        futures::stream::unfold((uploader, receiver), |(uploader, receiver)| async move {
+            let captured = receiver.recv().await.ok()?;
+            let frame = captured.map(|raw| raw.upload(&uploader));
+            Some((frame, (uploader, receiver)))
         })
     }
 
     /// Takes the next stream frame as the photo, converted upright on the GPU.
-    pub async fn capture_photo(&self) -> Result<Photo, CameraError> {
+    pub async fn capture_photo(&mut self) -> Result<Photo, CameraError> {
         let raw = self
             .subscribe_frames(PREVIEW_QUEUE)
             .receiver
             .recv()
             .await
-            .map_err(|_| CameraError::CaptureFailed("no frame available".into()))?;
+            .map_err(|_| CameraError::CaptureFailed("no frame available".into()))??;
 
-        let pool = FramePool::new(Arc::clone(&self.device), Arc::clone(&self.queue));
-        let frame = raw.upload(&pool);
-        let converter = self
-            .photo_converter
-            .get_or_init(|| FrameConverter::new(&self.device));
+        let uploader = FrameUploader::new(Arc::clone(&self.device), Arc::clone(&self.queue));
+        let frame = raw.upload(&uploader);
         let upright = FrameConverter::create_output(&self.device, &frame);
         let size = upright.size();
         // Photos are sampled linearized, like the mobile backends' photos; the
@@ -508,7 +510,8 @@ impl CameraInner {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("CameraPhoto"),
             });
-        converter.encode(&self.device, &mut encoder, &frame, &upright);
+        self.photo_converter
+            .encode(&self.device, &mut encoder, &frame, &upright);
         encoder.copy_texture_to_texture(upright.as_image_copy(), texture.as_image_copy(), size);
         self.queue.submit([encoder.finish()]);
 
@@ -605,12 +608,12 @@ mod tests {
             sender,
             dropped: Arc::clone(&dropped),
         }];
-        let frame = Arc::new(RawFrame {
+        let frame: Captured = Ok(Arc::new(RawFrame {
             pixels: CapturedPixels::Rgba(vec![0; 4]),
             width: 1,
             height: 1,
             timestamp: Duration::ZERO,
-        });
+        }));
         fan_out(&mut subscribers, &frame);
         assert_eq!(dropped.load(Ordering::Relaxed), 0);
         // The channel still holds the first frame, so the second displaces it.

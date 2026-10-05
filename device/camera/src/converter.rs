@@ -1,10 +1,13 @@
 //! GPU conversion of any camera [`Frame`] to an upright RGBA texture.
 
+use std::collections::HashMap;
+
 use shaderloom::{CompiledShader, ShaderStage};
+use waterkit_video_core::ycbcr_mode;
 use wgpu::util::DeviceExt as _;
 
 use crate::frame::{Frame, FramePlanes};
-use crate::{YcbcrEncoding, YcbcrMatrix, YcbcrRange};
+use crate::{CameraError, YcbcrEncoding, YcbcrMatrix, YcbcrRange};
 
 const CONVERT_RGB: CompiledShader = include!(concat!(env!("OUT_DIR"), "/frame_convert_rgb.rs"));
 const CONVERT_YCBCR420: CompiledShader =
@@ -29,12 +32,20 @@ pub const UPRIGHT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// on devices whose downlevel capabilities include view formats.
 ///
 /// The converter's shaders are compiled ahead of time, so the device must be
-/// created with [`FrameConverter::required_features`].
+/// created with [`FrameConverter::required_features`];
+/// [`FrameConverter::check_device`] says whether it was.
+///
+/// The converter keeps one uniform buffer per distinct set of conversion
+/// parameters it has seen (orientation, encoding, sample depth and size,
+/// which a camera rarely changes) and the view of the last output texture.
+/// The bind group is made per frame, since it names the frame's own planes.
 #[derive(Debug)]
 pub struct FrameConverter {
     rgb: ConvertPass,
     ycbcr420: ConvertPass,
     ycbcr422: ConvertPass,
+    params: HashMap<[u8; 32], wgpu::Buffer>,
+    output: Option<(wgpu::Texture, wgpu::TextureView)>,
 }
 
 #[derive(Debug)]
@@ -100,13 +111,13 @@ impl ConvertParams {
         Self {
             // YCBCR_MATRIX_* / YCBCR_RANGE_* in waterkit-video-core's ycbcr.wgsl.
             matrix_mode: match encoding.matrix {
-                YcbcrMatrix::Bt709 => 0,
-                YcbcrMatrix::Bt601 => 1,
-                YcbcrMatrix::Bt2020 => 2,
+                YcbcrMatrix::Bt709 => ycbcr_mode::MATRIX_BT709,
+                YcbcrMatrix::Bt601 => ycbcr_mode::MATRIX_BT601,
+                YcbcrMatrix::Bt2020 => ycbcr_mode::MATRIX_BT2020,
             },
             range_mode: match encoding.range {
-                YcbcrRange::Video => 0,
-                YcbcrRange::Full => 1,
+                YcbcrRange::Video => ycbcr_mode::RANGE_LIMITED,
+                YcbcrRange::Full => ycbcr_mode::RANGE_FULL,
             },
             bit_depth: sample.bit_depth,
             code_scale: sample.code_scale,
@@ -171,18 +182,46 @@ impl FrameConverter {
         shaderloom::required_features(adapter_features)
     }
 
+    /// Whether the converter can run on `device`: Metal, Vulkan and Direct3D
+    /// 12 devices load its precompiled shaders, which needs
+    /// `PASSTHROUGH_SHADERS`, one of [`Self::required_features`]; GL and
+    /// WebGPU devices compile its WGSL and need nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CameraError::GpuError`] naming the missing feature.
+    pub fn check_device(device: &wgpu::Device) -> Result<(), CameraError> {
+        let backend = device.adapter_info().backend;
+        let loads_native_shaders = matches!(
+            backend,
+            wgpu::Backend::Metal | wgpu::Backend::Vulkan | wgpu::Backend::Dx12
+        );
+        if loads_native_shaders
+            && !device
+                .features()
+                .contains(wgpu::Features::PASSTHROUGH_SHADERS)
+        {
+            return Err(CameraError::GpuError(format!(
+                "the frame converter loads precompiled shaders on {backend:?}, which needs a device \
+                 created with PASSTHROUGH_SHADERS; request `FrameConverter::required_features`"
+            )));
+        }
+        Ok(())
+    }
+
     /// Creates the converter's pipelines on `device`.
     ///
     /// # Panics
     ///
-    /// Panics when `device` lacks [`Self::required_features`] on a backend
-    /// that loads native shaders.
+    /// Panics when [`Self::check_device`] rejects `device`.
     #[must_use]
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
             rgb: ConvertPass::new(device, &CONVERT_RGB, "convert_rgb"),
             ycbcr420: ConvertPass::new(device, &CONVERT_YCBCR420, "convert_ycbcr420"),
             ycbcr422: ConvertPass::new(device, &CONVERT_YCBCR422, "convert_ycbcr422"),
+            params: HashMap::new(),
+            output: None,
         }
     }
 
@@ -235,7 +274,7 @@ impl FrameConverter {
     /// Panics when `output` is not an [`UPRIGHT_FORMAT`] storage texture of
     /// [`Self::upright_size`].
     pub fn encode(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         frame: &Frame,
@@ -259,47 +298,67 @@ impl FrameConverter {
             "frame conversion output must have the frame's upright size"
         );
 
-        let (pass, params, sources): (&ConvertPass, ConvertParams, Vec<&wgpu::TextureView>) =
-            match frame.planes() {
-                FramePlanes::Rgb(rgb) => (&self.rgb, ConvertParams::upright(frame), vec![rgb]),
-                FramePlanes::YCbCr420 {
-                    luma,
-                    chroma,
-                    encoding,
-                } => (
-                    &self.ycbcr420,
-                    ConvertParams::upright(frame).ycbcr(*encoding, SampleDepth::of_luma(luma)),
-                    vec![luma, chroma],
-                ),
-                FramePlanes::YCbCr422 { yuyv, encoding } => (
-                    &self.ycbcr422,
-                    ConvertParams::upright(frame).ycbcr(*encoding, SampleDepth::EIGHT_BIT),
-                    vec![yuyv],
-                ),
-            };
+        let (pass, params, sources): (
+            &ConvertPass,
+            ConvertParams,
+            [Option<&wgpu::TextureView>; 2],
+        ) = match frame.planes() {
+            FramePlanes::Rgb(rgb) => (&self.rgb, ConvertParams::upright(frame), [Some(rgb), None]),
+            FramePlanes::YCbCr420 {
+                luma,
+                chroma,
+                encoding,
+            } => (
+                &self.ycbcr420,
+                ConvertParams::upright(frame).ycbcr(*encoding, SampleDepth::of_luma(luma)),
+                [Some(luma), Some(chroma)],
+            ),
+            FramePlanes::YCbCr422 { yuyv, encoding } => (
+                &self.ycbcr422,
+                ConvertParams::upright(frame).ycbcr(*encoding, SampleDepth::EIGHT_BIT),
+                [Some(yuyv), None],
+            ),
+        };
 
-        let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("waterkit-camera frame conversion parameters"),
-            contents: &params.to_bytes(),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut entries: Vec<wgpu::BindGroupEntry<'_>> = sources
-            .into_iter()
-            .zip(0..)
-            .map(|(view, binding)| wgpu::BindGroupEntry {
+        let params = self
+            .params
+            .entry(params.to_bytes())
+            .or_insert_with_key(|bytes| {
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("waterkit-camera frame conversion parameters"),
+                    contents: bytes,
+                    usage: wgpu::BufferUsages::UNIFORM,
+                })
+            });
+        if self
+            .output
+            .as_ref()
+            .is_none_or(|(texture, _)| texture != output)
+        {
+            let view = output.create_view(&wgpu::TextureViewDescriptor::default());
+            self.output = Some((output.clone(), view));
+        }
+        let (_, output_view) = self
+            .output
+            .as_ref()
+            .expect("the output view was just cached");
+        let mut entries = [
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: params.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(output_view),
+            },
+        ]
+        .to_vec();
+        entries.extend(sources.into_iter().zip(0..).filter_map(|(view, binding)| {
+            view.map(|view| wgpu::BindGroupEntry {
                 binding,
                 resource: wgpu::BindingResource::TextureView(view),
             })
-            .collect();
-        entries.push(wgpu::BindGroupEntry {
-            binding: 2,
-            resource: params.as_entire_binding(),
-        });
-        entries.push(wgpu::BindGroupEntry {
-            binding: 3,
-            resource: wgpu::BindingResource::TextureView(&output_view),
-        });
+        }));
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("waterkit-camera frame conversion"),
             layout: &pass.layout,
@@ -325,7 +384,7 @@ impl FrameConverter {
     /// texture reused through [`Self::encode`].
     #[must_use]
     pub fn convert(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         frame: &Frame,
@@ -349,13 +408,16 @@ mod tests {
 
     use super::FrameConverter;
     use crate::frame::{Frame, Orientation};
-    use crate::pool::{CpuPlanes, FramePool};
+    use crate::upload::{CpuPlanes, FrameUploader};
     use crate::{YcbcrEncoding, YcbcrMatrix, YcbcrRange};
 
-    /// Stored frame size: even, as 4:2:0 and 4:2:2 need, and not square, so a
-    /// wrong quarter turn changes the output size.
+    /// Stored frame size: even, as 4:2:2 needs, and not square, so a wrong
+    /// quarter turn changes the output size.
     const WIDTH: u32 = 8;
     const HEIGHT: u32 = 6;
+    /// An odd stored size, whose 4:2:0 chroma plane rounds up to cover the
+    /// last column and row.
+    const ODD: (u32, u32) = (7, 5);
 
     /// Largest per-channel difference from the f64 reference, in 8-bit codes,
     /// for YCbCr frames: the converter evaluates in f32 with coefficients
@@ -387,7 +449,7 @@ mod tests {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         converter: FrameConverter,
-        pool: FramePool,
+        uploader: FrameUploader,
     }
 
     impl Gpu {
@@ -395,19 +457,28 @@ mod tests {
             let (device, queue) = crate::test_support::gpu(extra_features);
             Self {
                 converter: FrameConverter::new(&device),
-                pool: FramePool::new(Arc::clone(&device), Arc::clone(&queue)),
+                uploader: FrameUploader::new(Arc::clone(&device), Arc::clone(&queue)),
                 device,
                 queue,
             }
         }
 
         fn upload(&self, pixels: &CpuPlanes<'_>, orientation: Orientation) -> Frame {
-            self.pool
-                .upload(pixels, WIDTH, HEIGHT, orientation, Duration::ZERO)
+            self.upload_sized(pixels, (WIDTH, HEIGHT), orientation)
+        }
+
+        fn upload_sized(
+            &self,
+            pixels: &CpuPlanes<'_>,
+            (width, height): (u32, u32),
+            orientation: Orientation,
+        ) -> Frame {
+            self.uploader
+                .upload(pixels, width, height, orientation, Duration::ZERO)
         }
 
         /// Converts `frame` and reads the upright result back.
-        fn convert(&self, frame: &Frame) -> RgbaImage {
+        fn convert(&mut self, frame: &Frame) -> RgbaImage {
             let texture = self.converter.convert(&self.device, &self.queue, frame);
             let pixels = crate::test_support::read_texture(&self.device, &self.queue, &texture);
             RgbaImage::from_raw(texture.width(), texture.height(), pixels).expect("readback size")
@@ -464,13 +535,15 @@ mod tests {
         [luma(x, y), cb, cr].map(u16::from)
     }
 
-    fn nv12() -> Vec<u8> {
-        let mut data: Vec<u8> = (0..HEIGHT)
-            .flat_map(|y| (0..WIDTH).map(move |x| luma(x, y)))
+    fn nv12((width, height): (u32, u32)) -> Vec<u8> {
+        let mut data: Vec<u8> = (0..height)
+            .flat_map(|y| (0..width).map(move |x| luma(x, y)))
             .collect();
         data.extend(
-            (0..HEIGHT / 2).flat_map(|cy| (0..WIDTH / 2).flat_map(move |cx| chroma(cx, cy))),
+            (0..height.div_ceil(2))
+                .flat_map(|cy| (0..width.div_ceil(2)).flat_map(move |cx| chroma(cx, cy))),
         );
+        assert_eq!(data.len(), crate::upload::nv12_len(width, height));
         data
     }
 
@@ -489,7 +562,7 @@ mod tests {
     /// as 8-bit, or least-significant-aligned, misses the reference.
     #[cfg(target_vendor = "apple")]
     fn p010_codes() -> Vec<u16> {
-        nv12()
+        nv12((WIDTH, HEIGHT))
             .into_iter()
             .enumerate()
             .map(|(index, code)| u16::from(code) * 4 + u16::try_from(index % 4).expect("below 4"))
@@ -543,18 +616,19 @@ mod tests {
 
     /// The stored image of a 4:2:0 frame, chroma shared by each 2x2 block.
     fn reference_420(
+        (width, height): (u32, u32),
         samples: impl Fn(u32, u32) -> [u16; 3],
         bits: u32,
         encoding: YcbcrEncoding,
     ) -> RgbaImage {
-        RgbaImage::from_fn(WIDTH, HEIGHT, |x, y| {
+        RgbaImage::from_fn(width, height, |x, y| {
             reference_pixel(samples(x, y), bits, encoding)
         })
     }
 
     #[test]
     fn rgb_frames_turn_upright_in_every_orientation() {
-        let gpu = Gpu::new(wgpu::Features::empty());
+        let mut gpu = Gpu::new(wgpu::Features::empty());
         let stored = RgbaImage::from_fn(WIDTH, HEIGHT, |x, y| {
             image::Rgba([
                 u8::try_from(x * 30 + 5).expect("below 256"),
@@ -593,31 +667,34 @@ mod tests {
 
     #[test]
     fn ycbcr420_frames_decode_every_encoding_in_every_orientation() {
-        let gpu = Gpu::new(wgpu::Features::empty());
-        let data = nv12();
-        for encoding in encodings() {
-            let stored = reference_420(eight_bit_sample, 8, encoding);
-            for orientation in ORIENTATIONS {
-                let frame = gpu.upload(
-                    &CpuPlanes::Nv12 {
-                        data: &data,
-                        encoding,
-                    },
-                    orientation,
-                );
-                assert_matches(
-                    &gpu.convert(&frame),
-                    &upright_reference(stored.clone(), orientation),
-                    YCBCR_TOLERANCE,
-                    &format!("NV12 {encoding:?} {orientation:?}"),
-                );
+        let mut gpu = Gpu::new(wgpu::Features::empty());
+        for size in [(WIDTH, HEIGHT), ODD] {
+            let data = nv12(size);
+            for encoding in encodings() {
+                let stored = reference_420(size, eight_bit_sample, 8, encoding);
+                for orientation in ORIENTATIONS {
+                    let frame = gpu.upload_sized(
+                        &CpuPlanes::Nv12 {
+                            data: &data,
+                            encoding,
+                        },
+                        size,
+                        orientation,
+                    );
+                    assert_matches(
+                        &gpu.convert(&frame),
+                        &upright_reference(stored.clone(), orientation),
+                        YCBCR_TOLERANCE,
+                        &format!("NV12 {size:?} {encoding:?} {orientation:?}"),
+                    );
+                }
             }
         }
     }
 
     #[test]
     fn ycbcr422_frames_decode_every_encoding_in_every_orientation() {
-        let gpu = Gpu::new(wgpu::Features::empty());
+        let mut gpu = Gpu::new(wgpu::Features::empty());
         let data = yuyv();
         for encoding in encodings() {
             // 4:2:2 shares chroma across a pixel pair on its own row.
@@ -648,7 +725,7 @@ mod tests {
     #[cfg(target_vendor = "apple")]
     #[test]
     fn ten_bit_ycbcr420_frames_decode_every_encoding() {
-        let gpu = Gpu::new(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
+        let mut gpu = Gpu::new(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
         let codes = p010_codes();
         let bytes: Vec<u8> = codes
             .iter()
@@ -664,7 +741,7 @@ mod tests {
             ]
         };
         for encoding in encodings() {
-            let stored = reference_420(sample, 10, encoding);
+            let stored = reference_420((WIDTH, HEIGHT), sample, 10, encoding);
             for orientation in [Orientation::Up, Orientation::Right] {
                 let frame = gpu.upload(
                     &CpuPlanes::P010 {
@@ -681,36 +758,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// A dropped frame's textures carry the next frame of the same layout.
-    #[test]
-    fn pool_reuses_the_textures_of_dropped_frames() {
-        let gpu = Gpu::new(wgpu::Features::empty());
-        let data = nv12();
-        let encoding = YcbcrEncoding {
-            matrix: YcbcrMatrix::Bt601,
-            range: YcbcrRange::Video,
-        };
-        let pixels = CpuPlanes::Nv12 {
-            data: &data,
-            encoding,
-        };
-        let luma_texture = |frame: &Frame| match frame.planes() {
-            crate::FramePlanes::YCbCr420 { luma, .. } => luma.texture().clone(),
-            planes => panic!("NV12 uploads as YCbCr420, got {planes:?}"),
-        };
-
-        let first = gpu.upload(&pixels, Orientation::Up);
-        let held = gpu.upload(&pixels, Orientation::Up);
-        let first_texture = luma_texture(&first);
-        assert_ne!(
-            first_texture,
-            luma_texture(&held),
-            "live frames never share storage"
-        );
-        drop(first);
-        let reused = gpu.upload(&pixels, Orientation::Up);
-        assert_eq!(luma_texture(&reused), first_texture);
     }
 }

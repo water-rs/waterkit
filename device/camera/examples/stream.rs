@@ -56,12 +56,13 @@ async fn main() -> Result<(), CameraError> {
     tracing::info!("Dolby Vision: {}", caps.supports_dolby_vision);
     tracing::info!("flash: {}", caps.has_flash);
 
-    let converter = FrameConverter::new(&device);
+    let mut converter = FrameConverter::new(&device);
     let mut output = None;
     let mut frame_count = 0;
     {
         let mut frames = pin!(camera.frames());
         while let Some(frame) = frames.next().await {
+            let frame = frame?;
             frame_count += 1;
             let layout = match frame.planes() {
                 FramePlanes::Rgb(_) => "RGB",

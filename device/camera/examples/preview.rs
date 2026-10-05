@@ -139,7 +139,7 @@ impl App {
         let (Some(device), Some(queue), Some(converter), Some(layout), Some(sampler)) = (
             &self.device,
             &self.queue,
-            &self.converter,
+            &mut self.converter,
             &self.bind_group_layout,
             &self.sampler,
         ) else {
@@ -321,6 +321,7 @@ impl ApplicationHandler for App {
                 tracing::info!("camera opened: {}x{}", resolution.width, resolution.height);
                 let mut frames = pin!(camera.frames());
                 while let Some(frame) = frames.next().await {
+                    let frame = frame.expect("the camera stream failed");
                     if frame_tx.force_send(frame).is_err() {
                         break;
                     }

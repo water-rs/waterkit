@@ -66,7 +66,7 @@ pub async fn record(report: &mut TestReport) {
         return;
     }
 
-    let gpu = match Gpu::new().await {
+    let mut gpu = match Gpu::new().await {
         Ok(gpu) => gpu,
         Err(message) => {
             report.push(TestCase::failed("camera.gpu", message));
@@ -75,7 +75,7 @@ pub async fn record(report: &mut TestReport) {
     };
 
     for camera in &cameras {
-        record_frames(report, &gpu, camera).await;
+        record_frames(report, &mut gpu, camera).await;
     }
 }
 
@@ -169,7 +169,7 @@ impl Gpu {
 
 /// Opens `camera`, collects [`FRAMES`] frames and records what they look
 /// like as `camera.frames.<id>`.
-async fn record_frames(report: &mut TestReport, gpu: &Gpu, camera: &CameraInfo) {
+async fn record_frames(report: &mut TestReport, gpu: &mut Gpu, camera: &CameraInfo) {
     let case = format!("camera.frames.{}", camera.id);
 
     let handle = match Camera::open(
@@ -194,9 +194,16 @@ async fn record_frames(report: &mut TestReport, gpu: &Gpu, camera: &CameraInfo) 
     let mut last = None;
     for taken in 0..FRAMES {
         match tokio::time::timeout(FRAME_TIMEOUT, frames.next()).await {
-            Ok(Some(frame)) => {
+            Ok(Some(Ok(frame))) => {
                 orientations.push(frame.orientation());
                 last = Some(frame);
+            }
+            Ok(Some(Err(error))) => {
+                report.push(TestCase::failed(
+                    case,
+                    format!("stream failed after {taken} of {FRAMES} frames: {error}"),
+                ));
+                return;
             }
             Ok(None) => {
                 report.push(TestCase::failed(

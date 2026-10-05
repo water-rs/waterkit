@@ -21,7 +21,7 @@ use yuv::{
     YuvPlanarImageMut, YuvRange, YuvStandardMatrix,
 };
 
-use super::{CapturedPixels, FrameSubscription, RawFrame, WEBCAM_ENCODING};
+use super::{Captured, CapturedPixels, FrameSubscription, WEBCAM_ENCODING};
 use crate::{CameraError, YcbcrEncoding, YcbcrMatrix, YcbcrRange};
 
 /// The `yuv` crate's names for a frame's YCbCr encoding.
@@ -226,12 +226,15 @@ enum RecordingSink {
 
 /// What woke the recording worker out of its `select`.
 enum Wake {
-    Frame(Result<Arc<RawFrame>, async_channel::RecvError>),
+    Frame(Result<Captured, async_channel::RecvError>),
     Stop,
 }
 
 impl RecordingSink {
-    fn push(&mut self, frame: &RawFrame) -> Result<(), CameraError> {
+    /// Records one captured frame, or ends the recording with the error that
+    /// ended the capture.
+    fn push(&mut self, captured: &Captured) -> Result<(), CameraError> {
+        let frame = captured.as_ref().map_err(Clone::clone)?;
         match self {
             Self::Compressed(pipeline) => pipeline.push(&frame.pixels),
             Self::Raw(writer) => writer.push_frame(
@@ -631,6 +634,7 @@ fn packet_contains_sequence_header(data: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::RawFrame;
     use super::*;
     use std::sync::Arc;
     use std::time::Duration;
@@ -764,7 +768,7 @@ mod tests {
                     height,
                     timestamp: Duration::from_nanos(i as u64 * 33_333_333),
                 });
-                tx.send_blocking(frame).expect("frame channel open");
+                tx.send_blocking(Ok(frame)).expect("frame channel open");
             }
         })
         .join()

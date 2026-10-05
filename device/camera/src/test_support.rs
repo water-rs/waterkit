@@ -31,8 +31,8 @@ pub fn gpu(extra_features: wgpu::Features) -> (Arc<wgpu::Device>, Arc<wgpu::Queu
     (Arc::new(device), Arc::new(queue))
 }
 
-/// Waits until the GPU has finished every submission so far, which also runs
-/// the queue's work-done callbacks.
+/// Waits until the GPU has finished every submission so far, which also lets
+/// `wgpu` destroy the dropped resources those submissions used.
 pub fn wait_idle(device: &wgpu::Device) {
     device
         .poll(wgpu::PollType::Wait {

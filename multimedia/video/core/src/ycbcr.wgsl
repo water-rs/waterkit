@@ -8,13 +8,10 @@
 // code, `code / (2^bit_depth - 1)`, so 8-bit and 10-bit sources share one
 // range definition. The output is non-linear R'G'B' in the source's own
 // transfer function and primaries; linearization belongs to the caller.
-
-const YCBCR_MATRIX_BT709: u32 = 0u;
-const YCBCR_MATRIX_BT601: u32 = 1u;
-const YCBCR_MATRIX_BT2020: u32 = 2u;
-
-const YCBCR_RANGE_LIMITED: u32 = 0u;
-const YCBCR_RANGE_FULL: u32 = 1u;
+//
+// The YCBCR_MATRIX_* and YCBCR_RANGE_* mode constants are declared ahead of
+// this text by waterkit-video-core's `YCBCR_WGSL`, from the same Rust
+// definitions converters fill their uniforms with.
 
 // Removes the range offset and scale: Y' in [0, 1], Cb and Cr in [-0.5, 0.5].
 // Limited range places black at 16 and white at 235 (chroma 16..240) in

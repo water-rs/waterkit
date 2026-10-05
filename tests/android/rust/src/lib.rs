@@ -473,8 +473,12 @@ async fn record_android_camera_frames(
     use std::collections::BTreeSet;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
-    use waterkit_content::camera::wgpu_external_frame::ahardware_buffer;
-    use waterkit_content::camera::{Camera, CameraConfig, FrameConverter, FramePlanes, wgpu};
+    use waterkit_content::camera::wgpu_external_frame::ahardware_buffer::{
+        self, HardwareBufferImportError,
+    };
+    use waterkit_content::camera::{
+        Camera, CameraConfig, CameraError, FrameConverter, FramePlanes, wgpu,
+    };
 
     const STREAM: Duration = Duration::from_secs(3);
     let case = format!("camera.frames.{}", camera.id);
@@ -498,10 +502,10 @@ async fn record_android_camera_frames(
         }
     };
     // Camera frames are imported AHardwareBuffers, so the device carries the
-    // import's extensions; NV12 lets a driver that maps camera buffers to a
-    // Vulkan format alias them directly.
-    let features = FrameConverter::required_features(adapter.features())
-        | (adapter.features() & wgpu::Features::TEXTURE_FORMAT_NV12);
+    // import's extensions and NV12, which drivers that map camera buffers to a
+    // Vulkan format alias them as.
+    let features =
+        FrameConverter::required_features(adapter.features()) | wgpu::Features::TEXTURE_FORMAT_NV12;
     let (device, queue) = match ahardware_buffer::request_device(
         &adapter,
         &wgpu::DeviceDescriptor {
@@ -533,7 +537,7 @@ async fn record_android_camera_frames(
         }
     };
 
-    let converter = FrameConverter::new(&device);
+    let mut converter = FrameConverter::new(&device);
     let mut frames = std::pin::pin!(camera_handle.frames());
     let mut layouts = BTreeSet::new();
     let mut orientations = BTreeSet::new();
@@ -543,19 +547,25 @@ async fn record_android_camera_frames(
     let started = Instant::now();
     while started.elapsed() < STREAM {
         let frame = match tokio::time::timeout(Duration::from_secs(5), frames.next()).await {
-            Ok(Some(frame)) => frame,
-            Ok(None)
-                if count == 0
-                    && let Some(missing) = missing_conversion_extension(&device) =>
+            Ok(Some(Ok(frame))) => frame,
+            Ok(Some(Err(CameraError::FrameImport(error))))
+                if matches!(
+                    *error,
+                    HardwareBufferImportError::ConversionUnavailable { .. }
+                ) =>
             {
                 // The camera's buffers have only a driver-private format here,
                 // and this GPU cannot run the conversion that imports them.
                 report.push(TestCase::skipped(
                     case,
-                    format!(
-                        "no frame could be imported: converting external-format camera buffers \
-                         needs {missing:?}, which this GPU does not offer"
-                    ),
+                    format!("after {count} frames: {error}"),
+                ));
+                return;
+            }
+            Ok(Some(Err(error))) => {
+                report.push(TestCase::failed(
+                    case,
+                    format!("stream failed after {count} frames: {error}"),
                 ));
                 return;
             }
@@ -627,25 +637,6 @@ async fn record_android_camera_frames(
             png.display(),
         ),
     ));
-}
-
-/// The conversion extension `device` lacks, if any: without it, camera
-/// buffers the driver describes only through an external format cannot be
-/// imported.
-#[cfg(feature = "camera")]
-fn missing_conversion_extension(
-    device: &waterkit_content::camera::wgpu::Device,
-) -> Option<&'static std::ffi::CStr> {
-    use waterkit_content::camera::wgpu;
-    use waterkit_content::camera::wgpu_external_frame::ahardware_buffer::CONVERSION_DEVICE_EXTENSIONS;
-    // SAFETY: the guard names the device's real backend, Vulkan, which the
-    // instance was limited to, and is only read.
-    let hal = unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() }
-        .expect("the instance offers only Vulkan devices");
-    let enabled = hal.enabled_device_extensions();
-    CONVERSION_DEVICE_EXTENSIONS
-        .into_iter()
-        .find(|extension| !enabled.contains(extension))
 }
 
 /// Reads an upright `Rgba8Unorm` frame back and writes it as a PNG; the

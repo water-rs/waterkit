@@ -214,6 +214,13 @@ impl State {
         tokio::spawn(async move {
             let mut frames = std::pin::pin!(camera.frames());
             while let Some(frame) = frames.next().await {
+                let frame = match frame {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        log::error!("camera stream failed: {error}");
+                        break;
+                    }
+                };
                 // Drop old frames if receiver is slow
                 let _ = frame_tx.try_send(frame);
             }

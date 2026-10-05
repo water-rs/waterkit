@@ -103,7 +103,7 @@ mod fallback {
             Resolution::HD
         }
 
-        pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
+        pub fn frames(&self) -> impl futures::Stream<Item = Result<Frame, CameraError>> + '_ {
             futures::stream::empty()
         }
 

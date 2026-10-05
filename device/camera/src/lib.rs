@@ -13,20 +13,24 @@
 //! # Example
 //!
 //! ```ignore
-//! use waterkit_camera::{Camera, FrameConverter};
+//! use waterkit_camera::{Camera, CameraError, FrameConverter};
 //! use futures::StreamExt;
 //!
-//! async fn example(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) {
+//! async fn example(
+//!     device: Arc<wgpu::Device>,
+//!     queue: Arc<wgpu::Queue>,
+//! ) -> Result<(), CameraError> {
 //!     // Camera starts streaming immediately on open
-//!     let camera = Camera::open_default(device.clone(), queue.clone()).await.unwrap();
+//!     let camera = Camera::open_default(device.clone(), queue.clone()).await?;
 //!
-//!     let converter = FrameConverter::new(&device);
+//!     let mut converter = FrameConverter::new(&device);
 //!     let mut frames = camera.frames();
 //!     while let Some(frame) = frames.next().await {
-//!         let upright = converter.convert(&device, &queue, &frame);
+//!         let upright = converter.convert(&device, &queue, &frame?);
 //!         // Sample `upright` for rendering...
 //!     }
 //!     // Camera stops when dropped
+//!     Ok(())
 //! }
 //! ```
 
@@ -36,11 +40,11 @@ mod converter;
 mod frame;
 // Apple and Android frames are imported from the platform's buffers; desktop
 // frames, and the tests everywhere, are uploaded from CPU memory.
-#[cfg(any(target_os = "windows", target_os = "linux", test))]
-mod pool;
 mod sys;
 #[cfg(test)]
 mod test_support;
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+mod upload;
 
 pub use converter::{FrameConverter, UPRIGHT_FORMAT};
 pub use frame::{Frame, FramePlanes, Orientation};
@@ -671,6 +675,12 @@ pub enum CameraError {
     /// Platform-specific error.
     #[error("platform error: {0}")]
     PlatformError(String),
+    /// A frame the camera delivered could not be imported on the GPU device,
+    /// such as an external-format buffer on a device without the
+    /// conversion's extension. It is the frame stream's last item.
+    #[cfg(target_os = "android")]
+    #[error("camera frame import failed: {0}")]
+    FrameImport(Arc<wgpu_external_frame::ahardware_buffer::HardwareBufferImportError>),
 }
 
 // ============================================================================
@@ -705,15 +715,19 @@ impl Camera {
     /// On Android, frames are imported `AHardwareBuffer`s, which needs device
     /// extensions and a feature `wgpu` never enables by itself: open `device`
     /// with `wgpu_external_frame::ahardware_buffer::request_device`, or
-    /// apply `ahardware_buffer::DeviceRequirements` when opening it yourself.
-    /// Request `wgpu::Features::TEXTURE_FORMAT_NV12` too where the adapter
-    /// offers it, so drivers that map camera buffers to a Vulkan format can
-    /// alias them.
+    /// apply `ahardware_buffer::DeviceRequirements` when opening it yourself,
+    /// and request `wgpu::Features::TEXTURE_FORMAT_NV12`: drivers that map
+    /// camera buffers to a Vulkan format have them aliased as NV12 textures.
+    ///
+    /// On Windows and Linux, photos are converted upright with
+    /// [`FrameConverter`], so open `device` with
+    /// [`FrameConverter::required_features`].
     ///
     /// # Errors
-    /// Returns [`CameraError::OpenFailed`] if the camera cannot be opened, and
-    /// on Android [`CameraError::GpuError`] when `device` lacks the import's
-    /// extensions.
+    /// Returns [`CameraError::OpenFailed`] if the camera cannot be opened. On
+    /// Android it returns [`CameraError::GpuError`] when `device` lacks the
+    /// import's extensions or `TEXTURE_FORMAT_NV12`, and on Windows and Linux
+    /// when [`FrameConverter::check_device`] rejects `device`.
     pub async fn open(
         camera_id: &str,
         config: CameraConfig,
@@ -777,16 +791,16 @@ impl Camera {
     ///
     /// Frames are delivered at the camera's frame rate. The stream implements
     /// backpressure - if frames are not consumed fast enough, older frames
-    /// will be dropped. Each stream recycles the GPU storage of the frames it
-    /// produced once they are dropped.
+    /// will be dropped.
     ///
-    /// The stream ends, with the reason logged, when capture fails, and on
-    /// Android when the device cannot import the camera's buffers: buffers a
-    /// driver describes only through an external format are converted, which
-    /// needs `VK_KHR_push_descriptor`. `request_device` enables it where the
-    /// adapter offers it; whether the camera's buffers need it shows only on
-    /// the first frame.
-    pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
+    /// When capture fails, the stream yields the error as its last item and
+    /// then ends. On Android that includes [`CameraError::FrameImport`] when
+    /// the device cannot import the camera's buffers: buffers a driver
+    /// describes only through an external format are converted, which needs
+    /// `VK_KHR_push_descriptor`. `request_device` enables it where the adapter
+    /// offers it; whether the camera's buffers need it shows only on the first
+    /// frame.
+    pub fn frames(&self) -> impl futures::Stream<Item = Result<Frame, CameraError>> + '_ {
         self.inner.frames()
     }
 

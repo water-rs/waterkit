@@ -8816,7 +8816,7 @@ dependencies = [
 [[package]]
 name = "wgpu-external-frame"
 version = "0.1.0"
-source = "git+https://github.com/water-rs/wgpu-external-frame?rev=5c0772827b80b44f76bbf0bada4e83ea8b9322d7#5c0772827b80b44f76bbf0bada4e83ea8b9322d7"
+source = "git+https://github.com/water-rs/wgpu-external-frame?rev=5785c3967efcda574da5d872739dc5b9bdec63f1#5785c3967efcda574da5d872739dc5b9bdec63f1"
 dependencies = [
  "ash",
  "glow",

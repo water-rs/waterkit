@@ -8,7 +8,6 @@
 
 mod capture;
 
-pub use capture::CapturedBuffer;
 use capture::{CapturedPixelBuffer, RawFrame};
 
 use crate::{
@@ -53,6 +52,7 @@ mod ffi {
 
         // Camera lifecycle
         fn camera_open(device_id: String) -> CameraResultFFI;
+        fn camera_open_failure() -> String;
         fn camera_start() -> CameraResultFFI;
         fn camera_stop() -> CameraResultFFI;
         fn camera_close() -> CameraResultFFI;
@@ -259,7 +259,15 @@ impl CameraInner {
         queue: Arc<wgpu::Queue>,
     ) -> Result<Self, CameraError> {
         std::future::ready(()).await;
-        convert_result(ffi::camera_open(camera_id.to_string()), camera_id)?;
+        match ffi::camera_open(camera_id.to_string()) {
+            ffi::CameraResultFFI::OpenFailed => {
+                return Err(CameraError::OpenFailed(format!(
+                    "{camera_id}: {}",
+                    ffi::camera_open_failure()
+                )));
+            }
+            result => convert_result(result, camera_id)?,
+        }
         let mut open_guard = OpenCameraGuard::new();
 
         // Set resolution
@@ -621,19 +629,15 @@ impl CameraInner {
         self.resolution
     }
 
-    pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
+    pub fn frames(&self) -> impl futures::Stream<Item = Result<Frame, CameraError>> + '_ {
         let device = Arc::clone(&self.device);
-        let queue = Arc::clone(&self.queue);
         let receiver = self.frame_receiver.clone();
 
-        futures::stream::unfold(
-            (device, queue, receiver),
-            |(device, queue, receiver)| async move {
-                let raw = receiver.recv().await.ok()?;
-                let frame = capture::build_frame(&device, &queue, raw);
-                Some((frame, (device, queue, receiver)))
-            },
-        )
+        futures::stream::unfold((device, receiver), |(device, receiver)| async move {
+            let raw = receiver.recv().await.ok()?;
+            let frame = capture::build_frame(&device, raw);
+            Some((Ok(frame), (device, receiver)))
+        })
     }
 
     pub async fn capture_photo(&self) -> Result<Photo, CameraError> {

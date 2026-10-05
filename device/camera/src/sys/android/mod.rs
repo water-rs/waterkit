@@ -1057,7 +1057,7 @@ pub struct CameraInner {
     controls: CameraControls,
     resolution: Resolution,
     mounting: SensorMounting,
-    frame_receiver: async_channel::Receiver<RawFrame>,
+    frame_receiver: async_channel::Receiver<Result<RawFrame, CameraError>>,
     running: Arc<AtomicBool>,
     bridge: Arc<AndroidBridge>,
     recording_mode: Option<RecordingMode>,
@@ -1139,13 +1139,13 @@ impl CameraInner {
             while running_for_thread.load(Ordering::SeqCst) {
                 match bridge_for_thread.wait_for_frame(start_instant, frame_wait_ms) {
                     Ok(Some(frame)) => {
-                        let _ = sender.force_send(frame);
+                        let _ = sender.force_send(Ok(frame));
                     }
                     Ok(None) => {}
                     Err(error) => {
-                        // Ending the thread closes the frame channel, so the
-                        // failure reaches consumers as the end of their frames.
-                        tracing::error!("camera capture stopped: {error}");
+                        // The error is the stream's last item; ending the
+                        // thread then closes the channel.
+                        let _ = sender.force_send(Err(error));
                         running_for_thread.store(false, Ordering::SeqCst);
                         break;
                     }
@@ -1304,7 +1304,7 @@ impl CameraInner {
         self.resolution
     }
 
-    pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
+    pub fn frames(&self) -> impl futures::Stream<Item = Result<Frame, CameraError>> + '_ {
         let importer = wgpu_external_frame::ahardware_buffer::HardwareBufferImporter::new(
             &self.device,
             &self.queue,
@@ -1312,24 +1312,19 @@ impl CameraInner {
         let receiver = self.frame_receiver.clone();
         let mounting = self.mounting;
 
-        futures::stream::unfold(
-            (importer, receiver),
-            move |(mut importer, receiver)| async move {
-                let raw = receiver.recv().await.ok()?;
-                match raw.import(&mut importer, mounting) {
-                    Ok(frame) => Some((frame, (importer, receiver))),
-                    Err(error) => {
-                        // This device cannot take the camera's buffers;
-                        // ending the stream is how a capture failure reaches
-                        // consumers.
-                        tracing::error!(
-                            "camera frames stopped: a frame could not be imported: {error}"
-                        );
-                        None
-                    }
-                }
-            },
-        )
+        // The state is `None` once an error has been yielded, which ends the
+        // stream after it.
+        futures::stream::unfold(Some((importer, receiver)), move |state| async move {
+            let (mut importer, receiver) = state?;
+            let frame = match receiver.recv().await.ok()? {
+                Ok(raw) => raw
+                    .import(&mut importer, mounting)
+                    .map_err(|error| CameraError::FrameImport(Arc::new(error))),
+                Err(error) => Err(error),
+            };
+            let next = frame.is_ok().then_some((importer, receiver));
+            Some((frame, next))
+        })
     }
 
     #[allow(

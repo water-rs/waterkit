@@ -48,25 +48,36 @@ A `Frame` exposes what it holds rather than a hidden RGBA texture:
 - `FrameConverter` renders any frame to an upright `Rgba8Unorm` texture in a
   compute pass. Its shaders are compiled ahead of time with `shaderloom`, so
   create the device with `FrameConverter::required_features(adapter.features())`.
+  Windows and Linux convert photos with it, so there a camera opens only on
+  such a device and `Camera::open` returns `CameraError::GpuError` otherwise.
+- `Camera::frames()` yields `Result<Frame, CameraError>`: a capture or import
+  failure arrives as the stream's last item.
 
 What each platform delivers today:
 
 | Platform | Planes | Orientation |
 | :--- | :--- | :--- |
-| iOS / macOS | `YCbCr420`: the capture buffer's `IOSurface` planes (`420f`, else `420v`), no copy | capture connection rotation and mirroring |
+| iOS / macOS | `YCbCr420`: the capture buffer's `IOSurface` planes (`420f`, else `420v`), no copy | upright on the display: the foreground scene's interface orientation on iOS, the rotation coordinator's horizon-level angle on macOS; plus the connection's mirroring |
 | Android | `YCbCr420`: the camera's GPU-sampled `AHardwareBuffer`, imported (driver-private formats are converted into plane textures on the GPU) | sensor orientation, lens facing, display rotation |
 | Windows / Linux | `YCbCr420` (NV12), `YCbCr422` (YUYV), or `Rgb` from MJPEG | always `Up` |
 
-On Apple and Android no pixel of a frame passes through the CPU. On Apple a
-frame's textures alias the capture buffer, which returns to the camera's small
-pool only when the frame drops and the GPU work submitted until then
-finishes; a consumer that holds frames makes the camera drop new ones. On
-Android the camera's `AHardwareBuffer` is imported through
-`wgpu-external-frame`, which returns it to the reader as soon as the GPU no
-longer reads it; open the device with
+On Apple and Android no pixel of a frame passes through the CPU, and a
+frame's textures alias a buffer from the camera's small pool. On Apple the
+capture buffer returns to the pool when the frame drops and the GPU work
+submitted until then finishes; on Android the camera's `AHardwareBuffer` is
+imported through `wgpu-external-frame`, which returns it to the reader once
+the frame drops and the GPU no longer reads it. On both, a consumer that holds
+frames empties the pool and the camera drops new frames until one comes back,
+so drop each frame as soon as its work is submitted.
+
+On Android, open the device with
 `wgpu_external_frame::ahardware_buffer::request_device` (re-exported as
-`waterkit_camera::wgpu_external_frame`). Desktop uploads the planes the webcam
-delivers into pooled textures.
+`waterkit_camera::wgpu_external_frame`) and request
+`wgpu::Features::TEXTURE_FORMAT_NV12`; `Camera::open` returns
+`CameraError::GpuError` on a device without them.
+
+Desktop uploads the planes the webcam delivers into textures created for each
+frame.
 
 ## RAW Outputs
 
@@ -83,17 +94,34 @@ delivers into pooled textures.
 
 ```rust
 use std::sync::Arc;
-use waterkit_camera::{Camera, CameraError};
+use waterkit_camera::{Camera, CameraError, FrameConverter, wgpu};
 
 #[tokio::main]
 async fn main() -> Result<(), CameraError> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
         .await
         .expect("adapter");
+    // Windows and Linux convert photos with `FrameConverter`.
+    let required_features = FrameConverter::required_features(adapter.features());
+    // Android imports camera buffers, which needs the import's device
+    // extensions and NV12 textures.
+    #[cfg(target_os = "android")]
+    let (device, queue) = waterkit_camera::wgpu_external_frame::ahardware_buffer::request_device(
+        &adapter,
+        &wgpu::DeviceDescriptor {
+            required_features: required_features | wgpu::Features::TEXTURE_FORMAT_NV12,
+            ..Default::default()
+        },
+    )
+    .expect("device");
+    #[cfg(not(target_os = "android"))]
     let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor::default())
+        .request_device(&wgpu::DeviceDescriptor {
+            required_features,
+            ..Default::default()
+        })
         .await
         .expect("device");
 

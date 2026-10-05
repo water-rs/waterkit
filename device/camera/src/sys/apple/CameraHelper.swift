@@ -69,25 +69,29 @@ private var cachedDolbyVisionFormat: AVCaptureDevice.Format?
 // MARK: - Frame Orientation
 
 // Clockwise angle, in degrees, that a capture connection would have to apply
-// for horizon-level output. The rotation coordinator (iOS 17, macOS 14) keeps
-// it current; older systems derive it from the device orientation.
-private var horizonLevelAngle: Int = 0
+// for its output to stand upright on the display. On iOS that follows the
+// interface orientation of the app's foreground scene, so an app locked to
+// portrait keeps portrait frames however the device is held. A Mac's display
+// does not turn with gravity, so there it is the rotation coordinator's
+// horizon-level angle (macOS 14), which turns only for a camera that can be
+// rotated, such as an iPhone used as a webcam.
+// `nil` until it is first known; frames are not delivered before then.
+private var displayAngle: Int?
 private let orientationLock = NSLock()
+#if os(macOS)
 // `AVCaptureDevice.RotationCoordinator` where available; stored untyped so the
 // variable needs no availability annotation.
 private var rotationCoordinator: AnyObject?
 private var rotationObservation: NSKeyValueObservation?
-#if os(iOS)
-private var deviceOrientationObserver: NSObjectProtocol?
 #endif
 
 private func normalizedDegrees(_ angle: Int) -> Int {
     return ((angle % 360) + 360) % 360
 }
 
-private func setHorizonLevelAngle(_ angle: Int) {
+private func setDisplayAngle(_ angle: Int?) {
     orientationLock.lock()
-    horizonLevelAngle = normalizedDegrees(angle)
+    displayAngle = angle.map(normalizedDegrees)
     orientationLock.unlock()
 }
 
@@ -104,71 +108,74 @@ private func rotationAngle(of orientation: AVCaptureVideoOrientation) -> Int {
 }
 
 #if os(iOS)
-private func updateHorizonLevelAngle(from orientation: UIDeviceOrientation) {
-    switch orientation {
-    case .portrait: setHorizonLevelAngle(90)
-    case .landscapeLeft: setHorizonLevelAngle(0)
-    case .landscapeRight: setHorizonLevelAngle(180)
-    case .portraitUpsideDown: setHorizonLevelAngle(270)
-    // Face up, face down and unknown say nothing about the horizon; keep the
-    // last level angle.
-    default: break
+// The capture rotation that matches the foreground scene's interface
+// orientation, or `nil` while no scene is in the foreground. Main thread only.
+private func interfaceRotationAngle() -> Int? {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) else {
+        return nil
+    }
+    switch scene.interfaceOrientation {
+    case .landscapeRight: return 0
+    case .portrait: return 90
+    case .landscapeLeft: return 180
+    case .portraitUpsideDown: return 270
+    case .unknown: return nil
+    @unknown default: return nil
+    }
+}
+
+// Reads the interface orientation on the main thread, where UIKit allows it,
+// keeping the last known angle while no scene is in the foreground.
+private func refreshDisplayAngle() {
+    DispatchQueue.main.async {
+        if let angle = interfaceRotationAngle() {
+            setDisplayAngle(angle)
+        }
     }
 }
 #endif
 
 private func startOrientationTracking(device: AVCaptureDevice) {
-    if #available(iOS 17.0, macOS 14.0, *) {
+    setDisplayAngle(nil)
+    #if os(iOS)
+    refreshDisplayAngle()
+    #else
+    if #available(macOS 14.0, *) {
         let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
         rotationCoordinator = coordinator
         rotationObservation = coordinator.observe(
             \.videoRotationAngleForHorizonLevelCapture,
             options: [.initial, .new]
         ) { coordinator, _ in
-            setHorizonLevelAngle(Int(coordinator.videoRotationAngleForHorizonLevelCapture.rounded()))
+            setDisplayAngle(Int(coordinator.videoRotationAngleForHorizonLevelCapture.rounded()))
         }
     } else {
-        #if os(iOS)
-        // Portrait is the natural orientation until the device reports one.
-        setHorizonLevelAngle(90)
-        DispatchQueue.main.async {
-            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-            updateHorizonLevelAngle(from: UIDevice.current.orientation)
-            deviceOrientationObserver = NotificationCenter.default.addObserver(
-                forName: UIDevice.orientationDidChangeNotification,
-                object: nil,
-                queue: .main
-            ) { _ in
-                updateHorizonLevelAngle(from: UIDevice.current.orientation)
-            }
-        }
-        #else
         // A Mac's cameras do not turn with the machine.
-        setHorizonLevelAngle(0)
-        #endif
-    }
-}
-
-private func stopOrientationTracking() {
-    rotationObservation?.invalidate()
-    rotationObservation = nil
-    rotationCoordinator = nil
-    #if os(iOS)
-    if let observer = deviceOrientationObserver {
-        deviceOrientationObserver = nil
-        DispatchQueue.main.async {
-            NotificationCenter.default.removeObserver(observer)
-            UIDevice.current.endGeneratingDeviceOrientationNotifications()
-        }
+        setDisplayAngle(0)
     }
     #endif
 }
 
+private func stopOrientationTracking() {
+    #if os(macOS)
+    rotationObservation?.invalidate()
+    rotationObservation = nil
+    rotationCoordinator = nil
+    #endif
+    setDisplayAngle(nil)
+}
+
 // The clockwise rotation, in degrees, that turns this connection's buffers
-// upright once any mirroring is undone, and whether the connection mirrors.
+// upright on the display once any mirroring is undone, and whether the
+// connection mirrors; `nil` while the display's orientation is unknown.
 // Mirroring is about the output's vertical axis, after the rotation the
 // connection applied.
-private func frameOrientation(of connection: AVCaptureConnection) -> (UInt32, Bool) {
+private func frameOrientation(of connection: AVCaptureConnection) -> (UInt32, Bool)? {
+    #if os(iOS)
+    // The interface may turn at any frame; the next frame sees the change.
+    refreshDisplayAngle()
+    #endif
     let applied: Int
     if #available(iOS 17.0, macOS 14.0, *) {
         applied = Int(connection.videoRotationAngle.rounded())
@@ -176,9 +183,10 @@ private func frameOrientation(of connection: AVCaptureConnection) -> (UInt32, Bo
         applied = rotationAngle(of: connection.videoOrientation)
     }
     orientationLock.lock()
-    let level = horizonLevelAngle
+    let display = displayAngle
     orientationLock.unlock()
-    return (UInt32(normalizedDegrees(level - applied)), connection.isVideoMirrored)
+    guard let display else { return nil }
+    return (UInt32(normalizedDegrees(display - applied)), connection.isVideoMirrored)
 }
 
 // MARK: - Frame Delegate
@@ -187,12 +195,19 @@ class CameraFrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        let (rotationDegrees, mirrored) = frameOrientation(of: connection)
-
         // Get presentation timestamp
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let timestampNs = UInt64(CMTimeGetSeconds(pts) * 1_000_000_000)
 
+        // A frame whose upright orientation is not known yet is not delivered:
+        // it would reach the consumer turned the wrong way.
+        if let (rotationDegrees, mirrored) = frameOrientation(of: connection) {
+            deliver(pixelBuffer, timestampNs: timestampNs, rotationDegrees: rotationDegrees, mirrored: mirrored)
+        }
+        maybeWriteRawVideoFrame(pixelBuffer: pixelBuffer, timestampNs: timestampNs)
+    }
+
+    private func deliver(_ pixelBuffer: CVPixelBuffer, timestampNs: UInt64, rotationDegrees: UInt32, mirrored: Bool) {
         // Retain the CVPixelBuffer and hand that reference to Rust, which owns
         // it from here on and releases it when the frame built from it drops.
         let unmanaged = Unmanaged.passRetained(pixelBuffer)
@@ -208,7 +223,6 @@ class CameraFrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         } else {
             unmanaged.release()
         }
-        maybeWriteRawVideoFrame(pixelBuffer: pixelBuffer, timestampNs: timestampNs)
     }
 
     func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
@@ -342,6 +356,24 @@ func camera_device_is_front(index: Int32) -> Bool {
 
 // MARK: - Camera Control
 
+// Why the last `camera_open` returned `.OpenFailed`, for the Rust error.
+private var openFailure = ""
+
+private func openFailed(_ reason: String) -> CameraResultFFI {
+    openFailure = reason
+    return .OpenFailed
+}
+
+func camera_open_failure() -> RustString {
+    return openFailure.intoRustString()
+}
+
+// A pixel format's four-character code, such as `420f`.
+private func fourCharCode(_ format: OSType) -> String {
+    let bytes = [24, 16, 8, 0].map { UInt8((format >> $0) & 0xff) }
+    return String(decoding: bytes, as: UTF8.self)
+}
+
 func camera_open(device_id: RustString) -> CameraResultFFI {
     guard captureSession == nil else {
         return .AlreadyInUse
@@ -375,10 +407,10 @@ func camera_open(device_id: RustString) -> CameraResultFFI {
         if session.canAddInput(input) {
             session.addInput(input)
         } else {
-            return .OpenFailed
+            return openFailed("the capture session cannot take \(device.localizedName) as its input")
         }
     } catch {
-        return .OpenFailed
+        return openFailed("\(device.localizedName) cannot be opened: \(error.localizedDescription)")
     }
 
     let output = AVCaptureVideoDataOutput()
@@ -391,7 +423,11 @@ func camera_open(device_id: RustString) -> CameraResultFFI {
     } else if offered.contains(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) {
         capturePixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
     } else {
-        return .OpenFailed
+        let formats = offered.map(fourCharCode).joined(separator: ", ")
+        return openFailed(
+            "\(device.localizedName) offers neither 420f nor 420v frames, which the camera needs to "
+                + "hand them to the GPU as they are; it offers [\(formats)]"
+        )
     }
     output.videoSettings = [
         kCVPixelBufferPixelFormatTypeKey as String: capturePixelFormat
@@ -402,7 +438,7 @@ func camera_open(device_id: RustString) -> CameraResultFFI {
     if session.canAddOutput(output) {
         session.addOutput(output)
     } else {
-        return .OpenFailed
+        return openFailed("the capture session cannot add a video data output for \(device.localizedName)")
     }
 
     // Add Photo Output

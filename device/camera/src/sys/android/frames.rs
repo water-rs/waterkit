@@ -17,7 +17,7 @@ use wgpu_external_frame::ahardware_buffer::{
 };
 
 use super::{AndroidBridge, SensorMounting};
-use crate::frame::{Frame, FramePlanes, FrameStorage};
+use crate::frame::{Frame, FramePlanes};
 use crate::{CameraError, Orientation};
 
 /// Fails unless `device` was opened with the extensions every
@@ -37,6 +37,18 @@ pub fn check_device(device: &wgpu::Device) -> Result<(), CameraError> {
     let hal_device = unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() }.ok_or_else(|| {
         CameraError::GpuError("Android camera frames need a Vulkan wgpu device".into())
     })?;
+    // A driver that maps the camera's buffers to a Vulkan format has them
+    // aliased as NV12 textures, which the device must be able to create.
+    if !device
+        .features()
+        .contains(wgpu::Features::TEXTURE_FORMAT_NV12)
+    {
+        return Err(CameraError::GpuError(
+            "the wgpu device lacks TEXTURE_FORMAT_NV12, which camera frames need; request it when \
+             opening the device"
+                .into(),
+        ));
+    }
     let enabled = hal_device.enabled_device_extensions();
     if let Some(missing) = CONVERSION_DEVICE_EXTENSIONS
         .into_iter()
@@ -152,7 +164,6 @@ impl RawFrame {
         };
         Ok(Frame::new(
             planes,
-            FrameStorage::Imported,
             size.width,
             size.height,
             Orientation::from_camera2(

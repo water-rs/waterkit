@@ -25,6 +25,8 @@ shaderloom = { workspace = true, features = ["runtime"] }
 # Zero-copy import of the platform frame buffers, and the YCbCr encoding types
 # frames carry.
 wgpu-external-frame.workspace = true
+# The YCbCr mode codes the converter's shaders take.
+waterkit-video-core.workspace = true
 
 [build-dependencies]
 waterkit-build.workspace = true

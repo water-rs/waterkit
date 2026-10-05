@@ -103,6 +103,10 @@ fn init_logger() {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
+    // A panic's message goes to stderr, which an Android app does not keep,
+    // and the JNI boundary reports only that a panic happened; log it so a
+    // crashed run says why.
+    std::panic::set_hook(Box::new(|info| log::error!("Rust panic: {info}")));
 }
 
 fn run_native_report(_env: &mut Env<'_>, _activity: &JObject<'_>) -> TestReport {

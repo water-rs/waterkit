@@ -10,6 +10,9 @@ pub use android::*;
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod desktop;
+
+#[cfg(any(test, target_os = "windows", target_os = "linux"))]
+mod network;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub use desktop::*;
 

@@ -357,6 +357,7 @@ fn annex_b_nalus(data: &[u8]) -> Vec<(usize, usize)> {
 /// units — either the parameter sets an encoder prepends to its first IDR
 /// access unit or the raw `MF_MT_MPEG_SEQUENCE_HEADER` blob on Windows.
 /// Returns `None` when the bitstream carries no usable SPS/PPS pair.
+#[cfg(any(waterkit_hw_codec_vaapi, waterkit_hw_codec_windows))]
 pub fn build_h264_avcc_from_annex_b(bitstream: &[u8]) -> Option<Vec<u8>> {
     let mut sps = None;
     let mut pps = None;
@@ -405,6 +406,7 @@ pub fn build_h264_avcc_from_annex_b(bitstream: &[u8]) -> Option<Vec<u8>> {
 /// (type 33) and PPS (type 34) units. Profile/tier/level and the temporal
 /// layer fields are read out of the first SPS; the record is `None` when any
 /// of the three parameter sets is missing.
+#[cfg(waterkit_hw_codec_windows)]
 pub fn build_h265_hvcc_from_annex_b(bitstream: &[u8]) -> Option<Vec<u8>> {
     let mut vps_nalus: Vec<&[u8]> = Vec::new();
     let mut sps_nalus: Vec<&[u8]> = Vec::new();

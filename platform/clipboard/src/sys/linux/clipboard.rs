@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::formats::{self, Offered, Representation};
+use super::formats::{self, Representation};
 use super::session::{self, DisplayServer, Session};
 use super::wayland::{self, WaylandSelection};
 use super::x11::X11Selection;
@@ -30,33 +30,24 @@ impl ClipboardInner {
 
     // ========== Query (sync) ==========
 
-    /// The formats CLIPBOARD offers. The queries answer with a `bool`, so a
-    /// failure to list them is logged and reads as offering none.
-    fn offered(&self) -> Offered {
-        self.backend.offered().unwrap_or_else(|error| {
-            tracing::error!(%error, "listing the CLIPBOARD formats failed; reporting none");
-            Offered::default()
-        })
-    }
-
     /// Check if text is available.
-    pub fn has_text(&self) -> bool {
-        self.offered().has_text()
+    pub fn has_text(&self) -> Result<bool, ClipboardError> {
+        Ok(self.backend.offered()?.has_text())
     }
 
     /// Check if HTML is available.
-    pub fn has_html(&self) -> bool {
-        self.offered().has_html()
+    pub fn has_html(&self) -> Result<bool, ClipboardError> {
+        Ok(self.backend.offered()?.has_html())
     }
 
     /// Check if files are available.
-    pub fn has_files(&self) -> bool {
-        self.offered().has_files()
+    pub fn has_files(&self) -> Result<bool, ClipboardError> {
+        Ok(self.backend.offered()?.has_files())
     }
 
     /// Check if image is available.
-    pub fn has_image(&self) -> bool {
-        self.offered().has_image()
+    pub fn has_image(&self) -> Result<bool, ClipboardError> {
+        Ok(self.backend.offered()?.has_image())
     }
 
     // ========== Read (sync, called from blocking::unblock) ==========

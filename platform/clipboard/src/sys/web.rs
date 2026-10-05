@@ -14,27 +14,32 @@ impl ClipboardInner {
         Ok(Self)
     }
 
-    pub fn has_text(&self) -> bool {
-        false
+    // The browser clipboard lists its formats only asynchronously
+    // (`navigator.clipboard.read()`), so no synchronous query can answer.
+
+    pub fn has_text(&self) -> Result<bool, ClipboardError> {
+        Err(ClipboardError::UnsupportedType("text/plain".into()))
     }
 
-    pub fn has_html(&self) -> bool {
-        false
+    pub fn has_html(&self) -> Result<bool, ClipboardError> {
+        Err(ClipboardError::UnsupportedType("text/html".into()))
     }
 
-    pub fn has_files(&self) -> bool {
-        false
+    pub fn has_files(&self) -> Result<bool, ClipboardError> {
+        Err(ClipboardError::UnsupportedType("files".into()))
     }
 
-    pub fn has_image(&self) -> bool {
-        false
+    pub fn has_image(&self) -> Result<bool, ClipboardError> {
+        Err(ClipboardError::UnsupportedType("image".into()))
     }
 
     pub async fn get_text(&self) -> Result<Option<String>, ClipboardError> {
         let promise = browser_clipboard()?.read_text();
         let value = JsFuture::from(promise).await.map_err(js_error)?;
-        let text = value.as_string();
-        Ok(text.filter(|text| !text.is_empty()))
+        let text = value.as_string().ok_or_else(|| {
+            ClipboardError::Platform(format!("readText resolved to a non-string: {value:?}"))
+        })?;
+        Ok(Some(text).filter(|text| !text.is_empty()))
     }
 
     pub async fn get_html(&self) -> Result<Option<String>, ClipboardError> {

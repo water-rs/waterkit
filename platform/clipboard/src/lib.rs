@@ -12,7 +12,7 @@
 //! let mut clipboard = Clipboard::new()?;
 //!
 //! // Check and read text
-//! if clipboard.has_text() {
+//! if clipboard.has_text()? {
 //!     if let Some(text) = clipboard.text().await? {
 //!         println!("Clipboard text: {text}");
 //!     }
@@ -197,26 +197,48 @@ impl Clipboard {
     // ========== Query (sync - instant metadata checks) ==========
 
     /// Check if text content is available in the clipboard.
-    #[must_use]
-    pub fn has_text(&self) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard's formats cannot be listed, for
+    /// example when the platform bridge fails or, on Linux, the display server
+    /// is gone. A failure is never reported as an empty clipboard. In a
+    /// browser, [`ClipboardError::UnsupportedType`]: the browser clipboard has
+    /// no synchronous format query.
+    pub fn has_text(&self) -> Result<bool, ClipboardError> {
         self.inner.has_text()
     }
 
     /// Check if HTML content is available in the clipboard.
-    #[must_use]
-    pub fn has_html(&self) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard's formats cannot be listed, as
+    /// [`has_text`](Self::has_text) describes. In a browser,
+    /// [`ClipboardError::UnsupportedType`].
+    pub fn has_html(&self) -> Result<bool, ClipboardError> {
         self.inner.has_html()
     }
 
     /// Check if file paths are available in the clipboard.
-    #[must_use]
-    pub fn has_files(&self) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard's formats cannot be listed, as
+    /// [`has_text`](Self::has_text) describes. In a browser,
+    /// [`ClipboardError::UnsupportedType`].
+    pub fn has_files(&self) -> Result<bool, ClipboardError> {
         self.inner.has_files()
     }
 
     /// Check if image data is available in the clipboard.
-    #[must_use]
-    pub fn has_image(&self) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard's formats cannot be listed, as
+    /// [`has_text`](Self::has_text) describes. In a browser,
+    /// [`ClipboardError::UnsupportedType`].
+    pub fn has_image(&self) -> Result<bool, ClipboardError> {
         self.inner.has_image()
     }
 

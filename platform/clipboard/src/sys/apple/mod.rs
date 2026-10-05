@@ -10,12 +10,16 @@ use std::time::Duration;
 
 #[swift_bridge::bridge]
 mod ffi {
+    // The pasteboard's image as RGBA pixels. `is_valid` is false when the
+    // pasteboard holds no image; `error` says why an image it holds could not
+    // be converted. (swift-bridge rejects doc attributes on bridged structs.)
     #[swift_bridge(swift_repr = "struct")]
     struct SwiftImageData {
         width: usize,
         height: usize,
         bytes: Vec<u8>,
         is_valid: bool,
+        error: Option<String>,
     }
 
     #[swift_bridge(swift_repr = "struct")]
@@ -33,7 +37,7 @@ mod ffi {
 
         // Read
         fn clipboard_get_text() -> Option<String>;
-        fn clipboard_get_html() -> Option<String>;
+        fn clipboard_get_html() -> SwiftBinaryData;
         fn clipboard_get_image() -> SwiftImageData;
         fn clipboard_get_file_url() -> Option<String>;
         fn clipboard_get_binary(mime: String) -> SwiftBinaryData;
@@ -66,41 +70,49 @@ impl ClipboardInner {
     }
 
     // ========== Query (sync) ==========
+    //
+    // `UIPasteboard`'s presence queries (`hasStrings`, `hasImages`,
+    // `contains(pasteboardTypes:)`, `url`) cannot fail. The queries keep the
+    // cross-platform `Result` signature, which fails on other backends.
 
     /// Check if text is available.
     #[allow(
         clippy::unused_self,
-        reason = "the cross-platform clipboard backend API is instance-based"
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard query is fallible and instance-based"
     )]
-    pub fn has_text(&self) -> bool {
-        ffi::clipboard_has_text()
+    pub fn has_text(&self) -> Result<bool, ClipboardError> {
+        Ok(ffi::clipboard_has_text())
     }
 
     /// Check if HTML is available.
     #[allow(
         clippy::unused_self,
-        reason = "the cross-platform clipboard backend API is instance-based"
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard query is fallible and instance-based"
     )]
-    pub fn has_html(&self) -> bool {
-        ffi::clipboard_has_html()
+    pub fn has_html(&self) -> Result<bool, ClipboardError> {
+        Ok(ffi::clipboard_has_html())
     }
 
     /// Check if files are available.
     #[allow(
         clippy::unused_self,
-        reason = "the cross-platform clipboard backend API is instance-based"
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard query is fallible and instance-based"
     )]
-    pub fn has_files(&self) -> bool {
-        ffi::clipboard_has_files()
+    pub fn has_files(&self) -> Result<bool, ClipboardError> {
+        Ok(ffi::clipboard_has_files())
     }
 
     /// Check if image is available.
     #[allow(
         clippy::unused_self,
-        reason = "the cross-platform clipboard backend API is instance-based"
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard query is fallible and instance-based"
     )]
-    pub fn has_image(&self) -> bool {
-        ffi::clipboard_has_image()
+    pub fn has_image(&self) -> Result<bool, ClipboardError> {
+        Ok(ffi::clipboard_has_image())
     }
 
     // ========== Read (sync, called from blocking::unblock) ==========
@@ -122,7 +134,13 @@ impl ClipboardInner {
         reason = "the cross-platform clipboard backend API is fallible and instance-based"
     )]
     pub fn get_html(&self) -> Result<Option<String>, ClipboardError> {
-        Ok(ffi::clipboard_get_html())
+        let html = ffi::clipboard_get_html();
+        if !html.is_valid {
+            return Ok(None);
+        }
+        String::from_utf8(html.bytes)
+            .map(Some)
+            .map_err(|error| ClipboardError::Decode(format!("the HTML is not UTF-8: {error}")))
     }
 
     /// Get file paths.
@@ -152,6 +170,9 @@ impl ClipboardInner {
     )]
     pub fn get_image(&self) -> Result<Option<Image>, ClipboardError> {
         let image = ffi::clipboard_get_image();
+        if let Some(error) = image.error {
+            return Err(ClipboardError::InvalidImage(error));
+        }
         if !image.is_valid {
             return Ok(None);
         }

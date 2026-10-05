@@ -79,8 +79,8 @@ fn clipboard_round_trip() -> Result<(), String> {
 
 fn text(external: &External, clipboard: &mut Clipboard) -> Result<(), ClipboardError> {
     clipboard.set_text(TEXT)?;
-    assert!(clipboard.has_text());
-    assert!(!clipboard.has_html());
+    assert!(clipboard.has_text()?);
+    assert!(!clipboard.has_html()?);
     assert_eq!(block_on(clipboard.text())?.as_deref(), Some(TEXT));
     assert_eq!(external.read(None), TEXT.as_bytes());
 
@@ -94,16 +94,16 @@ fn text(external: &External, clipboard: &mut Clipboard) -> Result<(), ClipboardE
 
 fn html(external: &External, clipboard: &mut Clipboard) -> Result<(), ClipboardError> {
     clipboard.set_html(HTML, Some(ALT_TEXT))?;
-    assert!(clipboard.has_html());
+    assert!(clipboard.has_html()?);
     assert_eq!(block_on(clipboard.html())?.as_deref(), Some(HTML));
     assert_eq!(block_on(clipboard.text())?.as_deref(), Some(ALT_TEXT));
     assert_eq!(external.read(Some("text/html")), HTML.as_bytes());
     assert_eq!(external.read(None), ALT_TEXT.as_bytes());
 
     clipboard.set_html(HTML, None)?;
-    assert!(clipboard.has_html());
+    assert!(clipboard.has_html()?);
     assert!(
-        !clipboard.has_text(),
+        !clipboard.has_text()?,
         "HTML without alt text is offered as plain text"
     );
 
@@ -121,7 +121,7 @@ fn files(external: &External, clipboard: &mut Clipboard) -> Result<(), Clipboard
         PathBuf::from("/tmp/waterkit-\u{e9}.txt"),
     ];
     clipboard.set_files(&owned)?;
-    assert!(clipboard.has_files());
+    assert!(clipboard.has_files()?);
     assert_eq!(block_on(clipboard.files())?, owned);
     assert_eq!(
         external.read(Some("text/uri-list")),
@@ -184,7 +184,7 @@ fn image(external: &External, clipboard: &mut Clipboard) -> Result<(), Clipboard
     let owned = rgba(2, 1, &[255, 0, 0, 255, 0, 0, 255, 128]);
     let file = PngFile::new(&owned);
     clipboard.set_image(file.path())?;
-    assert!(clipboard.has_image());
+    assert!(clipboard.has_image()?);
     let read = block_on(clipboard.image())?.expect("the image just written");
     assert_eq!(pixels(&read), (2, 1, owned.to_vec()));
     let external_png = external.read(Some("image/png"));
@@ -251,7 +251,7 @@ fn large(external: &External, clipboard: &mut Clipboard) -> Result<(), Clipboard
 
 fn clear(_: &External, clipboard: &mut Clipboard) -> Result<(), ClipboardError> {
     clipboard.clear()?;
-    assert!(!clipboard.has_text());
+    assert!(!clipboard.has_text()?);
     assert_eq!(block_on(clipboard.text())?, None);
     assert_eq!(block_on(clipboard.files())?, Vec::<PathBuf>::new());
     Ok(())

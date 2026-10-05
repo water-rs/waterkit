@@ -34,6 +34,10 @@ jobs:
       - name: Start an X server for the clipboard tests
         if: runner.os == 'Linux'
         uses: ./.github/actions/setup-x11-display
+      - name: Start a Wayland compositor without data-control
+        id: weston
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/setup-wayland-compositor
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -46,6 +50,16 @@ jobs:
         run: cargo nextest run --workspace --all-features --no-fail-fast
       - if: ${{ success() || steps.unit_tests.outcome == 'failure' }}
         run: cargo test --doc --workspace --all-features --no-fail-fast
+      # PRIMARY in a Wayland session without data-control must fail even with
+      # the X server above reachable. Same build flags as the unit tests, so
+      # nothing is rebuilt.
+      - name: Check PRIMARY never falls through from Wayland to X11
+        if: ${{ !cancelled() && steps.weston.outcome == 'success' }}
+        env:
+          WAYLAND_DISPLAY: ${{ steps.weston.outputs.wayland-display }}
+        run: >
+          cargo nextest run --workspace --all-features --run-ignored only
+          -E 'binary_id(waterkit-clipboard::primary) & test(=wayland_without_data_control_never_uses_x11)'
       - name: Run macOS sensor integration harness
         if: runner.os == 'macOS'
         run: cargo run -p waterkit-test -- macos tests/macos/sensor

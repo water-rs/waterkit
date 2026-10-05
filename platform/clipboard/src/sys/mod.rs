@@ -27,7 +27,7 @@ mod web;
 #[cfg(target_arch = "wasm32")]
 pub use web::ClipboardInner;
 
-// Linux additionally exposes the PRIMARY selection (arboard backend)
+// Linux additionally exposes the PRIMARY selection (Wayland data-control or X11)
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]

@@ -1,61 +1,23 @@
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "windows")]
+mod windows;
+
+#[cfg(target_os = "linux")]
+use linux as os;
+#[cfg(target_os = "windows")]
+use windows as os;
+
 use crate::{ConnectionType, ConnectivityInfo, SystemError, SystemLoad, ThermalState};
 use sysinfo::{
-    Components, CpuRefreshKind, MINIMUM_CPU_UPDATE_INTERVAL, MemoryRefreshKind, Networks,
-    RefreshKind, System,
+    Components, CpuRefreshKind, MINIMUM_CPU_UPDATE_INTERVAL, MemoryRefreshKind, RefreshKind, System,
 };
 
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "every platform shares the fallible signature; sysinfo reports no failure here"
-)]
 pub fn connectivity() -> Result<ConnectivityInfo, SystemError> {
-    let networks = Networks::new_with_refreshed_list();
-
-    let mut has_connection = false;
-    let mut connection_type = ConnectionType::None;
-
-    for (name, _data) in &networks {
-        let name_lower = name.to_lowercase();
-
-        // Skip loopback
-        if name_lower.contains("lo") || name_lower.contains("loopback") {
-            continue;
-        }
-
-        has_connection = true;
-
-        // Identify interface type by name
-        if name_lower.contains("wlan")
-            || name_lower.contains("wi-fi")
-            || name_lower.contains("wifi")
-            || name_lower.starts_with("en") && !name_lower.contains("ethernet")
-        {
-            connection_type = ConnectionType::Wifi;
-            break;
-        } else if name_lower.contains("eth")
-            || name_lower.contains("ethernet")
-            || name_lower.starts_with("enp")
-            || name_lower.starts_with("eno")
-        {
-            connection_type = ConnectionType::Ethernet;
-        } else if name_lower.contains("wwan") || name_lower.contains("cellular") {
-            connection_type = ConnectionType::Cellular;
-            break;
-        } else if name_lower.contains("vpn")
-            || name_lower.contains("tun")
-            || name_lower.contains("tap")
-        {
-            connection_type = ConnectionType::Vpn;
-        } else if name_lower.contains("bluetooth") || name_lower.contains("pan") {
-            connection_type = ConnectionType::Bluetooth;
-        } else if connection_type == ConnectionType::None {
-            connection_type = ConnectionType::Other;
-        }
-    }
-
+    let transport = os::transport()?;
     Ok(ConnectivityInfo::new(
-        connection_type,
-        has_connection && connection_type != ConnectionType::None,
+        transport,
+        transport != ConnectionType::None,
     ))
 }
 

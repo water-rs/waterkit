@@ -25,7 +25,8 @@ waterkit-system = "0.1"
 | :--- | :--- |
 | **macOS/iOS** | `ProcessInfo`, `NWPathMonitor`, Mach host statistics |
 | **Android** | `ConnectivityManager`, `PowerManager`, `ActivityManager` |
-| **Desktop** | `sysinfo` |
+| **Linux** | NetworkManager over D-Bus, or the kernel's interface and route tables where NetworkManager does not run; `sysinfo` |
+| **Windows** | Network List Manager, IP Helper adapter table; `sysinfo` |
 
 On Android, `connectivity()` needs `android.permission.ACCESS_NETWORK_STATE`
 in the application manifest, and CPU usage is `None`: applications cannot read

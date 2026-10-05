@@ -7805,8 +7805,6 @@ dependencies = [
 name = "waterkit-biometric-test"
 version = "0.1.0"
 dependencies = [
- "swift-bridge",
- "swift-bridge-build",
  "tokio",
  "waterkit-biometric",
 ]

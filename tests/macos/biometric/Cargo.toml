@@ -7,12 +7,3 @@ publish = false
 [dependencies]
 waterkit-biometric.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-
-# Apple platforms (iOS, macOS)
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
-
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
-swift-bridge-build.workspace = true
-
-[build-dependencies]

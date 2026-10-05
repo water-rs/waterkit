@@ -6,7 +6,7 @@
 //! and Android APIs take the path as a Unicode string.
 
 use std::path::Path;
-#[cfg(any(target_os = "ios", target_os = "android", test))]
+#[cfg(any(target_os = "ios", target_os = "android", all(test, unix)))]
 use std::path::PathBuf;
 
 use crate::error::ClipboardError;
@@ -24,7 +24,10 @@ pub fn not_absolute(path: &Path) -> ClipboardError {
 /// # Errors
 ///
 /// [`ClipboardError::Encode`] when a path is not absolute or not Unicode.
-#[cfg(any(target_os = "ios", target_os = "android", test))]
+///
+/// Only the iOS and Android backends call this, so its tests run on Unix
+/// hosts, where their paths are absolute.
+#[cfg(any(target_os = "ios", target_os = "android", all(test, unix)))]
 pub fn unicode_paths(paths: &[PathBuf]) -> Result<Vec<String>, ClipboardError> {
     paths
         .iter()
@@ -42,7 +45,7 @@ pub fn unicode_paths(paths: &[PathBuf]) -> Result<Vec<String>, ClipboardError> {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::path::PathBuf;
 
@@ -69,7 +72,6 @@ mod tests {
         ));
     }
 
-    #[cfg(unix)]
     #[test]
     fn rejects_a_path_that_is_not_unicode() {
         use std::ffi::OsStr;

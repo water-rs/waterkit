@@ -5,7 +5,12 @@ use crate::error::ClipboardError;
 use std::sync::{Arc, Mutex};
 
 // The paths a file write accepts, for every backend that builds file URLs
-#[cfg(any(target_os = "ios", target_os = "android", target_os = "linux", test))]
+#[cfg(any(
+    target_os = "ios",
+    target_os = "android",
+    target_os = "linux",
+    all(test, unix)
+))]
 mod file_path;
 
 // Windows and macOS use clipboard-rs

@@ -1,5 +1,6 @@
 //! Camera case: streams frames from every camera on the device and reports
-//! the layout the frames arrive in.
+//! their plane layout and orientation, and the upright size `FrameConverter`
+//! turns the last one into.
 //!
 //! On a physical device the case first needs camera access. iOS grants it
 //! only through the system prompt, which a person answers once on the device;
@@ -12,7 +13,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
-use waterkit::camera::{Camera, CameraConfig, CameraInfo, Frame, wgpu};
+use waterkit::camera::{
+    Camera, CameraConfig, CameraInfo, Frame, FrameConverter, FramePlanes, wgpu,
+};
 use waterkit::permission::{self, Permission, PermissionStatus};
 
 use crate::{TestCase, TestReport};
@@ -134,10 +137,12 @@ async fn camera_access(report: &mut TestReport) -> bool {
     }
 }
 
-/// The GPU device every camera uploads its frames to.
+/// The GPU device every camera imports its frames on, and the converter that
+/// turns them upright.
 struct Gpu {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
+    converter: FrameConverter,
 }
 
 impl Gpu {
@@ -148,10 +153,14 @@ impl Gpu {
             .await
             .map_err(|error| format!("no GPU adapter: {error}"))?;
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: FrameConverter::required_features(adapter.features()),
+                ..Default::default()
+            })
             .await
             .map_err(|error| format!("no GPU device: {error}"))?;
         Ok(Self {
+            converter: FrameConverter::new(&device),
             device: Arc::new(device),
             queue: Arc::new(queue),
         })
@@ -178,46 +187,75 @@ async fn record_frames(report: &mut TestReport, gpu: &Gpu, camera: &CameraInfo) 
         }
     };
 
-    let frames = handle.frames().take(FRAMES).collect::<Vec<_>>();
-    let frames = match tokio::time::timeout(FRAME_TIMEOUT, frames).await {
-        Ok(frames) if frames.len() == FRAMES => frames,
-        Ok(frames) => {
-            report.push(TestCase::failed(
-                case,
-                format!("stream ended after {} of {FRAMES} frames", frames.len()),
-            ));
-            return;
+    // Each frame is dropped before the next is taken: a frame holds a
+    // capture buffer, and holding several starves the camera's pool.
+    let mut frames = std::pin::pin!(handle.frames());
+    let mut orientations = Vec::with_capacity(FRAMES);
+    let mut last = None;
+    for taken in 0..FRAMES {
+        match tokio::time::timeout(FRAME_TIMEOUT, frames.next()).await {
+            Ok(Some(frame)) => {
+                orientations.push(frame.orientation());
+                last = Some(frame);
+            }
+            Ok(None) => {
+                report.push(TestCase::failed(
+                    case,
+                    format!("stream ended after {taken} of {FRAMES} frames"),
+                ));
+                return;
+            }
+            Err(_) => {
+                report.push(TestCase::failed(
+                    case,
+                    format!(
+                        "frame {} of {FRAMES} did not arrive within {FRAME_TIMEOUT:?}",
+                        taken + 1
+                    ),
+                ));
+                return;
+            }
         }
-        Err(_) => {
-            report.push(TestCase::failed(
-                case,
-                format!("no {FRAMES} frames within {FRAME_TIMEOUT:?}"),
-            ));
-            return;
-        }
-    };
+    }
+    let last = last.expect("FRAMES frames were taken");
+    let upright = gpu.converter.convert(&gpu.device, &gpu.queue, &last);
 
     report.push(TestCase::passed_with_message(
         case,
         format!(
-            "name={:?} front={} {}",
+            "name={:?} front={} {} orientations={orientations:?} upright={}x{}",
             camera.name,
             camera.is_front_facing,
-            describe(&frames)
+            describe(&last),
+            upright.width(),
+            upright.height(),
         ),
     ));
 }
 
-/// What the report says about a camera's frames: the layout the last frame
-/// is stored in and its size. This is the only place the case reads a
-/// [`Frame`].
-fn describe(frames: &[Frame]) -> String {
-    let last = frames.last().expect("FRAMES frames were collected");
-    format!(
-        "format={:?} texture={:?} stored={}x{}",
-        last.format(),
-        last.texture().format(),
-        last.width(),
-        last.height(),
-    )
+/// What the report says about a camera's last frame: its plane layout, with
+/// the texture formats and encoding, and its stored size. This is the only
+/// place the case reads a [`Frame`]'s planes.
+fn describe(frame: &Frame) -> String {
+    let layout = match frame.planes() {
+        FramePlanes::Rgb(rgb) => format!("planes=rgb({:?})", rgb.texture().format()),
+        FramePlanes::YCbCr420 {
+            luma,
+            chroma,
+            encoding,
+        } => format!(
+            "planes=ycbcr420(luma={:?}, chroma={:?}, {:?}, {:?})",
+            luma.texture().format(),
+            chroma.texture().format(),
+            encoding.matrix,
+            encoding.range,
+        ),
+        FramePlanes::YCbCr422 { yuyv, encoding } => format!(
+            "planes=ycbcr422({:?}, {:?}, {:?})",
+            yuyv.texture().format(),
+            encoding.matrix,
+            encoding.range,
+        ),
+    };
+    format!("{layout} stored={}x{}", frame.width(), frame.height())
 }

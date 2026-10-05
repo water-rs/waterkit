@@ -11,6 +11,11 @@ pub async fn adapter_state() -> Result<AdapterState, BluetoothError> {
 #[derive(Debug)]
 pub struct BleScannerInner;
 
+#[expect(
+    clippy::unused_self,
+    clippy::missing_const_for_fn,
+    reason = "this unsupported-platform shim keeps no state and computes nothing, but the facade calls every platform's backend through the same non-const `&self` methods"
+)]
 impl BleScannerInner {
     #[allow(clippy::unused_async)]
     pub async fn new() -> Result<Self, BluetoothError> {

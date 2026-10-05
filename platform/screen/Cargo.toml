@@ -49,7 +49,6 @@ ndk-context.workspace = true
 waterkit-build.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["full"] }
 pollster = "1.0"
 
 # winit pulls in `android-activity`, which only builds once an application picks

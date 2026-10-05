@@ -301,8 +301,8 @@ pub trait PacketAudioDecoder: Send {
 ///
 /// Android and Windows use their platform AAC decoders. On other targets, the
 /// `he-aac` feature selects the complete FDK decoder for AAC-LC, HE-AAC, and
-/// HE-AAC v2. Without that feature, the smaller pure-Rust decoder supports
-/// AAC-LC only.
+/// HE-AAC v2. Without that feature, and always on `wasm32`, where FDK does not
+/// build, the smaller pure-Rust decoder supports AAC-LC only.
 pub struct AacPacketDecoder {
     decoder: SelectedAacDecoder,
     channels: NonZeroU16,
@@ -365,7 +365,7 @@ fn create_aac_decoder(config: AacDecoderConfig) -> Result<SelectedAacDecoder, St
 
 #[cfg(all(
     not(any(target_os = "android", target_os = "windows")),
-    not(feature = "he-aac")
+    any(not(feature = "he-aac"), target_arch = "wasm32")
 ))]
 fn create_symphonia_aac_decoder(
     parameters: &AudioCodecParameters,
@@ -375,7 +375,7 @@ fn create_symphonia_aac_decoder(
 }
 
 #[cfg(all(
-    not(any(target_os = "android", target_os = "windows")),
+    not(any(target_os = "android", target_os = "windows", target_arch = "wasm32")),
     feature = "he-aac"
 ))]
 fn create_symphonia_aac_decoder(
@@ -554,7 +554,7 @@ mod tests {
         ));
     }
 
-    #[cfg(feature = "he-aac")]
+    #[cfg(all(feature = "he-aac", not(target_arch = "wasm32")))]
     #[test]
     fn decodes_real_he_aac_access_unit_with_sbr() {
         let fixture = include_str!("fixtures/heaac-48k-stereo.hex");

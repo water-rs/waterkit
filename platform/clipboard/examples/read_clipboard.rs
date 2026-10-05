@@ -1,7 +1,17 @@
 //! Clipboard reading demo.
 
-#[tokio::main]
-async fn main() -> Result<(), waterkit_clipboard::ClipboardError> {
+fn main() -> Result<(), waterkit_clipboard::ClipboardError> {
+    futures::executor::block_on(read())
+}
+
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        clippy::future_not_send,
+        reason = "awaits `Clipboard::text`, which in a browser is bound to its thread"
+    )
+)]
+async fn read() -> Result<(), waterkit_clipboard::ClipboardError> {
     println!("Reading clipboard...\n");
 
     let clipboard = waterkit_clipboard::Clipboard::new()?;

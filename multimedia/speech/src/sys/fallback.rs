@@ -1,5 +1,9 @@
 use crate::{RecognitionConfig, RecognitionResult, SpeechError, TtsConfig, Voice};
 
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "the facade calls every platform's backend through the same non-const signature; only this unsupported-platform shim could be const"
+)]
 pub fn recognition_is_available() -> bool {
     false
 }
@@ -7,6 +11,11 @@ pub fn recognition_is_available() -> bool {
 #[derive(Debug)]
 pub struct TtsInner;
 
+#[expect(
+    clippy::unused_self,
+    clippy::missing_const_for_fn,
+    reason = "this unsupported-platform shim keeps no state and computes nothing, but the facade calls every platform's backend through the same non-const `&self` methods"
+)]
 impl TtsInner {
     #[allow(clippy::unused_async)]
     pub async fn new() -> Result<Self, SpeechError> {
@@ -32,6 +41,11 @@ impl TtsInner {
 #[derive(Debug)]
 pub struct SpeechRecognizerInner;
 
+#[expect(
+    clippy::unused_self,
+    clippy::missing_const_for_fn,
+    reason = "this unsupported-platform shim keeps no state and computes nothing, but the facade calls every platform's backend through the same non-const `&self` methods"
+)]
 impl SpeechRecognizerInner {
     #[allow(clippy::unused_async)]
     pub async fn start(

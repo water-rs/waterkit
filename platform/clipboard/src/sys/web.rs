@@ -8,6 +8,10 @@ use wasm_bindgen_futures::{JsFuture, spawn_local};
 #[derive(Debug)]
 pub struct ClipboardInner;
 
+#[expect(
+    clippy::unused_self,
+    reason = "the browser clipboard is global, so this backend keeps no state, but `Clipboard` calls every backend through the same `&self` methods"
+)]
 impl ClipboardInner {
     pub fn new() -> Result<Self, ClipboardError> {
         let _ = browser_clipboard()?;
@@ -33,27 +37,49 @@ impl ClipboardInner {
         Err(ClipboardError::UnsupportedType("image".into()))
     }
 
+    #[expect(
+        clippy::future_not_send,
+        reason = "awaits `navigator.clipboard.readText()` through a `JsFuture`, whose shared state is an `Rc<RefCell<_>>` holding JS callbacks"
+    )]
     pub async fn get_text(&self) -> Result<Option<String>, ClipboardError> {
         let promise = browser_clipboard()?.read_text();
-        let value = JsFuture::from(promise).await.map_err(js_error)?;
+        let value = JsFuture::from(promise)
+            .await
+            .map_err(|error| js_error(&error))?;
         let text = value.as_string().ok_or_else(|| {
             ClipboardError::Platform(format!("readText resolved to a non-string: {value:?}"))
         })?;
         Ok(Some(text).filter(|text| !text.is_empty()))
     }
 
+    #[expect(
+        clippy::unused_async,
+        reason = "`Clipboard` awaits every backend's reads; the browser reads only text, asynchronously"
+    )]
     pub async fn get_html(&self) -> Result<Option<String>, ClipboardError> {
         Err(ClipboardError::UnsupportedType("text/html".into()))
     }
 
+    #[expect(
+        clippy::unused_async,
+        reason = "`Clipboard` awaits every backend's reads; the browser reads only text, asynchronously"
+    )]
     pub async fn get_files(&self) -> Result<Vec<PathBuf>, ClipboardError> {
         Err(ClipboardError::UnsupportedType("files".into()))
     }
 
+    #[expect(
+        clippy::unused_async,
+        reason = "`Clipboard` awaits every backend's reads; the browser reads only text, asynchronously"
+    )]
     pub async fn get_image(&self) -> Result<Option<Image>, ClipboardError> {
         Err(ClipboardError::UnsupportedType("image".into()))
     }
 
+    #[expect(
+        clippy::unused_async,
+        reason = "`Clipboard` awaits every backend's reads; the browser reads only text, asynchronously"
+    )]
     pub async fn get_binary(&self, mime: &str) -> Result<Option<Vec<u8>>, ClipboardError> {
         Err(ClipboardError::UnsupportedType(mime.to_string()))
     }
@@ -101,6 +127,6 @@ fn browser_clipboard() -> Result<web_sys::Clipboard, ClipboardError> {
     Ok(window.navigator().clipboard())
 }
 
-fn js_error(error: JsValue) -> ClipboardError {
+fn js_error(error: &JsValue) -> ClipboardError {
     ClipboardError::Platform(format!("{error:?}"))
 }

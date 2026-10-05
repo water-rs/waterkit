@@ -60,7 +60,6 @@ waterkit-build.workspace = true
 
 [dev-dependencies]
 image = { workspace = true }
-tokio = { workspace = true }
 
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).

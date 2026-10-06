@@ -18,7 +18,7 @@ use objc2_core_video::{
     kCVImageBufferColorPrimaries_P3_D65, kCVImageBufferColorPrimaries_SMPTE_C,
     kCVImageBufferColorPrimariesKey, kCVImageBufferTransferFunction_ITU_R_709_2,
     kCVImageBufferTransferFunction_ITU_R_2020, kCVImageBufferTransferFunction_ITU_R_2100_HLG,
-    kCVImageBufferTransferFunction_SMPTE_240M_1995, kCVImageBufferTransferFunction_SMPTE_C,
+    kCVImageBufferTransferFunction_SMPTE_240M_1995,
     kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ, kCVImageBufferTransferFunction_sRGB,
     kCVImageBufferTransferFunctionKey, kCVImageBufferYCbCrMatrix_ITU_R_601_4,
     kCVImageBufferYCbCrMatrix_ITU_R_709_2, kCVImageBufferYCbCrMatrix_ITU_R_2020,
@@ -175,6 +175,10 @@ fn color_primaries(pixel_buffer: &CVPixelBuffer) -> ColorPrimaries {
     }
 }
 
+#[expect(
+    deprecated,
+    reason = "Core Video deprecated the SMPTE C transfer name, but buffers may still carry it, and it is SDR"
+)]
 fn transfer_function(pixel_buffer: &CVPixelBuffer) -> TransferFunction {
     // SAFETY: the keys and values are Core Video's own immutable constants.
     let (key, bt709, smpte_240m, bt2020, srgb, smpte_c, pq, hlg) = unsafe {
@@ -184,7 +188,7 @@ fn transfer_function(pixel_buffer: &CVPixelBuffer) -> TransferFunction {
             kCVImageBufferTransferFunction_SMPTE_240M_1995,
             kCVImageBufferTransferFunction_ITU_R_2020,
             kCVImageBufferTransferFunction_sRGB,
-            kCVImageBufferTransferFunction_SMPTE_C,
+            objc2_core_video::kCVImageBufferTransferFunction_SMPTE_C,
             kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
             kCVImageBufferTransferFunction_ITU_R_2100_HLG,
         )

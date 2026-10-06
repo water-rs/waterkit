@@ -127,6 +127,8 @@ class CameraHelper(private val appContext: Context) {
         val displayRotation: Int,
         val dataSpace: Int,
         val dynamicRangeProfile: Int,
+        /** The image's sensor timestamp, the start of exposure. */
+        val captureTimeNs: Long,
     )
 
     private fun imageDataSpace(image: Image): Int =
@@ -321,6 +323,7 @@ class CameraHelper(private val appContext: Context) {
                         displayRotationDegrees(),
                         imageDataSpace(image),
                         selectedDynamicRangeProfile,
+                        image.timestamp,
                     ),
                 )
             }, handler)

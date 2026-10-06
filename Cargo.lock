@@ -7824,6 +7824,7 @@ dependencies = [
  "objc2-io-surface",
  "objc2-metal 0.3.2",
  "objc2-video-toolbox",
+ "pollster 1.0.1",
  "rav1d",
  "rav1e",
  "shaderloom",

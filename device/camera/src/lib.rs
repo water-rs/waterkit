@@ -36,6 +36,16 @@
 
 #![warn(missing_docs)]
 
+/// Only the platforms with a camera backend measure capture time.
+#[cfg(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "android",
+    target_os = "windows",
+    target_os = "linux",
+    test
+))]
+mod clock;
 mod color;
 mod converter;
 mod frame;

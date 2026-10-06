@@ -1,8 +1,8 @@
 // Decoded bi-planar YUV to linear RGBA16F conversion.
 //
 // Plane textures are integer formats (`R8Uint`/`Rg8Uint` for NV12,
-// `R16Uint`/`Rg16Uint` for P010), sampled with textureLoad and normalized
-// to code space before the range/matrix/transfer decode.
+// `R16Uint`/`Rg16Uint` for P010), sampled with textureLoad and passed through
+// `ycbcr_codes` before the range/matrix/transfer decode.
 //
 // The range and matrix math is waterkit-video-core's `ycbcr.wgsl`, which the
 // build script prepends to this file.
@@ -141,9 +141,16 @@ fn convert_primaries_to_srgb(linear_rgb: vec3<f32>, primaries_mode: u32) -> vec3
     return linear_rgb;
 }
 
-fn normalize_yuv(y_sample: f32, uv_sample: vec2<f32>) -> vec3<f32> {
-    let bit_depth = select(8u, 10u, color_params.sample_mode == SAMPLE_P010);
-    return ycbcr_normalize(y_sample, uv_sample, color_params.range_mode, bit_depth);
+fn sample_bit_depth() -> u32 {
+    return select(8u, 10u, color_params.sample_mode == SAMPLE_P010);
+}
+
+fn sample_element_bits() -> u32 {
+    return select(8u, 16u, color_params.sample_mode == SAMPLE_P010);
+}
+
+fn normalize_yuv(codes: vec3<f32>) -> vec3<f32> {
+    return ycbcr_normalize(codes, color_params.range_mode, sample_bit_depth());
 }
 
 fn bt2020_constant_luminance_to_linear(yuv: vec3<f32>) -> vec3<f32> {
@@ -165,8 +172,8 @@ fn bt2020_constant_luminance_to_linear(yuv: vec3<f32>) -> vec3<f32> {
     return linear_rgb;
 }
 
-fn decode_yuv_to_linear(y: f32, uv: vec2<f32>) -> vec3<f32> {
-    let yuv = normalize_yuv(y, uv);
+fn decode_yuv_to_linear(codes: vec3<f32>) -> vec3<f32> {
+    let yuv = normalize_yuv(codes);
     var linear_rgb = vec3<f32>(0.0);
     if color_params.matrix_mode == MATRIX_BT2020_CONSTANT_LUMINANCE {
         linear_rgb = bt2020_constant_luminance_to_linear(yuv);
@@ -189,11 +196,11 @@ fn convert_to_linear_rgba(@builtin(global_invocation_id) global_id: vec3<u32>) {
         i32(global_id.x / 2u),
         i32(global_id.y / 2u),
     );
-    let code_scale = select(1.0 / 255.0, 1.0 / 65535.0, color_params.sample_mode == SAMPLE_P010);
-    let y = f32(textureLoad(y_texture, y_coordinates, 0).r) * code_scale;
-    let uv_raw = textureLoad(uv_texture, uv_coordinates, 0).rg;
-    let uv = vec2<f32>(f32(uv_raw.x), f32(uv_raw.y)) * code_scale;
-    let linear_rgb = decode_yuv_to_linear(y, uv);
+    let y = textureLoad(y_texture, y_coordinates, 0).r;
+    let uv = textureLoad(uv_texture, uv_coordinates, 0).rg;
+    let elements = vec3<u32>(y, uv);
+    let codes = ycbcr_codes(elements, sample_element_bits(), sample_bit_depth());
+    let linear_rgb = decode_yuv_to_linear(codes);
     textureStore(
         linear_rgba_output,
         y_coordinates,

@@ -22,10 +22,6 @@ thiserror.workspace = true
 tracing.workspace = true
 waterkit-camera = { workspace = true, optional = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# The Send-future API uses single-threaded JS wgpu objects; this feature marks their handles Send/Sync when atomics are disabled.
-wgpu = { workspace = true, features = ["fragile-send-sync-non-atomic-wasm"] }
-
 [features]
 camera = ["dep:waterkit-camera"]
 

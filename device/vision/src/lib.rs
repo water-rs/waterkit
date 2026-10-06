@@ -25,6 +25,9 @@
 //! [`Vision::with_policy`] panics if any enabled capability's portable
 //! realization is not carried by the application.
 //!
+//! Request futures are Send on native targets (`wgpu::WasmNotSend`); wasm32
+//! does not impose a `Send` requirement.
+//!
 //! Requests compose as tuples, including nested tuples:
 //!
 //! ```ignore

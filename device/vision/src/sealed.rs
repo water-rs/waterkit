@@ -8,10 +8,14 @@ use std::{
 
 use crate::{Image, Vision, VisionError, image::Pixels};
 
+trait Prepared: Any + wgpu::WasmNotSend {}
+
+impl<T: Any + wgpu::WasmNotSend> Prepared for T {}
+
 /// The implementation contract for sealed vision requests.
 pub trait Sealed {
     /// The selected plan for this request.
-    type Plan: Plan<Self> + Send + 'static
+    type Plan: Plan<Self> + wgpu::WasmNotSend + 'static
     where
         Self: crate::Request;
 
@@ -24,14 +28,16 @@ pub trait Sealed {
 /// A request's selected realizations, ready to run.
 pub trait Plan<R: crate::Request + ?Sized> {
     /// Fetches or verifies what the selected realization needs ahead of time.
-    fn prepare(&self, context: Context<'_>)
-    -> impl Future<Output = Result<(), VisionError>> + Send;
+    fn prepare(
+        &self,
+        context: Context<'_>,
+    ) -> impl Future<Output = Result<(), VisionError>> + wgpu::WasmNotSend;
 
     /// Runs this request using its already selected realization.
     fn run(
         self,
         pass: &mut Pass<'_>,
-    ) -> impl Future<Output = Result<R::Output, VisionError>> + Send;
+    ) -> impl Future<Output = Result<R::Output, VisionError>> + wgpu::WasmNotSend;
 }
 
 /// Whether a realization can serve a request.
@@ -106,7 +112,7 @@ impl<'a> Context<'a> {
 pub struct Pass<'a> {
     context: Context<'a>,
     image: &'a Image,
-    prepared: HashMap<TypeId, Box<dyn Any + Send>>,
+    prepared: HashMap<TypeId, Box<dyn Prepared>>,
 }
 
 impl fmt::Debug for Pass<'_> {
@@ -140,23 +146,32 @@ impl<'a> Pass<'a> {
     }
 
     /// Builds `P` once per pass and returns the shared preparation.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "wgpu::WasmNotSend imposes no Send requirement on wasm32"
+        )
+    )]
     pub async fn prepared<P: Preparation>(&mut self) -> Result<&P, VisionError> {
-        Ok(match self.prepared.entry(TypeId::of::<P>()) {
+        let prepared_box = match self.prepared.entry(TypeId::of::<P>()) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => entry.insert(Box::new(
                 P::prepare(self.context, self.image.pixels()).await?,
             )),
-        }
-        .downcast_ref::<P>()
-        .expect("preparations are keyed by their own TypeId"))
+        };
+        let prepared: &dyn Any = Box::as_ref(prepared_box) as &dyn Any;
+        Ok(prepared
+            .downcast_ref::<P>()
+            .expect("preparations are keyed by their own TypeId"))
     }
 }
 
 /// Image preparation shared by requests in one pass.
-pub trait Preparation: Send + 'static + Sized {
+pub trait Preparation: wgpu::WasmNotSend + 'static + Sized {
     /// Prepares image data shared among requests in the pass.
     fn prepare(
         context: Context<'_>,
         pixels: &Pixels,
-    ) -> impl Future<Output = Result<Self, VisionError>> + Send;
+    ) -> impl Future<Output = Result<Self, VisionError>> + wgpu::WasmNotSend;
 }

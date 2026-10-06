@@ -11,7 +11,7 @@ use crate::{
 /// shared preparations.
 pub trait Request: Sealed {
     /// The result produced by this request.
-    type Output: Send + 'static;
+    type Output: wgpu::WasmNotSend + 'static;
 }
 
 macro_rules! impl_request_tuple {
@@ -34,7 +34,7 @@ macro_rules! impl_request_tuple {
             fn prepare(
                 &self,
                 context: Context<'_>,
-            ) -> impl Future<Output = Result<(), VisionError>> + Send {
+            ) -> impl Future<Output = Result<(), VisionError>> + wgpu::WasmNotSend {
                 let prepares = ($(self.$index.prepare(context),)+);
                 async move {
                     futures::try_join!($(prepares.$index),+)?;
@@ -42,10 +42,19 @@ macro_rules! impl_request_tuple {
                 }
             }
 
+            #[cfg_attr(
+                target_arch = "wasm32",
+                expect(
+                    clippy::future_not_send,
+                    reason = "wgpu::WasmNotSend imposes no Send requirement on wasm32"
+                )
+            )]
             fn run(
                 self,
                 pass: &mut Pass<'_>,
-            ) -> impl Future<Output = Result<<($($type,)+) as Request>::Output, VisionError>> + Send {
+            ) -> impl Future<
+                Output = Result<<($($type,)+) as Request>::Output, VisionError>,
+            > + wgpu::WasmNotSend {
                 async move {
                     // Sequential: every element runs on this one `&mut Pass`, which owns the shared preparations.
                     Ok((

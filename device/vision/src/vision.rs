@@ -67,10 +67,17 @@ impl Vision {
     ///
     /// Returns [`VisionError::Unsupported`] if no realization serves the
     /// request, or a preparation error from its selected realization.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "wgpu::WasmNotSend imposes no Send requirement on wasm32"
+        )
+    )]
     pub fn prepare<R: Request>(
         &self,
         request: &R,
-    ) -> impl Future<Output = Result<(), VisionError>> + Send + '_ {
+    ) -> impl Future<Output = Result<(), VisionError>> + wgpu::WasmNotSend + '_ {
         let plan = request.plan(Context::new(self));
         async move { plan?.prepare(Context::new(self)).await }
     }
@@ -84,11 +91,18 @@ impl Vision {
     ///
     /// Returns [`VisionError::Unsupported`] if no realization serves the
     /// request, or the selected realization's execution error.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "wgpu::WasmNotSend imposes no Send requirement on wasm32"
+        )
+    )]
     pub fn perform<R: Request>(
         &self,
         image: &Image,
         request: &R,
-    ) -> impl Future<Output = Result<R::Output, VisionError>> + Send + '_ {
+    ) -> impl Future<Output = Result<R::Output, VisionError>> + wgpu::WasmNotSend + '_ {
         let plan = request.plan(Context::new(self));
         let image = image.share();
         async move {
@@ -122,6 +136,13 @@ mod tests {
     struct Shared<const ID: usize>;
 
     impl<const ID: usize> Preparation for Shared<ID> {
+        #[cfg_attr(
+            target_arch = "wasm32",
+            expect(
+                clippy::future_not_send,
+                reason = "wgpu::WasmNotSend does not require Send on wasm32"
+            )
+        )]
         async fn prepare(
             _context: Context<'_>,
             _pixels: &crate::image::Pixels,
@@ -166,6 +187,13 @@ mod tests {
     }
 
     impl<const ID: usize> Plan<Echo<ID>> for EchoPlan<ID> {
+        #[cfg_attr(
+            target_arch = "wasm32",
+            expect(
+                clippy::future_not_send,
+                reason = "wgpu::WasmNotSend does not require Send on wasm32"
+            )
+        )]
         async fn prepare(&self, _context: Context<'_>) -> Result<(), VisionError> {
             PLAN_PREPARATIONS[ID].fetch_add(1, Ordering::SeqCst);
             if self.rendezvous {
@@ -183,6 +211,13 @@ mod tests {
             Ok(())
         }
 
+        #[cfg_attr(
+            target_arch = "wasm32",
+            expect(
+                clippy::future_not_send,
+                reason = "wgpu::WasmNotSend does not require Send on wasm32"
+            )
+        )]
         async fn run(
             self,
             pass: &mut crate::sealed::Pass<'_>,
@@ -359,9 +394,9 @@ mod tests {
     }
 
     #[test]
-    fn public_handles_and_tuple_perform_future_are_send_and_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        fn assert_send<T: Send>(_: &T) {}
+    fn public_handles_and_tuple_perform_future_meet_wgpu_send_bounds() {
+        fn assert_send_sync<T: wgpu::WasmNotSendSync>() {}
+        fn assert_send<T: wgpu::WasmNotSend>(_: &T) {}
 
         assert_send_sync::<Vision>();
         assert_send_sync::<Image>();

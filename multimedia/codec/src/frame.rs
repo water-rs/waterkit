@@ -16,6 +16,8 @@ mod gpu;
 #[cfg(feature = "gpu")]
 pub use gpu::{DecodedFrameUploader, GpuFrame, LinearRgbaConverter};
 
+use waterkit_video_core::CicpColor;
+
 /// Decoded frame - opaque type hiding platform details.
 ///
 /// This represents a decoded video frame that has not yet been converted to GPU textures.
@@ -23,6 +25,7 @@ pub use gpu::{DecodedFrameUploader, GpuFrame, LinearRgbaConverter};
 /// otherwise read the pixels out with [`copy_to_buffer`](Self::copy_to_buffer).
 pub struct DecodedFrame {
     inner: DecodedFrameInner,
+    color: Option<CicpColor>,
 }
 
 // SAFETY: Apple IOSurfaces are explicitly cross-thread shareable allocations and
@@ -115,6 +118,7 @@ impl DecodedFrame {
                 timestamp_ns: frame.timestamp_ns,
                 layout: frame.layout,
             },
+            color: None,
         }
     }
 
@@ -126,6 +130,7 @@ impl DecodedFrame {
         height: u32,
         timestamp_ns: u64,
         layout: DecodedPixelLayout,
+        color: Option<CicpColor>,
     ) -> Self {
         Self {
             inner: DecodedFrameInner::Software {
@@ -135,7 +140,17 @@ impl DecodedFrame {
                 timestamp_ns,
                 layout,
             },
+            color,
         }
+    }
+
+    /// Returns the CICP description carried by the decoded bitstream, when available.
+    ///
+    /// Currently the software AV1 decoder reports this metadata. Hardware
+    /// decoders do not expose their bitstream color description.
+    #[must_use]
+    pub const fn color(&self) -> Option<CicpColor> {
+        self.color
     }
 
     /// Returns the native decoded pixel layout.

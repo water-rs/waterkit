@@ -7817,6 +7817,7 @@ dependencies = [
  "moxcms",
  "ndk",
  "ndk-sys",
+ "num-traits",
  "objc2 0.6.4",
  "objc2-core-foundation",
  "objc2-core-media",
@@ -7848,6 +7849,7 @@ dependencies = [
  "pollster 1.0.1",
  "waterkit-codec",
  "waterkit-screen",
+ "waterkit-video-core",
  "wgpu",
 ]
 

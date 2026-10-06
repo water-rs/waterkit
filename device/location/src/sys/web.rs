@@ -1,4 +1,4 @@
-use crate::{Location, LocationError};
+use crate::{Location, LocationCapabilities, LocationError, LocationProvider};
 use jiff::{SignedDuration, Timestamp};
 use js_sys::Reflect;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::wasm_bindgen};
@@ -50,6 +50,15 @@ pub async fn get_location() -> Result<Location, LocationError> {
         .recv()
         .await
         .map_err(|_| LocationError::Platform(String::from("geolocation callback closed")))?
+}
+
+/// The Geolocation API is exposed on a window's navigator only; a worker or a
+/// page whose permissions policy blocks it has none.
+pub async fn capabilities() -> LocationCapabilities {
+    let exposed = web_sys::window().is_some_and(|window| window.navigator().geolocation().is_ok());
+    LocationCapabilities {
+        provider: exposed.then_some(LocationProvider::BrowserGeolocation),
+    }
 }
 
 fn location_from_position(position: &JsValue) -> Result<Location, LocationError> {

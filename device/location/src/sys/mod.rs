@@ -17,21 +17,20 @@ mod linux;
 mod web;
 
 // Re-export platform implementations
-// Re-export platform implementations
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-pub use apple::get_location;
+pub use apple::{capabilities, get_location};
 
 #[cfg(target_os = "android")]
-pub use android::get_location;
+pub use android::{capabilities, get_location};
 
 #[cfg(target_os = "windows")]
-pub use windows::get_location;
+pub use windows::{capabilities, get_location};
 
 #[cfg(target_os = "linux")]
-pub use linux::get_location;
+pub use linux::{capabilities, get_location};
 
 #[cfg(target_arch = "wasm32")]
-pub use web::get_location;
+pub use web::{capabilities, get_location};
 
 // Fallback for unsupported platforms
 #[cfg(not(any(
@@ -44,4 +43,16 @@ pub use web::get_location;
 )))]
 pub(crate) async fn get_location() -> Result<crate::Location, crate::LocationError> {
     Err(crate::LocationError::NotAvailable)
+}
+
+#[cfg(not(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "android",
+    target_os = "windows",
+    target_os = "linux",
+    target_arch = "wasm32"
+)))]
+pub(crate) async fn capabilities() -> crate::LocationCapabilities {
+    crate::LocationCapabilities { provider: None }
 }

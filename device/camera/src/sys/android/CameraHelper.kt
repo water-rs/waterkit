@@ -115,6 +115,8 @@ class CameraHelper(private val appContext: Context) {
         val image: Image,
         val hardwareBuffer: HardwareBuffer,
         val displayRotation: Int,
+        /** The image's sensor timestamp, the start of exposure. */
+        val captureTimeNs: Long,
     )
 
     private val frameQueue: LinkedBlockingDeque<CapturedFrame> = LinkedBlockingDeque(1)
@@ -299,7 +301,7 @@ class CameraHelper(private val appContext: Context) {
                     stale.hardwareBuffer.close()
                     stale.image.close()
                 }
-                frameQueue.offerLast(CapturedFrame(image, buffer, displayRotationDegrees()))
+                frameQueue.offerLast(CapturedFrame(image, buffer, displayRotationDegrees(), image.timestamp))
             }, handler)
 
             rawImageReader?.setOnImageAvailableListener({ reader ->

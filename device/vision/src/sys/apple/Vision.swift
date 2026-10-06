@@ -81,6 +81,13 @@ private struct TextLineJson: Encodable {
     let text: String
     let confidence: Float
     let corners: [Float]
+    let words: [TextWordJson]
+}
+
+private struct TextWordJson: Encodable {
+    let text: String
+    let confidence: Float
+    let corners: [Float]
 }
 
 private func json<T: Encodable>(_ value: T) -> RustString {
@@ -258,16 +265,50 @@ public func vision_recognize_text(
                 json(
                     Outcome.served(
                         observations.map { observation in
-                            TextLineJson(
-                                text: observation.transcript,
-                                confidence: observation.confidence,
+                            let candidate = observation.topCandidates(1).first
+                            return TextLineJson(
+                                text: candidate?.string ?? observation.transcript,
+                                confidence: candidate?.confidence ?? observation.confidence,
                                 corners: uprightCorners(
                                     observation.topLeft, observation.topRight,
-                                    observation.bottomRight, observation.bottomLeft)
+                                    observation.bottomRight, observation.bottomLeft),
+                                words: candidate.map(words) ?? []
                             )
                         })))
         } catch {
             callback(json(Outcome<TextLineJson>.failed(error.localizedDescription)))
         }
     }
+}
+
+@available(iOS 18.0, macOS 15.0, *)
+private func words(_ candidate: RecognizedText) -> [TextWordJson] {
+    let string = candidate.string
+    var words: [TextWordJson] = []
+    var start = string.startIndex
+    for index in string.indices where string[index].isWhitespace {
+        if start < index {
+            appendWord(&words, candidate, start..<index)
+        }
+        start = string.index(after: index)
+    }
+    if start < string.endIndex {
+        appendWord(&words, candidate, start..<string.endIndex)
+    }
+    return words
+}
+
+@available(iOS 18.0, macOS 15.0, *)
+private func appendWord(
+    _ words: inout [TextWordJson],
+    _ candidate: RecognizedText,
+    _ range: Range<String.Index>
+) {
+    guard let box = candidate.boundingBox(for: range) else { return }
+    words.append(
+        TextWordJson(
+            text: String(candidate.string[range]),
+            confidence: candidate.confidence,
+            corners: uprightCorners(box.topLeft, box.topRight, box.bottomRight, box.bottomLeft)
+        ))
 }

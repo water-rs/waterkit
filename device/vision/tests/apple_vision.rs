@@ -257,7 +257,16 @@ fn rendered_text_is_recognized() {
     assert_eq!(lines.len(), 1);
     let line = &lines[0];
     assert_eq!(line.text.to_lowercase(), "waterkit sees");
-    assert!(line.confidence > 0.5);
+    assert!(line.confidence.is_some_and(|confidence| confidence > 0.5));
+
+    // `boundingBox(for:)` splits the line into words with real bounds.
+    let words: Vec<&str> = line.words.iter().map(|word| word.text.as_str()).collect();
+    assert_eq!(words, ["waterkit", "sees"]);
+    for word in &line.words {
+        assert!(word.confidence.is_some());
+        let [tl, _, br, _] = word.bounds.0;
+        assert!(br.x > tl.x && br.y > tl.y, "word {word:?} has empty bounds");
+    }
 }
 
 #[test]

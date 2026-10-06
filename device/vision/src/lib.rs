@@ -83,7 +83,7 @@ pub use request::Request;
 #[cfg(feature = "barcode")]
 pub use symbology::Symbology;
 #[cfg(feature = "text")]
-pub use text::{RecognitionLevel, RecognizeText, TextLine};
+pub use text::{RecognitionLevel, RecognizeText, TextLine, TextWord};
 pub use vision::{Policy, Vision};
 pub use waterkit_core::Orientation;
 pub use wgpu;

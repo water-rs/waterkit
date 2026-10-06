@@ -278,7 +278,15 @@ pub async fn record(report: &mut TestReport) {
             .await)
             .map_err(|error| format!("text request failed: {error}"))
             .and_then(|lines| match lines.as_slice() {
-                [line] if line.text.to_lowercase() == "waterkit sees" => Ok(()),
+                [line] if line.text.to_lowercase() == "waterkit sees" => {
+                    let words: Vec<&str> =
+                        line.words.iter().map(|word| word.text.as_str()).collect();
+                    if words == ["waterkit", "sees"] {
+                        Ok(())
+                    } else {
+                        Err(format!("line words were {words:?}"))
+                    }
+                }
                 lines => Err(format!("recognized {lines:?}")),
             }),
     ));

@@ -22,6 +22,7 @@ pub struct Vision {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
     pub(crate) policy: Policy,
+    capabilities: VisionCapabilities,
 }
 
 impl Vision {
@@ -51,18 +52,22 @@ impl Vision {
             device,
             queue,
             policy,
+            capabilities: VisionCapabilities::new(),
         }
     }
 
-    /// Capabilities compiled into this build and served on this device.
+    /// Capabilities compiled into this build and served on this device, as
+    /// observed at construction.
+    ///
+    /// `barcodes.native` is `DetectBarcodesRequest.supportedSymbologies` and
+    /// `text.native` the per-level `supportedRecognitionLanguages`
+    /// intersection on Apple; `text.native` is
+    /// `OcrEngine::AvailableRecognizerLanguages` on Windows. What they lack
+    /// is served by the portable realization when the application carries
+    /// one.
     #[must_use]
     pub fn capabilities(&self) -> VisionCapabilities {
-        VisionCapabilities {
-            #[cfg(feature = "barcode")]
-            barcodes: crate::sys::barcodes_capability(),
-            #[cfg(feature = "text")]
-            text: crate::sys::text_capability(),
-        }
+        self.capabilities.clone()
     }
 
     /// Prepares the selected realization's requirements without processing an
@@ -326,6 +331,15 @@ mod tests {
         assert_eq!(PORTABLE_RUNS[2].load(Ordering::SeqCst), 0);
     }
 
+    #[cfg(all(feature = "text", not(feature = "barcode")))]
+    #[test]
+    #[should_panic(expected = "PortableOnly requires portable realizations for: text")]
+    fn portable_only_requires_a_carried_portable_text() {
+        let (device, queue) = gpu();
+        let _ = Vision::with_policy(device, queue, Policy::PortableOnly);
+    }
+
+    #[cfg(not(feature = "text"))]
     #[test]
     #[cfg(not(any(feature = "barcode", feature = "text")))]
     fn portable_only_selects_portable_and_can_be_constructed_without_enabled_capabilities() {

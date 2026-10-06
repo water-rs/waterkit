@@ -8,25 +8,26 @@
 
 #[cfg(any(feature = "barcode", feature = "text"))]
 use futures::channel::oneshot;
+#[cfg(feature = "barcode")]
+use std::sync::OnceLock;
 #[cfg(any(feature = "barcode", feature = "text"))]
-use std::{ffi::c_void, ptr, sync::OnceLock};
+use std::{ffi::c_void, ptr};
 
+#[cfg(feature = "barcode")]
+use crate::sealed::{Offer, Pass};
 #[cfg(any(feature = "barcode", feature = "text"))]
 use crate::{
     VisionError,
     image::Pixels,
-    sealed::{Context, Offer, Pass, Preparation},
+    sealed::{Context, Preparation},
 };
 
 #[swift_bridge::bridge]
-mod ffi {
+pub mod ffi {
     extern "Swift" {
         // A JSON array of canonical symbology names Vision serves on this OS;
         // empty below the request API's availability.
         fn vision_supported_symbologies() -> String;
-        // A JSON array of BCP-47 tags Vision serves at `level`; empty below
-        // the request API's availability.
-        fn vision_supported_text_languages(level: u8) -> String;
         // Retains a request handler for a retained `CVPixelBuffer` and its
         // EXIF `orientation`; 0 when Vision cannot take the image.
         fn vision_handler_pixel_buffer(buffer: usize, orientation: u8) -> usize;
@@ -45,10 +46,13 @@ mod ffi {
             symbologies: &str,
             callback: Box<dyn FnOnce(String)>,
         );
-        // Runs text recognition; `languages` is a JSON array of BCP-47 tags
-        // (empty detects automatically) and the callback receives the JSON
-        // outcome.
-        fn vision_recognize_text(
+        // A JSON array of BCP-47 languages `recognitionLevel` `level`
+        // (0 = fast) serves; empty below the request API's availability.
+        pub fn vision_supported_text_languages(level: u8) -> String;
+        // Runs text recognition at `recognitionLevel` `level` (0 = fast)
+        // constrained to the JSON `languages` array; the callback receives
+        // the JSON outcome.
+        pub fn vision_recognize_text(
             handler: usize,
             level: u8,
             languages: &str,
@@ -85,7 +89,7 @@ unsafe impl Sync for PixelBuffer {}
 #[derive(Debug)]
 pub struct AppleImage {
     /// The retained `ImageRequestHandler`, as an `Unmanaged` pointer.
-    handler: usize,
+    pub handler: usize,
 }
 
 #[cfg(any(feature = "barcode", feature = "text"))]
@@ -154,7 +158,7 @@ fn metal_texture(texture: &wgpu::Texture) -> Result<usize, VisionError> {
 
 /// Runs `call` with a result callback and awaits the JSON it answers.
 #[cfg(any(feature = "barcode", feature = "text"))]
-async fn ffi_outcome<T: serde::de::DeserializeOwned>(
+pub async fn ffi_outcome<T: serde::de::DeserializeOwned>(
     call: impl FnOnce(Box<dyn FnOnce(String)>),
 ) -> Result<Vec<T>, VisionError> {
     let (sender, receiver) = oneshot::channel();
@@ -177,7 +181,7 @@ async fn ffi_outcome<T: serde::de::DeserializeOwned>(
 /// The JSON envelope every Vision result callback returns.
 #[cfg(any(feature = "barcode", feature = "text"))]
 #[derive(Debug, serde::Deserialize)]
-struct WireOutcome<T> {
+pub struct WireOutcome<T> {
     /// The results; absent on failure.
     results: Option<Vec<T>>,
     /// The failure description.
@@ -186,7 +190,7 @@ struct WireOutcome<T> {
 
 /// Corners normalized to the upright image, decoded from interleaved x/y.
 #[cfg(any(feature = "barcode", feature = "text"))]
-const fn wire_quad(corners: [f32; 8]) -> crate::Quad {
+pub const fn wire_quad(corners: [f32; 8]) -> crate::Quad {
     crate::Quad([
         crate::Point {
             x: corners[0],
@@ -343,106 +347,6 @@ impl WireBarcode {
             bounds: wire_quad(self.corners),
         }
     }
-}
-
-/// The wire value for [`crate::RecognitionLevel::Fast`].
-#[cfg(feature = "text")]
-const FFI_LEVEL_FAST: u8 = 0;
-/// The wire value for [`crate::RecognitionLevel::Accurate`].
-#[cfg(feature = "text")]
-const FFI_LEVEL_ACCURATE: u8 = 1;
-
-/// The wire value of `level`.
-#[cfg(feature = "text")]
-const fn ffi_level(level: crate::RecognitionLevel) -> u8 {
-    match level {
-        crate::RecognitionLevel::Fast => FFI_LEVEL_FAST,
-        crate::RecognitionLevel::Accurate => FFI_LEVEL_ACCURATE,
-    }
-}
-
-/// Languages Vision serves at `level`, fetched once.
-#[cfg(feature = "text")]
-pub fn supported_languages(
-    level: crate::RecognitionLevel,
-) -> &'static [icu_locale_core::LanguageIdentifier] {
-    static LANGUAGES: OnceLock<[Vec<icu_locale_core::LanguageIdentifier>; 2]> = OnceLock::new();
-    let [fast, accurate] = LANGUAGES.get_or_init(|| {
-        let load = |level: u8| {
-            let tags: Vec<String> =
-                serde_json::from_str(&ffi::vision_supported_text_languages(level))
-                    .expect("the bridge reports a JSON string array");
-            tags.iter()
-                .filter_map(|tag| tag.parse::<icu_locale_core::LanguageIdentifier>().ok())
-                .collect()
-        };
-        [load(FFI_LEVEL_FAST), load(FFI_LEVEL_ACCURATE)]
-    });
-    match level {
-        crate::RecognitionLevel::Fast => fast.as_slice(),
-        crate::RecognitionLevel::Accurate => accurate.as_slice(),
-    }
-}
-
-/// Whether Vision serves `languages` at `level` exactly.
-#[cfg(feature = "text")]
-pub fn text_offer(
-    languages: &[icu_locale_core::LanguageIdentifier],
-    level: crate::RecognitionLevel,
-) -> Offer {
-    let supported = supported_languages(level);
-    if supported.is_empty() {
-        return Offer::Absent;
-    }
-    if languages.is_empty() {
-        return Offer::Serves;
-    }
-    let missing: Vec<String> = languages
-        .iter()
-        .filter(|language| !supported.contains(language))
-        .map(ToString::to_string)
-        .collect();
-    if missing.is_empty() {
-        Offer::Serves
-    } else {
-        Offer::Lacks(format!("languages {}", missing.join(", ")))
-    }
-}
-
-/// Runs text recognition through Vision on the pass's shared handler.
-#[cfg(feature = "text")]
-pub async fn recognize_text(
-    pass: &mut Pass<'_>,
-    languages: &[icu_locale_core::LanguageIdentifier],
-    level: crate::RecognitionLevel,
-) -> Result<Vec<crate::TextLine>, VisionError> {
-    let handler = pass.prepared::<AppleImage>().await?.handler;
-    let tags: Vec<String> = languages.iter().map(ToString::to_string).collect();
-    let json = serde_json::to_string(&tags).expect("serializing strings cannot fail");
-    let lines = ffi_outcome::<WireTextLine>(|callback| {
-        ffi::vision_recognize_text(handler, ffi_level(level), &json, callback);
-    })
-    .await?;
-    Ok(lines
-        .into_iter()
-        .map(|line| crate::TextLine {
-            text: line.text,
-            confidence: line.confidence,
-            bounds: wire_quad(line.corners),
-        })
-        .collect())
-}
-
-/// A text line as the bridge reports it.
-#[cfg(feature = "text")]
-#[derive(Debug, serde::Deserialize)]
-struct WireTextLine {
-    /// The recognized text.
-    text: String,
-    /// Vision's confidence, 0 to 1.
-    confidence: f32,
-    /// The four upright corners in reading order, x/y interleaved.
-    corners: [f32; 8],
 }
 
 #[cfg(all(test, feature = "camera", feature = "barcode"))]

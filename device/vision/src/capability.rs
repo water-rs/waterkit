@@ -8,14 +8,43 @@ use crate::Policy;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisionCapabilities {
     /// The barcode symbologies this build serves.
+    ///
+    /// On Apple `native` is `DetectBarcodesRequest.supportedSymbologies`
+    /// exactly; it is empty on platforms without a native detector.
     #[cfg(feature = "barcode")]
     pub barcodes: RealizationSet<enumset::EnumSet<crate::Symbology>>,
-    /// The languages this build serves at every [`crate::RecognitionLevel`].
+    /// Text recognition: the languages each realization serves.
     ///
-    /// A level can serve fewer languages than this set advertises; offers
-    /// check the requested level's exact set.
+    /// On Apple `native` is the intersection of Vision's per-level
+    /// `supportedRecognitionLanguages`; on Windows it is
+    /// `OcrEngine::AvailableRecognizerLanguages` exactly; it is empty on
+    /// platforms without a native recognizer.
     #[cfg(feature = "text")]
     pub text: RealizationSet<Vec<icu_locale_core::LanguageIdentifier>>,
+}
+
+impl VisionCapabilities {
+    #[cfg_attr(
+        not(any(feature = "barcode", feature = "text")),
+        expect(
+            clippy::missing_const_for_fn,
+            reason = "native_symbologies()/native_languages() allocate; this is const-eligible only without barcode and text"
+        )
+    )]
+    pub(crate) fn new() -> Self {
+        Self {
+            #[cfg(feature = "barcode")]
+            barcodes: RealizationSet {
+                native: crate::barcode::native_symbologies(),
+                portable: Portable::Absent,
+            },
+            #[cfg(feature = "text")]
+            text: RealizationSet {
+                native: crate::text::native_languages(),
+                portable: Portable::Absent,
+            },
+        }
+    }
 }
 
 /// Native and portable realizations of a capability.
@@ -25,6 +54,14 @@ pub struct RealizationSet<T> {
     pub native: T,
     /// The portable realization carried by the application.
     pub portable: Portable<T>,
+}
+
+#[cfg(feature = "text")]
+impl<T> RealizationSet<Vec<T>> {
+    /// Whether either realization serves anything.
+    const fn available(&self) -> bool {
+        !self.native.is_empty() || !matches!(self.portable, Portable::Absent)
+    }
 }
 
 /// Availability of a portable realization.
@@ -48,8 +85,7 @@ impl waterkit_core::Capabilities for VisionCapabilities {
             || !self.barcodes.native.is_empty()
             || !matches!(self.barcodes.portable, Portable::Absent);
         #[cfg(feature = "text")]
-        let any =
-            any || !self.text.native.is_empty() || !matches!(self.text.portable, Portable::Absent);
+        let any = any || self.text.available();
         any
     }
 }

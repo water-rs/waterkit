@@ -7,6 +7,16 @@ use crate::{
     sealed::{Context, Pass, Plan, Sealed},
 };
 
+/// The symbologies the native barcode realization detects on this device.
+///
+/// On Apple this is `DetectBarcodesRequest.supportedSymbologies` mapped to
+/// the shared [`Symbology`] vocabulary; it is empty on platforms without a
+/// native detector.
+#[must_use]
+pub fn native_symbologies() -> EnumSet<Symbology> {
+    crate::sys::native::supported_symbologies()
+}
+
 /// Detect barcodes in an image, in the given symbologies.
 #[derive(Debug)]
 pub struct DetectBarcodes {

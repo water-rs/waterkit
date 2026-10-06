@@ -107,6 +107,10 @@ fn init_logger() {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
+    // A panic's message goes to stderr, which an Android app does not keep,
+    // and the JNI boundary reports only that a panic happened; log it so a
+    // crashed run says why.
+    std::panic::set_hook(Box::new(|info| log::error!("Rust panic: {info}")));
 }
 
 fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
@@ -129,12 +133,21 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
             return report;
         }
     };
+    #[cfg(feature = "camera")]
+    let files_dir = match files_dir(env, activity) {
+        Ok(dir) => dir,
+        Err(error) => {
+            report.push(TestCase::failed("harness.files_dir", error.to_string()));
+            return report;
+        }
+    };
     #[cfg(not(any(
         feature = "sensor",
         feature = "location",
         feature = "permission",
         feature = "fs",
         feature = "secret",
+        feature = "camera",
         feature = "clipboard"
     )))]
     let _ = (env, activity);
@@ -164,7 +177,7 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
         record_android_permission(&mut report, env, activity);
 
         #[cfg(feature = "camera")]
-        record_android_camera(&mut report);
+        record_android_camera(&mut report, &files_dir).await;
 
         #[cfg(feature = "clipboard")]
         record_android_clipboard(&mut report).await;
@@ -402,18 +415,322 @@ fn record_android_permission(report: &mut TestReport, env: &mut Env<'_>, activit
     }
 }
 
+/// The activity's private files directory, where the runner pulls artifacts
+/// from with `run-as`.
 #[cfg(feature = "camera")]
-fn record_android_camera(report: &mut TestReport) {
+fn files_dir(env: &mut Env<'_>, activity: &JObject<'_>) -> jni::errors::Result<std::path::PathBuf> {
+    use jni::{jni_sig, jni_str};
+    let dir = env
+        .call_method(
+            activity,
+            jni_str!("getFilesDir"),
+            jni_sig!("()Ljava/io/File;"),
+            &[],
+        )?
+        .l()?;
+    let path = env
+        .call_method(
+            &dir,
+            jni_str!("getAbsolutePath"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )?
+        .l()?;
+    let path = env
+        .as_cast::<jni::objects::JString>(&path)?
+        .try_to_string(env)?;
+    Ok(std::path::PathBuf::from(path))
+}
+
+#[cfg(feature = "camera")]
+async fn record_android_camera(report: &mut TestReport, files_dir: &std::path::Path) {
     match waterkit_content::camera::Camera::list() {
-        Ok(cameras) => report.push(TestCase::passed_with_message(
-            "camera.list",
-            format!("count={}", cameras.len()),
-        )),
+        Ok(cameras) => {
+            report.push(TestCase::passed_with_message(
+                "camera.list",
+                format!("count={}", cameras.len()),
+            ));
+            for camera in cameras {
+                record_android_camera_frames(report, &camera, files_dir).await;
+            }
+        }
         Err(error) => report.push(TestCase::failed(
             "camera.list",
             format!("camera list failed: {error}"),
         )),
     }
+}
+
+/// Streams `camera` for a few seconds, dropping each frame once it is
+/// converted, and reports the plane layouts, the orientations, and the frame
+/// rate; the last frame, converted upright on the GPU, is saved as
+/// `camera-<id>.png` in the files directory for inspection.
+#[cfg(feature = "camera")]
+async fn record_android_camera_frames(
+    report: &mut TestReport,
+    camera: &waterkit_content::camera::CameraInfo,
+    files_dir: &std::path::Path,
+) {
+    use futures::StreamExt;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use waterkit_content::camera::{Camera, CameraConfig, FrameConverter, wgpu};
+
+    const STREAM: Duration = Duration::from_secs(3);
+    let case = format!("camera.frames.{}", camera.id);
+
+    let (device, queue) = match camera_gpu().await {
+        Ok(gpu) => gpu,
+        Err(error) => {
+            report.push(TestCase::failed(case, error));
+            return;
+        }
+    };
+    let camera_handle = match Camera::open(
+        &camera.id,
+        CameraConfig::default(),
+        Arc::clone(&device),
+        Arc::clone(&queue),
+    )
+    .await
+    {
+        Ok(handle) => handle,
+        Err(error) => {
+            report.push(TestCase::failed(case, format!("open failed: {error}")));
+            return;
+        }
+    };
+
+    let mut converter = FrameConverter::new(&device);
+    let mut frames = std::pin::pin!(camera_handle.frames());
+    let mut summary = FrameSummary::default();
+    let mut upright = None;
+    let started = Instant::now();
+    while started.elapsed() < STREAM {
+        let next = tokio::time::timeout(Duration::from_secs(5), frames.next()).await;
+        let frame = match next_frame(&case, summary.count, next) {
+            Ok(frame) => frame,
+            Err(outcome) => {
+                report.push(outcome);
+                return;
+            }
+        };
+        summary.record(&frame);
+        let output = upright
+            .take()
+            .filter(|texture: &wgpu::Texture| {
+                texture.size() == FrameConverter::upright_size(&frame)
+            })
+            .unwrap_or_else(|| FrameConverter::create_output(&device, &frame));
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        converter.encode(&device, &mut encoder, &frame, &output);
+        queue.submit([encoder.finish()]);
+        upright = Some(output);
+    }
+    let elapsed = started.elapsed().as_secs_f64();
+    let upright = upright.expect("at least one frame was converted");
+    let png = files_dir.join(format!("camera-{}.png", camera.id));
+    if let Err(error) = save_png(&device, &queue, &upright, &png) {
+        report.push(TestCase::failed(
+            case,
+            format!("saving {}: {error}", png.display()),
+        ));
+        return;
+    }
+    let FrameSummary {
+        layouts,
+        orientations,
+        count,
+        stored,
+    } = summary;
+    report.push(TestCase::passed_with_message(
+        case,
+        format!(
+            "front={} frames={count} fps={:.1} planes={layouts:?} stored={}x{} orientations={orientations:?} upright={}x{} png={}",
+            camera.is_front_facing,
+            f64::from(count) / elapsed,
+            stored.0,
+            stored.1,
+            upright.width(),
+            upright.height(),
+            png.display(),
+        ),
+    ));
+}
+
+/// The Vulkan device camera frames are imported on: Android camera frames are
+/// `AHardwareBuffer`s, which only Vulkan can take, so the device carries the
+/// import's extensions and NV12, which drivers that map camera buffers to a
+/// Vulkan format alias them as.
+#[cfg(feature = "camera")]
+async fn camera_gpu() -> Result<
+    (
+        std::sync::Arc<waterkit_content::camera::wgpu::Device>,
+        std::sync::Arc<waterkit_content::camera::wgpu::Queue>,
+    ),
+    String,
+> {
+    use std::sync::Arc;
+    use waterkit_content::camera::wgpu_external_frame::ahardware_buffer;
+    use waterkit_content::camera::{FrameConverter, wgpu};
+
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::VULKAN,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .map_err(|error| format!("no Vulkan adapter: {error}"))?;
+    let features =
+        FrameConverter::required_features(adapter.features()) | wgpu::Features::TEXTURE_FORMAT_NV12;
+    let (device, queue) = ahardware_buffer::request_device(
+        &adapter,
+        &wgpu::DeviceDescriptor {
+            required_features: features,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| format!("no GPU device: {error}"))?;
+    Ok((Arc::new(device), Arc::new(queue)))
+}
+
+/// The next frame of a camera stream, or the outcome that ends the case after
+/// `count` frames: skipped when this GPU cannot convert the camera's
+/// driver-private buffers, failed for any other end of the stream.
+#[cfg(feature = "camera")]
+fn next_frame(
+    case: &str,
+    count: u32,
+    next: Result<
+        Option<Result<waterkit_content::camera::Frame, waterkit_content::camera::CameraError>>,
+        tokio::time::error::Elapsed,
+    >,
+) -> Result<waterkit_content::camera::Frame, TestCase> {
+    use waterkit_content::camera::CameraError;
+    use waterkit_content::camera::wgpu_external_frame::ahardware_buffer::HardwareBufferImportError;
+
+    match next {
+        Ok(Some(Ok(frame))) => Ok(frame),
+        Ok(Some(Err(CameraError::FrameImport(error))))
+            if matches!(
+                *error,
+                HardwareBufferImportError::ConversionUnavailable { .. }
+            ) =>
+        {
+            Err(TestCase::skipped(
+                case,
+                format!("after {count} frames: {error}"),
+            ))
+        }
+        Ok(Some(Err(error))) => Err(TestCase::failed(
+            case,
+            format!("stream failed after {count} frames: {error}"),
+        )),
+        Ok(None) => Err(TestCase::failed(
+            case,
+            format!("stream ended after {count} frames"),
+        )),
+        Err(_) => Err(TestCase::failed(
+            case,
+            format!("no frame within 5 s after {count}"),
+        )),
+    }
+}
+
+/// What a camera's frames showed while the harness streamed them.
+#[cfg(feature = "camera")]
+#[derive(Default)]
+struct FrameSummary {
+    /// Plane layouts, matrices and ranges seen.
+    layouts: std::collections::BTreeSet<&'static str>,
+    orientations: std::collections::BTreeSet<String>,
+    count: u32,
+    /// The stored size of the last frame.
+    stored: (u32, u32),
+}
+
+#[cfg(feature = "camera")]
+impl FrameSummary {
+    fn record(&mut self, frame: &waterkit_content::camera::Frame) {
+        use waterkit_content::camera::{FramePlanes, YcbcrMatrix, YcbcrRange};
+
+        self.count += 1;
+        self.layouts.insert(match frame.planes() {
+            FramePlanes::Rgb(_) => "rgb",
+            FramePlanes::YCbCr420 { .. } => "ycbcr420",
+            FramePlanes::YCbCr422 { .. } => "ycbcr422",
+        });
+        if let FramePlanes::YCbCr420 { encoding, .. } = frame.planes() {
+            self.layouts.insert(match encoding.matrix {
+                YcbcrMatrix::Bt601 => "bt601",
+                YcbcrMatrix::Bt709 => "bt709",
+                YcbcrMatrix::Bt2020 => "bt2020",
+            });
+            self.layouts.insert(match encoding.range {
+                YcbcrRange::Video => "video-range",
+                YcbcrRange::Full => "full-range",
+            });
+        }
+        self.orientations
+            .insert(format!("{:?}", frame.orientation()));
+        self.stored = (frame.width(), frame.height());
+    }
+}
+
+/// Reads an upright `Rgba8Unorm` frame back and writes it as a PNG; the
+/// readback is test tooling, not part of the camera path.
+#[cfg(feature = "camera")]
+fn save_png(
+    device: &waterkit_content::camera::wgpu::Device,
+    queue: &waterkit_content::camera::wgpu::Queue,
+    texture: &waterkit_content::camera::wgpu::Texture,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    use waterkit_content::camera::wgpu;
+    let size = texture.size();
+    let row = size.width * 4;
+    let padded = row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("harness png readback"),
+        size: u64::from(padded * size.height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(size.height),
+            },
+        },
+        size,
+    );
+    queue.submit([encoder.finish()]);
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(10)),
+        })
+        .map_err(|error| error.to_string())?;
+    let mapped = buffer
+        .slice(..)
+        .get_mapped_range()
+        .map_err(|error| error.to_string())?;
+    let pixels: Vec<u8> = mapped
+        .chunks(padded as usize)
+        .flat_map(|line| &line[..row as usize])
+        .copied()
+        .collect();
+    image::RgbaImage::from_raw(size.width, size.height, pixels)
+        .ok_or("readback size")?
+        .save(path)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(feature = "clipboard")]

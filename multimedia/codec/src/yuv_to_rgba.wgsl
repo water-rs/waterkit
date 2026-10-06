@@ -3,6 +3,9 @@
 // Plane textures are integer formats (`R8Uint`/`Rg8Uint` for NV12,
 // `R16Uint`/`Rg16Uint` for P010), sampled with textureLoad and normalized
 // to code space before the range/matrix/transfer decode.
+//
+// The range and matrix math is waterkit-video-core's `ycbcr.wgsl`, which the
+// build script prepends to this file.
 
 @group(0) @binding(0) var y_texture: texture_2d<u32>;
 @group(0) @binding(1) var uv_texture: texture_2d<u32>;
@@ -21,12 +24,8 @@ struct ColorParams {
 @group(0) @binding(3) var<uniform> color_params: ColorParams;
 @group(0) @binding(4) var linear_rgba_output: texture_storage_2d<rgba16float, write>;
 
-const MATRIX_BT709: u32 = 0u;
-const MATRIX_BT601: u32 = 1u;
-const MATRIX_BT2020: u32 = 2u;
 const MATRIX_BT2020_CONSTANT_LUMINANCE: u32 = 3u;
 
-const RANGE_LIMITED: u32 = 0u;
 const SAMPLE_NV12: u32 = 0u;
 const SAMPLE_P010: u32 = 1u;
 
@@ -143,56 +142,8 @@ fn convert_primaries_to_srgb(linear_rgb: vec3<f32>, primaries_mode: u32) -> vec3
 }
 
 fn normalize_yuv(y_sample: f32, uv_sample: vec2<f32>) -> vec3<f32> {
-    var y = y_sample;
-    var u = uv_sample.x;
-    var v = uv_sample.y;
-
-    if color_params.range_mode == RANGE_LIMITED {
-        if color_params.sample_mode == SAMPLE_P010 {
-            y = (y - (64.0 / 1023.0)) * (1023.0 / 876.0);
-            u = (u - (512.0 / 1023.0)) * (1023.0 / 896.0);
-            v = (v - (512.0 / 1023.0)) * (1023.0 / 896.0);
-        } else {
-            y = (y - (16.0 / 255.0)) * (255.0 / 219.0);
-            u = (u - (128.0 / 255.0)) * (255.0 / 224.0);
-            v = (v - (128.0 / 255.0)) * (255.0 / 224.0);
-        }
-    } else if color_params.sample_mode == SAMPLE_P010 {
-        u = u - (512.0 / 1023.0);
-        v = v - (512.0 / 1023.0);
-    } else {
-        u = u - (128.0 / 255.0);
-        v = v - (128.0 / 255.0);
-    }
-
-    return vec3<f32>(y, u, v);
-}
-
-fn yuv_to_gamma_rgb(yuv: vec3<f32>) -> vec3<f32> {
-    let y = yuv.x;
-    let u = yuv.y;
-    let v = yuv.z;
-
-    var r = 0.0;
-    var g = 0.0;
-    var b = 0.0;
-
-    if color_params.matrix_mode == MATRIX_BT601 {
-        r = y + 1.402 * v;
-        g = y - 0.344136 * u - 0.714136 * v;
-        b = y + 1.772 * u;
-    } else if color_params.matrix_mode == MATRIX_BT2020 {
-        r = y + 1.4746 * v;
-        g = y - 0.164553 * u - 0.571353 * v;
-        b = y + 1.8814 * u;
-    } else {
-        // BT.709
-        r = y + 1.5748 * v;
-        g = y - 0.187324 * u - 0.468124 * v;
-        b = y + 1.8556 * u;
-    }
-
-    return max(vec3<f32>(r, g, b), vec3<f32>(0.0));
+    let bit_depth = select(8u, 10u, color_params.sample_mode == SAMPLE_P010);
+    return ycbcr_normalize(y_sample, uv_sample, color_params.range_mode, bit_depth);
 }
 
 fn bt2020_constant_luminance_to_linear(yuv: vec3<f32>) -> vec3<f32> {
@@ -220,7 +171,7 @@ fn decode_yuv_to_linear(y: f32, uv: vec2<f32>) -> vec3<f32> {
     if color_params.matrix_mode == MATRIX_BT2020_CONSTANT_LUMINANCE {
         linear_rgb = bt2020_constant_luminance_to_linear(yuv);
     } else {
-        let gamma_rgb = yuv_to_gamma_rgb(yuv);
+        let gamma_rgb = ycbcr_to_rgb(yuv, color_params.matrix_mode);
         linear_rgb = decode_transfer_to_linear(gamma_rgb, color_params.transfer_mode);
     }
     return convert_primaries_to_srgb(linear_rgb, color_params.primaries_mode);

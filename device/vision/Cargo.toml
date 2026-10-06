@@ -1,0 +1,32 @@
+[package]
+name = "waterkit-vision"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository = "https://github.com/water-rs/waterkit"
+description = "Hardware-accelerated on-device vision requests over camera frames and still images"
+keywords = ["vision", "image", "gpu", "ocr", "barcode"]
+categories = ["multimedia::images", "multimedia::video"]
+
+[lints]
+workspace = true
+
+[dependencies]
+waterkit-core = { workspace = true }
+wgpu.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+waterkit-camera = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The Send-future API uses single-threaded JS wgpu objects; this feature marks their handles Send/Sync when atomics are disabled.
+wgpu = { workspace = true, features = ["fragile-send-sync-non-atomic-wasm"] }
+
+[features]
+camera = ["dep:waterkit-camera"]
+
+[dev-dependencies]
+pollster.workspace = true

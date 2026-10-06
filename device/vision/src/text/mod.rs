@@ -15,9 +15,7 @@ use crate::{
 };
 
 /// The languages the native text realization serves on this device.
-pub fn native_languages() -> Vec<LanguageIdentifier> {
-    sys::recognizer_languages()
-}
+pub use sys::recognizer_languages as native_languages;
 
 /// What a text recognition request spends for its result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -125,6 +123,13 @@ impl Sealed for RecognizeText {
 /// realization code constructs it.
 #[doc(hidden)]
 #[derive(Debug)]
+#[cfg_attr(
+    not(target_os = "windows"),
+    expect(
+        dead_code,
+        reason = "only a native realization reads the languages and level, and this platform has none yet"
+    )
+)]
 pub struct TextPlan {
     languages: Vec<LanguageIdentifier>,
     level: RecognitionLevel,

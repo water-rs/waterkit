@@ -15,10 +15,10 @@ pub struct VisionCapabilities {
 
 impl VisionCapabilities {
     #[cfg_attr(
-        not(feature = "text"),
+        any(not(feature = "text"), not(target_os = "windows")),
         expect(
             clippy::missing_const_for_fn,
-            reason = "native_languages() allocates; this is const-eligible only without text"
+            reason = "only a native text recognizer's language probe allocates; elsewhere the capabilities are constant"
         )
     )]
     pub(crate) fn new() -> Self {

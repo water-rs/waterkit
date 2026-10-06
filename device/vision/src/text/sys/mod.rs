@@ -6,6 +6,6 @@ mod windows;
 pub use windows::*;
 
 #[cfg(not(target_os = "windows"))]
-mod fallback;
+mod unsupported;
 #[cfg(not(target_os = "windows"))]
-pub use fallback::*;
+pub use unsupported::*;

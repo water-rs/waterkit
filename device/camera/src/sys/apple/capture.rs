@@ -175,20 +175,15 @@ fn color_primaries(pixel_buffer: &CVPixelBuffer) -> ColorPrimaries {
     }
 }
 
-#[expect(
-    deprecated,
-    reason = "Core Video deprecated the SMPTE C transfer name, but buffers may still carry it, and it is SDR"
-)]
 fn transfer_function(pixel_buffer: &CVPixelBuffer) -> TransferFunction {
     // SAFETY: the keys and values are Core Video's own immutable constants.
-    let (key, bt709, smpte_240m, bt2020, srgb, smpte_c, pq, hlg) = unsafe {
+    let (key, bt709, smpte_240m, bt2020, srgb, pq, hlg) = unsafe {
         (
             kCVImageBufferTransferFunctionKey,
             kCVImageBufferTransferFunction_ITU_R_709_2,
             kCVImageBufferTransferFunction_SMPTE_240M_1995,
             kCVImageBufferTransferFunction_ITU_R_2020,
             kCVImageBufferTransferFunction_sRGB,
-            objc2_core_video::kCVImageBufferTransferFunction_SMPTE_C,
             kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
             kCVImageBufferTransferFunction_ITU_R_2100_HLG,
         )
@@ -197,7 +192,7 @@ fn transfer_function(pixel_buffer: &CVPixelBuffer) -> TransferFunction {
     let name = attachment.downcast_ref::<CFString>().unwrap_or_else(|| {
         panic!("kCVImageBufferTransferFunctionKey attachment is not a string: {attachment:?}")
     });
-    if name == bt709 || name == smpte_240m || name == bt2020 || name == srgb || name == smpte_c {
+    if name == bt709 || name == smpte_240m || name == bt2020 || name == srgb || is_smpte_c(name) {
         TransferFunction::Sdr
     } else if name == pq {
         TransferFunction::Pq
@@ -206,6 +201,28 @@ fn transfer_function(pixel_buffer: &CVPixelBuffer) -> TransferFunction {
     } else {
         panic!("unsupported kCVImageBufferTransferFunctionKey value {name}")
     }
+}
+
+/// Whether `name` is the SMPTE C transfer, an SDR curve.
+///
+/// Only macOS exports the deprecated `kCVImageBufferTransferFunction_SMPTE_C`;
+/// iOS has no such symbol, so no iOS buffer carries it.
+#[cfg(target_os = "macos")]
+#[expect(
+    deprecated,
+    reason = "Core Video deprecated the SMPTE C transfer name, but macOS buffers may still carry it"
+)]
+fn is_smpte_c(name: &CFString) -> bool {
+    // SAFETY: the value is Core Video's own immutable constant.
+    name == unsafe { objc2_core_video::kCVImageBufferTransferFunction_SMPTE_C }
+}
+
+/// Whether `name` is the SMPTE C transfer, an SDR curve.
+///
+/// iOS exports no SMPTE C transfer name, so no iOS buffer carries it.
+#[cfg(not(target_os = "macos"))]
+const fn is_smpte_c(_name: &CFString) -> bool {
+    false
 }
 
 #[expect(

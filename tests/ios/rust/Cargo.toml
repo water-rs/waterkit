@@ -50,6 +50,7 @@ full = [
     "deeplink",
     "background",
     "passkey",
+    "wallet",
 ]
 sensor = ["waterkit/sensor"]
 biometric = ["waterkit/biometric"]
@@ -79,6 +80,7 @@ health = ["waterkit/health"]
 deeplink = ["waterkit/deeplink"]
 background = ["waterkit/background"]
 passkey = ["waterkit/passkey"]
+wallet = ["waterkit/wallet"]
 
 [build-dependencies]
 swift-bridge-build.workspace = true

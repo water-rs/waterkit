@@ -205,6 +205,9 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
             ),
         ));
 
+        #[cfg(feature = "wallet")]
+        report.push(record_wallet_availability().await);
+
         #[cfg(feature = "screen")]
         record_android_screen(&mut report);
 
@@ -223,6 +226,20 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
     }
 
     report
+}
+
+#[cfg(feature = "wallet")]
+async fn record_wallet_availability() -> TestCase {
+    match waterkit_content::wallet::capabilities().await {
+        Ok(capabilities) => TestCase::passed_with_message(
+            "wallet.availability",
+            format!("available={}", capabilities.available),
+        ),
+        Err(error) => TestCase::failed(
+            "wallet.availability",
+            format!("wallet capability probe failed: {error}"),
+        ),
+    }
 }
 
 /// The cases of the features this harness only links, or cannot exercise

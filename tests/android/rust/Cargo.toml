@@ -48,6 +48,7 @@ full = [
     "screen",
     "background",
     "passkey",
+    "wallet",
 ]
 sensor = ["waterkit_content/sensor"]
 biometric = ["waterkit_content/biometric"]
@@ -75,6 +76,7 @@ health = ["waterkit_content/health"]
 screen = ["waterkit_content/screen"]
 background = ["waterkit_content/background"]
 passkey = ["waterkit_content/passkey"]
+wallet = ["waterkit_content/wallet"]
 
 
 [target.'cfg(target_os = "android")'.dependencies]

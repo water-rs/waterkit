@@ -35,6 +35,7 @@ Waterkit is organized into focused, independent crates. You can use the main `wa
 | **[Speech](speech)** | Speech recognition and text-to-speech integrations. |
 | **[System](system)** | System information, connectivity status, and thermal info. |
 | **[Video](video)** | High-level video playback and processing. |
+| **[Wallet](wallet)** | Add server-signed passes to Google Wallet / Apple Wallet. |
 
 ## Advanced Modern Capabilities
 

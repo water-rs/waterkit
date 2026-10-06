@@ -53,10 +53,7 @@ fn build_report() -> TestReport {
         record_haptic(&mut report);
 
         #[cfg(feature = "notification")]
-        report.push(TestCase::skipped(
-            "notification.show",
-            "notification authorization cannot be granted headless on the simulator",
-        ));
+        record_notification(&mut report);
 
         #[cfg(feature = "secret")]
         record_secret(&mut report).await;
@@ -72,6 +69,9 @@ fn build_report() -> TestReport {
 
         #[cfg(feature = "passkey")]
         record_passkey(&mut report).await;
+
+        #[cfg(feature = "wallet")]
+        report.push(record_wallet_availability().await);
 
         #[cfg(feature = "biometric")]
         report.push(TestCase::skipped(
@@ -154,6 +154,28 @@ fn build_report() -> TestReport {
     }
 
     report
+}
+
+#[cfg(feature = "wallet")]
+async fn record_wallet_availability() -> TestCase {
+    match waterkit::wallet::capabilities().await {
+        Ok(capabilities) => TestCase::passed_with_message(
+            "wallet.availability",
+            format!("available={}", capabilities.available),
+        ),
+        Err(error) => TestCase::failed(
+            "wallet.availability",
+            format!("wallet capability probe failed: {error}"),
+        ),
+    }
+}
+
+#[cfg(feature = "notification")]
+fn record_notification(report: &mut TestReport) {
+    report.push(TestCase::skipped(
+        "notification.show",
+        "notification authorization cannot be granted headless on the simulator",
+    ));
 }
 
 #[cfg(feature = "sensor")]

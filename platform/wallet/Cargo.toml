@@ -1,0 +1,38 @@
+[package]
+name = "waterkit-wallet"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Native Google Wallet and Apple Wallet pass flows"
+keywords = ["wallet", "passes", "google-wallet", "apple-wallet"]
+categories = ["os", "gui"]
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = "0.22"
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+waterkit-core.workspace = true
+zip = { version = "6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true
+waterkit-build.workspace = true
+
+[target.'cfg(target_os = "ios")'.dependencies]
+swift-bridge.workspace = true
+
+[build-dependencies]
+waterkit-build.workspace = true
+
+[package.metadata.waterui.android]
+kotlin-sources = ["src/sys/android/WalletHelper.kt"]
+maven = ["com.google.android.gms:play-services-pay:16.5.0", "com.google.android.gms:play-services-base:18.5.0"]

@@ -20,9 +20,9 @@ use wgpu_external_frame::ahardware_buffer::{
 
 use super::{AndroidBridge, SensorMounting};
 use crate::color::from_ycbcr_encoding;
-use crate::frame::{Frame, FramePlanes};
+use crate::frame::{Frame, FramePlanes, orientation_from_camera2};
 use crate::{
-    CameraError, ColorPrimaries, ColorRange, DynamicRangeProfile, MatrixCoefficients, Orientation,
+    CameraError, ColorPrimaries, ColorRange, DynamicRangeProfile, MatrixCoefficients,
     TransferFunction, VideoColorInfo,
 };
 
@@ -186,7 +186,7 @@ impl RawFrame {
             color,
             size.width,
             size.height,
-            Orientation::from_camera2(
+            orientation_from_camera2(
                 mounting.sensor_orientation,
                 mounting.lens_faces_back,
                 display_rotation,

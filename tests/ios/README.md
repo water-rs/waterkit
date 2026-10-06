@@ -108,9 +108,10 @@ screen awake during a run.
 ## Cases
 
 The camera case lists the cameras, asks for camera access, and streams five
-frames from every camera (`camera.frames.<camera id>`). It reports each
-camera's name, whether it faces the user, and the layout and size of its
-frames.
+frames from every camera (`camera.frames.<camera id>`), dropping each before
+taking the next. It reports each camera's name, whether it faces the user, the
+plane layout, encoding and stored size of its frames, their orientations, and
+the upright size `FrameConverter` turns the last frame into.
 
 ## Manual runs
 

@@ -20,6 +20,8 @@ serde.workspace = true
 serde_json.workspace = true
 waterkit_content = { path = "../../..", package = "waterkit", default-features = false }
 waterkit-test-report.workspace = true
+# Saves converted camera frames for inspection.
+image = { workspace = true, default-features = false, features = ["png"] }
 waterkit-build.workspace = true
 
 [features]

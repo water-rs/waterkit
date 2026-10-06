@@ -1,13 +1,14 @@
 //! Camera preview harness: winit window + wgpu renderer.
 //!
 //! Lists cameras, allows selection, and renders the camera feed to a window.
-//! The camera API returns GPU textures directly for zero-copy rendering.
+//! Each frame is converted upright on the GPU by `FrameConverter` and drawn
+//! from that texture.
 
 use futures::StreamExt;
 use shaderloom::CompiledShader;
 use std::sync::Arc;
 use std::time::Instant;
-use waterkit_camera::{Camera, CameraConfig, CameraInfo, Frame};
+use waterkit_camera::{Camera, CameraConfig, CameraInfo, Frame, FrameConverter};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -48,7 +49,9 @@ struct State {
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     pipeline: wgpu::RenderPipeline,
-    current_frame: Option<Frame>,
+    converter: FrameConverter,
+    /// The newest frame, converted upright, and the bind group sampling it.
+    upright: Option<(wgpu::Texture, wgpu::BindGroup)>,
     last_fps_update: Instant,
     frame_count: u32,
 }
@@ -161,7 +164,10 @@ impl State {
             .map_err(|_| "No adapter")?;
 
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: FrameConverter::required_features(adapter.features()),
+                ..Default::default()
+            })
             .await
             .map_err(|e| format!("Device: {e}"))?;
 
@@ -169,7 +175,14 @@ impl State {
         let queue = Arc::new(queue);
 
         let caps = surface.get_capabilities(&adapter);
-        let format = caps.formats[0];
+        // The converted frames hold display-ready gamma values, which a
+        // non-sRGB target shows unchanged.
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|format| !format.is_srgb())
+            .ok_or("the window surface offers no non-sRGB format")?;
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -200,6 +213,13 @@ impl State {
         tokio::spawn(async move {
             let mut frames = std::pin::pin!(camera.frames());
             while let Some(frame) = frames.next().await {
+                let frame = match frame {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        log::error!("camera stream failed: {error}");
+                        break;
+                    }
+                };
                 // Drop old frames if receiver is slow
                 let _ = frame_tx.try_send(frame);
             }
@@ -208,6 +228,8 @@ impl State {
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
 
         let (bind_group_layout, pipeline) = create_pipeline(&device, format);
+
+        let converter = FrameConverter::new(&device);
 
         Ok(Self {
             window,
@@ -219,16 +241,58 @@ impl State {
             bind_group_layout,
             sampler,
             pipeline,
-            current_frame: None,
+            converter,
+            upright: None,
             last_fps_update: Instant::now(),
             frame_count: 0,
         })
     }
 
+    /// Converts `frame` upright into the reused output texture, recreating it
+    /// when the upright size changes.
+    fn show_frame(&mut self, frame: &Frame) {
+        let size = FrameConverter::upright_size(frame);
+        if self
+            .upright
+            .as_ref()
+            .is_none_or(|(texture, _)| texture.size() != size)
+        {
+            let texture = FrameConverter::create_output(&self.device, frame);
+            // The converted frame holds display-ready gamma values, and the
+            // surface is not sRGB, so they reach the screen unchanged.
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("texture_bind_group"),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+            self.upright = Some((texture, bind_group));
+        }
+        let Some((texture, _)) = &self.upright else {
+            return;
+        };
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        self.converter
+            .encode(&self.device, &mut encoder, frame, texture);
+        self.queue.submit([encoder.finish()]);
+    }
+
     fn update_and_render(&mut self) {
-        // Try to get latest frame (non-blocking)
-        while let Ok(frame) = self.frame_rx.try_recv() {
-            self.current_frame = Some(frame);
+        // Show the newest frame (non-blocking).
+        if let Some(frame) = std::iter::from_fn(|| self.frame_rx.try_recv().ok()).last() {
+            self.show_frame(&frame);
+            log::trace!("frame orientation {:?}", frame.orientation());
         }
 
         // Calculate FPS
@@ -283,23 +347,8 @@ impl State {
             });
 
             pass.set_pipeline(&self.pipeline);
-            if let Some(frame) = &self.current_frame {
-                let texture_view = frame.view();
-                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("texture_bind_group"),
-                    layout: &self.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&texture_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
-                        },
-                    ],
-                });
-                pass.set_bind_group(0, &bind_group, &[]);
+            if let Some((_, bind_group)) = &self.upright {
+                pass.set_bind_group(0, bind_group, &[]);
                 pass.draw(0..6, 0..1);
             }
         }

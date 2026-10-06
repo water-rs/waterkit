@@ -24,10 +24,7 @@ use shaderloom::{CompiledShader, ShaderStage};
 #[cfg(waterkit_hw_codec_apple)]
 mod apple;
 
-const YUV_COLOR_SHADER: CompiledShader = include!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/src/shaders/compiled/yuv_color.rs"
-));
+const YUV_COLOR_SHADER: CompiledShader = include!(concat!(env!("OUT_DIR"), "/yuv_color.rs"));
 
 impl DecodedFrame {
     /// Convert to GPU frame by uploading to the user's device.

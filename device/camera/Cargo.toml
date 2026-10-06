@@ -21,15 +21,22 @@ futures.workspace = true
 async-channel.workspace = true
 tracing.workspace = true
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
-
-shaderloom = { workspace = true, features = ["runtime"], optional = true }
+shaderloom = { workspace = true, features = ["runtime"] }
+# Zero-copy import of the platform frame buffers, and the YCbCr encoding types
+# frames carry.
+wgpu-external-frame.workspace = true
+# The YCbCr mode codes the converter's shaders take.
+waterkit-video-core.workspace = true
 
 [build-dependencies]
 waterkit-build.workspace = true
-shaderloom = { workspace = true, features = ["build"], optional = true }
+# The frame converter's shaders are composed with the shared Y'CbCr fragment
+# and compiled to the target's native shader format at build time.
+shaderloom = { workspace = true, features = ["build"] }
+waterkit-video-core.workspace = true
 
 [features]
-preview-example = ["dep:shaderloom"]
+preview-example = []
 # VA-API hardware encoders on Linux; off by default like the codec's own
 # `vaapi` (the software AV1 encoder still covers encoding without it).
 vaapi = ["waterkit-codec/vaapi"]
@@ -40,6 +47,7 @@ required-features = ["preview-example"]
 
 [dev-dependencies]
 pollster = "1.0"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
 
 # winit serves the preview example's window. On Android it pulls in
 # `android-activity`, which only builds once an activity backend is selected, so
@@ -49,6 +57,10 @@ winit.workspace = true
 
 [target.'cfg(target_os = "android")'.dev-dependencies]
 winit = { workspace = true, features = ["android-native-activity"] }
+
+# The preview example runs its camera loop on the browser's event loop.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-futures = "0.4"
 
 # Desktop platforms (Windows, Linux) - use nokhwa. Recording encodes through
 # waterkit-codec (hardware encoders plus the software AV1 fallback) and muxes
@@ -66,12 +78,25 @@ yuv = "0.8.16"
 swift-bridge.workspace = true
 objc.workspace = true
 core-graphics-types = "0.2"
+objc2-core-foundation = { workspace = true, features = ["CFString"] }
+objc2-core-video = { workspace = true, features = [
+    "CVBase",
+    "CVBuffer",
+    "CVImageBuffer",
+    "CVPixelBuffer",
+    "CVPixelBufferIOSurface",
+    "CVReturn",
+    "objc2-io-surface",
+] }
+objc2-io-surface.workspace = true
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 waterkit-build.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
+# `HardwareBuffer::from_jni`, to reach each camera image's AHardwareBuffer.
+ndk = { version = "0.9", default-features = false, features = ["api-level-26"] }
 
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).

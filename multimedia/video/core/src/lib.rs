@@ -242,6 +242,19 @@ impl MatrixCoefficients {
             _ => None,
         }
     }
+
+    /// The [`ycbcr_mode`] matrix code [`YCBCR_WGSL`] decodes these
+    /// coefficients with, or `None` for constant-luminance BT.2020, which is
+    /// not a matrix and which the shared fragment does not implement.
+    #[must_use]
+    pub const fn ycbcr_mode(self) -> Option<u32> {
+        match self {
+            Self::Bt709 => Some(ycbcr_mode::MATRIX_BT709),
+            Self::Bt601 => Some(ycbcr_mode::MATRIX_BT601),
+            Self::Bt2020NonConstantLuminance => Some(ycbcr_mode::MATRIX_BT2020),
+            Self::Bt2020ConstantLuminance => None,
+        }
+    }
 }
 
 /// Color primaries signaled by a video stream.
@@ -281,6 +294,17 @@ pub enum ColorRange {
     Limited,
     /// Full component range.
     Full,
+}
+
+impl ColorRange {
+    /// The [`ycbcr_mode`] range code [`YCBCR_WGSL`] decodes this range with.
+    #[must_use]
+    pub const fn ycbcr_mode(self) -> u32 {
+        match self {
+            Self::Limited => ycbcr_mode::RANGE_LIMITED,
+            Self::Full => ycbcr_mode::RANGE_FULL,
+        }
+    }
 }
 
 /// Static content-light metadata for HDR video.

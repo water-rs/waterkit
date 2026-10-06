@@ -2,7 +2,7 @@ use waterkit_video_core::{
     ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo,
 };
 
-pub fn bt709_sdr_limited() -> VideoColorInfo {
+pub const fn bt709_sdr_limited() -> VideoColorInfo {
     VideoColorInfo {
         matrix: MatrixCoefficients::Bt709,
         primaries: ColorPrimaries::Bt709,

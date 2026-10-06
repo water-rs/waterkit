@@ -1,8 +1,6 @@
 //! Shared color-conversion contract for decoded YUV textures.
 
-use waterkit_video_core::{
-    ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo, ycbcr_mode,
-};
+use waterkit_video_core::{ColorPrimaries, TransferFunction, VideoColorInfo};
 
 use crate::DecodedPixelLayout;
 
@@ -66,18 +64,11 @@ pub fn video_color_uniform(
     target: ColorOutputTarget,
 ) -> VideoColorUniform {
     VideoColorUniform {
-        matrix_mode: match color.matrix {
-            MatrixCoefficients::Bt709 => ycbcr_mode::MATRIX_BT709,
-            MatrixCoefficients::Bt601 => ycbcr_mode::MATRIX_BT601,
-            MatrixCoefficients::Bt2020NonConstantLuminance => ycbcr_mode::MATRIX_BT2020,
-            // The codec's own mode, which its shader handles before the
-            // shared matrices (`MATRIX_BT2020_CONSTANT_LUMINANCE`).
-            MatrixCoefficients::Bt2020ConstantLuminance => 3,
-        },
-        range_mode: match color.range {
-            ColorRange::Limited => ycbcr_mode::RANGE_LIMITED,
-            ColorRange::Full => ycbcr_mode::RANGE_FULL,
-        },
+        // Constant-luminance BT.2020 has no shared matrix mode: it takes the
+        // codec's own mode, which its shader handles before the shared
+        // matrices (`MATRIX_BT2020_CONSTANT_LUMINANCE`).
+        matrix_mode: color.matrix.ycbcr_mode().unwrap_or(3),
+        range_mode: color.range.ycbcr_mode(),
         primaries_mode: match color.primaries {
             ColorPrimaries::Bt709 => 0,
             ColorPrimaries::Bt601 => 1,

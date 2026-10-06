@@ -3,9 +3,7 @@
 use std::collections::HashMap;
 
 use shaderloom::{CompiledShader, ShaderStage};
-use waterkit_video_core::{
-    ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo, ycbcr_mode,
-};
+use waterkit_video_core::{MatrixCoefficients, TransferFunction, VideoColorInfo};
 use wgpu::util::DeviceExt as _;
 
 use crate::CameraError;
@@ -118,12 +116,14 @@ impl ConvertParams {
     }
 
     /// Adds how the YCbCr samples decode.
-    fn ycbcr(self, color: VideoColorInfo, sample: SampleDepth) -> Self {
-        let (matrix_mode, range_mode) = ycbcr_modes(color.matrix, color.range);
+    const fn ycbcr(self, color: VideoColorInfo, sample: SampleDepth) -> Self {
         Self {
             // YCBCR_MATRIX_* / YCBCR_RANGE_* in waterkit-video-core's ycbcr.wgsl.
-            matrix_mode,
-            range_mode,
+            matrix_mode: color
+                .matrix
+                .ycbcr_mode()
+                .expect("color validation rejects constant-luminance BT.2020"),
+            range_mode: color.range.ycbcr_mode(),
             bit_depth: sample.bit_depth,
             code_scale: sample.code_scale,
             ..self
@@ -147,22 +147,6 @@ impl ConvertParams {
         }
         bytes
     }
-}
-
-fn ycbcr_modes(matrix: MatrixCoefficients, range: ColorRange) -> (u32, u32) {
-    let matrix_mode = match matrix {
-        MatrixCoefficients::Bt601 => ycbcr_mode::MATRIX_BT601,
-        MatrixCoefficients::Bt709 => ycbcr_mode::MATRIX_BT709,
-        MatrixCoefficients::Bt2020NonConstantLuminance => ycbcr_mode::MATRIX_BT2020,
-        MatrixCoefficients::Bt2020ConstantLuminance => {
-            unreachable!("color validation rejects constant-luminance BT.2020")
-        }
-    };
-    let range_mode = match range {
-        ColorRange::Limited => ycbcr_mode::RANGE_LIMITED,
-        ColorRange::Full => ycbcr_mode::RANGE_FULL,
-    };
-    (matrix_mode, range_mode)
 }
 
 /// How a YCbCr plane's sampled unorm values relate to its codes.

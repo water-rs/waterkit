@@ -28,7 +28,8 @@ shaderloom = { workspace = true, features = ["runtime"], optional = true }
 [build-dependencies]
 waterkit-build.workspace = true
 cfg_aliases = "0.2"
-shaderloom = { workspace = true, optional = true }
+shaderloom = { workspace = true, features = ["build"], optional = true }
+waterkit-video-core.workspace = true
 
 # Software fallback codecs (private, not exposed in public API)
 # Only enabled on desktop platforms - mobile and wasm use their native decode paths
@@ -67,12 +68,6 @@ windows = { workspace = true, features = ["Win32_Media_MediaFoundation", "Win32_
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cros-codecs = { version = "0.0.6", default-features = false, features = ["vaapi"], optional = true }
-
-[dev-dependencies]
-# `build` here is dev-only: tests/packaged_shaders.rs re-packages the YUV
-# shader and asserts the checked-in artifacts are current. The normal graph
-# stays packaged-only.
-shaderloom = { workspace = true, features = ["build"] }
 
 # The software AV1 decoder's end-to-end test builds its input with `image`'s
 # AVIF *encoder*. Nothing else in the workspace encodes AVIF, so that encoder

@@ -1,0 +1,496 @@
+//! Zero-copy frames from `AVFoundation`'s capture buffers.
+//!
+//! The capture output delivers biplanar 4:2:0 `CVPixelBuffer`s backed by an
+//! `IOSurface`. Each frame imports the surface's luma and chroma planes as
+//! textures that alias its memory, so no pixel is copied. The buffer is the
+//! import's owner: the plane textures hold it until `wgpu` destroys them,
+//! after the last submission that read them has completed, and only then
+//! does it go back to the capture pool.
+
+use std::ffi::c_void;
+use std::ptr::NonNull;
+use std::time::Duration;
+
+use objc2_core_foundation::{CFRetained, CFString};
+use objc2_core_video::{
+    CVPixelBuffer, CVPixelBufferGetIOSurface, kCVImageBufferYCbCrMatrix_ITU_R_601_4,
+    kCVImageBufferYCbCrMatrix_ITU_R_709_2, kCVImageBufferYCbCrMatrix_ITU_R_2020,
+    kCVImageBufferYCbCrMatrixKey,
+};
+use wgpu_external_frame::io_surface::{Ycbcr420IoSurfaceFrame, Ycbcr420Plane};
+
+use crate::frame::{Frame, FramePlanes};
+use crate::{Orientation, YcbcrEncoding, YcbcrMatrix};
+
+/// A retained `CVPixelBuffer` that may cross threads.
+///
+/// Core Foundation's reference counting is thread-safe, and nothing here
+/// reads or writes the buffer's pixels on the CPU: it is only queried for
+/// immutable metadata and released.
+#[derive(Debug)]
+pub struct CapturedPixelBuffer(CFRetained<CVPixelBuffer>);
+
+// SAFETY: see the type's documentation; the buffer is only retained, released
+// and queried for immutable properties, all thread-safe in Core Video.
+#[expect(
+    clippy::non_send_fields_in_send_ty,
+    reason = "the Core Foundation reference is exactly what this impl vouches for"
+)]
+unsafe impl Send for CapturedPixelBuffer {}
+
+impl CapturedPixelBuffer {
+    /// Takes ownership of one reference on a pixel buffer.
+    ///
+    /// # Safety
+    ///
+    /// `buffer` must be a live `CVPixelBuffer` carrying a reference that the
+    /// caller hands over.
+    pub unsafe fn from_owned(buffer: NonNull<CVPixelBuffer>) -> Self {
+        // SAFETY: the caller transfers one reference on a live buffer.
+        Self(unsafe { CFRetained::from_raw(buffer) })
+    }
+}
+
+/// One captured frame as the capture callback delivered it.
+#[derive(Debug)]
+pub struct RawFrame {
+    pub pixel_buffer: CapturedPixelBuffer,
+    pub timestamp: Duration,
+    /// Clockwise rotation, in degrees, that makes the unmirrored buffer
+    /// upright.
+    pub rotation_degrees: u32,
+    /// Whether the capture connection mirrored the buffer.
+    pub mirrored: bool,
+}
+
+/// Builds a frame whose planes alias `raw`'s `IOSurface`.
+///
+/// # Panics
+///
+/// Panics when the buffer has no `IOSurface`, is not biplanar 4:2:0 YCbCr,
+/// or carries no YCbCr matrix this crate supports. The capture output is
+/// configured for `420f` or `420v`, so each of these is a platform defect.
+pub fn build_frame(device: &wgpu::Device, raw: RawFrame) -> Frame {
+    let matrix = ycbcr_matrix(&raw.pixel_buffer.0);
+    let surface = CVPixelBufferGetIOSurface(Some(&raw.pixel_buffer.0))
+        .expect("capture pixel buffers are IOSurface-backed");
+    // SAFETY: `surface` is a live IOSurface retained for this call, and the
+    // import takes its own reference on it.
+    let surface =
+        unsafe { Ycbcr420IoSurfaceFrame::retain(NonNull::from(&*surface).cast::<c_void>()) }
+            .with_owner(raw.pixel_buffer);
+    let luma = surface.import(device, Ycbcr420Plane::Luma);
+    let chroma = surface.import(device, Ycbcr420Plane::Chroma);
+    let encoding = YcbcrEncoding {
+        matrix,
+        range: surface.format().range,
+    };
+    let (width, height) = (
+        surface.width(Ycbcr420Plane::Luma),
+        surface.height(Ycbcr420Plane::Luma),
+    );
+    let planes = FramePlanes::YCbCr420 {
+        luma: luma.create_view(&wgpu::TextureViewDescriptor::default()),
+        chroma: chroma.create_view(&wgpu::TextureViewDescriptor::default()),
+        encoding,
+    };
+    Frame::new(
+        planes,
+        width,
+        height,
+        Orientation::from_rotation(raw.rotation_degrees, raw.mirrored),
+        raw.timestamp,
+    )
+}
+
+/// The matrix named by the buffer's `kCVImageBufferYCbCrMatrixKey`
+/// attachment, which `AVFoundation` sets on every YCbCr capture buffer.
+fn ycbcr_matrix(pixel_buffer: &CVPixelBuffer) -> YcbcrMatrix {
+    // SAFETY: the keys and values are Core Video's own immutable constants.
+    let (key, bt601, bt709, bt2020) = unsafe {
+        (
+            kCVImageBufferYCbCrMatrixKey,
+            kCVImageBufferYCbCrMatrix_ITU_R_601_4,
+            kCVImageBufferYCbCrMatrix_ITU_R_709_2,
+            kCVImageBufferYCbCrMatrix_ITU_R_2020,
+        )
+    };
+    #[expect(
+        deprecated,
+        reason = "CVBufferCopyAttachment needs iOS 15, above this crate's iOS 14 deployment target"
+    )]
+    // SAFETY: a null attachment mode pointer is allowed.
+    let attachment = unsafe { pixel_buffer.get_attachment(key, std::ptr::null_mut()) }
+        .expect("capture pixel buffers carry a YCbCr matrix attachment");
+    let name = attachment
+        .downcast_ref::<CFString>()
+        .expect("the YCbCr matrix attachment is a string");
+    if name == bt601 {
+        YcbcrMatrix::Bt601
+    } else if name == bt709 {
+        YcbcrMatrix::Bt709
+    } else if name == bt2020 {
+        YcbcrMatrix::Bt2020
+    } else {
+        panic!("capture buffer uses the unsupported YCbCr matrix {name}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ptr::NonNull;
+    use std::time::Duration;
+
+    use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained, CFString, CFType};
+    use objc2_core_video::{
+        CVAttachmentMode, CVPixelBuffer, CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane,
+        CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags,
+        CVPixelBufferPool, CVPixelBufferUnlockBaseAddress, kCVImageBufferYCbCrMatrix_ITU_R_601_4,
+        kCVImageBufferYCbCrMatrix_ITU_R_709_2, kCVImageBufferYCbCrMatrixKey,
+        kCVPixelBufferHeightKey, kCVPixelBufferIOSurfacePropertiesKey,
+        kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferPoolAllocationThresholdKey,
+        kCVPixelBufferWidthKey, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+        kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVReturnSuccess,
+        kCVReturnWouldExceedAllocationThreshold,
+    };
+
+    use super::{CapturedPixelBuffer, RawFrame, build_frame};
+    use crate::test_support::{gpu, read_texture, wait_idle};
+    use crate::{FrameConverter, FramePlanes, Orientation, YcbcrEncoding, YcbcrMatrix, YcbcrRange};
+
+    const WIDTH: usize = 64;
+    const HEIGHT: usize = 48;
+
+    fn luma(x: usize, y: usize) -> u8 {
+        u8::try_from((x * 3 + y * 5) % 256).expect("below 256")
+    }
+
+    fn chroma(cx: usize, cy: usize) -> [u8; 2] {
+        [
+            u8::try_from((cx * 7 + cy * 2 + 40) % 256).expect("below 256"),
+            u8::try_from((cx * 2 + cy * 11 + 90) % 256).expect("below 256"),
+        ]
+    }
+
+    /// An IOSurface-backed 4:2:0 pixel buffer with known samples and a YCbCr
+    /// matrix attachment, as the capture output delivers.
+    fn capture_buffer(pixel_format: u32, matrix: &CFString) -> CFRetained<CVPixelBuffer> {
+        // SAFETY: Core Video's immutable key constant.
+        let io_surface_key = unsafe { kCVPixelBufferIOSurfacePropertiesKey };
+        let no_properties = CFDictionary::<CFString, CFType>::empty();
+        let attributes = CFDictionary::<CFString, CFType>::from_slices(
+            &[io_surface_key],
+            &[no_properties.as_ref()],
+        );
+        let mut buffer: *mut CVPixelBuffer = std::ptr::null_mut();
+        // SAFETY: the out pointer is valid for the call, and a created buffer
+        // carries one reference the `CFRetained` below takes over.
+        let buffer = unsafe {
+            let status = CVPixelBufferCreate(
+                None,
+                WIDTH,
+                HEIGHT,
+                pixel_format,
+                Some(attributes.as_opaque()),
+                NonNull::from(&mut buffer),
+            );
+            assert_eq!(status, 0, "CVPixelBufferCreate failed");
+            CFRetained::from_raw(NonNull::new(buffer).expect("a created pixel buffer"))
+        };
+
+        // SAFETY: the buffer is live and unlocked.
+        let locked = unsafe { CVPixelBufferLockBaseAddress(&buffer, CVPixelBufferLockFlags(0)) };
+        assert_eq!(locked, 0, "locking the test buffer");
+        for (plane, rows, row_bytes) in [(0, HEIGHT, WIDTH), (1, HEIGHT / 2, WIDTH)] {
+            let base = CVPixelBufferGetBaseAddressOfPlane(&buffer, plane).cast::<u8>();
+            let stride = CVPixelBufferGetBytesPerRowOfPlane(&buffer, plane);
+            for row in 0..rows {
+                // SAFETY: the plane is locked and holds `rows` rows of
+                // `stride >= row_bytes` bytes.
+                let line =
+                    unsafe { std::slice::from_raw_parts_mut(base.add(row * stride), row_bytes) };
+                for (column, byte) in line.iter_mut().enumerate() {
+                    *byte = if plane == 0 {
+                        luma(column, row)
+                    } else {
+                        chroma(column / 2, row)[column % 2]
+                    };
+                }
+            }
+        }
+        // SAFETY: the buffer was locked above with the same flags.
+        let unlocked =
+            unsafe { CVPixelBufferUnlockBaseAddress(&buffer, CVPixelBufferLockFlags(0)) };
+        assert_eq!(unlocked, 0, "unlocking the test buffer");
+
+        // SAFETY: the key and value are Core Foundation strings, the types the
+        // attachment carries.
+        unsafe {
+            buffer.set_attachment(
+                kCVImageBufferYCbCrMatrixKey,
+                matrix,
+                CVAttachmentMode::ShouldPropagate,
+            );
+        }
+        buffer
+    }
+
+    /// A real `420v` or `420f` capture buffer becomes a frame whose planes
+    /// are its `IOSurface` planes, with the buffer's range and matrix, and the
+    /// buffer is released once the frame drops and the GPU is done.
+    #[test]
+    fn capture_buffers_import_as_ycbcr420_planes() {
+        let (device, queue) = gpu(wgpu::Features::empty());
+        // SAFETY: Core Video's immutable value constants.
+        let (bt601, bt709) = unsafe {
+            (
+                kCVImageBufferYCbCrMatrix_ITU_R_601_4,
+                kCVImageBufferYCbCrMatrix_ITU_R_709_2,
+            )
+        };
+        let expected_luma: Vec<u8> = (0..HEIGHT)
+            .flat_map(|y| (0..WIDTH).map(move |x| luma(x, y)))
+            .collect();
+        let expected_chroma: Vec<u8> = (0..HEIGHT / 2)
+            .flat_map(|cy| (0..WIDTH / 2).flat_map(move |cx| chroma(cx, cy)))
+            .collect();
+
+        for (pixel_format, range, matrix_name, matrix) in [
+            (
+                kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                YcbcrRange::Video,
+                bt709,
+                YcbcrMatrix::Bt709,
+            ),
+            (
+                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+                YcbcrRange::Full,
+                bt601,
+                YcbcrMatrix::Bt601,
+            ),
+        ] {
+            let buffer = capture_buffer(pixel_format, matrix_name);
+            let baseline = buffer.retain_count();
+            let frame = build_frame(
+                &device,
+                RawFrame {
+                    pixel_buffer: CapturedPixelBuffer(buffer.clone()),
+                    timestamp: Duration::from_millis(5),
+                    rotation_degrees: 90,
+                    mirrored: false,
+                },
+            );
+            assert!(
+                buffer.retain_count() > baseline,
+                "the frame holds the buffer"
+            );
+
+            assert_eq!((frame.width(), frame.height()), (64, 48));
+            assert_eq!(frame.orientation(), Orientation::Right);
+            assert_eq!(frame.timestamp(), Duration::from_millis(5));
+            let FramePlanes::YCbCr420 {
+                luma: luma_view,
+                chroma: chroma_view,
+                encoding,
+            } = frame.planes()
+            else {
+                panic!("a 4:2:0 capture buffer imports as YCbCr420");
+            };
+            assert_eq!(*encoding, YcbcrEncoding { matrix, range });
+            let (luma_texture, chroma_texture) = (luma_view.texture(), chroma_view.texture());
+            assert_eq!(luma_texture.format(), wgpu::TextureFormat::R8Unorm);
+            assert_eq!((luma_texture.width(), luma_texture.height()), (64, 48));
+            assert_eq!(chroma_texture.format(), wgpu::TextureFormat::Rg8Unorm);
+            assert_eq!((chroma_texture.width(), chroma_texture.height()), (32, 24));
+            // The textures alias the surface: they read back exactly what was
+            // written into the pixel buffer, which no code path copied.
+            assert_eq!(read_texture(&device, &queue, luma_texture), expected_luma);
+            assert_eq!(
+                read_texture(&device, &queue, chroma_texture),
+                expected_chroma
+            );
+
+            drop(frame);
+            wait_idle(&device);
+            assert_eq!(
+                buffer.retain_count(),
+                baseline,
+                "the buffer goes back once the frame drops and the GPU is done"
+            );
+        }
+    }
+
+    /// How many buffers the test pool lends at once, like the capture
+    /// output's small pool.
+    const POOL_BUFFERS: usize = 2;
+
+    /// A pool of IOSurface-backed `420v` buffers that refuses a buffer while
+    /// [`POOL_BUFFERS`] are lent out.
+    struct CapturePool {
+        pool: CFRetained<CVPixelBufferPool>,
+        threshold: CFRetained<CFDictionary<CFString, CFType>>,
+    }
+
+    impl CapturePool {
+        fn new() -> Self {
+            // SAFETY: Core Video's immutable key constants.
+            let keys = unsafe {
+                [
+                    kCVPixelBufferPixelFormatTypeKey,
+                    kCVPixelBufferWidthKey,
+                    kCVPixelBufferHeightKey,
+                    kCVPixelBufferIOSurfacePropertiesKey,
+                ]
+            };
+            let format = CFNumber::new_i32(
+                i32::try_from(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+                    .expect("a four-character code fits i32"),
+            );
+            let width = CFNumber::new_i32(i32::try_from(WIDTH).expect("small"));
+            let height = CFNumber::new_i32(i32::try_from(HEIGHT).expect("small"));
+            let no_properties = CFDictionary::<CFString, CFType>::empty();
+            let attributes = CFDictionary::<CFString, CFType>::from_slices(
+                &keys,
+                &[
+                    format.as_ref(),
+                    width.as_ref(),
+                    height.as_ref(),
+                    no_properties.as_ref(),
+                ],
+            );
+            let mut pool: *mut CVPixelBufferPool = std::ptr::null_mut();
+            // SAFETY: the out pointer is valid for the call, and a created
+            // pool carries one reference the `CFRetained` below takes over.
+            let pool = unsafe {
+                let status = CVPixelBufferPool::create(
+                    None,
+                    None,
+                    Some(attributes.as_opaque()),
+                    NonNull::from(&mut pool),
+                );
+                assert_eq!(status, kCVReturnSuccess, "CVPixelBufferPoolCreate failed");
+                CFRetained::from_raw(NonNull::new(pool).expect("a created pool"))
+            };
+            // SAFETY: Core Video's immutable key constant.
+            let threshold_key = unsafe { kCVPixelBufferPoolAllocationThresholdKey };
+            let limit = CFNumber::new_i32(i32::try_from(POOL_BUFFERS).expect("small"));
+            let threshold =
+                CFDictionary::<CFString, CFType>::from_slices(&[threshold_key], &[limit.as_ref()]);
+            Self { pool, threshold }
+        }
+
+        /// The next free buffer, tagged BT.709 as a capture buffer is, or
+        /// `None` while every buffer is lent out.
+        fn take(&self) -> Option<CFRetained<CVPixelBuffer>> {
+            let mut buffer: *mut CVPixelBuffer = std::ptr::null_mut();
+            // SAFETY: the out pointer is valid for the call, and a created
+            // buffer carries one reference the `CFRetained` below takes over.
+            let status = unsafe {
+                CVPixelBufferPool::create_pixel_buffer_with_aux_attributes(
+                    None,
+                    &self.pool,
+                    Some(self.threshold.as_opaque()),
+                    NonNull::from(&mut buffer),
+                )
+            };
+            if status == kCVReturnWouldExceedAllocationThreshold {
+                return None;
+            }
+            assert_eq!(status, kCVReturnSuccess, "taking a pool buffer failed");
+            // SAFETY: as above.
+            let buffer = unsafe {
+                CFRetained::from_raw(NonNull::new(buffer).expect("a created pixel buffer"))
+            };
+            // SAFETY: Core Video's immutable constants, the types the
+            // attachment carries.
+            unsafe {
+                buffer.set_attachment(
+                    kCVImageBufferYCbCrMatrixKey,
+                    kCVImageBufferYCbCrMatrix_ITU_R_709_2,
+                    CVAttachmentMode::ShouldPropagate,
+                );
+            }
+            Some(buffer)
+        }
+
+        /// How many buffers can be taken right now, up to [`POOL_BUFFERS`].
+        fn free(&self) -> usize {
+            // Each buffer is held until all are taken: one returned at once
+            // would be taken again.
+            let mut held = Vec::new();
+            while let Some(buffer) = self.take() {
+                held.push(buffer);
+            }
+            held.len()
+        }
+    }
+
+    fn frame_from(device: &wgpu::Device, buffer: CFRetained<CVPixelBuffer>) -> crate::Frame {
+        build_frame(
+            device,
+            RawFrame {
+                pixel_buffer: CapturedPixelBuffer(buffer),
+                timestamp: Duration::ZERO,
+                rotation_degrees: 0,
+                mirrored: false,
+            },
+        )
+    }
+
+    /// Frames dropped without any GPU work give their buffers straight back,
+    /// so a consumer that skips frames never starves the capture pool, and a
+    /// frame whose conversion is recorded keeps its buffer until that work
+    /// has been submitted and has completed.
+    #[test]
+    fn capture_buffers_return_to_the_pool_once_the_gpu_is_done() {
+        let (device, queue) = gpu(wgpu::Features::empty());
+        let pool = CapturePool::new();
+
+        // Held frames keep their buffers out, and the pool runs dry.
+        let held: Vec<_> = (0..POOL_BUFFERS)
+            .map(|_| frame_from(&device, pool.take().expect("a free buffer")))
+            .collect();
+        assert_eq!(pool.free(), 0, "every buffer is lent to a held frame");
+        drop(held);
+        assert_eq!(
+            pool.free(),
+            POOL_BUFFERS,
+            "dropped frames return their buffers"
+        );
+
+        // Many more frames than the pool holds, each dropped untouched with
+        // no submission at all.
+        for taken in 0..POOL_BUFFERS * 4 {
+            let buffer = pool.take().unwrap_or_else(|| {
+                panic!("frame {taken} starved: a dropped frame kept its buffer")
+            });
+            drop(frame_from(&device, buffer));
+        }
+        assert_eq!(pool.free(), POOL_BUFFERS);
+
+        // Skip frames, then convert the last one: the conversion recorded
+        // before the frame drops holds its buffer until the GPU finishes it.
+        let mut last = None;
+        for _ in 0..5 {
+            last = Some(frame_from(&device, pool.take().expect("a free buffer")));
+        }
+        let last = last.expect("five frames were taken");
+        let mut converter = FrameConverter::new(&device);
+        let upright = FrameConverter::create_output(&device, &last);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        converter.encode(&device, &mut encoder, &last, &upright);
+        drop(last);
+        assert_eq!(
+            pool.free(),
+            POOL_BUFFERS - 1,
+            "recorded work keeps the converted frame's buffer"
+        );
+        queue.submit([encoder.finish()]);
+        wait_idle(&device);
+        assert_eq!(
+            pool.free(),
+            POOL_BUFFERS,
+            "the buffer returns once the conversion has completed"
+        );
+    }
+}

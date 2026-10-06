@@ -26,7 +26,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::frame::StreamClock;
+use crate::clock::StreamClock;
 use crate::sys::android_session::{CameraHelper, FrameThread, OpenCamera};
 use waterkit_build::{AndroidError, DexHelper, dex_helper, jvm_and_context};
 

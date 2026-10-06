@@ -159,7 +159,7 @@ struct FrameCallbackContext {
     sender: async_channel::Sender<RawFrame>,
     /// Turns the sample buffers' presentation times into frame timestamps
     /// measured from the first captured frame.
-    clock: crate::frame::StreamClock<Duration>,
+    clock: crate::clock::StreamClock<Duration>,
 }
 
 struct OpenCameraGuard {
@@ -292,7 +292,7 @@ impl CameraInner {
         let (sender, receiver) = async_channel::bounded(1);
         let mut frame_callback_context = Box::new(FrameCallbackContext {
             sender,
-            clock: crate::frame::StreamClock::new(),
+            clock: crate::clock::StreamClock::new(),
         });
 
         // Set up frame callback

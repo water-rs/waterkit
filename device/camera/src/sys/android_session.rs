@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use crate::frame::StreamClock;
+use crate::clock::StreamClock;
 use crate::{CameraError, Resolution};
 
 /// The Kotlin camera helper's session calls.
@@ -163,7 +163,7 @@ impl<F> Drop for FrameThread<F> {
 #[cfg(test)]
 mod tests {
     use super::{CameraHelper, FrameThread, OpenCamera};
-    use crate::frame::StreamClock;
+    use crate::clock::StreamClock;
     use crate::{CameraError, Resolution};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier};

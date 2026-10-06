@@ -290,7 +290,7 @@ fn spawn_capture_thread(
     streaming: Arc<AtomicBool>,
 ) {
     std::thread::spawn(move || {
-        let clock = crate::frame::StreamClock::new();
+        let clock = crate::clock::StreamClock::new();
         let mut subscribers: Vec<Subscriber> = Vec::new();
         while streaming.load(Ordering::SeqCst) {
             // Pick up subscriptions registered since the last frame.

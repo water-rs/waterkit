@@ -94,6 +94,7 @@ private func errorReply(_ kind: String, _ message: String) -> String {
     return String(data: data, encoding: .utf8) ?? ""
 }
 
+@available(iOS 26.0, macOS 26.0, *)
 private func platformError(_ error: Error) -> String {
     if TranslationError.notInstalled ~= error {
         return errorReply("needs_download", error.localizedDescription)

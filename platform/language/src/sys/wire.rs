@@ -203,11 +203,11 @@ mod tests {
     #[test]
     fn unavailable_reply_is_empty_for_capabilities_and_an_error_for_pair_status() {
         let unavailable = r#"{"error":{"kind":"unavailable"}}"#;
-        assert!(
+        assert_eq!(
             decode_capabilities(unavailable)
                 .expect("unavailable capabilities")
-                .pairs()
-                .is_empty()
+                .pairs(),
+            []
         );
         assert_eq!(
             decode_pair_status(

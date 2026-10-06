@@ -310,7 +310,7 @@ mod fallback_tests {
     fn fallback_is_unavailable() {
         let capabilities = block_on(capabilities()).expect("fallback capabilities");
         assert!(!capabilities.available());
-        assert!(capabilities.pairs().is_empty());
+        assert_eq!(capabilities.pairs(), []);
         assert!(matches!(
             block_on(Translator::new(langid!("en"), langid!("de"))),
             Err(TranslationError::Unavailable)

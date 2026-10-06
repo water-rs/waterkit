@@ -605,9 +605,10 @@ async fn camera_gpu() -> Result<
     Ok((Arc::new(device), Arc::new(queue)))
 }
 
-/// The next frame of a camera stream, or the outcome that ends the case after
-/// `count` frames: skipped when this GPU cannot convert the camera's
-/// driver-private buffers, failed for any other end of the stream.
+/// The next frame of a camera stream, or the failure that ends the case after
+/// `count` frames: a device opened with the import's requirements converts
+/// every camera buffer, so any end of the stream, an import error included,
+/// fails the case.
 #[cfg(feature = "camera")]
 fn next_frame(
     case: &str,
@@ -617,22 +618,8 @@ fn next_frame(
         tokio::time::error::Elapsed,
     >,
 ) -> Result<waterkit_content::camera::Frame, TestCase> {
-    use waterkit_content::camera::CameraError;
-    use waterkit_content::camera::wgpu_external_frame::ahardware_buffer::HardwareBufferImportError;
-
     match next {
         Ok(Some(Ok(frame))) => Ok(frame),
-        Ok(Some(Err(CameraError::FrameImport(error))))
-            if matches!(
-                *error,
-                HardwareBufferImportError::ConversionUnavailable { .. }
-            ) =>
-        {
-            Err(TestCase::skipped(
-                case,
-                format!("after {count} frames: {error}"),
-            ))
-        }
         Ok(Some(Err(error))) => Err(TestCase::failed(
             case,
             format!("stream failed after {count} frames: {error}"),

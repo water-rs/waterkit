@@ -211,7 +211,7 @@ objc2-io-surface = "0.3"
 objc2-metal = "0.3"
 objc = "0.2"
 # Zero-copy import of platform frame buffers into wgpu textures.
-wgpu-external-frame = "0.2.0"
+wgpu-external-frame = "0.3.0"
 
 # Security
 keyring = "4"

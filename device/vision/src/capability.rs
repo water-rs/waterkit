@@ -2,10 +2,17 @@ use crate::Policy;
 
 /// Vision capabilities available to this build.
 ///
-/// Fields arrive with the capability features (barcodes, text, scanner); this
-/// build compiles none.
+/// Fields arrive with the capability features (barcodes, text, scanner).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VisionCapabilities {}
+pub struct VisionCapabilities {
+    /// Whether this device can present the system code scanner, as
+    /// [`CodeScanner::capabilities`] reports it. Present when the `scanner`
+    /// feature is enabled.
+    ///
+    /// [`CodeScanner::capabilities`]: crate::CodeScanner::capabilities
+    #[cfg(feature = "scanner")]
+    pub scanner: bool,
+}
 
 /// Native and portable realizations of a capability.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,15 +37,24 @@ pub enum Portable<T> {
 
 impl waterkit_core::Capabilities for VisionCapabilities {
     /// Returns whether any capability has a realization in this build.
-    ///
-    /// No capability is compiled in this build.
     fn available(&self) -> bool {
+        #[cfg(feature = "scanner")]
+        if self.scanner {
+            return true;
+        }
         false
     }
 }
 
-/// Every capability enabled by this build and whether its portable
+/// Every request capability enabled by this build and whether its portable
 /// realization is carried by the application.
+///
+/// The system code scanner is not a request served by [`Vision`]: it has no
+/// portable realization to select, so it is absent here even when its feature
+/// is enabled and [`Policy::PortableOnly`] does not constrain it.
+///
+/// [`Vision`]: crate::Vision
+/// [`Policy::PortableOnly`]: crate::Policy::PortableOnly
 pub const ENABLED: &[(&str, bool)] = &[];
 
 /// Capabilities whose portable realization is not carried when required by

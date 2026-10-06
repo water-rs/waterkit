@@ -55,9 +55,27 @@ impl Vision {
     }
 
     /// Capabilities compiled into this build.
+    ///
+    /// # Panics
+    ///
+    /// On Android with `feature = "scanner"`, panics if the application
+    /// `Context` has not been published to `ndk_context` yet or the Google
+    /// Play services probe fails, like [`CodeScanner::capabilities`].
+    ///
+    /// [`CodeScanner::capabilities`]: crate::CodeScanner::capabilities
     #[must_use]
-    pub const fn capabilities(&self) -> VisionCapabilities {
-        VisionCapabilities {}
+    #[cfg_attr(
+        not(all(feature = "scanner", any(target_os = "ios", target_os = "android"))),
+        expect(
+            clippy::missing_const_for_fn,
+            reason = "the iOS and Android scanner probes are runtime calls; elsewhere the probe is a constant and clippy suggests const"
+        )
+    )]
+    pub fn capabilities(&self) -> VisionCapabilities {
+        VisionCapabilities {
+            #[cfg(feature = "scanner")]
+            scanner: crate::sys::scanner_available(),
+        }
     }
 
     /// Prepares the selected realization's requirements without processing an

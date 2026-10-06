@@ -489,7 +489,7 @@ fn grant_android_permissions_for_feature(
             "android.permission.ACCESS_FINE_LOCATION",
             "android.permission.ACCESS_COARSE_LOCATION",
         ],
-        "camera" => &["android.permission.CAMERA"],
+        "camera" | "vision" => &["android.permission.CAMERA"],
         "audio" | "speech" => &["android.permission.RECORD_AUDIO"],
         "contacts" => &["android.permission.READ_CONTACTS"],
         "calendar" => &["android.permission.READ_CALENDAR"],
@@ -811,6 +811,8 @@ fn get_crate_feature(package_name: &str) -> Option<&'static str> {
         Some("audio")
     } else if package_name.contains("camera") {
         Some("camera")
+    } else if package_name.contains("vision") {
+        Some("vision")
     } else if package_name.contains("clipboard") {
         Some("clipboard")
     } else if package_name.contains("codec") {

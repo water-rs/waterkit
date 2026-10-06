@@ -71,37 +71,50 @@ pub fn check_device(device: &wgpu::Device) -> Result<(), CameraError> {
         })
 }
 
-/// A preview image the camera handed out; closing it returns its buffer to
-/// the `ImageReader`. Dropping the lease closes it too, as the importer
-/// requires of an abandoned import.
+/// A preview image the camera handed out.
+///
+/// The handle is shared between the frame's imported planes and a consumer
+/// that reads the `Image` itself, such as a native vision realization fed
+/// through `InputImage.fromMediaImage`. The last handle's drop closes the
+/// image and returns its buffer to the `ImageReader`.
 #[derive(Debug)]
-pub struct ImageLease {
+pub struct MediaImage {
     bridge: Arc<AndroidBridge>,
-    image: Option<Global<JObject<'static>>>,
+    image: Global<JObject<'static>>,
 }
 
-impl ImageLease {
-    pub const fn new(bridge: Arc<AndroidBridge>, image: Global<JObject<'static>>) -> Self {
-        Self {
-            bridge,
-            image: Some(image),
-        }
+impl MediaImage {
+    /// Shares `image` under a handle whose last drop closes it through the
+    /// app's Kotlin bridge. Only `sys::android` builds these, on the
+    /// frame-producing thread.
+    pub(super) const fn new(bridge: Arc<AndroidBridge>, image: Global<JObject<'static>>) -> Self {
+        Self { bridge, image }
+    }
+
+    /// The `android.media.Image`, still open while any `MediaImage` or the
+    /// importer's lease on it lives.
+    #[must_use]
+    pub const fn image(&self) -> &Global<JObject<'static>> {
+        &self.image
     }
 }
 
-impl HardwareBufferLease for ImageLease {
+impl Drop for MediaImage {
+    fn drop(&mut self) {
+        self.bridge.close_image(&self.image);
+    }
+}
+
+/// The importer's share of a [`MediaImage`]. Releasing it drops one handle;
+/// the image closes only once every handle is gone.
+#[derive(Debug)]
+struct MediaImageLease(Arc<MediaImage>);
+
+impl HardwareBufferLease for MediaImageLease {
     fn presented(&mut self) {}
 
     fn release(self: Box<Self>) {
-        // Dropping closes the image.
-    }
-}
-
-impl Drop for ImageLease {
-    fn drop(&mut self) {
-        if let Some(image) = self.image.take() {
-            self.bridge.close_image(&image);
-        }
+        drop(self.0); // hand this share of the image back
     }
 }
 
@@ -109,21 +122,25 @@ impl Drop for ImageLease {
 #[derive(Debug)]
 pub struct RawFrame {
     frame: HardwareBufferFrame,
+    /// The `Image` behind `frame`, kept open for the built `Frame`.
+    media: Arc<MediaImage>,
     /// Display rotation in degrees when the frame arrived.
     display_rotation: u32,
     timestamp: Duration,
 }
 
 impl RawFrame {
-    /// Takes a reference on `buffer`, leased from the image `lease` closes.
+    /// Takes a reference on `buffer`, leased from the image `media` closes.
     pub fn new(
         buffer: &HardwareBuffer,
-        lease: ImageLease,
+        media: Arc<MediaImage>,
         display_rotation: u32,
         timestamp: Duration,
     ) -> Self {
         Self {
-            frame: HardwareBufferFrame::new(buffer, None).with_lease(Box::new(lease)),
+            frame: HardwareBufferFrame::new(buffer, None)
+                .with_lease(Box::new(MediaImageLease(Arc::clone(&media)))),
+            media,
             display_rotation,
             timestamp,
         }
@@ -172,6 +189,7 @@ impl RawFrame {
                 self.display_rotation,
             ),
             self.timestamp,
+            self.media,
         ))
     }
 }

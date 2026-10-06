@@ -20,6 +20,8 @@ waterkit_content = { path = "../../..", package = "waterkit", default-features =
 waterkit-test-report.workspace = true
 # Saves converted camera frames for inspection.
 image = { workspace = true, default-features = false, features = ["png"] }
+# Draws the barcode test image at run time; the harness ships no fixtures.
+qrcodegen = "1.8"
 waterkit-build.workspace = true
 
 [features]
@@ -50,12 +52,17 @@ full = [
     "screen",
     "background",
     "passkey",
+    "vision",
 ]
 sensor = ["waterkit_content/sensor"]
 biometric = ["waterkit_content/biometric"]
 location = ["waterkit_content/location"]
 audio = ["waterkit_content/audio"]
 camera = ["waterkit_content/camera"]
+# Vision stills test the ML Kit clients alone; live frames exercise the
+# zero-copy `android.media.Image` path, so the camera cases and their
+# helpers join the run.
+vision = ["camera", "waterkit_content/vision"]
 clipboard = ["waterkit_content/clipboard"]
 codec = ["waterkit_content/codec"]
 dialog = ["waterkit_content/dialog"]

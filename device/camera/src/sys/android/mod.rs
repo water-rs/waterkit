@@ -1,15 +1,18 @@
 //! Android camera implementation using Camera2 + `MediaRecorder` via JNI/Kotlin bridge.
 //!
-//! The preview `ImageReader` produces GPU-sampled `PRIVATE` buffers. Each
+//! The preview `ImageReader` produces GPU-sampled `YUV_420_888` buffers. Each
 //! image's `AHardwareBuffer` is imported into wgpu through
 //! `wgpu-external-frame` with no CPU access to its pixels, and the image goes
-//! back to the reader once the GPU no longer reads it. A frame's orientation
-//! combines the sensor orientation, the lens facing and the display rotation
-//! at the time the frame arrived.
+//! back to the reader once the GPU and the frame's consumers no longer read
+//! it. The format also lets a native vision realization take the `Image`
+//! itself through `InputImage.fromMediaImage`, which accepts `YUV_420_888` but
+//! not PRIVATE. A frame's orientation combines the sensor orientation, the
+//! lens facing and the display rotation at the time the frame arrived.
 
 mod frames;
 
-use frames::{ImageLease, RawFrame};
+pub use frames::MediaImage;
+use frames::RawFrame;
 
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
@@ -676,7 +679,8 @@ impl AndroidBridge {
 
     /// Takes the next preview image, if one arrives within `timeout_ms`, as a
     /// frame ready for import: a reference on its `AHardwareBuffer` and a
-    /// lease that closes the image once the GPU no longer reads it.
+    /// shared handle on its `Image`, which closes once the GPU and every
+    /// consumer of the frame no longer reads it.
     fn wait_for_frame(
         self: &Arc<Self>,
         start_instant: Instant,
@@ -734,12 +738,12 @@ impl AndroidBridge {
                 CameraError::CaptureFailed(format!("display rotation {display_rotation}"))
             })?;
 
-            let lease = ImageLease::new(
+            let media = Arc::new(MediaImage::new(
                 Arc::clone(self),
                 env.new_global_ref(&image).map_err(|error| {
                     CameraError::CaptureFailed(format!("new_global_ref(image): {error}"))
                 })?,
-            );
+            ));
             // SAFETY: `env` is this thread's attached JNI environment and
             // `hardware_buffer` a live `android.hardware.HardwareBuffer`; the
             // NDK handle borrows its buffer only until the frame below takes
@@ -752,7 +756,7 @@ impl AndroidBridge {
             };
             // Java's ImageReader waits for the camera's write fence before it
             // hands an image out, so the buffer is ready as it arrives.
-            let frame = RawFrame::new(&buffer, lease, display_rotation, start_instant.elapsed());
+            let frame = RawFrame::new(&buffer, media, display_rotation, start_instant.elapsed());
             env.call_method(&hardware_buffer, jni_str!("close"), jni_sig!("()V"), &[])
                 .map_err(|error| {
                     CameraError::CaptureFailed(format!("HardwareBuffer.close: {error}"))

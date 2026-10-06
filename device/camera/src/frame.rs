@@ -120,6 +120,11 @@ pub struct Frame {
     width: u32,
     height: u32,
     timestamp: Duration,
+    /// The `android.media.Image` the planes were imported from. It stays
+    /// open while the frame lives, so a native realization can be handed
+    /// the image itself; closing it returns the buffer to the reader pool.
+    #[cfg(target_os = "android")]
+    media: std::sync::Arc<crate::sys::android::MediaImage>,
 }
 
 impl Frame {
@@ -127,7 +132,6 @@ impl Frame {
     #[cfg(any(
         target_os = "ios",
         target_os = "macos",
-        target_os = "android",
         target_os = "windows",
         target_os = "linux",
         test
@@ -146,6 +150,40 @@ impl Frame {
             height,
             timestamp,
         }
+    }
+
+    /// Android frames keep the `Image` behind their planes for consumers
+    /// that read the image itself (a native vision realization).
+    #[cfg(target_os = "android")]
+    pub(crate) const fn new(
+        planes: FramePlanes,
+        width: u32,
+        height: u32,
+        orientation: Orientation,
+        timestamp: Duration,
+        media: std::sync::Arc<crate::sys::android::MediaImage>,
+    ) -> Self {
+        Self {
+            planes,
+            orientation,
+            width,
+            height,
+            timestamp,
+            media,
+        }
+    }
+
+    /// The `android.media.Image` behind the frame's planes, open while the
+    /// frame lives.
+    ///
+    /// `InputImage.fromMediaImage` and every other consumer of the platform
+    /// image read from the same open `Image`, which returns its buffer to
+    /// the reader pool only when the last handle - the frame, its shared
+    /// clones, and the importer - is gone.
+    #[cfg(target_os = "android")]
+    #[must_use]
+    pub const fn media_image(&self) -> &std::sync::Arc<crate::sys::android::MediaImage> {
+        &self.media
     }
 
     /// The GPU planes holding the frame's pixels.

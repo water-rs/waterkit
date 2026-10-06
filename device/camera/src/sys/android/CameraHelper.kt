@@ -101,10 +101,10 @@ class CameraHelper(private val appContext: Context) {
     private var backgroundHandler: Handler? = null
 
     /**
-     * One preview frame: the `Image` from the GPU-sampled `PRIVATE` reader,
-     * its `HardwareBuffer`, and the display rotation, in degrees, when the
-     * frame arrived. Together with the sensor orientation and lens facing the
-     * rotation gives the frame's orientation.
+     * One preview frame: the `Image` from the GPU-sampled `YUV_420_888`
+     * reader, its `HardwareBuffer`, and the display rotation, in degrees,
+     * when the frame arrived. Together with the sensor orientation and lens
+     * facing the rotation gives the frame's orientation.
      *
      * The receiver owns `image` and must close it once the GPU has finished
      * with `hardwareBuffer`, which returns the buffer to the reader; it also
@@ -254,10 +254,14 @@ class CameraHelper(private val appContext: Context) {
             isRawVideoRecording = false
             rawVideoRecordingStartElapsedRealtimeMs = 0L
 
-            // PRIVATE buffers for GPU sampling reach the GPU as they are; the
-            // driver describes their YCbCr layout and encoding. The pool has
-            // room for the frame being imported, the newest waiting one, and
-            // one the camera is filling.
+            // GPU-sampled YUV_420_888 buffers reach the GPU as they are; the
+            // driver describes their layout and encoding. Unlike PRIVATE,
+            // YUV_420_888 is the one format `InputImage.fromMediaImage`
+            // accepts, and an ImageReader's non-private images keep
+            // CPU-readable planes, so the same image feeds ML Kit with no
+            // CPU copy. The pool has room for the frame being imported, the
+            // newest waiting one, one a consumer still holds, and one the
+            // camera is filling.
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                 throw IllegalStateException(
                     "GPU-sampled camera frames need Android 10 (API 29); this device runs API ${Build.VERSION.SDK_INT}",
@@ -266,9 +270,9 @@ class CameraHelper(private val appContext: Context) {
             previewImageReader = ImageReader.newInstance(
                 frameWidth,
                 frameHeight,
-                ImageFormat.PRIVATE,
+                ImageFormat.YUV_420_888,
                 PREVIEW_IMAGES,
-                HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE,
+                HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_CPU_READ_OFTEN,
             )
             stillImageReader = ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.JPEG, 2)
             // RAW_SENSOR streams only come in the sizes the sensor reads

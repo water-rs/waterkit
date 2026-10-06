@@ -54,10 +54,15 @@ impl Vision {
         }
     }
 
-    /// Capabilities compiled into this build.
-    #[must_use]
-    pub const fn capabilities(&self) -> VisionCapabilities {
-        VisionCapabilities {}
+    /// Capabilities on this device, among those compiled into this build.
+    ///
+    /// A capability's `native` set is empty when the platform's realization
+    /// is unavailable here - on Android, when Play services or the ML Kit
+    /// modules are absent; its `portable` field is
+    /// [`Portable::Absent`](crate::Portable::Absent) unless a `portable-*`
+    /// feature carries the realization.
+    pub fn capabilities(&self) -> impl Future<Output = VisionCapabilities> + wgpu::WasmNotSend {
+        crate::sys::capabilities()
     }
 
     /// Prepares the selected realization's requirements without processing an
@@ -121,8 +126,10 @@ mod tests {
         task::{Context as TaskContext, Poll, Waker},
     };
 
+    #[cfg(not(any(feature = "barcode", feature = "text")))]
+    use crate::Policy;
     use crate::{
-        Image, Orientation, Policy, Request, Vision, VisionError,
+        Image, Orientation, Request, Vision, VisionError,
         sealed::{Context, Offer, Plan, Preparation, Realization, Sealed},
         test_support::gpu,
     };
@@ -321,6 +328,9 @@ mod tests {
         assert_eq!(PORTABLE_RUNS[2].load(Ordering::SeqCst), 0);
     }
 
+    // With a capability feature enabled, `PortableOnly` correctly panics at
+    // construction: the build carries no portable realization to serve it.
+    #[cfg(not(any(feature = "barcode", feature = "text")))]
     #[test]
     fn portable_only_selects_portable_and_can_be_constructed_without_enabled_capabilities() {
         let (device, queue) = gpu();

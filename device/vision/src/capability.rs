@@ -1,11 +1,32 @@
 use crate::Policy;
 
+#[cfg(feature = "barcode")]
+use crate::Symbology;
+#[cfg(feature = "barcode")]
+use enumset::EnumSet;
+#[cfg(feature = "text")]
+use icu_locale::LanguageIdentifier;
+
 /// Vision capabilities available to this build.
 ///
-/// Fields arrive with the capability features (barcodes, text, scanner); this
-/// build compiles none.
+/// Fields arrive with the capability features (barcodes, text, scanner).
+/// A `native` set is empty when the platform's realization is unavailable on
+/// this device - for Android, when Play services or the ML Kit modules are
+/// absent. A `portable` field is [`Portable::Absent`] unless a `portable-*`
+/// feature carries the realization.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VisionCapabilities {}
+pub struct VisionCapabilities {
+    /// The symbologies each realization serves. An empty `native` set means
+    /// no native barcode realization is available.
+    #[cfg(feature = "barcode")]
+    pub barcodes: RealizationSet<EnumSet<Symbology>>,
+    /// The scripts each realization serves, as `und-<Script>` language
+    /// identifiers (`und-Latn`, `und-Hani`, `und-Deva`, `und-Jpan`,
+    /// `und-Kore`). An empty `native` list means no native text realization
+    /// is available.
+    #[cfg(feature = "text")]
+    pub text: RealizationSet<Vec<LanguageIdentifier>>,
+}
 
 /// Native and portable realizations of a capability.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,17 +50,41 @@ pub enum Portable<T> {
 }
 
 impl waterkit_core::Capabilities for VisionCapabilities {
-    /// Returns whether any capability has a realization in this build.
-    ///
-    /// No capability is compiled in this build.
+    /// Returns whether any capability has a realization on this device.
     fn available(&self) -> bool {
-        false
+        let barcodes = {
+            #[cfg(feature = "barcode")]
+            {
+                !self.barcodes.native.is_empty() || self.barcodes.portable != Portable::Absent
+            }
+            #[cfg(not(feature = "barcode"))]
+            {
+                false
+            }
+        };
+        let text = {
+            #[cfg(feature = "text")]
+            {
+                !self.text.native.is_empty() || self.text.portable != Portable::Absent
+            }
+            #[cfg(not(feature = "text"))]
+            {
+                false
+            }
+        };
+        barcodes || text
     }
 }
 
 /// Every capability enabled by this build and whether its portable
-/// realization is carried by the application.
-pub const ENABLED: &[(&str, bool)] = &[];
+/// realization is carried by the application. No `portable-*` feature exists
+/// yet, so every entry reports `false`.
+pub const ENABLED: &[(&str, bool)] = &[
+    #[cfg(feature = "barcode")]
+    ("barcode", false),
+    #[cfg(feature = "text")]
+    ("text", false),
+];
 
 /// Capabilities whose portable realization is not carried when required by
 /// `policy`; this is empty under [`Policy::PreferNative`].

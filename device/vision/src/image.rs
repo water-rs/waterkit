@@ -25,6 +25,10 @@ pub enum Pixels {
         planes: waterkit_camera::FramePlanes,
         /// How the stored pixels relate to upright.
         orientation: Orientation,
+        /// The `android.media.Image` the planes were imported from, kept open
+        /// for `InputImage.fromMediaImage`.
+        #[cfg(target_os = "android")]
+        media: std::sync::Arc<waterkit_camera::MediaImage>,
     },
     /// JPEG, PNG, or HEIF data, decoded with its own orientation metadata by
     /// the serving realization.
@@ -71,7 +75,25 @@ impl Image {
         }
     }
 
-    #[cfg(feature = "camera")]
+    #[cfg(all(feature = "camera", target_os = "android"))]
+    fn from_frame(frame: &waterkit_camera::Frame) -> Self {
+        Self {
+            pixels: Pixels::Frame {
+                planes: frame.planes().clone(),
+                orientation: frame.orientation(),
+                media: frame.media_image().clone(),
+            },
+        }
+    }
+
+    #[cfg(all(feature = "camera", not(target_os = "android")))]
+    fn from_frame(frame: &waterkit_camera::Frame) -> Self {
+        Self::from_planes(frame.planes(), frame.orientation())
+    }
+
+    // Android frames always carry their `media` handle, so a planes-only
+    // image cannot be built there.
+    #[cfg(all(feature = "camera", not(target_os = "android")))]
     fn from_planes(planes: &waterkit_camera::FramePlanes, orientation: Orientation) -> Self {
         Self {
             pixels: Pixels::Frame {
@@ -85,7 +107,7 @@ impl Image {
 #[cfg(feature = "camera")]
 impl From<&waterkit_camera::Frame> for Image {
     fn from(frame: &waterkit_camera::Frame) -> Self {
-        Self::from_planes(frame.planes(), frame.orientation())
+        Self::from_frame(frame)
     }
 }
 
@@ -165,7 +187,7 @@ mod tests {
         let _ = Image::from_texture(texture, Orientation::Up);
     }
 
-    #[cfg(feature = "camera")]
+    #[cfg(all(feature = "camera", not(target_os = "android")))]
     #[test]
     fn frame_images_keep_all_camera_plane_views_and_orientation() {
         use waterkit_camera::{FramePlanes, YcbcrEncoding, YcbcrMatrix, YcbcrRange};

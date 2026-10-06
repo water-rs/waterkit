@@ -51,6 +51,8 @@
 #![warn(missing_debug_implementations)]
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "barcode")]
+mod barcode;
 mod capability;
 mod error;
 mod geometry;
@@ -58,15 +60,30 @@ mod image;
 mod request;
 mod sealed;
 mod selection;
+#[cfg(feature = "barcode")]
+mod symbology;
+mod sys;
 #[cfg(test)]
 mod test_support;
+#[cfg(feature = "text")]
+mod text;
 mod vision;
 
+#[cfg(feature = "barcode")]
+pub use barcode::{Barcode, DetectBarcodes, Payload};
 pub use capability::{Portable, RealizationSet, VisionCapabilities};
+#[cfg(feature = "barcode")]
+pub use enumset::EnumSet;
 pub use error::VisionError;
 pub use geometry::{Point, Quad};
+#[cfg(feature = "text")]
+pub use icu_locale::LanguageIdentifier;
 pub use image::Image;
 pub use request::Request;
+#[cfg(feature = "barcode")]
+pub use symbology::Symbology;
+#[cfg(feature = "text")]
+pub use text::{RecognitionLevel, RecognizeText, TextLine};
 pub use vision::{Policy, Vision};
 pub use waterkit_core::Orientation;
 pub use wgpu;

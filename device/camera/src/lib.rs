@@ -48,6 +48,10 @@ mod upload;
 
 pub use converter::{FrameConverter, UPRIGHT_FORMAT};
 pub use frame::{Frame, FramePlanes, Orientation};
+/// The `android.media.Image` behind a [`Frame`], for native consumers such
+/// as `waterkit-vision`'s ML Kit requests.
+#[cfg(target_os = "android")]
+pub use sys::android::MediaImage;
 /// How YCbCr samples map to R'G'B'. These are `wgpu-external-frame`'s types,
 /// which its imports report, so frames carry them without a translation.
 pub use wgpu_external_frame::{YcbcrEncoding, YcbcrMatrix, YcbcrRange};

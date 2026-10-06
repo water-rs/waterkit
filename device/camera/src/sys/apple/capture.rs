@@ -19,7 +19,7 @@ use objc2_core_video::{
 };
 use wgpu_external_frame::io_surface::{Ycbcr420IoSurfaceFrame, Ycbcr420Plane};
 
-use crate::frame::{Frame, FramePlanes};
+use crate::frame::{Frame, FramePlanes, orientation_from_rotation};
 use crate::{Orientation, YcbcrEncoding, YcbcrMatrix};
 
 /// A retained `CVPixelBuffer` that may cross threads.
@@ -98,7 +98,7 @@ pub fn build_frame(device: &wgpu::Device, raw: RawFrame) -> Frame {
         planes,
         width,
         height,
-        Orientation::from_rotation(raw.rotation_degrees, raw.mirrored),
+        orientation_from_rotation(raw.rotation_degrees, raw.mirrored),
         raw.timestamp,
     )
 }

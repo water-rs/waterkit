@@ -86,7 +86,7 @@ struct ConvertParams {
     matrix_mode: u32,
     range_mode: u32,
     bit_depth: u32,
-    code_scale: f32,
+    element_bits: u32,
     stored_width: u32,
     stored_height: u32,
 }
@@ -100,7 +100,7 @@ impl ConvertParams {
             matrix_mode: 0,
             range_mode: 0,
             bit_depth: 0,
-            code_scale: 0.0,
+            element_bits: 0,
             stored_width: frame.width(),
             stored_height: frame.height(),
         }
@@ -120,7 +120,7 @@ impl ConvertParams {
                 YcbcrRange::Full => ycbcr_mode::RANGE_FULL,
             },
             bit_depth: sample.bit_depth,
-            code_scale: sample.code_scale,
+            element_bits: sample.element_bits,
             ..self
         }
     }
@@ -131,7 +131,7 @@ impl ConvertParams {
             self.matrix_mode,
             self.range_mode,
             self.bit_depth,
-            self.code_scale.to_bits(),
+            self.element_bits,
             self.stored_width,
             self.stored_height,
             0,
@@ -144,25 +144,23 @@ impl ConvertParams {
     }
 }
 
-/// How a YCbCr plane's sampled unorm values relate to its codes.
+/// How the significant YCbCr code bits occupy each sampled plane element.
 #[derive(Debug, Clone, Copy)]
 struct SampleDepth {
     bit_depth: u32,
-    /// Scales a sampled unorm value to `code / (2^bit_depth - 1)`.
-    code_scale: f32,
+    element_bits: u32,
 }
 
 impl SampleDepth {
     const EIGHT_BIT: Self = Self {
         bit_depth: 8,
-        code_scale: 1.0,
+        element_bits: 8,
     };
 
-    /// A 16-bit plane holding 10-bit codes in its top bits (P010): the
-    /// sampled value is `code * 64 / 65535`.
+    /// A 16-bit plane holding 10-bit codes in its top bits (P010).
     const TEN_BIT_MSB: Self = Self {
         bit_depth: 10,
-        code_scale: 65535.0 / 65472.0,
+        element_bits: 16,
     };
 
     fn of_luma(luma: &wgpu::TextureView) -> Self {

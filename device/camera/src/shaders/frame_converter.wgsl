@@ -10,8 +10,8 @@ struct ConvertParams {
     range_mode: u32,
     // Significant bits per YCbCr sample.
     bit_depth: u32,
-    // Factor taking a sampled unorm value to `code / (2^bit_depth - 1)`.
-    code_scale: f32,
+    // Bits per stored element; the samples occupy its high `bit_depth` bits.
+    element_bits: u32,
     // Stored (pre-orientation) frame size in pixels.
     stored_width: u32,
     stored_height: u32,

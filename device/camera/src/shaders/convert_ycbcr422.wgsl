@@ -9,8 +9,9 @@ fn convert_ycbcr422(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let stored = stored_coordinate(id.xy);
-    let texel = textureLoad(yuyv_plane, vec2<i32>(i32(stored.x / 2u), i32(stored.y)), 0) * params.code_scale;
+    let texel = textureLoad(yuyv_plane, vec2<i32>(i32(stored.x / 2u), i32(stored.y)), 0);
     let y = select(texel.r, texel.b, (stored.x & 1u) == 1u);
-    let ycbcr = ycbcr_normalize(y, texel.ga, params.range_mode, params.bit_depth);
+    let codes = ycbcr_unorm_codes(vec3<f32>(y, texel.ga), params.element_bits, params.bit_depth);
+    let ycbcr = ycbcr_normalize(codes, params.range_mode, params.bit_depth);
     store_upright(id.xy, ycbcr_to_rgb(ycbcr, params.matrix_mode));
 }

@@ -74,7 +74,7 @@ impl Image {
     }
 
     #[cfg(feature = "camera")]
-    fn from_planes(
+    pub(crate) fn from_planes(
         planes: &waterkit_camera::FramePlanes,
         color: waterkit_camera::VideoColorInfo,
         orientation: Orientation,

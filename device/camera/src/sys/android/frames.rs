@@ -14,8 +14,8 @@ use jni::objects::{Global, JObject};
 use ndk::data_space::{DataSpace, DataSpaceRange, DataSpaceStandard, DataSpaceTransfer};
 use wgpu_external_frame::YcbcrEncoding;
 use wgpu_external_frame::ahardware_buffer::{
-    CONVERSION_DEVICE_EXTENSIONS, DEVICE_EXTENSIONS, HardwareBuffer, HardwareBufferFrame,
-    HardwareBufferImporter, HardwareBufferLease, ImportedHardwareBuffer,
+    DEVICE_EXTENSIONS, HardwareBuffer, HardwareBufferFrame, HardwareBufferImporter,
+    HardwareBufferLease, ImportedHardwareBuffer,
 };
 
 use super::{AndroidBridge, SensorMounting};
@@ -28,15 +28,14 @@ use crate::{
 
 /// Fails unless `device` was opened with the extensions every
 /// `AHardwareBuffer` import needs, which `wgpu` never enables on its own, as
-/// the importer itself checks.
+/// the importer itself checks, and with `TEXTURE_FORMAT_NV12`.
 ///
-/// Whether the camera's buffers also need the conversion, and with it the
-/// [`CONVERSION_DEVICE_EXTENSIONS`], is not knowable here: the reader's
-/// `PRIVATE` format is the camera HAL's choice, and only the driver's reading
-/// of the first buffer says whether it maps to a Vulkan format. A device
-/// without those extensions is therefore accepted, with a warning, and a
-/// buffer that needs the conversion ends the stream with the importer's error
-/// naming the missing extension.
+/// Whether the driver aliases the camera's buffers or converts them from an
+/// external format shows only on the first buffer, since the reader's
+/// `PRIVATE` format is the camera HAL's choice; the conversion needs nothing
+/// of the device beyond what [`DeviceRequirements`] enables for every import.
+///
+/// [`DeviceRequirements`]: wgpu_external_frame::ahardware_buffer::DeviceRequirements
 pub fn check_device(device: &wgpu::Device) -> Result<(), CameraError> {
     // SAFETY: the guard names the device's real backend or yields `None`, and
     // is only read for its enabled extensions.
@@ -56,15 +55,6 @@ pub fn check_device(device: &wgpu::Device) -> Result<(), CameraError> {
         ));
     }
     let enabled = hal_device.enabled_device_extensions();
-    if let Some(missing) = CONVERSION_DEVICE_EXTENSIONS
-        .into_iter()
-        .find(|extension| !enabled.contains(extension))
-    {
-        tracing::warn!(
-            "the wgpu device does not enable {missing:?}; camera buffers the driver describes \
-             only through an external format cannot be imported on it"
-        );
-    }
     DEVICE_EXTENSIONS
         .into_iter()
         .find(|extension| !enabled.contains(extension))
@@ -145,8 +135,10 @@ impl RawFrame {
     ///
     /// # Errors
     ///
-    /// Returns an import or color-description error when the device cannot
-    /// import the buffer or its color description is unsupported.
+    /// Returns the importer's error when the buffer cannot be imported, such
+    /// as an external format other than 8-bit 4:2:0 YCbCr, or a driver that
+    /// cannot allocate the conversion's descriptor set, and a color-description
+    /// error when the buffer's color description is unsupported.
     pub fn import(
         self,
         importer: &mut HardwareBufferImporter,

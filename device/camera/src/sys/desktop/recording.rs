@@ -911,7 +911,7 @@ mod tests {
         let pixels = width as usize * height as usize;
         assert!(pipeline.nv12[..pixels].iter().all(|&value| value == 76));
         let (uv_pairs, remainder) = pipeline.nv12[pixels..].as_chunks::<2>();
-        assert!(remainder.is_empty());
+        assert_eq!(remainder, []);
         assert!(uv_pairs.iter().all(|uv| uv[0] == 85 && uv[1] == 255));
         pipeline.finish().expect("the container must finalize");
         std::fs::remove_file(path).ok();

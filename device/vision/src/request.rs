@@ -47,7 +47,7 @@ macro_rules! impl_request_tuple {
                 pass: &mut Pass<'_>,
             ) -> impl Future<Output = Result<<($($type,)+) as Request>::Output, VisionError>> + Send {
                 async move {
-                    // Each element shares this mutable pass and its preparations.
+                    // Sequential: every element runs on this one `&mut Pass`, which owns the shared preparations.
                     Ok((
                         $(
                             self.$index.run(pass).await?,

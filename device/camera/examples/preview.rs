@@ -271,6 +271,13 @@ impl ApplicationHandler for App {
         }))
         .expect("Failed to create device");
 
+        #[cfg_attr(
+            target_arch = "wasm32",
+            expect(
+                clippy::arc_with_non_send_sync,
+                reason = "`Camera::open` takes the device in an `Arc` on every platform; on wasm32 `wgpu::Device` is neither `Send` nor `Sync`"
+            )
+        )]
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
@@ -309,25 +316,30 @@ impl ApplicationHandler for App {
         self.sampler = Some(sampler);
         self.converter = Some(FrameConverter::new(&device));
 
-        // The camera lives on its own thread; the window keeps only the
+        // The camera runs off the event loop; the window keeps only the
         // newest frame it forwarded.
         let (frame_tx, frame_rx) = async_channel::bounded(1);
-        std::thread::spawn(move || {
-            pollster::block_on(async move {
-                let camera = Camera::open_default(device, queue)
-                    .await
-                    .expect("Failed to open camera");
-                let resolution = camera.resolution();
-                tracing::info!("camera opened: {}x{}", resolution.width, resolution.height);
-                let mut frames = pin!(camera.frames());
-                while let Some(frame) = frames.next().await {
-                    let frame = frame.expect("the camera stream failed");
-                    if frame_tx.force_send(frame).is_err() {
-                        break;
-                    }
+        let camera_loop = async move {
+            let camera = Camera::open_default(device, queue)
+                .await
+                .expect("Failed to open camera");
+            let resolution = camera.resolution();
+            tracing::info!("camera opened: {}x{}", resolution.width, resolution.height);
+            let mut frames = pin!(camera.frames());
+            while let Some(frame) = frames.next().await {
+                let frame = frame.expect("the camera stream failed");
+                if frame_tx.force_send(frame).is_err() {
+                    break;
                 }
-            });
-        });
+            }
+        };
+        // Natively the loop gets its own thread. On wasm32 WebGPU objects
+        // cannot leave the thread that created them, so it runs as a task on
+        // the browser's event loop instead.
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::spawn(move || pollster::block_on(camera_loop));
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(camera_loop);
         self.frames = Some(frame_rx);
     }
 

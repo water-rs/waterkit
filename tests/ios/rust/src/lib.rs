@@ -44,7 +44,7 @@ fn build_report() -> TestReport {
         camera::record(&mut report).await;
 
         #[cfg(feature = "clipboard")]
-        record_clipboard(&mut report);
+        record_clipboard(&mut report).await;
 
         #[cfg(feature = "fs")]
         record_fs(&mut report);
@@ -237,7 +237,7 @@ async fn record_permission(report: &mut TestReport) {
 }
 
 #[cfg(feature = "clipboard")]
-fn record_clipboard(report: &mut TestReport) {
+async fn record_clipboard(report: &mut TestReport) {
     let mut clipboard = match waterkit::clipboard::Clipboard::new() {
         Ok(clipboard) => clipboard,
         Err(error) => {
@@ -268,6 +268,76 @@ fn record_clipboard(report: &mut TestReport) {
             format!("has_text failed: {error}"),
         )),
     }
+
+    report.push(match clipboard_files_round_trip(&mut clipboard).await {
+        Ok(url) => {
+            TestCase::passed_with_message("clipboard.files_round_trip", format!("url={url}"))
+        }
+        Err(error) => TestCase::failed("clipboard.files_round_trip", error),
+    });
+}
+
+/// Copies two files, one with a name every URL encoding must escape, and
+/// checks that the pasteboard carries the first file's contents, which other
+/// apps paste, and its file URL, and that the paths read back unchanged.
+#[cfg(feature = "clipboard")]
+async fn clipboard_files_round_trip(
+    clipboard: &mut waterkit::clipboard::Clipboard,
+) -> Result<String, String> {
+    const NAME: &str = "waterkit clipboard n\u{e4}me #1?.txt";
+    const ENCODED_NAME: &str = "waterkit%20clipboard%20n%C3%A4me%20%231%3F.txt";
+    const CONTENTS: &[u8] = b"WaterKit clipboard file\n";
+
+    let dir = std::env::temp_dir();
+    let paths = vec![dir.join(NAME), dir.join("plain.txt")];
+    for path in &paths {
+        std::fs::write(path, CONTENTS)
+            .map_err(|error| format!("writing {}: {error}", path.display()))?;
+    }
+    clipboard
+        .set_files(&paths)
+        .map_err(|error| format!("set_files failed: {error}"))?;
+    if !clipboard
+        .has_files()
+        .map_err(|error| format!("has_files failed: {error}"))?
+    {
+        return Err("has_files reported no files right after set_files".into());
+    }
+    let contents = clipboard
+        .binary("public.plain-text")
+        .await
+        .map_err(|error| format!("reading public.plain-text failed: {error}"))?;
+    if contents.as_deref() != Some(CONTENTS) {
+        return Err(format!(
+            "the pasteboard's public.plain-text is {contents:?}"
+        ));
+    }
+    let url = clipboard
+        .binary("public.file-url")
+        .await
+        .map_err(|error| format!("reading public.file-url failed: {error}"))?
+        .ok_or("the pasteboard has no public.file-url")?;
+    // The representation is a binary property list that holds the URL
+    // string; take the URL from its scheme to the copied file's name.
+    let url = String::from_utf8_lossy(&url);
+    let url = url
+        .find("file:///")
+        .and_then(|start| {
+            let end = start + url[start..].find(ENCODED_NAME)? + ENCODED_NAME.len();
+            Some(url[start..end].to_owned())
+        })
+        .ok_or_else(|| format!("public.file-url holds no URL ending in {ENCODED_NAME}: {url:?}"))?;
+    let read = clipboard
+        .files()
+        .await
+        .map_err(|error| format!("files failed: {error}"))?;
+    if read != paths {
+        return Err(format!("url={url} files() returned {read:?} for {paths:?}"));
+    }
+    if url.contains(' ') {
+        return Err(format!("the pasteboard's file URL is {url}"));
+    }
+    Ok(url)
 }
 
 #[cfg(feature = "fs")]

@@ -2,7 +2,10 @@ package waterkit.clipboard
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentResolver
 import android.content.Context
+import android.content.pm.PackageManager
+import android.content.pm.ProviderInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -13,8 +16,8 @@ import java.io.InputStream
 /**
  * Helper class for clipboard operations on Android.
  *
- * Note: Some operations (setImageFromPath, setBinary) require the host app to configure
- * a FileProvider in AndroidManifest.xml for proper URI sharing.
+ * Files, images and binary data go on the clipboard as [ClipboardFileProvider]
+ * URIs, which the app's manifest must declare as that class documents.
  */
 object ClipboardHelper {
 
@@ -51,13 +54,7 @@ object ClipboardHelper {
     }
 
     @JvmStatic
-    fun hasFiles(context: Context): Boolean {
-        val clipboard = clipboard(context)
-        val clip = clipboard.primaryClip ?: return false
-        if (clip.itemCount == 0) return false
-        val uri = clip.getItemAt(0).uri ?: return false
-        return uri.scheme == "file"
-    }
+    fun hasFiles(context: Context): Boolean = getFiles(context).isNotEmpty()
 
     // ============== Read Operations ==============
 
@@ -77,16 +74,24 @@ object ClipboardHelper {
         return clip.getItemAt(0).htmlText
     }
 
+    /**
+     * The paths of the local files the clip names, decoded by [Uri.getPath]:
+     * those of `file://` URIs and of [ClipboardFileProvider] URIs this app
+     * wrote. Other `content://` URIs name no path.
+     */
     @JvmStatic
-    fun getFileUri(context: Context): String? {
-        val clipboard = clipboard(context)
-        val clip = clipboard.primaryClip ?: return null
-        if (clip.itemCount == 0) return null
-        val uri = clip.getItemAt(0).uri ?: return null
-        if (uri.scheme == "file") {
-            return uri.toString()
-        }
-        return null
+    fun getFiles(context: Context): Array<String> {
+        val clip = clipboard(context).primaryClip ?: return emptyArray()
+        val authority by lazy { fileProvider(context)?.authority }
+        return (0 until clip.itemCount).mapNotNull { index ->
+            val uri = clip.getItemAt(index).uri ?: return@mapNotNull null
+            when {
+                uri.scheme == ContentResolver.SCHEME_FILE -> uri.path
+                uri.scheme == ContentResolver.SCHEME_CONTENT && uri.authority == authority ->
+                    uri.path
+                else -> null
+            }
+        }.toTypedArray()
     }
 
     /**
@@ -194,38 +199,71 @@ object ClipboardHelper {
         clipboard.setPrimaryClip(clip)
     }
 
+    /**
+     * Put the files at the absolute [paths] on the clipboard, one item per
+     * file, as [ClipboardFileProvider] URIs that other apps can open.
+     */
     @JvmStatic
-    fun setFileUri(context: Context, uri: String) {
-        val clipboard = clipboard(context)
-        val clip = ClipData.newRawUri("file", Uri.parse(uri))
-        clipboard.setPrimaryClip(clip)
+    fun setFiles(context: Context, paths: Array<String>) {
+        val resolver = context.contentResolver
+        val uris = providerUris(context, paths.asList())
+        val clip = ClipData.newUri(resolver, "files", uris.first())
+        uris.drop(1).forEach { uri -> clip.addItem(resolver, ClipData.Item(uri)) }
+        clipboard(context).setPrimaryClip(clip)
+    }
+
+    /**
+     * The [ClipboardFileProvider] URIs of the files at the absolute [paths].
+     * Throws when the app's manifest does not declare the provider as it
+     * documents.
+     */
+    private fun providerUris(context: Context, paths: List<String>): List<Uri> {
+        val provider = checkNotNull(fileProvider(context)) {
+            "copying files needs the app's manifest to declare " +
+                "<provider android:name=\"${ClipboardFileProvider::class.java.name}\" " +
+                "android:authorities=\"\${applicationId}.waterkit.clipboard\" " +
+                "android:exported=\"false\" android:grantUriPermissions=\"true\" />"
+        }
+        check(!provider.exported && provider.grantUriPermissions) {
+            "${provider.name} must be declared with android:exported=\"false\" and " +
+                "android:grantUriPermissions=\"true\", so that only the apps the clipboard " +
+                "grants read access to can open the files"
+        }
+        return paths.map { path -> ClipboardFileProvider.uri(provider.authority, path) }
+    }
+
+    /** This app's declaration of [ClipboardFileProvider], if its manifest has one. */
+    private fun fileProvider(context: Context): ProviderInfo? {
+        val packageManager = context.packageManager
+        val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.getPackageInfo(
+                context.packageName,
+                PackageManager.PackageInfoFlags.of(PackageManager.GET_PROVIDERS.toLong()),
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(context.packageName, PackageManager.GET_PROVIDERS)
+        }
+        return packageInfo.providers?.find { it.name == ClipboardFileProvider::class.java.name }
     }
 
     /**
      * Set image from a file path.
      * Returns false if the file does not exist; any other failure throws.
-     *
-     * Note: This uses a file:// URI which only works within the same app.
-     * For cross-app sharing, the host app must implement FileProvider.
      */
     @JvmStatic
     fun setImageFromPath(context: Context, path: String): Boolean {
         val file = File(path)
         if (!file.exists()) return false
 
-        // Use file:// URI (works within app, but not for cross-app sharing)
-        val uri = Uri.fromFile(file)
-
+        val uri = providerUris(context, listOf(file.absolutePath)).single()
         val clip = ClipData.newUri(context.contentResolver, "image", uri)
         clipboard(context).setPrimaryClip(clip)
         return true
     }
 
     /**
-     * Set binary data with MIME type.
-     *
-     * Note: This saves data to cache and uses a file:// URI which only works within the same app.
-     * For cross-app sharing, the host app must implement FileProvider.
+     * Set binary data with MIME type, saved to a file in the app's cache.
      */
     @JvmStatic
     fun setBinary(context: Context, data: ByteArray, mime: String) {
@@ -235,9 +273,7 @@ object ClipboardHelper {
         val dataFile = File(cacheDir, "clipboard_data.$extension")
         dataFile.writeBytes(data)
 
-        // Use file:// URI (works within app, but not for cross-app sharing)
-        val uri = Uri.fromFile(dataFile)
-
+        val uri = providerUris(context, listOf(dataFile.absolutePath)).single()
         val clip = ClipData.newUri(context.contentResolver, "data", uri)
         clipboard(context).setPrimaryClip(clip)
     }

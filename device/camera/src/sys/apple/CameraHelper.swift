@@ -26,6 +26,7 @@ private let rawPhotoLock = NSLock()
 // RAW video frame stream state
 private var rawVideoFileHandle: FileHandle?
 private var rawVideoRecordingStartTime: Date?
+private var rawVideoInitialMatrix: UInt8?
 private let rawVideoLock = NSLock()
 
 // Frame callback - set from Rust: context, retained pixel buffer, timestamp
@@ -232,11 +233,6 @@ class CameraFrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
 
 private var frameDelegate = CameraFrameDelegate()
 
-private func appendUInt16LE(_ value: UInt16, to data: inout Data) {
-    var little = value.littleEndian
-    withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-}
-
 private func appendUInt32LE(_ value: UInt32, to data: inout Data) {
     var little = value.littleEndian
     withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
@@ -251,17 +247,27 @@ private func appendUInt64LE(_ value: UInt64, to data: inout Data) {
 // opens: `420f` when the device offers it, otherwise `420v`.
 private var capturePixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
 
-// The WKRV pixel-format byte of a biplanar 4:2:0 capture: 3 for video range,
-// 4 for full range.
-private func rawVideoPixelFormatByte() -> UInt8 {
-    return capturePixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange ? 4 : 3
+private func rawVideoRangeCode() -> UInt8? {
+    switch capturePixelFormat {
+    case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
+        return 1
+    case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
+        return 0
+    default:
+        return nil
+    }
 }
 
-private func writeRawVideoHeader(handle: FileHandle, width: UInt32, height: UInt32) {
+private func writeRawVideoHeader(
+    handle: FileHandle,
+    width: UInt32,
+    height: UInt32,
+    matrix: UInt8,
+    range: UInt8
+) {
     var header = Data()
     header.append(contentsOf: [UInt8(ascii: "W"), UInt8(ascii: "K"), UInt8(ascii: "R"), UInt8(ascii: "V")])
-    header.append(contentsOf: [1, rawVideoPixelFormatByte()]) // version=1, pixel_format
-    appendUInt16LE(0, to: &header)
+    header.append(contentsOf: [2, 3, matrix, range])
     appendUInt32LE(width, to: &header)
     appendUInt32LE(height, to: &header)
     appendUInt32LE(0, to: &header) // fps unknown from this layer
@@ -272,10 +278,22 @@ private func writeRawVideoHeader(handle: FileHandle, width: UInt32, height: UInt
 // without row padding.
 private func maybeWriteRawVideoFrame(pixelBuffer: CVPixelBuffer, timestampNs: UInt64) {
     rawVideoLock.lock()
-    let handle = rawVideoFileHandle
+    let isRecording = rawVideoFileHandle != nil
     rawVideoLock.unlock()
 
-    guard let handle else { return }
+    guard isRecording else { return }
+
+    let (matrixCode, matrixValue) = rawVideoMatrixCode(pixelBuffer)
+    guard let matrixCode else {
+        failRawVideoRecording(
+            "missing or unsupported kCVImageBufferYCbCrMatrixKey value: \(matrixValue)"
+        )
+        return
+    }
+    guard let rangeCode = rawVideoRangeCode() else {
+        failRawVideoRecording("unsupported capture pixel format for WKRV NV12 range")
+        return
+    }
 
     let lockResult = CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
     if lockResult != kCVReturnSuccess {
@@ -293,18 +311,96 @@ private func maybeWriteRawVideoFrame(pixelBuffer: CVPixelBuffer, timestampNs: UI
     }
     let payloadSize = planes.reduce(0) { $0 + $1.rowBytes * $1.rows }
 
+    var payload = Data()
+    payload.reserveCapacity(payloadSize)
+    for plane in planes {
+        guard let baseAddress = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, plane.plane) else {
+            failRawVideoRecording("missing base address for raw video plane \(plane.plane)")
+            return
+        }
+        let bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, plane.plane)
+        for row in 0..<plane.rows {
+            payload.append(
+                Data(
+                    bytes: baseAddress.advanced(by: row * bytesPerRow),
+                    count: plane.rowBytes
+                )
+            )
+        }
+    }
+
     var frameHeader = Data()
     appendUInt64LE(timestampNs, to: &frameHeader)
     appendUInt32LE(UInt32(payloadSize), to: &frameHeader)
-    handle.write(frameHeader)
 
-    for plane in planes {
-        guard let baseAddress = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, plane.plane) else { return }
-        let bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, plane.plane)
-        for row in 0..<plane.rows {
-            handle.write(Data(bytes: baseAddress.advanced(by: row * bytesPerRow), count: plane.rowBytes))
+    var changedMatrix: UInt8?
+    rawVideoLock.lock()
+    if let handle = rawVideoFileHandle {
+        if let firstMatrix = rawVideoInitialMatrix, firstMatrix != matrixCode {
+            changedMatrix = firstMatrix
+        } else {
+            if rawVideoInitialMatrix == nil {
+                writeRawVideoHeader(
+                    handle: handle,
+                    width: UInt32(CVPixelBufferGetWidth(pixelBuffer)),
+                    height: UInt32(CVPixelBufferGetHeight(pixelBuffer)),
+                    matrix: matrixCode,
+                    range: rangeCode
+                )
+                rawVideoInitialMatrix = matrixCode
+            }
+            handle.write(frameHeader)
+            handle.write(payload)
         }
     }
+    rawVideoLock.unlock()
+
+    if let changedMatrix {
+        failRawVideoRecording(
+            "raw video YCbCr matrix changed from H.273 code \(changedMatrix) to \(matrixCode)"
+        )
+    }
+}
+
+private func rawVideoMatrixCode(_ pixelBuffer: CVPixelBuffer) -> (UInt8?, String) {
+    var attachmentMode = CVAttachmentMode.shouldPropagate
+    guard let attachment = CVBufferGetAttachment(
+        pixelBuffer,
+        kCVImageBufferYCbCrMatrixKey,
+        &attachmentMode
+    ) else {
+        return (nil, "<missing>")
+    }
+    let attachmentValue = attachment.takeUnretainedValue()
+    guard let value = attachmentValue as? String else {
+        return (nil, String(describing: attachmentValue))
+    }
+
+    if value == (kCVImageBufferYCbCrMatrix_ITU_R_601_4 as String) {
+        return (6, value)
+    }
+    if value == (kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String) {
+        return (1, value)
+    }
+    if value == (kCVImageBufferYCbCrMatrix_ITU_R_2020 as String) {
+        return (9, value)
+    }
+    return (nil, value)
+}
+
+private func detachRawVideoFileHandle() -> FileHandle? {
+    rawVideoLock.lock()
+    let handle = rawVideoFileHandle
+    rawVideoFileHandle = nil
+    rawVideoInitialMatrix = nil
+    rawVideoRecordingStartTime = nil
+    rawVideoLock.unlock()
+    return handle
+}
+
+private func failRawVideoRecording(_ message: String) {
+    NSLog("WaterkitCamera RAW video: %@", message)
+    detachRawVideoFileHandle()?.closeFile()
 }
 
 // MARK: - Device Enumeration
@@ -1311,24 +1407,14 @@ func camera_start_raw_recording(path: RustString) -> CameraResultFFI {
         return .OpenFailed
     }
 
-    writeRawVideoHeader(
-        handle: handle,
-        width: camera_get_resolution_width(),
-        height: camera_get_resolution_height()
-    )
     rawVideoFileHandle = handle
+    rawVideoInitialMatrix = nil
     rawVideoRecordingStartTime = Date()
     return .Success
 }
 
 func camera_stop_raw_recording() -> CameraResultFFI {
-    rawVideoLock.lock()
-    let handle = rawVideoFileHandle
-    rawVideoFileHandle = nil
-    rawVideoRecordingStartTime = nil
-    rawVideoLock.unlock()
-
-    handle?.closeFile()
+    detachRawVideoFileHandle()?.closeFile()
     return .Success
 }
 

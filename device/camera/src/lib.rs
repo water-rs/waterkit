@@ -39,6 +39,8 @@
 mod color;
 mod converter;
 mod frame;
+/// Reader and color description for uncompressed `WKRV` recordings.
+pub mod raw_video;
 // Apple and Android frames are imported from the platform's buffers; desktop
 // frames, and the tests everywhere, are uploaded from CPU memory.
 mod sys;
@@ -49,6 +51,7 @@ mod upload;
 
 pub use converter::{FrameConverter, UPRIGHT_FORMAT};
 pub use frame::{Frame, FramePlanes, Orientation};
+pub use raw_video::{RawVideoError, RawVideoFrame, RawVideoHeader, RawVideoLayout, RawVideoReader};
 pub use waterkit_video_core::{
     ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo,
 };

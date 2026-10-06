@@ -46,6 +46,10 @@ import java.util.concurrent.TimeUnit
 class CameraHelper(private val appContext: Context) {
     private companion object {
         private const val TAG = "WaterkitCamera"
+        private const val DATA_SPACE_STANDARD_SHIFT = 16
+        private const val DATA_SPACE_STANDARD_MASK = 0x3F
+        private const val DATA_SPACE_RANGE_SHIFT = 27
+        private const val DATA_SPACE_RANGE_MASK = 0x7
 
         /** Preview buffers: one being imported, the newest waiting, one filling. */
         private const val PREVIEW_IMAGES = 4
@@ -94,6 +98,7 @@ class CameraHelper(private val appContext: Context) {
     private var recordingStartElapsedRealtimeMs: Long = 0
     private var isRecording: Boolean = false
     private var rawVideoOutput: FileOutputStream? = null
+    private var rawVideoDataSpace: Int? = null
     private var rawVideoRecordingStartElapsedRealtimeMs: Long = 0
     private var isRawVideoRecording: Boolean = false
 
@@ -751,9 +756,9 @@ class CameraHelper(private val appContext: Context) {
             }
             file.parentFile?.mkdirs()
             val stream = FileOutputStream(file)
-            writeRawVideoHeader(stream, frameWidth, frameHeight, frameRate)
             synchronized(rawVideoLock) {
                 rawVideoOutput = stream
+                rawVideoDataSpace = null
                 rawVideoRecordingStartElapsedRealtimeMs = SystemClock.elapsedRealtime()
                 isRawVideoRecording = true
             }
@@ -1637,6 +1642,7 @@ class CameraHelper(private val appContext: Context) {
         val output = synchronized(rawVideoLock) {
             val stream = rawVideoOutput
             rawVideoOutput = null
+            rawVideoDataSpace = null
             isRawVideoRecording = false
             rawVideoRecordingStartElapsedRealtimeMs = 0L
             stream
@@ -1658,18 +1664,27 @@ class CameraHelper(private val appContext: Context) {
      * stored; no colour conversion happens.
      */
     private fun maybeWriteRawVideoFrame(image: Image, timestampNs: Long) {
-        val output = synchronized(rawVideoLock) {
-            if (!isRawVideoRecording) {
-                return
-            }
-            rawVideoOutput
-        } ?: return
+        if (!synchronized(rawVideoLock) { isRawVideoRecording && rawVideoOutput != null }) {
+            return
+        }
+
+        val dataSpace = imageDataSpace(image)
+        val colorCodes = rawVideoColorCodes(dataSpace)
+        if (colorCodes == null) {
+            failRawVideoRecording(
+                "Unsupported RAW video data space=$dataSpace " +
+                    "(0x${Integer.toHexString(dataSpace)}), " +
+                    "standard=${rawVideoDataSpaceStandard(dataSpace)}, " +
+                    "range=${rawVideoDataSpaceRange(dataSpace)}",
+            )
+            return
+        }
 
         try {
             val width = image.width
             val height = image.height
-            val chromaWidth = width / 2
-            val chromaHeight = height / 2
+            val chromaWidth = (width + 1) / 2
+            val chromaHeight = (height + 1) / 2
             val nv12 = ByteArray(width * height + chromaWidth * chromaHeight * 2)
             val luma = image.planes[0]
             for (row in 0 until height) {
@@ -1687,13 +1702,71 @@ class CameraHelper(private val appContext: Context) {
                     offset += 2
                 }
             }
-            writeU64LE(output, timestampNs)
-            writeU32LE(output, nv12.size)
-            output.write(nv12)
+
+            val changedDataSpace = synchronized(rawVideoLock) {
+                val output = rawVideoOutput ?: return
+                val firstDataSpace = rawVideoDataSpace
+                if (firstDataSpace != null && firstDataSpace != dataSpace) {
+                    firstDataSpace
+                } else {
+                    if (firstDataSpace == null) {
+                        writeRawVideoHeader(
+                            output,
+                            width,
+                            height,
+                            frameRate,
+                            colorCodes.first,
+                            colorCodes.second,
+                        )
+                        rawVideoDataSpace = dataSpace
+                    }
+                    writeU64LE(output, timestampNs)
+                    writeU32LE(output, nv12.size)
+                    output.write(nv12)
+                    null
+                }
+            }
+            if (changedDataSpace != null) {
+                failRawVideoRecording(
+                    "RAW video data space changed from $changedDataSpace " +
+                        "(0x${Integer.toHexString(changedDataSpace)}) to $dataSpace " +
+                        "(0x${Integer.toHexString(dataSpace)})",
+                )
+            }
         } catch (error: Exception) {
-            Log.e(TAG, "Failed writing RAW video frame", error)
-            stopRawVideoRecordingInternal()
+            failRawVideoRecording("Failed writing RAW video frame in data space $dataSpace", error)
         }
+    }
+
+    private fun rawVideoColorCodes(dataSpace: Int): Pair<Int, Int>? {
+        val matrix = when (rawVideoDataSpaceStandard(dataSpace)) {
+            0 -> 6
+            1 -> 1
+            2, 3, 4, 5 -> 6
+            6 -> 9
+            else -> return null
+        }
+        val range = when (rawVideoDataSpaceRange(dataSpace)) {
+            0, 1 -> 1
+            2 -> 0
+            else -> return null
+        }
+        return matrix to range
+    }
+
+    private fun rawVideoDataSpaceStandard(dataSpace: Int): Int =
+        (dataSpace ushr DATA_SPACE_STANDARD_SHIFT) and DATA_SPACE_STANDARD_MASK
+
+    private fun rawVideoDataSpaceRange(dataSpace: Int): Int =
+        (dataSpace ushr DATA_SPACE_RANGE_SHIFT) and DATA_SPACE_RANGE_MASK
+
+    private fun failRawVideoRecording(message: String, error: Exception? = null) {
+        if (error == null) {
+            Log.e(TAG, message)
+        } else {
+            Log.e(TAG, message, error)
+        }
+        stopRawVideoRecordingInternal()
     }
 
     private fun writeRawVideoHeader(
@@ -1701,25 +1774,17 @@ class CameraHelper(private val appContext: Context) {
         width: Int,
         height: Int,
         fps: Int,
+        matrix: Int,
+        range: Int,
     ) {
         // Header layout:
-        // magic(4)='WKRV', version(u8)=1, pixel_format(u8), reserved(u16)=0,
-        // width(u32), height(u32), fps(u32)
+        // magic(4)='WKRV', version=2, NV12 pixel format, H.273 matrix, range,
+        // then width(u32), height(u32), fps(u32).
         output.write(byteArrayOf('W'.code.toByte(), 'K'.code.toByte(), 'R'.code.toByte(), 'V'.code.toByte()))
-        // pixel_format 4: NV12, full range; Camera2's YUV_420_888 output is
-        // full-range (JFIF) YCbCr.
-        output.write(byteArrayOf(1, 4))
-        writeU16LE(output, 0)
+        output.write(byteArrayOf(2, 3, matrix.toByte(), range.toByte()))
         writeU32LE(output, width)
         writeU32LE(output, height)
         writeU32LE(output, fps)
-    }
-
-    private fun writeU16LE(output: FileOutputStream, value: Int) {
-        output.write(byteArrayOf(
-            (value and 0xFF).toByte(),
-            ((value ushr 8) and 0xFF).toByte(),
-        ))
     }
 
     private fun writeU32LE(output: FileOutputStream, value: Int) {

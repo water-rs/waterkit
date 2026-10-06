@@ -10,7 +10,7 @@
 //!
 //! Video recording runs the capture stream through `waterkit-codec` and
 //! `waterkit-video-container` on a dedicated worker thread; raw recording
-//! writes the uncompressed `WKRV` frame stream the mobile backends use.
+//! writes uncompressed WKRV version 2 RGBA8 frames.
 
 mod recording;
 

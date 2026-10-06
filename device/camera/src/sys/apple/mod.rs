@@ -157,6 +157,9 @@ fn convert_result(result: ffi::CameraResultFFI, context: &str) -> Result<(), Cam
 
 struct FrameCallbackContext {
     sender: async_channel::Sender<RawFrame>,
+    /// Turns the sample buffers' presentation times into frame timestamps
+    /// measured from the first captured frame.
+    clock: crate::frame::StreamClock<Duration>,
 }
 
 struct OpenCameraGuard {
@@ -186,7 +189,7 @@ impl Drop for OpenCameraGuard {
 extern "C" fn frame_callback(
     context: *mut std::ffi::c_void,
     pixelbuffer_handle: u64,
-    timestamp_ns: u64,
+    capture_time_ns: u64,
     rotation_degrees: u32,
     mirrored: bool,
 ) {
@@ -197,7 +200,9 @@ extern "C" fn frame_callback(
         // SAFETY: Swift passes the buffer with `Unmanaged.passRetained`,
         // transferring that reference here.
         pixel_buffer: unsafe { CapturedPixelBuffer::from_owned(buffer) },
-        timestamp: Duration::from_nanos(timestamp_ns),
+        timestamp: context
+            .clock
+            .timestamp(Duration::from_nanos(capture_time_ns)),
         rotation_degrees,
         mirrored,
     };
@@ -285,7 +290,10 @@ impl CameraInner {
 
         // Create frame channel (bounded to prevent unbounded memory growth)
         let (sender, receiver) = async_channel::bounded(1);
-        let mut frame_callback_context = Box::new(FrameCallbackContext { sender });
+        let mut frame_callback_context = Box::new(FrameCallbackContext {
+            sender,
+            clock: crate::frame::StreamClock::new(),
+        });
 
         // Set up frame callback
         unsafe {

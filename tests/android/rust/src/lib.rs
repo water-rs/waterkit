@@ -466,6 +466,10 @@ async fn record_android_camera(report: &mut TestReport, files_dir: &std::path::P
 /// rate; the last frame, converted upright on the GPU, is saved as
 /// `camera-<id>.png` in the files directory for inspection.
 #[cfg(feature = "camera")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one streaming pass over the camera's frames with its summary checks; splitting it would scatter a single case"
+)]
 async fn record_android_camera_frames(
     report: &mut TestReport,
     camera: &waterkit_content::camera::CameraInfo,
@@ -486,6 +490,7 @@ async fn record_android_camera_frames(
             return;
         }
     };
+    let opened = Instant::now();
     let camera_handle = match Camera::open(
         &camera.id,
         CameraConfig::default(),
@@ -542,17 +547,37 @@ async fn record_android_camera_frames(
         orientations,
         count,
         stored,
+        timestamps,
     } = summary;
+    // A capture span cannot exceed the time since the camera was opened.
+    let span = timestamps.last;
+    if let Some(span) = span
+        && span > opened.elapsed()
+    {
+        report.push(TestCase::failed(
+            case,
+            format!("last frame timestamp {span:?} exceeds time since open"),
+        ));
+        return;
+    }
+    if let Some((index, at)) = timestamps.first_unordered {
+        report.push(TestCase::failed(
+            case,
+            format!("frame {index} timestamp {at:?} is not strictly greater than the previous"),
+        ));
+        return;
+    }
     report.push(TestCase::passed_with_message(
         case,
         format!(
-            "front={} frames={count} fps={:.1} planes={layouts:?} stored={}x{} orientations={orientations:?} upright={}x{} png={}",
+            "front={} frames={count} fps={:.1} planes={layouts:?} stored={}x{} orientations={orientations:?} upright={}x{} span={:?} png={}",
             camera.is_front_facing,
             f64::from(count) / elapsed,
             stored.0,
             stored.1,
             upright.width(),
             upright.height(),
+            span.unwrap_or_default(),
             png.display(),
         ),
     ));
@@ -648,6 +673,20 @@ struct FrameSummary {
     count: u32,
     /// The stored size of the last frame.
     stored: (u32, u32),
+    /// Frame timestamps seen, on the camera's capture clock.
+    timestamps: Timestamps,
+}
+
+/// What the frame timestamps showed: monotonic, from the first captured
+/// frame.
+#[cfg(feature = "camera")]
+#[derive(Default)]
+struct Timestamps {
+    /// The last frame's timestamp; the stream's capture span.
+    last: Option<std::time::Duration>,
+    /// The first frame whose timestamp did not strictly increase, as
+    /// (frame index, its timestamp).
+    first_unordered: Option<(u32, std::time::Duration)>,
 }
 
 #[cfg(feature = "camera")]
@@ -675,6 +714,14 @@ impl FrameSummary {
         self.orientations
             .insert(format!("{:?}", frame.orientation()));
         self.stored = (frame.width(), frame.height());
+        let at = frame.timestamp();
+        if let Some(previous) = self.timestamps.last
+            && at <= previous
+            && self.timestamps.first_unordered.is_none()
+        {
+            self.timestamps.first_unordered = Some((self.count, at));
+        }
+        self.timestamps.last = Some(at);
     }
 }
 

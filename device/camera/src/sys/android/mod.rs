@@ -25,7 +25,9 @@ use std::num::NonZeroU8;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::frame::StreamClock;
 use waterkit_build::{AndroidError, DexHelper, dex_helper, jvm_and_context};
 
 /// `waterkit.camera.CameraHelper`, embedded as a DEX by this crate's build
@@ -679,7 +681,7 @@ impl AndroidBridge {
     /// lease that closes the image once the GPU no longer reads it.
     fn wait_for_frame(
         self: &Arc<Self>,
-        start_instant: Instant,
+        clock: &StreamClock<Duration>,
         timeout_ms: i32,
     ) -> Result<Option<RawFrame>, CameraError> {
         self.with_env(|env| {
@@ -719,6 +721,22 @@ impl AndroidBridge {
                 .map_err(|error| {
                     CameraError::CaptureFailed(format!("getHardwareBuffer: {error}"))
                 })?;
+            let capture_time_ns = env
+                .call_method(
+                    &frame_obj,
+                    jni_str!("getCaptureTimeNs"),
+                    jni_sig!("()J"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::j)
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("getCaptureTimeNs: {error}"))
+                })?;
+            let capture_time_ns = u64::try_from(capture_time_ns).map_err(|_| {
+                CameraError::CaptureFailed(format!(
+                    "sensor timestamp is negative: {capture_time_ns}"
+                ))
+            })?;
             let display_rotation = env
                 .call_method(
                     &frame_obj,
@@ -752,7 +770,12 @@ impl AndroidBridge {
             };
             // Java's ImageReader waits for the camera's write fence before it
             // hands an image out, so the buffer is ready as it arrives.
-            let frame = RawFrame::new(&buffer, lease, display_rotation, start_instant.elapsed());
+            let frame = RawFrame::new(
+                &buffer,
+                lease,
+                display_rotation,
+                clock.timestamp(Duration::from_nanos(capture_time_ns)),
+            );
             env.call_method(&hardware_buffer, jni_str!("close"), jni_sig!("()V"), &[])
                 .map_err(|error| {
                     CameraError::CaptureFailed(format!("HardwareBuffer.close: {error}"))
@@ -1131,13 +1154,13 @@ impl CameraInner {
         let running = Arc::new(AtomicBool::new(true));
         let running_for_thread = Arc::clone(&running);
         let bridge_for_thread = Arc::clone(&bridge);
-        let start_instant = Instant::now();
+        let clock = StreamClock::new();
         let frame_wait_ms = i32::try_from((1_000_u64 / u64::from(config.frame_rate.max(1))).max(5))
             .unwrap_or(i32::MAX);
 
         std::thread::spawn(move || {
             while running_for_thread.load(Ordering::SeqCst) {
-                match bridge_for_thread.wait_for_frame(start_instant, frame_wait_ms) {
+                match bridge_for_thread.wait_for_frame(&clock, frame_wait_ms) {
                     Ok(Some(frame)) => {
                         let _ = sender.force_send(Ok(frame));
                     }

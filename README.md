@@ -22,6 +22,7 @@ Waterkit is organized into focused, independent crates. You can use the main `wa
 | **[FS](fs)** | File system helpers, sandboxing, and file picking. |
 | **[Haptic](haptic)** | Haptic feedback and vibration control. |
 | **[Health](health)** | Health data integration (HealthKit / Health Connect). |
+| **[Language](language)** | On-device translation through the OS translation services. |
 | **[Location](location)** | GPS and location services (CoreLocation, Android location APIs, etc.). |
 | **[NFC](nfc)** | NFC read/write and tag interaction workflows. |
 | **[Notification](notification)** | Local system notifications. |

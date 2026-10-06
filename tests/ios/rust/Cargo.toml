@@ -47,6 +47,7 @@ full = [
     "speech",
     "contacts",
     "calendar",
+    "language",
     "deeplink",
     "background",
     "passkey",
@@ -75,6 +76,7 @@ share = ["waterkit/share"]
 speech = ["waterkit/speech"]
 contacts = ["waterkit/contacts"]
 calendar = ["waterkit/calendar"]
+language = ["waterkit/language"]
 health = ["waterkit/health"]
 deeplink = ["waterkit/deeplink"]
 background = ["waterkit/background"]

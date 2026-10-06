@@ -37,6 +37,7 @@ waterkit-permission = { workspace = true, optional = true }
 waterkit-location = { workspace = true, optional = true }
 waterkit-audio = { workspace = true, optional = true, features = ["playback", "recording", "streaming", "media-session", "apple-artwork"] }
 waterkit-haptic = { workspace = true, optional = true }
+waterkit-language = { workspace = true, optional = true }
 waterkit-notification = { workspace = true, optional = true }
 waterkit-dialog = { workspace = true, optional = true }
 waterkit-biometric = { workspace = true, optional = true }
@@ -71,6 +72,7 @@ full = [
     "location",
     "audio",
     "haptic",
+    "language",
     "notification",
     "dialog",
     "biometric",
@@ -99,6 +101,7 @@ permission = ["dep:waterkit-permission"]
 location = ["dep:waterkit-location", "permission"]
 audio = ["dep:waterkit-audio"]
 haptic = ["dep:waterkit-haptic"]
+language = ["dep:waterkit-language"]
 notification = ["dep:waterkit-notification"]
 dialog = ["dep:waterkit-dialog"]
 biometric = ["dep:waterkit-biometric"]
@@ -142,6 +145,7 @@ waterkit-permission = { path = "platform/permission", version = "0.1.4" }
 waterkit-location = { path = "device/location", version = "0.1.4" }
 waterkit-audio = { path = "multimedia/audio", version = "0.1.4", default-features = false }
 waterkit-haptic = { path = "device/haptic", version = "0.1.4" }
+waterkit-language = { path = "platform/language", version = "0.1.4" }
 waterkit-notification = { path = "sharing/notification", version = "0.1.4" }
 waterkit-dialog = { path = "sharing/dialog", version = "0.1.4" }
 waterkit-biometric = { path = "identity/biometric", version = "0.1.4" }
@@ -181,6 +185,7 @@ smallvec = "1.15"
 async-channel = "2.5"
 async-fs = "2"
 thiserror = "2"
+icu_locale_core = { version = "2", features = ["alloc"] }
 num-traits = "0.2"
 blocking = "1"
 async-io = "2"

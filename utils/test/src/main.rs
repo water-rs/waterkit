@@ -845,6 +845,8 @@ fn get_crate_feature(package_name: &str) -> Option<&'static str> {
         Some("calendar")
     } else if package_name.contains("health") {
         Some("health")
+    } else if package_name.contains("language") {
+        Some("language")
     } else if package_name.contains("deeplink") {
         Some("deeplink")
     } else if package_name.contains("screen") {

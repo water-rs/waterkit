@@ -56,6 +56,10 @@ pub use waterkit_fs as fs;
 #[doc(inline)]
 pub use waterkit_haptic as haptic;
 
+#[cfg(feature = "language")]
+#[doc(inline)]
+pub use waterkit_language as language;
+
 #[cfg(feature = "location")]
 #[doc(inline)]
 pub use waterkit_location as location;

@@ -45,6 +45,7 @@ full = [
     "contacts",
     "calendar",
     "health",
+    "language",
     "screen",
     "background",
     "passkey",
@@ -72,6 +73,7 @@ deeplink = ["waterkit_content/deeplink"]
 contacts = ["waterkit_content/contacts"]
 calendar = ["waterkit_content/calendar"]
 health = ["waterkit_content/health"]
+language = ["waterkit_content/language"]
 screen = ["waterkit_content/screen"]
 background = ["waterkit_content/background"]
 passkey = ["waterkit_content/passkey"]

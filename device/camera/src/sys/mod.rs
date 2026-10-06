@@ -6,7 +6,9 @@ pub mod apple;
 #[cfg(target_os = "android")]
 pub mod android;
 
-#[cfg(any(target_os = "android", test))]
+// The session runs its reader on a `std::thread`, so its host tests need a
+// target with threads.
+#[cfg(any(target_os = "android", all(test, not(target_family = "wasm"))))]
 mod android_session;
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]

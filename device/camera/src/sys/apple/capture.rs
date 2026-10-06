@@ -27,8 +27,8 @@ use crate::{YcbcrEncoding, YcbcrMatrix};
 /// Core Foundation's reference counting is thread-safe, and nothing here
 /// reads or writes the buffer's pixels on the CPU: it is only queried for
 /// immutable metadata and released.
-#[derive(Debug)]
-pub struct CapturedPixelBuffer(CFRetained<CVPixelBuffer>);
+#[derive(Debug, Clone)]
+pub struct CapturedPixelBuffer(pub(crate) CFRetained<CVPixelBuffer>);
 
 // SAFETY: see the type's documentation; the buffer is only retained, released
 // and queried for immutable properties, all thread-safe in Core Video.
@@ -78,7 +78,7 @@ pub fn build_frame(device: &wgpu::Device, raw: RawFrame) -> Frame {
     // import takes its own reference on it.
     let surface =
         unsafe { Ycbcr420IoSurfaceFrame::retain(NonNull::from(&*surface).cast::<c_void>()) }
-            .with_owner(raw.pixel_buffer);
+            .with_owner(raw.pixel_buffer.clone());
     let luma = surface.import(device, Ycbcr420Plane::Luma);
     let chroma = surface.import(device, Ycbcr420Plane::Chroma);
     let encoding = YcbcrEncoding {
@@ -94,13 +94,15 @@ pub fn build_frame(device: &wgpu::Device, raw: RawFrame) -> Frame {
         chroma: chroma.create_view(&wgpu::TextureViewDescriptor::default()),
         encoding,
     };
-    Frame::new(
+    let mut frame = Frame::new(
         planes,
         width,
         height,
         orientation_from_rotation(raw.rotation_degrees, raw.mirrored),
         raw.timestamp,
-    )
+    );
+    frame.pixel_buffer = Some(raw.pixel_buffer);
+    frame
 }
 
 /// The matrix named by the buffer's `kCVImageBufferYCbCrMatrixKey`

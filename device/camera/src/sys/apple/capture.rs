@@ -28,8 +28,8 @@ use wgpu_external_frame::YcbcrMatrix;
 use wgpu_external_frame::io_surface::{Ycbcr420IoSurfaceFrame, Ycbcr420Plane};
 
 use crate::color::{from_ycbcr_matrix, from_ycbcr_range};
-use crate::frame::{Frame, FramePlanes};
-use crate::{ColorPrimaries, MatrixCoefficients, Orientation, TransferFunction, VideoColorInfo};
+use crate::frame::{Frame, FramePlanes, orientation_from_rotation};
+use crate::{ColorPrimaries, MatrixCoefficients, TransferFunction, VideoColorInfo};
 
 /// A retained `CVPixelBuffer` that may cross threads.
 ///
@@ -114,7 +114,7 @@ pub fn build_frame(device: &wgpu::Device, raw: RawFrame) -> Frame {
         color,
         width,
         height,
-        Orientation::from_rotation(raw.rotation_degrees, raw.mirrored),
+        orientation_from_rotation(raw.rotation_degrees, raw.mirrored),
         raw.timestamp,
     )
 }

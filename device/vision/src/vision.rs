@@ -54,10 +54,15 @@ impl Vision {
         }
     }
 
-    /// Capabilities compiled into this build.
+    /// Capabilities compiled into this build and served on this device.
     #[must_use]
-    pub const fn capabilities(&self) -> VisionCapabilities {
-        VisionCapabilities {}
+    pub fn capabilities(&self) -> VisionCapabilities {
+        VisionCapabilities {
+            #[cfg(feature = "barcode")]
+            barcodes: crate::sys::barcodes_capability(),
+            #[cfg(feature = "text")]
+            text: crate::sys::text_capability(),
+        }
     }
 
     /// Prepares the selected realization's requirements without processing an
@@ -322,6 +327,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(any(feature = "barcode", feature = "text")))]
     fn portable_only_selects_portable_and_can_be_constructed_without_enabled_capabilities() {
         let (device, queue) = gpu();
         let vision = Vision::with_policy(device, queue, Policy::PortableOnly);
@@ -340,6 +346,14 @@ mod tests {
         );
         assert_eq!(PORTABLE_RUNS[3].load(Ordering::SeqCst), 1);
         assert_eq!(PORTABLE_RUNS[4].load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    #[cfg(any(feature = "barcode", feature = "text"))]
+    #[should_panic(expected = "PortableOnly requires portable realizations")]
+    fn portable_only_panics_while_an_enabled_capability_is_not_carried() {
+        let (device, queue) = gpu();
+        let _vision = Vision::with_policy(device, queue, Policy::PortableOnly);
     }
 
     #[test]

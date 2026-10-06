@@ -1,0 +1,313 @@
+//! Real `Vision` results against images generated at test time; no binary
+//! fixtures are committed. The macOS run verifies the same bridge code iOS
+//! ships.
+#![cfg(all(target_os = "macos", feature = "barcode", feature = "text"))]
+
+use std::sync::Arc;
+
+use bytes::Bytes;
+use enumset::EnumSet;
+use image::{DynamicImage, Rgba, RgbaImage};
+use waterkit_core::Capabilities;
+use waterkit_vision::{
+    DetectBarcodes, Image, Orientation, RecognitionLevel, RecognizeText, Symbology, Vision,
+    VisionError,
+};
+
+fn gpu() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+        apply_limit_buckets: false,
+    }))
+    .expect("vision tests need an adapter");
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            .expect("vision tests need a device");
+    (Arc::new(device), Arc::new(queue))
+}
+
+fn vision() -> (Vision, Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+    let (device, queue) = gpu();
+    (Vision::new(device.clone(), queue.clone()), device, queue)
+}
+
+fn qr_rgba(content: &str) -> RgbaImage {
+    let code = qrcode::QrCode::new(content.as_bytes()).expect("content fits a QR code");
+    let luma = code
+        .render::<image::Luma<u8>>()
+        .min_dimensions(256, 256)
+        .build();
+    DynamicImage::ImageLuma8(luma).to_rgba8()
+}
+
+#[allow(clippy::cast_possible_truncation)] // generated barcodes fit u32
+fn code128_rgba(content: &str) -> RgbaImage {
+    const XDIM: u32 = 3;
+    const QUIET: u32 = 12 * XDIM;
+
+    // barcoders takes an explicit start-set marker; `Ɓ` selects set B. The
+    // marker is encoding syntax, not part of the decoded payload.
+    let bars = barcoders::sym::code128::Code128::new(format!("\u{181}{content}"))
+        .expect("content encodes as Code 128")
+        .encode();
+    let width = bars.len() as u32 * XDIM + 2 * QUIET;
+    RgbaImage::from_fn(width, 150, |x, _| {
+        let index = x.saturating_sub(QUIET) / XDIM;
+        let black = x >= QUIET && bars.get(index as usize) == Some(&1);
+        if black {
+            Rgba([0, 0, 0, 255])
+        } else {
+            Rgba([255, 255, 255, 255])
+        }
+    })
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_lossless,
+    clippy::cast_sign_loss
+)]
+// glyph bounds are whole-pixel values; canvas sizes and coverage are small
+fn text_rgba(line: &str, width: u32, height: u32) -> RgbaImage {
+    use ab_glyph::{Font, FontArc, PxScale, ScaleFont, point};
+
+    let font = FontArc::try_from_slice(dejavu::sans::regular()).expect("DejaVu Sans parses");
+    let scale = PxScale::from(56.0);
+    let scaled = font.as_scaled(scale);
+    let mut image = RgbaImage::from_pixel(width, height, Rgba([255, 255, 255, 255]));
+    let mut caret = point(24.0, 24.0 + scaled.ascent());
+    let mut last = None;
+    for ch in line.chars() {
+        let id = scaled.glyph_id(ch);
+        if let Some(previous) = last {
+            caret.x += scaled.kern(previous, id);
+        }
+        let glyph = id.with_scale_and_position(scale, caret);
+        if let Some(outline) = font.outline_glyph(glyph) {
+            let bounds = outline.px_bounds();
+            outline.draw(|dx, dy, coverage| {
+                let x = bounds.min.x as i64 + i64::from(dx);
+                let y = bounds.min.y as i64 + i64::from(dy);
+                if (0..width as i64).contains(&x) && (0..height as i64).contains(&y) {
+                    let shade = 255 - (coverage * 255.0) as u8;
+                    *image.get_pixel_mut(x as u32, y as u32) = Rgba([shade, shade, shade, 255]);
+                }
+            });
+        }
+        caret.x += scaled.h_advance(id);
+        last = Some(id);
+    }
+    image
+}
+
+fn encoded(image: &RgbaImage) -> Image {
+    let mut png = std::io::Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(image.clone())
+        .write_to(&mut png, image::ImageFormat::Png)
+        .expect("png encoding succeeds");
+    Image::from_encoded(Bytes::from(png.into_inner()))
+}
+
+fn textured(
+    image: &RgbaImage,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    orientation: Orientation,
+) -> Image {
+    let (width, height) = (image.width(), image.height());
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("vision test image"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        image.as_raw(),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    // `write_texture` is staged in wgpu's pending-writes encoder: submit it
+    // and wait, so Vision reads finished pixels, as a rendered frame would.
+    queue.submit(std::iter::empty());
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        })
+        .expect("the upload completes");
+    Image::from_texture(texture, orientation)
+}
+
+#[test]
+fn capabilities_report_the_running_oss_vision_support() {
+    let (vision, _, _) = vision();
+    let capabilities = vision.capabilities();
+    assert!(capabilities.available());
+    for symbology in [
+        Symbology::Qr,
+        Symbology::Code128,
+        Symbology::Ean13,
+        Symbology::Pdf417,
+        Symbology::Aztec,
+        Symbology::DataMatrix,
+    ] {
+        assert!(
+            capabilities.barcodes.native.contains(symbology),
+            "Vision serves {symbology:?} on every macOS 26"
+        );
+    }
+    assert!(
+        !capabilities.text.native.is_empty(),
+        "Vision serves text languages on every macOS 26"
+    );
+}
+
+#[test]
+fn qr_in_an_encoded_png_decodes_with_payload_and_bounds() {
+    let (vision, _, _) = vision();
+    let request = DetectBarcodes::new(EnumSet::only(Symbology::Qr));
+    let barcodes = pollster::block_on(vision.perform(&encoded(&qr_rgba("waterkit")), &request))
+        .expect("Vision decodes the generated QR");
+
+    assert_eq!(barcodes.len(), 1);
+    let barcode = &barcodes[0];
+    assert_eq!(barcode.symbology(), Symbology::Qr);
+    assert_eq!(barcode.payload().text(), Some("waterkit"));
+    let [top_left, top_right, _, bottom_left] = barcode.bounds().0;
+    for corner in [top_left, top_right, bottom_left] {
+        assert!((0.0..=1.0).contains(&corner.x) && (0.0..=1.0).contains(&corner.y));
+    }
+    assert!(top_left.y < bottom_left.y);
+    assert!(top_left.x < top_right.x);
+}
+
+#[test]
+fn qr_and_code128_decode_from_gpu_textures() {
+    let (vision, device, queue) = vision();
+    let request = DetectBarcodes::new(EnumSet::only(Symbology::Qr) | Symbology::Code128);
+
+    let barcodes = pollster::block_on(vision.perform(
+        &textured(&qr_rgba("from-gpu"), &device, &queue, Orientation::Up),
+        &request,
+    ))
+    .expect("QR decodes from an MTLTexture");
+    assert_eq!(barcodes.len(), 1);
+    assert_eq!(barcodes[0].symbology(), Symbology::Qr);
+    assert_eq!(barcodes[0].payload().text(), Some("from-gpu"));
+
+    let barcodes = pollster::block_on(vision.perform(
+        &textured(&code128_rgba("WATERKIT"), &device, &queue, Orientation::Up),
+        &request,
+    ))
+    .expect("Code 128 decodes from an MTLTexture");
+    assert_eq!(barcodes.len(), 1);
+    assert_eq!(barcodes[0].symbology(), Symbology::Code128);
+    assert_eq!(barcodes[0].payload().text(), Some("WATERKIT"));
+}
+
+#[test]
+fn stored_orientation_is_applied_before_vision_reads() {
+    let (vision, device, queue) = vision();
+    // `Right` marks pixels stored turned 90° counter-clockwise from upright.
+    let rotated = image::imageops::rotate270(&qr_rgba("oriented"));
+    let request = DetectBarcodes::new(EnumSet::only(Symbology::Qr));
+    let barcodes = pollster::block_on(vision.perform(
+        &textured(&rotated, &device, &queue, Orientation::Right),
+        &request,
+    ))
+    .expect("the rotated texture still decodes");
+    assert_eq!(barcodes.len(), 1);
+    assert_eq!(barcodes[0].payload().text(), Some("oriented"));
+}
+
+#[test]
+fn rendered_text_is_recognized() {
+    let (vision, _, _) = vision();
+    let request = RecognizeText::new().level(RecognitionLevel::Accurate);
+    let lines = pollster::block_on(
+        vision.perform(&encoded(&text_rgba("waterkit sees", 720, 140)), &request),
+    )
+    .expect("Vision recognizes rendered text");
+
+    assert_eq!(lines.len(), 1);
+    let line = &lines[0];
+    assert_eq!(line.text.to_lowercase(), "waterkit sees");
+    assert!(line.confidence > 0.5);
+}
+
+#[test]
+fn a_request_tuple_shares_one_image_and_reports_each_result() {
+    let (vision, _, _) = vision();
+    // A QR and a rendered line composed onto one canvas.
+    let mut canvas = RgbaImage::from_pixel(720, 560, Rgba([255, 255, 255, 255]));
+    image::imageops::overlay(&mut canvas, &qr_rgba("shared pass"), 24, 24);
+    image::imageops::overlay(&mut canvas, &text_rgba("shared pass", 680, 100), 20, 420);
+
+    let request = (
+        DetectBarcodes::new(EnumSet::only(Symbology::Qr)),
+        RecognizeText::new(),
+    );
+    let (barcodes, lines) = pollster::block_on(vision.perform(&encoded(&canvas), &request))
+        .expect("both requests share the pass");
+
+    assert_eq!(barcodes.len(), 1);
+    assert_eq!(barcodes[0].payload().text(), Some("shared pass"));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.text.to_lowercase().contains("shared")),
+        "recognized lines: {lines:?}"
+    );
+}
+
+#[test]
+fn an_unserved_language_fails_ahead_of_time_and_names_it() {
+    let (vision, _, _) = vision();
+    // BCP-47 "tlh" (Klingon) parses but Vision does not serve it.
+    let request = RecognizeText::new().languages(["tlh".parse().expect("tlh is BCP-47")]);
+    let error = pollster::block_on(vision.perform(&encoded(&text_rgba("x", 200, 80)), &request))
+        .expect_err("an unsupported language is rejected before any native call");
+    let VisionError::Unsupported(message) = error else {
+        panic!("expected Unsupported, got {error:?}")
+    };
+    assert!(
+        message.contains("tlh"),
+        "the error names the language: {message}"
+    );
+}
+
+#[test]
+fn a_request_symbology_set_is_checked_against_the_supported_set() {
+    let (vision, _, _) = vision();
+    // Everything the crate vocabulary names and Vision does not serve must
+    // already be filtered out by `capabilities()`; the served subset decodes.
+    let served = vision.capabilities().barcodes.native;
+    assert!(served.contains(Symbology::Qr));
+    let request = DetectBarcodes::new(EnumSet::only(Symbology::Qr));
+    pollster::block_on(vision.prepare(&request)).expect("a served request prepares");
+}

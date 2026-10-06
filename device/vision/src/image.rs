@@ -25,6 +25,12 @@ pub enum Pixels {
         planes: waterkit_camera::FramePlanes,
         /// How the stored pixels relate to upright.
         orientation: Orientation,
+        /// The captured `CVPixelBuffer`, when the frame carries one.
+        ///
+        /// Native realizations serve straight from it; frames uploaded from
+        /// memory carry no buffer and prepare through their planes.
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        pixel_buffer: Option<crate::sys::apple::PixelBuffer>,
     },
     /// JPEG, PNG, or HEIF data, decoded with its own orientation metadata by
     /// the serving realization.
@@ -71,21 +77,42 @@ impl Image {
         }
     }
 
+    /// Mutable access for tests that need to construct a `Pixels` variant no
+    /// public constructor produces, like a frame carrying its pixel buffer.
+    #[cfg(test)]
+    pub(crate) const fn pixels_mut(&mut self) -> &mut Pixels {
+        &mut self.pixels
+    }
+
     #[cfg(feature = "camera")]
-    fn from_planes(planes: &waterkit_camera::FramePlanes, orientation: Orientation) -> Self {
-        Self {
-            pixels: Pixels::Frame {
-                planes: planes.clone(),
-                orientation,
-            },
-        }
+    pub(crate) fn from_planes(
+        planes: &waterkit_camera::FramePlanes,
+        orientation: Orientation,
+    ) -> Self {
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        let pixels = Pixels::Frame {
+            planes: planes.clone(),
+            orientation,
+            pixel_buffer: None,
+        };
+        #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+        let pixels = Pixels::Frame {
+            planes: planes.clone(),
+            orientation,
+        };
+        Self { pixels }
     }
 }
 
 #[cfg(feature = "camera")]
 impl From<&waterkit_camera::Frame> for Image {
     fn from(frame: &waterkit_camera::Frame) -> Self {
-        Self::from_planes(frame.planes(), frame.orientation())
+        let mut image = Self::from_planes(frame.planes(), frame.orientation());
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        if let Pixels::Frame { pixel_buffer, .. } = &mut image.pixels {
+            *pixel_buffer = frame.pixel_buffer().map(crate::sys::apple::PixelBuffer);
+        }
+        image
     }
 }
 
@@ -195,6 +222,7 @@ mod tests {
             Pixels::Frame {
                 planes: FramePlanes::Rgb(view),
                 orientation,
+                ..
             } => {
                 assert_eq!(*orientation, Orientation::Right);
                 assert_eq!(view, &rgb_view);
@@ -222,6 +250,7 @@ mod tests {
                         ..
                     },
                 orientation,
+                ..
             } => {
                 assert_eq!(*orientation, Orientation::Right);
                 assert_eq!(actual_luma, &luma);
@@ -246,6 +275,7 @@ mod tests {
                         yuyv: actual_yuyv, ..
                     },
                 orientation,
+                ..
             } => {
                 assert_eq!(*orientation, Orientation::Right);
                 assert_eq!(actual_yuyv, &yuyv);

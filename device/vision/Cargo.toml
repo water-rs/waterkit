@@ -20,10 +20,47 @@ bytes.workspace = true
 futures.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+enumset = { workspace = true, optional = true }
+icu_locale_core = { workspace = true, optional = true }
 waterkit-camera = { workspace = true, optional = true }
 
+[build-dependencies]
+waterkit-build.workspace = true
+
 [features]
+# The barcode vocabulary and `DetectBarcodes`.
+barcode = ["dep:enumset"]
+# `RecognizeText`.
+text = ["dep:icu_locale_core"]
+# Camera `Frame` images through `waterkit-camera`.
 camera = ["dep:waterkit-camera"]
+
+# Apple platforms (iOS, macOS) - the system Vision framework.
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+serde = { workspace = true, features = ["derive"] }
+# Results cross the bridge as JSON.
+serde_json.workspace = true
+objc2.workspace = true
+objc2-core-foundation = { workspace = true, features = ["CFDictionary", "CFString"] }
+objc2-core-video = { workspace = true, features = [
+    "CVBuffer",
+    "CVImageBuffer",
+    "CVPixelBuffer",
+    "CVReturn",
+] }
+objc2-metal.workspace = true
+# The wgpu Metal backend, for recovering the `MTLTexture` an image texture is.
+wgpu-hal.workspace = true
 
 [dev-dependencies]
 pollster.workspace = true
+image.workspace = true
+# Renders a QR code at test time; no image fixture is committed.
+qrcode = "0.14"
+# Renders 1D symbologies at test time.
+barcoders = "1"
+# Rasterizes glyphs for text recognition tests.
+ab_glyph = "0.2"
+# A bundled DejaVu font; no font binary is committed.
+dejavu = "2.37"

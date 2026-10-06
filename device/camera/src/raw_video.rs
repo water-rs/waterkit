@@ -558,7 +558,7 @@ mod tests {
             let rgba = frame.to_rgba(reader.header()).expect("NV12 converts");
             let expected = expected_rgb(matrix, range, 81, 90, 240);
             let (pixels, remainder) = rgba.as_chunks::<4>();
-            assert!(remainder.is_empty());
+            assert_eq!(remainder, []);
             for pixel in pixels {
                 assert!(expected[0].mul_add(-255.0, f64::from(pixel[0])).abs() <= 1.0);
                 assert!(expected[1].mul_add(-255.0, f64::from(pixel[1])).abs() <= 1.0);

@@ -123,6 +123,15 @@ pub struct Frame {
 }
 
 impl Frame {
+    /// Only the platforms with a camera backend build frames.
+    #[cfg(any(
+        target_os = "ios",
+        target_os = "macos",
+        target_os = "android",
+        target_os = "windows",
+        target_os = "linux",
+        test
+    ))]
     pub(crate) const fn new(
         planes: FramePlanes,
         width: u32,

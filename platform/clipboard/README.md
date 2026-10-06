@@ -51,6 +51,25 @@ async fn copy_paste() -> Result<(), waterkit_clipboard::ClipboardError> {
 }
 ```
 
+## Android file provider
+
+Android apps cannot open another app's `file://` URIs, so files, images and
+binary data go on the clipboard as `content://` URIs served by
+`waterkit.clipboard.ClipboardFileProvider`. The app's `AndroidManifest.xml`
+declares it inside `<application>`, under any authority:
+
+```xml
+<provider
+    android:name="waterkit.clipboard.ClipboardFileProvider"
+    android:authorities="${applicationId}.waterkit.clipboard"
+    android:exported="false"
+    android:grantUriPermissions="true" />
+```
+
+The provider is not exported: an app opens a URI only through the read
+access the clipboard grants the app that reads the clip. Without the
+declaration, writing a file returns `ClipboardError::Platform`.
+
 ## Linux display server
 
 `Clipboard::new` and `PrimarySelection::new` each choose the display server

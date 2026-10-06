@@ -214,6 +214,13 @@ impl<E: Effect> GpuEffectProcessor<E> {
     /// # Errors
     ///
     /// Returns a processing error when effect setup fails.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
+        )
+    )]
     pub async fn new(
         device: wgpu::Device,
         queue: wgpu::Queue,
@@ -267,6 +274,13 @@ impl<E: Effect> GpuEffectProcessor<E> {
 impl<E: Effect> FrameProcessor<GpuTextureFrame> for GpuEffectProcessor<E> {
     type Output = GpuTextureFrame;
 
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
+        )
+    )]
     fn process(
         &mut self,
         input: TimedFrame<GpuTextureFrame>,

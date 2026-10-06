@@ -9,6 +9,7 @@ use url::Url;
 
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
+use crate::sys::file_path::not_absolute;
 
 /// HTML markup.
 pub const HTML: &str = "text/html";
@@ -73,14 +74,7 @@ pub fn html(html: &str, alt_text: Option<&str>) -> Vec<Representation> {
 pub fn files(paths: &[PathBuf]) -> Result<Vec<Representation>, ClipboardError> {
     let uris = paths
         .iter()
-        .map(|path| {
-            Url::from_file_path(path).map_err(|()| {
-                ClipboardError::Encode(format!(
-                    "{} is not an absolute path, which a file URI needs",
-                    path.display()
-                ))
-            })
-        })
+        .map(|path| Url::from_file_path(path).map_err(|()| not_absolute(path)))
         .collect::<Result<Vec<_>, _>>()?;
     let uri_list: String = uris.iter().flat_map(|uri| [uri.as_str(), "\r\n"]).collect();
     let copied_files = std::iter::once("copy")
@@ -271,25 +265,25 @@ mod tests {
     fn files_round_trip_through_the_uri_list() {
         let paths = vec![
             PathBuf::from("/tmp/a file.txt"),
-            PathBuf::from("/tmp/n\u{e4}me#1"),
+            PathBuf::from("/tmp/n\u{e4}me#1?.txt"),
         ];
         let representations = files(&paths).unwrap();
         let uri_list = bytes_of(&representations, URI_LIST);
         assert_eq!(
             uri_list,
-            b"file:///tmp/a%20file.txt\r\nfile:///tmp/n%C3%A4me%231\r\n"
+            b"file:///tmp/a%20file.txt\r\nfile:///tmp/n%C3%A4me%231%3F.txt\r\n"
         );
         assert_eq!(decode_uri_list(uri_list).unwrap(), paths);
         assert_eq!(
             bytes_of(&representations, "x-special/gnome-copied-files"),
-            b"copy\nfile:///tmp/a%20file.txt\nfile:///tmp/n%C3%A4me%231"
+            b"copy\nfile:///tmp/a%20file.txt\nfile:///tmp/n%C3%A4me%231%3F.txt"
         );
         let offered = offered(&representations);
         assert!(offered.has_files());
         let target = offered.text_target().expect("paths are offered as text");
         assert_eq!(
             bytes_of(&representations, target),
-            "/tmp/a file.txt\n/tmp/n\u{e4}me#1".as_bytes()
+            "/tmp/a file.txt\n/tmp/n\u{e4}me#1?.txt".as_bytes()
         );
     }
 

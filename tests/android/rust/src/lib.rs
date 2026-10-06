@@ -8,6 +8,8 @@ use jni::objects::JDoubleArray;
 use jni::objects::{Global, JObject};
 use jni::sys::{jdoubleArray, jstring};
 use jni::{Env, EnvUnowned};
+#[cfg(feature = "clipboard")]
+use waterkit_build::describe_jni_error;
 use waterkit_test_report::{TestCase, TestReport, to_json_pretty};
 
 const PERMISSION_NOT_DETERMINED: i32 = 0;
@@ -118,7 +120,8 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
         feature = "location",
         feature = "permission",
         feature = "fs",
-        feature = "secret"
+        feature = "secret",
+        feature = "clipboard"
     ))]
     let activity_global = match env.new_global_ref(activity) {
         Ok(value) => value,
@@ -144,7 +147,8 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
         feature = "permission",
         feature = "fs",
         feature = "secret",
-        feature = "camera"
+        feature = "camera",
+        feature = "clipboard"
     )))]
     let _ = (env, activity);
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -158,7 +162,8 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
             feature = "location",
             feature = "permission",
             feature = "fs",
-            feature = "secret"
+            feature = "secret",
+            feature = "clipboard"
         ))]
         let activity = activity_global.as_obj();
 
@@ -176,6 +181,9 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
 
         #[cfg(feature = "clipboard")]
         record_android_clipboard(&mut report).await;
+
+        #[cfg(feature = "clipboard")]
+        report.push(ClipboardFiles::record(env, activity).await);
 
         #[cfg(feature = "fs")]
         record_android_fs(&mut report, env, activity);
@@ -773,6 +781,200 @@ async fn record_android_clipboard(report: &mut TestReport) {
     }
 
     record_android_clipboard_watch(report, &mut clipboard).await;
+}
+
+/// The files the `clipboard.files_round_trip` case copies: two in the app's
+/// cache, one with a name every URL encoding must escape.
+#[cfg(feature = "clipboard")]
+struct ClipboardFiles {
+    /// The clip's first URI, as `ClipboardFileProvider` builds it.
+    expected_uri: String,
+    paths: Vec<std::path::PathBuf>,
+}
+
+#[cfg(feature = "clipboard")]
+impl ClipboardFiles {
+    const NAME: &str = "waterkit clipboard n\u{e4}me #1?.txt";
+    const ENCODED_NAME: &str = "waterkit%20clipboard%20n%C3%A4me%20%231%3F.txt";
+    const CONTENTS: &[u8] = b"WaterKit clipboard file\n";
+
+    /// Runs the case.
+    #[expect(
+        clippy::future_not_send,
+        reason = "the JNI environment belongs to the harness thread, which the current-thread runtime blocks on"
+    )]
+    async fn record(env: &mut Env<'_>, activity: &JObject<'_>) -> TestCase {
+        const CASE: &str = "clipboard.files_round_trip";
+        let files = match Self::new(env, activity) {
+            Ok(files) => files,
+            Err(error) => return TestCase::failed(CASE, error),
+        };
+        if let Err(error) = files.round_trip().await {
+            return TestCase::failed(CASE, error);
+        }
+        match files.check_clip(env, activity) {
+            Ok(uri) => TestCase::passed_with_message(CASE, format!("uri={uri}")),
+            Err(error) => TestCase::failed(CASE, error),
+        }
+    }
+
+    /// The files in `activity`'s cache directory.
+    fn new(env: &mut Env<'_>, activity: &JObject<'_>) -> Result<Self, String> {
+        use jni::{jni_sig, jni_str};
+
+        let cache_dir = call_object(
+            env,
+            activity,
+            jni_str!("getCacheDir"),
+            &jni_sig!("()Ljava/io/File;"),
+            &[],
+        )?;
+        let cache_dir = call_object(
+            env,
+            &cache_dir,
+            jni_str!("getAbsolutePath"),
+            &jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )?;
+        let cache_dir = std::path::PathBuf::from(java_string(env, &cache_dir)?);
+        let package = call_object(
+            env,
+            activity,
+            jni_str!("getPackageName"),
+            &jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )?;
+        let package = java_string(env, &package)?;
+        Ok(Self {
+            expected_uri: format!(
+                "content://{package}.waterkit.clipboard{}/{}",
+                cache_dir.display(),
+                Self::ENCODED_NAME
+            ),
+            paths: vec![cache_dir.join(Self::NAME), cache_dir.join("plain.txt")],
+        })
+    }
+
+    /// Copies the files, and reads back their paths and the first one's
+    /// contents through the clipboard.
+    async fn round_trip(&self) -> Result<(), String> {
+        for path in &self.paths {
+            std::fs::write(path, Self::CONTENTS)
+                .map_err(|error| format!("writing {}: {error}", path.display()))?;
+        }
+        let mut clipboard = waterkit_content::clipboard::Clipboard::new()
+            .map_err(|error| format!("clipboard init failed: {error}"))?;
+        clipboard
+            .set_files(&self.paths)
+            .map_err(|error| format!("set_files failed: {error}"))?;
+        let read = clipboard
+            .files()
+            .await
+            .map_err(|error| format!("files failed: {error}"))?;
+        if read != self.paths {
+            return Err(format!("files() returned {read:?} for {:?}", self.paths));
+        }
+        let contents = clipboard
+            .binary("text/plain")
+            .await
+            .map_err(|error| format!("reading the first file failed: {error}"))?;
+        if contents.as_deref() != Some(Self::CONTENTS) {
+            return Err(format!("the first file's URI served {contents:?}"));
+        }
+        Ok(())
+    }
+
+    /// Checks the clip's first URI, and grants `com.android.shell` read
+    /// access to it, as the clipboard grants the app that reads the clip, so
+    /// that `adb shell content read --uri <uri>` can open it as another app.
+    fn check_clip(&self, env: &mut Env<'_>, activity: &JObject<'_>) -> Result<String, String> {
+        use jni::objects::JValue;
+        use jni::{jni_sig, jni_str};
+
+        const FLAG_GRANT_READ_URI_PERMISSION: i32 = 1;
+
+        let service = env
+            .new_string("clipboard")
+            .map_err(|error| describe_jni_error(env, error))?;
+        let manager = call_object(
+            env,
+            activity,
+            jni_str!("getSystemService"),
+            &jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
+            &[JValue::Object(&service)],
+        )?;
+        let clip = call_object(
+            env,
+            &manager,
+            jni_str!("getPrimaryClip"),
+            &jni_sig!("()Landroid/content/ClipData;"),
+            &[],
+        )?;
+        let item = call_object(
+            env,
+            &clip,
+            jni_str!("getItemAt"),
+            &jni_sig!("(I)Landroid/content/ClipData$Item;"),
+            &[JValue::Int(0)],
+        )?;
+        let uri = call_object(
+            env,
+            &item,
+            jni_str!("getUri"),
+            &jni_sig!("()Landroid/net/Uri;"),
+            &[],
+        )?;
+        let uri_text = call_object(
+            env,
+            &uri,
+            jni_str!("toString"),
+            &jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )?;
+        let uri_text = java_string(env, &uri_text)?;
+        if uri_text != self.expected_uri {
+            return Err(format!(
+                "the clip names {uri_text}, expected {}",
+                self.expected_uri
+            ));
+        }
+
+        let shell = env
+            .new_string("com.android.shell")
+            .map_err(|error| describe_jni_error(env, error))?;
+        env.call_method(
+            activity,
+            jni_str!("grantUriPermission"),
+            jni_sig!("(Ljava/lang/String;Landroid/net/Uri;I)V"),
+            &[
+                JValue::Object(&shell),
+                JValue::Object(&uri),
+                JValue::Int(FLAG_GRANT_READ_URI_PERMISSION),
+            ],
+        )
+        .map_err(|error| format!("grantUriPermission: {}", describe_jni_error(env, error)))?;
+        Ok(uri_text)
+    }
+}
+
+/// Calls the object-returning method `name` of `object`.
+#[cfg(feature = "clipboard")]
+fn call_object<'local>(
+    env: &mut Env<'local>,
+    object: &JObject<'_>,
+    name: &'static jni::strings::JNIStr,
+    signature: &jni::signature::MethodSignature<'_, '_>,
+    args: &[jni::objects::JValue<'_>],
+) -> Result<JObject<'local>, String> {
+    env.call_method(object, name, signature, args)
+        .and_then(jni::JValueOwned::l)
+        .map_err(|error| format!("{name}: {}", describe_jni_error(env, error)))
+}
+
+/// The contents of the `java.lang.String` `value`.
+#[cfg(feature = "clipboard")]
+fn java_string(env: &Env<'_>, value: &JObject<'_>) -> Result<String, String> {
+    waterkit_build::decode_string(env, value).map_err(|error| error.to_string())
 }
 
 /// Outcome of waiting on a clipboard stream, with a bound so a broken

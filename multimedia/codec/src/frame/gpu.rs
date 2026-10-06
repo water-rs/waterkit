@@ -80,6 +80,14 @@ impl DecodedFrameUploader {
     /// share the `IOSurface` storage, nothing is copied. Software frames are
     /// written to freshly created textures exactly once.
     #[must_use]
+    #[cfg_attr(
+        not(waterkit_any_codec),
+        expect(
+            clippy::missing_const_for_fn,
+            clippy::needless_pass_by_value,
+            reason = "a build without a codec has no decoded frame to upload: `DecodedFrame` is uninhabited there, so the body reduces to an empty match"
+        )
+    )]
     pub fn upload(
         &mut self,
         decoded: DecodedFrame,

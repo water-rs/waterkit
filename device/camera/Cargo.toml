@@ -46,7 +46,6 @@ name = "preview"
 required-features = ["preview-example"]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 pollster = "1.0"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 
@@ -58,6 +57,10 @@ winit.workspace = true
 
 [target.'cfg(target_os = "android")'.dev-dependencies]
 winit = { workspace = true, features = ["android-native-activity"] }
+
+# The preview example runs its camera loop on the browser's event loop.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-futures = "0.4"
 
 # Desktop platforms (Windows, Linux) - use nokhwa. Recording encodes through
 # waterkit-codec (hardware encoders plus the software AV1 fallback) and muxes

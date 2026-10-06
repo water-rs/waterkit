@@ -37,6 +37,10 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     target_os = "ios",
     target_os = "android"
 )))]
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "the facade calls every platform's backend through the same non-const signature; only this unsupported-platform shim could be const"
+)]
 pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     Err(Error::Unsupported)
 }
@@ -155,6 +159,10 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
     target_os = "ios",
     target_os = "android"
 )))]
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "the facade calls every platform's backend through the same non-const signature; only this unsupported-platform shim could be const"
+)]
 pub fn screenshot(_display: &ScreenInfo, _format: ImageFormat) -> Result<Screenshot, Error> {
     Err(Error::Unsupported)
 }
@@ -191,6 +199,11 @@ pub struct ScreenStreamInner;
     target_os = "ios",
     target_os = "android"
 )))]
+#[expect(
+    clippy::unused_self,
+    clippy::missing_const_for_fn,
+    reason = "this unsupported-platform shim keeps no state and computes nothing, but the facade calls every platform's backend through the same non-const `&self` methods"
+)]
 impl ScreenStreamInner {
     pub fn new(
         _display: &ScreenInfo,
@@ -201,6 +214,10 @@ impl ScreenStreamInner {
         Err(Error::Unsupported)
     }
 
+    #[expect(
+        clippy::unused_async,
+        reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
+    )]
     pub async fn next_frame(&self) -> Option<crate::frame::ScreenFrame> {
         None
     }

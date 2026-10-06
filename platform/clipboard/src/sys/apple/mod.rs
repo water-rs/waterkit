@@ -2,6 +2,7 @@
 
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
+use crate::sys::file_path::unicode_paths;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,14 +40,14 @@ mod ffi {
         fn clipboard_get_text() -> Option<String>;
         fn clipboard_get_html() -> SwiftBinaryData;
         fn clipboard_get_image() -> SwiftImageData;
-        fn clipboard_get_file_url() -> Option<String>;
+        fn clipboard_get_file_paths() -> Vec<String>;
         fn clipboard_get_binary(mime: String) -> SwiftBinaryData;
 
         // Write
         fn clipboard_set_text(text: String);
         fn clipboard_set_html(html: String, alt_text: String);
         fn clipboard_set_image_from_path(path: String) -> bool;
-        fn clipboard_set_file_url(url: String);
+        fn clipboard_set_file_paths(paths: Vec<String>) -> Option<String>;
         fn clipboard_set_binary(data: Vec<u8>, mime: String);
 
         // Control
@@ -143,22 +144,18 @@ impl ClipboardInner {
             .map_err(|error| ClipboardError::Decode(format!("the HTML is not UTF-8: {error}")))
     }
 
-    /// Get file paths.
+    /// Get the paths of the file URLs on the pasteboard, decoded by
+    /// `URL.path`.
     #[allow(
         clippy::unused_self,
-        reason = "the cross-platform clipboard backend API is instance-based"
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform clipboard backend API is fallible and instance-based"
     )]
     pub fn get_files(&self) -> Result<Vec<PathBuf>, ClipboardError> {
-        if let Some(url) = ffi::clipboard_get_file_url()
-            && let Some(path) = url.strip_prefix("file://")
-        {
-            // URL decode the path
-            let decoded = percent_encoding::percent_decode_str(path)
-                .decode_utf8()
-                .map_err(|e| ClipboardError::Platform(format!("Invalid URL encoding: {e}")))?;
-            return Ok(vec![PathBuf::from(decoded.into_owned())]);
-        }
-        Ok(Vec::new())
+        Ok(ffi::clipboard_get_file_paths()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect())
     }
 
     /// Get image as RGBA.
@@ -221,27 +218,21 @@ impl ClipboardInner {
         Ok(())
     }
 
-    /// Set file paths.
+    /// Set file paths, one pasteboard item per file.
+    ///
+    /// Each item is an `NSItemProvider` for the file: other apps paste the
+    /// file's contents, which they cannot read through a URL into this app's
+    /// sandbox, and its file URL, which encodes the path's bytes as they are.
     #[allow(
         clippy::unused_self,
-        clippy::unnecessary_wraps,
-        reason = "the cross-platform clipboard backend API is fallible and instance-based"
+        reason = "the cross-platform clipboard backend API is instance-based"
     )]
     pub fn set_files(&self, files: &[PathBuf]) -> Result<(), ClipboardError> {
         if files.is_empty() {
             return Ok(());
         }
-        // iOS only supports single file URL
-        let path = &files[0];
-        let url = format!(
-            "file://{}",
-            percent_encoding::utf8_percent_encode(
-                path.to_string_lossy().as_ref(),
-                percent_encoding::NON_ALPHANUMERIC
-            )
-        );
-        ffi::clipboard_set_file_url(url);
-        Ok(())
+        ffi::clipboard_set_file_paths(unicode_paths(files)?)
+            .map_or(Ok(()), |error| Err(ClipboardError::Platform(error)))
     }
 
     /// Set image from a file path.

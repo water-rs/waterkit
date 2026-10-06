@@ -8675,8 +8675,9 @@ dependencies = [
 
 [[package]]
 name = "wgpu-external-frame"
-version = "0.1.0"
-source = "git+https://github.com/water-rs/wgpu-external-frame?rev=5785c3967efcda574da5d872739dc5b9bdec63f1#5785c3967efcda574da5d872739dc5b9bdec63f1"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8248db9730eb67fcfdd414da3bfd7efe6a2c0c4f9f1d1ae3796e874646ea8252"
 dependencies = [
  "ash",
  "glow",

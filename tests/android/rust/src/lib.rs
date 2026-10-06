@@ -356,6 +356,16 @@ fn record_android_sensor(report: &mut TestReport, env: &mut Env<'_>, activity: &
 
 #[cfg(feature = "location")]
 fn record_android_location(report: &mut TestReport, env: &mut Env<'_>, activity: &JObject<'_>) {
+    match waterkit_content::location::android::provider_with_context(env, activity) {
+        Ok(provider) => report.push(TestCase::passed_with_message(
+            "location.provider",
+            format!("{provider:?}"),
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "location.provider",
+            format!("provider probe failed: {error}"),
+        )),
+    }
     match waterkit_content::location::android::get_location_with_context(env, activity) {
         Ok(location) => {
             let latitude = location.latitude().get();

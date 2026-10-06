@@ -16,9 +16,9 @@ mod recording;
 
 use crate::upload::{CpuPlanes, FrameUploader, nv12_len};
 use crate::{
-    CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
-    Frame, FrameConverter, Orientation, Photo, RawPhoto, RawVideoFormat, Resolution,
-    StabilizationMode, YcbcrEncoding, YcbcrMatrix, YcbcrRange,
+    CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, ColorPrimaries,
+    ColorRange, DynamicRangeProfile, Frame, FrameConverter, MatrixCoefficients, Orientation, Photo,
+    RawPhoto, RawVideoFormat, Resolution, StabilizationMode, TransferFunction, VideoColorInfo,
 };
 use nokhwa::Camera as NokhwaCamera;
 use nokhwa::pixel_format::RgbAFormat;
@@ -41,19 +41,32 @@ const DELIVERED_FORMATS: [NokhwaFrameFormat; 3] = [
     NokhwaFrameFormat::MJPEG,
 ];
 
-/// How UVC webcams encode YCbCr unless a colour-matching descriptor says
-/// otherwise: BT.601 (SMPTE 170M) coefficients in video range. Neither nokhwa
-/// backend reports a camera's descriptor, so this is the encoding every
-/// desktop YCbCr frame carries.
-const WEBCAM_ENCODING: YcbcrEncoding = YcbcrEncoding {
-    matrix: YcbcrMatrix::Bt601,
-    range: YcbcrRange::Video,
+/// nokhwa exposes no UVC colour-matching descriptor, so the UVC 1.5 default
+/// (BT.709 primaries and transfer, SMPTE 170M matrix, video range) applies.
+const UVC_YCBCR_COLOR: VideoColorInfo = VideoColorInfo {
+    matrix: MatrixCoefficients::Bt601,
+    primaries: ColorPrimaries::Bt709,
+    transfer: TransferFunction::Sdr,
+    range: ColorRange::Limited,
+    content_light_level: None,
+    dolby_vision: false,
+};
+
+/// MJPEG frames are JFIF (BT.601 full range) decoded to sRGB R'G'B'.
+const JFIF_RGB_COLOR: VideoColorInfo = VideoColorInfo {
+    matrix: MatrixCoefficients::Bt601,
+    primaries: ColorPrimaries::Bt709,
+    transfer: TransferFunction::Sdr,
+    range: ColorRange::Full,
+    content_light_level: None,
+    dolby_vision: false,
 };
 
 /// One captured frame in the layout the camera delivered, with its capture
 /// timestamp as a duration since the camera stream started.
 pub(super) struct RawFrame {
     pixels: CapturedPixels,
+    color: VideoColorInfo,
     width: u32,
     height: u32,
     timestamp: Duration,
@@ -75,17 +88,26 @@ impl RawFrame {
         let width = buffer.resolution().width();
         let height = buffer.resolution().height();
         let pixels = width as usize * height as usize;
-        let (data, expected) = match buffer.source_frame_format() {
+        let (data, expected, color) = match buffer.source_frame_format() {
             NokhwaFrameFormat::NV12 => (
                 CapturedPixels::Nv12(buffer.buffer().to_vec()),
                 nv12_len(width, height),
+                UVC_YCBCR_COLOR,
             ),
-            NokhwaFrameFormat::YUYV => (CapturedPixels::Yuyv(buffer.buffer().to_vec()), pixels * 2),
+            NokhwaFrameFormat::YUYV => (
+                CapturedPixels::Yuyv(buffer.buffer().to_vec()),
+                pixels * 2,
+                UVC_YCBCR_COLOR,
+            ),
             NokhwaFrameFormat::MJPEG => {
                 let image = buffer.decode_image::<RgbAFormat>().map_err(|error| {
                     CameraError::CaptureFailed(format!("MJPEG frame decode: {error}"))
                 })?;
-                (CapturedPixels::Rgba(image.into_raw()), pixels * 4)
+                (
+                    CapturedPixels::Rgba(image.into_raw()),
+                    pixels * 4,
+                    JFIF_RGB_COLOR,
+                )
             }
             other => {
                 return Err(CameraError::CaptureFailed(format!(
@@ -101,6 +123,7 @@ impl RawFrame {
         }
         Ok(Self {
             pixels: data,
+            color,
             width,
             height,
             timestamp,
@@ -109,14 +132,8 @@ impl RawFrame {
 
     fn upload(&self, uploader: &FrameUploader) -> Frame {
         let planes = match &self.pixels {
-            CapturedPixels::Nv12(data) => CpuPlanes::Nv12 {
-                data,
-                encoding: WEBCAM_ENCODING,
-            },
-            CapturedPixels::Yuyv(data) => CpuPlanes::Yuyv {
-                data,
-                encoding: WEBCAM_ENCODING,
-            },
+            CapturedPixels::Nv12(data) => CpuPlanes::Nv12 { data },
+            CapturedPixels::Yuyv(data) => CpuPlanes::Yuyv { data },
             CapturedPixels::Rgba(data) => CpuPlanes::Rgb {
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 data,
@@ -125,6 +142,7 @@ impl RawFrame {
         };
         uploader.upload(
             &planes,
+            self.color,
             self.width,
             self.height,
             Orientation::Up,
@@ -511,7 +529,7 @@ impl CameraInner {
                 label: Some("CameraPhoto"),
             });
         self.photo_converter
-            .encode(&self.device, &mut encoder, &frame, &upright);
+            .encode(&self.device, &mut encoder, &frame, &upright)?;
         encoder.copy_texture_to_texture(upright.as_image_copy(), texture.as_image_copy(), size);
         self.queue.submit([encoder.finish()]);
 
@@ -597,6 +615,7 @@ impl Drop for CameraInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::upload::FrameUploader;
 
     /// A lagging subscriber loses its pending frame to the newest one, and
     /// the loss is counted on the subscription rather than hidden.
@@ -610,6 +629,7 @@ mod tests {
         }];
         let frame: Captured = Ok(Arc::new(RawFrame {
             pixels: CapturedPixels::Rgba(vec![0; 4]),
+            color: JFIF_RGB_COLOR,
             width: 1,
             height: 1,
             timestamp: Duration::ZERO,
@@ -669,5 +689,41 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn upload_preserves_color_for_ycbcr_and_decoded_mjpeg_frames() {
+        let (device, queue) = crate::test_support::gpu(wgpu::Features::empty());
+        let uploader = FrameUploader::new(Arc::clone(&device), Arc::clone(&queue));
+        let frames = [
+            RawFrame {
+                pixels: CapturedPixels::Nv12(vec![16, 16, 16, 16, 128, 128]),
+                color: UVC_YCBCR_COLOR,
+                width: 2,
+                height: 2,
+                timestamp: Duration::ZERO,
+            },
+            RawFrame {
+                pixels: CapturedPixels::Yuyv(vec![16, 128, 16, 128, 16, 128, 16, 128]),
+                color: UVC_YCBCR_COLOR,
+                width: 2,
+                height: 2,
+                timestamp: Duration::ZERO,
+            },
+            RawFrame {
+                pixels: CapturedPixels::Rgba(vec![0; 16]),
+                color: JFIF_RGB_COLOR,
+                width: 2,
+                height: 2,
+                timestamp: Duration::ZERO,
+            },
+        ];
+        for (frame, expected) in
+            frames
+                .iter()
+                .zip([UVC_YCBCR_COLOR, UVC_YCBCR_COLOR, JFIF_RGB_COLOR])
+        {
+            assert_eq!(frame.upload(&uploader).color(), expected);
+        }
     }
 }

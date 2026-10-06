@@ -733,6 +733,22 @@ impl AndroidBridge {
             let display_rotation = u32::try_from(display_rotation).map_err(|_| {
                 CameraError::CaptureFailed(format!("display rotation {display_rotation}"))
             })?;
+            let data_space = env
+                .call_method(&frame_obj, jni_str!("getDataSpace"), jni_sig!("()I"), &[])
+                .and_then(jni::objects::JValueOwned::i)
+                .map_err(|error| CameraError::CaptureFailed(format!("getDataSpace: {error}")))?;
+            let profile = env
+                .call_method(
+                    &frame_obj,
+                    jni_str!("getDynamicRangeProfile"),
+                    jni_sig!("()I"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::i)
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("getDynamicRangeProfile: {error}"))
+                })?;
+            let profile = dynamic_range_profile(profile)?;
 
             let lease = ImageLease::new(
                 Arc::clone(self),
@@ -752,7 +768,14 @@ impl AndroidBridge {
             };
             // Java's ImageReader waits for the camera's write fence before it
             // hands an image out, so the buffer is ready as it arrives.
-            let frame = RawFrame::new(&buffer, lease, display_rotation, start_instant.elapsed());
+            let frame = RawFrame::new(
+                &buffer,
+                lease,
+                display_rotation,
+                data_space,
+                profile,
+                start_instant.elapsed(),
+            );
             env.call_method(&hardware_buffer, jni_str!("close"), jni_sig!("()V"), &[])
                 .map_err(|error| {
                     CameraError::CaptureFailed(format!("HardwareBuffer.close: {error}"))
@@ -1049,6 +1072,18 @@ impl AndroidBridge {
     }
 }
 
+fn dynamic_range_profile(value: i32) -> Result<DynamicRangeProfile, CameraError> {
+    match value {
+        DYNAMIC_RANGE_SDR => Ok(DynamicRangeProfile::Sdr),
+        DYNAMIC_RANGE_HDR10 => Ok(DynamicRangeProfile::Hdr10),
+        DYNAMIC_RANGE_HLG10 => Ok(DynamicRangeProfile::Hlg10),
+        DYNAMIC_RANGE_DOLBY_VISION => Ok(DynamicRangeProfile::DolbyVision),
+        _ => Err(CameraError::CaptureFailed(format!(
+            "unknown dynamic range profile in captured frame: {value}"
+        ))),
+    }
+}
+
 /// Camera inner implementation for Android.
 pub struct CameraInner {
     device: Arc<wgpu::Device>,
@@ -1317,9 +1352,7 @@ impl CameraInner {
         futures::stream::unfold(Some((importer, receiver)), move |state| async move {
             let (mut importer, receiver) = state?;
             let frame = match receiver.recv().await.ok()? {
-                Ok(raw) => raw
-                    .import(&mut importer, mounting)
-                    .map_err(|error| CameraError::FrameImport(Arc::new(error))),
+                Ok(raw) => raw.import(&mut importer, mounting),
                 Err(error) => Err(error),
             };
             let next = frame.is_ok().then_some((importer, receiver));

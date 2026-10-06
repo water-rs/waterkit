@@ -26,7 +26,7 @@
 //!     let mut converter = FrameConverter::new(&device);
 //!     let mut frames = camera.frames();
 //!     while let Some(frame) = frames.next().await {
-//!         let upright = converter.convert(&device, &queue, &frame?);
+//!         let upright = converter.convert(&device, &queue, &frame?)?;
 //!         // Sample `upright` for rendering...
 //!     }
 //!     // Camera stops when dropped
@@ -36,6 +36,7 @@
 
 #![warn(missing_docs)]
 
+mod color;
 mod converter;
 mod frame;
 // Apple and Android frames are imported from the platform's buffers; desktop
@@ -48,9 +49,9 @@ mod upload;
 
 pub use converter::{FrameConverter, UPRIGHT_FORMAT};
 pub use frame::{Frame, FramePlanes, Orientation};
-/// How YCbCr samples map to R'G'B'. These are `wgpu-external-frame`'s types,
-/// which its imports report, so frames carry them without a translation.
-pub use wgpu_external_frame::{YcbcrEncoding, YcbcrMatrix, YcbcrRange};
+pub use waterkit_video_core::{
+    ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo,
+};
 
 use std::num::NonZeroU8;
 use std::path::Path;
@@ -685,6 +686,9 @@ pub enum CameraError {
     /// GPU error.
     #[error("GPU error: {0}")]
     GpuError(String),
+    /// The frame's color description is unsupported by the frame converter.
+    #[error("unsupported frame colour: {0}")]
+    UnsupportedColor(String),
     /// Recording error.
     #[error("recording error: {0}")]
     RecordingError(String),

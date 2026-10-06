@@ -11,16 +11,25 @@ use std::ffi::c_void;
 use std::ptr::NonNull;
 use std::time::Duration;
 
-use objc2_core_foundation::{CFRetained, CFString};
+use objc2_core_foundation::{CFRetained, CFString, CFType};
 use objc2_core_video::{
-    CVPixelBuffer, CVPixelBufferGetIOSurface, kCVImageBufferYCbCrMatrix_ITU_R_601_4,
+    CVPixelBuffer, CVPixelBufferGetIOSurface, kCVImageBufferColorPrimaries_EBU_3213,
+    kCVImageBufferColorPrimaries_ITU_R_709_2, kCVImageBufferColorPrimaries_ITU_R_2020,
+    kCVImageBufferColorPrimaries_P3_D65, kCVImageBufferColorPrimaries_SMPTE_C,
+    kCVImageBufferColorPrimariesKey, kCVImageBufferTransferFunction_ITU_R_709_2,
+    kCVImageBufferTransferFunction_ITU_R_2020, kCVImageBufferTransferFunction_ITU_R_2100_HLG,
+    kCVImageBufferTransferFunction_SMPTE_240M_1995, kCVImageBufferTransferFunction_SMPTE_C,
+    kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ, kCVImageBufferTransferFunction_sRGB,
+    kCVImageBufferTransferFunctionKey, kCVImageBufferYCbCrMatrix_ITU_R_601_4,
     kCVImageBufferYCbCrMatrix_ITU_R_709_2, kCVImageBufferYCbCrMatrix_ITU_R_2020,
     kCVImageBufferYCbCrMatrixKey,
 };
+use wgpu_external_frame::YcbcrMatrix;
 use wgpu_external_frame::io_surface::{Ycbcr420IoSurfaceFrame, Ycbcr420Plane};
 
+use crate::color::{from_ycbcr_matrix, from_ycbcr_range};
 use crate::frame::{Frame, FramePlanes};
-use crate::{Orientation, YcbcrEncoding, YcbcrMatrix};
+use crate::{ColorPrimaries, MatrixCoefficients, Orientation, TransferFunction, VideoColorInfo};
 
 /// A retained `CVPixelBuffer` that may cross threads.
 ///
@@ -68,10 +77,13 @@ pub struct RawFrame {
 /// # Panics
 ///
 /// Panics when the buffer has no `IOSurface`, is not biplanar 4:2:0 YCbCr,
-/// or carries no YCbCr matrix this crate supports. The capture output is
-/// configured for `420f` or `420v`, so each of these is a platform defect.
+/// or carries no supported matrix, primaries, or transfer attachment. The
+/// capture output is configured for `420f` or `420v`, so each is a platform
+/// defect.
 pub fn build_frame(device: &wgpu::Device, raw: RawFrame) -> Frame {
     let matrix = ycbcr_matrix(&raw.pixel_buffer.0);
+    let primaries = color_primaries(&raw.pixel_buffer.0);
+    let transfer = transfer_function(&raw.pixel_buffer.0);
     let surface = CVPixelBufferGetIOSurface(Some(&raw.pixel_buffer.0))
         .expect("capture pixel buffers are IOSurface-backed");
     // SAFETY: `surface` is a live IOSurface retained for this call, and the
@@ -81,9 +93,13 @@ pub fn build_frame(device: &wgpu::Device, raw: RawFrame) -> Frame {
             .with_owner(raw.pixel_buffer);
     let luma = surface.import(device, Ycbcr420Plane::Luma);
     let chroma = surface.import(device, Ycbcr420Plane::Chroma);
-    let encoding = YcbcrEncoding {
+    let color = VideoColorInfo {
         matrix,
-        range: surface.format().range,
+        primaries,
+        transfer,
+        range: from_ycbcr_range(surface.format().range),
+        content_light_level: None,
+        dolby_vision: false,
     };
     let (width, height) = (
         surface.width(Ycbcr420Plane::Luma),
@@ -92,10 +108,10 @@ pub fn build_frame(device: &wgpu::Device, raw: RawFrame) -> Frame {
     let planes = FramePlanes::YCbCr420 {
         luma: luma.create_view(&wgpu::TextureViewDescriptor::default()),
         chroma: chroma.create_view(&wgpu::TextureViewDescriptor::default()),
-        encoding,
     };
     Frame::new(
         planes,
+        color,
         width,
         height,
         Orientation::from_rotation(raw.rotation_degrees, raw.mirrored),
@@ -105,7 +121,7 @@ pub fn build_frame(device: &wgpu::Device, raw: RawFrame) -> Frame {
 
 /// The matrix named by the buffer's `kCVImageBufferYCbCrMatrixKey`
 /// attachment, which `AVFoundation` sets on every YCbCr capture buffer.
-fn ycbcr_matrix(pixel_buffer: &CVPixelBuffer) -> YcbcrMatrix {
+fn ycbcr_matrix(pixel_buffer: &CVPixelBuffer) -> MatrixCoefficients {
     // SAFETY: the keys and values are Core Video's own immutable constants.
     let (key, bt601, bt709, bt2020) = unsafe {
         (
@@ -115,25 +131,91 @@ fn ycbcr_matrix(pixel_buffer: &CVPixelBuffer) -> YcbcrMatrix {
             kCVImageBufferYCbCrMatrix_ITU_R_2020,
         )
     };
-    #[expect(
-        deprecated,
-        reason = "CVBufferCopyAttachment needs iOS 15, above this crate's iOS 14 deployment target"
-    )]
-    // SAFETY: a null attachment mode pointer is allowed.
-    let attachment = unsafe { pixel_buffer.get_attachment(key, std::ptr::null_mut()) }
-        .expect("capture pixel buffers carry a YCbCr matrix attachment");
-    let name = attachment
-        .downcast_ref::<CFString>()
-        .expect("the YCbCr matrix attachment is a string");
+    let attachment = string_attachment(pixel_buffer, key, "kCVImageBufferYCbCrMatrixKey");
+    let name = attachment.downcast_ref::<CFString>().unwrap_or_else(|| {
+        panic!("kCVImageBufferYCbCrMatrixKey attachment is not a string: {attachment:?}")
+    });
     if name == bt601 {
-        YcbcrMatrix::Bt601
+        from_ycbcr_matrix(YcbcrMatrix::Bt601)
     } else if name == bt709 {
-        YcbcrMatrix::Bt709
+        from_ycbcr_matrix(YcbcrMatrix::Bt709)
     } else if name == bt2020 {
-        YcbcrMatrix::Bt2020
+        from_ycbcr_matrix(YcbcrMatrix::Bt2020)
     } else {
-        panic!("capture buffer uses the unsupported YCbCr matrix {name}")
+        panic!("unsupported kCVImageBufferYCbCrMatrixKey value {name}")
     }
+}
+
+fn color_primaries(pixel_buffer: &CVPixelBuffer) -> ColorPrimaries {
+    // SAFETY: the keys and values are Core Video's own immutable constants.
+    let (key, bt709, smpte_c, ebu_3213, p3_d65, bt2020) = unsafe {
+        (
+            kCVImageBufferColorPrimariesKey,
+            kCVImageBufferColorPrimaries_ITU_R_709_2,
+            kCVImageBufferColorPrimaries_SMPTE_C,
+            kCVImageBufferColorPrimaries_EBU_3213,
+            kCVImageBufferColorPrimaries_P3_D65,
+            kCVImageBufferColorPrimaries_ITU_R_2020,
+        )
+    };
+    let attachment = string_attachment(pixel_buffer, key, "kCVImageBufferColorPrimariesKey");
+    let name = attachment.downcast_ref::<CFString>().unwrap_or_else(|| {
+        panic!("kCVImageBufferColorPrimariesKey attachment is not a string: {attachment:?}")
+    });
+    if name == bt709 {
+        ColorPrimaries::Bt709
+    } else if name == smpte_c || name == ebu_3213 {
+        ColorPrimaries::Bt601
+    } else if name == p3_d65 {
+        ColorPrimaries::DisplayP3
+    } else if name == bt2020 {
+        ColorPrimaries::Bt2020
+    } else {
+        panic!("unsupported kCVImageBufferColorPrimariesKey value {name}")
+    }
+}
+
+fn transfer_function(pixel_buffer: &CVPixelBuffer) -> TransferFunction {
+    // SAFETY: the keys and values are Core Video's own immutable constants.
+    let (key, bt709, smpte_240m, bt2020, srgb, smpte_c, pq, hlg) = unsafe {
+        (
+            kCVImageBufferTransferFunctionKey,
+            kCVImageBufferTransferFunction_ITU_R_709_2,
+            kCVImageBufferTransferFunction_SMPTE_240M_1995,
+            kCVImageBufferTransferFunction_ITU_R_2020,
+            kCVImageBufferTransferFunction_sRGB,
+            kCVImageBufferTransferFunction_SMPTE_C,
+            kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
+            kCVImageBufferTransferFunction_ITU_R_2100_HLG,
+        )
+    };
+    let attachment = string_attachment(pixel_buffer, key, "kCVImageBufferTransferFunctionKey");
+    let name = attachment.downcast_ref::<CFString>().unwrap_or_else(|| {
+        panic!("kCVImageBufferTransferFunctionKey attachment is not a string: {attachment:?}")
+    });
+    if name == bt709 || name == smpte_240m || name == bt2020 || name == srgb || name == smpte_c {
+        TransferFunction::Sdr
+    } else if name == pq {
+        TransferFunction::Pq
+    } else if name == hlg {
+        TransferFunction::Hlg
+    } else {
+        panic!("unsupported kCVImageBufferTransferFunctionKey value {name}")
+    }
+}
+
+#[expect(
+    deprecated,
+    reason = "CVBufferCopyAttachment needs iOS 15, above this crate's iOS 14 deployment target"
+)]
+fn string_attachment(
+    pixel_buffer: &CVPixelBuffer,
+    key: &CFString,
+    attachment_name: &str,
+) -> CFRetained<CFType> {
+    // SAFETY: a null attachment mode pointer is allowed.
+    unsafe { pixel_buffer.get_attachment(key, std::ptr::null_mut()) }
+        .unwrap_or_else(|| panic!("capture pixel buffers carry no {attachment_name} attachment"))
 }
 
 #[cfg(test)]
@@ -145,18 +227,24 @@ mod tests {
     use objc2_core_video::{
         CVAttachmentMode, CVPixelBuffer, CVPixelBufferCreate, CVPixelBufferGetBaseAddressOfPlane,
         CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags,
-        CVPixelBufferPool, CVPixelBufferUnlockBaseAddress, kCVImageBufferYCbCrMatrix_ITU_R_601_4,
-        kCVImageBufferYCbCrMatrix_ITU_R_709_2, kCVImageBufferYCbCrMatrixKey,
-        kCVPixelBufferHeightKey, kCVPixelBufferIOSurfacePropertiesKey,
-        kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferPoolAllocationThresholdKey,
-        kCVPixelBufferWidthKey, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+        CVPixelBufferPool, CVPixelBufferUnlockBaseAddress,
+        kCVImageBufferColorPrimaries_ITU_R_709_2, kCVImageBufferColorPrimariesKey,
+        kCVImageBufferTransferFunction_ITU_R_709_2, kCVImageBufferTransferFunctionKey,
+        kCVImageBufferYCbCrMatrix_ITU_R_601_4, kCVImageBufferYCbCrMatrix_ITU_R_709_2,
+        kCVImageBufferYCbCrMatrixKey, kCVPixelBufferHeightKey,
+        kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferPixelFormatTypeKey,
+        kCVPixelBufferPoolAllocationThresholdKey, kCVPixelBufferWidthKey,
+        kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
         kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVReturnSuccess,
         kCVReturnWouldExceedAllocationThreshold,
     };
 
     use super::{CapturedPixelBuffer, RawFrame, build_frame};
     use crate::test_support::{gpu, read_texture, wait_idle};
-    use crate::{FrameConverter, FramePlanes, Orientation, YcbcrEncoding, YcbcrMatrix, YcbcrRange};
+    use crate::{
+        ColorPrimaries, ColorRange, FrameConverter, FramePlanes, MatrixCoefficients, Orientation,
+        TransferFunction, VideoColorInfo,
+    };
 
     const WIDTH: usize = 64;
     const HEIGHT: usize = 48;
@@ -172,8 +260,8 @@ mod tests {
         ]
     }
 
-    /// An IOSurface-backed 4:2:0 pixel buffer with known samples and a YCbCr
-    /// matrix attachment, as the capture output delivers.
+    /// An IOSurface-backed 4:2:0 pixel buffer with known samples and color
+    /// attachments, as the capture output delivers.
     fn capture_buffer(pixel_format: u32, matrix: &CFString) -> CFRetained<CVPixelBuffer> {
         // SAFETY: Core Video's immutable key constant.
         let io_surface_key = unsafe { kCVPixelBufferIOSurfacePropertiesKey };
@@ -223,12 +311,30 @@ mod tests {
             unsafe { CVPixelBufferUnlockBaseAddress(&buffer, CVPixelBufferLockFlags(0)) };
         assert_eq!(unlocked, 0, "unlocking the test buffer");
 
-        // SAFETY: the key and value are Core Foundation strings, the types the
-        // attachment carries.
+        // SAFETY: the keys and values are Core Foundation strings, the types
+        // the attachments carry.
+        let (primaries_key, bt709_primaries, transfer_key, sdr_transfer) = unsafe {
+            (
+                kCVImageBufferColorPrimariesKey,
+                kCVImageBufferColorPrimaries_ITU_R_709_2,
+                kCVImageBufferTransferFunctionKey,
+                kCVImageBufferTransferFunction_ITU_R_709_2,
+            )
+        };
         unsafe {
             buffer.set_attachment(
                 kCVImageBufferYCbCrMatrixKey,
                 matrix,
+                CVAttachmentMode::ShouldPropagate,
+            );
+            buffer.set_attachment(
+                primaries_key,
+                bt709_primaries,
+                CVAttachmentMode::ShouldPropagate,
+            );
+            buffer.set_attachment(
+                transfer_key,
+                sdr_transfer,
                 CVAttachmentMode::ShouldPropagate,
             );
         }
@@ -258,15 +364,15 @@ mod tests {
         for (pixel_format, range, matrix_name, matrix) in [
             (
                 kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-                YcbcrRange::Video,
+                ColorRange::Limited,
                 bt709,
-                YcbcrMatrix::Bt709,
+                MatrixCoefficients::Bt709,
             ),
             (
                 kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-                YcbcrRange::Full,
+                ColorRange::Full,
                 bt601,
-                YcbcrMatrix::Bt601,
+                MatrixCoefficients::Bt601,
             ),
         ] {
             let buffer = capture_buffer(pixel_format, matrix_name);
@@ -291,12 +397,21 @@ mod tests {
             let FramePlanes::YCbCr420 {
                 luma: luma_view,
                 chroma: chroma_view,
-                encoding,
             } = frame.planes()
             else {
                 panic!("a 4:2:0 capture buffer imports as YCbCr420");
             };
-            assert_eq!(*encoding, YcbcrEncoding { matrix, range });
+            assert_eq!(
+                frame.color(),
+                VideoColorInfo {
+                    matrix,
+                    primaries: ColorPrimaries::Bt709,
+                    transfer: TransferFunction::Sdr,
+                    range,
+                    content_light_level: None,
+                    dolby_vision: false,
+                }
+            );
             let (luma_texture, chroma_texture) = (luma_view.texture(), chroma_view.texture());
             assert_eq!(luma_texture.format(), wgpu::TextureFormat::R8Unorm);
             assert_eq!((luma_texture.width(), luma_texture.height()), (64, 48));
@@ -478,7 +593,9 @@ mod tests {
         let mut converter = FrameConverter::new(&device);
         let upright = FrameConverter::create_output(&device, &last);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        converter.encode(&device, &mut encoder, &last, &upright);
+        converter
+            .encode(&device, &mut encoder, &last, &upright)
+            .expect("test frame has supported color");
         drop(last);
         assert_eq!(
             pool.free(),

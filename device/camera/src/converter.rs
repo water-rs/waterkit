@@ -3,11 +3,13 @@
 use std::collections::HashMap;
 
 use shaderloom::{CompiledShader, ShaderStage};
-use waterkit_video_core::ycbcr_mode;
+use waterkit_video_core::{
+    ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo, ycbcr_mode,
+};
 use wgpu::util::DeviceExt as _;
 
+use crate::CameraError;
 use crate::frame::{Frame, FramePlanes};
-use crate::{CameraError, YcbcrEncoding, YcbcrMatrix, YcbcrRange};
 
 const CONVERT_RGB: CompiledShader = include!(concat!(env!("OUT_DIR"), "/frame_convert_rgb.rs"));
 const CONVERT_YCBCR420: CompiledShader =
@@ -24,10 +26,19 @@ pub const UPRIGHT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Renders camera frames of any plane layout and orientation to upright
 /// [`UPRIGHT_FORMAT`] textures on the GPU.
 ///
-/// The output holds the frame's non-linear R'G'B' code values: YCbCr frames
-/// go through their matrix and range, and keep their transfer function and
-/// primaries, so the texture displays correctly when drawn to a non-sRGB
-/// target. To sample it linearized, create the output from
+/// The output (`UPRIGHT_FORMAT`) is non-linear R'G'B' in the frame's own
+/// primaries and SDR transfer. The converter removes the YCbCr matrix/range
+/// and orientation only; it does not convert primaries or transfer.
+///
+/// It accepts exactly frames with `transfer == TransferFunction::Sdr`,
+/// `dolby_vision == false`, and a matrix in
+/// `{Bt601, Bt709, Bt2020NonConstantLuminance}`. Any primaries and range are
+/// accepted. RGB planes do not use matrix or range when converting, but the
+/// description must still be one the converter accepts. PQ, HLG,
+/// `Bt2020ConstantLuminance`, and Dolby Vision fail fast with
+/// [`CameraError::UnsupportedColor`].
+///
+/// To sample the output linearized, create it from
 /// [`Self::output_descriptor`] with `Rgba8UnormSrgb` among its view formats,
 /// on devices whose downlevel capabilities include view formats.
 ///
@@ -36,7 +47,7 @@ pub const UPRIGHT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// [`FrameConverter::check_device`] says whether it was.
 ///
 /// The converter keeps one uniform buffer per distinct set of conversion
-/// parameters it has seen (orientation, encoding, sample depth and size,
+/// parameters it has seen (orientation, matrix/range, sample depth and size,
 /// which a camera rarely changes) and the view of the last output texture.
 /// The bind group is made per frame, since it names the frame's own planes.
 #[derive(Debug)]
@@ -107,18 +118,12 @@ impl ConvertParams {
     }
 
     /// Adds how the YCbCr samples decode.
-    const fn ycbcr(self, encoding: YcbcrEncoding, sample: SampleDepth) -> Self {
+    fn ycbcr(self, color: VideoColorInfo, sample: SampleDepth) -> Self {
+        let (matrix_mode, range_mode) = ycbcr_modes(color.matrix, color.range);
         Self {
             // YCBCR_MATRIX_* / YCBCR_RANGE_* in waterkit-video-core's ycbcr.wgsl.
-            matrix_mode: match encoding.matrix {
-                YcbcrMatrix::Bt709 => ycbcr_mode::MATRIX_BT709,
-                YcbcrMatrix::Bt601 => ycbcr_mode::MATRIX_BT601,
-                YcbcrMatrix::Bt2020 => ycbcr_mode::MATRIX_BT2020,
-            },
-            range_mode: match encoding.range {
-                YcbcrRange::Video => ycbcr_mode::RANGE_LIMITED,
-                YcbcrRange::Full => ycbcr_mode::RANGE_FULL,
-            },
+            matrix_mode,
+            range_mode,
             bit_depth: sample.bit_depth,
             code_scale: sample.code_scale,
             ..self
@@ -142,6 +147,22 @@ impl ConvertParams {
         }
         bytes
     }
+}
+
+fn ycbcr_modes(matrix: MatrixCoefficients, range: ColorRange) -> (u32, u32) {
+    let matrix_mode = match matrix {
+        MatrixCoefficients::Bt601 => ycbcr_mode::MATRIX_BT601,
+        MatrixCoefficients::Bt709 => ycbcr_mode::MATRIX_BT709,
+        MatrixCoefficients::Bt2020NonConstantLuminance => ycbcr_mode::MATRIX_BT2020,
+        MatrixCoefficients::Bt2020ConstantLuminance => {
+            unreachable!("color validation rejects constant-luminance BT.2020")
+        }
+    };
+    let range_mode = match range {
+        ColorRange::Limited => ycbcr_mode::RANGE_LIMITED,
+        ColorRange::Full => ycbcr_mode::RANGE_FULL,
+    };
+    (matrix_mode, range_mode)
 }
 
 /// How a YCbCr plane's sampled unorm values relate to its codes.
@@ -175,6 +196,36 @@ impl SampleDepth {
 }
 
 impl FrameConverter {
+    /// Checks whether the converter accepts a frame's color description.
+    ///
+    /// The converter accepts SDR transfer, no Dolby Vision, and BT.601,
+    /// BT.709 or non-constant-luminance BT.2020 matrix coefficients. Primaries
+    /// and range may be any supported values. RGB planes do not use matrix or
+    /// range when converting, but the description must still be one the
+    /// converter accepts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CameraError::UnsupportedColor`] when a field is outside the
+    /// accepted description.
+    pub fn check_color(color: &VideoColorInfo) -> Result<(), CameraError> {
+        let acceptance = "the converter accepts SDR transfer, no Dolby Vision, and BT.601, BT.709, or \
+             non-constant-luminance BT.2020 matrix coefficients";
+        let unsupported = |field: &str| {
+            CameraError::UnsupportedColor(format!("field `{field}` in {color:?}; {acceptance}"))
+        };
+        if color.transfer != TransferFunction::Sdr {
+            return Err(unsupported("transfer"));
+        }
+        if color.dolby_vision {
+            return Err(unsupported("dolby_vision"));
+        }
+        if color.matrix == MatrixCoefficients::Bt2020ConstantLuminance {
+            return Err(unsupported("matrix"));
+        }
+        Ok(())
+    }
+
     /// The device features the converter's precompiled shaders need, out of
     /// what `adapter_features` offers. Request them when creating the device.
     #[must_use]
@@ -273,13 +324,19 @@ impl FrameConverter {
     ///
     /// Panics when `output` is not an [`UPRIGHT_FORMAT`] storage texture of
     /// [`Self::upright_size`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CameraError::UnsupportedColor`] when the frame's color
+    /// description is not supported by this converter.
     pub fn encode(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         frame: &Frame,
         output: &wgpu::Texture,
-    ) {
+    ) -> Result<(), CameraError> {
+        Self::check_color(&frame.color())?;
         assert_eq!(
             output.format(),
             UPRIGHT_FORMAT,
@@ -304,18 +361,14 @@ impl FrameConverter {
             [Option<&wgpu::TextureView>; 2],
         ) = match frame.planes() {
             FramePlanes::Rgb(rgb) => (&self.rgb, ConvertParams::upright(frame), [Some(rgb), None]),
-            FramePlanes::YCbCr420 {
-                luma,
-                chroma,
-                encoding,
-            } => (
+            FramePlanes::YCbCr420 { luma, chroma } => (
                 &self.ycbcr420,
-                ConvertParams::upright(frame).ycbcr(*encoding, SampleDepth::of_luma(luma)),
+                ConvertParams::upright(frame).ycbcr(frame.color(), SampleDepth::of_luma(luma)),
                 [Some(luma), Some(chroma)],
             ),
-            FramePlanes::YCbCr422 { yuyv, encoding } => (
+            FramePlanes::YCbCr422 { yuyv } => (
                 &self.ycbcr422,
-                ConvertParams::upright(frame).ycbcr(*encoding, SampleDepth::EIGHT_BIT),
+                ConvertParams::upright(frame).ycbcr(frame.color(), SampleDepth::EIGHT_BIT),
                 [Some(yuyv), None],
             ),
         };
@@ -376,26 +429,32 @@ impl FrameConverter {
             size.height.div_ceil(WORKGROUP_SIZE),
             1,
         );
+        Ok(())
     }
 
     /// Converts `frame` into a new upright texture and submits the work.
     ///
     /// A stream of frames is better served by one [`Self::create_output`]
     /// texture reused through [`Self::encode`].
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CameraError::UnsupportedColor`] when the frame's color
+    /// description is not supported by this converter.
     pub fn convert(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         frame: &Frame,
-    ) -> wgpu::Texture {
+    ) -> Result<wgpu::Texture, CameraError> {
+        Self::check_color(&frame.color())?;
         let output = Self::create_output(device, frame);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("waterkit-camera frame conversion"),
         });
-        self.encode(device, &mut encoder, frame, &output);
+        self.encode(device, &mut encoder, frame, &output)?;
         queue.submit([encoder.finish()]);
-        output
+        Ok(output)
     }
 }
 
@@ -405,11 +464,15 @@ mod tests {
     use std::time::Duration;
 
     use image::{DynamicImage, RgbaImage};
+    use waterkit_video_core::{
+        ColorPrimaries, MatrixCoefficients, TransferFunction, VideoColorInfo,
+    };
 
     use super::FrameConverter;
+    use crate::CameraError;
     use crate::frame::{Frame, Orientation};
     use crate::upload::{CpuPlanes, FrameUploader};
-    use crate::{YcbcrEncoding, YcbcrMatrix, YcbcrRange};
+    use crate::wgpu_external_frame::{YcbcrEncoding, YcbcrMatrix, YcbcrRange};
 
     /// Stored frame size: even, as 4:2:2 needs, and not square, so a wrong
     /// quarter turn changes the output size.
@@ -445,6 +508,15 @@ mod tests {
             })
     }
 
+    fn color_info(encoding: YcbcrEncoding) -> VideoColorInfo {
+        let (matrix, range) = crate::color::from_ycbcr_encoding(encoding);
+        VideoColorInfo {
+            matrix,
+            range,
+            ..VideoColorInfo::default()
+        }
+    }
+
     struct Gpu {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
@@ -463,23 +535,32 @@ mod tests {
             }
         }
 
-        fn upload(&self, pixels: &CpuPlanes<'_>, orientation: Orientation) -> Frame {
-            self.upload_sized(pixels, (WIDTH, HEIGHT), orientation)
+        fn upload(
+            &self,
+            pixels: &CpuPlanes<'_>,
+            color: VideoColorInfo,
+            orientation: Orientation,
+        ) -> Frame {
+            self.upload_sized(pixels, color, (WIDTH, HEIGHT), orientation)
         }
 
         fn upload_sized(
             &self,
             pixels: &CpuPlanes<'_>,
+            color: VideoColorInfo,
             (width, height): (u32, u32),
             orientation: Orientation,
         ) -> Frame {
             self.uploader
-                .upload(pixels, width, height, orientation, Duration::ZERO)
+                .upload(pixels, color, width, height, orientation, Duration::ZERO)
         }
 
         /// Converts `frame` and reads the upright result back.
         fn convert(&mut self, frame: &Frame) -> RgbaImage {
-            let texture = self.converter.convert(&self.device, &self.queue, frame);
+            let texture = self
+                .converter
+                .convert(&self.device, &self.queue, frame)
+                .expect("test frame color is supported");
             let pixels = crate::test_support::read_texture(&self.device, &self.queue, &texture);
             RgbaImage::from_raw(texture.width(), texture.height(), pixels).expect("readback size")
         }
@@ -653,6 +734,7 @@ mod tests {
                         data,
                         stride: WIDTH * 4,
                     },
+                    VideoColorInfo::default(),
                     orientation,
                 );
                 assert_matches(
@@ -674,10 +756,8 @@ mod tests {
                 let stored = reference_420(size, eight_bit_sample, 8, encoding);
                 for orientation in ORIENTATIONS {
                     let frame = gpu.upload_sized(
-                        &CpuPlanes::Nv12 {
-                            data: &data,
-                            encoding,
-                        },
+                        &CpuPlanes::Nv12 { data: &data },
+                        color_info(encoding),
                         size,
                         orientation,
                     );
@@ -704,10 +784,8 @@ mod tests {
             });
             for orientation in ORIENTATIONS {
                 let frame = gpu.upload(
-                    &CpuPlanes::Yuyv {
-                        data: &data,
-                        encoding,
-                    },
+                    &CpuPlanes::Yuyv { data: &data },
+                    color_info(encoding),
                     orientation,
                 );
                 assert_matches(
@@ -744,10 +822,8 @@ mod tests {
             let stored = reference_420((WIDTH, HEIGHT), sample, 10, encoding);
             for orientation in [Orientation::Up, Orientation::Right] {
                 let frame = gpu.upload(
-                    &CpuPlanes::P010 {
-                        data: &bytes,
-                        encoding,
-                    },
+                    &CpuPlanes::P010 { data: &bytes },
+                    color_info(encoding),
                     orientation,
                 );
                 assert_matches(
@@ -757,6 +833,105 @@ mod tests {
                     &format!("P010 {encoding:?} {orientation:?}"),
                 );
             }
+        }
+    }
+
+    #[test]
+    fn unsupported_color_descriptions_fail_before_conversion() {
+        let mut gpu = Gpu::new(wgpu::Features::empty());
+        let data = [0_u8, 0, 0, 255].repeat((WIDTH * HEIGHT) as usize);
+        let invalid_colors = [
+            (
+                VideoColorInfo {
+                    transfer: TransferFunction::Pq,
+                    ..VideoColorInfo::default()
+                },
+                "transfer",
+            ),
+            (
+                VideoColorInfo {
+                    transfer: TransferFunction::Hlg,
+                    ..VideoColorInfo::default()
+                },
+                "transfer",
+            ),
+            (
+                VideoColorInfo {
+                    matrix: MatrixCoefficients::Bt2020ConstantLuminance,
+                    ..VideoColorInfo::default()
+                },
+                "matrix",
+            ),
+            (
+                VideoColorInfo {
+                    dolby_vision: true,
+                    ..VideoColorInfo::default()
+                },
+                "dolby_vision",
+            ),
+        ];
+        for (color, field) in invalid_colors {
+            let Err(CameraError::UnsupportedColor(message)) = FrameConverter::check_color(&color)
+            else {
+                panic!("expected UnsupportedColor for {color:?}");
+            };
+            assert!(message.contains(field), "{message}");
+            assert!(message.contains(&format!("{color:?}")), "{message}");
+            assert!(message.contains("accepts"), "{message}");
+
+            let frame = gpu.upload(
+                &CpuPlanes::Rgb {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    data: &data,
+                    stride: WIDTH * 4,
+                },
+                color,
+                Orientation::Up,
+            );
+            let output = FrameConverter::create_output(&gpu.device, &frame);
+            let mut encoder = gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("unsupported color test"),
+                });
+            assert!(matches!(
+                gpu.converter
+                    .encode(&gpu.device, &mut encoder, &frame, &output),
+                Err(CameraError::UnsupportedColor(_))
+            ));
+            assert!(matches!(
+                gpu.converter.convert(&gpu.device, &gpu.queue, &frame),
+                Err(CameraError::UnsupportedColor(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn primaries_do_not_change_converted_code_values() {
+        let mut gpu = Gpu::new(wgpu::Features::empty());
+        let data = nv12((WIDTH, HEIGHT));
+        let base_color = color_info(YcbcrEncoding {
+            matrix: YcbcrMatrix::Bt709,
+            range: YcbcrRange::Video,
+        });
+        let reference = gpu.convert(&gpu.upload(
+            &CpuPlanes::Nv12 { data: &data },
+            VideoColorInfo {
+                primaries: ColorPrimaries::Bt709,
+                ..base_color
+            },
+            Orientation::Up,
+        ));
+        for primaries in [ColorPrimaries::DisplayP3, ColorPrimaries::Bt2020] {
+            let actual = gpu.convert(&gpu.upload(
+                &CpuPlanes::Nv12 { data: &data },
+                VideoColorInfo {
+                    primaries,
+                    ..base_color
+                },
+                Orientation::Up,
+            ));
+            assert_eq!(actual, reference, "{primaries:?}");
         }
     }
 }

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Location::capabilities()` returns `LocationCapabilities`, reporting the
+  `LocationProvider` that serves the device.
+- Android: devices with Google Play services get their fixes from the Fused
+  Location Provider (`play-services-location`), chosen ahead of time through
+  `GoogleApiAvailability`; other devices keep the framework `LocationManager`,
+  which asks its own `FUSED_PROVIDER` from API 31 when the device registers
+  one.
+
 ## [0.1.0](https://github.com/water-rs/waterkit/releases/tag/waterkit-location-v0.1.0) - 2026-02-07
 
 ### Added

@@ -17,8 +17,8 @@ use wgpu_external_frame::ahardware_buffer::{
 };
 
 use super::{AndroidBridge, SensorMounting};
-use crate::frame::{Frame, FramePlanes};
-use crate::{CameraError, Orientation};
+use crate::CameraError;
+use crate::frame::{Frame, FramePlanes, orientation_from_camera2};
 
 /// Fails unless `device` was opened with the extensions every
 /// `AHardwareBuffer` import needs, which `wgpu` never enables on its own, as
@@ -166,7 +166,7 @@ impl RawFrame {
             planes,
             size.width,
             size.height,
-            Orientation::from_camera2(
+            orientation_from_camera2(
                 mounting.sensor_orientation,
                 mounting.lens_faces_back,
                 self.display_rotation,

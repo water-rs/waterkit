@@ -1,6 +1,6 @@
 //! Windows location implementation using `WinRT` Geolocator.
 
-use crate::{Location, LocationError, Timestamp};
+use crate::{Location, LocationCapabilities, LocationError, LocationProvider, Timestamp};
 
 // FILETIME epoch offset: 11644473600 seconds between 1601-01-01 and 1970-01-01
 const FILETIME_UNIX_DIFF: i64 = 11_644_473_600;
@@ -62,4 +62,11 @@ pub async fn get_location() -> Result<Location, LocationError> {
     }
 
     Ok(location)
+}
+
+/// `Windows.Devices.Geolocation` ships with every supported Windows release.
+pub async fn capabilities() -> LocationCapabilities {
+    LocationCapabilities {
+        provider: Some(LocationProvider::WindowsGeolocation),
+    }
 }

@@ -2,10 +2,11 @@
 
 use core::time::Duration;
 
-use crate::{Location, LocationError, Timestamp};
+use crate::{Location, LocationCapabilities, LocationError, LocationProvider, Timestamp};
 use futures::StreamExt;
 use futures::future::{Either, select};
 use zbus::Connection;
+use zbus::names::WellKnownName;
 use zbus::zvariant::OwnedObjectPath;
 
 /// How long `GeoClue2` may take to produce the first fix before the request
@@ -106,6 +107,37 @@ async fn read_location(
         location = location.with_altitude(altitude);
     }
     Ok(location)
+}
+
+/// `GeoClue2` serves location when its service is installed on the system bus:
+/// D-Bus activatable, or already running.
+///
+/// # Panics
+///
+/// Panics if the system bus refuses the name queries.
+pub async fn capabilities() -> LocationCapabilities {
+    // Without a system bus no `GeoClue2` service can be reached.
+    let Ok(connection) = Connection::system().await else {
+        return LocationCapabilities { provider: None };
+    };
+    let bus = zbus::fdo::DBusProxy::new(&connection)
+        .await
+        .unwrap_or_else(|error| panic!("waterkit-location: D-Bus proxy failed: {error}"));
+    let service = WellKnownName::from_static_str_unchecked(GEOCLUE_SERVICE);
+    let activatable = bus
+        .list_activatable_names()
+        .await
+        .unwrap_or_else(|error| panic!("waterkit-location: ListActivatableNames failed: {error}"))
+        .iter()
+        .any(|name| name.as_str() == GEOCLUE_SERVICE);
+    let installed = activatable
+        || bus
+            .name_has_owner(service.into())
+            .await
+            .unwrap_or_else(|error| panic!("waterkit-location: NameHasOwner failed: {error}"));
+    LocationCapabilities {
+        provider: installed.then_some(LocationProvider::GeoClue),
+    }
 }
 
 pub async fn get_location() -> Result<Location, LocationError> {

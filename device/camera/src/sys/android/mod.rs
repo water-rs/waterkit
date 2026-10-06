@@ -24,10 +24,10 @@ use jni::{Env, JavaVM, jni_sig, jni_str};
 use std::num::NonZeroU8;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::frame::StreamClock;
+use crate::sys::android_session::{CameraHelper, FrameThread, OpenCamera};
 use waterkit_build::{AndroidError, DexHelper, dex_helper, jvm_and_context};
 
 /// `waterkit.camera.CameraHelper`, embedded as a DEX by this crate's build
@@ -62,13 +62,13 @@ enum RecordingMode {
 
 /// What fixes a camera's frame orientation besides the display rotation.
 #[derive(Debug, Clone, Copy)]
-struct SensorMounting {
+pub(super) struct SensorMounting {
     sensor_orientation: u32,
     lens_faces_back: bool,
 }
 
 #[derive(Debug)]
-struct AndroidBridge {
+pub(super) struct AndroidBridge {
     vm: JavaVM,
     helper: Global<JObject<'static>>,
 }
@@ -577,211 +577,8 @@ impl AndroidBridge {
         })
     }
 
-    fn open_camera(
-        &self,
-        camera_id: &str,
-        resolution: Resolution,
-        frame_rate: u32,
-    ) -> Result<(), CameraError> {
-        self.with_env(|env| {
-            let camera_id_java = env.new_string(camera_id).map_err(|error| {
-                CameraError::OpenFailed(format!("new_string(camera id): {error}"))
-            })?;
-
-            let width = i32::try_from(resolution.width)
-                .map_err(|_| CameraError::OpenFailed("camera width exceeds i32".into()))?;
-            let height = i32::try_from(resolution.height)
-                .map_err(|_| CameraError::OpenFailed("camera height exceeds i32".into()))?;
-            let fps = i32::try_from(frame_rate.max(1))
-                .map_err(|_| CameraError::OpenFailed("camera frame rate exceeds i32".into()))?;
-
-            let opened = env
-                .call_method(
-                    self.helper.as_obj(),
-                    jni_str!("openCamera"),
-                    jni_sig!("(Ljava/lang/String;III)Z"),
-                    &[
-                        JValue::Object(&camera_id_java),
-                        JValue::Int(width),
-                        JValue::Int(height),
-                        JValue::Int(fps),
-                    ],
-                )
-                .and_then(jni::objects::JValueOwned::z)
-                .map_err(|error| {
-                    CameraError::OpenFailed(format!("openCamera JNI call: {error}"))
-                })?;
-
-            if opened {
-                Ok(())
-            } else {
-                Err(CameraError::OpenFailed(format!(
-                    "openCamera returned false for `{camera_id}`"
-                )))
-            }
-        })
-    }
-
-    fn start_capture(&self) -> Result<(), CameraError> {
-        self.with_env(|env| {
-            let started = env
-                .call_method(
-                    self.helper.as_obj(),
-                    jni_str!("startCapture"),
-                    jni_sig!("()Z"),
-                    &[],
-                )
-                .and_then(jni::objects::JValueOwned::z)
-                .map_err(|error| {
-                    CameraError::StartFailed(format!("startCapture JNI call: {error}"))
-                })?;
-
-            if started {
-                Ok(())
-            } else {
-                Err(CameraError::StartFailed(
-                    "startCapture returned false".into(),
-                ))
-            }
-        })
-    }
-
-    fn stop_capture(&self) -> Result<(), CameraError> {
-        self.with_env(|env| {
-            env.call_method(
-                self.helper.as_obj(),
-                jni_str!("stopCapture"),
-                jni_sig!("()V"),
-                &[],
-            )
-            .map_err(|error| CameraError::PlatformError(format!("stopCapture: {error}")))?;
-            Ok(())
-        })
-    }
-
-    fn close_camera(&self) -> Result<(), CameraError> {
-        self.with_env(|env| {
-            env.call_method(
-                self.helper.as_obj(),
-                jni_str!("closeCamera"),
-                jni_sig!("()V"),
-                &[],
-            )
-            .map_err(|error| CameraError::PlatformError(format!("closeCamera: {error}")))?;
-            Ok(())
-        })
-    }
-
     fn frame_size(&self) -> Result<Resolution, CameraError> {
         self.with_env(|env| self.frame_size_internal(env))
-    }
-
-    /// Takes the next preview image, if one arrives within `timeout_ms`, as a
-    /// frame ready for import: a reference on its `AHardwareBuffer` and a
-    /// lease that closes the image once the GPU no longer reads it.
-    fn wait_for_frame(
-        self: &Arc<Self>,
-        clock: &StreamClock<Duration>,
-        timeout_ms: i32,
-    ) -> Result<Option<RawFrame>, CameraError> {
-        self.with_env(|env| {
-            let frame_obj = env
-                .call_method(
-                    self.helper.as_obj(),
-                    jni_str!("waitForNextFrame"),
-                    jni_sig!("(I)Lwaterkit/camera/CameraHelper$CapturedFrame;"),
-                    &[JValue::Int(timeout_ms.max(0))],
-                )
-                .and_then(jni::objects::JValueOwned::l)
-                .map_err(|error| {
-                    CameraError::CaptureFailed(format!("waitForNextFrame JNI call: {error}"))
-                })?;
-
-            if frame_obj.is_null() {
-                return Ok(None);
-            }
-
-            let image = env
-                .call_method(
-                    &frame_obj,
-                    jni_str!("getImage"),
-                    jni_sig!("()Landroid/media/Image;"),
-                    &[],
-                )
-                .and_then(jni::objects::JValueOwned::l)
-                .map_err(|error| CameraError::CaptureFailed(format!("getImage: {error}")))?;
-            let hardware_buffer = env
-                .call_method(
-                    &frame_obj,
-                    jni_str!("getHardwareBuffer"),
-                    jni_sig!("()Landroid/hardware/HardwareBuffer;"),
-                    &[],
-                )
-                .and_then(jni::objects::JValueOwned::l)
-                .map_err(|error| {
-                    CameraError::CaptureFailed(format!("getHardwareBuffer: {error}"))
-                })?;
-            let capture_time_ns = env
-                .call_method(
-                    &frame_obj,
-                    jni_str!("getCaptureTimeNs"),
-                    jni_sig!("()J"),
-                    &[],
-                )
-                .and_then(jni::objects::JValueOwned::j)
-                .map_err(|error| {
-                    CameraError::CaptureFailed(format!("getCaptureTimeNs: {error}"))
-                })?;
-            let capture_time_ns = u64::try_from(capture_time_ns).map_err(|_| {
-                CameraError::CaptureFailed(format!(
-                    "sensor timestamp is negative: {capture_time_ns}"
-                ))
-            })?;
-            let display_rotation = env
-                .call_method(
-                    &frame_obj,
-                    jni_str!("getDisplayRotation"),
-                    jni_sig!("()I"),
-                    &[],
-                )
-                .and_then(jni::objects::JValueOwned::i)
-                .map_err(|error| {
-                    CameraError::CaptureFailed(format!("getDisplayRotation: {error}"))
-                })?;
-            let display_rotation = u32::try_from(display_rotation).map_err(|_| {
-                CameraError::CaptureFailed(format!("display rotation {display_rotation}"))
-            })?;
-
-            let lease = ImageLease::new(
-                Arc::clone(self),
-                env.new_global_ref(&image).map_err(|error| {
-                    CameraError::CaptureFailed(format!("new_global_ref(image): {error}"))
-                })?,
-            );
-            // SAFETY: `env` is this thread's attached JNI environment and
-            // `hardware_buffer` a live `android.hardware.HardwareBuffer`; the
-            // NDK handle borrows its buffer only until the frame below takes
-            // its own reference.
-            let buffer = unsafe {
-                ndk::hardware_buffer::HardwareBuffer::from_jni(
-                    env.get_raw().cast(),
-                    hardware_buffer.as_raw().cast(),
-                )
-            };
-            // Java's ImageReader waits for the camera's write fence before it
-            // hands an image out, so the buffer is ready as it arrives.
-            let frame = RawFrame::new(
-                &buffer,
-                lease,
-                display_rotation,
-                clock.timestamp(Duration::from_nanos(capture_time_ns)),
-            );
-            env.call_method(&hardware_buffer, jni_str!("close"), jni_sig!("()V"), &[])
-                .map_err(|error| {
-                    CameraError::CaptureFailed(format!("HardwareBuffer.close: {error}"))
-                })?;
-            Ok(Some(frame))
-        })
     }
 
     /// Closes a preview image, returning its buffer to the reader.
@@ -1072,6 +869,215 @@ impl AndroidBridge {
     }
 }
 
+/// `Arc<AndroidBridge>` is the [`CameraHelper`] a capture session sequences;
+/// clones let the reader thread and image leases share the helper.
+impl CameraHelper for Arc<AndroidBridge> {
+    type Frame = RawFrame;
+
+    fn open_camera(
+        &self,
+        camera_id: &str,
+        resolution: Resolution,
+        frame_rate: u32,
+    ) -> Result<(), CameraError> {
+        self.with_env(|env| {
+            let camera_id_java = env.new_string(camera_id).map_err(|error| {
+                CameraError::OpenFailed(format!("new_string(camera id): {error}"))
+            })?;
+
+            let width = i32::try_from(resolution.width)
+                .map_err(|_| CameraError::OpenFailed("camera width exceeds i32".into()))?;
+            let height = i32::try_from(resolution.height)
+                .map_err(|_| CameraError::OpenFailed("camera height exceeds i32".into()))?;
+            let fps = i32::try_from(frame_rate.max(1))
+                .map_err(|_| CameraError::OpenFailed("camera frame rate exceeds i32".into()))?;
+
+            let opened = env
+                .call_method(
+                    self.helper.as_obj(),
+                    jni_str!("openCamera"),
+                    jni_sig!("(Ljava/lang/String;III)Z"),
+                    &[
+                        JValue::Object(&camera_id_java),
+                        JValue::Int(width),
+                        JValue::Int(height),
+                        JValue::Int(fps),
+                    ],
+                )
+                .and_then(jni::objects::JValueOwned::z)
+                .map_err(|error| {
+                    CameraError::OpenFailed(format!("openCamera JNI call: {error}"))
+                })?;
+
+            if opened {
+                Ok(())
+            } else {
+                Err(CameraError::OpenFailed(format!(
+                    "openCamera returned false for `{camera_id}`"
+                )))
+            }
+        })
+    }
+
+    fn start_capture(&self) -> Result<(), CameraError> {
+        self.with_env(|env| {
+            let started = env
+                .call_method(
+                    self.helper.as_obj(),
+                    jni_str!("startCapture"),
+                    jni_sig!("()Z"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::z)
+                .map_err(|error| {
+                    CameraError::StartFailed(format!("startCapture JNI call: {error}"))
+                })?;
+
+            if started {
+                Ok(())
+            } else {
+                Err(CameraError::StartFailed(
+                    "startCapture returned false".into(),
+                ))
+            }
+        })
+    }
+
+    /// Takes the next preview image, if one arrives within `timeout_ms`, as a
+    /// frame ready for import: a reference on its `AHardwareBuffer` and a
+    /// lease that closes the image once the GPU no longer reads it.
+    fn wait_for_frame(
+        &self,
+        clock: &StreamClock<Duration>,
+        timeout_ms: i32,
+    ) -> Result<Option<RawFrame>, CameraError> {
+        self.with_env(|env| {
+            let frame_obj = env
+                .call_method(
+                    self.helper.as_obj(),
+                    jni_str!("waitForNextFrame"),
+                    jni_sig!("(I)Lwaterkit/camera/CameraHelper$CapturedFrame;"),
+                    &[JValue::Int(timeout_ms.max(0))],
+                )
+                .and_then(jni::objects::JValueOwned::l)
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("waitForNextFrame JNI call: {error}"))
+                })?;
+
+            if frame_obj.is_null() {
+                return Ok(None);
+            }
+
+            let image = env
+                .call_method(
+                    &frame_obj,
+                    jni_str!("getImage"),
+                    jni_sig!("()Landroid/media/Image;"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::l)
+                .map_err(|error| CameraError::CaptureFailed(format!("getImage: {error}")))?;
+            let hardware_buffer = env
+                .call_method(
+                    &frame_obj,
+                    jni_str!("getHardwareBuffer"),
+                    jni_sig!("()Landroid/hardware/HardwareBuffer;"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::l)
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("getHardwareBuffer: {error}"))
+                })?;
+            let capture_time_ns = env
+                .call_method(
+                    &frame_obj,
+                    jni_str!("getCaptureTimeNs"),
+                    jni_sig!("()J"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::j)
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("getCaptureTimeNs: {error}"))
+                })?;
+            let capture_time_ns = u64::try_from(capture_time_ns).map_err(|_| {
+                CameraError::CaptureFailed(format!(
+                    "sensor timestamp is negative: {capture_time_ns}"
+                ))
+            })?;
+            let display_rotation = env
+                .call_method(
+                    &frame_obj,
+                    jni_str!("getDisplayRotation"),
+                    jni_sig!("()I"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::i)
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("getDisplayRotation: {error}"))
+                })?;
+            let display_rotation = u32::try_from(display_rotation).map_err(|_| {
+                CameraError::CaptureFailed(format!("display rotation {display_rotation}"))
+            })?;
+
+            let lease = ImageLease::new(
+                Self::clone(self),
+                env.new_global_ref(&image).map_err(|error| {
+                    CameraError::CaptureFailed(format!("new_global_ref(image): {error}"))
+                })?,
+            );
+            // SAFETY: `env` is this thread's attached JNI environment and
+            // `hardware_buffer` a live `android.hardware.HardwareBuffer`; the
+            // NDK handle borrows its buffer only until the frame below takes
+            // its own reference.
+            let buffer = unsafe {
+                ndk::hardware_buffer::HardwareBuffer::from_jni(
+                    env.get_raw().cast(),
+                    hardware_buffer.as_raw().cast(),
+                )
+            };
+            // Java's ImageReader waits for the camera's write fence before it
+            // hands an image out, so the buffer is ready as it arrives.
+            let frame = RawFrame::new(
+                &buffer,
+                lease,
+                display_rotation,
+                clock.timestamp(Duration::from_nanos(capture_time_ns)),
+            );
+            env.call_method(&hardware_buffer, jni_str!("close"), jni_sig!("()V"), &[])
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("HardwareBuffer.close: {error}"))
+                })?;
+            Ok(Some(frame))
+        })
+    }
+
+    fn stop_capture(&self) -> Result<(), CameraError> {
+        self.with_env(|env| {
+            env.call_method(
+                self.helper.as_obj(),
+                jni_str!("stopCapture"),
+                jni_sig!("()V"),
+                &[],
+            )
+            .map_err(|error| CameraError::PlatformError(format!("stopCapture: {error}")))?;
+            Ok(())
+        })
+    }
+
+    fn close_camera(&self) -> Result<(), CameraError> {
+        self.with_env(|env| {
+            env.call_method(
+                self.helper.as_obj(),
+                jni_str!("closeCamera"),
+                jni_sig!("()V"),
+                &[],
+            )
+            .map_err(|error| CameraError::PlatformError(format!("closeCamera: {error}")))?;
+            Ok(())
+        })
+    }
+}
+
 /// Camera inner implementation for Android.
 pub struct CameraInner {
     device: Arc<wgpu::Device>,
@@ -1080,8 +1086,9 @@ pub struct CameraInner {
     controls: CameraControls,
     resolution: Resolution,
     mounting: SensorMounting,
-    frame_receiver: async_channel::Receiver<Result<RawFrame, CameraError>>,
-    running: Arc<AtomicBool>,
+    /// Owns the capture session: its drop stops capture, closes the camera,
+    /// and returns once the reader thread has finished the teardown.
+    frames_thread: FrameThread<RawFrame>,
     bridge: Arc<AndroidBridge>,
     recording_mode: Option<RecordingMode>,
 }
@@ -1134,50 +1141,20 @@ impl CameraInner {
         capabilities.validate()?;
         let mounting = bridge.sensor_mounting(camera_id)?;
 
-        bridge.open_camera(camera_id, config.resolution, config.frame_rate)?;
+        // The capture owns the open camera, so every failure path closes
+        // it exactly once as the value drops.
+        let capture = OpenCamera::open(
+            Arc::clone(&bridge),
+            camera_id,
+            config.resolution,
+            config.frame_rate,
+        )?
+        .start_capture()?;
 
-        if let Err(error) = bridge.start_capture() {
-            let _ = bridge.close_camera();
-            return Err(error);
-        }
+        let resolution = bridge.frame_size()?;
 
-        let resolution = match bridge.frame_size() {
-            Ok(size) => size,
-            Err(error) => {
-                let _ = bridge.stop_capture();
-                let _ = bridge.close_camera();
-                return Err(error);
-            }
-        };
-
-        let (sender, receiver) = async_channel::bounded(1);
-        let running = Arc::new(AtomicBool::new(true));
-        let running_for_thread = Arc::clone(&running);
-        let bridge_for_thread = Arc::clone(&bridge);
-        let clock = StreamClock::new();
         let frame_wait_ms = i32::try_from((1_000_u64 / u64::from(config.frame_rate.max(1))).max(5))
             .unwrap_or(i32::MAX);
-
-        std::thread::spawn(move || {
-            while running_for_thread.load(Ordering::SeqCst) {
-                match bridge_for_thread.wait_for_frame(&clock, frame_wait_ms) {
-                    Ok(Some(frame)) => {
-                        let _ = sender.force_send(Ok(frame));
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        // The error is the stream's last item; ending the
-                        // thread then closes the channel.
-                        let _ = sender.force_send(Err(error));
-                        running_for_thread.store(false, Ordering::SeqCst);
-                        break;
-                    }
-                }
-            }
-
-            let _ = bridge_for_thread.stop_capture();
-            let _ = bridge_for_thread.close_camera();
-        });
 
         Ok(Self {
             device,
@@ -1186,8 +1163,7 @@ impl CameraInner {
             controls: CameraControls::default(),
             resolution,
             mounting,
-            frame_receiver: receiver,
-            running,
+            frames_thread: FrameThread::spawn(capture, frame_wait_ms),
             bridge,
             recording_mode: None,
         })
@@ -1332,7 +1308,7 @@ impl CameraInner {
             &self.device,
             &self.queue,
         );
-        let receiver = self.frame_receiver.clone();
+        let receiver = self.frames_thread.frames().clone();
         let mounting = self.mounting;
 
         // The state is `None` once an error has been yielded, which ends the
@@ -1499,22 +1475,5 @@ impl CameraInner {
             ),
             _ => Duration::ZERO,
         }
-    }
-}
-
-impl Drop for CameraInner {
-    fn drop(&mut self) {
-        self.running.store(false, Ordering::SeqCst);
-        match self.recording_mode {
-            Some(RecordingMode::Standard) => {
-                let _ = self.bridge.stop_recording();
-            }
-            Some(RecordingMode::Raw) => {
-                let _ = self.bridge.stop_raw_recording();
-            }
-            None => {}
-        }
-        let _ = self.bridge.stop_capture();
-        let _ = self.bridge.close_camera();
     }
 }

@@ -6,6 +6,9 @@ pub mod apple;
 #[cfg(target_os = "android")]
 pub mod android;
 
+#[cfg(any(target_os = "android", test))]
+mod android_session;
+
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub mod desktop;
 

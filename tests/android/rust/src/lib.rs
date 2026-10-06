@@ -581,6 +581,56 @@ async fn record_android_camera_frames(
             png.display(),
         ),
     ));
+    record_android_camera_reopen(report, camera, &device, &queue).await;
+}
+
+/// Reopens `camera` right after its frames case dropped the handle, and
+/// takes one frame from each open. Dropping a camera joins its teardown, so
+/// the immediate second open passes only when teardown already finished.
+#[cfg(feature = "camera")]
+async fn record_android_camera_reopen(
+    report: &mut TestReport,
+    camera: &waterkit_content::camera::CameraInfo,
+    device: &std::sync::Arc<waterkit_content::camera::wgpu::Device>,
+    queue: &std::sync::Arc<waterkit_content::camera::wgpu::Queue>,
+) {
+    use futures::StreamExt;
+    use std::time::Duration;
+    use waterkit_content::camera::{Camera, CameraConfig};
+
+    let case = format!("camera.reopen.{}", camera.id);
+    for open in 0..2 {
+        let handle = match Camera::open(
+            &camera.id,
+            CameraConfig::default(),
+            std::sync::Arc::clone(device),
+            std::sync::Arc::clone(queue),
+        )
+        .await
+        {
+            Ok(handle) => handle,
+            Err(error) => {
+                report.push(TestCase::failed(
+                    case,
+                    format!("open {open} failed: {error}"),
+                ));
+                return;
+            }
+        };
+        {
+            let mut frames = std::pin::pin!(handle.frames());
+            let next = tokio::time::timeout(Duration::from_secs(5), frames.next()).await;
+            match next_frame(&case, 0, next) {
+                Ok(frame) => drop(frame),
+                Err(outcome) => {
+                    report.push(outcome);
+                    return;
+                }
+            }
+        }
+        drop(handle);
+    }
+    report.push(TestCase::passed(case));
 }
 
 /// The Vulkan device camera frames are imported on: Android camera frames are

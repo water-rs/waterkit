@@ -198,6 +198,8 @@ written justification.
 - **Multimedia**: `rodio`, `cpal`, `wgpu`, `nokhwa`, `mp4`, `media-codec`
 - **Apple objc2 bindings**: `objc2`, `objc2-foundation`, `objc2-core-media`, etc.
 
+No dependency, direct or transitive, comes from the Tauri project (crates published by tauri-apps); the capability is implemented in waterkit instead.
+
 ## Linting
 
 Workspace enforces strict clippy lints (all categories at warn level). Run `cargo clippy --workspace --all-targets --all-features -- -D warnings` before committing.

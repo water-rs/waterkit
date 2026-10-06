@@ -706,8 +706,8 @@ pub enum CameraError {
     #[error("platform error: {0}")]
     PlatformError(String),
     /// A frame the camera delivered could not be imported on the GPU device,
-    /// such as an external-format buffer on a device without the
-    /// conversion's extension. It is the frame stream's last item.
+    /// such as an external-format buffer whose conversion descriptor set the
+    /// driver cannot allocate. It is the frame stream's last item.
     #[cfg(target_os = "android")]
     #[error("camera frame import failed: {0}")]
     FrameImport(Arc<wgpu_external_frame::ahardware_buffer::HardwareBufferImportError>),
@@ -839,11 +839,10 @@ impl Camera {
     ///
     /// When capture fails, the stream yields the error as its last item and
     /// then ends. On Android that includes [`CameraError::FrameImport`] when
-    /// the device cannot import the camera's buffers: buffers a driver
-    /// describes only through an external format are converted, which needs
-    /// `VK_KHR_push_descriptor`. `request_device` enables it where the adapter
-    /// offers it; whether the camera's buffers need it shows only on the first
-    /// frame.
+    /// the device cannot import the camera's buffers. Buffers a driver
+    /// describes only through an external format are converted on the GPU,
+    /// which needs nothing beyond what `request_device` enables; whether the
+    /// camera's buffers are converted shows only on the first frame.
     pub fn frames(&self) -> impl futures::Stream<Item = Result<Frame, CameraError>> + '_ {
         self.inner.frames()
     }

@@ -1,6 +1,6 @@
 //! Apple platform (iOS/macOS) location implementation using swift-bridge.
 
-use crate::{Location, LocationError, Timestamp};
+use crate::{Location, LocationCapabilities, LocationError, LocationProvider, Timestamp};
 
 #[swift_bridge::bridge]
 mod ffi {
@@ -66,5 +66,12 @@ pub async fn get_location() -> Result<Location, LocationError> {
         ffi::LocationResult::ServiceDisabled => Err(LocationError::ServiceDisabled),
         ffi::LocationResult::Timeout => Err(LocationError::Timeout),
         ffi::LocationResult::NotAvailable => Err(LocationError::NotAvailable),
+    }
+}
+
+/// Core Location ships with every iOS and macOS release.
+pub async fn capabilities() -> LocationCapabilities {
+    LocationCapabilities {
+        provider: Some(LocationProvider::CoreLocation),
     }
 }

@@ -6,6 +6,32 @@
 //! `waterkit_permission::request(Permission::Location).await` then
 //! `Location::get().await`.
 //!
+//! # Realizations
+//!
+//! Each platform serves [`Location::get`] through the location service the
+//! device itself supplies; [`Location::capabilities`] reports which one, as a
+//! [`LocationProvider`]:
+//!
+//! - **iOS / macOS:** Core Location.
+//! - **Android with Google Play services:** the Fused Location Provider of
+//!   Google Play services, which fuses GNSS, Wi-Fi, cell and sensor input. The
+//!   app links the thin `play-services-location` client, which this crate
+//!   declares for the packager.
+//! - **Android without Google Play services:** the framework
+//!   `LocationManager`. From API 31 it is asked for its own fused provider
+//!   (`LocationManager.FUSED_PROVIDER`) when the device registers one, which
+//!   also serves a coarse-only grant on devices without a network provider;
+//!   otherwise it is asked for the GPS provider, or the network provider when
+//!   only coarse location is granted.
+//! - **Windows:** `Windows.Devices.Geolocation`.
+//! - **Linux:** `GeoClue2`, when its service is installed on the system bus.
+//! - **Browser:** the Geolocation API, when the page exposes it.
+//!
+//! The Android realization is chosen once per process, before the first
+//! request, from whether Google Play services is usable
+//! (`GoogleApiAvailability`). A failed request returns its error; it is never
+//! retried through the other realization.
+//!
 //! # Example
 //!
 //! ```no_run
@@ -27,6 +53,8 @@
 pub use jiff::Timestamp;
 pub use waterkit_core::{Latitude, Longitude, OutOfRange};
 
+use waterkit_core::Capabilities;
+
 mod sys;
 
 pub use waterkit_permission::{Permission, PermissionStatus};
@@ -37,7 +65,46 @@ pub use waterkit_permission::{Permission, PermissionStatus};
 /// permission/location flows require an app-owned JNI context.
 #[cfg(target_os = "android")]
 pub mod android {
-    pub use crate::sys::android::get_location_with_context;
+    pub use crate::sys::android::{get_location_with_context, provider_with_context};
+}
+
+/// The location service that serves [`Location::get`] on this device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LocationProvider {
+    /// Apple Core Location (`CLLocationManager`).
+    CoreLocation,
+    /// The Fused Location Provider of Google Play services
+    /// (`FusedLocationProviderClient`).
+    FusedLocationProvider,
+    /// The Android framework `LocationManager`.
+    AndroidLocationManager,
+    /// Windows `Windows.Devices.Geolocation.Geolocator`.
+    WindowsGeolocation,
+    /// The `GeoClue2` D-Bus service.
+    GeoClue,
+    /// The browser Geolocation API (`navigator.geolocation`).
+    BrowserGeolocation,
+}
+
+/// Capability probe for location access, returned by
+/// [`Location::capabilities`].
+///
+/// Availability is not a separate field: location is available exactly when
+/// a [`provider`](Self::provider) serves it, so the two cannot disagree.
+/// [`Capabilities::available`] reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct LocationCapabilities {
+    /// The service that serves [`Location::get`], or `None` when this
+    /// platform or device has none.
+    pub provider: Option<LocationProvider>,
+}
+
+impl Capabilities for LocationCapabilities {
+    fn available(&self) -> bool {
+        self.provider.is_some()
+    }
 }
 
 /// A geographic location with coordinates and metadata.
@@ -114,6 +181,22 @@ impl Location {
     )]
     pub async fn get() -> Result<Self, LocationError> {
         sys::get_location().await
+    }
+
+    /// Probes location access and reports which [`LocationProvider`] serves
+    /// [`Location::get`] on this device.
+    ///
+    /// Availability says whether the service exists, not whether the user
+    /// has granted [`Permission::Location`] or turned location services on;
+    /// those surface as errors from [`Location::get`].
+    ///
+    /// # Panics
+    ///
+    /// On Android, panics if the application `Context` has not been
+    /// published to `ndk_context` yet or the JNI probe fails. On Linux,
+    /// panics if the system bus refuses the name queries.
+    pub async fn capabilities() -> LocationCapabilities {
+        sys::capabilities().await
     }
 
     /// Sets the altitude in meters above sea level.

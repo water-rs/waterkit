@@ -9,6 +9,9 @@ CLL = "CLL"
 # taking an int and a boolean and returning void. Respelling these breaks
 # every method descriptor they appear in.
 IZ = "IZ"
+# nokhwa spells its format-request setter `set_camera_requset`; calling it
+# needs the upstream spelling.
+requset = "requset"
 # Mirrors the `seek` API it reports on, rather than the English past tense.
 seeked = "seeked"
 thw = "thw"

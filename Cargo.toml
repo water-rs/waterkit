@@ -215,6 +215,8 @@ objc2-core-foundation = "0.3"
 objc2-io-surface = "0.3"
 objc2-metal = "0.3"
 objc = "0.2"
+# Zero-copy import of platform frame buffers into wgpu textures.
+wgpu-external-frame = "0.2.0"
 
 # Security
 keyring = "4"
@@ -326,8 +328,7 @@ filtrate-core = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4
 filtrate-derive = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }
 cherenkov-shader = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }
 
-# shaderloom's packaged-artifact API (`shaderloom::packaged`, used by
-# waterkit-codec's build script) is not on crates.io yet; pin the rev that
-# carries it, as other water-rs consumers do. The pinned rev is the head of
-# water-rs/shaderloom#21 (`build/wgpu-30`), which ports shaderloom to wgpu 30.
+# shaderloom's wgpu 30 port is not on crates.io yet; pin the rev that carries
+# it, as other water-rs consumers do. The pinned rev is the head of
+# water-rs/shaderloom#21 (`build/wgpu-30`).
 shaderloom = { git = "https://github.com/water-rs/shaderloom", rev = "84c37c8314f1bb6d228fce30f78d94872247a18f" }

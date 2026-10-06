@@ -1,22 +1,30 @@
 //! Desktop camera implementation using nokhwa.
 //!
 //! Desktop cameras don't support professional controls (ISO, focus, etc.).
-//! Frames are uploaded to GPU textures via CPU copy. Video recording runs the
-//! capture stream through `waterkit-codec` and `waterkit-video-container` on a
-//! dedicated worker thread; raw recording writes the uncompressed `WKRV`
-//! frame stream the mobile backends use.
+//! The camera runs in the uncompressed format closest to the requested
+//! resolution and frame rate when it offers one: NV12 frames upload as
+//! `YCbCr420` planes and YUYV frames as one packed `YCbCr422` texture, with no
+//! CPU colour conversion. A compressed MJPEG stream is decoded on the CPU and
+//! uploads as `Rgb`. Each frame's planes are uploaded into textures created
+//! for it, and desktop frames are always upright.
+//!
+//! Video recording runs the capture stream through `waterkit-codec` and
+//! `waterkit-video-container` on a dedicated worker thread; raw recording
+//! writes the uncompressed `WKRV` frame stream the mobile backends use.
 
 mod recording;
 
+use crate::upload::{CpuPlanes, FrameUploader, nv12_len};
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
-    Frame, Photo, PixelFormat, RawPhoto, RawVideoFormat, Resolution, StabilizationMode,
+    Frame, FrameConverter, Orientation, Photo, RawPhoto, RawVideoFormat, Resolution,
+    StabilizationMode, YcbcrEncoding, YcbcrMatrix, YcbcrRange,
 };
 use nokhwa::Camera as NokhwaCamera;
 use nokhwa::pixel_format::RgbAFormat;
 use nokhwa::utils::{
     CameraFormat as NokhwaCameraFormat, CameraIndex, FrameFormat as NokhwaFrameFormat,
-    RequestedFormat, RequestedFormatType, Resolution as NokhwaResolution,
+    RequestedFormat, RequestedFormatType,
 };
 use recording::RecordingSession;
 use std::num::NonZeroU8;
@@ -25,18 +33,146 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Internal frame data from nokhwa: decoded RGBA pixels and the capture
+/// Frame formats the desktop backend runs a camera in, most preferred first:
+/// the uncompressed formats upload as they are, MJPEG needs a decode.
+const DELIVERED_FORMATS: [NokhwaFrameFormat; 3] = [
+    NokhwaFrameFormat::NV12,
+    NokhwaFrameFormat::YUYV,
+    NokhwaFrameFormat::MJPEG,
+];
+
+/// How UVC webcams encode YCbCr unless a colour-matching descriptor says
+/// otherwise: BT.601 (SMPTE 170M) coefficients in video range. Neither nokhwa
+/// backend reports a camera's descriptor, so this is the encoding every
+/// desktop YCbCr frame carries.
+const WEBCAM_ENCODING: YcbcrEncoding = YcbcrEncoding {
+    matrix: YcbcrMatrix::Bt601,
+    range: YcbcrRange::Video,
+};
+
+/// One captured frame in the layout the camera delivered, with its capture
 /// timestamp as a duration since the camera stream started.
 pub(super) struct RawFrame {
-    data: Vec<u8>,
+    pixels: CapturedPixels,
     width: u32,
     height: u32,
     timestamp: Duration,
 }
 
+/// The pixel layouts the capture thread forwards.
+pub(super) enum CapturedPixels {
+    /// NV12 as the camera delivered it.
+    Nv12(Vec<u8>),
+    /// Packed YUYV 4:2:2 as the camera delivered it.
+    Yuyv(Vec<u8>),
+    /// RGBA decoded from a compressed MJPEG frame.
+    Rgba(Vec<u8>),
+}
+
+impl RawFrame {
+    /// Reads one nokhwa buffer, checking that its size matches its layout.
+    fn capture(buffer: &nokhwa::Buffer, timestamp: Duration) -> Result<Self, CameraError> {
+        let width = buffer.resolution().width();
+        let height = buffer.resolution().height();
+        let pixels = width as usize * height as usize;
+        let (data, expected) = match buffer.source_frame_format() {
+            NokhwaFrameFormat::NV12 => (
+                CapturedPixels::Nv12(buffer.buffer().to_vec()),
+                nv12_len(width, height),
+            ),
+            NokhwaFrameFormat::YUYV => (CapturedPixels::Yuyv(buffer.buffer().to_vec()), pixels * 2),
+            NokhwaFrameFormat::MJPEG => {
+                let image = buffer.decode_image::<RgbAFormat>().map_err(|error| {
+                    CameraError::CaptureFailed(format!("MJPEG frame decode: {error}"))
+                })?;
+                (CapturedPixels::Rgba(image.into_raw()), pixels * 4)
+            }
+            other => {
+                return Err(CameraError::CaptureFailed(format!(
+                    "camera delivered {other} frames, which the stream was not opened for"
+                )));
+            }
+        };
+        let len = data.bytes().len();
+        if len != expected {
+            return Err(CameraError::CaptureFailed(format!(
+                "{width}x{height} frame holds {len} bytes, its layout needs {expected}"
+            )));
+        }
+        Ok(Self {
+            pixels: data,
+            width,
+            height,
+            timestamp,
+        })
+    }
+
+    fn upload(&self, uploader: &FrameUploader) -> Frame {
+        let planes = match &self.pixels {
+            CapturedPixels::Nv12(data) => CpuPlanes::Nv12 {
+                data,
+                encoding: WEBCAM_ENCODING,
+            },
+            CapturedPixels::Yuyv(data) => CpuPlanes::Yuyv {
+                data,
+                encoding: WEBCAM_ENCODING,
+            },
+            CapturedPixels::Rgba(data) => CpuPlanes::Rgb {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                data,
+                stride: self.width * 4,
+            },
+        };
+        uploader.upload(
+            &planes,
+            self.width,
+            self.height,
+            Orientation::Up,
+            self.timestamp,
+        )
+    }
+}
+
+impl CapturedPixels {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Nv12(data) | Self::Yuyv(data) | Self::Rgba(data) => data,
+        }
+    }
+}
+
+/// The delivered format closest to the request: nearest resolution first,
+/// then nearest frame rate, then the format least work to upload.
+fn choose_format(
+    formats: &[NokhwaCameraFormat],
+    resolution: Resolution,
+    frame_rate: u32,
+) -> Option<NokhwaCameraFormat> {
+    formats
+        .iter()
+        .filter_map(|format| {
+            let preference = DELIVERED_FORMATS
+                .iter()
+                .position(|delivered| *delivered == format.format())?;
+            let resolution_distance = format.width().abs_diff(resolution.width)
+                + format.height().abs_diff(resolution.height);
+            let frame_rate_distance = format.frame_rate().abs_diff(frame_rate);
+            Some((
+                (resolution_distance, frame_rate_distance, preference),
+                *format,
+            ))
+        })
+        .min_by_key(|(key, _)| *key)
+        .map(|(_, format)| format)
+}
+
+/// What the capture thread delivers: a frame, or the error that ended the
+/// capture, after which the subscription closes.
+pub(super) type Captured = Result<Arc<RawFrame>, CameraError>;
+
 /// One live frame subscription, owned by the capture thread.
 struct Subscriber {
-    sender: async_channel::Sender<Arc<RawFrame>>,
+    sender: async_channel::Sender<Captured>,
     /// Frames displaced by `force_send` before the receiver could read them.
     dropped: Arc<AtomicU64>,
 }
@@ -44,7 +180,7 @@ struct Subscriber {
 /// A capture-stream receiver plus the count of frames it missed because a
 /// newer frame displaced the pending one before it was read.
 pub(super) struct FrameSubscription {
-    pub receiver: async_channel::Receiver<Arc<RawFrame>>,
+    pub receiver: async_channel::Receiver<Captured>,
     pub dropped: Arc<AtomicU64>,
 }
 
@@ -71,6 +207,8 @@ pub struct CameraInner {
     streaming: Arc<AtomicBool>,
     frame_rate: u32,
     recording: Option<RecordingSession>,
+    /// Converts the frame a photo is taken from upright.
+    photo_converter: FrameConverter,
 }
 
 /// Preview subscribers only ever need the newest frame.
@@ -136,10 +274,10 @@ fn build_desktop_capabilities(
 /// Deliver `frame` to every live subscriber. A lagging subscriber's pending
 /// frame is displaced by the newer one rather than applying backpressure to
 /// the capture thread; each displaced frame is counted on the subscription.
-fn fan_out(subscribers: &mut Vec<Subscriber>, frame: &Arc<RawFrame>) {
+fn fan_out(subscribers: &mut Vec<Subscriber>, frame: &Captured) {
     subscribers.retain(|sub| !sub.sender.is_closed());
     for sub in subscribers.iter() {
-        if let Ok(Some(_evicted)) = sub.sender.force_send(Arc::clone(frame)) {
+        if let Ok(Some(_evicted)) = sub.sender.force_send(frame.clone()) {
             sub.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -159,24 +297,22 @@ fn spawn_capture_thread(
                 subscribers.push(subscriber);
             }
 
-            let frame = {
-                let mut guard = camera.lock().unwrap();
-                guard.0.frame().ok()
-            };
-
-            if let Some(frame) = frame {
-                let decoded = frame.decode_image::<RgbAFormat>();
-                if let Ok(img) = decoded {
-                    let raw = Arc::new(RawFrame {
-                        data: img.into_raw(),
-                        width: frame.resolution().width(),
-                        height: frame.resolution().height(),
-                        timestamp: Instant::now().duration_since(start_instant),
-                    });
-                    fan_out(&mut subscribers, &raw);
-                }
-            } else {
-                std::thread::sleep(Duration::from_millis(2));
+            // `frame` blocks until the camera delivers the next frame.
+            let captured = camera
+                .lock()
+                .unwrap()
+                .0
+                .frame()
+                .map_err(|error| CameraError::CaptureFailed(error.to_string()))
+                .and_then(|buffer| {
+                    RawFrame::capture(&buffer, Instant::now().duration_since(start_instant))
+                });
+            let failed = captured.is_err();
+            // A failure is delivered as the last item; the subscriptions
+            // close when this thread ends right after it.
+            fan_out(&mut subscribers, &captured.map(Arc::new));
+            if failed {
+                break;
             }
         }
 
@@ -211,17 +347,33 @@ impl CameraInner {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
     ) -> Result<Self, CameraError> {
+        // Photos are converted upright on the GPU, so the device must be able
+        // to run the converter before the camera opens.
+        FrameConverter::check_device(&device)?;
+        let photo_converter = FrameConverter::new(&device);
         let index = parse_camera_index(camera_id);
 
-        let requested_format = NokhwaCameraFormat::new(
-            NokhwaResolution::new(config.resolution.width, config.resolution.height),
-            NokhwaFrameFormat::RAWRGB,
-            config.frame_rate.max(1),
-        );
-        let requested =
-            RequestedFormat::new::<RgbAFormat>(RequestedFormatType::Closest(requested_format));
-
-        let mut camera = NokhwaCamera::new(index, requested)
+        // Open in any delivered format, then switch to the one closest to the
+        // request among everything the camera offers.
+        let mut camera = NokhwaCamera::new(
+            index,
+            RequestedFormat::with_formats(RequestedFormatType::None, &DELIVERED_FORMATS),
+        )
+        .map_err(|e| CameraError::OpenFailed(e.to_string()))?;
+        let offered = camera
+            .compatible_camera_formats()
+            .map_err(|e| CameraError::OpenFailed(e.to_string()))?;
+        let format = choose_format(&offered, config.resolution, config.frame_rate.max(1))
+            .ok_or_else(|| {
+                CameraError::OpenFailed(format!(
+                    "camera offers none of the formats the desktop backend runs ({DELIVERED_FORMATS:?}): {offered:?}"
+                ))
+            })?;
+        camera
+            .set_camera_requset(RequestedFormat::with_formats(
+                RequestedFormatType::Exact(format),
+                &DELIVERED_FORMATS,
+            ))
             .map_err(|e| CameraError::OpenFailed(e.to_string()))?;
 
         let resolution = camera.resolution();
@@ -255,6 +407,7 @@ impl CameraInner {
             streaming,
             frame_rate: config.frame_rate.max(1),
             recording: None,
+            photo_converter,
         })
     }
 
@@ -313,83 +466,36 @@ impl CameraInner {
         self.resolution
     }
 
-    pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
-        let device = self.device.clone();
-        let queue = self.queue.clone();
+    pub fn frames(&self) -> impl futures::Stream<Item = Result<Frame, CameraError>> + '_ {
+        let uploader = FrameUploader::new(Arc::clone(&self.device), Arc::clone(&self.queue));
         let receiver = self.subscribe_frames(PREVIEW_QUEUE).receiver;
 
-        futures::stream::unfold(
-            (device, queue, receiver),
-            move |(device, queue, receiver)| async move {
-                let raw = receiver.recv().await.ok()?;
-
-                // Create GPU texture
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("CameraFrame"),
-                    size: wgpu::Extent3d {
-                        width: raw.width,
-                        height: raw.height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-
-                // Upload frame data to GPU
-                queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &raw.data,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(raw.width * 4),
-                        rows_per_image: Some(raw.height),
-                    },
-                    wgpu::Extent3d {
-                        width: raw.width,
-                        height: raw.height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-
-                let frame = Frame {
-                    texture,
-                    width: raw.width,
-                    height: raw.height,
-                    format: PixelFormat::Rgba8,
-                    timestamp: raw.timestamp,
-                };
-
-                Some((frame, (device, queue, receiver)))
-            },
-        )
+        futures::stream::unfold((uploader, receiver), |(uploader, receiver)| async move {
+            let captured = receiver.recv().await.ok()?;
+            let frame = captured.map(|raw| raw.upload(&uploader));
+            Some((frame, (uploader, receiver)))
+        })
     }
 
-    pub async fn capture_photo(&self) -> Result<Photo, CameraError> {
-        // Wait for next frame from the stream
+    /// Takes the next stream frame as the photo, converted upright on the GPU.
+    pub async fn capture_photo(&mut self) -> Result<Photo, CameraError> {
         let raw = self
             .subscribe_frames(PREVIEW_QUEUE)
             .receiver
             .recv()
             .await
-            .map_err(|_| CameraError::CaptureFailed("no frame available".into()))?;
+            .map_err(|_| CameraError::CaptureFailed("no frame available".into()))??;
 
-        // Create GPU texture
+        let uploader = FrameUploader::new(Arc::clone(&self.device), Arc::clone(&self.queue));
+        let frame = raw.upload(&uploader);
+        let upright = FrameConverter::create_output(&self.device, &frame);
+        let size = upright.size();
+        // Photos are sampled linearized, like the mobile backends' photos; the
+        // converter's storage output copies into an sRGB texture of the same
+        // texels.
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("CameraPhoto"),
-            size: wgpu::Extent3d {
-                width: raw.width,
-                height: raw.height,
-                depth_or_array_layers: 1,
-            },
+            size,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -399,32 +505,20 @@ impl CameraInner {
                 | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-
-        // Upload to GPU
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &raw.data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(raw.width * 4),
-                rows_per_image: Some(raw.height),
-            },
-            wgpu::Extent3d {
-                width: raw.width,
-                height: raw.height,
-                depth_or_array_layers: 1,
-            },
-        );
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("CameraPhoto"),
+            });
+        self.photo_converter
+            .encode(&self.device, &mut encoder, &frame, &upright);
+        encoder.copy_texture_to_texture(upright.as_image_copy(), texture.as_image_copy(), size);
+        self.queue.submit([encoder.finish()]);
 
         Ok(Photo {
             texture,
-            width: raw.width,
-            height: raw.height,
+            width: size.width,
+            height: size.height,
         })
     }
 
@@ -514,23 +608,66 @@ mod tests {
             sender,
             dropped: Arc::clone(&dropped),
         }];
-        let frame = Arc::new(RawFrame {
-            data: vec![0],
+        let frame: Captured = Ok(Arc::new(RawFrame {
+            pixels: CapturedPixels::Rgba(vec![0; 4]),
             width: 1,
             height: 1,
             timestamp: Duration::ZERO,
-        });
+        }));
         fan_out(&mut subscribers, &frame);
         assert_eq!(dropped.load(Ordering::Relaxed), 0);
         // The channel still holds the first frame, so the second displaces it.
         fan_out(&mut subscribers, &frame);
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
-        receiver.try_recv().unwrap();
+        let pending = receiver.try_recv().expect("the newest frame is pending");
+        assert!(pending.is_ok(), "the pending item is a frame");
         fan_out(&mut subscribers, &frame);
         assert_eq!(dropped.load(Ordering::Relaxed), 1);
         // A closed receiver is pruned from the list.
         drop(receiver);
         fan_out(&mut subscribers, &frame);
         assert!(subscribers.is_empty());
+    }
+
+    fn offered(width: u32, height: u32, format: NokhwaFrameFormat, fps: u32) -> NokhwaCameraFormat {
+        NokhwaCameraFormat::new_from(width, height, format, fps)
+    }
+
+    /// The closest resolution wins, then the closest frame rate, and only a
+    /// tie between them falls to the format that needs the least work.
+    #[test]
+    fn format_choice_prefers_resolution_then_frame_rate_then_uncompressed() {
+        let full_hd = Resolution::FULL_HD;
+        let formats = [
+            offered(1920, 1080, NokhwaFrameFormat::YUYV, 5),
+            offered(1920, 1080, NokhwaFrameFormat::MJPEG, 30),
+            offered(1280, 720, NokhwaFrameFormat::NV12, 30),
+            offered(1920, 1080, NokhwaFrameFormat::GRAY, 30),
+        ];
+        assert_eq!(
+            choose_format(&formats, full_hd, 30),
+            Some(offered(1920, 1080, NokhwaFrameFormat::MJPEG, 30))
+        );
+        assert_eq!(
+            choose_format(&formats, full_hd, 5),
+            Some(offered(1920, 1080, NokhwaFrameFormat::YUYV, 5))
+        );
+        let tied = [
+            offered(1280, 720, NokhwaFrameFormat::MJPEG, 30),
+            offered(1280, 720, NokhwaFrameFormat::YUYV, 30),
+            offered(1280, 720, NokhwaFrameFormat::NV12, 30),
+        ];
+        assert_eq!(
+            choose_format(&tied, Resolution::HD, 30),
+            Some(offered(1280, 720, NokhwaFrameFormat::NV12, 30))
+        );
+        assert_eq!(
+            choose_format(
+                &[offered(640, 480, NokhwaFrameFormat::RAWRGB, 30)],
+                Resolution::HD,
+                30
+            ),
+            None
+        );
     }
 }

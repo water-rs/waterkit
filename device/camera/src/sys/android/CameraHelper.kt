@@ -13,6 +13,8 @@ import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.DynamicRangeProfiles
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
+import android.hardware.HardwareBuffer
+import android.hardware.display.DisplayManager
 import android.media.Image
 import android.media.ImageReader
 import android.media.MediaCodecInfo
@@ -26,6 +28,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.util.Range
 import android.util.Size
+import android.view.Display
 import android.view.Surface
 import kotlin.math.roundToInt
 import java.io.ByteArrayOutputStream
@@ -43,6 +46,9 @@ import java.util.concurrent.TimeUnit
 class CameraHelper(private val appContext: Context) {
     private companion object {
         private const val TAG = "WaterkitCamera"
+
+        /** Preview buffers: one being imported, the newest waiting, one filling. */
+        private const val PREVIEW_IMAGES = 4
 
         private const val OPEN_TIMEOUT_SECONDS = 5L
         private const val SESSION_TIMEOUT_SECONDS = 5L
@@ -78,6 +84,8 @@ class CameraHelper(private val appContext: Context) {
     private var previewRequestBuilder: CaptureRequest.Builder? = null
 
     private var previewImageReader: ImageReader? = null
+    /** CPU-readable YUV frames for RAW video recording, present only while it runs. */
+    private var rawVideoImageReader: ImageReader? = null
     private var stillImageReader: ImageReader? = null
     private var rawImageReader: ImageReader? = null
 
@@ -92,7 +100,26 @@ class CameraHelper(private val appContext: Context) {
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
 
-    private val frameQueue: LinkedBlockingDeque<ByteArray> = LinkedBlockingDeque(1)
+    /**
+     * One preview frame: the `Image` from the GPU-sampled `PRIVATE` reader,
+     * its `HardwareBuffer`, and the display rotation, in degrees, when the
+     * frame arrived. Together with the sensor orientation and lens facing the
+     * rotation gives the frame's orientation.
+     *
+     * The receiver owns `image` and must close it once the GPU has finished
+     * with `hardwareBuffer`, which returns the buffer to the reader; it also
+     * closes `hardwareBuffer`, its own handle on the buffer, once it has
+     * taken a reference of its own. The pixels are never read on the CPU.
+     */
+    class CapturedFrame(
+        val image: Image,
+        val hardwareBuffer: HardwareBuffer,
+        val displayRotation: Int,
+    )
+
+    private val frameQueue: LinkedBlockingDeque<CapturedFrame> = LinkedBlockingDeque(1)
+    private val displayManager: DisplayManager =
+        appContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
     private var latestPhotoData: ByteArray? = null
     private var latestRawPhotoData: ByteArray? = null
     private var latestRawImage: Image? = null
@@ -227,29 +254,52 @@ class CameraHelper(private val appContext: Context) {
             isRawVideoRecording = false
             rawVideoRecordingStartElapsedRealtimeMs = 0L
 
-            previewImageReader = ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.YUV_420_888, 3)
+            // PRIVATE buffers for GPU sampling reach the GPU as they are; the
+            // driver describes their YCbCr layout and encoding. The pool has
+            // room for the frame being imported, the newest waiting one, and
+            // one the camera is filling.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                throw IllegalStateException(
+                    "GPU-sampled camera frames need Android 10 (API 29); this device runs API ${Build.VERSION.SDK_INT}",
+                )
+            }
+            previewImageReader = ImageReader.newInstance(
+                frameWidth,
+                frameHeight,
+                ImageFormat.PRIVATE,
+                PREVIEW_IMAGES,
+                HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE,
+            )
             stillImageReader = ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.JPEG, 2)
+            // RAW_SENSOR streams only come in the sizes the sensor reads
+            // out, normally just its full array; a reader at the preview size
+            // makes the whole capture session fail to configure.
             rawImageReader = if (snapshot.supportsRawPhoto) {
-                ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.RAW_SENSOR, 2)
+                val rawSize = characteristics
+                    .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                    ?.getOutputSizes(ImageFormat.RAW_SENSOR)
+                    ?.maxByOrNull { size -> size.width.toLong() * size.height }
+                    ?: throw IllegalStateException("camera $cameraId reports RAW without a RAW_SENSOR size")
+                ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 2)
             } else {
                 null
             }
 
             previewImageReader?.setOnImageAvailableListener({ reader ->
                 val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-                try {
-                    frameWidth = image.width
-                    frameHeight = image.height
-                    val rgba = yuv420ToRgba(image)
-                    val timestampNs = SystemClock.elapsedRealtimeNanos()
-                    frameQueue.pollLast()
-                    frameQueue.offerLast(rgba)
-                    maybeWriteRawVideoFrame(rgba, image.width, image.height, timestampNs)
-                } catch (error: Exception) {
-                    Log.e(TAG, "Failed to process camera frame", error)
-                } finally {
+                val buffer = image.hardwareBuffer
+                if (buffer == null) {
                     image.close()
+                    throw IllegalStateException("a GPU-sampled camera image carries no HardwareBuffer")
                 }
+                frameWidth = image.width
+                frameHeight = image.height
+                // Newest wins: a frame nobody took yet goes back to the reader.
+                frameQueue.pollLast()?.let { stale ->
+                    stale.hardwareBuffer.close()
+                    stale.image.close()
+                }
+                frameQueue.offerLast(CapturedFrame(image, buffer, displayRotationDegrees()))
             }, handler)
 
             rawImageReader?.setOnImageAvailableListener({ reader ->
@@ -683,11 +733,26 @@ class CameraHelper(private val appContext: Context) {
             }
             file.parentFile?.mkdirs()
             val stream = FileOutputStream(file)
-            writeRawVideoHeader(stream, frameWidth, frameHeight, frameRate, isBgra = false)
+            writeRawVideoHeader(stream, frameWidth, frameHeight, frameRate)
             synchronized(rawVideoLock) {
                 rawVideoOutput = stream
                 rawVideoRecordingStartElapsedRealtimeMs = SystemClock.elapsedRealtime()
                 isRawVideoRecording = true
+            }
+            // The preview frames are GPU-only, so RAW video reads its own
+            // CPU-readable YUV stream, attached only while recording.
+            val reader = ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.YUV_420_888, 2)
+            reader.setOnImageAvailableListener({ source ->
+                val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
+                try {
+                    maybeWriteRawVideoFrame(image, SystemClock.elapsedRealtimeNanos())
+                } finally {
+                    image.close()
+                }
+            }, backgroundHandler)
+            rawVideoImageReader = reader
+            if (!createCaptureSession(includeRecorderSurface = false)) {
+                throw IllegalStateException("the capture session rejected the RAW video stream")
             }
             true
         } catch (error: Exception) {
@@ -711,18 +776,10 @@ class CameraHelper(private val appContext: Context) {
     }
 
     /**
-     * Get latest frame as RGBA bytes.
-     * Returns null if no new frame is available.
-     */
-    fun getFrame(): ByteArray? {
-        return frameQueue.pollFirst()
-    }
-
-    /**
      * Wait for the next available frame and consume it.
      * Returns null on timeout or if no frame is available.
      */
-    fun waitForNextFrame(timeoutMs: Int): ByteArray? {
+    fun waitForNextFrame(timeoutMs: Int): CapturedFrame? {
         return try {
             if (timeoutMs <= 0) {
                 frameQueue.pollFirst()
@@ -732,6 +789,39 @@ class CameraHelper(private val appContext: Context) {
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()
             null
+        }
+    }
+
+    /**
+     * Clockwise angle, in degrees, through which the sensor's output must be
+     * rotated to be upright in the device's natural orientation.
+     */
+    fun getSensorOrientation(cameraId: String): Int {
+        val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        return manager.getCameraCharacteristics(cameraId)
+            .get(CameraCharacteristics.SENSOR_ORIENTATION)
+            ?: throw IllegalStateException("camera $cameraId reports no SENSOR_ORIENTATION")
+    }
+
+    /**
+     * Whether the lens faces away from the display. Front and external lenses
+     * do not, so the display rotation turns their image the other way.
+     */
+    fun lensFacesBack(cameraId: String): Boolean {
+        val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        return manager.getCameraCharacteristics(cameraId)
+            .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+    }
+
+    private fun displayRotationDegrees(): Int {
+        val display = displayManager.getDisplay(Display.DEFAULT_DISPLAY)
+            ?: throw IllegalStateException("the default display is gone")
+        return when (val rotation = display.rotation) {
+            Surface.ROTATION_0 -> 0
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> throw IllegalStateException("unknown display rotation $rotation")
         }
     }
 
@@ -752,6 +842,11 @@ class CameraHelper(private val appContext: Context) {
         cameraDevice?.close()
         cameraDevice = null
 
+        // The readers' listeners run on the background thread and read their
+        // images' buffers there; closing a reader frees those buffers, so the
+        // thread must have finished with them first.
+        stopBackgroundThread()
+
         previewImageReader?.close()
         previewImageReader = null
         stillImageReader?.close()
@@ -762,7 +857,11 @@ class CameraHelper(private val appContext: Context) {
         releaseRecorder()
         stopRawVideoRecordingInternal()
 
-        frameQueue.clear()
+        while (true) {
+            val stale = frameQueue.pollFirst() ?: break
+            stale.hardwareBuffer.close()
+            stale.image.close()
+        }
         synchronized(photoLock) {
             latestPhotoData = null
             pendingPhotoLatch?.countDown()
@@ -781,8 +880,6 @@ class CameraHelper(private val appContext: Context) {
         cameraManager = null
         recordingStartElapsedRealtimeMs = 0L
         isRecording = false
-
-        stopBackgroundThread()
     }
 
     // -------------------------------------------------------------------------
@@ -1227,11 +1324,13 @@ class CameraHelper(private val appContext: Context) {
             return false
         }
 
+        val rawVideoSurface = rawVideoImageReader?.surface
         val surfaces = mutableListOf<Surface>(
             previewReader.surface,
             stillReader.surface,
         )
         rawImageReader?.surface?.let { surfaces.add(it) }
+        rawVideoSurface?.let { surfaces.add(it) }
 
         if (includeRecorderSurface) {
             val surface = recorderSurface ?: run {
@@ -1256,6 +1355,7 @@ class CameraHelper(private val appContext: Context) {
                     }
                     val builder = device.createCaptureRequest(template)
                     builder.addTarget(previewReader.surface)
+                    rawVideoSurface?.let { builder.addTarget(it) }
                     if (includeRecorderSurface) {
                         val recordingSurface = recorderSurface
                             ?: error("Recorder surface lost during session configuration")
@@ -1509,6 +1609,13 @@ class CameraHelper(private val appContext: Context) {
     }
 
     private fun stopRawVideoRecordingInternal(): Boolean {
+        rawVideoImageReader?.let { reader ->
+            rawVideoImageReader = null
+            if (cameraDevice != null) {
+                createCaptureSession(includeRecorderSurface = false)
+            }
+            reader.close()
+        }
         val output = synchronized(rawVideoLock) {
             val stream = rawVideoOutput
             rawVideoOutput = null
@@ -1527,12 +1634,12 @@ class CameraHelper(private val appContext: Context) {
         }
     }
 
-    private fun maybeWriteRawVideoFrame(
-        rgba: ByteArray,
-        width: Int,
-        height: Int,
-        timestampNs: Long,
-    ) {
+    /**
+     * Appends one YUV_420_888 image as NV12: the luma rows, then the
+     * interleaved Cb/Cr rows, without padding. The planes are copied as
+     * stored; no colour conversion happens.
+     */
+    private fun maybeWriteRawVideoFrame(image: Image, timestampNs: Long) {
         val output = synchronized(rawVideoLock) {
             if (!isRawVideoRecording) {
                 return
@@ -1541,14 +1648,30 @@ class CameraHelper(private val appContext: Context) {
         } ?: return
 
         try {
-            val expected = width.toLong() * height.toLong() * 4L
-            if (expected != rgba.size.toLong()) {
-                Log.e(TAG, "RAW frame byte count mismatch: expected=$expected actual=${rgba.size}")
-                return
+            val width = image.width
+            val height = image.height
+            val chromaWidth = width / 2
+            val chromaHeight = height / 2
+            val nv12 = ByteArray(width * height + chromaWidth * chromaHeight * 2)
+            val luma = image.planes[0]
+            for (row in 0 until height) {
+                val source = luma.buffer.duplicate()
+                source.position(row * luma.rowStride)
+                source.get(nv12, row * width, width)
+            }
+            val cb = image.planes[1]
+            val cr = image.planes[2]
+            var offset = width * height
+            for (row in 0 until chromaHeight) {
+                for (column in 0 until chromaWidth) {
+                    nv12[offset] = cb.buffer.get(row * cb.rowStride + column * cb.pixelStride)
+                    nv12[offset + 1] = cr.buffer.get(row * cr.rowStride + column * cr.pixelStride)
+                    offset += 2
+                }
             }
             writeU64LE(output, timestampNs)
-            writeU32LE(output, rgba.size)
-            output.write(rgba)
+            writeU32LE(output, nv12.size)
+            output.write(nv12)
         } catch (error: Exception) {
             Log.e(TAG, "Failed writing RAW video frame", error)
             stopRawVideoRecordingInternal()
@@ -1560,13 +1683,14 @@ class CameraHelper(private val appContext: Context) {
         width: Int,
         height: Int,
         fps: Int,
-        isBgra: Boolean,
     ) {
         // Header layout:
         // magic(4)='WKRV', version(u8)=1, pixel_format(u8), reserved(u16)=0,
         // width(u32), height(u32), fps(u32)
         output.write(byteArrayOf('W'.code.toByte(), 'K'.code.toByte(), 'R'.code.toByte(), 'V'.code.toByte()))
-        output.write(byteArrayOf(1, if (isBgra) 1 else 2))
+        // pixel_format 4: NV12, full range; Camera2's YUV_420_888 output is
+        // full-range (JFIF) YCbCr.
+        output.write(byteArrayOf(1, 4))
         writeU16LE(output, 0)
         writeU32LE(output, width)
         writeU32LE(output, height)
@@ -1660,62 +1784,5 @@ class CameraHelper(private val appContext: Context) {
         } catch (_: IllegalArgumentException) {
             // Key unsupported on this device/request template. Skip gracefully.
         }
-    }
-
-    private fun yuv420ToRgba(image: Image): ByteArray {
-        val width = image.width
-        val height = image.height
-
-        val yPlane = image.planes[0]
-        val uPlane = image.planes[1]
-        val vPlane = image.planes[2]
-
-        val yBuffer = yPlane.buffer
-        val uBuffer = uPlane.buffer
-        val vBuffer = vPlane.buffer
-
-        val yRowStride = yPlane.rowStride
-        val yPixelStride = yPlane.pixelStride
-
-        val uRowStride = uPlane.rowStride
-        val uPixelStride = uPlane.pixelStride
-
-        val vRowStride = vPlane.rowStride
-        val vPixelStride = vPlane.pixelStride
-
-        val rgba = ByteArray(width * height * 4)
-
-        for (row in 0 until height) {
-            val yRowOffset = row * yRowStride
-            val uvRowOffsetU = (row / 2) * uRowStride
-            val uvRowOffsetV = (row / 2) * vRowStride
-
-            for (col in 0 until width) {
-                val yIndex = yRowOffset + col * yPixelStride
-                val uvCol = col / 2
-                val uIndex = uvRowOffsetU + uvCol * uPixelStride
-                val vIndex = uvRowOffsetV + uvCol * vPixelStride
-
-                val y = yBuffer.get(yIndex).toInt() and 0xFF
-                val u = uBuffer.get(uIndex).toInt() and 0xFF
-                val v = vBuffer.get(vIndex).toInt() and 0xFF
-
-                val c = y - 16
-                val d = u - 128
-                val e = v - 128
-
-                val r = ((298 * c + 409 * e + 128) shr 8).coerceIn(0, 255)
-                val g = ((298 * c - 100 * d - 208 * e + 128) shr 8).coerceIn(0, 255)
-                val b = ((298 * c + 516 * d + 128) shr 8).coerceIn(0, 255)
-
-                val rgbaIndex = (row * width + col) * 4
-                rgba[rgbaIndex] = r.toByte()
-                rgba[rgbaIndex + 1] = g.toByte()
-                rgba[rgbaIndex + 2] = b.toByte()
-                rgba[rgbaIndex + 3] = 0xFF.toByte()
-            }
-        }
-
-        return rgba
     }
 }

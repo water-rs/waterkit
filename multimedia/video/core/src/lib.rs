@@ -16,6 +16,44 @@ pub use protection::{
 
 use std::{num::NonZeroU32, time::Duration};
 
+/// Declares the mode codes [`YCBCR_WGSL`]'s functions take, once, as Rust
+/// constants in [`ycbcr_mode`] and as the WGSL constants the fragment opens
+/// with, so a converter's uniform and its shader cannot disagree.
+macro_rules! ycbcr_modes {
+    ($($(#[$doc:meta])* $name:ident = $value:literal,)*) => {
+        /// The `u32` codes [`YCBCR_WGSL`]'s `matrix_mode` and `range_mode`
+        /// parameters take. Each is also declared in WGSL as `YCBCR_<name>`.
+        pub mod ycbcr_mode {
+            $($(#[$doc])* pub const $name: u32 = $value;)*
+        }
+
+        /// WGSL fragment holding the YCbCr to RGB range and matrix math that
+        /// every `WaterKit` GPU colour converter shares.
+        ///
+        /// It declares the [`ycbcr_mode`] constants and the conversion
+        /// functions, but no bindings. A converter prepends it to its own
+        /// shader source before compiling, so the decoder's YUV path and the
+        /// camera's frame converter evaluate the same coefficients.
+        pub const YCBCR_WGSL: &str = concat!(
+            $("const YCBCR_", stringify!($name), ": u32 = ", stringify!($value), "u;\n",)*
+            include_str!("ycbcr.wgsl"),
+        );
+    };
+}
+
+ycbcr_modes! {
+    /// ITU-R BT.709 matrix.
+    MATRIX_BT709 = 0,
+    /// ITU-R BT.601 matrix.
+    MATRIX_BT601 = 1,
+    /// ITU-R BT.2020 non-constant-luminance matrix.
+    MATRIX_BT2020 = 2,
+    /// Video ("limited") range.
+    RANGE_LIMITED = 0,
+    /// Full range.
+    RANGE_FULL = 1,
+}
+
 /// Error returned by `WaterKit` video operations.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

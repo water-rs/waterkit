@@ -20,7 +20,7 @@ use objc2_core_video::{
 use wgpu_external_frame::io_surface::{Ycbcr420IoSurfaceFrame, Ycbcr420Plane};
 
 use crate::frame::{Frame, FramePlanes, orientation_from_rotation};
-use crate::{Orientation, YcbcrEncoding, YcbcrMatrix};
+use crate::{YcbcrEncoding, YcbcrMatrix};
 
 /// A retained `CVPixelBuffer` that may cross threads.
 ///

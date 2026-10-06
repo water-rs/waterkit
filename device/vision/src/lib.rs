@@ -60,6 +60,8 @@ mod sealed;
 mod selection;
 #[cfg(test)]
 mod test_support;
+#[cfg(feature = "text")]
+mod text;
 mod vision;
 
 pub use capability::{Portable, RealizationSet, VisionCapabilities};
@@ -67,6 +69,8 @@ pub use error::VisionError;
 pub use geometry::{Point, Quad};
 pub use image::Image;
 pub use request::Request;
+#[cfg(feature = "text")]
+pub use text::{RecognitionLevel, RecognizeText, TextLine, TextWord};
 pub use vision::{Policy, Vision};
 pub use waterkit_core::Orientation;
 pub use wgpu;

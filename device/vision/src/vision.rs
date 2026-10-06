@@ -71,7 +71,7 @@ impl Vision {
         target_arch = "wasm32",
         expect(
             clippy::future_not_send,
-            reason = "wgpu::WasmNotSend imposes no Send requirement on wasm32"
+            reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
         )
     )]
     pub fn prepare<R: Request>(
@@ -95,7 +95,7 @@ impl Vision {
         target_arch = "wasm32",
         expect(
             clippy::future_not_send,
-            reason = "wgpu::WasmNotSend imposes no Send requirement on wasm32"
+            reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
         )
     )]
     pub fn perform<R: Request>(
@@ -140,7 +140,7 @@ mod tests {
             target_arch = "wasm32",
             expect(
                 clippy::future_not_send,
-                reason = "wgpu::WasmNotSend does not require Send on wasm32"
+                reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
             )
         )]
         async fn prepare(
@@ -191,7 +191,7 @@ mod tests {
             target_arch = "wasm32",
             expect(
                 clippy::future_not_send,
-                reason = "wgpu::WasmNotSend does not require Send on wasm32"
+                reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
             )
         )]
         async fn prepare(&self, _context: Context<'_>) -> Result<(), VisionError> {
@@ -215,7 +215,7 @@ mod tests {
             target_arch = "wasm32",
             expect(
                 clippy::future_not_send,
-                reason = "wgpu::WasmNotSend does not require Send on wasm32"
+                reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
             )
         )]
         async fn run(

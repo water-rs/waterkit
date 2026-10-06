@@ -46,7 +46,7 @@ macro_rules! impl_request_tuple {
                 target_arch = "wasm32",
                 expect(
                     clippy::future_not_send,
-                    reason = "wgpu::WasmNotSend imposes no Send requirement on wasm32"
+                    reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
                 )
             )]
             fn run(

@@ -4,7 +4,7 @@ use std::sync::Arc;
     target_arch = "wasm32",
     expect(
         clippy::arc_with_non_send_sync,
-        reason = "the vision test harness shares wgpu handles behind Arc on wasm32"
+        reason = "the vision context takes its device in an `Arc` on every platform; on wasm32 `wgpu::Device` is neither `Send` nor `Sync`"
     )
 )]
 pub fn gpu() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {

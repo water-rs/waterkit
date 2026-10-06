@@ -114,117 +114,15 @@ fn init_logger() {
 }
 
 fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
-    let mut report = TestReport::new("android", "waterkit-test-android");
-    #[cfg(any(
-        feature = "sensor",
-        feature = "location",
-        feature = "permission",
-        feature = "fs",
-        feature = "secret",
-        feature = "clipboard"
-    ))]
-    let activity_global = match env.new_global_ref(activity) {
-        Ok(value) => value,
-        Err(error) => {
-            report.push(TestCase::failed(
-                "harness.activity_ref",
-                format!("failed to create global activity ref: {error}"),
-            ));
-            return report;
-        }
-    };
-    #[cfg(feature = "camera")]
-    let files_dir = match files_dir(env, activity) {
-        Ok(dir) => dir,
-        Err(error) => {
-            report.push(TestCase::failed("harness.files_dir", error.to_string()));
-            return report;
-        }
-    };
-    #[cfg(not(any(
-        feature = "sensor",
-        feature = "location",
-        feature = "permission",
-        feature = "fs",
-        feature = "secret",
-        feature = "camera",
-        feature = "clipboard"
-    )))]
-    let _ = (env, activity);
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("failed to build tokio runtime for Android test harness");
-
-    rt.block_on(async {
-        #[cfg(any(
-            feature = "sensor",
-            feature = "location",
-            feature = "permission",
-            feature = "fs",
-            feature = "secret",
-            feature = "clipboard"
-        ))]
-        let activity = activity_global.as_obj();
-
-        #[cfg(feature = "sensor")]
-        record_android_sensor(&mut report, env, activity);
-
-        #[cfg(feature = "location")]
-        record_android_location(&mut report, env, activity);
-
-        #[cfg(feature = "permission")]
-        record_android_permission(&mut report, env, activity);
-
-        #[cfg(feature = "camera")]
-        record_android_camera(&mut report, &files_dir).await;
-
-        #[cfg(feature = "clipboard")]
-        record_android_clipboard(&mut report).await;
-
-        #[cfg(feature = "clipboard")]
-        report.push(ClipboardFiles::record(env, activity).await);
-
-        #[cfg(feature = "fs")]
-        record_android_fs(&mut report, env, activity);
-
-        #[cfg(feature = "haptic")]
-        record_android_haptic(&mut report);
-
-        #[cfg(feature = "notification")]
-        record_android_notification(&mut report);
-
-        #[cfg(feature = "secret")]
-        record_android_secret(&mut report, env, activity);
-
-        #[cfg(feature = "system")]
-        record_android_system(&mut report);
-
-        #[cfg(feature = "background")]
-        record_android_background(&mut report);
-
-        #[cfg(feature = "passkey")]
-        record_android_passkey(&mut report).await;
-
-        #[cfg(feature = "codec")]
-        record_android_avif_decode(&mut report);
-
-        #[cfg(feature = "health")]
-        report.push(TestCase::passed_with_message(
-            "health.availability",
-            format!(
-                "available={}",
-                waterkit_content::health::capabilities().available
-            ),
-        ));
-
-        #[cfg(feature = "screen")]
-        record_android_screen(&mut report);
-
-        for case in unexercised_cases() {
-            report.push(case);
-        }
-    });
+    let report = TestReport::new("android", "waterkit-test-android");
+    let mut report = match Harness::new(env, activity, &runtime, report) {
+        Ok(harness) => harness.run(),
+        Err(report) => report,
+    };
 
     // Every enabled feature records at least one case, so an empty report
     // means the harness was built without any feature.
@@ -238,59 +136,178 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
     report
 }
 
-/// The cases of the features this harness only links, or cannot exercise
-/// without an interactive prompt or the user's data.
-fn unexercised_cases() -> impl Iterator<Item = TestCase> {
-    [
-        (
-            cfg!(feature = "biometric"),
-            TestCase::skipped(
-                "biometric.authenticate",
-                "biometric authentication requires an interactive prompt",
-            ),
-        ),
-        (cfg!(feature = "audio"), TestCase::passed("audio.linked")),
-        (cfg!(feature = "codec"), TestCase::passed("codec.linked")),
-        (cfg!(feature = "dialog"), TestCase::passed("dialog.linked")),
-        (cfg!(feature = "video"), TestCase::passed("video.linked")),
-        (
-            cfg!(feature = "bluetooth"),
-            TestCase::passed("bluetooth.linked"),
-        ),
-        (cfg!(feature = "nfc"), TestCase::passed("nfc.linked")),
-        (
-            cfg!(feature = "share"),
-            TestCase::skipped("share.sheet", "share sheet requires an interactive chooser"),
-        ),
-        (
-            cfg!(feature = "speech"),
-            TestCase::skipped(
-                "speech.tts",
-                "speech synthesis is audible and not asserted by this harness",
-            ),
-        ),
-        (
-            cfg!(feature = "contacts"),
-            TestCase::skipped(
-                "contacts.fetch_all",
-                "contacts access depends on runtime user data permissions",
-            ),
-        ),
-        (
-            cfg!(feature = "calendar"),
-            TestCase::skipped(
-                "calendar.list",
-                "calendar access depends on runtime user data permissions",
-            ),
-        ),
-        (
-            cfg!(feature = "deeplink"),
-            TestCase::passed("deeplink.linked"),
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(enabled, case)| enabled.then_some(case))
+/// What every capability's recorder shares: the JNI environment, a global
+/// reference to the activity, the files directory, the runtime its
+/// asynchronous calls run on, and the report its cases go into.
+#[cfg_attr(
+    not(any(
+        feature = "sensor",
+        feature = "location",
+        feature = "permission",
+        feature = "fs",
+        feature = "secret",
+        feature = "clipboard"
+    )),
+    expect(
+        dead_code,
+        reason = "only the recorders that call into the activity read the environment and the activity"
+    )
+)]
+struct Harness<'h, 'local> {
+    env: &'h mut Env<'local>,
+    activity: Global<JObject<'static>>,
+    #[cfg(feature = "camera")]
+    files_dir: std::path::PathBuf,
+    runtime: &'h tokio::runtime::Runtime,
+    report: TestReport,
 }
+
+impl<'h, 'local> Harness<'h, 'local> {
+    /// Sets up what the recorders share, or returns `report` with the case
+    /// that says which part could not be set up.
+    fn new(
+        env: &'h mut Env<'local>,
+        activity: &JObject<'_>,
+        runtime: &'h tokio::runtime::Runtime,
+        mut report: TestReport,
+    ) -> Result<Self, TestReport> {
+        let global_activity = match env.new_global_ref(activity) {
+            Ok(value) => value,
+            Err(error) => {
+                report.push(TestCase::failed(
+                    "harness.activity_ref",
+                    format!("failed to create global activity ref: {error}"),
+                ));
+                return Err(report);
+            }
+        };
+        #[cfg(feature = "camera")]
+        let files_dir = match files_dir(env, activity) {
+            Ok(dir) => dir,
+            Err(error) => {
+                report.push(TestCase::failed("harness.files_dir", error.to_string()));
+                return Err(report);
+            }
+        };
+        Ok(Self {
+            env,
+            activity: global_activity,
+            #[cfg(feature = "camera")]
+            files_dir,
+            runtime,
+            report,
+        })
+    }
+
+    /// Runs every enabled capability's recorder and returns the report.
+    fn run(mut self) -> TestReport {
+        // Every recorder runs in the runtime's context, and the asynchronous
+        // ones drive their future on it.
+        let _runtime_context = self.runtime.enter();
+        for record in RECORDERS {
+            record(&mut self);
+        }
+        self.report
+    }
+}
+
+/// Records one capability's cases.
+type Recorder = fn(&mut Harness<'_, '_>);
+
+/// The recorder of every enabled capability, in report order. The features
+/// this harness only links, or cannot exercise without an interactive prompt
+/// or the user's data, record a fixed case.
+const RECORDERS: &[Recorder] = &[
+    #[cfg(feature = "sensor")]
+    |h| record_android_sensor(&mut h.report, h.env, h.activity.as_obj()),
+    #[cfg(feature = "location")]
+    |h| record_android_location(&mut h.report, h.env, h.activity.as_obj()),
+    #[cfg(feature = "permission")]
+    |h| record_android_permission(&mut h.report, h.env, h.activity.as_obj()),
+    #[cfg(feature = "camera")]
+    |h| {
+        h.runtime
+            .block_on(record_android_camera(&mut h.report, &h.files_dir));
+    },
+    #[cfg(feature = "clipboard")]
+    |h| h.runtime.block_on(record_android_clipboard(&mut h.report)),
+    #[cfg(feature = "clipboard")]
+    |h| {
+        let case = h
+            .runtime
+            .block_on(ClipboardFiles::record(h.env, h.activity.as_obj()));
+        h.report.push(case);
+    },
+    #[cfg(feature = "fs")]
+    |h| record_android_fs(&mut h.report, h.env, h.activity.as_obj()),
+    #[cfg(feature = "haptic")]
+    |h| record_android_haptic(&mut h.report),
+    #[cfg(feature = "notification")]
+    |h| record_android_notification(&mut h.report),
+    #[cfg(feature = "secret")]
+    |h| record_android_secret(&mut h.report, h.env, h.activity.as_obj()),
+    #[cfg(feature = "system")]
+    |h| record_android_system(&mut h.report),
+    #[cfg(feature = "background")]
+    |h| record_android_background(&mut h.report),
+    #[cfg(feature = "passkey")]
+    |h| h.runtime.block_on(record_android_passkey(&mut h.report)),
+    #[cfg(feature = "codec")]
+    |h| record_android_avif_decode(&mut h.report),
+    #[cfg(feature = "health")]
+    |h| record_android_health(&mut h.report),
+    #[cfg(feature = "screen")]
+    |h| record_android_screen(&mut h.report),
+    #[cfg(feature = "biometric")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "biometric.authenticate",
+            "biometric authentication requires an interactive prompt",
+        ));
+    },
+    #[cfg(feature = "audio")]
+    |h| h.report.push(TestCase::passed("audio.linked")),
+    #[cfg(feature = "codec")]
+    |h| h.report.push(TestCase::passed("codec.linked")),
+    #[cfg(feature = "dialog")]
+    |h| h.report.push(TestCase::passed("dialog.linked")),
+    #[cfg(feature = "video")]
+    |h| h.report.push(TestCase::passed("video.linked")),
+    #[cfg(feature = "bluetooth")]
+    |h| h.report.push(TestCase::passed("bluetooth.linked")),
+    #[cfg(feature = "nfc")]
+    |h| h.report.push(TestCase::passed("nfc.linked")),
+    #[cfg(feature = "share")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "share.sheet",
+            "share sheet requires an interactive chooser",
+        ));
+    },
+    #[cfg(feature = "speech")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "speech.tts",
+            "speech synthesis is audible and not asserted by this harness",
+        ));
+    },
+    #[cfg(feature = "contacts")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "contacts.fetch_all",
+            "contacts access depends on runtime user data permissions",
+        ));
+    },
+    #[cfg(feature = "calendar")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "calendar.list",
+            "calendar access depends on runtime user data permissions",
+        ));
+    },
+    #[cfg(feature = "deeplink")]
+    |h| h.report.push(TestCase::passed("deeplink.linked")),
+];
 
 fn log_report(report: &TestReport) {
     log::info!(
@@ -1439,6 +1456,17 @@ async fn record_android_passkey(report: &mut TestReport) {
             format!("passkey availability failed: {error}"),
         )),
     }
+}
+
+#[cfg(feature = "health")]
+fn record_android_health(report: &mut TestReport) {
+    report.push(TestCase::passed_with_message(
+        "health.availability",
+        format!(
+            "available={}",
+            waterkit_content::health::capabilities().available
+        ),
+    ));
 }
 
 #[cfg(feature = "screen")]

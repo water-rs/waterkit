@@ -62,8 +62,9 @@ const JFIF_RGB_COLOR: VideoColorInfo = VideoColorInfo {
     dolby_vision: false,
 };
 
-/// One captured frame in the layout the camera delivered, with its capture
-/// timestamp as a duration since the camera stream started.
+/// One captured frame in the layout the camera delivered, timestamped on the
+/// stream's capture clock: nokhwa reports no capture time, so the reading is
+/// the moment the capture thread receives the frame from the driver.
 pub(super) struct RawFrame {
     pixels: CapturedPixels,
     color: VideoColorInfo,
@@ -305,9 +306,9 @@ fn spawn_capture_thread(
     camera: Arc<Mutex<SendableCamera>>,
     registration_rx: async_channel::Receiver<Subscriber>,
     streaming: Arc<AtomicBool>,
-    start_instant: Instant,
 ) {
     std::thread::spawn(move || {
+        let clock = crate::clock::StreamClock::new();
         let mut subscribers: Vec<Subscriber> = Vec::new();
         while streaming.load(Ordering::SeqCst) {
             // Pick up subscriptions registered since the last frame.
@@ -322,9 +323,7 @@ fn spawn_capture_thread(
                 .0
                 .frame()
                 .map_err(|error| CameraError::CaptureFailed(error.to_string()))
-                .and_then(|buffer| {
-                    RawFrame::capture(&buffer, Instant::now().duration_since(start_instant))
-                });
+                .and_then(|buffer| RawFrame::capture(&buffer, clock.timestamp(Instant::now())));
             let failed = captured.is_err();
             // A failure is delivered as the last item; the subscriptions
             // close when this thread ends right after it.
@@ -408,12 +407,11 @@ impl CameraInner {
             .map_err(|e| CameraError::StartFailed(e.to_string()))?;
 
         let streaming = Arc::new(AtomicBool::new(true));
-        let start_instant = Instant::now();
 
         // Wrap camera in SendableCamera for thread safety
         let camera = Arc::new(Mutex::new(SendableCamera(camera)));
         let (subscriber_tx, subscriber_rx) = async_channel::unbounded();
-        spawn_capture_thread(camera, subscriber_rx, Arc::clone(&streaming), start_instant);
+        spawn_capture_thread(camera, subscriber_rx, Arc::clone(&streaming));
 
         Ok(Self {
             device,

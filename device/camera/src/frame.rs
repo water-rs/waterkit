@@ -188,7 +188,21 @@ impl Frame {
         self.height
     }
 
-    /// Presentation timestamp since the camera started.
+    /// When the frame was captured, measured from the first frame the
+    /// camera delivered after it opened, on that platform's capture clock.
+    ///
+    /// The first delivered frame reads [`Duration::ZERO`]. Timestamps are
+    /// monotonic but not wall-clock time: they are not comparable between
+    /// cameras, nor between two opens of the same camera. Frames the stream
+    /// drops (newest wins) still count, so the first frame a consumer takes
+    /// need not read zero.
+    ///
+    /// The clock each platform reads: on Apple platforms the sample
+    /// buffer's presentation time (the capture session's synchronization
+    /// clock, host time); on Android the image's sensor timestamp, the
+    /// start of exposure; on Windows and Linux the moment the capture
+    /// thread receives the frame from the driver, because nokhwa reports no
+    /// capture time.
     #[must_use]
     pub const fn timestamp(&self) -> Duration {
         self.timestamp

@@ -8422,6 +8422,7 @@ name = "waterkit-vision"
 version = "0.1.4"
 dependencies = [
  "bytes",
+ "futures",
  "pollster 1.0.1",
  "thiserror 2.0.20",
  "tracing",

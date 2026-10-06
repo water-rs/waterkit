@@ -17,6 +17,7 @@ workspace = true
 waterkit-core = { workspace = true }
 wgpu.workspace = true
 bytes.workspace = true
+futures.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 waterkit-camera = { workspace = true, optional = true }

@@ -101,7 +101,11 @@ impl Vision {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        future::Future,
+        sync::atomic::{AtomicUsize, Ordering},
+        task::{Context as TaskContext, Poll, Waker},
+    };
 
     use crate::{
         Image, Orientation, Policy, Request, Vision, VisionError,
@@ -112,6 +116,7 @@ mod tests {
     static PREPARATIONS: [AtomicUsize; 16] = [const { AtomicUsize::new(0) }; 16];
     static PLAN_PREPARATIONS: [AtomicUsize; 16] = [const { AtomicUsize::new(0) }; 16];
     static PORTABLE_RUNS: [AtomicUsize; 16] = [const { AtomicUsize::new(0) }; 16];
+    static RENDEZVOUS_PREPARATIONS: [AtomicUsize; 16] = [const { AtomicUsize::new(0) }; 16];
 
     #[derive(Debug)]
     struct Shared<const ID: usize>;
@@ -132,6 +137,7 @@ mod tests {
         native: Offer,
         portable: Offer,
         fail_native: bool,
+        rendezvous: bool,
     }
 
     #[derive(Debug)]
@@ -139,6 +145,7 @@ mod tests {
         name: &'static str,
         realization: Realization,
         fail_native: bool,
+        rendezvous: bool,
     }
 
     impl<const ID: usize> Request for Echo<ID> {
@@ -153,6 +160,7 @@ mod tests {
                 name: self.name,
                 realization: context.select(self.name, &self.native, &self.portable)?,
                 fail_native: self.fail_native,
+                rendezvous: self.rendezvous,
             })
         }
     }
@@ -160,6 +168,18 @@ mod tests {
     impl<const ID: usize> Plan<Echo<ID>> for EchoPlan<ID> {
         async fn prepare(&self, _context: Context<'_>) -> Result<(), VisionError> {
             PLAN_PREPARATIONS[ID].fetch_add(1, Ordering::SeqCst);
+            if self.rendezvous {
+                RENDEZVOUS_PREPARATIONS[ID].fetch_add(1, Ordering::SeqCst);
+                futures::future::poll_fn(|context| {
+                    if RENDEZVOUS_PREPARATIONS[ID].load(Ordering::SeqCst) >= 2 {
+                        Poll::Ready(())
+                    } else {
+                        context.waker().wake_by_ref();
+                        Poll::Pending
+                    }
+                })
+                .await;
+            }
             Ok(())
         }
 
@@ -184,6 +204,7 @@ mod tests {
             native,
             portable,
             fail_native: false,
+            rendezvous: false,
         }
     }
 
@@ -287,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_visits_tuple_plans_in_order_and_rejects_unserved_requests() {
+    fn prepare_visits_each_tuple_plan_and_rejects_unserved_requests() {
         let vision = test_vision();
         let request = (
             echo::<5>("first", Offer::Serves, Offer::Absent),
@@ -301,6 +322,27 @@ mod tests {
         let error = pollster::block_on(vision.prepare(&unserved)).unwrap_err();
         assert!(matches!(error, VisionError::Unsupported(_)));
         assert_eq!(PLAN_PREPARATIONS[7].load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn tuple_prepares_plans_concurrently() {
+        let vision = test_vision();
+        let mut first = echo::<10>("first", Offer::Serves, Offer::Absent);
+        let mut second = echo::<10>("second", Offer::Serves, Offer::Absent);
+        first.rendezvous = true;
+        second.rendezvous = true;
+        let request = (first, second);
+
+        let mut future = Box::pin(vision.prepare(&request));
+        let waker = Waker::noop();
+        let mut context = TaskContext::from_waker(waker);
+        let result = (0..16).find_map(|_| match future.as_mut().poll(&mut context) {
+            Poll::Ready(result) => Some(result),
+            Poll::Pending => None,
+        });
+
+        assert!(matches!(result, Some(Ok(()))));
+        assert_eq!(RENDEZVOUS_PREPARATIONS[10].load(Ordering::SeqCst), 2);
     }
 
     #[test]

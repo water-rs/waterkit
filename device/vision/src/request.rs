@@ -15,7 +15,7 @@ pub trait Request: Sealed {
 }
 
 macro_rules! impl_request_tuple {
-    ($($type:ident:$index:tt:$prepare:ident),+ $(,)?) => {
+    ($($type:ident:$index:tt),+ $(,)?) => {
         impl<$($type: Request),+> Request for ($($type,)+) {
             type Output = ($($type::Output,)+);
         }
@@ -35,13 +35,9 @@ macro_rules! impl_request_tuple {
                 &self,
                 context: Context<'_>,
             ) -> impl Future<Output = Result<(), VisionError>> + Send {
-                $(
-                    let $prepare = self.$index.prepare(context);
-                )+
+                let prepares = ($(self.$index.prepare(context),)+);
                 async move {
-                    $(
-                        $prepare.await?;
-                    )+
+                    futures::try_join!($(prepares.$index),+)?;
                     Ok(())
                 }
             }
@@ -51,6 +47,7 @@ macro_rules! impl_request_tuple {
                 pass: &mut Pass<'_>,
             ) -> impl Future<Output = Result<<($($type,)+) as Request>::Output, VisionError>> + Send {
                 async move {
+                    // Each element shares this mutable pass and its preparations.
                     Ok((
                         $(
                             self.$index.run(pass).await?,
@@ -62,10 +59,10 @@ macro_rules! impl_request_tuple {
     };
 }
 
-impl_request_tuple!(A:0:prepare_a, B:1:prepare_b);
-impl_request_tuple!(A:0:prepare_a, B:1:prepare_b, C:2:prepare_c);
-impl_request_tuple!(A:0:prepare_a, B:1:prepare_b, C:2:prepare_c, D:3:prepare_d);
-impl_request_tuple!(A:0:prepare_a, B:1:prepare_b, C:2:prepare_c, D:3:prepare_d, E:4:prepare_e);
-impl_request_tuple!(A:0:prepare_a, B:1:prepare_b, C:2:prepare_c, D:3:prepare_d, E:4:prepare_e, F:5:prepare_f);
-impl_request_tuple!(A:0:prepare_a, B:1:prepare_b, C:2:prepare_c, D:3:prepare_d, E:4:prepare_e, F:5:prepare_f, G:6:prepare_g);
-impl_request_tuple!(A:0:prepare_a, B:1:prepare_b, C:2:prepare_c, D:3:prepare_d, E:4:prepare_e, F:5:prepare_f, G:6:prepare_g, H:7:prepare_h);
+impl_request_tuple!(A:0, B:1);
+impl_request_tuple!(A:0, B:1, C:2);
+impl_request_tuple!(A:0, B:1, C:2, D:3);
+impl_request_tuple!(A:0, B:1, C:2, D:3, E:4);
+impl_request_tuple!(A:0, B:1, C:2, D:3, E:4, F:5);
+impl_request_tuple!(A:0, B:1, C:2, D:3, E:4, F:5, G:6);
+impl_request_tuple!(A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7);

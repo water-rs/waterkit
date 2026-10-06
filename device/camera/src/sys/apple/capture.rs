@@ -315,34 +315,30 @@ mod tests {
             unsafe { CVPixelBufferUnlockBaseAddress(&buffer, CVPixelBufferLockFlags(0)) };
         assert_eq!(unlocked, 0, "unlocking the test buffer");
 
-        // SAFETY: the keys and values are Core Foundation strings, the types
-        // the attachments carry.
-        let (primaries_key, bt709_primaries, transfer_key, sdr_transfer) = unsafe {
-            (
-                kCVImageBufferColorPrimariesKey,
-                kCVImageBufferColorPrimaries_ITU_R_709_2,
-                kCVImageBufferTransferFunctionKey,
-                kCVImageBufferTransferFunction_ITU_R_709_2,
-            )
-        };
-        unsafe {
-            buffer.set_attachment(
-                kCVImageBufferYCbCrMatrixKey,
-                matrix,
-                CVAttachmentMode::ShouldPropagate,
-            );
-            buffer.set_attachment(
-                primaries_key,
-                bt709_primaries,
-                CVAttachmentMode::ShouldPropagate,
-            );
-            buffer.set_attachment(
-                transfer_key,
-                sdr_transfer,
-                CVAttachmentMode::ShouldPropagate,
-            );
-        }
+        tag_sdr_capture_colour(&buffer, matrix);
         buffer
+    }
+
+    /// Attaches `matrix` with BT.709 primaries and transfer, the colour
+    /// attachments `AVFoundation` puts on every SDR capture buffer.
+    fn tag_sdr_capture_colour(buffer: &CVPixelBuffer, matrix: &CFString) {
+        // SAFETY: the keys and values are Core Video's immutable
+        // Core Foundation strings, the types the attachments carry.
+        unsafe {
+            for (key, value) in [
+                (kCVImageBufferYCbCrMatrixKey, matrix),
+                (
+                    kCVImageBufferColorPrimariesKey,
+                    kCVImageBufferColorPrimaries_ITU_R_709_2,
+                ),
+                (
+                    kCVImageBufferTransferFunctionKey,
+                    kCVImageBufferTransferFunction_ITU_R_709_2,
+                ),
+            ] {
+                buffer.set_attachment(key, value, CVAttachmentMode::ShouldPropagate);
+            }
+        }
     }
 
     /// A real `420v` or `420f` capture buffer becomes a frame whose planes
@@ -498,7 +494,7 @@ mod tests {
             Self { pool, threshold }
         }
 
-        /// The next free buffer, tagged BT.709 as a capture buffer is, or
+        /// The next free buffer, tagged BT.709 SDR as a capture buffer is, or
         /// `None` while every buffer is lent out.
         fn take(&self) -> Option<CFRetained<CVPixelBuffer>> {
             let mut buffer: *mut CVPixelBuffer = std::ptr::null_mut();
@@ -520,15 +516,8 @@ mod tests {
             let buffer = unsafe {
                 CFRetained::from_raw(NonNull::new(buffer).expect("a created pixel buffer"))
             };
-            // SAFETY: Core Video's immutable constants, the types the
-            // attachment carries.
-            unsafe {
-                buffer.set_attachment(
-                    kCVImageBufferYCbCrMatrixKey,
-                    kCVImageBufferYCbCrMatrix_ITU_R_709_2,
-                    CVAttachmentMode::ShouldPropagate,
-                );
-            }
+            // SAFETY: Core Video's immutable constant.
+            tag_sdr_capture_colour(&buffer, unsafe { kCVImageBufferYCbCrMatrix_ITU_R_709_2 });
             Some(buffer)
         }
 

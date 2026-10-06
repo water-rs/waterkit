@@ -3,34 +3,58 @@ import UIKit
 import Vision
 import VisionKit
 
-// Maps the crate's symbology vocabulary onto `VNBarcodeSymbology`. VisionKit
-// has no UPC-A symbology: a UPC-A code is an EAN-13 with a leading zero, so
-// requesting "upca" registers `.ean13` and decodes report "ean13".
+// Maps one vocabulary id onto `VNBarcodeSymbology`. VisionKit has no UPC-A
+// symbology: a UPC-A code is an EAN-13 with a leading zero, so "upca"
+// registers `.ean13` and a decoded EAN-13 whose payload carries that
+// leading zero reports "upca" when UPC-A was requested. `nil` means the
+// device cannot express the symbology (`.msiPlessey` needs iOS 17) or the
+// id is unknown.
+@available(iOS 16.0, *)
+private func vnSymbology(_ id: String) -> VNBarcodeSymbology? {
+    switch id {
+    case "aztec": return .aztec
+    case "codabar": return .codabar
+    case "code39": return .code39
+    case "code93": return .code93
+    case "code128": return .code128
+    case "datamatrix": return .dataMatrix
+    case "ean8": return .ean8
+    case "ean13", "upca": return .ean13
+    case "gs1databar": return .gs1DataBar
+    case "gs1databarexpanded": return .gs1DataBarExpanded
+    case "gs1databarlimited": return .gs1DataBarLimited
+    case "itf": return .i2of5
+    case "itf14": return .itf14
+    case "micropdf417": return .microPDF417
+    case "microqr": return .microQR
+    case "msiplessey":
+        if #available(iOS 17.0, *) { return .msiPlessey }
+        return nil
+    case "pdf417": return .pdf417
+    case "qr": return .qr
+    case "upce": return .upce
+    default: return nil
+    }
+}
+
+// The Rust side filters requested symbologies through
+// `symbology_supported_bridge` first, so an id that maps to `nil` here is
+// a contract violation.
 @available(iOS 16.0, *)
 private func barcodeSymbologies(_ csv: String) -> [VNBarcodeSymbology] {
-    var symbologies = Set<VNBarcodeSymbology>()
-    for id in csv.split(separator: ",") {
-        switch id {
-        case "aztec": symbologies.insert(.aztec)
-        case "codabar": symbologies.insert(.codabar)
-        case "code39": symbologies.insert(.code39)
-        case "code93": symbologies.insert(.code93)
-        case "code128": symbologies.insert(.code128)
-        case "datamatrix": symbologies.insert(.dataMatrix)
-        case "ean8": symbologies.insert(.ean8)
-        case "ean13", "upca": symbologies.insert(.ean13)
-        case "itf": symbologies.formUnion([.itf14, .i2of5])
-        case "pdf417": symbologies.insert(.pdf417)
-        case "qr": symbologies.insert(.qr)
-        case "upce": symbologies.insert(.upce)
-        default: fatalError("waterkit-vision: unknown symbology id \(id)")
+    csv.split(separator: ",").map { id in
+        guard let symbology = vnSymbology(String(id)) else {
+            fatalError("waterkit-vision: unsupported symbology id \(id)")
         }
+        return symbology
     }
-    return Array(symbologies)
 }
 
 @available(iOS 16.0, *)
 private func symbologyId(_ symbology: VNBarcodeSymbology) -> String? {
+    if #available(iOS 17.0, *), symbology == .msiPlessey {
+        return "msiplessey"
+    }
     switch symbology {
     case .aztec: return "aztec"
     case .codabar: return "codabar"
@@ -40,7 +64,13 @@ private func symbologyId(_ symbology: VNBarcodeSymbology) -> String? {
     case .dataMatrix: return "datamatrix"
     case .ean8: return "ean8"
     case .ean13: return "ean13"
-    case .itf14, .i2of5: return "itf"
+    case .gs1DataBar: return "gs1databar"
+    case .gs1DataBarExpanded: return "gs1databarexpanded"
+    case .gs1DataBarLimited: return "gs1databarlimited"
+    case .i2of5: return "itf"
+    case .itf14: return "itf14"
+    case .microPDF417: return "micropdf417"
+    case .microQR: return "microqr"
     case .pdf417: return "pdf417"
     case .qr: return "qr"
     case .upce: return "upce"
@@ -73,13 +103,12 @@ private func finishScan(
     scanner: DataScannerViewController,
     payload: String?,
     symbology: String?,
-    bounds: String?,
     error: String?
 ) {
     activeScannerDelegates.removeValue(forKey: cbId)
-    try? scanner.stopScanning()
+    scanner.stopScanning()
     scanner.dismiss(animated: true) {
-        on_scan_result(cbId, payload, symbology, bounds, error)
+        on_scan_result(cbId, payload, symbology, error)
     }
 }
 
@@ -87,11 +116,13 @@ private func finishScan(
 @MainActor
 private class ScannerDelegate: NSObject, DataScannerViewControllerDelegate {
     let cbId: UInt64
+    let requestedUpca: Bool
     weak var scanner: DataScannerViewController?
     private var finished = false
 
-    init(cbId: UInt64) {
+    init(cbId: UInt64, requestedUpca: Bool) {
         self.cbId = cbId
+        self.requestedUpca = requestedUpca
     }
 
     @objc func cancelTapped() {
@@ -103,18 +134,17 @@ private class ScannerDelegate: NSObject, DataScannerViewControllerDelegate {
         _ scanner: DataScannerViewController,
         payload: String? = nil,
         symbology: String? = nil,
-        bounds: String? = nil,
         error: String? = nil
     ) {
         guard !finished else { return }
         finished = true
         finishScan(
             cbId: cbId, scanner: scanner, payload: payload,
-            symbology: symbology, bounds: bounds, error: error)
+            symbology: symbology, error: error)
     }
 
     private func accept(_ scanner: DataScannerViewController, barcode: RecognizedItem.Barcode) {
-        guard let symbology = symbologyId(barcode.observation.symbology) else {
+        guard var symbology = symbologyId(barcode.observation.symbology) else {
             finish(
                 scanner,
                 error: "the scanner returned an unrecognized symbology \(barcode.observation.symbology)")
@@ -126,14 +156,12 @@ private class ScannerDelegate: NSObject, DataScannerViewControllerDelegate {
                 error: "the scanner returned a barcode without a decodable payload")
             return
         }
-        // `RecognizedItem.Bounds` corners are normalized to the presented
-        // view in top-left origin — the crate's Quad convention.
-        let bounds = barcode.bounds
-        let corners = [
-            bounds.topLeft, bounds.topRight, bounds.bottomRight, bounds.bottomLeft,
-        ]
-        let boundsCsv = corners.map({ "\($0.x),\($0.y)" }).joined(separator: ",")
-        finish(scanner, payload: payload, symbology: symbology, bounds: boundsCsv)
+        // A UPC-A is an EAN-13 with a leading zero: when the request asked
+        // for UPC-A, a leading-0 EAN-13 reports as "upca".
+        if symbology == "ean13", requestedUpca, payload.hasPrefix("0") {
+            symbology = "upca"
+        }
+        finish(scanner, payload: payload, symbology: symbology)
     }
 
     func dataScanner(
@@ -164,6 +192,13 @@ private class ScannerDelegate: NSObject, DataScannerViewControllerDelegate {
     }
 }
 
+// Whether this device's `DataScannerViewController` can restrict a scan
+// to the given vocabulary id.
+func symbology_supported_bridge(id: RustStr) -> Bool {
+    guard #available(iOS 16.0, *) else { return false }
+    return vnSymbology(id.toString()) != nil
+}
+
 func scanner_supported_bridge() -> Bool {
     guard #available(iOS 16.0, *) else { return false }
     // `DataScannerViewController.isSupported` is main-actor isolated; a
@@ -181,17 +216,19 @@ func scan_bridge(symbologies_csv: RustStr, cb_id: UInt64) {
     DispatchQueue.main.async {
         guard #available(iOS 16.0, *), DataScannerViewController.isSupported else {
             on_scan_result(
-                cb_id, nil as String?, nil as String?, nil as String?,
+                cb_id, nil as String?, nil as String?,
                 "DataScannerViewController is unsupported")
             return
         }
         guard let topVC = getTopViewController() else {
             on_scan_result(
-                cb_id, nil as String?, nil as String?, nil as String?,
+                cb_id, nil as String?, nil as String?,
                 "no key window scene to present the scanner from")
             return
         }
-        let delegate = ScannerDelegate(cbId: cb_id)
+        let delegate = ScannerDelegate(
+            cbId: cb_id,
+            requestedUpca: csv.split(separator: ",").contains("upca"))
         let scanner = DataScannerViewController(
             recognizedDataTypes: [.barcode(symbologies: barcodeSymbologies(csv))],
             qualityLevel: .balanced,
@@ -229,7 +266,6 @@ func scan_bridge(symbologies_csv: RustStr, cb_id: UInt64) {
             } catch {
                 finishScan(
                     cbId: cb_id, scanner: scanner, payload: nil, symbology: nil,
-                    bounds: nil,
                     error: "start scanning: \(error.localizedDescription)")
             }
         }

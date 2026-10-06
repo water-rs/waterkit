@@ -2,13 +2,14 @@ use bytes::Bytes;
 
 use crate::{Quad, Symbology};
 
-/// A decoded barcode with its symbology, payload and geometry.
+/// A decoded barcode with its symbology, payload and geometry — the output
+/// of a `DetectBarcodes` request, where the bounds always exist.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Barcode {
     pub(crate) symbology: Symbology,
     pub(crate) payload: Payload,
-    pub(crate) bounds: Option<Quad>,
+    pub(crate) bounds: Quad,
 }
 
 impl Barcode {
@@ -24,16 +25,9 @@ impl Barcode {
         &self.payload
     }
 
-    /// The detected code's geometry, when the serving realization reports
-    /// it.
-    ///
-    /// Frame-scanning realizations report the quad normalized to the
-    /// analyzed image. The Android system scanner's corner points are in
-    /// the coordinates of an internal camera frame the caller never sees,
-    /// so it reports `None`; the iOS scanner normalizes to the presented
-    /// view and reports `Some`.
+    /// The detected code's geometry, normalized to the analyzed image.
     #[must_use]
-    pub const fn bounds(&self) -> Option<Quad> {
+    pub const fn bounds(&self) -> Quad {
         self.bounds
     }
 }

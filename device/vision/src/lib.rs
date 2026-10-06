@@ -84,7 +84,7 @@ pub use geometry::{Point, Quad};
 pub use image::Image;
 pub use request::Request;
 #[cfg(feature = "scanner")]
-pub use scanner::{CodeScanner, ScannerCapabilities};
+pub use scanner::{CodeScanner, ScannedCode, ScannerCapabilities};
 pub use symbology::Symbology;
 pub use vision::{Policy, Vision};
 pub use waterkit_core::Orientation;

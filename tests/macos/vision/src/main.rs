@@ -9,10 +9,11 @@ use waterkit_vision::{CodeScanner, Symbology, VisionError};
 async fn main() -> ExitCode {
     let mut report = TestReport::new("macos", "waterkit-vision");
 
-    if CodeScanner::capabilities().available {
+    let capabilities = CodeScanner::capabilities();
+    if capabilities.available || !capabilities.symbologies.is_empty() {
         report.push(TestCase::failed(
             "scanner.capabilities",
-            "macOS has no system code scanner yet availability reported true",
+            "macOS has no system code scanner yet capabilities were reported",
         ));
     } else {
         report.push(TestCase::passed("scanner.capabilities"));
@@ -26,6 +27,24 @@ async fn main() -> ExitCode {
         other => report.push(TestCase::failed(
             "scanner.scan",
             format!("scan() on macOS returned {other:?}"),
+        )),
+    }
+
+    // Every symbology is inexpressible on macOS; the failure must name them
+    // before any presentation is attempted.
+    match CodeScanner::new(waterkit_vision::EnumSet::all())
+        .scan()
+        .await
+    {
+        Err(VisionError::Unsupported(message)) if message.contains("Qr") => {
+            report.push(TestCase::passed_with_message(
+                "scanner.scan_unsupported_symbologies",
+                format!("unsupported: {message}"),
+            ));
+        }
+        other => report.push(TestCase::failed(
+            "scanner.scan_unsupported_symbologies",
+            format!("scan() of the full vocabulary returned {other:?}"),
         )),
     }
 

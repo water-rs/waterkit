@@ -6,7 +6,7 @@
 //! answers through `on_scan_result`, so nothing blocks: the callback
 //! completes the awaiting [`crate::CodeScanner::scan`] through a oneshot.
 
-use crate::{Barcode, Payload, Point, Quad, Symbology, VisionError};
+use crate::{Payload, ScannedCode, Symbology, VisionError};
 use bytes::Bytes;
 use enumset::EnumSet;
 use futures::channel::oneshot;
@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-type ScanCallback = oneshot::Sender<Result<Option<Barcode>, VisionError>>;
+type ScanCallback = oneshot::Sender<Result<Option<ScannedCode>, VisionError>>;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -34,7 +34,14 @@ const fn symbology_id(symbology: Symbology) -> &'static str {
         Symbology::DataMatrix => "datamatrix",
         Symbology::Ean8 => "ean8",
         Symbology::Ean13 => "ean13",
+        Symbology::Gs1DataBar => "gs1databar",
+        Symbology::Gs1DataBarExpanded => "gs1databarexpanded",
+        Symbology::Gs1DataBarLimited => "gs1databarlimited",
         Symbology::Itf => "itf",
+        Symbology::Itf14 => "itf14",
+        Symbology::MicroPdf417 => "micropdf417",
+        Symbology::MicroQr => "microqr",
+        Symbology::MsiPlessey => "msiplessey",
         Symbology::Pdf417 => "pdf417",
         Symbology::Qr => "qr",
         Symbology::UpcA => "upca",
@@ -52,7 +59,14 @@ fn symbology_from_id(id: &str) -> Result<Symbology, VisionError> {
         "datamatrix" => Symbology::DataMatrix,
         "ean8" => Symbology::Ean8,
         "ean13" => Symbology::Ean13,
+        "gs1databar" => Symbology::Gs1DataBar,
+        "gs1databarexpanded" => Symbology::Gs1DataBarExpanded,
+        "gs1databarlimited" => Symbology::Gs1DataBarLimited,
         "itf" => Symbology::Itf,
+        "itf14" => Symbology::Itf14,
+        "micropdf417" => Symbology::MicroPdf417,
+        "microqr" => Symbology::MicroQr,
+        "msiplessey" => Symbology::MsiPlessey,
         "pdf417" => Symbology::Pdf417,
         "qr" => Symbology::Qr,
         "upca" => Symbology::UpcA,
@@ -66,27 +80,11 @@ fn symbology_from_id(id: &str) -> Result<Symbology, VisionError> {
     Ok(symbology)
 }
 
-fn quad_from_csv(csv: &str) -> Result<Quad, VisionError> {
-    let malformed =
-        || VisionError::Platform(format!("the scanner returned malformed bounds {csv:?}"));
-    let parts: Vec<f32> = csv
-        .split(',')
-        .map(str::parse)
-        .collect::<Result<_, _>>()
-        .map_err(|_| malformed())?;
-    let [x1, y1, x2, y2, x3, y3, x4, y4]: [f32; 8] = parts.try_into().map_err(|_| malformed())?;
-    Ok(Quad([
-        Point { x: x1, y: y1 },
-        Point { x: x2, y: y2 },
-        Point { x: x3, y: y3 },
-        Point { x: x4, y: y4 },
-    ]))
-}
-
 #[swift_bridge::bridge]
 mod ffi {
     extern "Swift" {
         fn scanner_supported_bridge() -> bool;
+        fn symbology_supported_bridge(id: &str) -> bool;
         fn scan_bridge(symbologies_csv: &str, cb_id: u64);
     }
 
@@ -95,7 +93,6 @@ mod ffi {
             cb_id: u64,
             payload: Option<String>,
             symbology: Option<String>,
-            bounds: Option<String>,
             error: Option<String>,
         );
     }
@@ -105,7 +102,6 @@ fn on_scan_result(
     cb_id: u64,
     payload: Option<String>,
     symbology: Option<String>,
-    bounds: Option<String>,
     error: Option<String>,
 ) {
     let tx = callbacks()
@@ -123,17 +119,11 @@ fn on_scan_result(
                 )
             })
             .and_then(|id| symbology_from_id(&id))
-            .and_then(|symbology| {
-                bounds
-                    .map(|csv| quad_from_csv(&csv))
-                    .transpose()
-                    .map(|quad| Barcode {
-                        symbology,
-                        payload: Payload {
-                            bytes: Bytes::from(payload),
-                        },
-                        bounds: quad,
-                    })
+            .map(|symbology| ScannedCode {
+                symbology,
+                payload: Payload {
+                    bytes: Bytes::from(payload),
+                },
             })
             .map(Some),
         (None, None) => Ok(None),
@@ -150,6 +140,17 @@ pub fn scanner_available() -> bool {
     ffi::scanner_supported_bridge()
 }
 
+/// The symbologies `DataScannerViewController` can restrict a scan to on
+/// this device: `VisionKit` recognizes every [`Symbology`], with `UpcA`
+/// expressed as EAN-13 (a UPC-A is an EAN-13 with a leading 0) and
+/// `MsiPlessey` requiring iOS 17.
+pub fn scanner_symbologies() -> EnumSet<Symbology> {
+    EnumSet::all()
+        .iter()
+        .filter(|symbology| ffi::symbology_supported_bridge(symbology_id(*symbology)))
+        .collect()
+}
+
 /// Presents `DataScannerViewController` and resolves to the scanned barcode.
 ///
 /// # Errors
@@ -157,7 +158,7 @@ pub fn scanner_available() -> bool {
 /// Returns [`VisionError::Unsupported`] when the device does not support the
 /// data scanner and [`VisionError::Platform`] when presentation or scanning
 /// fails.
-pub async fn scan(symbologies: EnumSet<Symbology>) -> Result<Option<Barcode>, VisionError> {
+pub async fn scan(symbologies: EnumSet<Symbology>) -> Result<Option<ScannedCode>, VisionError> {
     if !scanner_available() {
         return Err(VisionError::Unsupported(
             "this device does not support VisionKit's DataScannerViewController".to_owned(),

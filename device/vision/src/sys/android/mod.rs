@@ -8,7 +8,7 @@
 //! Kotlin listener hands the outcome back over JNI and this side completes
 //! the awaiting [`crate::CodeScanner::scan`] through a oneshot.
 
-use crate::{Barcode, Payload, Symbology, VisionError};
+use crate::{Payload, ScannedCode, Symbology, VisionError};
 use bytes::Bytes;
 use enumset::EnumSet;
 use futures::channel::oneshot;
@@ -34,6 +34,27 @@ impl From<AndroidError> for VisionError {
     }
 }
 
+/// The symbologies `GmsBarcodeScanning` can restrict a scan to — the
+/// constants `com.google.mlkit.vision.barcode.common.Barcode#FORMAT_*`
+/// defines. `Itf14` is absent: the scanner's ITF format accepts any
+/// interleaved-2-of-5 length, so it cannot restrict to the 14-digit
+/// symbology.
+const SUPPORTED_SYMBOLOGIES: EnumSet<Symbology> = enumset::enum_set!(
+    Symbology::Aztec
+        | Symbology::Codabar
+        | Symbology::Code39
+        | Symbology::Code93
+        | Symbology::Code128
+        | Symbology::DataMatrix
+        | Symbology::Ean8
+        | Symbology::Ean13
+        | Symbology::Itf
+        | Symbology::Pdf417
+        | Symbology::Qr
+        | Symbology::UpcA
+        | Symbology::UpcE
+);
+
 /// The Google code scanner's format constants
 /// (`com.google.mlkit.vision.barcode.common.Barcode#FORMAT_*`).
 const fn gms_format(symbology: Symbology) -> i32 {
@@ -51,6 +72,7 @@ const fn gms_format(symbology: Symbology) -> i32 {
         Symbology::Qr => 256,
         Symbology::UpcA => 512,
         Symbology::UpcE => 1024,
+        _ => panic!("waterkit-vision: the Google code scanner cannot express this symbology"),
     }
 }
 
@@ -73,7 +95,7 @@ fn symbology_from_gms_format(format: i32) -> Symbology {
     }
 }
 
-type ScanCallback = oneshot::Sender<Result<Option<Barcode>, VisionError>>;
+type ScanCallback = oneshot::Sender<Result<Option<ScannedCode>, VisionError>>;
 
 static NEXT_SCAN_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -82,8 +104,13 @@ fn scan_callbacks() -> &'static Mutex<HashMap<u64, ScanCallback>> {
     LOCK.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// The symbologies the Google code scanner can restrict a scan to.
+pub const fn scanner_symbologies() -> EnumSet<Symbology> {
+    SUPPORTED_SYMBOLOGIES
+}
+
 /// Whether Google Play services is usable on this device — the device's own
-/// answer, which is what makes the system code scanner available.
+/// answer, which makes the system code scanner available.
 ///
 /// # Panics
 ///
@@ -113,7 +140,7 @@ fn launch_scan_with_context(
     env: &mut Env<'_>,
     context: &JObject<'_>,
     symbologies: EnumSet<Symbology>,
-) -> Result<oneshot::Receiver<Result<Option<Barcode>, VisionError>>, VisionError> {
+) -> Result<oneshot::Receiver<Result<Option<ScannedCode>, VisionError>>, VisionError> {
     let helper_class = HELPER.class(env, context)?;
 
     let formats: Vec<i32> = symbologies.iter().map(gms_format).collect();
@@ -173,7 +200,7 @@ fn launch_scan_with_context(
 /// # Panics
 ///
 /// Panics if `ndk_context` has no `JavaVM` or Android `Context` yet.
-pub async fn scan(symbologies: EnumSet<Symbology>) -> Result<Option<Barcode>, VisionError> {
+pub async fn scan(symbologies: EnumSet<Symbology>) -> Result<Option<ScannedCode>, VisionError> {
     if !scanner_available() {
         return Err(VisionError::Unsupported(
             "Google Play services is unavailable, so this device has no system code scanner"
@@ -226,14 +253,11 @@ pub extern "system" fn Java_waterkit_vision_ScannerHelper_onScanResult<'caller>(
             Ok(None)
         } else {
             let bytes = env.convert_byte_array(&env.cast_local::<JByteArray>(payload)?)?;
-            Ok(Some(Barcode {
+            Ok(Some(ScannedCode {
                 symbology: symbology_from_gms_format(format),
                 payload: Payload {
                     bytes: Bytes::from(bytes),
                 },
-                // `Barcode#getCornerPoints` reports in the internal camera
-                // frame's coordinates, which the caller never sees.
-                bounds: None,
             }))
         };
         let _ = tx.send(result);

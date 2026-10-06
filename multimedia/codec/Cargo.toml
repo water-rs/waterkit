@@ -36,6 +36,7 @@ waterkit-video-core.workspace = true
 [target.'cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))'.dependencies]
 rav1e = { workspace = true, optional = true }
 rav1d = { workspace = true, optional = true }
+num-traits = { workspace = true, optional = true }
 avif-parse = { version = "2.1", optional = true }
 yuv = { version = "0.8.16", optional = true }
 moxcms = { version = "0.8.1", features = ["extended_range"], optional = true }
@@ -91,7 +92,7 @@ gpu = [
 # yuv, moxcms). Consumers that never encode pick this and skip `rav1e`.
 software-decode = ["dep:rav1d", "dep:avif-parse", "dep:yuv", "dep:moxcms"]
 # AV1 *encode* in software adds `rav1e` on top of the decode stack.
-software-encode = ["dep:rav1e", "software-decode"]
+software-encode = ["dep:rav1e", "dep:num-traits", "software-decode"]
 # VA-API hardware decode/encode on Linux via `cros-codecs`, which compiles
 # `cros-libva` against the system libva headers (>= 2.20). Off by default so a
 # consumer that only decodes still images links no hardware video decoder —

@@ -21,6 +21,7 @@ path = "src/profiler.rs"
 
 [dependencies]
 waterkit-codec.workspace = true
+waterkit-video-core.workspace = true
 waterkit-screen.workspace = true
 wgpu.workspace = true
 pollster.workspace = true

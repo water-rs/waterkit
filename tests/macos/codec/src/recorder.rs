@@ -3,6 +3,8 @@
 //! Captures screen at 30fps, encodes to H.265 (HEVC) using `VideoToolbox`,
 //! saves raw H.265 bitstream to disk, and monitors performance.
 
+mod common;
+
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
@@ -211,7 +213,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create encoder
     println!("Creating H.265 encoder...");
-    let mut encoder = Encoder::new(CodecType::H265, width, height, EncoderProfile::Realtime)?;
+    let mut encoder = Encoder::new(
+        CodecType::H265,
+        width,
+        height,
+        EncoderProfile::Realtime,
+        common::bt709_sdr_limited(),
+    )?;
     println!("Encoder ready!");
 
     // Create output file

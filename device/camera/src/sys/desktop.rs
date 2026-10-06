@@ -62,6 +62,14 @@ const JFIF_RGB_COLOR: VideoColorInfo = VideoColorInfo {
     dolby_vision: false,
 };
 
+const fn source_color(format: NokhwaFrameFormat) -> Option<VideoColorInfo> {
+    match format {
+        NokhwaFrameFormat::NV12 | NokhwaFrameFormat::YUYV => Some(UVC_YCBCR_COLOR),
+        NokhwaFrameFormat::MJPEG => Some(JFIF_RGB_COLOR),
+        _ => None,
+    }
+}
+
 /// One captured frame in the layout the camera delivered, with its capture
 /// timestamp as a duration since the camera stream started.
 pub(super) struct RawFrame {
@@ -88,26 +96,23 @@ impl RawFrame {
         let width = buffer.resolution().width();
         let height = buffer.resolution().height();
         let pixels = width as usize * height as usize;
-        let (data, expected, color) = match buffer.source_frame_format() {
+        let source_format = buffer.source_frame_format();
+        let color = source_color(source_format).ok_or_else(|| {
+            CameraError::CaptureFailed(format!(
+                "camera delivered {source_format} frames, which the stream was not opened for"
+            ))
+        })?;
+        let (data, expected) = match source_format {
             NokhwaFrameFormat::NV12 => (
                 CapturedPixels::Nv12(buffer.buffer().to_vec()),
                 nv12_len(width, height),
-                UVC_YCBCR_COLOR,
             ),
-            NokhwaFrameFormat::YUYV => (
-                CapturedPixels::Yuyv(buffer.buffer().to_vec()),
-                pixels * 2,
-                UVC_YCBCR_COLOR,
-            ),
+            NokhwaFrameFormat::YUYV => (CapturedPixels::Yuyv(buffer.buffer().to_vec()), pixels * 2),
             NokhwaFrameFormat::MJPEG => {
                 let image = buffer.decode_image::<RgbAFormat>().map_err(|error| {
                     CameraError::CaptureFailed(format!("MJPEG frame decode: {error}"))
                 })?;
-                (
-                    CapturedPixels::Rgba(image.into_raw()),
-                    pixels * 4,
-                    JFIF_RGB_COLOR,
-                )
+                (CapturedPixels::Rgba(image.into_raw()), pixels * 4)
             }
             other => {
                 return Err(CameraError::CaptureFailed(format!(
@@ -217,6 +222,7 @@ pub struct CameraInner {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     resolution: Resolution,
+    source_color: VideoColorInfo,
     capabilities: CameraCapabilities,
     controls: CameraControls,
     /// Registrations travel to the capture thread over this unbounded
@@ -387,6 +393,12 @@ impl CameraInner {
                     "camera offers none of the formats the desktop backend runs ({DELIVERED_FORMATS:?}): {offered:?}"
                 ))
             })?;
+        let source_color = source_color(format.format()).ok_or_else(|| {
+            CameraError::OpenFailed(format!(
+                "camera negotiated unsupported frame format {}",
+                format.format()
+            ))
+        })?;
         camera
             .set_camera_requset(RequestedFormat::with_formats(
                 RequestedFormatType::Exact(format),
@@ -419,6 +431,7 @@ impl CameraInner {
             device,
             queue,
             resolution: res,
+            source_color,
             capabilities,
             controls: CameraControls::default(),
             subscriber_tx,
@@ -561,6 +574,7 @@ impl CameraInner {
             self.resolution.width,
             self.resolution.height,
             self.frame_rate,
+            self.source_color,
         )?;
         self.recording = Some(session);
         Ok(())
@@ -689,6 +703,14 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn source_color_matches_the_negotiated_desktop_format() {
+        assert_eq!(source_color(NokhwaFrameFormat::NV12), Some(UVC_YCBCR_COLOR));
+        assert_eq!(source_color(NokhwaFrameFormat::YUYV), Some(UVC_YCBCR_COLOR));
+        assert_eq!(source_color(NokhwaFrameFormat::MJPEG), Some(JFIF_RGB_COLOR));
+        assert_eq!(source_color(NokhwaFrameFormat::GRAY), None);
     }
 
     #[test]

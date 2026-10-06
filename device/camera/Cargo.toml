@@ -96,7 +96,7 @@ waterkit-build.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
 # `HardwareBuffer::from_jni`, to reach each camera image's AHardwareBuffer.
-ndk = { version = "0.9", default-features = false, features = ["api-level-26"] }
+ndk = { version = "0.9", default-features = false, features = ["api-level-28"] }
 
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).

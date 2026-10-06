@@ -21,20 +21,21 @@ use yuv::{
     YuvPlanarImageMut, YuvRange, YuvStandardMatrix,
 };
 
-use super::{Captured, CapturedPixels, FrameSubscription, WEBCAM_ENCODING};
-use crate::{CameraError, YcbcrEncoding, YcbcrMatrix, YcbcrRange};
+use super::{Captured, CapturedPixels, FrameSubscription, UVC_YCBCR_COLOR};
+use crate::{CameraError, ColorRange, MatrixCoefficients, VideoColorInfo};
 
 /// The `yuv` crate's names for a frame's YCbCr encoding.
-const fn yuv_encoding(encoding: YcbcrEncoding) -> (YuvRange, YuvStandardMatrix) {
+const fn yuv_encoding(color: VideoColorInfo) -> (YuvRange, YuvStandardMatrix) {
     (
-        match encoding.range {
-            YcbcrRange::Video => YuvRange::Limited,
-            YcbcrRange::Full => YuvRange::Full,
+        match color.range {
+            ColorRange::Limited => YuvRange::Limited,
+            ColorRange::Full => YuvRange::Full,
         },
-        match encoding.matrix {
-            YcbcrMatrix::Bt601 => YuvStandardMatrix::Bt601,
-            YcbcrMatrix::Bt709 => YuvStandardMatrix::Bt709,
-            YcbcrMatrix::Bt2020 => YuvStandardMatrix::Bt2020,
+        match color.matrix {
+            MatrixCoefficients::Bt601 => YuvStandardMatrix::Bt601,
+            MatrixCoefficients::Bt709 => YuvStandardMatrix::Bt709,
+            MatrixCoefficients::Bt2020ConstantLuminance
+            | MatrixCoefficients::Bt2020NonConstantLuminance => YuvStandardMatrix::Bt2020,
         },
     )
 }
@@ -494,7 +495,7 @@ impl RawVideoWriter {
         height: u32,
         timestamp_ns: u64,
     ) -> Result<(), CameraError> {
-        let (range, matrix) = yuv_encoding(WEBCAM_ENCODING);
+        let (range, matrix) = yuv_encoding(UVC_YCBCR_COLOR);
         let rgba_len = width as usize * height as usize * 4;
         match pixels {
             CapturedPixels::Rgba(rgba) => return self.write_rgba(rgba, timestamp_ns),
@@ -764,6 +765,7 @@ mod tests {
                         height as usize,
                         i,
                     )),
+                    color: super::super::JFIF_RGB_COLOR,
                     width,
                     height,
                     timestamp: Duration::from_nanos(i as u64 * 33_333_333),

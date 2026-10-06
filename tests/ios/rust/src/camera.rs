@@ -225,7 +225,16 @@ async fn record_frames(report: &mut TestReport, gpu: &mut Gpu, camera: &CameraIn
         }
     }
     let last = last.expect("FRAMES frames were taken");
-    let upright = gpu.converter.convert(&gpu.device, &gpu.queue, &last);
+    let upright = match gpu.converter.convert(&gpu.device, &gpu.queue, &last) {
+        Ok(upright) => upright,
+        Err(error) => {
+            report.push(TestCase::failed(
+                case,
+                format!("frame conversion failed: {error}"),
+            ));
+            return;
+        }
+    };
 
     report.push(TestCase::passed_with_message(
         case,
@@ -246,22 +255,16 @@ async fn record_frames(report: &mut TestReport, gpu: &mut Gpu, camera: &CameraIn
 fn describe(frame: &Frame) -> String {
     let layout = match frame.planes() {
         FramePlanes::Rgb(rgb) => format!("planes=rgb({:?})", rgb.texture().format()),
-        FramePlanes::YCbCr420 {
-            luma,
-            chroma,
-            encoding,
-        } => format!(
-            "planes=ycbcr420(luma={:?}, chroma={:?}, {:?}, {:?})",
+        FramePlanes::YCbCr420 { luma, chroma } => format!(
+            "planes=ycbcr420(luma={:?}, chroma={:?}, color={:?})",
             luma.texture().format(),
             chroma.texture().format(),
-            encoding.matrix,
-            encoding.range,
+            frame.color(),
         ),
-        FramePlanes::YCbCr422 { yuyv, encoding } => format!(
-            "planes=ycbcr422({:?}, {:?}, {:?})",
+        FramePlanes::YCbCr422 { yuyv } => format!(
+            "planes=ycbcr422({:?}, color={:?})",
             yuyv.texture().format(),
-            encoding.matrix,
-            encoding.range,
+            frame.color(),
         ),
     };
     format!("{layout} stored={}x{}", frame.width(), frame.height())

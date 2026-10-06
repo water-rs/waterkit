@@ -5,13 +5,15 @@ use std::time::Duration;
 
 use wgpu_external_frame::YcbcrEncoding;
 
+pub use waterkit_core::Orientation;
+
 /// The GPU planes of one camera frame, in the layout the platform delivered.
 ///
 /// Every view samples the stored code values: no plane uses an sRGB view
 /// format, so sampling returns the camera's non-linear values unchanged.
 /// [`FrameConverter`](crate::FrameConverter) turns any layout into one
 /// upright RGBA texture.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FramePlanes {
     /// One 8-bit RGBA- or BGRA-ordered texture; `format()` of the view's
     /// texture says which.
@@ -44,108 +46,56 @@ pub enum FramePlanes {
     },
 }
 
-/// How the stored pixels relate to upright (EXIF orientations 1–8).
+/// The orientation of stored pixels that become upright when they are
+/// first mirrored horizontally (if `mirrored`) and then rotated
+/// `clockwise_degrees` clockwise.
 ///
-/// Upright is the scene as the lens sees it, unmirrored, with the horizon
-/// level relative to the display. Each variant is the EXIF orientation of the
-/// stored pixels: [`Right`] (EXIF 6) means the stored image must be rotated
-/// 90° clockwise to be upright.
-/// The mirrored variants appear only when the platform mirrored the pixels;
-/// showing a front camera mirrored, as a selfie preview, is a presentation
-/// choice left to the consumer.
+/// # Panics
 ///
-/// [`Right`]: Orientation::Right
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum Orientation {
-    /// EXIF 1: stored upright.
-    Up = 1,
-    /// EXIF 2: mirrored horizontally.
-    UpMirrored = 2,
-    /// EXIF 3: rotated 180°.
-    Down = 3,
-    /// EXIF 4: mirrored vertically.
-    DownMirrored = 4,
-    /// EXIF 5: transposed; mirror horizontally, then rotate 90° counter-clockwise
-    /// to be upright.
-    LeftMirrored = 5,
-    /// EXIF 6: rotate 90° clockwise to be upright.
-    Right = 6,
-    /// EXIF 7: transversed; mirror horizontally, then rotate 90° clockwise to be
-    /// upright.
-    RightMirrored = 7,
-    /// EXIF 8: rotate 90° counter-clockwise to be upright.
-    Left = 8,
+/// Panics when `clockwise_degrees` is not a multiple of 90: every
+/// platform reports its rotations in quarter turns, so anything else is a
+/// backend defect.
+#[cfg_attr(
+    not(any(target_os = "ios", target_os = "macos", target_os = "android", test)),
+    expect(
+        dead_code,
+        reason = "desktop frames are delivered upright; only the mobile backends and the tests rotate"
+    )
+)]
+pub fn orientation_from_rotation(clockwise_degrees: u32, mirrored: bool) -> Orientation {
+    assert!(
+        clockwise_degrees.is_multiple_of(90),
+        "camera rotation of {clockwise_degrees}° is not a quarter turn"
+    );
+    match ((clockwise_degrees / 90) % 4, mirrored) {
+        (0, false) => Orientation::Up,
+        (1, false) => Orientation::Right,
+        (2, false) => Orientation::Down,
+        (3, false) => Orientation::Left,
+        (0, true) => Orientation::UpMirrored,
+        (1, true) => Orientation::RightMirrored,
+        (2, true) => Orientation::DownMirrored,
+        (_, true) => Orientation::LeftMirrored,
+        (_, false) => unreachable!("quarter turns are reduced modulo 4"),
+    }
 }
 
-impl Orientation {
-    /// The EXIF orientation value, 1–8.
-    #[must_use]
-    pub const fn exif(self) -> u8 {
-        self as u8
-    }
-
-    /// Whether the upright image's width is the stored height, which is the
-    /// case for the four orientations that turn the image a quarter.
-    #[must_use]
-    pub const fn swaps_dimensions(self) -> bool {
-        matches!(
-            self,
-            Self::LeftMirrored | Self::Right | Self::RightMirrored | Self::Left
-        )
-    }
-
-    /// The orientation of stored pixels that become upright when they are
-    /// first mirrored horizontally (if `mirrored`) and then rotated
-    /// `clockwise_degrees` clockwise.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `clockwise_degrees` is not a multiple of 90: every
-    /// platform reports its rotations in quarter turns, so anything else is a
-    /// backend defect.
-    #[cfg_attr(
-        not(any(target_os = "ios", target_os = "macos", target_os = "android", test)),
-        expect(
-            dead_code,
-            reason = "desktop frames are delivered upright; only the mobile backends and the tests rotate"
-        )
-    )]
-    pub(crate) fn from_rotation(clockwise_degrees: u32, mirrored: bool) -> Self {
-        assert!(
-            clockwise_degrees.is_multiple_of(90),
-            "camera rotation of {clockwise_degrees}° is not a quarter turn"
-        );
-        match ((clockwise_degrees / 90) % 4, mirrored) {
-            (0, false) => Self::Up,
-            (1, false) => Self::Right,
-            (2, false) => Self::Down,
-            (3, false) => Self::Left,
-            (0, true) => Self::UpMirrored,
-            (1, true) => Self::RightMirrored,
-            (2, true) => Self::DownMirrored,
-            (_, true) => Self::LeftMirrored,
-            (_, false) => unreachable!("quarter turns are reduced modulo 4"),
-        }
-    }
-
-    /// Orientation of a Camera2 frame: the sensor's mounting angle combined
-    /// with the display rotation, whose sign flips for a lens that does not
-    /// face away from the display, because that lens sees the world mirrored
-    /// relative to it. Camera2 buffers themselves are never mirrored.
-    #[cfg(any(target_os = "android", test))]
-    pub(crate) fn from_camera2(
-        sensor_orientation: u32,
-        lens_faces_back: bool,
-        display_rotation: u32,
-    ) -> Self {
-        let rotation = if lens_faces_back {
-            (sensor_orientation + 360 - display_rotation) % 360
-        } else {
-            (sensor_orientation + display_rotation) % 360
-        };
-        Self::from_rotation(rotation, false)
-    }
+/// Orientation of a Camera2 frame: the sensor's mounting angle combined
+/// with the display rotation, whose sign flips for a lens that does not
+/// face away from the display, because that lens sees the world mirrored
+/// relative to it. Camera2 buffers themselves are never mirrored.
+#[cfg(any(target_os = "android", test))]
+pub fn orientation_from_camera2(
+    sensor_orientation: u32,
+    lens_faces_back: bool,
+    display_rotation: u32,
+) -> Orientation {
+    let rotation = if lens_faces_back {
+        (sensor_orientation + 360 - display_rotation) % 360
+    } else {
+        (sensor_orientation + display_rotation) % 360
+    };
+    orientation_from_rotation(rotation, false)
 }
 
 /// A GPU-backed camera frame.
@@ -335,7 +285,7 @@ impl<T: CaptureTime> StreamClock<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Orientation, StreamClock};
+    use super::{Orientation, StreamClock, orientation_from_camera2, orientation_from_rotation};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -388,7 +338,7 @@ mod tests {
         ];
         for (degrees, mirrored, expected) in cases {
             assert_eq!(
-                Orientation::from_rotation(degrees, mirrored),
+                orientation_from_rotation(degrees, mirrored),
                 expected,
                 "{degrees}° mirrored={mirrored}"
             );
@@ -399,16 +349,13 @@ mod tests {
     fn camera2_rotation_flips_sign_for_front_lenses() {
         // A back sensor mounted at 90° in a portrait device needs a quarter
         // turn clockwise; turning the display to landscape (90°) cancels it.
-        assert_eq!(Orientation::from_camera2(90, true, 0), Orientation::Right);
-        assert_eq!(Orientation::from_camera2(90, true, 90), Orientation::Up);
-        assert_eq!(Orientation::from_camera2(90, true, 270), Orientation::Down);
+        assert_eq!(orientation_from_camera2(90, true, 0), Orientation::Right);
+        assert_eq!(orientation_from_camera2(90, true, 90), Orientation::Up);
+        assert_eq!(orientation_from_camera2(90, true, 270), Orientation::Down);
         // A front sensor at 270° adds the display rotation instead.
-        assert_eq!(Orientation::from_camera2(270, false, 0), Orientation::Left);
-        assert_eq!(Orientation::from_camera2(270, false, 90), Orientation::Up);
-        assert_eq!(
-            Orientation::from_camera2(270, false, 270),
-            Orientation::Down
-        );
+        assert_eq!(orientation_from_camera2(270, false, 0), Orientation::Left);
+        assert_eq!(orientation_from_camera2(270, false, 90), Orientation::Up);
+        assert_eq!(orientation_from_camera2(270, false, 270), Orientation::Down);
     }
 
     #[test]

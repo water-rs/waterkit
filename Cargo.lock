@@ -7599,6 +7599,7 @@ dependencies = [
  "waterkit-speech",
  "waterkit-system",
  "waterkit-video",
+ "waterkit-vision",
 ]
 
 [[package]]
@@ -7984,6 +7985,7 @@ dependencies = [
  "js-sys",
  "swift-bridge",
  "thiserror 2.0.20",
+ "tracing",
  "wasm-bindgen",
  "waterkit-build",
  "waterkit-core",
@@ -8412,6 +8414,20 @@ dependencies = [
  "waterkit-video-core",
  "windows 0.62.2",
  "zenwave",
+]
+
+[[package]]
+name = "waterkit-vision"
+version = "0.1.4"
+dependencies = [
+ "bytes",
+ "futures",
+ "pollster 1.0.1",
+ "thiserror 2.0.20",
+ "tracing",
+ "waterkit-camera",
+ "waterkit-core",
+ "wgpu",
 ]
 
 [[package]]

@@ -205,7 +205,7 @@ fn assert_read(lines: &[TextLine], expected: &[&str]) {
             );
         }
         for word in &line.words {
-            assert!(!word.text.is_empty());
+            assert_ne!(word.text, "");
             for point in word.bounds.0 {
                 assert!(
                     (0.0..=1.0).contains(&point.x) && (0.0..=1.0).contains(&point.y),

@@ -49,7 +49,7 @@ pub fn recognizer_languages() -> Vec<LanguageIdentifier> {
                         tracing::warn!(
                             tag = %tag,
                             %error,
-                            "Windows.Media.Ocr returned an unparseable language tag"
+                            "Windows.Media.Ocr returned an unparsable language tag"
                         );
                         None
                     }

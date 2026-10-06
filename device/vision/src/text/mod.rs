@@ -137,6 +137,13 @@ pub struct TextPlan {
 }
 
 impl Plan<RecognizeText> for TextPlan {
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
+        )
+    )]
     async fn prepare(&self, _context: Context<'_>) -> Result<(), VisionError> {
         match self.realization {
             Realization::Native => sys::prepare(self),

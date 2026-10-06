@@ -30,6 +30,13 @@ pub fn prepare(_plan: &TextPlan) -> Result<(), VisionError> {
     clippy::unused_async,
     reason = "keeps the signature every platform's native realization shares"
 )]
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        clippy::future_not_send,
+        reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
+    )
+)]
 pub async fn recognize(
     _pass: &mut Pass<'_>,
     _plan: &TextPlan,

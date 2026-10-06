@@ -27,6 +27,7 @@ class MainActivity : AppCompatActivity() {
     
     private lateinit var logText: TextView
     private var pendingNativeTest = false
+    private var pendingInteractiveTest = false
     
     companion object {
         private const val REPORT_FILE_NAME = "waterkit-test-report.json"
@@ -47,7 +48,7 @@ class MainActivity : AppCompatActivity() {
     
     // Generic runner
     private external fun runTest(activity: AppCompatActivity)
-    private external fun runTestReport(activity: AppCompatActivity): String
+    private external fun runTestReport(activity: AppCompatActivity, interactive: Boolean): String
     
     // ===== End JNI declarations =====
     
@@ -85,7 +86,7 @@ class MainActivity : AppCompatActivity() {
         
         // Generic Native Test
         layout.addView(testButton("Run Generic Native Test") {
-            runNativeTest()
+            runNativeTest(false)
         })
 
         // Permission Tests
@@ -170,13 +171,17 @@ class MainActivity : AppCompatActivity() {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus && pendingNativeTest) {
             pendingNativeTest = false
-            runNativeTest()
+            val interactive = pendingInteractiveTest
+            pendingInteractiveTest = false
+            runNativeTest(interactive)
         }
     }
 
     private fun checkIntent(intent: android.content.Intent) {
         if (intent.getBooleanExtra("run_test", false)) {
             intent.removeExtra("run_test")
+            pendingInteractiveTest = intent.getBooleanExtra("interactive", false)
+            intent.removeExtra("interactive")
             // The runner wakes the device just before launch. From here until
             // the report is written this window keeps the screen on, so the
             // screen timeout cannot take focus away mid-run. The flag belongs
@@ -190,10 +195,12 @@ class MainActivity : AppCompatActivity() {
     private fun runPendingNativeTest() {
         if (!pendingNativeTest || !hasWindowFocus()) return
         pendingNativeTest = false
-        runNativeTest()
+        val interactive = pendingInteractiveTest
+        pendingInteractiveTest = false
+        runNativeTest(interactive)
     }
 
-    private fun runNativeTest() {
+    private fun runNativeTest(interactive: Boolean) {
         log("Running native test...")
         android.util.Log.i("waterkit", "Native test started with window focus")
         // Native clipboard cases write synthetic clips; hold the user's
@@ -204,7 +211,7 @@ class MainActivity : AppCompatActivity() {
         Thread {
             var restoreFailure: Throwable? = null
             val report = try {
-                runTestReport(this)
+                runTestReport(this, interactive)
             } finally {
                 try {
                     restorePrimaryClip(savedClip)

@@ -177,6 +177,7 @@ waterkit-passkey = { path = "identity/passkey", version = "0.1.4" }
 
 # Cross-platform
 futures = "0.3"
+futures-channel = "0.3"
 smallvec = "1.15"
 async-channel = "2.5"
 async-fs = "2"

@@ -37,6 +37,9 @@ const ANDROID_LAUNCH_TIMEOUT: Duration = Duration::from_secs(300);
 /// from the moment Android reports the activity displayed.
 const ANDROID_REPORT_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// The report deadline when the harness is waiting for picker interaction.
+const ANDROID_INTERACTIVE_REPORT_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// Cadence for polling the on-device report file over `adb`.
 const ANDROID_REPORT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -54,6 +57,9 @@ enum Commands {
     Android {
         /// Path to the crate to run
         crate_path: PathBuf,
+        /// Enable cases that require interaction with Android pickers
+        #[arg(long)]
+        interactive: bool,
     },
     /// Run a crate on macOS
     Macos {
@@ -73,13 +79,16 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Android { crate_path } => run_android(&crate_path),
+        Commands::Android {
+            crate_path,
+            interactive,
+        } => run_android(&crate_path, interactive),
         Commands::Macos { crate_path } => run_macos(&crate_path),
         Commands::Ios(args) => ios::run(args),
     }
 }
 
-fn run_android(crate_path: &Path) -> Result<()> {
+fn run_android(crate_path: &Path, interactive: bool) -> Result<()> {
     info!("{}", "Preparing Android test environment...".green().bold());
 
     let toolchain = AndroidToolchain::resolve()?;
@@ -125,9 +134,14 @@ fn run_android(crate_path: &Path) -> Result<()> {
     // enough for the screen to time out again. The harness window keeps the
     // screen on from its first frame.
     android_device::wake_and_unlock(&toolchain)?;
-    launch_android_test(&toolchain)?;
+    launch_android_test(&toolchain, interactive)?;
     android_device::wait_for_harness_focus(&toolchain)?;
-    let report = wait_for_android_report(ANDROID_REPORT_TIMEOUT, &toolchain)?;
+    let report_timeout = if interactive {
+        ANDROID_INTERACTIVE_REPORT_TIMEOUT
+    } else {
+        ANDROID_REPORT_TIMEOUT
+    };
+    let report = wait_for_android_report(report_timeout, &toolchain)?;
     ensure_report_success(&report)?;
 
     Ok(())
@@ -507,7 +521,7 @@ fn grant_android_permissions_for_feature(
     Ok(())
 }
 
-fn launch_android_test(toolchain: &AndroidToolchain) -> Result<()> {
+fn launch_android_test(toolchain: &AndroidToolchain, interactive: bool) -> Result<()> {
     run_adb(
         toolchain,
         ["shell", "am", "force-stop", ANDROID_HARNESS_PACKAGE],
@@ -532,6 +546,7 @@ fn launch_android_test(toolchain: &AndroidToolchain) -> Result<()> {
     // frame instead of returning as soon as the start request is queued. The
     // report deadline then bounds the native test alone, which is the thing it
     // is meant to bound.
+    let activity = format!("{ANDROID_HARNESS_PACKAGE}/.MainActivity");
     let output = run_adb_with_timeout(
         toolchain,
         &[
@@ -540,10 +555,13 @@ fn launch_android_test(toolchain: &AndroidToolchain) -> Result<()> {
             "start",
             "-W",
             "-n",
-            &format!("{ANDROID_HARNESS_PACKAGE}/.MainActivity"),
+            &activity,
             "--ez",
             "run_test",
             "true",
+            "--ez",
+            "interactive",
+            if interactive { "true" } else { "false" },
         ],
         ANDROID_LAUNCH_TIMEOUT,
         "launch the Android test activity",

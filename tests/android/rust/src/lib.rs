@@ -5,6 +5,8 @@
 use jni::errors::ThrowRuntimeExAndDefault;
 #[cfg(feature = "location")]
 use jni::objects::JDoubleArray;
+#[cfg(feature = "dialog")]
+use jni::objects::JValue;
 use jni::objects::{Global, JObject};
 use jni::sys::{jdoubleArray, jstring};
 use jni::{Env, EnvUnowned};
@@ -32,7 +34,7 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest<'local>(
     init_logger();
     env.with_env(|env| -> jni::errors::Result<()> {
         let _android_context = AndroidContextOwner::new(env, &activity)?;
-        let report = run_native_report(env, &activity);
+        let report = run_native_report(env, &activity, false);
         log_report(&report);
         Ok(())
     })
@@ -45,11 +47,12 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTestReport<'local>
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     activity: JObject<'local>,
+    interactive: jni::sys::jboolean,
 ) -> jstring {
     init_logger();
     env.with_env(|env| -> jni::errors::Result<jstring> {
         let _android_context = AndroidContextOwner::new(env, &activity)?;
-        let report = run_native_report(env, &activity);
+        let report = run_native_report(env, &activity, interactive);
         log_report(&report);
 
         let json = match to_json_pretty(&report) {
@@ -109,7 +112,7 @@ fn init_logger() {
     );
 }
 
-fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
+fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>, interactive: bool) -> TestReport {
     let mut report = TestReport::new("android", "waterkit-test-android");
     #[cfg(any(
         feature = "sensor",
@@ -117,7 +120,8 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
         feature = "permission",
         feature = "fs",
         feature = "secret",
-        feature = "clipboard"
+        feature = "clipboard",
+        feature = "dialog"
     ))]
     let activity_global = match env.new_global_ref(activity) {
         Ok(value) => value,
@@ -135,7 +139,8 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
         feature = "permission",
         feature = "fs",
         feature = "secret",
-        feature = "clipboard"
+        feature = "clipboard",
+        feature = "dialog"
     )))]
     let _ = (env, activity);
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -150,7 +155,8 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
             feature = "permission",
             feature = "fs",
             feature = "secret",
-            feature = "clipboard"
+            feature = "clipboard",
+            feature = "dialog"
         ))]
         let activity = activity_global.as_obj();
 
@@ -208,6 +214,9 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
         #[cfg(feature = "screen")]
         record_android_screen(&mut report);
 
+        #[cfg(feature = "dialog")]
+        record_android_activity_results(&mut report, env, activity, interactive).await;
+
         for case in unexercised_cases() {
             report.push(case);
         }
@@ -238,7 +247,6 @@ fn unexercised_cases() -> impl Iterator<Item = TestCase> {
         ),
         (cfg!(feature = "audio"), TestCase::passed("audio.linked")),
         (cfg!(feature = "codec"), TestCase::passed("codec.linked")),
-        (cfg!(feature = "dialog"), TestCase::passed("dialog.linked")),
         (cfg!(feature = "video"), TestCase::passed("video.linked")),
         (
             cfg!(feature = "bluetooth"),
@@ -277,6 +285,337 @@ fn unexercised_cases() -> impl Iterator<Item = TestCase> {
     ]
     .into_iter()
     .filter_map(|(enabled, case)| enabled.then_some(case))
+}
+
+#[cfg(feature = "dialog")]
+static ACTIVITY_RESULT_ECHO: waterkit_build::DexHelper =
+    waterkit_build::dex_helper!("com.waterkit.test.ActivityResultEchoActivity");
+
+#[cfg(feature = "dialog")]
+#[expect(
+    clippy::future_not_send,
+    reason = "the JNI environment belongs to the harness thread, which the current-thread runtime blocks on"
+)]
+async fn echo_activity_result(
+    env: &mut Env<'_>,
+    activity: &JObject<'_>,
+    token: &str,
+    result_code: i32,
+    use_intent_sender: bool,
+) -> Result<(waterkit_build::ResultCode, String), String> {
+    let helper_class = ACTIVITY_RESULT_ECHO
+        .class(env, activity)
+        .map_err(|error| error.to_string())?;
+    let token_string = env.new_string(token).map_err(|error| error.to_string())?;
+    let arguments = [
+        JValue::Object(activity),
+        JValue::Object(&token_string),
+        JValue::Int(result_code),
+    ];
+    let input = if use_intent_sender {
+        env.call_static_method(
+            helper_class,
+            jni::jni_str!("intentSender"),
+            jni::jni_sig!(
+                "(Landroid/content/Context;Ljava/lang/String;I)Landroid/content/IntentSender;"
+            ),
+            &arguments,
+        )
+    } else {
+        env.call_static_method(
+            helper_class,
+            jni::jni_str!("intent"),
+            jni::jni_sig!("(Landroid/content/Context;Ljava/lang/String;I)Landroid/content/Intent;"),
+            &arguments,
+        )
+    }
+    .map_err(|error| error.to_string())?
+    .l()
+    .map_err(|error| error.to_string())?;
+    let result = if use_intent_sender {
+        waterkit_build::start_intent_sender_for_result(env, &input)
+    } else {
+        waterkit_build::start_activity_for_result(env, &input)
+    }
+    .map_err(|error| error.to_string())?
+    .await
+    .map_err(|error| error.to_string())?;
+    let result_code = result.code();
+    let data = result
+        .into_data()
+        .ok_or_else(|| "echo activity returned no Intent data".to_owned())?;
+    let helper_class = ACTIVITY_RESULT_ECHO
+        .class(env, activity)
+        .map_err(|error| error.to_string())?;
+    let token = env
+        .call_static_method(
+            helper_class,
+            jni::jni_str!("token"),
+            jni::jni_sig!("(Landroid/content/Intent;)Ljava/lang/String;"),
+            &[JValue::Object(data.as_obj())],
+        )
+        .map_err(|error| error.to_string())?
+        .l()
+        .map_err(|error| error.to_string())?;
+    let token = waterkit_build::decode_optional_string(env, &token)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "echo activity returned no token".to_owned())?;
+    Ok((result_code, token))
+}
+
+#[cfg(feature = "dialog")]
+#[expect(
+    clippy::future_not_send,
+    reason = "the JNI environment belongs to the harness thread, which the current-thread runtime blocks on"
+)]
+async fn record_android_activity_results(
+    report: &mut TestReport,
+    env: &mut Env<'_>,
+    activity: &JObject<'_>,
+    interactive: bool,
+) {
+    for (name, token, code, intent_sender) in [
+        ("activity_result.intent", "activity-intent", -1, false),
+        (
+            "activity_result.intent_sender",
+            "activity-intent-sender",
+            -1,
+            true,
+        ),
+        ("activity_result.custom_code", "activity-custom", 5, false),
+    ] {
+        match echo_activity_result(env, activity, token, code, intent_sender).await {
+            Ok((waterkit_build::ResultCode::Ok, returned_token))
+                if code == -1 && returned_token == token =>
+            {
+                report.push(TestCase::passed(name));
+            }
+            Ok((waterkit_build::ResultCode::Custom(5), returned_token))
+                if code == 5 && returned_token == token =>
+            {
+                report.push(TestCase::passed(name));
+            }
+            Ok((result_code, returned_token)) => report.push(TestCase::failed(
+                name,
+                format!("unexpected result code or token: {result_code:?}, {returned_token}"),
+            )),
+            Err(error) => report.push(TestCase::failed(name, error)),
+        }
+    }
+
+    let launch_failure = (|| -> Result<_, String> {
+        let class = env
+            .find_class(jni::jni_str!("android/content/Intent"))
+            .map_err(|error| error.to_string())?;
+        let intent = env
+            .new_object(class, jni::jni_sig!("()V"), &[])
+            .map_err(|error| error.to_string())?;
+        let action = env
+            .new_string("waterkit.test.NONEXISTENT_ACTION")
+            .map_err(|error| error.to_string())?;
+        env.call_method(
+            &intent,
+            jni::jni_str!("setAction"),
+            jni::jni_sig!("(Ljava/lang/String;)Landroid/content/Intent;"),
+            &[JValue::Object(&action)],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(intent)
+    })();
+    match launch_failure {
+        Ok(intent) => match waterkit_build::start_activity_for_result(env, &intent) {
+            Ok(pending) => match pending.await {
+                Err(waterkit_build::ActivityResultError::Launch(_)) => {
+                    report.push(TestCase::passed("activity_result.launch_failure"));
+                }
+                Err(error) => report.push(TestCase::failed(
+                    "activity_result.launch_failure",
+                    format!("launch returned the wrong error: {error}"),
+                )),
+                Ok(_) => report.push(TestCase::failed(
+                    "activity_result.launch_failure",
+                    "nonexistent action unexpectedly returned an activity result",
+                )),
+            },
+            Err(error) => report.push(TestCase::failed(
+                "activity_result.launch_failure",
+                format!("failed before asynchronous launch: {error}"),
+            )),
+        },
+        Err(error) => report.push(TestCase::failed(
+            "activity_result.launch_failure",
+            format!("could not create invalid intent: {error}"),
+        )),
+    }
+
+    if interactive {
+        record_interactive_dialog_cases(report).await;
+    }
+}
+
+#[cfg(feature = "dialog")]
+async fn record_interactive_dialog_cases(report: &mut TestReport) {
+    record_photo_picker_case(report).await;
+    record_file_picker_case(report).await;
+    record_multiple_file_picker_case(report).await;
+    record_picker_cancelled_case(report).await;
+}
+
+#[cfg(feature = "dialog")]
+async fn record_photo_picker_case(report: &mut TestReport) {
+    use waterkit_content::dialog::{MediaType, PhotoPicker};
+
+    match PhotoPicker::new()
+        .with_media_type(MediaType::Image)
+        .pick()
+        .await
+    {
+        Ok(Some(handle)) => match handle.load().await {
+            Ok(path) => match std::fs::read(&path) {
+                Ok(bytes) if bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) => {
+                    report.push(TestCase::passed_with_message(
+                        "dialog.photo_picker",
+                        format!("path={} bytes={}", path.display(), bytes.len()),
+                    ));
+                }
+                Ok(bytes) => report.push(TestCase::failed(
+                    "dialog.photo_picker",
+                    format!(
+                        "selected image was not a PNG: path={} bytes={}",
+                        path.display(),
+                        bytes.len()
+                    ),
+                )),
+                Err(error) => report.push(TestCase::failed(
+                    "dialog.photo_picker",
+                    format!("could not read selected image {}: {error}", path.display()),
+                )),
+            },
+            Err(error) => report.push(TestCase::failed(
+                "dialog.photo_picker",
+                format!("could not load selected image: {error}"),
+            )),
+        },
+        Ok(None) => report.push(TestCase::failed(
+            "dialog.photo_picker",
+            "photo picker returned no selection",
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "dialog.photo_picker",
+            format!("photo picker failed: {error}"),
+        )),
+    }
+}
+
+#[cfg(feature = "dialog")]
+async fn record_file_picker_case(report: &mut TestReport) {
+    use waterkit_content::dialog::FileDialog;
+
+    let selected_file = FileDialog::new()
+        .with_filter("Text files", &["txt"])
+        .pick_single()
+        .await;
+    match selected_file {
+        Ok(Some(path)) => match std::fs::read_to_string(&path) {
+            Ok(contents) if contents == "waterkit activity results a" => {
+                report.push(TestCase::passed_with_message(
+                    "dialog.file_picker",
+                    format!("path={}", path.display()),
+                ));
+            }
+            Ok(_) => report.push(TestCase::failed(
+                "dialog.file_picker",
+                format!(
+                    "selected file did not contain the expected fixture: {}",
+                    path.display()
+                ),
+            )),
+            Err(error) => report.push(TestCase::failed(
+                "dialog.file_picker",
+                format!("could not read selected file {}: {error}", path.display()),
+            )),
+        },
+        Ok(None) => report.push(TestCase::failed(
+            "dialog.file_picker",
+            "file picker returned no selection",
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "dialog.file_picker",
+            format!("file picker failed: {error}"),
+        )),
+    }
+}
+
+#[cfg(feature = "dialog")]
+async fn record_multiple_file_picker_case(report: &mut TestReport) {
+    use waterkit_content::dialog::FileDialog;
+
+    let selected_files = FileDialog::new()
+        .with_filter("Text files", &["txt"])
+        .pick_multiple()
+        .await;
+    match selected_files {
+        Ok(Some(paths)) => {
+            let mut contents = paths
+                .iter()
+                .map(std::fs::read_to_string)
+                .collect::<Result<Vec<_>, _>>();
+            match &mut contents {
+                Ok(contents) => {
+                    contents.sort();
+                    let mut expected = vec![
+                        "waterkit activity results a".to_owned(),
+                        "waterkit activity results b".to_owned(),
+                    ];
+                    expected.sort();
+                    if paths.len() == 2 && *contents == expected {
+                        report.push(TestCase::passed_with_message(
+                            "dialog.file_picker_multiple",
+                            format!("selected={}", paths.len()),
+                        ));
+                    } else {
+                        report.push(TestCase::failed(
+                            "dialog.file_picker_multiple",
+                            format!("unexpected fixture selection: {contents:?}"),
+                        ));
+                    }
+                }
+                Err(error) => report.push(TestCase::failed(
+                    "dialog.file_picker_multiple",
+                    format!("could not read selected fixtures: {error}"),
+                )),
+            }
+        }
+        Ok(None) => report.push(TestCase::failed(
+            "dialog.file_picker_multiple",
+            "multiple file picker returned no selection",
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "dialog.file_picker_multiple",
+            format!("multiple file picker failed: {error}"),
+        )),
+    }
+}
+
+#[cfg(feature = "dialog")]
+async fn record_picker_cancelled_case(report: &mut TestReport) {
+    use waterkit_content::dialog::FileDialog;
+
+    match FileDialog::new()
+        .with_filter("Text files", &["txt"])
+        .pick_single()
+        .await
+    {
+        Ok(None) => report.push(TestCase::passed("dialog.picker_cancelled")),
+        Ok(Some(_)) => report.push(TestCase::failed(
+            "dialog.picker_cancelled",
+            "picker returned a selection instead of being cancelled",
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "dialog.picker_cancelled",
+            format!("picker cancellation failed: {error}"),
+        )),
+    }
 }
 
 fn log_report(report: &TestReport) {

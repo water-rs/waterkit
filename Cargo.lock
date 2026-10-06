@@ -7689,6 +7689,7 @@ dependencies = [
 name = "waterkit-build"
 version = "0.1.4"
 dependencies = [
+ "futures-channel",
  "jni 0.22.4",
  "ndk-context",
  "swift-bridge-build",
@@ -7874,7 +7875,6 @@ version = "0.1.4"
 dependencies = [
  "futures",
  "jni 0.22.4",
- "ndk-context",
  "rfd",
  "roxmltree",
  "swift-bridge",

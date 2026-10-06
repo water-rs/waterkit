@@ -36,6 +36,44 @@ cargo run -p waterkit-test -- android .
 Passing the workspace root (`.`) enables every supported Android harness
 feature in one APK so they can be exercised together on a connected device.
 
+Add `--interactive` to run cases that need someone to use Android's photo and
+document pickers. These cases run in this order:
+
+1. `dialog.photo_picker`
+2. `dialog.file_picker`
+3. `dialog.file_picker_multiple`
+4. `dialog.picker_cancelled`
+
+Before starting an interactive run, create these two fixture files on the
+device. Their contents must match exactly:
+
+```bash
+adb shell "mkdir -p /sdcard/Download"
+adb shell "printf 'waterkit activity results a' > /sdcard/Download/waterkit-activity-result-a.txt"
+adb shell "printf 'waterkit activity results b' > /sdcard/Download/waterkit-activity-result-b.txt"
+```
+
+Place a PNG in `/sdcard/Pictures` for `dialog.photo_picker`. For example,
+capture the emulator display and scan the image into Android's media library:
+
+```bash
+adb exec-out screencap -p > /tmp/waterkit-activity-result.png
+adb push /tmp/waterkit-activity-result.png /sdcard/Pictures/waterkit-activity-result.png
+adb shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE \
+  -d file:///sdcard/Pictures/waterkit-activity-result.png
+```
+
+Run the interactive cases with:
+
+```bash
+cargo run -p waterkit-test -- android sharing/dialog --interactive
+```
+
+Choose the PNG, choose fixture A in the single-file picker, select both
+fixtures in the multiple-file picker, then press Back in the final picker.
+Interactive runs allow up to ten minutes for the report. Fixture files and
+image binaries are local test data and are not committed to the repository.
+
 The Android app also keeps the manual UI buttons for local exploration.
 
 ## Adding new crates to test

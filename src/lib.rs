@@ -131,3 +131,7 @@ pub use waterkit_background as background;
 #[cfg(feature = "passkey")]
 #[doc(inline)]
 pub use waterkit_passkey as passkey;
+
+#[cfg(feature = "otp")]
+#[doc(inline)]
+pub use waterkit_otp as otp;

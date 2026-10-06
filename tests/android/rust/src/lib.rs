@@ -2,13 +2,24 @@
 
 #![cfg(target_os = "android")]
 
+#[cfg(feature = "otp")]
+use jni::JavaVM;
 use jni::errors::ThrowRuntimeExAndDefault;
 #[cfg(feature = "location")]
 use jni::objects::JDoubleArray;
+#[cfg(any(feature = "clipboard", feature = "otp"))]
+use jni::objects::JValue;
+#[cfg(feature = "otp")]
+use jni::objects::JValueOwned;
 use jni::objects::{Global, JObject};
-use jni::sys::{jdoubleArray, jstring};
+use jni::sys::{jboolean, jdoubleArray, jstring};
 use jni::{Env, EnvUnowned};
-#[cfg(feature = "clipboard")]
+#[cfg(feature = "otp")]
+use jni::{jni_sig, jni_str};
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "otp")]
+use waterkit_build::decode_string;
+#[cfg(any(feature = "clipboard", feature = "otp"))]
 use waterkit_build::describe_jni_error;
 use waterkit_test_report::{TestCase, TestReport, to_json_pretty};
 
@@ -31,8 +42,17 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest<'local>(
 ) {
     init_logger();
     env.with_env(|env| -> jni::errors::Result<()> {
-        let _android_context = AndroidContextOwner::new(env, &activity)?;
-        let report = run_native_report(env, &activity);
+        let _android_context = match AndroidContextOwner::new(env, &activity) {
+            Ok(owner) => owner,
+            Err(AndroidContextOwnerError::AlreadyActive) => {
+                log::error!(
+                    "Android test context is already active; do not run a manual OTP request and runTest concurrently"
+                );
+                return Ok(());
+            }
+            Err(AndroidContextOwnerError::Jni(error)) => return Err(error),
+        };
+        let report = run_native_report(env, &activity, false);
         log_report(&report);
         Ok(())
     })
@@ -45,11 +65,29 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTestReport<'local>
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     activity: JObject<'local>,
+    sms_delivery: jboolean,
 ) -> jstring {
     init_logger();
     env.with_env(|env| -> jni::errors::Result<jstring> {
-        let _android_context = AndroidContextOwner::new(env, &activity)?;
-        let report = run_native_report(env, &activity);
+        let _android_context = match AndroidContextOwner::new(env, &activity) {
+            Ok(owner) => owner,
+            Err(AndroidContextOwnerError::AlreadyActive) => {
+                let mut report = TestReport::new("android", "waterkit-test-android");
+                report.push(TestCase::failed(
+                    "harness.android_context",
+                    "Android context is already active; do not run a manual OTP request and runTestReport concurrently",
+                ));
+                log_report(&report);
+                return match env.new_string(to_json_pretty(&report).map_err(|error| {
+                    jni::errors::Error::ParseFailed(error.to_string())
+                })?) {
+                    Ok(value) => Ok(value.into_raw()),
+                    Err(error) => Err(error),
+                };
+            }
+            Err(AndroidContextOwnerError::Jni(error)) => return Err(error),
+        };
+        let report = run_native_report(env, &activity, sms_delivery);
         log_report(&report);
 
         let json = match to_json_pretty(&report) {
@@ -71,24 +109,202 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTestReport<'local>
     .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+#[cfg(feature = "otp")]
+#[derive(Clone, Copy)]
+enum ManualOtpMode {
+    Addressed,
+    Consent,
+}
+
+#[cfg(feature = "otp")]
+/// Starts a manual addressed OTP request from the Android UI.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_waterkit_test_MainActivity_testOtpAddressed<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    activity: JObject<'local>,
+) {
+    init_logger();
+    env.with_env(|env| start_manual_otp(env, &activity, ManualOtpMode::Addressed))
+        .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[cfg(feature = "otp")]
+/// Starts a manual SMS User Consent request from the Android UI.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_waterkit_test_MainActivity_testOtpConsent<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    activity: JObject<'local>,
+) {
+    init_logger();
+    env.with_env(|env| start_manual_otp(env, &activity, ManualOtpMode::Consent))
+        .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[cfg(feature = "otp")]
+fn start_manual_otp(
+    env: &mut Env<'_>,
+    activity: &JObject<'_>,
+    mode: ManualOtpMode,
+) -> jni::errors::Result<()> {
+    let owner = match AndroidContextOwner::new(env, activity) {
+        Ok(owner) => owner,
+        Err(AndroidContextOwnerError::AlreadyActive) => {
+            let message = "waterkit-otp error=Android context is already active; do not run manual OTP and runTestReport concurrently";
+            log::error!(target: "waterkit-otp", "{message}");
+            activity_log(env, activity, message)?;
+            activity_finish_otp(env, activity)?;
+            return Ok(());
+        }
+        Err(AndroidContextOwnerError::Jni(error)) => return Err(error),
+    };
+    let java_vm = env.get_java_vm()?;
+    let activity_for_worker = env.new_global_ref(activity)?;
+    let spawn_result = std::thread::Builder::new()
+        .name("waterkit-otp-manual".to_owned())
+        .spawn(move || {
+            run_manual_otp(&java_vm, &activity_for_worker, mode);
+            drop(owner);
+        });
+    if let Err(error) = spawn_result {
+        let message = format!("waterkit-otp error=failed to start request thread: {error}");
+        log::error!(target: "waterkit-otp", "{message}");
+        activity_log(env, activity, &message)?;
+        activity_finish_otp(env, activity)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "otp")]
+fn run_manual_otp(java_vm: &JavaVM, activity: &Global<JObject<'static>>, mode: ManualOtpMode) {
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())
+        .and_then(|runtime| runtime.block_on(run_manual_otp_request(java_vm, activity, mode)));
+    if let Err(error) = result {
+        let message = format!("waterkit-otp error={error}");
+        log::error!(target: "waterkit-otp", "{message}");
+        activity_log_attached(java_vm, activity, &message);
+    }
+    if let Err(error) = activity_finish_otp_attached(java_vm, activity) {
+        log::warn!(target: "waterkit-otp", "failed to finish manual OTP UI state: {error}");
+    }
+}
+
+#[cfg(feature = "otp")]
+async fn run_manual_otp_request(
+    java_vm: &JavaVM,
+    activity: &Global<JObject<'static>>,
+    mode: ManualOtpMode,
+) -> Result<(), String> {
+    use waterkit_content::otp::{AddressedRequest, ConsentRequest};
+
+    match mode {
+        ManualOtpMode::Addressed => {
+            let request = AddressedRequest::start()
+                .await
+                .map_err(|error| error.to_string())?;
+            let token_line = format!("waterkit-otp token={}", request.token());
+            log::info!(target: "waterkit-otp", "{token_line}");
+            activity_log_attached(java_vm, activity, &token_line);
+            let message = request.message().await.map_err(|error| error.to_string())?;
+            let message_line = format!("waterkit-otp message={message}");
+            log::info!(target: "waterkit-otp", "{message_line}");
+            activity_log_attached(java_vm, activity, &message_line);
+        }
+        ManualOtpMode::Consent => {
+            let request = ConsentRequest::start(None)
+                .await
+                .map_err(|error| error.to_string())?;
+            let message = request.message().await.map_err(|error| error.to_string())?;
+            let message_line = format!("waterkit-otp message={message}");
+            log::info!(target: "waterkit-otp", "{message_line}");
+            activity_log_attached(java_vm, activity, &message_line);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "otp")]
+fn activity_log(
+    env: &mut Env<'_>,
+    activity: &JObject<'_>,
+    message: &str,
+) -> jni::errors::Result<()> {
+    let message = env.new_string(message)?;
+    env.call_method(
+        activity,
+        jni_str!("logFromNative"),
+        jni_sig!("(Ljava/lang/String;)V"),
+        &[JValue::Object(&message)],
+    )?;
+    Ok(())
+}
+
+#[cfg(feature = "otp")]
+fn activity_finish_otp(env: &mut Env<'_>, activity: &JObject<'_>) -> jni::errors::Result<()> {
+    env.call_method(activity, jni_str!("finishOtpRequest"), jni_sig!("()V"), &[])?;
+    Ok(())
+}
+
+#[cfg(feature = "otp")]
+fn activity_log_attached(java_vm: &JavaVM, activity: &Global<JObject<'static>>, message: &str) {
+    if let Err(error) = java_vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+        activity_log(env, activity.as_obj(), message)
+    }) {
+        log::warn!(target: "waterkit-otp", "failed to update manual OTP UI log: {error}");
+    }
+}
+
+#[cfg(feature = "otp")]
+fn activity_finish_otp_attached(
+    java_vm: &JavaVM,
+    activity: &Global<JObject<'static>>,
+) -> jni::errors::Result<()> {
+    java_vm.attach_current_thread(|env| activity_finish_otp(env, activity.as_obj()))
+}
+
 struct AndroidContextOwner {
     _activity: Global<JObject<'static>>,
 }
 
+static ANDROID_CONTEXT_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+enum AndroidContextOwnerError {
+    AlreadyActive,
+    Jni(jni::errors::Error),
+}
+
 impl AndroidContextOwner {
-    fn new(env: &Env<'_>, activity: &JObject<'_>) -> jni::errors::Result<Self> {
-        let java_vm = env.get_java_vm()?;
-        let activity = env.new_global_ref(activity)?;
-        // SAFETY: both pointers are retained for this owner's lifetime, and
-        // the harness creates exactly one owner around each native test run.
-        unsafe {
-            ndk_context::initialize_android_context(
-                java_vm.get_raw().cast(),
-                activity.as_obj().as_raw().cast(),
-            );
+    fn new(env: &Env<'_>, activity: &JObject<'_>) -> Result<Self, AndroidContextOwnerError> {
+        if ANDROID_CONTEXT_ACTIVE
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(AndroidContextOwnerError::AlreadyActive);
         }
-        Ok(Self {
-            _activity: activity,
+
+        let result = (|| -> jni::errors::Result<Self> {
+            let java_vm = env.get_java_vm()?;
+            let activity = env.new_global_ref(activity)?;
+            // SAFETY: both pointers are retained for this owner's lifetime,
+            // and the active-owner guard prevents concurrent initialization.
+            unsafe {
+                ndk_context::initialize_android_context(
+                    java_vm.get_raw().cast(),
+                    activity.as_obj().as_raw().cast(),
+                );
+            }
+            Ok(Self {
+                _activity: activity,
+            })
+        })();
+
+        result.map_err(|error| {
+            ANDROID_CONTEXT_ACTIVE.store(false, Ordering::Release);
+            AndroidContextOwnerError::Jni(error)
         })
     }
 }
@@ -100,6 +316,7 @@ impl Drop for AndroidContextOwner {
         unsafe {
             ndk_context::release_android_context();
         }
+        ANDROID_CONTEXT_ACTIVE.store(false, Ordering::Release);
     }
 }
 
@@ -109,8 +326,10 @@ fn init_logger() {
     );
 }
 
-fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
+fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>, sms_delivery: bool) -> TestReport {
     let mut report = TestReport::new("android", "waterkit-test-android");
+    #[cfg(not(feature = "otp"))]
+    let _ = sms_delivery;
     #[cfg(any(
         feature = "sensor",
         feature = "location",
@@ -137,7 +356,9 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
         feature = "secret",
         feature = "clipboard"
     )))]
-    let _ = (env, activity);
+    let _ = (&*env, activity);
+    #[cfg(feature = "otp")]
+    let files_dir = android_files_dir(env, activity);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -192,6 +413,9 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
 
         #[cfg(feature = "passkey")]
         record_android_passkey(&mut report).await;
+
+        #[cfg(feature = "otp")]
+        record_android_otp(&mut report, sms_delivery, files_dir).await;
 
         #[cfg(feature = "codec")]
         record_android_avif_decode(&mut report);
@@ -1015,6 +1239,177 @@ async fn record_android_passkey(report: &mut TestReport) {
             format!("passkey availability failed: {error}"),
         )),
     }
+}
+
+#[cfg(feature = "otp")]
+async fn record_android_otp(
+    report: &mut TestReport,
+    sms_delivery: bool,
+    files_dir: Result<std::path::PathBuf, String>,
+) {
+    use waterkit_content::otp::AddressedRequest;
+
+    let capabilities = match waterkit_content::otp::capabilities() {
+        Ok(capabilities) => capabilities,
+        Err(error) => {
+            report.push(TestCase::failed(
+                "otp.capabilities",
+                format!("capability query failed: {error}"),
+            ));
+            report.push(TestCase::skipped(
+                "otp.addressed",
+                "capability query failed",
+            ));
+            report.push(TestCase::skipped("otp.consent", "capability query failed"));
+            return;
+        }
+    };
+    let capability_message = otp_capability_message(capabilities);
+    if capabilities.addressed.is_some() {
+        report.push(TestCase::passed_with_message(
+            "otp.capabilities",
+            capability_message,
+        ));
+    } else {
+        report.push(TestCase::failed(
+            "otp.capabilities",
+            format!("addressed retrieval is unavailable; {capability_message}"),
+        ));
+    }
+
+    if sms_delivery {
+        let realization = capabilities.addressed.map_or_else(
+            || "unavailable".to_owned(),
+            |realization| format!("{realization:?}"),
+        );
+        match AddressedRequest::start().await {
+            Err(error) => report.push(TestCase::failed(
+                "otp.addressed",
+                format!("start failed (realization={realization}): {error}"),
+            )),
+            Ok(request) => {
+                let body = format!("Your waterkit code is 123456 {}", request.token());
+                let files_dir = match files_dir {
+                    Ok(path) => path,
+                    Err(error) => {
+                        report.push(TestCase::failed(
+                            "otp.addressed",
+                            format!("could not resolve activity filesDir: {error}"),
+                        ));
+                        return;
+                    }
+                };
+                if let Err(error) = write_sms_request(files_dir, "5551234", &body).await {
+                    report.push(TestCase::failed(
+                        "otp.addressed",
+                        format!("could not publish test SMS request: {error}"),
+                    ));
+                    return;
+                }
+
+                match tokio::time::timeout(std::time::Duration::from_secs(30), request.message())
+                    .await
+                {
+                    Ok(Ok(message)) if message == body => {
+                        report.push(TestCase::passed_with_message(
+                            "otp.addressed",
+                            format!("received exact test SMS using {realization}"),
+                        ));
+                    }
+                    Ok(Ok(_)) => report.push(TestCase::failed(
+                        "otp.addressed",
+                        format!(
+                            "received text did not match the test SMS (realization={realization})"
+                        ),
+                    )),
+                    Ok(Err(error)) => report.push(TestCase::failed(
+                        "otp.addressed",
+                        format!("message retrieval failed (realization={realization}): {error}"),
+                    )),
+                    Err(_) => report.push(TestCase::failed(
+                        "otp.addressed",
+                        format!("timed out waiting for the test SMS (realization={realization})"),
+                    )),
+                }
+            }
+        }
+    } else {
+        report.push(TestCase::skipped(
+            "otp.addressed",
+            "no host SMS delivery: physical device",
+        ));
+    }
+
+    report.push(TestCase::skipped(
+        "otp.consent",
+        format!(
+            "needs the user's consent tap; exercised manually; consent_available={}",
+            capabilities.consent
+        ),
+    ));
+}
+
+#[cfg(feature = "otp")]
+fn otp_capability_message(capabilities: waterkit_content::otp::OtpCapabilities) -> String {
+    format!(
+        "available={} addressed={:?} consent={} one_time_code_autofill={}",
+        capabilities.available,
+        capabilities.addressed,
+        capabilities.consent,
+        capabilities.one_time_code_autofill
+    )
+}
+
+#[cfg(feature = "otp")]
+fn android_files_dir(
+    env: &mut Env<'_>,
+    activity: &JObject<'_>,
+) -> Result<std::path::PathBuf, String> {
+    let files_dir = env
+        .call_method(
+            activity,
+            jni_str!("getFilesDir"),
+            jni_sig!("()Ljava/io/File;"),
+            &[],
+        )
+        .and_then(JValueOwned::l)
+        .map_err(|error| describe_jni_error(env, error))?;
+    let path = env
+        .call_method(
+            &files_dir,
+            jni_str!("getAbsolutePath"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )
+        .and_then(JValueOwned::l)
+        .map_err(|error| describe_jni_error(env, error))?;
+    decode_string(env, &path)
+        .map(std::path::PathBuf::from)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "otp")]
+async fn write_sms_request(
+    files_dir: std::path::PathBuf,
+    sender: &str,
+    body: &str,
+) -> Result<(), String> {
+    #[derive(serde::Serialize)]
+    struct SmsRequest<'a> {
+        sender: &'a str,
+        body: &'a str,
+    }
+
+    let request_path = files_dir.join("waterkit-sms-request.json");
+    let temp_path = files_dir.join("waterkit-sms-request.json.tmp");
+    let contents =
+        serde_json::to_vec(&SmsRequest { sender, body }).map_err(|error| error.to_string())?;
+    tokio::fs::write(&temp_path, contents)
+        .await
+        .map_err(|error| error.to_string())?;
+    tokio::fs::rename(temp_path, request_path)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(feature = "screen")]

@@ -8,13 +8,15 @@ use std::path::Path;
 use std::path::PathBuf;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-fn has_ios26_background_task_apis(sdk: &str, target: &str) -> bool {
-    if !target.contains("ios") {
+fn has_ios26_background_task_apis(target: &SwiftTarget) -> bool {
+    // The iOS 26 continued-processing task APIs are unavailable in Mac
+    // Catalyst, whatever the macOS SDK version.
+    if !target.rust_target.contains("ios") || target.mac_catalyst {
         return false;
     }
 
     let output = std::process::Command::new("xcrun")
-        .args(["--sdk", sdk, "--show-sdk-version"])
+        .args(["--sdk", target.sdk, "--show-sdk-version"])
         .output();
     let Ok(output) = output else {
         return false;
@@ -488,19 +490,28 @@ struct SwiftTarget {
     swift_triple: String,
     /// The directory of the Swift runtime under the toolchain's `lib/swift`.
     runtime_dir: &'static str,
+    /// Whether this is a Mac Catalyst target. It compiles against the macOS
+    /// SDK, whose `UIKit` lives under `System/iOSSupport`, outside `swiftc`'s
+    /// default framework search path.
+    mac_catalyst: bool,
 }
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 impl SwiftTarget {
     fn from_cargo_env() -> Self {
         let rust_target = cargo_env("TARGET");
+        let mac_catalyst = rust_target.ends_with("-apple-ios-macabi");
         let (sdk, swift_triple, runtime_dir) = if rust_target.contains("ios") {
             let arch = if rust_target.contains("x86_64") {
                 "x86_64"
             } else {
                 "arm64"
             };
-            if rust_target.contains("ios-sim") {
+            if mac_catalyst {
+                // Mac Catalyst: the macOS SDK and runtime, with the `-macabi`
+                // environment selecting the iOS API surface.
+                ("macosx", format!("{arch}-apple-ios14.0-macabi"), "macosx")
+            } else if rust_target.contains("ios-sim") {
                 (
                     "iphonesimulator",
                     format!("{arch}-apple-ios14.0-simulator"),
@@ -522,6 +533,7 @@ impl SwiftTarget {
             sdk,
             swift_triple,
             runtime_dir,
+            mac_catalyst,
         }
     }
 
@@ -584,6 +596,7 @@ fn build_swift_library(
     fs::write(&combined_swift, combined).expect("Failed to write combined Swift file");
 
     let target = SwiftTarget::from_cargo_env();
+    let sdk_path = target.sdk_path();
     let obj_file = out_dir.join(format!("{module_name}.o"));
     let mut swiftc = Command::new("swiftc");
     swiftc
@@ -591,7 +604,7 @@ fn build_swift_library(
         .arg("-o")
         .arg(&obj_file)
         .arg("-sdk")
-        .arg(target.sdk_path())
+        .arg(&sdk_path)
         .arg("-import-objc-header")
         .arg(&bridging_h)
         .arg("-parse-as-library")
@@ -600,7 +613,12 @@ fn build_swift_library(
         .arg(&combined_swift)
         .arg("-target")
         .arg(&target.swift_triple);
-    if has_ios26_background_task_apis(target.sdk, &target.rust_target) {
+    if target.mac_catalyst {
+        swiftc.arg("-F").arg(format!(
+            "{sdk_path}/System/iOSSupport/System/Library/Frameworks"
+        ));
+    }
+    if has_ios26_background_task_apis(&target) {
         swiftc.arg("-D").arg("WATERKIT_HAS_IOS26_BACKGROUND_TASKS");
     }
 

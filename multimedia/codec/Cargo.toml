@@ -76,6 +76,9 @@ cros-codecs = { version = "0.0.6", default-features = false, features = ["vaapi"
 [target.'cfg(not(any(target_os = "android", target_arch = "wasm32")))'.dev-dependencies]
 image = { workspace = true, features = ["avif"] }
 
+[dev-dependencies]
+pollster.workspace = true
+
 [features]
 default = ["gpu", "software-encode"]
 # Uploads decoded frames to `wgpu` textures and converts them to linear RGBA on

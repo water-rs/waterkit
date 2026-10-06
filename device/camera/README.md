@@ -53,6 +53,14 @@ A `Frame` exposes what it holds rather than a hidden RGBA texture:
 - `Camera::frames()` yields `Result<Frame, CameraError>`: a capture or import
   failure arrives as the stream's last item.
 
+Frame timestamps: `Frame::timestamp()` reads zero on the first frame the
+camera delivered after it opened and measures every later frame on the platform's
+capture clock — the sample buffer's presentation time on Apple, the image's
+sensor timestamp (start of exposure) on Android, and the capture thread's
+receipt time on Windows and Linux. Timestamps are monotonic within one open
+but are not wall-clock time and are not comparable between cameras or
+between two opens of the same camera.
+
 What each platform delivers today:
 
 | Platform | Planes | Orientation |

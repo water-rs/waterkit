@@ -72,7 +72,10 @@ impl Image {
     }
 
     #[cfg(feature = "camera")]
-    fn from_planes(planes: &waterkit_camera::FramePlanes, orientation: Orientation) -> Self {
+    pub(crate) fn from_planes(
+        planes: &waterkit_camera::FramePlanes,
+        orientation: Orientation,
+    ) -> Self {
         Self {
             pixels: Pixels::Frame {
                 planes: planes.clone(),

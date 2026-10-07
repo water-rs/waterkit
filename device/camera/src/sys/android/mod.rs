@@ -3,13 +3,16 @@
 //! The preview `ImageReader` produces GPU-sampled `PRIVATE` buffers. Each
 //! image's `AHardwareBuffer` is imported into wgpu through
 //! `wgpu-external-frame` with no CPU access to its pixels, and the image goes
-//! back to the reader once the GPU no longer reads it. A frame's orientation
-//! combines the sensor orientation, the lens facing and the display rotation
-//! at the time the frame arrived.
+//! back to the reader once the GPU no longer reads it. The reader acquires
+//! at most a fixed number of images at once — one queued in Kotlin, one in
+//! the frame channel, and the frames a consumer still holds — so a slow or
+//! hoarding consumer drops camera frames instead of exhausting the pool. A
+//! frame's orientation combines the sensor orientation, the lens facing and
+//! the display rotation at the time the frame arrived.
 
 mod frames;
 
-use frames::{ImageLease, RawFrame};
+use frames::{FrameLease, RawFrame};
 
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
@@ -581,15 +584,18 @@ impl AndroidBridge {
         self.with_env(|env| self.frame_size_internal(env))
     }
 
-    /// Closes a preview image, returning its buffer to the reader.
-    fn close_image(&self, image: &Global<JObject<'static>>) {
-        let closed = self.with_env(|env| {
-            env.call_method(image.as_obj(), jni_str!("close"), jni_sig!("()V"), &[])
+    /// Closes a captured preview frame, returning its image to the reader
+    /// and freeing one in-flight slot so acquisition resumes.
+    fn release_frame(&self, frame: &Global<JObject<'static>>) {
+        let released = self.with_env(|env| {
+            env.call_method(frame.as_obj(), jni_str!("close"), jni_sig!("()V"), &[])
                 .map(drop)
-                .map_err(|error| CameraError::PlatformError(format!("Image.close: {error}")))
+                .map_err(|error| {
+                    CameraError::PlatformError(format!("CapturedFrame.close: {error}"))
+                })
         });
-        if let Err(error) = closed {
-            panic!("a camera image could not be returned to its reader: {error}");
+        if let Err(error) = released {
+            panic!("a camera frame could not be returned to its reader: {error}");
         }
     }
 
@@ -957,11 +963,8 @@ impl CameraHelper for Arc<AndroidBridge> {
 
     /// Takes the next preview image, if one arrives within `timeout_ms`, as a
     /// frame ready for import: a reference on its `AHardwareBuffer` and a
-    /// lease that closes the image once the GPU no longer reads it.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one linear pass over the CapturedFrame's JNI getters; splitting it would scatter a single frame's reads across helpers that share no meaning."
-    )]
+    /// lease that closes the frame — returning its image and freeing an
+    /// in-flight slot — once the GPU no longer reads it.
     fn wait_for_frame(
         &self,
         clock: &StreamClock<Duration>,
@@ -984,15 +987,6 @@ impl CameraHelper for Arc<AndroidBridge> {
                 return Ok(None);
             }
 
-            let image = env
-                .call_method(
-                    &frame_obj,
-                    jni_str!("getImage"),
-                    jni_sig!("()Landroid/media/Image;"),
-                    &[],
-                )
-                .and_then(jni::objects::JValueOwned::l)
-                .map_err(|error| CameraError::CaptureFailed(format!("getImage: {error}")))?;
             let hardware_buffer = env
                 .call_method(
                     &frame_obj,
@@ -1051,10 +1045,10 @@ impl CameraHelper for Arc<AndroidBridge> {
                 })?;
             let profile = dynamic_range_profile(profile)?;
 
-            let lease = ImageLease::new(
+            let lease = FrameLease::new(
                 Self::clone(self),
-                env.new_global_ref(&image).map_err(|error| {
-                    CameraError::CaptureFailed(format!("new_global_ref(image): {error}"))
+                env.new_global_ref(&frame_obj).map_err(|error| {
+                    CameraError::CaptureFailed(format!("new_global_ref(frame): {error}"))
                 })?,
             );
             // SAFETY: `env` is this thread's attached JNI environment and

@@ -38,6 +38,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Camera helper for waterkit-camera crate.
@@ -47,8 +48,22 @@ class CameraHelper(private val appContext: Context) {
     private companion object {
         private const val TAG = "WaterkitCamera"
 
-        /** Preview buffers: one being imported, the newest waiting, one filling. */
-        private const val PREVIEW_IMAGES = 4
+        /**
+         * Preview images the consumer may hold at once: the newest waiting
+         * in `frameQueue`, the one in the Rust reader channel, and the frames
+         * whose `HardwareBuffer` the GPU still reads. The preview listener
+         * acquires only while fewer are out, so a consumer that falls behind
+         * makes the camera drop frames instead of running the reader dry.
+         */
+        private const val PREVIEW_MAX_IN_FLIGHT = 4
+
+        /**
+         * `acquireLatestImage` acquires the next image before closing the
+         * stale ones it drains, so while it runs the reader hands out one
+         * more than were out at entry: the pool needs a spare slot above
+         * `PREVIEW_MAX_IN_FLIGHT`.
+         */
+        private const val PREVIEW_IMAGES = PREVIEW_MAX_IN_FLIGHT + 1
 
         private const val OPEN_TIMEOUT_SECONDS = 5L
         private const val SESSION_TIMEOUT_SECONDS = 5L
@@ -101,20 +116,23 @@ class CameraHelper(private val appContext: Context) {
     private var backgroundHandler: Handler? = null
 
     /**
-     * One preview frame: the `Image` from the GPU-sampled `PRIVATE` reader,
-     * its `HardwareBuffer`, and the display rotation, in degrees, when the
-     * frame arrived, plus its data space and active dynamic-range profile.
-     * Together with the sensor orientation and lens facing the rotation gives
-     * the frame's orientation.
+     * One preview frame: the `Image` acquired from the GPU-sampled `PRIVATE`
+     * reader, its `HardwareBuffer`, and the display rotation, in degrees,
+     * when the frame arrived, plus its data space and active dynamic-range
+     * profile. Together with the sensor orientation and lens facing the
+     * rotation gives the frame's orientation.
      * Below API 33 the bridge reports `DATASPACE_UNKNOWN` (0), so each
      * unspecified data-space component uses the captured profile's default.
      * The profile is captured with the image so Rust does not look it up
      * after arrival.
      *
-     * The receiver owns `image` and must close it once the GPU has finished
-     * with `hardwareBuffer`, which returns the buffer to the reader; it also
-     * closes `hardwareBuffer`, its own handle on the buffer, once it has
-     * taken a reference of its own. The pixels are never read on the CPU.
+     * The receiver owns the frame and must call [close] once the GPU has
+     * finished with `hardwareBuffer`: it returns the image to the reader,
+     * freeing one of the `PREVIEW_MAX_IN_FLIGHT` slots, and drops this
+     * handle's reference on the buffer. The receiver also closes
+     * `hardwareBuffer` itself, once it has taken a reference of its own;
+     * [close] then only releases the image. The pixels are never read on
+     * the CPU.
      */
     class CapturedFrame(
         val image: Image,
@@ -124,12 +142,49 @@ class CameraHelper(private val appContext: Context) {
         val dynamicRangeProfile: Int,
         /** The image's sensor timestamp, the start of exposure. */
         val captureTimeNs: Long,
-    )
+        /**
+         * Runs after the image is closed, on whichever thread called
+         * [close]; the reader bookkeeping lives behind it.
+         */
+        private val onClosed: () -> Unit,
+    ) {
+        private val closed = AtomicBoolean(false)
+
+        /** Returns the image and the buffer reference to the reader, once. */
+        fun close() {
+            if (closed.compareAndSet(false, true)) {
+                hardwareBuffer.close()
+                image.close()
+                onClosed()
+            }
+        }
+    }
 
     private fun imageDataSpace(image: Image): Int =
         if (Build.VERSION.SDK_INT >= 33) image.dataSpace else 0
 
     private val frameQueue: LinkedBlockingDeque<CapturedFrame> = LinkedBlockingDeque(1)
+
+    /**
+     * Preview images acquired from `previewImageReader` and not yet closed:
+     * the one waiting in `frameQueue` plus every frame leased to the
+     * consumer. Read and written only on the camera background thread,
+     * except that `closeCamera` resets it once that thread has stopped.
+     */
+    private var previewImagesInFlight = 0
+
+    /**
+     * Frames the producer wrote while `previewImagesInFlight` was at
+     * `PREVIEW_MAX_IN_FLIGHT`; they stay with the producer and are dropped.
+     * Counted and logged on the camera background thread.
+     */
+    private var previewFramesDropped = 0
+
+    /**
+     * True while [drainPreviewReader] runs; the release a stale frame's
+     * close posts back must not re-enter it.
+     */
+    private var previewDrainActive = false
     private val displayManager: DisplayManager =
         appContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
     private var latestPhotoData: ByteArray? = null
@@ -267,9 +322,9 @@ class CameraHelper(private val appContext: Context) {
             rawVideoRecordingStartElapsedRealtimeMs = 0L
 
             // PRIVATE buffers for GPU sampling reach the GPU as they are; the
-            // driver describes their YCbCr layout and encoding. The pool has
-            // room for the frame being imported, the newest waiting one, and
-            // one the camera is filling.
+            // driver describes their YCbCr layout and encoding. The pool is
+            // one slot wider than the number of images the consumer may hold
+            // at once, so `acquireLatestImage` always has a slot to take.
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                 throw IllegalStateException(
                     "GPU-sampled camera frames need Android 10 (API 29); this device runs API ${Build.VERSION.SDK_INT}",
@@ -298,29 +353,7 @@ class CameraHelper(private val appContext: Context) {
             }
 
             previewImageReader?.setOnImageAvailableListener({ reader ->
-                val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-                val buffer = image.hardwareBuffer
-                if (buffer == null) {
-                    image.close()
-                    throw IllegalStateException("a GPU-sampled camera image carries no HardwareBuffer")
-                }
-                frameWidth = image.width
-                frameHeight = image.height
-                // Newest wins: a frame nobody took yet goes back to the reader.
-                frameQueue.pollLast()?.let { stale ->
-                    stale.hardwareBuffer.close()
-                    stale.image.close()
-                }
-                frameQueue.offerLast(
-                    CapturedFrame(
-                        image,
-                        buffer,
-                        displayRotationDegrees(),
-                        imageDataSpace(image),
-                        selectedDynamicRangeProfile,
-                        image.timestamp,
-                    ),
-                )
+                drainPreviewReader(reader, handler)
             }, handler)
 
             rawImageReader?.setOnImageAvailableListener({ reader ->
@@ -799,6 +832,9 @@ class CameraHelper(private val appContext: Context) {
     /**
      * Wait for the next available frame and consume it.
      * Returns null on timeout or if no frame is available.
+     *
+     * The returned frame keeps one of the `PREVIEW_MAX_IN_FLIGHT` slots
+     * until its [CapturedFrame.close] runs.
      */
     fun waitForNextFrame(timeoutMs: Int): CapturedFrame? {
         return try {
@@ -810,6 +846,91 @@ class CameraHelper(private val appContext: Context) {
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()
             null
+        }
+    }
+
+    /**
+     * Takes the newest pending preview image while a slot is free, evicting
+     * the queued frame nobody took — newest wins. Runs only on the camera
+     * background thread; the counter it reads is mutated there alone.
+     *
+     * When `PREVIEW_MAX_IN_FLIGHT` images are already out this acquires
+     * nothing, so `acquireLatestImage` always has a spare `PREVIEW_IMAGES`
+     * slot: the pending frame stays with the producer and is dropped once a
+     * leased image's close re-arms the drain through [releasePreviewImage].
+     */
+    private fun drainPreviewReader(reader: ImageReader, handler: Handler) {
+        if (reader !== previewImageReader || previewDrainActive) {
+            return
+        }
+        previewDrainActive = true
+        try {
+            while (true) {
+                if (previewImagesInFlight >= PREVIEW_MAX_IN_FLIGHT) {
+                    previewFramesDropped += 1
+                    if (previewFramesDropped == 1) {
+                        Log.i(
+                            TAG,
+                            "preview consumer holds $PREVIEW_MAX_IN_FLIGHT frames; " +
+                                "dropping until one returns",
+                        )
+                    }
+                    return
+                }
+                val image = reader.acquireLatestImage() ?: return
+                previewImagesInFlight += 1
+                if (previewFramesDropped != 0) {
+                    Log.i(TAG, "preview resumed after dropping $previewFramesDropped frames")
+                    previewFramesDropped = 0
+                }
+                val buffer = image.hardwareBuffer
+                if (buffer == null) {
+                    image.close()
+                    previewImagesInFlight -= 1
+                    throw IllegalStateException(
+                        "a GPU-sampled camera image carries no HardwareBuffer",
+                    )
+                }
+                frameWidth = image.width
+                frameHeight = image.height
+                // Newest wins: a frame nobody took yet goes back to the reader.
+                frameQueue.pollLast()?.let { stale -> stale.close() }
+                frameQueue.offerLast(
+                    CapturedFrame(
+                        image,
+                        buffer,
+                        displayRotationDegrees(),
+                        imageDataSpace(image),
+                        selectedDynamicRangeProfile,
+                        image.timestamp,
+                    ) {
+                        releasePreviewImage(reader, handler)
+                    },
+                )
+            }
+        } finally {
+            previewDrainActive = false
+        }
+    }
+
+    /**
+     * A leased preview image was closed on some thread: free one in-flight
+     * slot, then re-check the reader for the newest image that waited for
+     * it. Runs on the camera background thread — [close] on another thread
+     * posts here; once the session's looper is gone the slot count has been
+     * reset anyway, so a close during teardown is dropped.
+     */
+    private fun releasePreviewImage(reader: ImageReader, handler: Handler) {
+        val released = Runnable {
+            if (reader === previewImageReader) {
+                previewImagesInFlight -= 1
+                drainPreviewReader(reader, handler)
+            }
+        }
+        if (handler.looper.isCurrentThread) {
+            released.run()
+        } else if (handler.looper.thread.isAlive) {
+            handler.post(released)
         }
     }
 
@@ -878,11 +999,16 @@ class CameraHelper(private val appContext: Context) {
         releaseRecorder()
         stopRawVideoRecordingInternal()
 
+        // The background thread is dead by now, so the frames' closes could
+        // not post their bookkeeping anyway; the count resets below.
         while (true) {
             val stale = frameQueue.pollFirst() ?: break
             stale.hardwareBuffer.close()
             stale.image.close()
         }
+        previewImagesInFlight = 0
+        previewFramesDropped = 0
+        previewDrainActive = false
         synchronized(photoLock) {
             latestPhotoData = null
             pendingPhotoLatch?.countDown()

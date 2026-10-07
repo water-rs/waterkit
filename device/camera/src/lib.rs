@@ -843,6 +843,13 @@ impl Camera {
     /// describes only through an external format are converted on the GPU,
     /// which needs nothing beyond what `request_device` enables; whether the
     /// camera's buffers are converted shows only on the first frame.
+    ///
+    /// On Android a frame pins its camera buffer until the GPU no longer
+    /// reads it and the frame is dropped, and at most four preview images
+    /// can be out at once — one queued in the camera helper, one in the
+    /// reader channel, and the frames the consumer still holds. A consumer
+    /// may keep at most two frames alive at once; holding more makes the
+    /// camera drop new frames until one comes back.
     pub fn frames(&self) -> impl futures::Stream<Item = Result<Frame, CameraError>> + '_ {
         self.inner.frames()
     }

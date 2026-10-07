@@ -75,8 +75,9 @@ capture buffer returns to the pool when the frame drops and the GPU work
 submitted until then finishes; on Android the camera's `AHardwareBuffer` is
 imported through `wgpu-external-frame`, which returns it to the reader once
 the frame drops and the GPU no longer reads it. On both, a consumer that holds
-frames empties the pool and the camera drops new frames until one comes back,
-so drop each frame as soon as its work is submitted.
+frames empties the pool and the camera drops new frames until one comes back —
+on Android at most two frames may be held at once — so drop each frame as soon
+as its work is submitted.
 
 On Android, open the device with
 `wgpu_external_frame::ahardware_buffer::request_device` (re-exported as

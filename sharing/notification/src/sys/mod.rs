@@ -3,10 +3,16 @@ pub mod android;
 #[cfg(target_os = "android")]
 pub use android::{NotificationHandleInner, show_notification};
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(target_os = "linux")]
 mod desktop;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(target_os = "linux")]
 pub use desktop::{NotificationHandleInner, show_notification};
+
+// Windows: Direct WinRT toasts through windows-rs
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::{NotificationHandleInner, show_notification};
 
 // iOS: Always use native UserNotifications framework
 #[cfg(target_os = "ios")]

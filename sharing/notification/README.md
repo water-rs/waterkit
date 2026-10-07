@@ -7,12 +7,14 @@ Cross-platform local notifications for Rust.
 | Feature | Linux | macOS | Windows | iOS | Android |
 |---------|:-----:|:-----:|:-------:|:---:|:-------:|
 | title/body | ✓ | ✓ | ✓ | ✓ | ✓ |
-| icon | ✓ | ✓ | ✓ | ✗ | ✗ |
+| icon | ✓ | ✓ | ✓* | ✗ | ✗ |
 | subtitle | ✗ | ✓ | ✗ | ✓ | ✗ |
 | interruption_level | ✓ | ✗ | ✗ | ✓ | ✓ |
-| timeout | ✓ | ✗ | ✗ | ✗ | ✗ |
-| sound | ✓ | ✗ | ✗ | ✓ | ✓ |
-| actions (URL) | ✓ | ✓ | ✗ | ✓ | ✓ |
+| timeout | ✓ | ✗ | ✓ | ✗ | ✗ |
+| sound | ✓ | ✗ | ✓* | ✓ | ✓ |
+| actions (URL) | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+*Windows: `Icon::File` only (theme icons are a freedesktop concept); `Sound::Default`/`Sound::Suppress` only (toast audio cannot play theme names or arbitrary files).
 
 ## Installation
 
@@ -102,7 +104,7 @@ Notification::new()
 |----------|---------|
 | Linux | D-Bus (freedesktop.org notifications) |
 | macOS | `UserNotifications` (bundled apps) / `notify-rust` (CLI) |
-| Windows | `notify-rust` (winrt-notification) |
+| Windows | `WinRT` `Windows.UI.Notifications` via `windows` |
 | iOS | `UserNotifications` framework |
 | Android | `NotificationManager` with channels |
 

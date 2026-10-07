@@ -45,12 +45,15 @@
 //! | title/body | ✓ | ✓ | ✓ | ✓ | ✓ |
 //! | icon | ✓ | ✓ | ✓ | ✗ | ✗ |
 //! | subtitle | ✗ | ✓ | ✗ | ✓ | ✗ |
-//! | interruption_level | ✓ | ✗ | ✗ | ✓ | ✓ |
-//! | timeout | ✓ | ✗ | ✗ | ✗ | ✗ |
-//! | sound | ✓ | ✗ | ✗ | ✓ | ✓ |
-//! | actions (URL) | ✓ | ✓ | ✗ | ✓ | ✓ |
+//! | `interruption_level` | ✓ | ✗ | ✗ | ✓ | ✓ |
+//! | timeout | ✓ | ✗ | ✓ | ✗ | ✗ |
+//! | sound | ✓ | ✗ | ✓* | ✓ | ✓ |
+//! | actions (URL) | ✓ | ✓ | ✓ | ✓ | ✓ |
 //! | quick reply | ✗ | ✓ | ✗ | ✓ | ✓ |
 //! | update by ID | ✓ | ✓ | ✓ | ✓ | ✓ |
+//!
+//! *Windows: `Sound::Default` and `Sound::Suppress` are honored; theme
+//! names and sound files have no `ms-winsoundevent` equivalent.
 
 mod error;
 mod sys;
@@ -390,7 +393,9 @@ impl Notification {
 
     /// Set the notification icon.
     ///
-    /// **Desktop only**: On mobile platforms, this is ignored.
+    /// **Desktop only**: On mobile platforms, this is ignored. On Windows
+    /// only [`Icon::File`] is supported; theme icons are a freedesktop
+    /// concept with no `WinRT` equivalent.
     #[must_use]
     pub fn icon(mut self, icon: Icon) -> Self {
         self.icon = Some(icon);
@@ -400,7 +405,9 @@ impl Notification {
     /// Set the notification sound.
     ///
     /// **Linux/iOS/Android**: Custom sounds are supported.
-    /// **macOS/Windows**: Only default sound is used.
+    /// **Windows**: `Default` and `Suppress` are honored; custom sounds
+    /// are ignored.
+    /// **macOS**: Only default sound is used.
     #[must_use]
     pub fn sound(mut self, sound: Sound) -> Self {
         self.sound = Some(sound);
@@ -416,7 +423,8 @@ impl Notification {
 
     /// Set the timeout duration for the notification.
     ///
-    /// **Linux only**: On other platforms, this is ignored.
+    /// **Linux and Windows**: Ignored on other platforms. On Windows the
+    /// timeout maps onto a short (~7s) or long (~25s) toast duration.
     #[must_use]
     pub const fn timeout(mut self, timeout: Timeout) -> Self {
         self.timeout = timeout;

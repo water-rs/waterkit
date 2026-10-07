@@ -27,6 +27,8 @@ shaderloom = { workspace = true, features = ["runtime"] }
 wgpu-external-frame.workspace = true
 # The YCbCr mode codes the converter's shaders take.
 waterkit-video-core.workspace = true
+# CPU conversion for offline raw-video decoding and desktop recording.
+yuv = "0.8.16"
 
 [build-dependencies]
 waterkit-build.workspace = true
@@ -63,15 +65,14 @@ winit = { workspace = true, features = ["android-native-activity"] }
 wasm-bindgen-futures = "0.4"
 
 # Desktop platforms (Windows, Linux) - use nokhwa. Recording encodes through
-# waterkit-codec (hardware encoders plus the software AV1 fallback) and muxes
-# with waterkit-video-container; `yuv` does the RGBA to NV12 conversion.
+# waterkit-codec and muxes with waterkit-video-container. `yuv` is a common
+# dependency because the public WKRV reader converts NV12 on every platform.
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 nokhwa = { workspace = true, features = ["input-native"] }
 # `software-encode` carries the rav1e AV1 encoder; the `vaapi` feature adds
 # the VA-API hardware encoders via cros-codecs on Linux.
 waterkit-codec = { workspace = true, features = ["software-encode"] }
 waterkit-video-container.workspace = true
-yuv = "0.8.16"
 
 # Apple platforms (iOS, macOS) - use native AVCaptureSession
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]

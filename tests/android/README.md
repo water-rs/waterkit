@@ -36,7 +36,11 @@ cargo run -p waterkit-test -- android .
 Passing the workspace root (`.`) enables every supported Android harness
 feature in one APK so they can be exercised together on a connected device.
 
-The Android app also keeps the manual UI buttons for local exploration.
+The Android app also keeps the manual UI buttons for local exploration. The
+OTP section can start addressed SMS and User Consent requests; do not run
+either manual request while the native test report is running. The driver
+enables host SMS delivery only when `ro.boot.qemu` reports `1`; physical
+devices skip addressed-message delivery.
 
 ## Adding new crates to test
 

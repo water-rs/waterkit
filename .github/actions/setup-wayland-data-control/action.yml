@@ -22,8 +22,8 @@ runs:
       id: sway
       shell: bash
       run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends sway wl-clipboard
+        sudo apt-get -c "$GITHUB_WORKSPACE/.github/apt.conf" update
+        sudo apt-get -c "$GITHUB_WORKSPACE/.github/apt.conf" install -y --no-install-recommends sway wl-clipboard
         runtime_dir="$RUNNER_TEMP/sway-runtime"
         mkdir -m 0700 "$runtime_dir"
         ready="$RUNNER_TEMP/sway-ready"

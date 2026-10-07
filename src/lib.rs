@@ -139,3 +139,6 @@ pub use waterkit_passkey as passkey;
 #[cfg(feature = "menu")]
 #[doc(inline)]
 pub use waterkit_menu as menu;
+#[cfg(feature = "otp")]
+#[doc(inline)]
+pub use waterkit_otp as otp;

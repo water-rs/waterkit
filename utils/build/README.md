@@ -42,6 +42,28 @@ use waterkit_build::{DexHelper, dex_helper};
 static HELPER: DexHelper = dex_helper!("com.example.Helper");
 ```
 
+## Activity results
+
+Android crates that need to launch an activity and await its result can enable
+the `activity-result` feature. The feature ships
+`waterkit.build.ActivityResultHelper` once through the shared build crate,
+declares the `androidx.activity:activity:1.11.0` dependency, and exposes
+typed Rust APIs:
+
+```rust,ignore
+use waterkit_build::{ResultCode, start_activity_for_result};
+
+let pending = start_activity_for_result(&mut env, &intent)?;
+let result = pending.await?;
+if result.code() == ResultCode::Ok {
+    let data = result.into_data();
+}
+```
+
+The helper registers an AndroidX activity-result contract on the host
+`ComponentActivity`, so host applications do not need request codes,
+`onActivityResult` forwarding, or JNI callback glue of their own.
+
 ## License
 
 MIT OR Apache-2.0

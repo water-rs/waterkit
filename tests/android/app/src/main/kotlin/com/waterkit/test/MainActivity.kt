@@ -30,6 +30,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logText: TextView
     private var pendingNativeTest = false
     private var pendingSmsDelivery = false
+    private var pendingInteractiveTest = false
     private var nativeTestRunning = false
     private var manualOtpRunning = false
     
@@ -52,7 +53,7 @@ class MainActivity : AppCompatActivity() {
     
     // Generic runner
     private external fun runTest(activity: AppCompatActivity)
-    private external fun runTestReport(activity: AppCompatActivity, smsDelivery: Boolean): String
+    private external fun runTestReport(activity: AppCompatActivity, smsDelivery: Boolean, interactive: Boolean): String
     private external fun testOtpAddressed(activity: AppCompatActivity)
     private external fun testOtpConsent(activity: AppCompatActivity)
     
@@ -93,7 +94,7 @@ class MainActivity : AppCompatActivity() {
         
         // Generic Native Test
         layout.addView(testButton("Run Generic Native Test") {
-            runNativeTest()
+            runNativeTest(false)
         })
 
         // Permission Tests
@@ -198,7 +199,9 @@ class MainActivity : AppCompatActivity() {
             pendingNativeTest = false
             val smsDelivery = pendingSmsDelivery
             pendingSmsDelivery = false
-            runNativeTest(smsDelivery)
+            val interactive = pendingInteractiveTest
+            pendingInteractiveTest = false
+            runNativeTest(smsDelivery, interactive)
         }
     }
 
@@ -207,6 +210,8 @@ class MainActivity : AppCompatActivity() {
             intent.removeExtra("run_test")
             pendingSmsDelivery = intent.getBooleanExtra("sms_delivery", false)
             intent.removeExtra("sms_delivery")
+            pendingInteractiveTest = intent.getBooleanExtra("interactive", false)
+            intent.removeExtra("interactive")
             // The runner wakes the device just before launch. From here until
             // the report is written this window keeps the screen on, so the
             // screen timeout cannot take focus away mid-run. The flag belongs
@@ -222,10 +227,12 @@ class MainActivity : AppCompatActivity() {
         pendingNativeTest = false
         val smsDelivery = pendingSmsDelivery
         pendingSmsDelivery = false
-        runNativeTest(smsDelivery)
+        val interactive = pendingInteractiveTest
+        pendingInteractiveTest = false
+        runNativeTest(smsDelivery, interactive)
     }
 
-    private fun runNativeTest(smsDelivery: Boolean = false) {
+    private fun runNativeTest(smsDelivery: Boolean = false, interactive: Boolean = false) {
         if (nativeTestRunning || manualOtpRunning) {
             log("Native test not started: another native OTP/test operation is active")
             return
@@ -241,7 +248,7 @@ class MainActivity : AppCompatActivity() {
         Thread {
             var restoreFailure: Throwable? = null
             val report = try {
-                runTestReport(this, smsDelivery)
+                runTestReport(this, smsDelivery, interactive)
             } finally {
                 try {
                     restorePrimaryClip(savedClip)

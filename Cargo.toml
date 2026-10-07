@@ -187,6 +187,7 @@ waterkit-otp = { path = "identity/otp", version = "0.1.4" }
 enumset = "1.1"
 futures = "0.3"
 icu_locale_core = { version = "2", features = ["alloc"] }
+futures-channel = "0.3"
 smallvec = "1.15"
 async-channel = "2.5"
 async-fs = "2"

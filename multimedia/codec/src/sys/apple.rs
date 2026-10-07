@@ -13,6 +13,7 @@ use objc2_core_foundation::CFRetained;
 use objc2_core_video::{
     CVPixelBuffer, CVPixelBufferCreate, CVPixelBufferLockBaseAddress,
     CVPixelBufferUnlockBaseAddress, kCVPixelBufferPixelFormatTypeKey,
+    kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
     kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
 };
 use objc2_io_surface::IOSurfaceRef;
@@ -24,6 +25,9 @@ use std::fmt;
 use std::ptr;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
+use waterkit_video_core::{
+    ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo,
+};
 
 /// Internal codec type for Apple implementations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +50,25 @@ unsafe extern "C" {
     static kCFAllocatorDefault: *const c_void;
     static kCFTypeDictionaryKeyCallBacks: c_void;
     static kCFTypeDictionaryValueCallBacks: c_void;
+    static kVTCompressionPropertyKey_ColorPrimaries: *const c_void;
+    static kVTCompressionPropertyKey_TransferFunction: *const c_void;
+    static kVTCompressionPropertyKey_YCbCrMatrix: *const c_void;
+    static kCVImageBufferColorPrimaries_ITU_R_709_2: *const c_void;
+    static kCVImageBufferColorPrimaries_SMPTE_C: *const c_void;
+    static kCVImageBufferColorPrimaries_ITU_R_2020: *const c_void;
+    static kCVImageBufferColorPrimaries_P3_D65: *const c_void;
+    static kCVImageBufferTransferFunction_ITU_R_709_2: *const c_void;
+    static kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ: *const c_void;
+    static kCVImageBufferTransferFunction_ITU_R_2100_HLG: *const c_void;
+    static kCVImageBufferYCbCrMatrix_ITU_R_601_4: *const c_void;
+    static kCVImageBufferYCbCrMatrix_ITU_R_709_2: *const c_void;
+    static kCVImageBufferYCbCrMatrix_ITU_R_2020: *const c_void;
+
+    fn VTSessionSetProperty(
+        session: *const c_void,
+        property_key: *const c_void,
+        property_value: *const c_void,
+    ) -> i32;
 
     fn CMSampleBufferGetFormatDescription(sbuf: *mut CMSampleBuffer) -> *const c_void;
     fn CMFormatDescriptionGetExtension(desc: *const c_void, key: *const c_void) -> *const c_void;
@@ -177,6 +200,7 @@ pub struct AppleEncoder {
     width: u32,
     height: u32,
     frame_count: i64,
+    color: VideoColorInfo,
 }
 
 impl fmt::Debug for AppleEncoder {
@@ -505,7 +529,7 @@ impl AppleEncoder {
     /// Create a new Apple hardware encoder with default 1080p dimensions.
     #[allow(dead_code)]
     pub fn new(codec: CodecType) -> Result<Self, CodecError> {
-        Self::with_size(codec, 1920, 1080)
+        Self::with_size(codec, 1920, 1080, VideoColorInfo::default())
     }
 
     /// Create encoder with specific dimensions.
@@ -517,7 +541,12 @@ impl AppleEncoder {
     /// # Panics
     ///
     /// Panics if the internal session pointer cannot be wrapped in `NonNull`.
-    pub fn with_size(codec: CodecType, width: u32, height: u32) -> Result<Self, CodecError> {
+    pub fn with_size(
+        codec: CodecType,
+        width: u32,
+        height: u32,
+        color: VideoColorInfo,
+    ) -> Result<Self, CodecError> {
         let codec_type = match codec {
             CodecType::H264 => kCMVideoCodecType_H264,
             CodecType::H265 => kCMVideoCodecType_HEVC,
@@ -554,6 +583,7 @@ impl AppleEncoder {
 
         let session = unsafe { Retained::retain(session_ptr) }
             .ok_or_else(|| CodecError::InitializationFailed("Failed to retain session".into()))?;
+        set_video_toolbox_color(&session, color)?;
 
         Ok(Self {
             session,
@@ -561,6 +591,7 @@ impl AppleEncoder {
             width,
             height,
             frame_count: 0,
+            color,
         })
     }
 
@@ -701,7 +732,10 @@ impl AppleEncoder {
                 None,
                 self.width as usize,
                 self.height as usize,
-                kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                match self.color.range {
+                    ColorRange::Full => kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+                    ColorRange::Limited => kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+                },
                 None,
                 NonNull::new(&raw mut pixel_buffer_ptr).unwrap(),
             );
@@ -819,6 +853,62 @@ impl AppleEncoder {
             .map(|lock| lock.clone())
             .map_err(|_| CodecError::EncodingFailed("Lock error".into()))
     }
+}
+
+fn set_video_toolbox_color(
+    session: &VTCompressionSession,
+    color: VideoColorInfo,
+) -> Result<(), CodecError> {
+    if color.dolby_vision {
+        return Err(CodecError::Unsupported(
+            "VideoToolbox cannot signal Dolby Vision metadata".into(),
+        ));
+    }
+    let primaries = unsafe {
+        match color.primaries {
+            ColorPrimaries::Bt709 => kCVImageBufferColorPrimaries_ITU_R_709_2,
+            ColorPrimaries::Bt601 => kCVImageBufferColorPrimaries_SMPTE_C,
+            ColorPrimaries::Bt2020 => kCVImageBufferColorPrimaries_ITU_R_2020,
+            ColorPrimaries::DisplayP3 => kCVImageBufferColorPrimaries_P3_D65,
+        }
+    };
+    let transfer = unsafe {
+        match color.transfer {
+            TransferFunction::Sdr => kCVImageBufferTransferFunction_ITU_R_709_2,
+            TransferFunction::Pq => kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ,
+            TransferFunction::Hlg => kCVImageBufferTransferFunction_ITU_R_2100_HLG,
+        }
+    };
+    let matrix = match color.matrix {
+        MatrixCoefficients::Bt601 => unsafe { kCVImageBufferYCbCrMatrix_ITU_R_601_4 },
+        MatrixCoefficients::Bt709 => unsafe { kCVImageBufferYCbCrMatrix_ITU_R_709_2 },
+        MatrixCoefficients::Bt2020NonConstantLuminance => unsafe {
+            kCVImageBufferYCbCrMatrix_ITU_R_2020
+        },
+        MatrixCoefficients::Bt2020ConstantLuminance => {
+            return Err(CodecError::Unsupported(
+                "VideoToolbox cannot represent BT.2020 constant-luminance matrix coefficients"
+                    .into(),
+            ));
+        }
+    };
+    let session_ptr = ptr::from_ref(session).cast::<c_void>();
+    let properties = unsafe {
+        [
+            (kVTCompressionPropertyKey_ColorPrimaries, primaries),
+            (kVTCompressionPropertyKey_TransferFunction, transfer),
+            (kVTCompressionPropertyKey_YCbCrMatrix, matrix),
+        ]
+    };
+    for (property_key, property_value) in properties {
+        let status = unsafe { VTSessionSetProperty(session_ptr, property_key, property_value) };
+        if status != 0 {
+            return Err(CodecError::InitializationFailed(format!(
+                "VTSessionSetProperty color metadata failed: {status}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 struct DecoderContext {
@@ -1274,13 +1364,14 @@ pub fn open_encoder(
     codec: crate::CodecType,
     width: u32,
     height: u32,
+    color: VideoColorInfo,
 ) -> Result<crate::EncoderInner, CodecError> {
     let codec = match codec {
         crate::CodecType::H264 => CodecType::H264,
         crate::CodecType::H265 => CodecType::H265,
         crate::CodecType::Av1 => unreachable!(),
     };
-    AppleEncoder::with_size(codec, width, height).map(crate::EncoderInner::Apple)
+    AppleEncoder::with_size(codec, width, height, color).map(crate::EncoderInner::Apple)
 }
 
 #[cfg(test)]

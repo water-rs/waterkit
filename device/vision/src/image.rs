@@ -81,7 +81,12 @@ impl Image {
 
     /// Mutable access for tests that need to construct a `Pixels` variant no
     /// public constructor produces, like a frame carrying its pixel buffer.
-    #[cfg(test)]
+    #[cfg(all(
+        test,
+        feature = "camera",
+        feature = "barcode",
+        any(target_os = "ios", target_os = "macos")
+    ))]
     pub(crate) const fn pixels_mut(&mut self) -> &mut Pixels {
         &mut self.pixels
     }

@@ -24,6 +24,10 @@ objc2.workspace = true
 objc2-foundation = { workspace = true, features = ["NSString"] }
 objc2-app-kit.workspace = true
 
+[dev-dependencies]
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
     "Win32_Foundation",

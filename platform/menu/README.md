@@ -13,8 +13,8 @@ Native application menu bar for macOS and Windows.
   crate). `MenuBar::attach` subclasses the window with `SetWindowSubclass` so
   `WM_COMMAND` activations reach the bar's event stream; the returned
   `Attachment` removes the subclass and detaches the menu on drop.
-- **Other platforms** — no application menu-bar object exists, so
-  `MenuBar::new` fails with `MenuError::Unsupported`.
+- **Other platforms** — `MenuBar` does not exist there at all, so code that
+  tries to use it fails to compile.
 
 ## Shortcuts
 
@@ -26,9 +26,17 @@ equivalent — on macOS `Delete` is `NSDeleteFunctionKey` (U+F728) and
 virtual-key code and accelerator text. A key with no mapping fails
 `MenuBar::new` with `MenuError::UnmappableKey` — never silently dropped.
 
-On Windows the shortcut shows as accelerator text next to the item title.
-Message pumps such as winit's never call `TranslateAcceleratorW`, so chords do
-not fire through the menu: the host dispatches the chord itself.
+On Windows the shortcut shows as accelerator text next to the item title, and
+`MenuBar::accelerator_table` exposes a matching `HACCEL`: hosts that call
+`TranslateAcceleratorW` in their message pump get chord activations reported
+as the command's `CommandId` on `events()`. Hosts that never translate
+accelerators dispatch chords themselves.
+
+`CommandId`s are caller-supplied and must be unique within a bar
+(`MenuError::DuplicateCommandId` otherwise). On Windows the bar assigns its
+own 16-bit item ids, so a process can build far more than 65,535 commands
+across bars; a single bar that runs out reports
+`MenuError::ItemLimitExceeded`.
 
 ## Activation
 

@@ -16,7 +16,7 @@ use objc2_app_kit::{
     NSMenuItem,
 };
 use waterkit_menu::{
-    Command, Entry, Key, MenuBar, Modifiers, NamedKey, Shortcut, StandardItem, Submenu,
+    Command, CommandId, Entry, Key, MenuBar, Modifiers, NamedKey, Shortcut, StandardItem, Submenu,
 };
 use waterkit_test_report::{TestCase, TestReport, write_report_block_to_stdout};
 
@@ -39,28 +39,28 @@ fn run(report: &mut TestReport) {
         return;
     };
 
-    let open = Command::new("Open").shortcut(Shortcut::new(
+    let open_id = CommandId::new(1);
+    let save_id = CommandId::new(2);
+    let word_wrap_id = CommandId::new(3);
+    let open = Command::new(open_id, "Open").shortcut(Shortcut::new(
         Key::Character("o".into()),
         Modifiers::COMMAND,
     ));
-    let save = Command::new("Save")
+    let save = Command::new(save_id, "Save")
         .shortcut(Shortcut::new(
             Key::Character("s".into()),
             Modifiers::COMMAND | Modifiers::SHIFT,
         ))
         .enabled(false);
-    let word_wrap = Command::new("Word Wrap").checked(true);
-    let delete_forward = Command::new("Delete Forward")
+    let word_wrap = Command::new(word_wrap_id, "Word Wrap").checked(true);
+    let delete_forward = Command::new(CommandId::new(4), "Delete Forward")
         .shortcut(Shortcut::new(NamedKey::Delete, Modifiers::empty()));
-    let delete_backward = Command::new("Delete Backward")
+    let delete_backward = Command::new(CommandId::new(5), "Delete Backward")
         .shortcut(Shortcut::new(NamedKey::Backspace, Modifiers::empty()));
-    let close_window = Command::new("Close Tab").shortcut(Shortcut::new(
+    let close_window = Command::new(CommandId::new(6), "Close Tab").shortcut(Shortcut::new(
         NamedKey::Tab,
         Modifiers::COMMAND | Modifiers::CONTROL,
     ));
-    let open_id = open.id();
-    let save_id = save.id();
-    let word_wrap_id = word_wrap.id();
 
     let bar = match MenuBar::new([
         Submenu::new("Test App")
@@ -83,7 +83,7 @@ fn run(report: &mut TestReport) {
             .entry(open)
             .entry(save)
             .entry(Entry::Separator)
-            .entry(Submenu::new("Recent").entry(Command::new("One"))),
+            .entry(Submenu::new("Recent").entry(Command::new(CommandId::new(7), "One"))),
         Submenu::new("Edit")
             .entry(word_wrap)
             .entry(delete_forward)

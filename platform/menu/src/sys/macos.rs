@@ -40,9 +40,12 @@ define_class!(
         #[unsafe(method(waterkitMenuCommandActivate:))]
         fn activate(&self, _sender: &NSMenuItem) {
             let ivars = self.ivars();
-            // The channel is unbounded, so `try_send` cannot fail while a
-            // receiver lives; a dropped bar simply stops reporting.
-            let _ = ivars.sender.try_send(ivars.command_id);
+            // The channel is unbounded and the bar holds a receiver, so
+            // `try_send` cannot fail while the bar is alive.
+            ivars
+                .sender
+                .try_send(ivars.command_id)
+                .expect("waterkit-menu: the event channel is closed while the bar is alive");
         }
     }
 );
@@ -164,6 +167,9 @@ impl MenuBarInner {
         mtm: MainThreadMarker,
         sender: &Sender<CommandId>,
     ) -> Result<Retained<NSMenuItem>, MenuError> {
+        if self.commands.contains_key(&command.id()) {
+            return Err(MenuError::DuplicateCommandId(command.id()));
+        }
         let item = NSMenuItem::new(mtm);
         item.setTitle(&NSString::from_str(&command.title));
         if let Some(shortcut) = &command.shortcut {
@@ -453,7 +459,7 @@ mod tests {
     #[test]
     fn submenu_builder_collects_entries() {
         let submenu = Submenu::new("File")
-            .entry(Command::new("Open"))
+            .entry(Command::new(CommandId::new(1), "Open"))
             .entry(Entry::Separator)
             .entry(StandardItem::ShowAll);
         assert_eq!(submenu.entries.len(), 3);
@@ -461,9 +467,8 @@ mod tests {
     }
 
     #[test]
-    fn command_ids_are_unique() {
-        let a = Command::new("a").id();
-        let b = Command::new("b").id();
-        assert_ne!(a, b);
+    fn command_keeps_the_supplied_id() {
+        let command = Command::new(CommandId::new(42), "a");
+        assert_eq!(command.id(), CommandId::new(42));
     }
 }

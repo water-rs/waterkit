@@ -9,8 +9,3 @@ pub use macos::*;
 mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::*;
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-mod fallback;
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub use fallback::*;

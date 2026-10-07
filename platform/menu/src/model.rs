@@ -5,31 +5,30 @@
 //! Windows) can turn them into a [`MenuBar`](crate::MenuBar).
 
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use keyboard_types::Key;
 
-/// Identifier of a [`Command`], assigned when the command is constructed.
+/// Identifier of a [`Command`], supplied by the caller at construction.
 ///
 /// Activation events delivered by [`MenuBar::events`](crate::MenuBar::events)
-/// carry this id. Ids are unique for the lifetime of the process, so ids from
-/// different bars can never collide inside one `events()` stream.
+/// carry this id. Ids must be unique within one [`MenuBar`](crate::MenuBar);
+/// [`MenuBar::new`](crate::MenuBar::new) fails with
+/// [`MenuError::DuplicateCommandId`](crate::MenuError::DuplicateCommandId)
+/// on a repeated id. Different bars may reuse ids freely — each bar owns its
+/// own stream.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CommandId(u64);
 
 impl CommandId {
-    /// Returns the next unique id.
-    ///
-    /// This counter exists only to hand out unique ids; it is not part of the
-    /// activation path, which is fully contained in each [`MenuBar`](crate::MenuBar).
-    fn next() -> Self {
-        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    /// Creates a command id from a caller-chosen number.
+    #[must_use]
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
     }
 
-    /// The numeric id, used as the Win32 menu-item identifier on Windows.
-    #[cfg(target_os = "windows")]
-    pub(crate) const fn raw(self) -> u64 {
+    /// The caller-chosen number this id was created with.
+    #[must_use]
+    pub const fn raw(self) -> u64 {
         self.0
     }
 }
@@ -107,9 +106,9 @@ impl From<StandardItem> for Entry {
 
 /// An actionable menu item.
 ///
-/// The item's [`CommandId`] is assigned at construction; after the bar is
-/// built, [`MenuBar::events`](crate::MenuBar::events) yields it each time the
-/// item is chosen or its accelerator is pressed.
+/// The caller supplies the item's [`CommandId`]; after the bar is built,
+/// [`MenuBar::events`](crate::MenuBar::events) yields it each time the item
+/// is chosen or its accelerator is pressed.
 #[derive(Debug)]
 pub struct Command {
     pub(crate) id: CommandId,
@@ -120,10 +119,10 @@ pub struct Command {
 }
 
 impl Command {
-    /// Creates a command with the given title, enabled and unchecked.
-    pub fn new(title: impl Into<String>) -> Self {
+    /// Creates a command with the given id and title, enabled and unchecked.
+    pub fn new(id: CommandId, title: impl Into<String>) -> Self {
         Self {
-            id: CommandId::next(),
+            id,
             title: title.into(),
             shortcut: None,
             enabled: true,
@@ -154,7 +153,7 @@ impl Command {
         self
     }
 
-    /// The id this command was assigned at construction.
+    /// The id this command was created with.
     #[must_use]
     pub const fn id(&self) -> CommandId {
         self.id
@@ -163,10 +162,11 @@ impl Command {
 
 /// A keyboard shortcut: a W3C `KeyboardEvent.key` plus modifiers.
 ///
-/// On Windows the shortcut is informational: the item's title is rendered with
-/// the accelerator text, but winit's (and most other) message pumps never call
-/// `TranslateAcceleratorW`, so chords do not fire through the menu. The host
-/// dispatches the chord itself and activates the matching [`Command`].
+/// On Windows the item's title is rendered with the accelerator text, and
+/// [`MenuBar::accelerator_table`](crate::MenuBar::accelerator_table) provides
+/// the matching `HACCEL` for hosts that call `TranslateAcceleratorW` in their
+/// message pump. Hosts that never translate accelerators dispatch the chord
+/// themselves and activate the matching [`Command`].
 #[derive(Debug, Clone)]
 pub struct Shortcut {
     /// The key, using W3C `KeyboardEvent.key` names (`Key::Character("s")`,

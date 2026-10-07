@@ -7,12 +7,14 @@
 //! process-global channel and no `static` state.
 //!
 //! Win32 menus have no accelerators of their own: the chord text is rendered
-//! as the accelerator portion of the item title, and since hosts like winit
-//! never call `TranslateAcceleratorW`, the host dispatches the chord itself.
+//! as the accelerator portion of the item title, and the bar builds a
+//! matching `HACCEL` (see
+//! [`MenuBar::accelerator_table`](crate::MenuBar::accelerator_table)) for
+//! hosts that call `TranslateAcceleratorW` in their message pump.
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::marker::PhantomData;
 
 use async_channel::Sender;
 use keyboard_types::{Key, NamedKey};
@@ -20,22 +22,23 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY, VK_ACCEPT, VK_APPS, VK_BACK, VK_BROWSER_BACK, VK_BROWSER_FAVORITES,
     VK_BROWSER_FORWARD, VK_BROWSER_HOME, VK_BROWSER_REFRESH, VK_BROWSER_SEARCH, VK_BROWSER_STOP,
-    VK_CAPITAL, VK_CLEAR, VK_CONVERT, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_EXECUTE, VK_F1,
-    VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_F10, VK_F11, VK_F12, VK_F13, VK_F14,
-    VK_F15, VK_F16, VK_F17, VK_F18, VK_F19, VK_F20, VK_F21, VK_F22, VK_F23, VK_F24, VK_HELP,
-    VK_HOME, VK_INSERT, VK_LAUNCH_APP1, VK_LAUNCH_APP2, VK_LAUNCH_MAIL, VK_LAUNCH_MEDIA_SELECT,
-    VK_LEFT, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE, VK_MEDIA_PREV_TRACK, VK_MEDIA_STOP,
-    VK_MODECHANGE, VK_NEXT, VK_NONCONVERT, VK_NUMLOCK, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4,
-    VK_OEM_5, VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PAUSE,
-    VK_PRINT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SCROLL, VK_SELECT, VK_SNAPSHOT, VK_SPACE, VK_TAB,
-    VK_UP, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP, VK_ZOOM,
+    VK_CLEAR, VK_CONVERT, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_EXECUTE, VK_F1, VK_F2, VK_F3,
+    VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_F10, VK_F11, VK_F12, VK_F13, VK_F14, VK_F15,
+    VK_F16, VK_F17, VK_F18, VK_F19, VK_F20, VK_F21, VK_F22, VK_F23, VK_F24, VK_HELP, VK_HOME,
+    VK_INSERT, VK_LAUNCH_APP1, VK_LAUNCH_APP2, VK_LAUNCH_MAIL, VK_LAUNCH_MEDIA_SELECT, VK_LEFT,
+    VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE, VK_MEDIA_PREV_TRACK, VK_MEDIA_STOP, VK_MODECHANGE,
+    VK_NEXT, VK_NONCONVERT, VK_NUMLOCK, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6,
+    VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_PAUSE, VK_PRINT, VK_PRIOR,
+    VK_RETURN, VK_RIGHT, VK_SCROLL, VK_SELECT, VK_SNAPSHOT, VK_SPACE, VK_TAB, VK_UP,
+    VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP, VK_ZOOM,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreateMenu, CreatePopupMenu, DestroyMenu, GetMenuItemCount, HMENU, IsWindow,
-    MENU_ITEM_STATE, MENUITEMINFOW, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    MF_UNCHECKED, MFS_CHECKED, MFS_ENABLED, MFS_GRAYED, MFS_UNCHECKED, MIIM_STATE, SetMenu,
-    SetMenuItemInfoW, WM_COMMAND,
+    ACCEL, ACCEL_VIRT_FLAGS, AppendMenuW, CreateAcceleratorTableW, CreateMenu, CreatePopupMenu,
+    DestroyAcceleratorTable, DestroyMenu, FALT, FCONTROL, FSHIFT, FVIRTKEY, GetMenuItemCount,
+    HACCEL, HMENU, IsWindow, MENU_ITEM_STATE, MENUITEMINFOW, MF_CHECKED, MF_GRAYED, MF_POPUP,
+    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MFS_CHECKED, MFS_ENABLED, MFS_GRAYED, MFS_UNCHECKED,
+    MIIM_STATE, SetMenu, SetMenuItemInfoW, WM_COMMAND, WM_NCDESTROY,
 };
 use windows::core::PCWSTR;
 
@@ -44,13 +47,17 @@ use crate::{Command, CommandId, Entry, MenuError, Modifiers, Shortcut, Submenu};
 /// `uidsubclass` value identifying this bar's subclass procedure.
 const SUBCLASS_ID: usize = 0x574B_4D4E; // 'WKMN'
 
+/// The highest Win32 menu-item id a bar can hand out: `WM_COMMAND` reports
+/// item ids through the low word of `wParam`.
+const MAX_ITEM_ID: usize = 0xFFFF;
+
 /// The data a subclass procedure needs to report an activation. Owned by the
 /// [`Attachment`]; the window stores a borrowed pointer in `dwRefData`.
 #[derive(Debug)]
 struct AttachContext {
     sender: Sender<CommandId>,
     /// Win32 menu-item id (the low word of `WM_COMMAND`'s `wParam`) → id.
-    commands: HashMap<u32, CommandId>,
+    commands: HashMap<usize, CommandId>,
 }
 
 /// A [`Command`]'s slot in the menu tree: where it lives plus the state the
@@ -79,16 +86,23 @@ impl ItemSlot {
     }
 }
 
-/// The Windows menu bar: owns the `HMENU` tree.
+/// The Windows menu bar: owns the `HMENU` tree and the `HACCEL`.
 #[derive(Debug)]
 pub struct MenuBarInner {
     menu: HMENU,
     items: HashMap<CommandId, ItemSlot>,
     /// Win32 item id → `CommandId`, cloned into the attach context.
-    commands: HashMap<u32, CommandId>,
+    commands: HashMap<usize, CommandId>,
+    /// Accelerator entries collected while building; consumed by
+    /// `build_accel_table`.
+    accels: Vec<ACCEL>,
+    /// The accelerator table for hosts that run `TranslateAcceleratorW`.
+    accel: Option<HACCEL>,
+    /// Next per-bar Win32 item id, assigned from 1 upward.
+    next_item_id: usize,
     sender: Sender<CommandId>,
     /// `Some(hwnd)` while an [`Attachment`] is alive.
-    attachment: Rc<Cell<Option<HWND>>>,
+    attachment: Cell<Option<HWND>>,
 }
 
 impl MenuBarInner {
@@ -101,10 +115,13 @@ impl MenuBarInner {
                 .map_err(|error| MenuError::Platform(format!("CreateMenu: {error}")))?,
             items: HashMap::new(),
             commands: HashMap::new(),
+            accels: Vec::new(),
+            accel: None,
+            next_item_id: 1,
             sender: sender.clone(),
-            attachment: Rc::new(Cell::new(None)),
+            attachment: Cell::new(None),
         };
-        if let Err(error) = inner.build(menus) {
+        if let Err(error) = inner.build(menus).and_then(|()| inner.build_accel_table()) {
             // A bar that failed to build must not leak its menu tree.
             unsafe {
                 let _ = DestroyMenu(inner.menu);
@@ -118,7 +135,13 @@ impl MenuBarInner {
         for submenu in menus {
             let popup = unsafe { CreatePopupMenu() }
                 .map_err(|error| MenuError::Platform(format!("CreatePopupMenu: {error}")))?;
-            self.fill(popup, &submenu.entries)?;
+            if let Err(error) = self.fill(popup, &submenu.entries) {
+                // The popup was never appended to the bar: destroy it.
+                unsafe {
+                    let _ = DestroyMenu(popup);
+                }
+                return Err(error);
+            }
             append_submenu(self.menu, popup, &submenu.title)?;
         }
         Ok(())
@@ -133,7 +156,13 @@ impl MenuBarInner {
                     let popup = unsafe { CreatePopupMenu() }.map_err(|error| {
                         MenuError::Platform(format!("CreatePopupMenu: {error}"))
                     })?;
-                    self.fill(popup, &submenu.entries)?;
+                    if let Err(error) = self.fill(popup, &submenu.entries) {
+                        // SAFETY: the popup was never appended to `parent`.
+                        unsafe {
+                            let _ = DestroyMenu(popup);
+                        }
+                        return Err(error);
+                    }
                     append_submenu(parent, popup, &submenu.title)?;
                 }
                 Entry::Separator => {
@@ -148,6 +177,14 @@ impl MenuBarInner {
     }
 
     fn append_command(&mut self, parent: HMENU, command: &Command) -> Result<(), MenuError> {
+        if self.items.contains_key(&command.id()) {
+            return Err(MenuError::DuplicateCommandId(command.id()));
+        }
+        let item_id = self.next_item_id;
+        if item_id > MAX_ITEM_ID {
+            return Err(MenuError::ItemLimitExceeded);
+        }
+        self.next_item_id += 1;
         let mut flags = MF_STRING;
         if !command.enabled {
             flags |= MF_GRAYED;
@@ -156,25 +193,29 @@ impl MenuBarInner {
             flags |= if checked { MF_CHECKED } else { MF_UNCHECKED };
         }
         let title = match &command.shortcut {
-            Some(shortcut) => format!("{}\t{}", command.title, accelerator_text(shortcut)?),
+            Some(shortcut) => {
+                let (virtual_key, key_text) = map_key(&shortcut.key)?;
+                self.accels.push(ACCEL {
+                    fVirt: accel_flags(shortcut.modifiers),
+                    key: virtual_key.0,
+                    cmd: u16::try_from(item_id).expect("item ids are <= 0xFFFF"),
+                });
+                format!(
+                    "{}\t{}",
+                    command.title,
+                    accelerator_text(shortcut, &key_text)
+                )
+            }
             None => command.title.clone(),
         };
         let position = unsafe { GetMenuItemCount(Some(parent)) };
         if position < 0 {
             return Err(MenuError::Platform("GetMenuItemCount failed".to_owned()));
         }
-        let id = command.id().raw();
         // SAFETY: `wide` outlives the call; the menu copies the string.
         let mut wide = to_wide(&title);
-        unsafe {
-            AppendMenuW(
-                parent,
-                flags,
-                usize::try_from(id).expect("CommandId fits in usize"),
-                PCWSTR(wide.as_mut_ptr()),
-            )
-        }
-        .map_err(|error| MenuError::Platform(format!("AppendMenuW: {error}")))?;
+        unsafe { AppendMenuW(parent, flags, item_id, PCWSTR(wide.as_mut_ptr())) }
+            .map_err(|error| MenuError::Platform(format!("AppendMenuW: {error}")))?;
         self.items.insert(
             command.id(),
             ItemSlot {
@@ -184,16 +225,33 @@ impl MenuBarInner {
                 checked: Cell::new(command.checked),
             },
         );
-        self.commands.insert(
-            u32::try_from(id).expect("CommandId fits in u32"),
-            command.id(),
+        self.commands.insert(item_id, command.id());
+        Ok(())
+    }
+
+    /// Builds the `HACCEL` from the entries collected while filling, for
+    /// hosts that run `TranslateAcceleratorW`.
+    fn build_accel_table(&mut self) -> Result<(), MenuError> {
+        if self.accels.is_empty() {
+            return Ok(());
+        }
+        let accels = std::mem::take(&mut self.accels);
+        // SAFETY: `accels` is a valid slice of `ACCEL` entries.
+        self.accel = Some(
+            unsafe { CreateAcceleratorTableW(&accels) }.map_err(|error| {
+                MenuError::Platform(format!("CreateAcceleratorTableW: {error}"))
+            })?,
         );
         Ok(())
     }
 
+    pub(crate) const fn accelerator_table(&self) -> Option<HACCEL> {
+        self.accel
+    }
+
     /// Attaches the bar to `hwnd` and subclasses the window so `WM_COMMAND`
     /// activations reach the bar's stream.
-    pub(crate) fn attach(&self, hwnd: HWND) -> Result<Attachment, MenuError> {
+    pub(crate) fn attach(&self, hwnd: HWND) -> Result<Attachment<'_>, MenuError> {
         if self.attachment.get().is_some() {
             return Err(MenuError::Platform(
                 "menu bar is already attached to a window".to_owned(),
@@ -205,6 +263,10 @@ impl MenuBarInner {
                 "attach: hwnd is not a window on this thread".to_owned(),
             ));
         }
+        // SAFETY: both handles are valid on this thread. The menu is set
+        // first so a subclass failure leaves nothing behind.
+        unsafe { SetMenu(hwnd, Some(self.menu)) }
+            .map_err(|error| MenuError::Platform(format!("SetMenu: {error}")))?;
         let context = Box::into_raw(Box::new(AttachContext {
             sender: self.sender.clone(),
             commands: self.commands.clone(),
@@ -223,19 +285,20 @@ impl MenuBarInner {
         if !ok.as_bool() {
             // SAFETY: `context` came from `Box::into_raw` above and is not
             // shared yet, since the subclass was never installed.
-            drop(unsafe { Box::from_raw(context) });
+            unsafe {
+                drop(Box::from_raw(context));
+                let _ = SetMenu(hwnd, None);
+            }
             return Err(MenuError::Platform(
                 "SetWindowSubclass: hwnd belongs to another thread".to_owned(),
             ));
         }
-        // SAFETY: both handles are valid on this thread.
-        unsafe { SetMenu(hwnd, Some(self.menu)) }
-            .map_err(|error| MenuError::Platform(format!("SetMenu: {error}")))?;
         self.attachment.set(Some(hwnd));
         Ok(Attachment {
             hwnd,
             context: context as usize,
-            shared: self.attachment.clone(),
+            shared: &self.attachment,
+            _bar: PhantomData,
         })
     }
 
@@ -273,10 +336,13 @@ impl MenuBarInner {
 impl Drop for MenuBarInner {
     fn drop(&mut self) {
         // SAFETY: detaches the menu first when a live attachment still points
-        // at it, then destroys the menu tree this bar built.
+        // at it, then destroys the objects this bar built.
         unsafe {
             if let Some(hwnd) = self.attachment.get() {
                 let _ = SetMenu(hwnd, None);
+            }
+            if let Some(accel) = self.accel {
+                let _ = DestroyAcceleratorTable(accel);
             }
             let _ = DestroyMenu(self.menu);
         }
@@ -285,18 +351,21 @@ impl Drop for MenuBarInner {
 
 /// The active binding between a [`MenuBar`](crate::MenuBar) and a window.
 ///
-/// Dropping the guard removes the window subclass and detaches the menu. The
-/// guard must drop before `hwnd` is destroyed and while the bar is alive.
+/// The guard borrows the bar, so the bar always outlives it. Dropping the
+/// guard removes the window subclass and detaches the menu; it must drop
+/// before `hwnd` is destroyed (the subclass also removes itself on
+/// `WM_NCDESTROY`).
 #[derive(Debug)]
-pub struct Attachment {
+pub struct Attachment<'a> {
     hwnd: HWND,
     /// The `Box<AttachContext>` shared with the subclass's `dwRefData`;
     /// freed on drop after the subclass is removed.
     context: usize,
-    shared: Rc<Cell<Option<HWND>>>,
+    shared: &'a Cell<Option<HWND>>,
+    _bar: PhantomData<&'a MenuBarInner>,
 }
 
-impl Drop for Attachment {
+impl Drop for Attachment<'_> {
     fn drop(&mut self) {
         // SAFETY: `menu_subclass_proc`/`SUBCLASS_ID` is this attachment's
         // subclass on `hwnd`; removing it ends all reads of `context`, so the
@@ -311,11 +380,13 @@ impl Drop for Attachment {
 }
 
 /// The subclass procedure installed by [`MenuBarInner::attach`]. Reports menu
-/// activations (`WM_COMMAND` with `HIWORD(wParam) == 0`) for the bar's ids and
-/// defers everything else to the previous procedure.
+/// activations and accelerator translations (`WM_COMMAND` whose low word is
+/// one of the bar's item ids) and defers everything else to the previous
+/// procedure.
 ///
 /// `dwRefData` is a live `*const AttachContext` from `SetWindowSubclass` until
-/// the attachment's `RemoveWindowSubclass`.
+/// the subclass is removed — by the attachment's drop or, on `WM_NCDESTROY`,
+/// by the window itself.
 unsafe extern "system" fn menu_subclass_proc(
     hwnd: HWND,
     msg: u32,
@@ -324,24 +395,25 @@ unsafe extern "system" fn menu_subclass_proc(
     _uidsubclass: usize,
     dwrefdata: usize,
 ) -> LRESULT {
-    if msg == WM_COMMAND && hiword(wparam) == 0 {
+    if msg == WM_NCDESTROY {
+        // The window is being destroyed; drop the subclass so `dwRefData` is
+        // never read on a dead window.
+        unsafe {
+            let _ = RemoveWindowSubclass(hwnd, Some(menu_subclass_proc), SUBCLASS_ID);
+        }
+    } else if msg == WM_COMMAND {
         // SAFETY: upheld by the attach/remove contract described above.
         let context = unsafe { &*(dwrefdata as *const AttachContext) };
-        if let Some(id) = context.commands.get(&loword(wparam)) {
-            let _ = context.sender.try_send(*id);
+        if let Some(id) = context.commands.get(&(wparam.0 & 0xFFFF)) {
+            context
+                .sender
+                .try_send(*id)
+                .expect("waterkit-menu: the event channel is closed while the bar is alive");
             return LRESULT(0);
         }
     }
     // SAFETY: forwards to the previous subclass/window procedure.
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
-}
-
-fn loword(wparam: WPARAM) -> u32 {
-    u32::from(u16::try_from(wparam.0 & 0xFFFF).unwrap_or(0))
-}
-
-fn hiword(wparam: WPARAM) -> u16 {
-    u16::try_from((wparam.0 >> 16) & 0xFFFF).unwrap_or(0)
 }
 
 fn append_submenu(parent: HMENU, popup: HMENU, title: &str) -> Result<(), MenuError> {
@@ -363,13 +435,27 @@ fn to_wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// The `ACCEL.fVirt` flags for a shortcut's modifiers. `FVIRTKEY` is always
+/// set: every key maps to a virtual-key code. On Windows `COMMAND` is Ctrl,
+/// so `COMMAND` and `CONTROL` set `FCONTROL` once.
+fn accel_flags(modifiers: Modifiers) -> ACCEL_VIRT_FLAGS {
+    let mut flags = FVIRTKEY;
+    if modifiers.contains(Modifiers::COMMAND) || modifiers.contains(Modifiers::CONTROL) {
+        flags |= FCONTROL;
+    }
+    if modifiers.contains(Modifiers::ALT) {
+        flags |= FALT;
+    }
+    if modifiers.contains(Modifiers::SHIFT) {
+        flags |= FSHIFT;
+    }
+    flags
+}
+
 /// The "Ctrl+Alt+Shift+X" accelerator text of a shortcut, rendered after a tab
 /// in the item title. On Windows `COMMAND` is Ctrl, so `COMMAND` and
 /// `CONTROL` print once.
-fn accelerator_text(shortcut: &Shortcut) -> Result<String, MenuError> {
-    // The virtual-key code is validation only: nothing dispatches it — the
-    // text is what a Win32 menu can show.
-    let (_virtual_key, key_text) = map_key(&shortcut.key)?;
+fn accelerator_text(shortcut: &Shortcut, virtual_key_text: &str) -> String {
     let mut text = String::new();
     let modifiers = shortcut.modifiers;
     if modifiers.contains(Modifiers::COMMAND) || modifiers.contains(Modifiers::CONTROL) {
@@ -381,8 +467,8 @@ fn accelerator_text(shortcut: &Shortcut) -> Result<String, MenuError> {
     if modifiers.contains(Modifiers::SHIFT) {
         text.push_str("Shift+");
     }
-    text.push_str(&key_text);
-    Ok(text)
+    text.push_str(virtual_key_text);
+    text
 }
 
 /// Maps a W3C `Key` to its virtual-key code and accelerator text.
@@ -401,7 +487,6 @@ const fn named_virtual_key(key: NamedKey) -> Option<(VIRTUAL_KEY, &'static str)>
         NamedKey::Clear => (VK_CLEAR, "Clear"),
         NamedKey::Enter => (VK_RETURN, "Enter"),
         NamedKey::Pause => (VK_PAUSE, "Pause"),
-        NamedKey::CapsLock => (VK_CAPITAL, "CapsLock"),
         NamedKey::Escape => (VK_ESCAPE, "Esc"),
         NamedKey::Convert => (VK_CONVERT, "Convert"),
         NamedKey::NonConvert => (VK_NONCONVERT, "NonConvert"),
@@ -664,6 +749,8 @@ mod tests {
         unmappable(&Key::Named(NamedKey::Shift));
         unmappable(&Key::Named(NamedKey::Alt));
         unmappable(&Key::Named(NamedKey::Meta));
+        // CapsLock is not a menu key on either platform.
+        unmappable(&Key::Named(NamedKey::CapsLock));
         unmappable(&Key::Named(NamedKey::Dead));
         unmappable(&Key::Character("ab".into()));
         unmappable(&Key::Character("é".into()));
@@ -672,13 +759,11 @@ mod tests {
 
     #[test]
     fn command_modifier_is_ctrl_on_windows() {
-        let text = |modifiers| {
-            accelerator_text(&Shortcut {
-                key: Key::Character("q".into()),
-                modifiers,
-            })
-            .expect("key maps")
+        let shortcut = |modifiers| Shortcut {
+            key: Key::Character("q".into()),
+            modifiers,
         };
+        let text = |modifiers| accelerator_text(&shortcut(modifiers), "Q");
         assert_eq!(text(Modifiers::COMMAND), "Ctrl+Q");
         assert_eq!(text(Modifiers::COMMAND | Modifiers::SHIFT), "Ctrl+Shift+Q");
         // COMMAND and CONTROL are the same physical key on Windows.
@@ -686,27 +771,39 @@ mod tests {
         assert_eq!(text(Modifiers::ALT), "Alt+Q");
         assert_eq!(text(Modifiers::empty()), "Q");
 
-        let tab = accelerator_text(&Shortcut {
-            key: Key::Named(NamedKey::Tab),
-            modifiers: Modifiers::CONTROL | Modifiers::SHIFT,
-        })
-        .expect("key maps");
-        assert_eq!(tab, "Ctrl+Shift+Tab");
+        assert_eq!(
+            accelerator_text(
+                &Shortcut {
+                    key: Key::Named(NamedKey::Tab),
+                    modifiers: Modifiers::CONTROL | Modifiers::SHIFT,
+                },
+                "Tab",
+            ),
+            "Ctrl+Shift+Tab"
+        );
+    }
+
+    #[test]
+    fn accelerator_flags_track_the_modifiers() {
+        assert!(accel_flags(Modifiers::COMMAND).contains(FCONTROL));
+        assert!(accel_flags(Modifiers::COMMAND).contains(FVIRTKEY));
+        let flags = accel_flags(Modifiers::COMMAND | Modifiers::CONTROL | Modifiers::SHIFT);
+        assert!(flags.contains(FCONTROL | FSHIFT));
+        assert!(!flags.contains(FALT));
     }
 
     /// A `WM_COMMAND` sent to the attached window delivers the item's
-    /// `CommandId` on `events()`; an id outside the bar is forwarded to the
-    /// previous procedure without reporting.
+    /// `CommandId` on `events()` — for menu picks (HIWORD = 0) and
+    /// accelerator translations (HIWORD = 1) alike; an id outside the bar is
+    /// forwarded to the previous procedure without reporting.
     #[test]
     fn wm_command_delivers_command_id() {
         use futures::{FutureExt, StreamExt};
         use windows::Win32::System::LibraryLoader::GetModuleHandleW;
         use windows::Win32::UI::WindowsAndMessaging::{
-            CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW,
-            SendMessageW, WNDCLASSW, WS_OVERLAPPED,
+            CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetMenu, GetMenuItemID,
+            GetSubMenu, RegisterClassW, SendMessageW, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPED,
         };
-
-        use windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE;
 
         unsafe extern "system" fn wnd_proc(
             hwnd: HWND,
@@ -747,38 +844,36 @@ mod tests {
             .expect("CreateWindowExW failed")
         };
 
-        let open = Command::new("Open");
+        let open = Command::new(CommandId::new(7), "Open");
         let open_id = open.id();
-        let menu_id = u32::try_from(open_id.raw()).expect("CommandId fits in u32");
         let bar =
             crate::MenuBar::new([Submenu::new("File").entry(open)]).expect("MenuBar::new failed");
         let attachment = bar.attach(hwnd).expect("attach failed");
         let mut events = std::pin::pin!(bar.events());
 
-        let send = |menu_id: u32| unsafe {
+        // The bar assigns Win32 item ids itself, starting at 1.
+        let menu_id = unsafe { GetMenuItemID(GetSubMenu(GetMenu(hwnd), 0), 0) };
+        assert_eq!(menu_id, 1);
+
+        let send = |menu_id: u32, notify: u32| unsafe {
             SendMessageW(
                 hwnd,
                 WM_COMMAND,
-                Some(WPARAM(menu_id as usize)),
+                Some(WPARAM(((notify as usize) << 16) | menu_id as usize)),
                 Some(LPARAM(0)),
             );
         };
-        send(menu_id);
+
+        // A menu pick (HIWORD = 0).
+        send(menu_id, 0);
         assert_eq!(events.next().now_or_never().flatten(), Some(open_id));
 
-        // An accelerator-style WM_COMMAND (HIWORD = 1) is not a menu pick.
-        unsafe {
-            SendMessageW(
-                hwnd,
-                WM_COMMAND,
-                Some(WPARAM((1usize << 16) | menu_id as usize)),
-                Some(LPARAM(0)),
-            );
-        }
-        assert!(events.next().now_or_never().is_none());
+        // A TranslateAcceleratorW-generated activation (HIWORD = 1).
+        send(menu_id, 1);
+        assert_eq!(events.next().now_or_never().flatten(), Some(open_id));
 
         // An unknown menu id is forwarded to DefWindowProc, not reported.
-        send(0xBEEF);
+        send(0xBEEF, 0);
         assert!(events.next().now_or_never().is_none());
 
         drop(attachment);

@@ -8032,6 +8032,8 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "thiserror 2.0.20",
+ "tracing",
+ "tracing-subscriber",
  "windows 0.62.2",
 ]
 

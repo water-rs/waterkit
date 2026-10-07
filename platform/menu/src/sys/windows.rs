@@ -124,7 +124,7 @@ impl MenuBarInner {
         if let Err(error) = inner.build(menus).and_then(|()| inner.build_accel_table()) {
             // A bar that failed to build must not leak its menu tree.
             unsafe {
-                let _ = DestroyMenu(inner.menu);
+                DestroyMenu(inner.menu).expect("waterkit-menu: DestroyMenu failed");
             }
             return Err(error);
         }
@@ -138,7 +138,7 @@ impl MenuBarInner {
             if let Err(error) = self.fill(popup, &submenu.entries) {
                 // The popup was never appended to the bar: destroy it.
                 unsafe {
-                    let _ = DestroyMenu(popup);
+                    DestroyMenu(popup).expect("waterkit-menu: DestroyMenu failed");
                 }
                 return Err(error);
             }
@@ -159,7 +159,7 @@ impl MenuBarInner {
                     if let Err(error) = self.fill(popup, &submenu.entries) {
                         // SAFETY: the popup was never appended to `parent`.
                         unsafe {
-                            let _ = DestroyMenu(popup);
+                            DestroyMenu(popup).expect("waterkit-menu: DestroyMenu failed");
                         }
                         return Err(error);
                     }
@@ -287,7 +287,7 @@ impl MenuBarInner {
             // shared yet, since the subclass was never installed.
             unsafe {
                 drop(Box::from_raw(context));
-                let _ = SetMenu(hwnd, None);
+                SetMenu(hwnd, None).expect("waterkit-menu: SetMenu failed");
             }
             return Err(MenuError::Platform(
                 "SetWindowSubclass: hwnd belongs to another thread".to_owned(),
@@ -339,12 +339,14 @@ impl Drop for MenuBarInner {
         // at it, then destroys the objects this bar built.
         unsafe {
             if let Some(hwnd) = self.attachment.get() {
-                let _ = SetMenu(hwnd, None);
+                SetMenu(hwnd, None).expect("waterkit-menu: SetMenu failed");
             }
             if let Some(accel) = self.accel {
-                let _ = DestroyAcceleratorTable(accel);
+                DestroyAcceleratorTable(accel)
+                    .ok()
+                    .expect("waterkit-menu: DestroyAcceleratorTable failed");
             }
-            let _ = DestroyMenu(self.menu);
+            DestroyMenu(self.menu).expect("waterkit-menu: DestroyMenu failed");
         }
     }
 }
@@ -371,8 +373,10 @@ impl Drop for Attachment<'_> {
         // subclass on `hwnd`; removing it ends all reads of `context`, so the
         // box can be freed. `context` came from `Box::into_raw` in `attach`.
         unsafe {
-            let _ = RemoveWindowSubclass(self.hwnd, Some(menu_subclass_proc), SUBCLASS_ID);
-            let _ = SetMenu(self.hwnd, None);
+            RemoveWindowSubclass(self.hwnd, Some(menu_subclass_proc), SUBCLASS_ID)
+                .ok()
+                .expect("waterkit-menu: RemoveWindowSubclass failed");
+            SetMenu(self.hwnd, None).expect("waterkit-menu: SetMenu failed");
             drop(Box::from_raw(self.context as *mut AttachContext));
         }
         self.shared.set(None);
@@ -399,7 +403,9 @@ unsafe extern "system" fn menu_subclass_proc(
         // The window is being destroyed; drop the subclass so `dwRefData` is
         // never read on a dead window.
         unsafe {
-            let _ = RemoveWindowSubclass(hwnd, Some(menu_subclass_proc), SUBCLASS_ID);
+            RemoveWindowSubclass(hwnd, Some(menu_subclass_proc), SUBCLASS_ID)
+                .ok()
+                .expect("waterkit-menu: RemoveWindowSubclass failed");
         }
     } else if msg == WM_COMMAND {
         // SAFETY: upheld by the attach/remove contract described above.
@@ -878,7 +884,7 @@ mod tests {
 
         drop(attachment);
         unsafe {
-            let _ = DestroyWindow(hwnd);
+            DestroyWindow(hwnd).expect("DestroyWindow failed");
         }
     }
 }

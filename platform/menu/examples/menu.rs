@@ -187,5 +187,6 @@ fn run(bar: &MenuBar) -> ! {
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn main() {
-    eprintln!("waterkit-menu runs on macOS and Windows only");
+    tracing_subscriber::fmt().init();
+    tracing::error!("waterkit-menu runs on macOS and Windows only");
 }

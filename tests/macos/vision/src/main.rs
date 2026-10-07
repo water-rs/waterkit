@@ -2,7 +2,7 @@
 
 use std::process::ExitCode;
 
-use waterkit_test_report::{TestCase, TestReport, write_report_block_to_stdout};
+use waterkit_test_report::{write_report_block_to_stdout, TestCase, TestReport};
 use waterkit_vision::{CodeScanner, Symbology, VisionError};
 
 #[tokio::main]

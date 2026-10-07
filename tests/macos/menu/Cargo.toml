@@ -13,9 +13,13 @@ name = "menu-test"
 path = "src/main.rs"
 
 [dependencies]
+
+# The harness only runs on macOS, so the AppKit stack it drives is scoped to
+# macOS rather than built for every target the workspace is swept with;
+# `objc2` does not compile on Linux at all.
+[target.'cfg(target_os = "macos")'.dependencies]
 waterkit-menu.workspace = true
 waterkit-test-report.workspace = true
 futures.workspace = true
 objc2.workspace = true
-objc2-foundation.workspace = true
 objc2-app-kit.workspace = true

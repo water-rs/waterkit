@@ -9,9 +9,9 @@
 //!   crate. [`MenuBar::attach`] subclasses the window so `WM_COMMAND`
 //!   activations reach the bar's own event stream; dropping the returned
 //!   [`Attachment`] detaches the bar.
-//! - **Other platforms:** `MenuBar` does not exist, so code that tries to use
-//!   it fails to compile. The model types ([`Submenu`], [`Command`], ...)
-//!   still compile everywhere.
+//! - **Other platforms:** the crate compiles to nothing — `MenuBar`, the
+//!   model types and `MenuError` are all macOS/Windows-only, so code that
+//!   tries to use them fails to compile.
 //!
 //! # Shortcuts
 //!
@@ -42,7 +42,9 @@
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod error;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod model;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod sys;
@@ -52,8 +54,11 @@ use std::marker::PhantomData;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::rc::Rc;
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub use error::MenuError;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub use keyboard_types::{Key, NamedKey};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub use model::{Command, CommandId, Entry, Modifiers, Shortcut, StandardItem, Submenu};
 #[cfg(target_os = "windows")]
 pub use sys::Attachment;

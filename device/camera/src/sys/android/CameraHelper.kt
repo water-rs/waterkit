@@ -38,6 +38,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Camera helper for waterkit-camera crate.
@@ -46,9 +47,27 @@ import java.util.concurrent.TimeUnit
 class CameraHelper(private val appContext: Context) {
     private companion object {
         private const val TAG = "WaterkitCamera"
+        private const val DATA_SPACE_STANDARD_SHIFT = 16
+        private const val DATA_SPACE_STANDARD_MASK = 0x3F
+        private const val DATA_SPACE_RANGE_SHIFT = 27
+        private const val DATA_SPACE_RANGE_MASK = 0x7
 
-        /** Preview buffers: one being imported, the newest waiting, one filling. */
-        private const val PREVIEW_IMAGES = 4
+        /**
+         * Preview images the consumer may hold at once: the newest waiting
+         * in `frameQueue`, the one in the Rust reader channel, and the frames
+         * whose `HardwareBuffer` the GPU still reads. The preview listener
+         * acquires only while fewer are out, so a consumer that falls behind
+         * makes the camera drop frames instead of running the reader dry.
+         */
+        private const val PREVIEW_MAX_IN_FLIGHT = 4
+
+        /**
+         * `acquireLatestImage` acquires the next image before closing the
+         * stale ones it drains, so while it runs the reader hands out one
+         * more than were out at entry: the pool needs a spare slot above
+         * `PREVIEW_MAX_IN_FLIGHT`.
+         */
+        private const val PREVIEW_IMAGES = PREVIEW_MAX_IN_FLIGHT + 1
 
         private const val OPEN_TIMEOUT_SECONDS = 5L
         private const val SESSION_TIMEOUT_SECONDS = 5L
@@ -94,6 +113,7 @@ class CameraHelper(private val appContext: Context) {
     private var recordingStartElapsedRealtimeMs: Long = 0
     private var isRecording: Boolean = false
     private var rawVideoOutput: FileOutputStream? = null
+    private var rawVideoDataSpace: Int? = null
     private var rawVideoRecordingStartElapsedRealtimeMs: Long = 0
     private var isRawVideoRecording: Boolean = false
 
@@ -101,23 +121,75 @@ class CameraHelper(private val appContext: Context) {
     private var backgroundHandler: Handler? = null
 
     /**
-     * One preview frame: the `Image` from the GPU-sampled `PRIVATE` reader,
-     * its `HardwareBuffer`, and the display rotation, in degrees, when the
-     * frame arrived. Together with the sensor orientation and lens facing the
+     * One preview frame: the `Image` acquired from the GPU-sampled `PRIVATE`
+     * reader, its `HardwareBuffer`, and the display rotation, in degrees,
+     * when the frame arrived, plus its data space and active dynamic-range
+     * profile. Together with the sensor orientation and lens facing the
      * rotation gives the frame's orientation.
+     * Below API 33 the bridge reports `DATASPACE_UNKNOWN` (0), so each
+     * unspecified data-space component uses the captured profile's default.
+     * The profile is captured with the image so Rust does not look it up
+     * after arrival.
      *
-     * The receiver owns `image` and must close it once the GPU has finished
-     * with `hardwareBuffer`, which returns the buffer to the reader; it also
-     * closes `hardwareBuffer`, its own handle on the buffer, once it has
-     * taken a reference of its own. The pixels are never read on the CPU.
+     * The receiver owns the frame and must call [close] once the GPU has
+     * finished with `hardwareBuffer`: it returns the image to the reader,
+     * freeing one of the `PREVIEW_MAX_IN_FLIGHT` slots, and drops this
+     * handle's reference on the buffer. The receiver also closes
+     * `hardwareBuffer` itself, once it has taken a reference of its own;
+     * [close] then only releases the image. The pixels are never read on
+     * the CPU.
      */
     class CapturedFrame(
         val image: Image,
         val hardwareBuffer: HardwareBuffer,
         val displayRotation: Int,
-    )
+        val dataSpace: Int,
+        val dynamicRangeProfile: Int,
+        /** The image's sensor timestamp, the start of exposure. */
+        val captureTimeNs: Long,
+        /**
+         * Runs after the image is closed, on whichever thread called
+         * [close]; the reader bookkeeping lives behind it.
+         */
+        private val onClosed: () -> Unit,
+    ) {
+        private val closed = AtomicBoolean(false)
+
+        /** Returns the image and the buffer reference to the reader, once. */
+        fun close() {
+            if (closed.compareAndSet(false, true)) {
+                hardwareBuffer.close()
+                image.close()
+                onClosed()
+            }
+        }
+    }
+
+    private fun imageDataSpace(image: Image): Int =
+        if (Build.VERSION.SDK_INT >= 33) image.dataSpace else 0
 
     private val frameQueue: LinkedBlockingDeque<CapturedFrame> = LinkedBlockingDeque(1)
+
+    /**
+     * Preview images acquired from `previewImageReader` and not yet closed:
+     * the one waiting in `frameQueue` plus every frame leased to the
+     * consumer. Read and written only on the camera background thread,
+     * except that `closeCamera` resets it once that thread has stopped.
+     */
+    private var previewImagesInFlight = 0
+
+    /**
+     * Frames the producer wrote while `previewImagesInFlight` was at
+     * `PREVIEW_MAX_IN_FLIGHT`; they stay with the producer and are dropped.
+     * Counted and logged on the camera background thread.
+     */
+    private var previewFramesDropped = 0
+
+    /**
+     * True while [drainPreviewReader] runs; the release a stale frame's
+     * close posts back must not re-enter it.
+     */
+    private var previewDrainActive = false
     private val displayManager: DisplayManager =
         appContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
     private var latestPhotoData: ByteArray? = null
@@ -134,7 +206,7 @@ class CameraHelper(private val appContext: Context) {
     private var frameHeight: Int = 720
     private var frameRate: Int = 30
 
-    private var selectedDynamicRangeProfile: Int = DYNAMIC_RANGE_SDR
+    @Volatile private var selectedDynamicRangeProfile: Int = DYNAMIC_RANGE_SDR
     private var selectedPlatformDynamicRangeProfile: Long = PLATFORM_DYNAMIC_RANGE_STANDARD
     private var selectedFlashMode: Int = FLASH_OFF
     private var selectedStabilizationMode: Int = STABILIZATION_OFF
@@ -255,9 +327,9 @@ class CameraHelper(private val appContext: Context) {
             rawVideoRecordingStartElapsedRealtimeMs = 0L
 
             // PRIVATE buffers for GPU sampling reach the GPU as they are; the
-            // driver describes their YCbCr layout and encoding. The pool has
-            // room for the frame being imported, the newest waiting one, and
-            // one the camera is filling.
+            // driver describes their YCbCr layout and encoding. The pool is
+            // one slot wider than the number of images the consumer may hold
+            // at once, so `acquireLatestImage` always has a slot to take.
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                 throw IllegalStateException(
                     "GPU-sampled camera frames need Android 10 (API 29); this device runs API ${Build.VERSION.SDK_INT}",
@@ -286,20 +358,7 @@ class CameraHelper(private val appContext: Context) {
             }
 
             previewImageReader?.setOnImageAvailableListener({ reader ->
-                val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-                val buffer = image.hardwareBuffer
-                if (buffer == null) {
-                    image.close()
-                    throw IllegalStateException("a GPU-sampled camera image carries no HardwareBuffer")
-                }
-                frameWidth = image.width
-                frameHeight = image.height
-                // Newest wins: a frame nobody took yet goes back to the reader.
-                frameQueue.pollLast()?.let { stale ->
-                    stale.hardwareBuffer.close()
-                    stale.image.close()
-                }
-                frameQueue.offerLast(CapturedFrame(image, buffer, displayRotationDegrees()))
+                drainPreviewReader(reader, handler)
             }, handler)
 
             rawImageReader?.setOnImageAvailableListener({ reader ->
@@ -733,9 +792,9 @@ class CameraHelper(private val appContext: Context) {
             }
             file.parentFile?.mkdirs()
             val stream = FileOutputStream(file)
-            writeRawVideoHeader(stream, frameWidth, frameHeight, frameRate)
             synchronized(rawVideoLock) {
                 rawVideoOutput = stream
+                rawVideoDataSpace = null
                 rawVideoRecordingStartElapsedRealtimeMs = SystemClock.elapsedRealtime()
                 isRawVideoRecording = true
             }
@@ -778,6 +837,9 @@ class CameraHelper(private val appContext: Context) {
     /**
      * Wait for the next available frame and consume it.
      * Returns null on timeout or if no frame is available.
+     *
+     * The returned frame keeps one of the `PREVIEW_MAX_IN_FLIGHT` slots
+     * until its [CapturedFrame.close] runs.
      */
     fun waitForNextFrame(timeoutMs: Int): CapturedFrame? {
         return try {
@@ -789,6 +851,91 @@ class CameraHelper(private val appContext: Context) {
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()
             null
+        }
+    }
+
+    /**
+     * Takes the newest pending preview image while a slot is free, evicting
+     * the queued frame nobody took — newest wins. Runs only on the camera
+     * background thread; the counter it reads is mutated there alone.
+     *
+     * When `PREVIEW_MAX_IN_FLIGHT` images are already out this acquires
+     * nothing, so `acquireLatestImage` always has a spare `PREVIEW_IMAGES`
+     * slot: the pending frame stays with the producer and is dropped once a
+     * leased image's close re-arms the drain through [releasePreviewImage].
+     */
+    private fun drainPreviewReader(reader: ImageReader, handler: Handler) {
+        if (reader !== previewImageReader || previewDrainActive) {
+            return
+        }
+        previewDrainActive = true
+        try {
+            while (true) {
+                if (previewImagesInFlight >= PREVIEW_MAX_IN_FLIGHT) {
+                    previewFramesDropped += 1
+                    if (previewFramesDropped == 1) {
+                        Log.i(
+                            TAG,
+                            "preview consumer holds $PREVIEW_MAX_IN_FLIGHT frames; " +
+                                "dropping until one returns",
+                        )
+                    }
+                    return
+                }
+                val image = reader.acquireLatestImage() ?: return
+                previewImagesInFlight += 1
+                if (previewFramesDropped != 0) {
+                    Log.i(TAG, "preview resumed after dropping $previewFramesDropped frames")
+                    previewFramesDropped = 0
+                }
+                val buffer = image.hardwareBuffer
+                if (buffer == null) {
+                    image.close()
+                    previewImagesInFlight -= 1
+                    throw IllegalStateException(
+                        "a GPU-sampled camera image carries no HardwareBuffer",
+                    )
+                }
+                frameWidth = image.width
+                frameHeight = image.height
+                // Newest wins: a frame nobody took yet goes back to the reader.
+                frameQueue.pollLast()?.let { stale -> stale.close() }
+                frameQueue.offerLast(
+                    CapturedFrame(
+                        image,
+                        buffer,
+                        displayRotationDegrees(),
+                        imageDataSpace(image),
+                        selectedDynamicRangeProfile,
+                        image.timestamp,
+                    ) {
+                        releasePreviewImage(reader, handler)
+                    },
+                )
+            }
+        } finally {
+            previewDrainActive = false
+        }
+    }
+
+    /**
+     * A leased preview image was closed on some thread: free one in-flight
+     * slot, then re-check the reader for the newest image that waited for
+     * it. Runs on the camera background thread — [close] on another thread
+     * posts here; once the session's looper is gone the slot count has been
+     * reset anyway, so a close during teardown is dropped.
+     */
+    private fun releasePreviewImage(reader: ImageReader, handler: Handler) {
+        val released = Runnable {
+            if (reader === previewImageReader) {
+                previewImagesInFlight -= 1
+                drainPreviewReader(reader, handler)
+            }
+        }
+        if (handler.looper.isCurrentThread) {
+            released.run()
+        } else if (handler.looper.thread.isAlive) {
+            handler.post(released)
         }
     }
 
@@ -857,11 +1004,16 @@ class CameraHelper(private val appContext: Context) {
         releaseRecorder()
         stopRawVideoRecordingInternal()
 
+        // The background thread is dead by now, so the frames' closes could
+        // not post their bookkeeping anyway; the count resets below.
         while (true) {
             val stale = frameQueue.pollFirst() ?: break
             stale.hardwareBuffer.close()
             stale.image.close()
         }
+        previewImagesInFlight = 0
+        previewFramesDropped = 0
+        previewDrainActive = false
         synchronized(photoLock) {
             latestPhotoData = null
             pendingPhotoLatch?.countDown()
@@ -1619,6 +1771,7 @@ class CameraHelper(private val appContext: Context) {
         val output = synchronized(rawVideoLock) {
             val stream = rawVideoOutput
             rawVideoOutput = null
+            rawVideoDataSpace = null
             isRawVideoRecording = false
             rawVideoRecordingStartElapsedRealtimeMs = 0L
             stream
@@ -1640,18 +1793,27 @@ class CameraHelper(private val appContext: Context) {
      * stored; no colour conversion happens.
      */
     private fun maybeWriteRawVideoFrame(image: Image, timestampNs: Long) {
-        val output = synchronized(rawVideoLock) {
-            if (!isRawVideoRecording) {
-                return
-            }
-            rawVideoOutput
-        } ?: return
+        if (!synchronized(rawVideoLock) { isRawVideoRecording && rawVideoOutput != null }) {
+            return
+        }
+
+        val dataSpace = imageDataSpace(image)
+        val colorCodes = rawVideoColorCodes(dataSpace)
+        if (colorCodes == null) {
+            failRawVideoRecording(
+                "Unsupported RAW video data space=$dataSpace " +
+                    "(0x${Integer.toHexString(dataSpace)}), " +
+                    "standard=${rawVideoDataSpaceStandard(dataSpace)}, " +
+                    "range=${rawVideoDataSpaceRange(dataSpace)}",
+            )
+            return
+        }
 
         try {
             val width = image.width
             val height = image.height
-            val chromaWidth = width / 2
-            val chromaHeight = height / 2
+            val chromaWidth = (width + 1) / 2
+            val chromaHeight = (height + 1) / 2
             val nv12 = ByteArray(width * height + chromaWidth * chromaHeight * 2)
             val luma = image.planes[0]
             for (row in 0 until height) {
@@ -1669,13 +1831,71 @@ class CameraHelper(private val appContext: Context) {
                     offset += 2
                 }
             }
-            writeU64LE(output, timestampNs)
-            writeU32LE(output, nv12.size)
-            output.write(nv12)
+
+            val changedDataSpace = synchronized(rawVideoLock) {
+                val output = rawVideoOutput ?: return
+                val firstDataSpace = rawVideoDataSpace
+                if (firstDataSpace != null && firstDataSpace != dataSpace) {
+                    firstDataSpace
+                } else {
+                    if (firstDataSpace == null) {
+                        writeRawVideoHeader(
+                            output,
+                            width,
+                            height,
+                            frameRate,
+                            colorCodes.first,
+                            colorCodes.second,
+                        )
+                        rawVideoDataSpace = dataSpace
+                    }
+                    writeU64LE(output, timestampNs)
+                    writeU32LE(output, nv12.size)
+                    output.write(nv12)
+                    null
+                }
+            }
+            if (changedDataSpace != null) {
+                failRawVideoRecording(
+                    "RAW video data space changed from $changedDataSpace " +
+                        "(0x${Integer.toHexString(changedDataSpace)}) to $dataSpace " +
+                        "(0x${Integer.toHexString(dataSpace)})",
+                )
+            }
         } catch (error: Exception) {
-            Log.e(TAG, "Failed writing RAW video frame", error)
-            stopRawVideoRecordingInternal()
+            failRawVideoRecording("Failed writing RAW video frame in data space $dataSpace", error)
         }
+    }
+
+    private fun rawVideoColorCodes(dataSpace: Int): Pair<Int, Int>? {
+        val matrix = when (rawVideoDataSpaceStandard(dataSpace)) {
+            0 -> 6
+            1 -> 1
+            2, 3, 4, 5 -> 6
+            6 -> 9
+            else -> return null
+        }
+        val range = when (rawVideoDataSpaceRange(dataSpace)) {
+            0, 1 -> 1
+            2 -> 0
+            else -> return null
+        }
+        return matrix to range
+    }
+
+    private fun rawVideoDataSpaceStandard(dataSpace: Int): Int =
+        (dataSpace ushr DATA_SPACE_STANDARD_SHIFT) and DATA_SPACE_STANDARD_MASK
+
+    private fun rawVideoDataSpaceRange(dataSpace: Int): Int =
+        (dataSpace ushr DATA_SPACE_RANGE_SHIFT) and DATA_SPACE_RANGE_MASK
+
+    private fun failRawVideoRecording(message: String, error: Exception? = null) {
+        if (error == null) {
+            Log.e(TAG, message)
+        } else {
+            Log.e(TAG, message, error)
+        }
+        stopRawVideoRecordingInternal()
     }
 
     private fun writeRawVideoHeader(
@@ -1683,25 +1903,17 @@ class CameraHelper(private val appContext: Context) {
         width: Int,
         height: Int,
         fps: Int,
+        matrix: Int,
+        range: Int,
     ) {
         // Header layout:
-        // magic(4)='WKRV', version(u8)=1, pixel_format(u8), reserved(u16)=0,
-        // width(u32), height(u32), fps(u32)
+        // magic(4)='WKRV', version=2, NV12 pixel format, H.273 matrix, range,
+        // then width(u32), height(u32), fps(u32).
         output.write(byteArrayOf('W'.code.toByte(), 'K'.code.toByte(), 'R'.code.toByte(), 'V'.code.toByte()))
-        // pixel_format 4: NV12, full range; Camera2's YUV_420_888 output is
-        // full-range (JFIF) YCbCr.
-        output.write(byteArrayOf(1, 4))
-        writeU16LE(output, 0)
+        output.write(byteArrayOf(2, 3, matrix.toByte(), range.toByte()))
         writeU32LE(output, width)
         writeU32LE(output, height)
         writeU32LE(output, fps)
-    }
-
-    private fun writeU16LE(output: FileOutputStream, value: Int) {
-        output.write(byteArrayOf(
-            (value and 0xFF).toByte(),
-            ((value ushr 8) and 0xFF).toByte(),
-        ))
     }
 
     private fun writeU32LE(output: FileOutputStream, value: Int) {

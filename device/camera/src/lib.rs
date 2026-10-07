@@ -26,7 +26,7 @@
 //!     let mut converter = FrameConverter::new(&device);
 //!     let mut frames = camera.frames();
 //!     while let Some(frame) = frames.next().await {
-//!         let upright = converter.convert(&device, &queue, &frame?);
+//!         let upright = converter.convert(&device, &queue, &frame?)?;
 //!         // Sample `upright` for rendering...
 //!     }
 //!     // Camera stops when dropped
@@ -36,8 +36,21 @@
 
 #![warn(missing_docs)]
 
+/// Only the platforms with a camera backend measure capture time.
+#[cfg(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "android",
+    target_os = "windows",
+    target_os = "linux",
+    test
+))]
+mod clock;
+mod color;
 mod converter;
 mod frame;
+/// Reader and color description for uncompressed `WKRV` recordings.
+pub mod raw_video;
 // Apple and Android frames are imported from the platform's buffers; desktop
 // frames, and the tests everywhere, are uploaded from CPU memory.
 mod sys;
@@ -48,9 +61,10 @@ mod upload;
 
 pub use converter::{FrameConverter, UPRIGHT_FORMAT};
 pub use frame::{Frame, FramePlanes, Orientation};
-/// How YCbCr samples map to R'G'B'. These are `wgpu-external-frame`'s types,
-/// which its imports report, so frames carry them without a translation.
-pub use wgpu_external_frame::{YcbcrEncoding, YcbcrMatrix, YcbcrRange};
+pub use raw_video::{RawVideoError, RawVideoFrame, RawVideoHeader, RawVideoLayout, RawVideoReader};
+pub use waterkit_video_core::{
+    ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo,
+};
 
 use std::num::NonZeroU8;
 use std::path::Path;
@@ -685,6 +699,9 @@ pub enum CameraError {
     /// GPU error.
     #[error("GPU error: {0}")]
     GpuError(String),
+    /// The frame's color description is unsupported by the frame converter.
+    #[error("unsupported frame colour: {0}")]
+    UnsupportedColor(String),
     /// Recording error.
     #[error("recording error: {0}")]
     RecordingError(String),
@@ -692,8 +709,8 @@ pub enum CameraError {
     #[error("platform error: {0}")]
     PlatformError(String),
     /// A frame the camera delivered could not be imported on the GPU device,
-    /// such as an external-format buffer on a device without the
-    /// conversion's extension. It is the frame stream's last item.
+    /// such as an external-format buffer whose conversion descriptor set the
+    /// driver cannot allocate. It is the frame stream's last item.
     #[cfg(target_os = "android")]
     #[error("camera frame import failed: {0}")]
     FrameImport(Arc<wgpu_external_frame::ahardware_buffer::HardwareBufferImportError>),
@@ -825,11 +842,17 @@ impl Camera {
     ///
     /// When capture fails, the stream yields the error as its last item and
     /// then ends. On Android that includes [`CameraError::FrameImport`] when
-    /// the device cannot import the camera's buffers: buffers a driver
-    /// describes only through an external format are converted, which needs
-    /// `VK_KHR_push_descriptor`. `request_device` enables it where the adapter
-    /// offers it; whether the camera's buffers need it shows only on the first
-    /// frame.
+    /// the device cannot import the camera's buffers. Buffers a driver
+    /// describes only through an external format are converted on the GPU,
+    /// which needs nothing beyond what `request_device` enables; whether the
+    /// camera's buffers are converted shows only on the first frame.
+    ///
+    /// On Android a frame pins its camera buffer until the GPU no longer
+    /// reads it and the frame is dropped, and at most four preview images
+    /// can be out at once — one queued in the camera helper, one in the
+    /// reader channel, and the frames the consumer still holds. A consumer
+    /// may keep at most two frames alive at once; holding more makes the
+    /// camera drop new frames until one comes back.
     pub fn frames(&self) -> impl futures::Stream<Item = Result<Frame, CameraError>> + '_ {
         self.inner.frames()
     }

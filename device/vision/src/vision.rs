@@ -39,6 +39,10 @@ impl Vision {
     /// Under [`Policy::PortableOnly`], panics when the application carries no
     /// portable realization for an enabled capability. This packaging error
     /// is fixed in `Water.toml`; the message names each capability.
+    ///
+    /// On Android with `feature = "scanner"`, panics if the application
+    /// `Context` has not been published to `ndk_context` yet or the Google
+    /// Play services probe fails, like `CodeScanner::capabilities`.
     #[must_use]
     pub fn with_policy(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>, policy: Policy) -> Self {
         let missing = uncarried(policy, ENABLED);
@@ -64,7 +68,8 @@ impl Vision {
     /// intersection on Apple; `text.native` is
     /// `OcrEngine::AvailableRecognizerLanguages` on Windows. What they lack
     /// is served by the portable realization when the application carries
-    /// one.
+    /// one. `scanner` reports the device-support probe
+    /// `CodeScanner::capabilities` performs.
     #[must_use]
     pub fn capabilities(&self) -> VisionCapabilities {
         self.capabilities.clone()
@@ -339,9 +344,8 @@ mod tests {
         let _ = Vision::with_policy(device, queue, Policy::PortableOnly);
     }
 
-    #[cfg(not(feature = "text"))]
-    #[test]
     #[cfg(not(any(feature = "barcode", feature = "text")))]
+    #[test]
     fn portable_only_selects_portable_and_can_be_constructed_without_enabled_capabilities() {
         let (device, queue) = gpu();
         let vision = Vision::with_policy(device, queue, Policy::PortableOnly);

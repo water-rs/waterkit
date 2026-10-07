@@ -4,12 +4,63 @@
 //! has one. Portable realizations are application-carried implementations
 //! selected by the `portable-*` features (#130, #132); none exists yet, so
 //! every portable offer is [`Offer::Absent`].
+//!
+//! The `scanner` capability has its own per-platform modules: the Google
+//! code scanner on Android and `VisionKit`'s `DataScannerViewController` on
+//! iOS, with no system scanner elsewhere. The `barcode` and `text`
+//! capabilities' Apple realization lives in [`apple_vision`].
 
-#[cfg(any(target_os = "ios", target_os = "macos"))]
-pub mod apple;
+#[cfg(all(
+    any(target_os = "ios", target_os = "macos"),
+    any(feature = "barcode", feature = "text")
+))]
+pub mod apple_vision;
+
+/// A retained `CVPixelBuffer` that may cross threads.
+///
+/// Core Foundation's reference counting is thread-safe, and nothing here
+/// reads or writes the buffer's pixels on the CPU: it is only handed to
+/// Vision, which samples it on the GPU.
+#[cfg(all(any(target_os = "ios", target_os = "macos"), feature = "camera"))]
+#[derive(Debug, Clone)]
+pub struct PixelBuffer(pub objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>);
+
+// SAFETY: see the type's documentation; the buffer is only retained, released
+// and handed to Vision, all thread-safe in Core Video. `Sync` comes with the
+// same argument: readers only carry the reference.
+#[cfg(all(any(target_os = "ios", target_os = "macos"), feature = "camera"))]
+#[expect(
+    clippy::non_send_fields_in_send_ty,
+    reason = "the Core Foundation reference is exactly what this impl vouches for"
+)]
+unsafe impl Send for PixelBuffer {}
+
+// SAFETY: as above.
+#[cfg(all(any(target_os = "ios", target_os = "macos"), feature = "camera"))]
+unsafe impl Sync for PixelBuffer {}
+
+#[cfg(all(feature = "scanner", target_os = "android"))]
+mod android;
+#[cfg(all(feature = "scanner", target_os = "ios"))]
+mod apple;
+#[cfg(all(
+    feature = "scanner",
+    not(any(target_os = "android", target_os = "ios"))
+))]
+mod unsupported;
+
+#[cfg(all(feature = "scanner", target_os = "android"))]
+pub use android::{scan, scanner_available, scanner_symbologies};
+#[cfg(all(feature = "scanner", target_os = "ios"))]
+pub use apple::{scan, scanner_available, scanner_symbologies};
+#[cfg(all(
+    feature = "scanner",
+    not(any(target_os = "android", target_os = "ios"))
+))]
+pub use unsupported::{scan, scanner_available, scanner_symbologies};
 
 #[cfg(all(any(target_os = "ios", target_os = "macos"), feature = "barcode"))]
-pub use apple as native;
+pub use apple_vision as native;
 
 #[cfg(not(any(target_os = "ios", target_os = "macos")))]
 pub mod native {

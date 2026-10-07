@@ -1,7 +1,5 @@
 //! No native text realization exists on this platform.
 
-use std::future::Future;
-
 use icu_locale_core::LanguageIdentifier;
 
 use crate::{
@@ -23,14 +21,25 @@ pub const fn offer(_request: &RecognizeText) -> Offer {
 /// Native text is never selected here; `offer` is always
 /// [`Offer::Absent`].
 pub fn prepare(_plan: &TextPlan) -> Result<(), VisionError> {
-    unreachable!("the fallback text realization is never selected")
+    unreachable!("a platform without a native text recognizer never selects it")
 }
 
 /// Native text is never selected here; `offer` is always
 /// [`Offer::Absent`].
-pub fn recognize(
+#[expect(
+    clippy::unused_async,
+    reason = "keeps the signature every platform's native realization shares"
+)]
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        clippy::future_not_send,
+        reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
+    )
+)]
+pub async fn recognize(
     _pass: &mut Pass<'_>,
     _plan: &TextPlan,
-) -> impl Future<Output = Result<Vec<TextLine>, VisionError>> {
-    async { unreachable!("the fallback text realization is never selected") }
+) -> Result<Vec<TextLine>, VisionError> {
+    unreachable!("a platform without a native text recognizer never selects it")
 }

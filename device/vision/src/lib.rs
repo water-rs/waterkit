@@ -46,6 +46,15 @@
 //! Camera frame channels are already newest-wins (`bounded(1)` plus
 //! `force_send`), so this `then` pattern never queues stale frames and needs no
 //! extra channel.
+//!
+//! The crate also ships the one-shot system code scanner behind the `scanner`
+//! feature: [`CodeScanner`] presents the platform's own scanning UI — the
+//! Google code scanner of Google Play services on Android (no camera
+//! permission required) and `VisionKit`'s `DataScannerViewController` on iOS —
+//! and resolves to the decoded [`Barcode`]. macOS, Windows and Linux have no
+//! system scanner; [`CodeScanner::capabilities`] reports it unavailable there
+//! and [`CodeScanner::scan`] is an error, never a fallback: `WaterUI` owns
+//! the fallback scanning view.
 
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
@@ -53,16 +62,16 @@
 // thread-boundaries; every other target stays forbidding unsafe code.
 #![cfg_attr(not(any(target_os = "ios", target_os = "macos")), forbid(unsafe_code))]
 
-#[cfg(feature = "barcode")]
 mod barcode;
 mod capability;
 mod error;
 mod geometry;
 mod image;
 mod request;
+#[cfg(feature = "scanner")]
+mod scanner;
 mod sealed;
 mod selection;
-#[cfg(feature = "barcode")]
 mod symbology;
 mod sys;
 #[cfg(test)]
@@ -72,15 +81,16 @@ mod text;
 mod vision;
 
 #[cfg(feature = "barcode")]
-pub use barcode::{Barcode, DetectBarcodes, Payload};
+pub use barcode::DetectBarcodes;
+pub use barcode::{Barcode, Payload};
 pub use capability::{Portable, RealizationSet, VisionCapabilities};
-#[cfg(feature = "barcode")]
 pub use enumset::EnumSet;
 pub use error::VisionError;
 pub use geometry::{Point, Quad};
 pub use image::Image;
 pub use request::Request;
-#[cfg(feature = "barcode")]
+#[cfg(feature = "scanner")]
+pub use scanner::{CodeScanner, ScannedCode, ScannerCapabilities};
 pub use symbology::Symbology;
 #[cfg(feature = "text")]
 pub use text::{RecognitionLevel, RecognizeText, TextLine, TextWord};

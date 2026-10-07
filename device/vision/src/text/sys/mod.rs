@@ -11,6 +11,6 @@ mod apple;
 pub use apple::*;
 
 #[cfg(not(any(target_os = "windows", target_os = "ios", target_os = "macos")))]
-mod fallback;
+mod unsupported;
 #[cfg(not(any(target_os = "windows", target_os = "ios", target_os = "macos")))]
-pub use fallback::*;
+pub use unsupported::*;

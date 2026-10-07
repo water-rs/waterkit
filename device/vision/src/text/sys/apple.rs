@@ -1,7 +1,7 @@
 //! The native text realization: Apple Vision's `RecognizeTextRequest`
 //! bridged through `swift-bridge` like the crate's other Apple bridges.
 //!
-//! The shared pass handler and bridge come from [`crate::sys::apple`]; this
+//! The shared pass handler and bridge come from [`crate::sys::apple_vision`]; this
 //! module owns what text asks of them: the level-parameterized language
 //! set, the offer, and the decode into [`TextLine`]s with per-word bounds.
 
@@ -15,7 +15,7 @@ use crate::{
     text::{RecognizeText, TextPlan},
 };
 
-use crate::sys::apple::ffi;
+use crate::sys::apple_vision::ffi;
 
 /// The wire value for [`RecognitionLevel::Fast`].
 const FFI_LEVEL_FAST: u8 = 0;
@@ -118,12 +118,12 @@ pub fn prepare(plan: &TextPlan) -> Result<(), VisionError> {
 /// Runs text recognition through Vision on the pass's shared handler.
 pub async fn recognize(pass: &mut Pass<'_>, plan: &TextPlan) -> Result<Vec<TextLine>, VisionError> {
     let handler = pass
-        .prepared::<crate::sys::apple::AppleImage>()
+        .prepared::<crate::sys::apple_vision::AppleImage>()
         .await?
         .handler;
     let tags: Vec<String> = plan.languages.iter().map(ToString::to_string).collect();
     let json = serde_json::to_string(&tags).expect("serializing strings cannot fail");
-    let lines = crate::sys::apple::ffi_outcome::<WireTextLine>(|callback| {
+    let lines = crate::sys::apple_vision::ffi_outcome::<WireTextLine>(|callback| {
         ffi::vision_recognize_text(handler, ffi_level(plan.level), &json, callback);
     })
     .await?;
@@ -148,14 +148,14 @@ impl WireTextLine {
         TextLine {
             text: self.text,
             confidence: Some(self.confidence),
-            bounds: crate::sys::apple::wire_quad(self.corners),
+            bounds: crate::sys::apple_vision::wire_quad(self.corners),
             words: self
                 .words
                 .into_iter()
                 .map(|word| TextWord {
                     text: word.text,
                     confidence: Some(word.confidence),
-                    bounds: crate::sys::apple::wire_quad(word.corners),
+                    bounds: crate::sys::apple_vision::wire_quad(word.corners),
                 })
                 .collect(),
         }

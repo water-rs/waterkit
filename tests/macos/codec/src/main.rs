@@ -3,6 +3,8 @@
 //! Tests encoding performance using hardware accelerated (Apple `VideoToolbox`) encoders.
 //! Measures throughput with screen capture as input source.
 
+mod common;
+
 use std::time::Instant;
 use waterkit_codec::{CodecType, Encoder, EncoderProfile};
 
@@ -110,7 +112,13 @@ struct BenchCase<'a> {
 }
 
 fn run_case(results: &mut Vec<BenchResult>, case: &BenchCase<'_>, nv12_data: &[u8]) {
-    match Encoder::new(case.codec, case.width, case.height, case.profile) {
+    match Encoder::new(
+        case.codec,
+        case.width,
+        case.height,
+        case.profile,
+        common::bt709_sdr_limited(),
+    ) {
         Ok(mut encoder) => {
             results.push(benchmark_encoder(
                 case.name,

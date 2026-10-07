@@ -216,6 +216,47 @@ pub enum MatrixCoefficients {
     Bt2020NonConstantLuminance,
 }
 
+impl MatrixCoefficients {
+    /// Returns the canonical ITU-T H.273 matrix-coefficients code point.
+    #[must_use]
+    pub const fn cicp(self) -> u8 {
+        match self {
+            Self::Bt709 => 1,
+            Self::Bt601 => 6,
+            Self::Bt2020NonConstantLuminance => 9,
+            Self::Bt2020ConstantLuminance => 10,
+        }
+    }
+
+    /// Returns the matrix coefficients represented by a known H.273 code point.
+    ///
+    /// Both code points 5 (ITU-R BT.470 System B, G) and 6 (SMPTE 170M)
+    /// use the BT.601 matrix in this API.
+    #[must_use]
+    pub const fn from_cicp(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(Self::Bt709),
+            5 | 6 => Some(Self::Bt601),
+            9 => Some(Self::Bt2020NonConstantLuminance),
+            10 => Some(Self::Bt2020ConstantLuminance),
+            _ => None,
+        }
+    }
+
+    /// The [`ycbcr_mode`] matrix code [`YCBCR_WGSL`] decodes these
+    /// coefficients with, or `None` for constant-luminance BT.2020, which is
+    /// not a matrix and which the shared fragment does not implement.
+    #[must_use]
+    pub const fn ycbcr_mode(self) -> Option<u32> {
+        match self {
+            Self::Bt709 => Some(ycbcr_mode::MATRIX_BT709),
+            Self::Bt601 => Some(ycbcr_mode::MATRIX_BT601),
+            Self::Bt2020NonConstantLuminance => Some(ycbcr_mode::MATRIX_BT2020),
+            Self::Bt2020ConstantLuminance => None,
+        }
+    }
+}
+
 /// Color primaries signaled by a video stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ColorPrimaries {
@@ -234,6 +275,9 @@ pub enum ColorPrimaries {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TransferFunction {
     /// Conventional standard-dynamic-range transfer function.
+    ///
+    /// This does not distinguish BT.709, sRGB, or SMPTE 170M; CICP signaling
+    /// uses code point 1 (BT.709) for this value.
     #[default]
     Sdr,
     /// SMPTE ST 2084 perceptual quantizer.
@@ -250,6 +294,17 @@ pub enum ColorRange {
     Limited,
     /// Full component range.
     Full,
+}
+
+impl ColorRange {
+    /// The [`ycbcr_mode`] range code [`YCBCR_WGSL`] decodes this range with.
+    #[must_use]
+    pub const fn ycbcr_mode(self) -> u32 {
+        match self {
+            Self::Limited => ycbcr_mode::RANGE_LIMITED,
+            Self::Full => ycbcr_mode::RANGE_FULL,
+        }
+    }
 }
 
 /// Static content-light metadata for HDR video.
@@ -299,7 +354,46 @@ pub struct VideoColorInfo {
     pub dolby_vision: bool,
 }
 
+/// ITU-T H.273 (CICP) code points, as video bitstreams and the ISO BMFF
+/// `colr`/`nclx` box carry them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CicpColor {
+    /// Color-primaries code point: BT.709 1, BT.601/SMPTE 170M 6,
+    /// BT.2020 9, or Display P3 12.
+    pub primaries: u8,
+    /// Transfer-characteristics code point: SDR/BT.709 1, PQ 16, or HLG 18.
+    pub transfer: u8,
+    /// Matrix-coefficients code point: BT.709 1, BT.601 6,
+    /// BT.2020 non-constant-luminance 9, or BT.2020 constant-luminance 10.
+    pub matrix: u8,
+    /// Whether the encoded component values use full range.
+    pub full_range: bool,
+}
+
 impl VideoColorInfo {
+    /// Returns this description's ITU-T H.273 (CICP) code points.
+    ///
+    /// `TransferFunction::Sdr` maps to code point 1 (BT.709), because the
+    /// shared SDR value does not distinguish BT.709, sRGB, and SMPTE 170M.
+    #[must_use]
+    pub const fn cicp(&self) -> CicpColor {
+        CicpColor {
+            primaries: match self.primaries {
+                ColorPrimaries::Bt709 => 1,
+                ColorPrimaries::Bt601 => 6,
+                ColorPrimaries::Bt2020 => 9,
+                ColorPrimaries::DisplayP3 => 12,
+            },
+            transfer: match self.transfer {
+                TransferFunction::Sdr => 1,
+                TransferFunction::Pq => 16,
+                TransferFunction::Hlg => 18,
+            },
+            matrix: self.matrix.cicp(),
+            full_range: matches!(self.range, ColorRange::Full),
+        }
+    }
+
     /// Returns whether this description represents HDR transfer characteristics.
     #[must_use]
     pub const fn is_hdr(self) -> bool {
@@ -320,7 +414,80 @@ impl VideoColorInfo {
 mod tests {
     use std::{num::NonZeroU32, time::Duration};
 
-    use super::{ColorPrimaries, FrameRate, FrameTiming, TransferFunction, VideoColorInfo};
+    use super::{
+        CicpColor, ColorPrimaries, ColorRange, FrameRate, FrameTiming, MatrixCoefficients,
+        TransferFunction, VideoColorInfo,
+    };
+
+    #[test]
+    fn video_color_info_maps_every_supported_cicp_code_point() {
+        let mut color = VideoColorInfo::default();
+
+        for (primaries, code) in [
+            (ColorPrimaries::Bt709, 1),
+            (ColorPrimaries::Bt601, 6),
+            (ColorPrimaries::Bt2020, 9),
+            (ColorPrimaries::DisplayP3, 12),
+        ] {
+            color.primaries = primaries;
+            assert_eq!(color.cicp().primaries, code);
+        }
+
+        for (transfer, code) in [
+            (TransferFunction::Sdr, 1),
+            (TransferFunction::Pq, 16),
+            (TransferFunction::Hlg, 18),
+        ] {
+            color.transfer = transfer;
+            assert_eq!(color.cicp().transfer, code);
+        }
+
+        for (matrix, code) in [
+            (MatrixCoefficients::Bt709, 1),
+            (MatrixCoefficients::Bt601, 6),
+            (MatrixCoefficients::Bt2020NonConstantLuminance, 9),
+            (MatrixCoefficients::Bt2020ConstantLuminance, 10),
+        ] {
+            color.matrix = matrix;
+            assert_eq!(color.cicp().matrix, code);
+        }
+
+        color.range = ColorRange::Limited;
+        assert!(!color.cicp().full_range);
+        color.range = ColorRange::Full;
+        assert!(color.cicp().full_range);
+    }
+
+    #[test]
+    fn cicp_color_is_a_copyable_code_point_record() {
+        let color = CicpColor {
+            primaries: 9,
+            transfer: 18,
+            matrix: 9,
+            full_range: false,
+        };
+        let copied_color = color;
+        assert_eq!(color, copied_color);
+    }
+
+    #[test]
+    fn matrix_coefficients_map_to_and_from_cicp() {
+        for (matrix, code) in [
+            (MatrixCoefficients::Bt709, 1),
+            (MatrixCoefficients::Bt601, 6),
+            (MatrixCoefficients::Bt2020NonConstantLuminance, 9),
+            (MatrixCoefficients::Bt2020ConstantLuminance, 10),
+        ] {
+            assert_eq!(matrix.cicp(), code);
+            assert_eq!(MatrixCoefficients::from_cicp(code), Some(matrix));
+        }
+        assert_eq!(
+            MatrixCoefficients::from_cicp(5),
+            Some(MatrixCoefficients::Bt601)
+        );
+        assert_eq!(MatrixCoefficients::from_cicp(0), None);
+        assert_eq!(MatrixCoefficients::from_cicp(2), None);
+    }
 
     #[test]
     fn frame_timing_retains_media_time_instead_of_wall_clock_time() {

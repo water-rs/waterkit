@@ -205,7 +205,7 @@ fn assert_read(lines: &[TextLine], expected: &[&str]) {
             );
         }
         for word in &line.words {
-            assert!(!word.text.is_empty());
+            assert_ne!(word.text, "");
             for point in word.bounds.0 {
                 assert!(
                     (0.0..=1.0).contains(&point.x) && (0.0..=1.0).contains(&point.y),
@@ -273,23 +273,31 @@ fn uprights_a_rotated_texture_before_recognition() {
 #[cfg(feature = "camera")]
 #[test]
 fn recognizes_text_in_camera_planes() {
-    use waterkit_camera::{FramePlanes, YcbcrEncoding, YcbcrMatrix, YcbcrRange};
+    use waterkit_camera::{
+        ColorPrimaries, ColorRange, FramePlanes, MatrixCoefficients, TransferFunction,
+        VideoColorInfo,
+    };
 
     let Some(vision) = english_vision() else {
         return;
     };
-    let encoding = YcbcrEncoding {
-        matrix: YcbcrMatrix::Bt709,
-        range: YcbcrRange::Video,
+    let color = VideoColorInfo {
+        matrix: MatrixCoefficients::Bt709,
+        primaries: ColorPrimaries::Bt709,
+        transfer: TransferFunction::Sdr,
+        range: ColorRange::Limited,
+        content_light_level: None,
+        dolby_vision: false,
     };
     let (gray, w, h) = render(&LINES);
     let request = RecognizeText::new();
 
     let rgb_texture = bgra_texture(&vision.device, &vision.queue, &bgra(&gray), w, h);
     let rgb = FramePlanes::Rgb(rgb_texture.create_view(&wgpu::TextureViewDescriptor::default()));
-    let lines =
-        pollster::block_on(vision.perform(&Image::from_planes(&rgb, Orientation::Up), &request))
-            .expect("OCR on RGB camera planes");
+    let lines = pollster::block_on(
+        vision.perform(&Image::from_planes(&rgb, color, Orientation::Up), &request),
+    )
+    .expect("OCR on RGB camera planes");
     assert_read(&lines, &["QUICK", "FOX"]);
 
     let luma_texture = texture(&vision.device, w, h, wgpu::TextureFormat::R8Unorm);
@@ -304,11 +312,11 @@ fn recognizes_text_in_camera_planes() {
     let ycbcr420 = FramePlanes::YCbCr420 {
         luma,
         chroma: chroma_texture.create_view(&wgpu::TextureViewDescriptor::default()),
-        encoding,
     };
-    let lines = pollster::block_on(
-        vision.perform(&Image::from_planes(&ycbcr420, Orientation::Up), &request),
-    )
+    let lines = pollster::block_on(vision.perform(
+        &Image::from_planes(&ycbcr420, color, Orientation::Up),
+        &request,
+    ))
     .expect("OCR on YCbCr420 camera planes");
     assert_read(&lines, &["QUICK", "FOX"]);
 
@@ -338,11 +346,11 @@ fn recognizes_text_in_camera_planes() {
     );
     let ycbcr422 = FramePlanes::YCbCr422 {
         yuyv: yuyv_texture.create_view(&wgpu::TextureViewDescriptor::default()),
-        encoding,
     };
-    let lines = pollster::block_on(
-        vision.perform(&Image::from_planes(&ycbcr422, Orientation::Up), &request),
-    )
+    let lines = pollster::block_on(vision.perform(
+        &Image::from_planes(&ycbcr422, color, Orientation::Up),
+        &request,
+    ))
     .expect("OCR on YCbCr422 camera planes");
     assert_read(&lines, &["QUICK", "FOX"]);
 }

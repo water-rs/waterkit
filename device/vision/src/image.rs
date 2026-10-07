@@ -18,11 +18,13 @@ pub enum Pixels {
         /// How the stored pixels relate to upright.
         orientation: Orientation,
     },
-    /// Camera frame planes and their orientation.
+    /// Camera frame planes, their colour description, and their orientation.
     #[cfg(feature = "camera")]
     Frame {
         /// Ref-counted camera plane views.
         planes: waterkit_camera::FramePlanes,
+        /// How the plane samples decode to colour.
+        color: waterkit_camera::VideoColorInfo,
         /// How the stored pixels relate to upright.
         orientation: Orientation,
         /// The captured `CVPixelBuffer`, when the frame carries one.
@@ -30,7 +32,7 @@ pub enum Pixels {
         /// Native realizations serve straight from it; frames uploaded from
         /// memory carry no buffer and prepare through their planes.
         #[cfg(any(target_os = "ios", target_os = "macos"))]
-        pixel_buffer: Option<crate::sys::apple::PixelBuffer>,
+        pixel_buffer: Option<crate::sys::PixelBuffer>,
     },
     /// JPEG, PNG, or HEIF data, decoded with its own orientation metadata by
     /// the serving realization.
@@ -87,30 +89,28 @@ impl Image {
     #[cfg(feature = "camera")]
     pub(crate) fn from_planes(
         planes: &waterkit_camera::FramePlanes,
+        color: waterkit_camera::VideoColorInfo,
         orientation: Orientation,
     ) -> Self {
-        #[cfg(any(target_os = "ios", target_os = "macos"))]
-        let pixels = Pixels::Frame {
-            planes: planes.clone(),
-            orientation,
-            pixel_buffer: None,
-        };
-        #[cfg(not(any(target_os = "ios", target_os = "macos")))]
-        let pixels = Pixels::Frame {
-            planes: planes.clone(),
-            orientation,
-        };
-        Self { pixels }
+        Self {
+            pixels: Pixels::Frame {
+                planes: planes.clone(),
+                color,
+                orientation,
+                #[cfg(any(target_os = "ios", target_os = "macos"))]
+                pixel_buffer: None,
+            },
+        }
     }
 }
 
 #[cfg(feature = "camera")]
 impl From<&waterkit_camera::Frame> for Image {
     fn from(frame: &waterkit_camera::Frame) -> Self {
-        let mut image = Self::from_planes(frame.planes(), frame.orientation());
+        let mut image = Self::from_planes(frame.planes(), frame.color(), frame.orientation());
         #[cfg(any(target_os = "ios", target_os = "macos"))]
         if let Pixels::Frame { pixel_buffer, .. } = &mut image.pixels {
-            *pixel_buffer = frame.pixel_buffer().map(crate::sys::apple::PixelBuffer);
+            *pixel_buffer = frame.pixel_buffer().map(crate::sys::PixelBuffer);
         }
         image
     }
@@ -194,8 +194,11 @@ mod tests {
 
     #[cfg(feature = "camera")]
     #[test]
-    fn frame_images_keep_all_camera_plane_views_and_orientation() {
-        use waterkit_camera::{FramePlanes, YcbcrEncoding, YcbcrMatrix, YcbcrRange};
+    fn frame_images_keep_all_camera_plane_views_color_and_orientation() {
+        use waterkit_camera::{
+            ColorPrimaries, ColorRange, FramePlanes, MatrixCoefficients, TransferFunction,
+            VideoColorInfo,
+        };
 
         let (device, _) = gpu();
         let make_plane = || {
@@ -209,21 +212,27 @@ mod tests {
                 },
             )
         };
-        let encoding = YcbcrEncoding {
-            matrix: YcbcrMatrix::Bt709,
-            range: YcbcrRange::Video,
+        let color = VideoColorInfo {
+            matrix: MatrixCoefficients::Bt2020NonConstantLuminance,
+            primaries: ColorPrimaries::Bt2020,
+            transfer: TransferFunction::Hlg,
+            range: ColorRange::Limited,
+            content_light_level: None,
+            dolby_vision: false,
         };
 
         let rgb_texture = make_plane();
         let rgb_view = rgb_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let rgb = FramePlanes::Rgb(rgb_view.clone());
-        let rgb_image = Image::from_planes(&rgb, Orientation::Right);
+        let rgb_image = Image::from_planes(&rgb, color, Orientation::Right);
         match rgb_image.pixels() {
             Pixels::Frame {
                 planes: FramePlanes::Rgb(view),
+                color: actual_color,
                 orientation,
                 ..
             } => {
+                assert_eq!(*actual_color, color);
                 assert_eq!(*orientation, Orientation::Right);
                 assert_eq!(view, &rgb_view);
                 assert_eq!(view.texture(), &rgb_texture);
@@ -238,20 +247,20 @@ mod tests {
         let ycbcr420 = FramePlanes::YCbCr420 {
             luma: luma.clone(),
             chroma: chroma.clone(),
-            encoding,
         };
-        let ycbcr420_image = Image::from_planes(&ycbcr420, Orientation::Right);
+        let ycbcr420_image = Image::from_planes(&ycbcr420, color, Orientation::Right);
         match ycbcr420_image.pixels() {
             Pixels::Frame {
                 planes:
                     FramePlanes::YCbCr420 {
                         luma: actual_luma,
                         chroma: actual_chroma,
-                        ..
                     },
+                color: actual_color,
                 orientation,
                 ..
             } => {
+                assert_eq!(*actual_color, color);
                 assert_eq!(*orientation, Orientation::Right);
                 assert_eq!(actual_luma, &luma);
                 assert_eq!(actual_luma.texture(), &luma_texture);
@@ -263,20 +272,16 @@ mod tests {
 
         let yuyv_texture = make_plane();
         let yuyv = yuyv_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let ycbcr422 = FramePlanes::YCbCr422 {
-            yuyv: yuyv.clone(),
-            encoding,
-        };
-        let ycbcr422_image = Image::from_planes(&ycbcr422, Orientation::Right);
+        let ycbcr422 = FramePlanes::YCbCr422 { yuyv: yuyv.clone() };
+        let ycbcr422_image = Image::from_planes(&ycbcr422, color, Orientation::Right);
         match ycbcr422_image.pixels() {
             Pixels::Frame {
-                planes:
-                    FramePlanes::YCbCr422 {
-                        yuyv: actual_yuyv, ..
-                    },
+                planes: FramePlanes::YCbCr422 { yuyv: actual_yuyv },
+                color: actual_color,
                 orientation,
                 ..
             } => {
+                assert_eq!(*actual_color, color);
                 assert_eq!(*orientation, Orientation::Right);
                 assert_eq!(actual_yuyv, &yuyv);
                 assert_eq!(actual_yuyv.texture(), &yuyv_texture);

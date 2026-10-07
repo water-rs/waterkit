@@ -96,7 +96,7 @@ async fn stream() -> Result<(), CameraError> {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("camera frame"),
             });
-            converter.encode(&device, &mut encoder, &frame, &upright);
+            converter.encode(&device, &mut encoder, &frame, &upright)?;
             queue.submit([encoder.finish()]);
             tracing::info!(
                 "frame {frame_count}: {}x{} {layout} {:?}, upright {}x{} @ {:?}",

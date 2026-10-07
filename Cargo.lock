@@ -305,7 +305,7 @@ version = "0.38.0+1.3.281"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bb44936d800fea8f016d7f2311c6a4f97aebd5dc86f09906139ec848cf3a46f"
 dependencies = [
- "libloading",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -1070,7 +1070,7 @@ checksum = "157a8ba7b480713b56f4c09fd13fc3e0a22a5dfab8097ba61cbc5feef950788a"
 dependencies = [
  "glob",
  "libc",
- "libloading",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -1575,12 +1575,35 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "darling"
+version = "0.21.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cdf337090841a411e2a7f3deb9187445851f91b309c0c0a29e05f74a00a48c0"
+dependencies = [
+ "darling_core 0.21.3",
+ "darling_macro 0.21.3",
+]
+
+[[package]]
+name = "darling"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed17f5901b6630b993ca003def43f2f8ef4014fc13b047b57aad617ff32bc2ec"
 dependencies = [
- "darling_core",
- "darling_macro",
+ "darling_core 0.24.1",
+ "darling_macro 0.24.1",
+]
+
+[[package]]
+name = "darling_core"
+version = "0.21.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1247195ecd7e3c85f83c8d2a366e4210d588e802133e1e355180a9870b517ea4"
+dependencies = [
+ "fnv",
+ "ident_case",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1598,11 +1621,22 @@ dependencies = [
 
 [[package]]
 name = "darling_macro"
+version = "0.21.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d38308df82d1080de0afee5d069fa14b0326a88c14f15c5ccda35b4a6c414c81"
+dependencies = [
+ "darling_core 0.21.3",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "darling_macro"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ac7135c3ef02b2f7833bbeb1be5ba7f966dcde8a87c6b87f65a778d71a02785"
 dependencies = [
- "darling_core",
+ "darling_core 0.24.1",
  "quote",
  "syn 3.0.5",
 ]
@@ -1815,7 +1849,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -2029,6 +2063,27 @@ version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67c78a4d8fdf9953a5c9d458f9efe940fd97a0cab0941c075a813ac594733827"
 dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "enumset"
+version = "1.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ccc5801fd11762e24d1e420d01d2ac518f2a2ca4329d4fbb6639f2412b6204e0"
+dependencies = [
+ "enumset_derive",
+]
+
+[[package]]
+name = "enumset_derive"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4bd536557b58c682b217b8fb199afdff47cd3eff260623f19e77074eb073d63a"
+dependencies = [
+ "darling 0.21.3",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -2296,6 +2351,12 @@ dependencies = [
  "nanorand",
  "spin",
 ]
+
+[[package]]
+name = "fnv"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "foldhash"
@@ -2937,6 +2998,7 @@ checksum = "d56e28588da92eee5c3201a6eff33fabdd49b62269c8938d4ff050ce4d900deb"
 dependencies = [
  "displaydoc",
  "litemap",
+ "serde",
  "tinystr",
  "writeable",
  "zerovec",
@@ -3397,7 +3459,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6aae1df220ece3c0ada96b8153459b67eebe9ae9212258bb0134ae60416fdf76"
 dependencies = [
  "libc",
- "libloading",
+ "libloading 0.8.9",
  "pkg-config",
 ]
 
@@ -3459,6 +3521,16 @@ name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if 1.0.4",
+ "windows-link 0.2.1",
+]
+
+[[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
 dependencies = [
  "cfg-if 1.0.4",
  "windows-link 0.2.1",
@@ -4825,6 +4897,7 @@ dependencies = [
  "objc2 0.6.4",
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
+ "objc2-io-surface",
 ]
 
 [[package]]
@@ -6123,7 +6196,7 @@ dependencies = [
  "num",
  "once_cell",
  "serde",
- "sha2",
+ "sha2 0.11.0",
  "zbus",
 ]
 
@@ -6273,7 +6346,7 @@ version = "3.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d607aa01a3cb0ad757d6fd216136910db3c97b102fe686585689615a02dbcdc"
 dependencies = [
- "darling",
+ "darling 0.24.1",
  "proc-macro2",
  "quote",
  "syn 3.0.5",
@@ -6284,6 +6357,17 @@ name = "sha1"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if 1.0.4",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if 1.0.4",
  "cpufeatures 0.2.17",
@@ -6830,6 +6914,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sync_wrapper"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
+
+[[package]]
 name = "synstructure"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7080,6 +7170,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1e27c91459209c2986af3dcf603a5a74a4368754ce37414f59acc971167f643"
 dependencies = [
  "displaydoc",
+ "serde_core",
  "zerovec",
 ]
 
@@ -7586,6 +7677,7 @@ dependencies = [
  "waterkit-location",
  "waterkit-nfc",
  "waterkit-notification",
+ "waterkit-otp",
  "waterkit-passkey",
  "waterkit-permission",
  "waterkit-regional",
@@ -7596,6 +7688,7 @@ dependencies = [
  "waterkit-speech",
  "waterkit-system",
  "waterkit-video",
+ "waterkit-vision",
  "waterkit-wallet",
 ]
 
@@ -7704,6 +7797,7 @@ dependencies = [
 name = "waterkit-build"
 version = "0.1.4"
 dependencies = [
+ "futures-channel",
  "jni 0.22.4",
  "ndk-context",
  "swift-bridge-build",
@@ -7735,19 +7829,27 @@ dependencies = [
  "futures",
  "image",
  "jni 0.22.4",
+ "ndk",
  "ndk-context",
  "nokhwa",
  "objc",
+ "objc2-core-foundation",
+ "objc2-core-video",
+ "objc2-io-surface",
  "pollster 1.0.1",
  "shaderloom",
  "swift-bridge",
  "thiserror 2.0.20",
  "tracing",
+ "tracing-subscriber",
+ "wasm-bindgen-futures",
  "waterkit-build",
  "waterkit-codec",
  "waterkit-core",
  "waterkit-video-container",
+ "waterkit-video-core",
  "wgpu",
+ "wgpu-external-frame",
  "winit",
  "yuv",
 ]
@@ -7804,6 +7906,7 @@ dependencies = [
  "moxcms",
  "ndk",
  "ndk-sys",
+ "num-traits",
  "objc2 0.6.4",
  "objc2-core-foundation",
  "objc2-core-media",
@@ -7812,6 +7915,7 @@ dependencies = [
  "objc2-io-surface",
  "objc2-metal 0.3.2",
  "objc2-video-toolbox",
+ "pollster 1.0.1",
  "rav1d",
  "rav1e",
  "shaderloom",
@@ -7834,6 +7938,7 @@ dependencies = [
  "pollster 1.0.1",
  "waterkit-codec",
  "waterkit-screen",
+ "waterkit-video-core",
  "wgpu",
 ]
 
@@ -7889,7 +7994,6 @@ version = "0.1.4"
 dependencies = [
  "futures",
  "jni 0.22.4",
- "ndk-context",
  "rfd",
  "roxmltree",
  "swift-bridge",
@@ -7974,6 +8078,7 @@ dependencies = [
  "js-sys",
  "swift-bridge",
  "thiserror 2.0.20",
+ "tracing",
  "wasm-bindgen",
  "waterkit-build",
  "waterkit-core",
@@ -8033,6 +8138,22 @@ dependencies = [
  "core-foundation-sys 0.8.7",
  "tracing",
  "waterkit-notification",
+]
+
+[[package]]
+name = "waterkit-otp"
+version = "0.1.4"
+dependencies = [
+ "base64 0.22.1",
+ "futures",
+ "hex",
+ "jni 0.22.4",
+ "ndk-context",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "tracing",
+ "waterkit-build",
+ "waterkit-core",
 ]
 
 [[package]]
@@ -8218,6 +8339,8 @@ dependencies = [
  "owo-colors",
  "process_control",
  "regex",
+ "serde",
+ "serde_json",
  "toml_edit",
  "tracing",
  "tracing-subscriber",
@@ -8231,9 +8354,12 @@ version = "0.1.0"
 dependencies = [
  "android_logger",
  "futures",
+ "image",
  "jni 0.22.4",
  "log",
  "ndk-context",
+ "serde",
+ "serde_json",
  "tokio",
  "waterkit",
  "waterkit-build",
@@ -8401,6 +8527,38 @@ dependencies = [
  "waterkit-video-core",
  "windows 0.62.2",
  "zenwave",
+]
+
+[[package]]
+name = "waterkit-vision"
+version = "0.1.4"
+dependencies = [
+ "ab_glyph",
+ "bytes",
+ "enumset",
+ "futures",
+ "icu_locale_core",
+ "image",
+ "jni 0.22.4",
+ "ndk-context",
+ "pollster 1.0.1",
+ "swift-bridge",
+ "thiserror 2.0.20",
+ "tracing",
+ "waterkit-build",
+ "waterkit-camera",
+ "waterkit-core",
+ "wgpu",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "waterkit-vision-test"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "waterkit-test-report",
+ "waterkit-vision",
 ]
 
 [[package]]
@@ -8680,6 +8838,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "wgpu-external-frame"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "911f341938a2bacb3a3f270082e8cd52d3ae51e667a1a9abe8367ea530a317d5"
+dependencies = [
+ "ash",
+ "glow",
+ "libc",
+ "libloading 0.9.0",
+ "ndk",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-io-surface",
+ "objc2-metal 0.3.2",
+ "sync_wrapper",
+ "thiserror 2.0.20",
+ "wgpu",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "wgpu-hal"
 version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8701,7 +8880,7 @@ dependencies = [
  "js-sys",
  "khronos-egl",
  "libc",
- "libloading",
+ "libloading 0.8.9",
  "log",
  "naga",
  "naga-types",
@@ -9455,7 +9634,7 @@ dependencies = [
  "as-raw-xcb-connection",
  "gethostname",
  "libc",
- "libloading",
+ "libloading 0.8.9",
  "once_cell",
  "rustix 1.1.4",
  "x11rb-protocol",
@@ -9807,6 +9986,7 @@ version = "0.11.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb0464e17806c1d976d5cba29399c7f08e516e279e2ba493f63123b5fca67dd8"
 dependencies = [
+ "serde",
  "yoke",
  "zerofrom",
  "zerovec-derive",

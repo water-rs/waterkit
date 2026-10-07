@@ -3,6 +3,9 @@ import AVFoundation
 import CoreMedia
 import CoreVideo
 import Metal
+#if os(iOS)
+import UIKit
+#endif
 
 // MARK: - Camera State
 
@@ -23,15 +26,17 @@ private let rawPhotoLock = NSLock()
 // RAW video frame stream state
 private var rawVideoFileHandle: FileHandle?
 private var rawVideoRecordingStartTime: Date?
+private var rawVideoInitialMatrix: UInt8?
 private let rawVideoLock = NSLock()
 
-// Frame callback - set from Rust
+// Frame callback - set from Rust: context, retained pixel buffer, timestamp
+// (ns), clockwise rotation to upright (degrees), mirrored.
 public typealias CameraFrameCallback = @convention(c) (
     UnsafeMutableRawPointer?,
     UInt64,
+    UInt64,
     UInt32,
-    UInt32,
-    UInt64
+    Bool
 ) -> Void
 private var frameCallback: CameraFrameCallback?
 private var frameCallbackContext: UnsafeMutableRawPointer?
@@ -62,20 +67,152 @@ private var cachedSdrFormat: AVCaptureDevice.Format?
 private var cachedDolbyVisionFormat: AVCaptureDevice.Format?
 #endif
 
+// MARK: - Frame Orientation
+
+// Clockwise angle, in degrees, that a capture connection would have to apply
+// for its output to stand upright on the display. On iOS that follows the
+// interface orientation of the app's foreground scene, so an app locked to
+// portrait keeps portrait frames however the device is held. A Mac's display
+// does not turn with gravity, so there it is the rotation coordinator's
+// horizon-level angle (macOS 14), which turns only for a camera that can be
+// rotated, such as an iPhone used as a webcam.
+// `nil` until it is first known; frames are not delivered before then.
+private var displayAngle: Int?
+private let orientationLock = NSLock()
+#if os(macOS)
+// `AVCaptureDevice.RotationCoordinator` where available; stored untyped so the
+// variable needs no availability annotation.
+private var rotationCoordinator: AnyObject?
+private var rotationObservation: NSKeyValueObservation?
+#endif
+
+private func normalizedDegrees(_ angle: Int) -> Int {
+    return ((angle % 360) + 360) % 360
+}
+
+private func setDisplayAngle(_ angle: Int?) {
+    orientationLock.lock()
+    displayAngle = angle.map(normalizedDegrees)
+    orientationLock.unlock()
+}
+
+// The rotation angle each legacy `AVCaptureVideoOrientation` stands for, as
+// `videoRotationAngle` defines it.
+private func rotationAngle(of orientation: AVCaptureVideoOrientation) -> Int {
+    switch orientation {
+    case .landscapeRight: return 0
+    case .portrait: return 90
+    case .landscapeLeft: return 180
+    case .portraitUpsideDown: return 270
+    @unknown default: return 0
+    }
+}
+
+#if os(iOS)
+// The capture rotation that matches the foreground scene's interface
+// orientation, or `nil` while no scene is in the foreground. Main thread only.
+private func interfaceRotationAngle() -> Int? {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) else {
+        return nil
+    }
+    switch scene.interfaceOrientation {
+    case .landscapeRight: return 0
+    case .portrait: return 90
+    case .landscapeLeft: return 180
+    case .portraitUpsideDown: return 270
+    case .unknown: return nil
+    @unknown default: return nil
+    }
+}
+
+// Reads the interface orientation on the main thread, where UIKit allows it,
+// keeping the last known angle while no scene is in the foreground.
+private func refreshDisplayAngle() {
+    DispatchQueue.main.async {
+        if let angle = interfaceRotationAngle() {
+            setDisplayAngle(angle)
+        }
+    }
+}
+#endif
+
+private func startOrientationTracking(device: AVCaptureDevice) {
+    setDisplayAngle(nil)
+    #if os(iOS)
+    refreshDisplayAngle()
+    #else
+    if #available(macOS 14.0, *) {
+        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
+        rotationCoordinator = coordinator
+        rotationObservation = coordinator.observe(
+            \.videoRotationAngleForHorizonLevelCapture,
+            options: [.initial, .new]
+        ) { coordinator, _ in
+            setDisplayAngle(Int(coordinator.videoRotationAngleForHorizonLevelCapture.rounded()))
+        }
+    } else {
+        // A Mac's cameras do not turn with the machine.
+        setDisplayAngle(0)
+    }
+    #endif
+}
+
+private func stopOrientationTracking() {
+    #if os(macOS)
+    rotationObservation?.invalidate()
+    rotationObservation = nil
+    rotationCoordinator = nil
+    #endif
+    setDisplayAngle(nil)
+}
+
+// The clockwise rotation, in degrees, that turns this connection's buffers
+// upright on the display once any mirroring is undone, and whether the
+// connection mirrors; `nil` while the display's orientation is unknown.
+// Mirroring is about the output's vertical axis, after the rotation the
+// connection applied.
+private func frameOrientation(of connection: AVCaptureConnection) -> (UInt32, Bool)? {
+    #if os(iOS)
+    // The interface may turn at any frame; the next frame sees the change.
+    refreshDisplayAngle()
+    #endif
+    let applied: Int
+    if #available(iOS 17.0, macOS 14.0, *) {
+        applied = Int(connection.videoRotationAngle.rounded())
+    } else {
+        applied = rotationAngle(of: connection.videoOrientation)
+    }
+    orientationLock.lock()
+    let display = displayAngle
+    orientationLock.unlock()
+    guard let display else { return nil }
+    return (UInt32(normalizedDegrees(display - applied)), connection.isVideoMirrored)
+}
+
 // MARK: - Frame Delegate
 
 class CameraFrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        let width = UInt32(CVPixelBufferGetWidth(pixelBuffer))
-        let height = UInt32(CVPixelBufferGetHeight(pixelBuffer))
-
-        // Get presentation timestamp
+        // The presentation time is the frame's capture-clock reading: the
+        // capture session's synchronization clock, in host time.
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        let timestampNs = UInt64(CMTimeGetSeconds(pts) * 1_000_000_000)
+        precondition(pts.isNumeric, "a capture buffer's presentation time is numeric")
+        let captureTimeNs = UInt64(CMTimeConvertScale(pts, timescale: 1_000_000_000, method: .roundHalfAwayFromZero).value)
 
-        // Retain the CVPixelBuffer and pass to Rust callback
+        // A frame whose upright orientation is not known yet is not delivered:
+        // it would reach the consumer turned the wrong way.
+        if let (rotationDegrees, mirrored) = frameOrientation(of: connection) {
+            deliver(pixelBuffer, timestampNs: captureTimeNs, rotationDegrees: rotationDegrees, mirrored: mirrored)
+        }
+        maybeWriteRawVideoFrame(pixelBuffer: pixelBuffer, timestampNs: captureTimeNs)
+    }
+
+    private func deliver(_ pixelBuffer: CVPixelBuffer, timestampNs: UInt64, rotationDegrees: UInt32, mirrored: Bool) {
+        // Retain the CVPixelBuffer and hand that reference to Rust, which owns
+        // it from here on and releases it when the frame built from it drops.
         let unmanaged = Unmanaged.passRetained(pixelBuffer)
         let handle = UInt64(UInt(bitPattern: unmanaged.toOpaque()))
 
@@ -85,11 +222,10 @@ class CameraFrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
         frameLock.unlock()
 
         if let callback {
-            callback(callbackContext, handle, width, height, timestampNs)
+            callback(callbackContext, handle, timestampNs, rotationDegrees, mirrored)
         } else {
             unmanaged.release()
         }
-        maybeWriteRawVideoFrame(pixelBuffer: pixelBuffer, timestampNs: timestampNs)
     }
 
     func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
@@ -98,11 +234,6 @@ class CameraFrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
 }
 
 private var frameDelegate = CameraFrameDelegate()
-
-private func appendUInt16LE(_ value: UInt16, to data: inout Data) {
-    var little = value.littleEndian
-    withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-}
 
 private func appendUInt32LE(_ value: UInt32, to data: inout Data) {
     var little = value.littleEndian
@@ -114,23 +245,57 @@ private func appendUInt64LE(_ value: UInt64, to data: inout Data) {
     withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
 }
 
-private func writeRawVideoHeader(handle: FileHandle, width: UInt32, height: UInt32) {
+// The capture output's biplanar 4:2:0 pixel format, chosen when the camera
+// opens: `420f` when the device offers it, otherwise `420v`.
+private var capturePixelFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+
+private func rawVideoRangeCode() -> UInt8? {
+    switch capturePixelFormat {
+    case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
+        return 1
+    case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
+        return 0
+    default:
+        return nil
+    }
+}
+
+private func writeRawVideoHeader(
+    handle: FileHandle,
+    width: UInt32,
+    height: UInt32,
+    matrix: UInt8,
+    range: UInt8
+) {
     var header = Data()
     header.append(contentsOf: [UInt8(ascii: "W"), UInt8(ascii: "K"), UInt8(ascii: "R"), UInt8(ascii: "V")])
-    header.append(contentsOf: [1, 1]) // version=1, pixel_format=1(BGRA8)
-    appendUInt16LE(0, to: &header)
+    header.append(contentsOf: [2, 3, matrix, range])
     appendUInt32LE(width, to: &header)
     appendUInt32LE(height, to: &header)
     appendUInt32LE(0, to: &header) // fps unknown from this layer
     handle.write(header)
 }
 
+// Appends one frame as its luma rows followed by its interleaved chroma rows,
+// without row padding.
 private func maybeWriteRawVideoFrame(pixelBuffer: CVPixelBuffer, timestampNs: UInt64) {
     rawVideoLock.lock()
-    let handle = rawVideoFileHandle
+    let isRecording = rawVideoFileHandle != nil
     rawVideoLock.unlock()
 
-    guard let handle else { return }
+    guard isRecording else { return }
+
+    let (matrixCode, matrixValue) = rawVideoMatrixCode(pixelBuffer)
+    guard let matrixCode else {
+        failRawVideoRecording(
+            "missing or unsupported kCVImageBufferYCbCrMatrixKey value: \(matrixValue)"
+        )
+        return
+    }
+    guard let rangeCode = rawVideoRangeCode() else {
+        failRawVideoRecording("unsupported capture pixel format for WKRV NV12 range")
+        return
+    }
 
     let lockResult = CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
     if lockResult != kCVReturnSuccess {
@@ -138,23 +303,106 @@ private func maybeWriteRawVideoFrame(pixelBuffer: CVPixelBuffer, timestampNs: UI
     }
     defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
-    guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else { return }
-    let width = CVPixelBufferGetWidth(pixelBuffer)
-    let height = CVPixelBufferGetHeight(pixelBuffer)
-    let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-    let rowBytes = width * 4
-    let payloadSize = rowBytes * height
+    // Luma holds one byte per pixel, chroma one Cb/Cr byte pair per 2x2 block.
+    let planes = (0..<2).map { plane in
+        (
+            plane: plane,
+            rowBytes: CVPixelBufferGetWidthOfPlane(pixelBuffer, plane) * (plane == 0 ? 1 : 2),
+            rows: CVPixelBufferGetHeightOfPlane(pixelBuffer, plane)
+        )
+    }
+    let payloadSize = planes.reduce(0) { $0 + $1.rowBytes * $1.rows }
+
+    var payload = Data()
+    payload.reserveCapacity(payloadSize)
+    for plane in planes {
+        guard let baseAddress = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, plane.plane) else {
+            failRawVideoRecording("missing base address for raw video plane \(plane.plane)")
+            return
+        }
+        let bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, plane.plane)
+        for row in 0..<plane.rows {
+            payload.append(
+                Data(
+                    bytes: baseAddress.advanced(by: row * bytesPerRow),
+                    count: plane.rowBytes
+                )
+            )
+        }
+    }
 
     var frameHeader = Data()
     appendUInt64LE(timestampNs, to: &frameHeader)
     appendUInt32LE(UInt32(payloadSize), to: &frameHeader)
-    handle.write(frameHeader)
 
-    for row in 0..<height {
-        let rowPtr = baseAddress.advanced(by: row * bytesPerRow)
-        let rowData = Data(bytes: rowPtr, count: rowBytes)
-        handle.write(rowData)
+    var changedMatrix: UInt8?
+    rawVideoLock.lock()
+    if let handle = rawVideoFileHandle {
+        if let firstMatrix = rawVideoInitialMatrix, firstMatrix != matrixCode {
+            changedMatrix = firstMatrix
+        } else {
+            if rawVideoInitialMatrix == nil {
+                writeRawVideoHeader(
+                    handle: handle,
+                    width: UInt32(CVPixelBufferGetWidth(pixelBuffer)),
+                    height: UInt32(CVPixelBufferGetHeight(pixelBuffer)),
+                    matrix: matrixCode,
+                    range: rangeCode
+                )
+                rawVideoInitialMatrix = matrixCode
+            }
+            handle.write(frameHeader)
+            handle.write(payload)
+        }
     }
+    rawVideoLock.unlock()
+
+    if let changedMatrix {
+        failRawVideoRecording(
+            "raw video YCbCr matrix changed from H.273 code \(changedMatrix) to \(matrixCode)"
+        )
+    }
+}
+
+private func rawVideoMatrixCode(_ pixelBuffer: CVPixelBuffer) -> (UInt8?, String) {
+    var attachmentMode = CVAttachmentMode.shouldPropagate
+    guard let attachment = CVBufferGetAttachment(
+        pixelBuffer,
+        kCVImageBufferYCbCrMatrixKey,
+        &attachmentMode
+    ) else {
+        return (nil, "<missing>")
+    }
+    let attachmentValue = attachment.takeUnretainedValue()
+    guard let value = attachmentValue as? String else {
+        return (nil, String(describing: attachmentValue))
+    }
+
+    if value == (kCVImageBufferYCbCrMatrix_ITU_R_601_4 as String) {
+        return (6, value)
+    }
+    if value == (kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String) {
+        return (1, value)
+    }
+    if value == (kCVImageBufferYCbCrMatrix_ITU_R_2020 as String) {
+        return (9, value)
+    }
+    return (nil, value)
+}
+
+private func detachRawVideoFileHandle() -> FileHandle? {
+    rawVideoLock.lock()
+    let handle = rawVideoFileHandle
+    rawVideoFileHandle = nil
+    rawVideoInitialMatrix = nil
+    rawVideoRecordingStartTime = nil
+    rawVideoLock.unlock()
+    return handle
+}
+
+private func failRawVideoRecording(_ message: String) {
+    NSLog("WaterkitCamera RAW video: %@", message)
+    detachRawVideoFileHandle()?.closeFile()
 }
 
 // MARK: - Device Enumeration
@@ -206,6 +454,24 @@ func camera_device_is_front(index: Int32) -> Bool {
 
 // MARK: - Camera Control
 
+// Why the last `camera_open` returned `.OpenFailed`, for the Rust error.
+private var openFailure = ""
+
+private func openFailed(_ reason: String) -> CameraResultFFI {
+    openFailure = reason
+    return .OpenFailed
+}
+
+func camera_open_failure() -> RustString {
+    return openFailure.intoRustString()
+}
+
+// A pixel format's four-character code, such as `420f`.
+private func fourCharCode(_ format: OSType) -> String {
+    let bytes = [24, 16, 8, 0].map { UInt8((format >> $0) & 0xff) }
+    return String(decoding: bytes, as: UTF8.self)
+}
+
 func camera_open(device_id: RustString) -> CameraResultFFI {
     guard captureSession == nil else {
         return .AlreadyInUse
@@ -239,16 +505,30 @@ func camera_open(device_id: RustString) -> CameraResultFFI {
         if session.canAddInput(input) {
             session.addInput(input)
         } else {
-            return .OpenFailed
+            return openFailed("the capture session cannot take \(device.localizedName) as its input")
         }
     } catch {
-        return .OpenFailed
+        return openFailed("\(device.localizedName) cannot be opened: \(error.localizedDescription)")
     }
 
     let output = AVCaptureVideoDataOutput()
-    // Use BGRA format
+    // Keep the camera's native biplanar 4:2:0 layout so frames reach the GPU
+    // as their IOSurface planes, without a conversion: full range when the
+    // device offers it, video range otherwise.
+    let offered = output.availableVideoPixelFormatTypes
+    if offered.contains(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) {
+        capturePixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+    } else if offered.contains(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) {
+        capturePixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+    } else {
+        let formats = offered.map(fourCharCode).joined(separator: ", ")
+        return openFailed(
+            "\(device.localizedName) offers neither 420f nor 420v frames, which the camera needs to "
+                + "hand them to the GPU as they are; it offers [\(formats)]"
+        )
+    }
     output.videoSettings = [
-        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        kCVPixelBufferPixelFormatTypeKey as String: capturePixelFormat
     ]
     output.setSampleBufferDelegate(frameDelegate, queue: frameQueue)
     output.alwaysDiscardsLateVideoFrames = true
@@ -256,7 +536,7 @@ func camera_open(device_id: RustString) -> CameraResultFFI {
     if session.canAddOutput(output) {
         session.addOutput(output)
     } else {
-        return .OpenFailed
+        return openFailed("the capture session cannot add a video data output for \(device.localizedName)")
     }
 
     // Add Photo Output
@@ -282,6 +562,7 @@ func camera_open(device_id: RustString) -> CameraResultFFI {
 
     // Cache capabilities
     queryCapabilities(device: device, movieOutput: mOutput)
+    startOrientationTracking(device: device)
 
     return .Success
 }
@@ -314,6 +595,7 @@ func camera_stop() -> CameraResultFFI {
 
 func camera_close() -> CameraResultFFI {
     _ = camera_stop()
+    stopOrientationTracking()
     captureSession = nil
     videoOutput = nil
     photoOutput = nil
@@ -346,14 +628,6 @@ public func camera_clear_frame_callback() {
     frameCallbackContext = nil
     frameLock.unlock()
     frameQueue.sync {}
-}
-
-@_cdecl("camera_release_pixelbuffer")
-public func camera_release_pixelbuffer(handle: UInt64) {
-    if handle == 0 { return }
-    guard let ptr = UnsafeRawPointer(bitPattern: UInt(handle)) else { return }
-    let unmanaged = Unmanaged<CVPixelBuffer>.fromOpaque(ptr)
-    unmanaged.release()
 }
 
 // MARK: - Resolution
@@ -1135,24 +1409,14 @@ func camera_start_raw_recording(path: RustString) -> CameraResultFFI {
         return .OpenFailed
     }
 
-    writeRawVideoHeader(
-        handle: handle,
-        width: camera_get_resolution_width(),
-        height: camera_get_resolution_height()
-    )
     rawVideoFileHandle = handle
+    rawVideoInitialMatrix = nil
     rawVideoRecordingStartTime = Date()
     return .Success
 }
 
 func camera_stop_raw_recording() -> CameraResultFFI {
-    rawVideoLock.lock()
-    let handle = rawVideoFileHandle
-    rawVideoFileHandle = nil
-    rawVideoRecordingStartTime = nil
-    rawVideoLock.unlock()
-
-    handle?.closeFile()
+    detachRawVideoFileHandle()?.closeFile()
     return .Success
 }
 

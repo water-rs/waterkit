@@ -1,10 +1,10 @@
 //! Desktop video recording pipeline.
 //!
-//! Converts capture-stream RGBA frames to `NV12`, encodes them through
+//! Brings capture-stream frames to `NV12` (NV12 frames pass through, YUYV is
+//! re-subsampled, decoded MJPEG is converted from RGBA), encodes them through
 //! `waterkit-codec` (hardware encoders first, software AV1 when no hardware
 //! encoder exists), and muxes the packets with `waterkit-video-container`.
-//! Raw recording writes the uncompressed `WKRV` frame stream the mobile
-//! backends already produce.
+//! Raw recording writes uncompressed WKRV version 2 RGBA frames.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -16,11 +16,26 @@ use std::thread::JoinHandle;
 use waterkit_codec::{CodecType, Encoder, EncoderProfile, annex_b_to_length_prefixed};
 use waterkit_video_container::{MuxerCodecType, VideoWriter};
 use yuv::{
-    YuvBiPlanarImageMut, YuvChromaSubsampling, YuvConversionMode, YuvRange, YuvStandardMatrix,
+    YuvBiPlanarImage, YuvBiPlanarImageMut, YuvChromaSubsampling, YuvConversionMode, YuvPackedImage,
+    YuvPlanarImageMut, YuvRange, YuvStandardMatrix,
 };
 
-use super::{FrameSubscription, RawFrame};
-use crate::CameraError;
+use super::{Captured, CapturedPixels, FrameSubscription, RawFrame};
+use crate::{CameraError, RawVideoHeader, RawVideoLayout, VideoColorInfo};
+
+/// The `yuv` crate's names for a frame's YCbCr encoding.
+fn yuv_encoding(color: VideoColorInfo) -> Result<(YuvRange, YuvStandardMatrix), CameraError> {
+    crate::raw_video::yuv_encoding(color.matrix, color.range).ok_or_else(|| {
+        CameraError::RecordingError(format!(
+            "matrix {:?} is unsupported by the yuv conversion for color description {color:?}",
+            color.matrix
+        ))
+    })
+}
+
+fn yuv_error(error: &yuv::YuvError) -> CameraError {
+    CameraError::RecordingError(format!("pixel layout conversion: {error}"))
+}
 
 /// Which encoder ended up serving the recording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +64,9 @@ pub(super) struct RecordingPipeline {
     choice: EncoderChoice,
     writer: VideoWriter,
     width: u32,
-    nv12: YuvBiPlanarImageMut<'static, u8>,
+    height: u32,
+    color: VideoColorInfo,
+    nv12: Vec<u8>,
 }
 
 impl RecordingPipeline {
@@ -58,17 +75,59 @@ impl RecordingPipeline {
     ///
     /// When no encoder can be constructed the error names every encoder that
     /// was tried and why it failed.
-    pub(super) fn new(path: &Path, width: u32, height: u32, fps: u32) -> Result<Self, CameraError> {
+    pub(super) fn new(
+        path: &Path,
+        width: u32,
+        height: u32,
+        fps: u32,
+        color: VideoColorInfo,
+    ) -> Result<Self, CameraError> {
+        Self::new_with_codecs(
+            path,
+            width,
+            height,
+            fps,
+            color,
+            &[
+                (CodecType::H264, "h264"),
+                (CodecType::H265, "h265"),
+                (CodecType::Av1, "av1 (software)"),
+            ],
+        )
+    }
+
+    #[cfg(test)]
+    fn new_av1(
+        path: &Path,
+        width: u32,
+        height: u32,
+        fps: u32,
+        color: VideoColorInfo,
+    ) -> Result<Self, CameraError> {
+        Self::new_with_codecs(
+            path,
+            width,
+            height,
+            fps,
+            color,
+            &[(CodecType::Av1, "av1 (software)")],
+        )
+    }
+
+    fn new_with_codecs(
+        path: &Path,
+        width: u32,
+        height: u32,
+        fps: u32,
+        color: VideoColorInfo,
+        codecs: &[(CodecType, &str)],
+    ) -> Result<Self, CameraError> {
         let mut attempts = Vec::new();
         let mut encoder = None;
         let mut choice = EncoderChoice::Av1;
 
-        for (codec, name) in [
-            (CodecType::H264, "h264"),
-            (CodecType::H265, "h265"),
-            (CodecType::Av1, "av1 (software)"),
-        ] {
-            match Encoder::new(codec, width, height, EncoderProfile::Realtime) {
+        for &(codec, name) in codecs {
+            match Encoder::new(codec, width, height, EncoderProfile::Realtime, color) {
                 Ok(enc) => {
                     choice = match codec {
                         CodecType::H264 => EncoderChoice::H264,
@@ -89,7 +148,7 @@ impl RecordingPipeline {
             )));
         };
 
-        let writer = VideoWriter::new(path, width, height, fps, choice.muxer_codec())
+        let writer = VideoWriter::new(path, width, height, fps, choice.muxer_codec(), color)
             .map_err(|err| CameraError::RecordingError(format!("video writer: {err}")))?;
 
         Ok(Self {
@@ -97,29 +156,60 @@ impl RecordingPipeline {
             choice,
             writer,
             width,
-            nv12: YuvBiPlanarImageMut::alloc(width, height, YuvChromaSubsampling::Yuv420),
+            height,
+            color,
+            nv12: Vec::new(),
         })
     }
 
-    /// Convert one RGBA capture frame, encode it, and append the sample.
-    pub(super) fn push_rgba(&mut self, rgba: &[u8]) -> Result<(), CameraError> {
-        yuv::rgba_to_yuv_nv12(
-            &mut self.nv12,
-            rgba,
-            self.width * 4,
-            YuvRange::Limited,
-            YuvStandardMatrix::Bt709,
-            YuvConversionMode::Balanced,
-        )
-        .map_err(|err| CameraError::RecordingError(format!("RGBA to NV12 conversion: {err}")))?;
+    /// Bring one capture frame to NV12, encode it, and append the sample.
+    pub(super) fn push(&mut self, frame: &RawFrame) -> Result<(), CameraError> {
+        if frame.color != self.color {
+            return Err(CameraError::RecordingError(format!(
+                "captured frame color {:?} differs from recording color {:?}",
+                frame.color, self.color
+            )));
+        }
+        match &frame.pixels {
+            CapturedPixels::Nv12(nv12) => self.encode(nv12),
+            CapturedPixels::Yuyv(yuyv) => {
+                self.nv12 = yuyv_to_nv12(yuyv, self.width, self.height)?;
+                self.encode_buffered()
+            }
+            CapturedPixels::Rgba(rgba) => {
+                let (range, matrix) = yuv_encoding(self.color)?;
+                let mut nv12 = YuvBiPlanarImageMut::alloc(
+                    self.width,
+                    self.height,
+                    YuvChromaSubsampling::Yuv420,
+                );
+                yuv::rgba_to_yuv_nv12(
+                    &mut nv12,
+                    rgba,
+                    self.width * 4,
+                    range,
+                    matrix,
+                    YuvConversionMode::Balanced,
+                )
+                .map_err(|error| yuv_error(&error))?;
+                self.nv12.clear();
+                self.nv12.extend_from_slice(nv12.y_plane.borrow());
+                self.nv12.extend_from_slice(nv12.uv_plane.borrow());
+                self.encode_buffered()
+            }
+        }
+    }
 
-        let nv12_len = self.nv12.y_plane.borrow().len() + self.nv12.uv_plane.borrow().len();
-        let mut nv12 = Vec::with_capacity(nv12_len);
-        nv12.extend_from_slice(self.nv12.y_plane.borrow());
-        nv12.extend_from_slice(self.nv12.uv_plane.borrow());
+    fn encode_buffered(&mut self) -> Result<(), CameraError> {
+        let nv12 = std::mem::take(&mut self.nv12);
+        let result = self.encode(&nv12);
+        self.nv12 = nv12;
+        result
+    }
 
+    fn encode(&mut self, nv12: &[u8]) -> Result<(), CameraError> {
         let mut packet = Vec::new();
-        for item in self.encoder.encode_nv12(&nv12) {
+        for item in self.encoder.encode_nv12(nv12) {
             let bytes =
                 item.map_err(|err| CameraError::RecordingError(format!("video encoder: {err}")))?;
             packet.extend_from_slice(&bytes);
@@ -181,16 +271,19 @@ enum RecordingSink {
 
 /// What woke the recording worker out of its `select`.
 enum Wake {
-    Frame(Result<Arc<RawFrame>, async_channel::RecvError>),
+    Frame(Result<Captured, async_channel::RecvError>),
     Stop,
 }
 
 impl RecordingSink {
-    fn push(&mut self, frame: &RawFrame) -> Result<(), CameraError> {
+    /// Records one captured frame, or ends the recording with the error that
+    /// ended the capture.
+    fn push(&mut self, captured: &Captured) -> Result<(), CameraError> {
+        let frame = captured.as_ref().map_err(Clone::clone)?;
         match self {
-            Self::Compressed(pipeline) => pipeline.push_rgba(&frame.data),
+            Self::Compressed(pipeline) => pipeline.push(frame),
             Self::Raw(writer) => writer.push_frame(
-                &frame.data,
+                frame,
                 u64::try_from(frame.timestamp.as_nanos()).unwrap_or(u64::MAX),
             ),
         }
@@ -222,6 +315,7 @@ enum RecordingSpec {
         width: u32,
         height: u32,
         fps: u32,
+        color: VideoColorInfo,
     },
     Raw {
         path: PathBuf,
@@ -239,8 +333,9 @@ impl RecordingSpec {
                 width,
                 height,
                 fps,
+                color,
             } => Ok(RecordingSink::Compressed(Box::new(RecordingPipeline::new(
-                &path, width, height, fps,
+                &path, width, height, fps, color,
             )?))),
             Self::Raw {
                 path,
@@ -263,6 +358,7 @@ impl RecordingSession {
         width: u32,
         height: u32,
         fps: u32,
+        color: VideoColorInfo,
     ) -> Result<Self, CameraError> {
         Self::spawn(
             subscription,
@@ -271,6 +367,7 @@ impl RecordingSession {
                 width,
                 height,
                 fps,
+                color,
             },
         )
     }
@@ -405,33 +502,88 @@ impl RecordingSession {
     }
 }
 
-/// Uncompressed frame-stream writer matching the mobile `WKRV` format: a
-/// header of `WKRV` + version 1 + pixel-format byte + reserved u16 + width,
-/// height and fps as u32, then per frame `timestamp_ns` u64, `payload_len`
-/// u32 and the RGBA payload, all little-endian.
+/// Uncompressed frame-stream writer using WKRV version 2 and RGBA8 payloads.
 pub(super) struct RawVideoWriter {
     file: BufWriter<File>,
+    /// Reused RGBA buffer for frames the camera delivered as YCbCr.
+    rgba: Vec<u8>,
 }
 
 impl RawVideoWriter {
-    /// Pixel-format byte used by the mobile backends: 1 = BGRA8, 2 = RGBA8.
-    const PIXEL_FORMAT_RGBA8: u8 = 2;
-
     fn new(path: &Path, width: u32, height: u32, fps: u32) -> Result<Self, CameraError> {
         let mut file = BufWriter::new(
             File::create(path)
                 .map_err(|err| CameraError::RecordingError(format!("raw video writer: {err}")))?,
         );
-        file.write_all(b"WKRV")
-            .and_then(|()| file.write_all(&[1, Self::PIXEL_FORMAT_RGBA8, 0, 0]))
-            .and_then(|()| file.write_all(&width.to_le_bytes()))
-            .and_then(|()| file.write_all(&height.to_le_bytes()))
-            .and_then(|()| file.write_all(&fps.to_le_bytes()))
+        let header = RawVideoHeader {
+            layout: RawVideoLayout::Rgba8,
+            width,
+            height,
+            fps,
+        }
+        .to_bytes()
+        .map_err(|err| CameraError::RecordingError(format!("raw video writer: {err}")))?;
+        file.write_all(&header)
             .map_err(|err| CameraError::RecordingError(format!("raw video writer: {err}")))?;
-        Ok(Self { file })
+        Ok(Self {
+            file,
+            rgba: Vec::new(),
+        })
     }
 
-    fn push_frame(&mut self, rgba: &[u8], timestamp_ns: u64) -> Result<(), CameraError> {
+    /// Append one capture frame as RGBA8.
+    fn push_frame(&mut self, frame: &RawFrame, timestamp_ns: u64) -> Result<(), CameraError> {
+        let width = frame.width;
+        let height = frame.height;
+        let rgba_len = width as usize * height as usize * 4;
+        match &frame.pixels {
+            CapturedPixels::Rgba(rgba) => return self.write_rgba(rgba, timestamp_ns),
+            CapturedPixels::Nv12(nv12) => {
+                let (range, matrix) = yuv_encoding(frame.color)?;
+                let (y_plane, uv_plane) = nv12.split_at(width as usize * height as usize);
+                self.rgba.resize(rgba_len, 0);
+                yuv::yuv_nv12_to_rgba(
+                    &YuvBiPlanarImage {
+                        y_plane,
+                        y_stride: width,
+                        uv_plane,
+                        uv_stride: width,
+                        width,
+                        height,
+                    },
+                    &mut self.rgba,
+                    width * 4,
+                    range,
+                    matrix,
+                    YuvConversionMode::Balanced,
+                )
+                .map_err(|error| yuv_error(&error))?;
+            }
+            CapturedPixels::Yuyv(yuyv) => {
+                let (range, matrix) = yuv_encoding(frame.color)?;
+                self.rgba.resize(rgba_len, 0);
+                yuv::yuyv422_to_rgba(
+                    &YuvPackedImage {
+                        yuy: yuyv,
+                        yuy_stride: width * 2,
+                        width,
+                        height,
+                    },
+                    &mut self.rgba,
+                    width * 4,
+                    range,
+                    matrix,
+                )
+                .map_err(|error| yuv_error(&error))?;
+            }
+        }
+        let rgba = std::mem::take(&mut self.rgba);
+        let result = self.write_rgba(&rgba, timestamp_ns);
+        self.rgba = rgba;
+        result
+    }
+
+    fn write_rgba(&mut self, rgba: &[u8], timestamp_ns: u64) -> Result<(), CameraError> {
         let len = u32::try_from(rgba.len()).map_err(|_| {
             CameraError::RecordingError("raw frame exceeds u32 payload length".into())
         })?;
@@ -447,6 +599,28 @@ impl RawVideoWriter {
             .flush()
             .map_err(|err| CameraError::RecordingError(format!("raw video writer: {err}")))
     }
+}
+
+/// Re-subsample packed YUYV 4:2:2 to NV12 4:2:0; the samples keep their
+/// encoding.
+fn yuyv_to_nv12(yuyv: &[u8], width: u32, height: u32) -> Result<Vec<u8>, CameraError> {
+    let mut planar = YuvPlanarImageMut::alloc(width, height, YuvChromaSubsampling::Yuv420);
+    yuv::yuyv422_to_yuv420(
+        &mut planar,
+        &YuvPackedImage {
+            yuy: yuyv,
+            yuy_stride: width * 2,
+            width,
+            height,
+        },
+    )
+    .map_err(|error| yuv_error(&error))?;
+    let mut nv12 = Vec::with_capacity(width as usize * height as usize * 3 / 2);
+    nv12.extend_from_slice(planar.y_plane.borrow());
+    for (u, v) in planar.u_plane.borrow().iter().zip(planar.v_plane.borrow()) {
+        nv12.extend_from_slice(&[*u, *v]);
+    }
+    Ok(nv12)
 }
 
 fn read_leb128(data: &[u8]) -> Option<(usize, usize)> {
@@ -502,10 +676,15 @@ fn packet_contains_sequence_header(data: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::RawFrame;
+    use super::super::UVC_YCBCR_COLOR;
     use super::*;
+    use crate::{MatrixCoefficients, RawVideoLayout, RawVideoReader};
+    use std::path::Path;
     use std::sync::Arc;
     use std::time::Duration;
-    use waterkit_video_container::VideoReader;
+    use waterkit_codec::{DecodePacket, Decoder};
+    use waterkit_video_container::{VideoReader, probe_mp4_color_info};
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -530,16 +709,72 @@ mod tests {
         rgba
     }
 
+    fn captured_frame(
+        pixels: CapturedPixels,
+        color: VideoColorInfo,
+        width: u32,
+        height: u32,
+    ) -> RawFrame {
+        RawFrame {
+            pixels,
+            color,
+            width,
+            height,
+            timestamp: Duration::ZERO,
+        }
+    }
+
+    fn decoded_av1_color(path: &Path, width: u32, height: u32) -> waterkit_video_core::CicpColor {
+        let mut reader = VideoReader::open(path).expect("recorded file must reopen");
+        let timescale = u128::from(reader.timescale());
+        let samples: Vec<_> = reader
+            .samples()
+            .map(|sample| sample.expect("every recorded sample must read back"))
+            .collect();
+        let mut decoder =
+            Decoder::new(CodecType::Av1, None, width, height).expect("software AV1 decoder");
+
+        for (data, pts, _) in samples {
+            let timestamp_ns = u64::try_from(u128::from(pts) * 1_000_000_000 / timescale).unwrap();
+            let packet = DecodePacket::new(&data, Duration::from_nanos(timestamp_ns));
+            for frame in decoder.decode(packet) {
+                if let Some(color) = frame.expect("AV1 sample decodes").color() {
+                    return color;
+                }
+            }
+        }
+        for frame in decoder.drain() {
+            if let Some(color) = frame.expect("AV1 decoder drains").color() {
+                return color;
+            }
+        }
+        panic!("decoded AV1 frames must expose their CICP description");
+    }
+
+    fn assert_recording_color(path: &Path, color: VideoColorInfo, width: u32, height: u32) {
+        assert_eq!(
+            probe_mp4_color_info(path, None).expect("MP4 color metadata is readable"),
+            color
+        );
+        assert_eq!(decoded_av1_color(path, width, height), color.cicp());
+    }
+
     #[test]
     fn compressed_recording_roundtrips_through_the_container_reader() {
         let (width, height, fps, frames) = (64u32, 48u32, 30u32, 12usize);
         let path = temp_path("compressed");
-        let mut pipeline = RecordingPipeline::new(&path, width, height, fps)
-            .expect("at least the software AV1 encoder must be constructible");
+        let mut pipeline =
+            RecordingPipeline::new_av1(&path, width, height, fps, super::super::JFIF_RGB_COLOR)
+                .expect("at least the software AV1 encoder must be constructible");
 
         for index in 0..frames {
             pipeline
-                .push_rgba(&synthetic_rgba(width as usize, height as usize, index))
+                .push(&captured_frame(
+                    CapturedPixels::Rgba(synthetic_rgba(width as usize, height as usize, index)),
+                    super::super::JFIF_RGB_COLOR,
+                    width,
+                    height,
+                ))
                 .expect("encoding a synthetic frame");
         }
         pipeline.finish().expect("the container must finalize");
@@ -553,6 +788,7 @@ mod tests {
             let (data, _, _) = sample.expect("every recorded sample must read back");
             assert_ne!(data, [] as [u8; 0]);
         }
+        assert_recording_color(&path, super::super::JFIF_RGB_COLOR, width, height);
         std::fs::remove_file(&path).ok();
     }
 
@@ -567,34 +803,99 @@ mod tests {
             .map(|i| synthetic_rgba(width as usize, height as usize, i))
             .collect();
         for (i, frame) in frames.iter().enumerate() {
+            let raw_frame = captured_frame(
+                CapturedPixels::Rgba(frame.clone()),
+                super::super::JFIF_RGB_COLOR,
+                width,
+                height,
+            );
             writer
-                .push_frame(frame, i as u64 * 33_333_333)
+                .push_frame(&raw_frame, i as u64 * 33_333_333)
                 .expect("raw frame write");
         }
         writer.finish().expect("raw writer finalize");
 
-        let bytes = std::fs::read(&path).unwrap();
-        assert_eq!(&bytes[..4], b"WKRV");
-        assert_eq!(bytes[4], 1); // version
-        assert_eq!(bytes[5], RawVideoWriter::PIXEL_FORMAT_RGBA8);
-        assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), width);
+        let mut reader = RawVideoReader::open(&path).expect("WKRV v2 file reads");
+        assert_eq!(reader.header().layout, RawVideoLayout::Rgba8);
         assert_eq!(
-            u32::from_le_bytes(bytes[12..16].try_into().unwrap()),
-            height
+            (reader.header().width, reader.header().height),
+            (width, height)
         );
-        assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), fps);
-
-        let mut pos = 20;
+        assert_eq!(reader.header().fps, fps);
         for (i, frame) in frames.iter().enumerate() {
-            let ts = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
-            assert_eq!(ts, u64::try_from(i).unwrap() * 33_333_333);
-            let len = u32::from_le_bytes(bytes[pos + 8..pos + 12].try_into().unwrap()) as usize;
-            assert_eq!(len, frame_bytes);
-            assert_eq!(&bytes[pos + 12..pos + 12 + len], &frame[..]);
-            pos += 12 + len;
+            let decoded = reader.next_frame().unwrap().expect("recorded frame");
+            assert_eq!(
+                decoded.timestamp,
+                Duration::from_nanos(u64::try_from(i).unwrap() * 33_333_333)
+            );
+            assert_eq!(decoded.data.len(), frame_bytes);
+            assert_eq!(decoded.data, *frame);
         }
-        assert_eq!(pos, bytes.len());
+        assert!(reader.next_frame().unwrap().is_none());
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn recording_rejects_frames_with_a_different_color_description() {
+        let (width, height, fps) = (16u32, 16u32, 30u32);
+        let path = temp_path("color-mismatch");
+        let mut pipeline = RecordingPipeline::new_av1(&path, width, height, fps, UVC_YCBCR_COLOR)
+            .expect("software AV1 encoder");
+        let error = pipeline
+            .push(&captured_frame(
+                CapturedPixels::Rgba(vec![0; width as usize * height as usize * 4]),
+                super::super::JFIF_RGB_COLOR,
+                width,
+                height,
+            ))
+            .expect_err("recording cannot change its color description");
+        let CameraError::RecordingError(message) = error else {
+            panic!("expected a recording error");
+        };
+        assert!(message.contains(&format!("{:?}", super::super::JFIF_RGB_COLOR)));
+        assert!(message.contains(&format!("{UVC_YCBCR_COLOR:?}")));
+        drop(pipeline);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn yuv_conversion_rejects_bt2020_constant_luminance() {
+        let color = VideoColorInfo {
+            matrix: MatrixCoefficients::Bt2020ConstantLuminance,
+            ..UVC_YCBCR_COLOR
+        };
+        let error = yuv_encoding(color).expect_err("the yuv crate has no BT.2020 CL path");
+        let CameraError::RecordingError(message) = error else {
+            panic!("expected a recording error");
+        };
+        assert!(message.contains("Bt2020ConstantLuminance"));
+        assert!(message.contains(&format!("{color:?}")));
+    }
+
+    #[test]
+    fn rgba_recording_conversion_uses_jfif_601_full_range() {
+        let (width, height, fps) = (16u32, 16u32, 30u32);
+        let path = temp_path("rgba-jfif-conversion");
+        let mut pipeline =
+            RecordingPipeline::new_av1(&path, width, height, fps, super::super::JFIF_RGB_COLOR)
+                .expect("software AV1 encoder");
+        let rgba = [255, 0, 0, 255].repeat(width as usize * height as usize);
+        pipeline
+            .push(&captured_frame(
+                CapturedPixels::Rgba(rgba),
+                super::super::JFIF_RGB_COLOR,
+                width,
+                height,
+            ))
+            .expect("red RGBA frame converts to NV12");
+
+        let pixels = width as usize * height as usize;
+        assert!(pipeline.nv12[..pixels].iter().all(|&value| value == 76));
+        let (uv_pairs, remainder) = pipeline.nv12[pixels..].as_chunks::<2>();
+        assert_eq!(remainder, &[] as &[u8]);
+        assert!(uv_pairs.iter().all(|uv| uv[0] == 85 && uv[1] == 255));
+        pipeline.finish().expect("the container must finalize");
+        std::fs::remove_file(path).ok();
     }
 
     #[test]
@@ -612,17 +913,20 @@ mod tests {
             width,
             height,
             fps,
+            super::super::JFIF_RGB_COLOR,
         )
         .expect("session opens");
         std::thread::spawn(move || {
             for i in 0..count {
-                let frame = Arc::new(RawFrame {
-                    data: synthetic_rgba(width as usize, height as usize, i),
+                let mut frame = captured_frame(
+                    CapturedPixels::Rgba(synthetic_rgba(width as usize, height as usize, i)),
+                    super::super::JFIF_RGB_COLOR,
                     width,
                     height,
-                    timestamp: Duration::from_nanos(i as u64 * 33_333_333),
-                });
-                tx.send_blocking(frame).expect("frame channel open");
+                );
+                frame.timestamp = Duration::from_nanos(i as u64 * 33_333_333);
+                let frame = Arc::new(frame);
+                tx.send_blocking(Ok(frame)).expect("frame channel open");
             }
         })
         .join()
@@ -631,7 +935,91 @@ mod tests {
 
         let reader = VideoReader::open(&path).unwrap();
         assert_eq!(reader.sample_count() as usize, count);
+        assert_eq!(
+            probe_mp4_color_info(&path, None).expect("MP4 color metadata is readable"),
+            super::super::JFIF_RGB_COLOR
+        );
         std::fs::remove_file(&path).ok();
+    }
+
+    /// Frames the camera delivered as NV12 or YUYV reach the encoder and the
+    /// raw writer in their own layouts.
+    #[test]
+    fn ycbcr_capture_frames_record_in_both_sinks() {
+        let (width, height, fps) = (32u32, 16u32, 30u32);
+        let pixels = width as usize * height as usize;
+
+        let path = temp_path("ycbcr");
+        let mut pipeline = RecordingPipeline::new_av1(&path, width, height, fps, UVC_YCBCR_COLOR)
+            .expect("at least the software AV1 encoder must be constructible");
+        for _ in 0..3 {
+            pipeline
+                .push(&captured_frame(
+                    CapturedPixels::Nv12(vec![128; pixels * 3 / 2]),
+                    UVC_YCBCR_COLOR,
+                    width,
+                    height,
+                ))
+                .expect("encoding an NV12 frame");
+            pipeline
+                .push(&captured_frame(
+                    CapturedPixels::Yuyv(vec![128; pixels * 2]),
+                    UVC_YCBCR_COLOR,
+                    width,
+                    height,
+                ))
+                .expect("encoding a YUYV frame");
+        }
+        pipeline.finish().expect("the container must finalize");
+        let reader = VideoReader::open(&path).expect("recorded file must reopen");
+        assert_eq!(reader.sample_count(), 6);
+        assert_recording_color(&path, UVC_YCBCR_COLOR, width, height);
+        std::fs::remove_file(&path).ok();
+
+        let raw_path = temp_path("ycbcr-raw");
+        let mut writer = RawVideoWriter::new(&raw_path, width, height, fps).expect("raw writer");
+        let mut raw_nv12 = vec![81; pixels];
+        raw_nv12.extend((0..pixels / 2).flat_map(|_| [90, 240]));
+        let raw_yuyv = [81, 90, 81, 240].repeat(pixels / 2);
+        writer
+            .push_frame(
+                &captured_frame(
+                    CapturedPixels::Nv12(raw_nv12),
+                    UVC_YCBCR_COLOR,
+                    width,
+                    height,
+                ),
+                0,
+            )
+            .expect("NV12 raw frame");
+        writer
+            .push_frame(
+                &captured_frame(
+                    CapturedPixels::Yuyv(raw_yuyv),
+                    UVC_YCBCR_COLOR,
+                    width,
+                    height,
+                ),
+                1,
+            )
+            .expect("YUYV raw frame");
+        writer.finish().expect("raw writer finalize");
+        let mut reader = RawVideoReader::open(&raw_path).expect("WKRV v2 file reads");
+        assert_eq!(reader.header().layout, RawVideoLayout::Rgba8);
+        let expected = expected_bt601_limited_rgb(81, 90, 240);
+        for _ in 0..2 {
+            let frame = reader.next_frame().unwrap().expect("recorded YCbCr frame");
+            let (pixels, remainder) = frame.data.as_chunks::<4>();
+            assert_eq!(remainder, &[] as &[u8]);
+            for pixel in pixels {
+                assert!(expected[0].mul_add(-255.0, f64::from(pixel[0])).abs() <= 1.0);
+                assert!(expected[1].mul_add(-255.0, f64::from(pixel[1])).abs() <= 1.0);
+                assert!(expected[2].mul_add(-255.0, f64::from(pixel[2])).abs() <= 1.0);
+                assert_eq!(pixel[3], 255);
+            }
+        }
+        assert!(reader.next_frame().unwrap().is_none());
+        std::fs::remove_file(&raw_path).ok();
     }
 
     /// Synthetic capture muxed into an MP4 that ffprobe/ffmpeg can decode.
@@ -641,11 +1029,17 @@ mod tests {
     fn short_recording_writes_a_decodable_mp4() {
         let (width, height, fps, frames) = (640u32, 480u32, 30u32, 6usize);
         let path = std::env::temp_dir().join("waterkit-camera-evidence.mp4");
-        let mut pipeline = RecordingPipeline::new(&path, width, height, fps)
-            .expect("at least the software AV1 encoder must be constructible");
+        let mut pipeline =
+            RecordingPipeline::new_av1(&path, width, height, fps, super::super::JFIF_RGB_COLOR)
+                .expect("at least the software AV1 encoder must be constructible");
         for index in 0..frames {
             pipeline
-                .push_rgba(&synthetic_rgba(width as usize, height as usize, index))
+                .push(&captured_frame(
+                    CapturedPixels::Rgba(synthetic_rgba(width as usize, height as usize, index)),
+                    super::super::JFIF_RGB_COLOR,
+                    width,
+                    height,
+                ))
                 .expect("encoding a synthetic frame");
         }
         pipeline.finish().expect("the container must finalize");
@@ -653,6 +1047,7 @@ mod tests {
         let reader = VideoReader::open(&path).expect("recorded file must reopen");
         assert_eq!(reader.dimensions(), (width, height));
         assert_eq!(reader.sample_count() as usize, frames);
+        assert_recording_color(&path, super::super::JFIF_RGB_COLOR, width, height);
     }
 
     /// Raw recording read back through the WKRV frame records; the
@@ -663,35 +1058,60 @@ mod tests {
         let path = std::env::temp_dir().join("waterkit-camera-evidence.wkrv");
         let mut writer = RawVideoWriter::new(&path, width, height, fps).expect("raw writer");
         for index in 0..frames {
+            let frame = captured_frame(
+                CapturedPixels::Rgba(synthetic_rgba(width as usize, height as usize, index)),
+                super::super::JFIF_RGB_COLOR,
+                width,
+                height,
+            );
             writer
-                .push_frame(
-                    &synthetic_rgba(width as usize, height as usize, index),
-                    index as u64 * 33_333_333,
-                )
+                .push_frame(&frame, index as u64 * 33_333_333)
                 .expect("raw frame write");
         }
         writer.finish().expect("raw writer finalize");
 
-        let bytes = std::fs::read(&path).unwrap();
-        assert_eq!(&bytes[..4], b"WKRV");
-        let frame_bytes = width as usize * height as usize * 4;
-        let mut pos = 20;
-        let mut count = 0usize;
-        while pos + 12 <= bytes.len() {
-            let len = u32::from_le_bytes(bytes[pos + 8..pos + 12].try_into().unwrap()) as usize;
-            assert_eq!(len, frame_bytes);
-            pos += 12 + len;
-            count += 1;
+        let mut reader = RawVideoReader::open(&path).expect("WKRV v2 file reads");
+        assert_eq!(reader.header().fps, fps);
+        for index in 0..frames {
+            let frame = reader.next_frame().unwrap().expect("recorded frame");
+            assert_eq!(
+                frame.timestamp,
+                Duration::from_nanos(index as u64 * 33_333_333)
+            );
+            assert_eq!(
+                frame.data,
+                synthetic_rgba(width as usize, height as usize, index)
+            );
         }
-        assert_eq!(count, frames);
-        assert_eq!(pos, bytes.len());
+        assert!(reader.next_frame().unwrap().is_none());
+    }
+
+    fn expected_bt601_limited_rgb(y: u8, cb: u8, cr: u8) -> [f64; 3] {
+        let luma = (f64::from(y) - 16.0) / 219.0;
+        let blue_difference = (f64::from(cb) - 128.0) / 224.0;
+        let red_difference = (f64::from(cr) - 128.0) / 224.0;
+        [
+            1.402f64.mul_add(red_difference, luma),
+            0.714_136f64.mul_add(
+                -red_difference,
+                0.344_136f64.mul_add(-blue_difference, luma),
+            ),
+            1.772f64.mul_add(blue_difference, luma),
+        ]
+        .map(|channel| channel.clamp(0.0, 1.0))
     }
 
     #[test]
     fn av1_codec_config_is_the_rav1e_configuration_record() {
         let (width, height) = (64u32, 48u32);
-        let mut encoder = Encoder::new(CodecType::Av1, width, height, EncoderProfile::Offline)
-            .expect("software AV1 encoder is always available on desktop");
+        let mut encoder = Encoder::new(
+            CodecType::Av1,
+            width,
+            height,
+            EncoderProfile::Offline,
+            crate::VideoColorInfo::default(),
+        )
+        .expect("software AV1 encoder is always available on desktop");
         // rav1e builds the AV1CodecConfigurationRecord at construction — no
         // packet has to be encoded first.
         let av1c = encoder.codec_config().expect("AV1 exposes av1C");

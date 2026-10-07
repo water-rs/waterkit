@@ -28,13 +28,15 @@ shaderloom = { workspace = true, features = ["runtime"], optional = true }
 [build-dependencies]
 waterkit-build.workspace = true
 cfg_aliases = "0.2"
-shaderloom = { workspace = true, optional = true }
+shaderloom = { workspace = true, features = ["build"], optional = true }
+waterkit-video-core.workspace = true
 
 # Software fallback codecs (private, not exposed in public API)
 # Only enabled on desktop platforms - mobile and wasm use their native decode paths
 [target.'cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))'.dependencies]
 rav1e = { workspace = true, optional = true }
 rav1d = { workspace = true, optional = true }
+num-traits = { workspace = true, optional = true }
 avif-parse = { version = "2.1", optional = true }
 yuv = { version = "0.8.16", optional = true }
 moxcms = { version = "0.8.1", features = ["extended_range"], optional = true }
@@ -68,17 +70,14 @@ windows = { workspace = true, features = ["Win32_Media_MediaFoundation", "Win32_
 [target.'cfg(target_os = "linux")'.dependencies]
 cros-codecs = { version = "0.0.6", default-features = false, features = ["vaapi"], optional = true }
 
-[dev-dependencies]
-# `build` here is dev-only: tests/packaged_shaders.rs re-packages the YUV
-# shader and asserts the checked-in artifacts are current. The normal graph
-# stays packaged-only.
-shaderloom = { workspace = true, features = ["build"] }
-
 # The software AV1 decoder's end-to-end test builds its input with `image`'s
 # AVIF *encoder*. Nothing else in the workspace encodes AVIF, so that encoder
 # (ravif -> rav1e) is asked for here instead of in the shared workspace entry.
 [target.'cfg(not(any(target_os = "android", target_arch = "wasm32")))'.dev-dependencies]
 image = { workspace = true, features = ["avif"] }
+
+[dev-dependencies]
+pollster.workspace = true
 
 [features]
 default = ["gpu", "software-encode"]
@@ -96,7 +95,7 @@ gpu = [
 # yuv, moxcms). Consumers that never encode pick this and skip `rav1e`.
 software-decode = ["dep:rav1d", "dep:avif-parse", "dep:yuv", "dep:moxcms"]
 # AV1 *encode* in software adds `rav1e` on top of the decode stack.
-software-encode = ["dep:rav1e", "software-decode"]
+software-encode = ["dep:rav1e", "dep:num-traits", "software-decode"]
 # VA-API hardware decode/encode on Linux via `cros-codecs`, which compiles
 # `cros-libva` against the system libva headers (>= 2.20). Off by default so a
 # consumer that only decodes still images links no hardware video decoder —

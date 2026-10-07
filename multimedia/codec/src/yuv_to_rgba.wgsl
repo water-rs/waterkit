@@ -1,8 +1,11 @@
 // Decoded bi-planar YUV to linear RGBA16F conversion.
 //
 // Plane textures are integer formats (`R8Uint`/`Rg8Uint` for NV12,
-// `R16Uint`/`Rg16Uint` for P010), sampled with textureLoad and normalized
-// to code space before the range/matrix/transfer decode.
+// `R16Uint`/`Rg16Uint` for P010), sampled with textureLoad and passed through
+// `ycbcr_codes` before the range/matrix/transfer decode.
+//
+// The range and matrix math is waterkit-video-core's `ycbcr.wgsl`, which the
+// build script prepends to this file.
 
 @group(0) @binding(0) var y_texture: texture_2d<u32>;
 @group(0) @binding(1) var uv_texture: texture_2d<u32>;
@@ -21,12 +24,8 @@ struct ColorParams {
 @group(0) @binding(3) var<uniform> color_params: ColorParams;
 @group(0) @binding(4) var linear_rgba_output: texture_storage_2d<rgba16float, write>;
 
-const MATRIX_BT709: u32 = 0u;
-const MATRIX_BT601: u32 = 1u;
-const MATRIX_BT2020: u32 = 2u;
 const MATRIX_BT2020_CONSTANT_LUMINANCE: u32 = 3u;
 
-const RANGE_LIMITED: u32 = 0u;
 const SAMPLE_NV12: u32 = 0u;
 const SAMPLE_P010: u32 = 1u;
 
@@ -142,57 +141,16 @@ fn convert_primaries_to_srgb(linear_rgb: vec3<f32>, primaries_mode: u32) -> vec3
     return linear_rgb;
 }
 
-fn normalize_yuv(y_sample: f32, uv_sample: vec2<f32>) -> vec3<f32> {
-    var y = y_sample;
-    var u = uv_sample.x;
-    var v = uv_sample.y;
-
-    if color_params.range_mode == RANGE_LIMITED {
-        if color_params.sample_mode == SAMPLE_P010 {
-            y = (y - (64.0 / 1023.0)) * (1023.0 / 876.0);
-            u = (u - (512.0 / 1023.0)) * (1023.0 / 896.0);
-            v = (v - (512.0 / 1023.0)) * (1023.0 / 896.0);
-        } else {
-            y = (y - (16.0 / 255.0)) * (255.0 / 219.0);
-            u = (u - (128.0 / 255.0)) * (255.0 / 224.0);
-            v = (v - (128.0 / 255.0)) * (255.0 / 224.0);
-        }
-    } else if color_params.sample_mode == SAMPLE_P010 {
-        u = u - (512.0 / 1023.0);
-        v = v - (512.0 / 1023.0);
-    } else {
-        u = u - (128.0 / 255.0);
-        v = v - (128.0 / 255.0);
-    }
-
-    return vec3<f32>(y, u, v);
+fn sample_bit_depth() -> u32 {
+    return select(8u, 10u, color_params.sample_mode == SAMPLE_P010);
 }
 
-fn yuv_to_gamma_rgb(yuv: vec3<f32>) -> vec3<f32> {
-    let y = yuv.x;
-    let u = yuv.y;
-    let v = yuv.z;
+fn sample_element_bits() -> u32 {
+    return select(8u, 16u, color_params.sample_mode == SAMPLE_P010);
+}
 
-    var r = 0.0;
-    var g = 0.0;
-    var b = 0.0;
-
-    if color_params.matrix_mode == MATRIX_BT601 {
-        r = y + 1.402 * v;
-        g = y - 0.344136 * u - 0.714136 * v;
-        b = y + 1.772 * u;
-    } else if color_params.matrix_mode == MATRIX_BT2020 {
-        r = y + 1.4746 * v;
-        g = y - 0.164553 * u - 0.571353 * v;
-        b = y + 1.8814 * u;
-    } else {
-        // BT.709
-        r = y + 1.5748 * v;
-        g = y - 0.187324 * u - 0.468124 * v;
-        b = y + 1.8556 * u;
-    }
-
-    return max(vec3<f32>(r, g, b), vec3<f32>(0.0));
+fn normalize_yuv(codes: vec3<f32>) -> vec3<f32> {
+    return ycbcr_normalize(codes, color_params.range_mode, sample_bit_depth());
 }
 
 fn bt2020_constant_luminance_to_linear(yuv: vec3<f32>) -> vec3<f32> {
@@ -214,13 +172,13 @@ fn bt2020_constant_luminance_to_linear(yuv: vec3<f32>) -> vec3<f32> {
     return linear_rgb;
 }
 
-fn decode_yuv_to_linear(y: f32, uv: vec2<f32>) -> vec3<f32> {
-    let yuv = normalize_yuv(y, uv);
+fn decode_yuv_to_linear(codes: vec3<f32>) -> vec3<f32> {
+    let yuv = normalize_yuv(codes);
     var linear_rgb = vec3<f32>(0.0);
     if color_params.matrix_mode == MATRIX_BT2020_CONSTANT_LUMINANCE {
         linear_rgb = bt2020_constant_luminance_to_linear(yuv);
     } else {
-        let gamma_rgb = yuv_to_gamma_rgb(yuv);
+        let gamma_rgb = ycbcr_to_rgb(yuv, color_params.matrix_mode);
         linear_rgb = decode_transfer_to_linear(gamma_rgb, color_params.transfer_mode);
     }
     return convert_primaries_to_srgb(linear_rgb, color_params.primaries_mode);
@@ -238,11 +196,11 @@ fn convert_to_linear_rgba(@builtin(global_invocation_id) global_id: vec3<u32>) {
         i32(global_id.x / 2u),
         i32(global_id.y / 2u),
     );
-    let code_scale = select(1.0 / 255.0, 1.0 / 65535.0, color_params.sample_mode == SAMPLE_P010);
-    let y = f32(textureLoad(y_texture, y_coordinates, 0).r) * code_scale;
-    let uv_raw = textureLoad(uv_texture, uv_coordinates, 0).rg;
-    let uv = vec2<f32>(f32(uv_raw.x), f32(uv_raw.y)) * code_scale;
-    let linear_rgb = decode_yuv_to_linear(y, uv);
+    let y = textureLoad(y_texture, y_coordinates, 0).r;
+    let uv = textureLoad(uv_texture, uv_coordinates, 0).rg;
+    let elements = vec3<u32>(y, uv);
+    let codes = ycbcr_codes(elements, sample_element_bits(), sample_bit_depth());
+    let linear_rgb = decode_yuv_to_linear(codes);
     textureStore(
         linear_rgba_output,
         y_coordinates,

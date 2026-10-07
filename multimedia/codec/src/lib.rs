@@ -99,9 +99,11 @@ pub use frame::{DecodedFrame, DecodedPixelLayout};
 #[cfg(feature = "gpu")]
 pub use frame::{DecodedFrameUploader, GpuFrame, LinearRgbaConverter};
 pub use image::{DecodedImage, DecodedPixelFormat, decode_image, decode_image_platform};
+pub use waterkit_video_core::CicpColor;
 
 use std::{time::Duration, vec::IntoIter};
 use thiserror::Error;
+use waterkit_video_core::VideoColorInfo;
 
 /// Codec error type.
 #[derive(Debug, Clone, Error)]
@@ -450,6 +452,7 @@ impl Decoder {
                         android_frame.height,
                         android_frame.timestamp_ns,
                         android_frame.layout,
+                        None,
                     );
                     frames.push(frame);
                 }
@@ -467,6 +470,7 @@ impl Decoder {
                         windows_frame.height,
                         windows_frame.timestamp_ns,
                         windows_frame.layout,
+                        None,
                     );
                     frames.push(frame);
                 }
@@ -484,6 +488,7 @@ impl Decoder {
                         linux_frame.height,
                         linux_frame.timestamp_ns,
                         linux_frame.layout,
+                        None,
                     );
                     frames.push(frame);
                 }
@@ -495,12 +500,23 @@ impl Decoder {
                 let cpu_frames = dec.decode(packet)?;
                 let mut frames = Vec::with_capacity(cpu_frames.len());
                 for cpu_frame in cpu_frames {
+                    #[cfg(all(
+                        not(any(target_os = "android", target_arch = "wasm32")),
+                        any(test, not(target_vendor = "apple"))
+                    ))]
+                    let color = Some(cpu_frame.color);
+                    #[cfg(not(all(
+                        not(any(target_os = "android", target_arch = "wasm32")),
+                        any(test, not(target_vendor = "apple"))
+                    )))]
+                    let color = None;
                     let frame = DecodedFrame::from_biplanar_data(
                         cpu_frame.data,
                         cpu_frame.width,
                         cpu_frame.height,
                         cpu_frame.timestamp_ns,
                         cpu_frame.layout,
+                        color,
                     );
                     frames.push(frame);
                 }
@@ -553,6 +569,7 @@ impl Decoder {
                         frame.height,
                         frame.timestamp_ns,
                         frame.layout,
+                        None,
                     )
                 })
                 .collect()),
@@ -567,6 +584,7 @@ impl Decoder {
                         frame.height,
                         frame.timestamp_ns,
                         frame.layout,
+                        None,
                     )
                 })
                 .collect()),
@@ -581,6 +599,7 @@ impl Decoder {
                         frame.height,
                         frame.timestamp_ns,
                         frame.layout,
+                        None,
                     )
                 })
                 .collect()),
@@ -589,12 +608,23 @@ impl Decoder {
                 .drain()?
                 .into_iter()
                 .map(|frame| {
+                    #[cfg(all(
+                        not(any(target_os = "android", target_arch = "wasm32")),
+                        any(test, not(target_vendor = "apple"))
+                    ))]
+                    let color = Some(frame.color);
+                    #[cfg(not(all(
+                        not(any(target_os = "android", target_arch = "wasm32")),
+                        any(test, not(target_vendor = "apple"))
+                    )))]
+                    let color = None;
                     DecodedFrame::from_biplanar_data(
                         frame.data,
                         frame.width,
                         frame.height,
                         frame.timestamp_ns,
                         frame.layout,
+                        color,
                     )
                 })
                 .collect()),
@@ -803,7 +833,10 @@ impl std::fmt::Debug for Encoder {
 }
 
 impl Encoder {
-    /// Create a new encoder tuned for `profile`.
+    /// Create a new encoder tuned for `profile` and signal `color` on its output.
+    ///
+    /// `color` must describe the colorimetry of the NV12 samples passed to
+    /// [`Self::encode_nv12`].
     ///
     /// # Errors
     ///
@@ -813,10 +846,11 @@ impl Encoder {
         width: u32,
         height: u32,
         profile: EncoderProfile,
+        color: VideoColorInfo,
     ) -> Result<Self, CodecError> {
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = (width, height, profile);
+            let _ = (width, height, profile, color);
             let _ = EncoderInner::Unsupported;
             Err(CodecError::Unsupported(format!(
                 "{codec:?} encoding is not supported by waterkit-codec on WebAssembly"
@@ -826,28 +860,28 @@ impl Encoder {
         #[cfg(not(target_arch = "wasm32"))]
         {
             #[cfg(not(any(waterkit_hw_codec, waterkit_av1_software_encode)))]
-            let _ = (width, height);
+            let _ = (width, height, color);
             #[cfg(not(waterkit_av1_software_encode))]
             let _ = profile;
             match codec {
                 #[cfg(waterkit_hw_codec_apple)]
                 CodecType::H264 | CodecType::H265 => Ok(Self {
-                    inner: sys::apple::open_encoder(codec, width, height)?,
+                    inner: sys::apple::open_encoder(codec, width, height, color)?,
                 }),
 
                 #[cfg(waterkit_hw_codec_android)]
                 CodecType::H264 | CodecType::H265 => Ok(Self {
-                    inner: sys::android::open_encoder(codec, width, height)?,
+                    inner: sys::android::open_encoder(codec, width, height, color)?,
                 }),
 
                 #[cfg(waterkit_hw_codec_windows)]
                 CodecType::H264 | CodecType::H265 => Ok(Self {
-                    inner: sys::windows::open_encoder(codec, width, height)?,
+                    inner: sys::windows::open_encoder(codec, width, height, color)?,
                 }),
 
                 #[cfg(waterkit_hw_codec_vaapi)]
                 CodecType::H264 | CodecType::H265 => Ok(Self {
-                    inner: sys::linux::open_encoder(codec, width, height)?,
+                    inner: sys::linux::open_encoder(codec, width, height, color)?,
                 }),
 
                 #[cfg(not(waterkit_hw_codec))]
@@ -861,6 +895,7 @@ impl Encoder {
                         width as usize,
                         height as usize,
                         profile,
+                        color,
                     )?)),
                 }),
 

@@ -1,8 +1,10 @@
 //! Cross-platform camera streaming with GPU-first frame delivery.
 //!
 //! This crate provides a unified API for camera enumeration and streaming
-//! across iOS, macOS, Android, Windows, and Linux platforms. Frames are
-//! delivered as GPU textures for zero-copy rendering.
+//! across iOS, macOS, Android, Windows, and Linux platforms. Each [`Frame`]
+//! holds its pixels as GPU textures in the plane layout the platform
+//! delivered ([`FramePlanes`]) together with its [`Orientation`];
+//! [`FrameConverter`] renders any frame to one upright RGBA texture on the GPU.
 //!
 //! The camera API is fully RAII-based: cameras start streaming when opened
 //! and stop when dropped.
@@ -11,25 +13,58 @@
 //! # Example
 //!
 //! ```ignore
-//! use waterkit_camera::{Camera, CameraConfig};
+//! use waterkit_camera::{Camera, CameraError, FrameConverter};
 //! use futures::StreamExt;
 //!
-//! async fn example(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) {
+//! async fn example(
+//!     device: Arc<wgpu::Device>,
+//!     queue: Arc<wgpu::Queue>,
+//! ) -> Result<(), CameraError> {
 //!     // Camera starts streaming immediately on open
-//!     let camera = Camera::open_default(device, queue).await.unwrap();
+//!     let camera = Camera::open_default(device.clone(), queue.clone()).await?;
 //!
+//!     let mut converter = FrameConverter::new(&device);
 //!     let mut frames = camera.frames();
 //!     while let Some(frame) = frames.next().await {
-//!         let view = frame.view();
-//!         // Use texture view for rendering...
+//!         let upright = converter.convert(&device, &queue, &frame?)?;
+//!         // Sample `upright` for rendering...
 //!     }
 //!     // Camera stops when dropped
+//!     Ok(())
 //! }
 //! ```
 
 #![warn(missing_docs)]
 
+/// Only the platforms with a camera backend measure capture time.
+#[cfg(any(
+    target_os = "ios",
+    target_os = "macos",
+    target_os = "android",
+    target_os = "windows",
+    target_os = "linux",
+    test
+))]
+mod clock;
+mod color;
+mod converter;
+mod frame;
+/// Reader and color description for uncompressed `WKRV` recordings.
+pub mod raw_video;
+// Apple and Android frames are imported from the platform's buffers; desktop
+// frames, and the tests everywhere, are uploaded from CPU memory.
 mod sys;
+#[cfg(test)]
+mod test_support;
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+mod upload;
+
+pub use converter::{FrameConverter, UPRIGHT_FORMAT};
+pub use frame::{Frame, FramePlanes, Orientation};
+pub use raw_video::{RawVideoError, RawVideoFrame, RawVideoHeader, RawVideoLayout, RawVideoReader};
+pub use waterkit_video_core::{
+    ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo,
+};
 
 use std::num::NonZeroU8;
 use std::path::Path;
@@ -38,118 +73,10 @@ use std::time::Duration;
 
 // Re-export wgpu types for convenience
 pub use wgpu;
-
-// ============================================================================
-// Pixel Format
-// ============================================================================
-
-/// Pixel format for camera frames.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum PixelFormat {
-    /// BGRA 8-bit per channel (native on Apple platforms).
-    #[default]
-    Bgra8,
-    /// RGBA 8-bit per channel.
-    Rgba8,
-    /// NV12 (YUV 4:2:0 bi-planar) - common camera format.
-    Nv12,
-}
-
-impl PixelFormat {
-    /// Get the corresponding wgpu texture format.
-    ///
-    /// For YUV formats, returns the format for the combined texture.
-    /// Use a shader to convert YUV to RGB.
-    #[must_use]
-    #[allow(clippy::match_same_arms)] // Nv12 converts to Bgra8, intentionally same
-    pub const fn wgpu_format(&self) -> wgpu::TextureFormat {
-        match self {
-            Self::Bgra8 | Self::Nv12 => wgpu::TextureFormat::Bgra8UnormSrgb,
-            Self::Rgba8 => wgpu::TextureFormat::Rgba8UnormSrgb,
-        }
-    }
-
-    /// Bytes per pixel for the format.
-    #[must_use]
-    pub const fn bytes_per_pixel(&self) -> u32 {
-        match self {
-            Self::Bgra8 | Self::Rgba8 => 4,
-            Self::Nv12 => 1, // 1.5 average, but luma plane is 1 bpp
-        }
-    }
-}
-
-// ============================================================================
-// Frame
-// ============================================================================
-
-/// A GPU-backed camera frame.
-///
-/// Contains a wgpu texture that can be used directly for rendering.
-/// On supported platforms (Apple), this is zero-copy from the camera hardware.
-pub struct Frame {
-    texture: wgpu::Texture,
-    width: u32,
-    height: u32,
-    format: PixelFormat,
-    timestamp: Duration,
-}
-
-impl Frame {
-    /// Get the underlying wgpu texture.
-    #[must_use]
-    pub const fn texture(&self) -> &wgpu::Texture {
-        &self.texture
-    }
-
-    /// Consume the frame and return the underlying texture.
-    #[must_use]
-    pub fn into_texture(self) -> wgpu::Texture {
-        self.texture
-    }
-
-    /// Create a texture view for rendering.
-    #[must_use]
-    pub fn view(&self) -> wgpu::TextureView {
-        self.texture
-            .create_view(&wgpu::TextureViewDescriptor::default())
-    }
-
-    /// Frame width in pixels.
-    #[must_use]
-    pub const fn width(&self) -> u32 {
-        self.width
-    }
-
-    /// Frame height in pixels.
-    #[must_use]
-    pub const fn height(&self) -> u32 {
-        self.height
-    }
-
-    /// Pixel format.
-    #[must_use]
-    pub const fn format(&self) -> PixelFormat {
-        self.format
-    }
-
-    /// Presentation timestamp since camera start.
-    #[must_use]
-    pub const fn timestamp(&self) -> Duration {
-        self.timestamp
-    }
-}
-
-impl std::fmt::Debug for Frame {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Frame")
-            .field("width", &self.width)
-            .field("height", &self.height)
-            .field("format", &self.format)
-            .field("timestamp", &self.timestamp)
-            .finish_non_exhaustive()
-    }
-}
+/// The zero-copy import layer under the platform backends. On Android, open
+/// the device passed to [`Camera::open`] with its
+/// `ahardware_buffer::request_device` or `ahardware_buffer::DeviceRequirements`.
+pub use wgpu_external_frame;
 
 // ============================================================================
 // Resolution
@@ -199,8 +126,6 @@ pub struct CameraConfig {
     pub resolution: Resolution,
     /// Desired frame rate.
     pub frame_rate: u32,
-    /// Pixel format preference.
-    pub format: PixelFormat,
 }
 
 impl Default for CameraConfig {
@@ -208,7 +133,6 @@ impl Default for CameraConfig {
         Self {
             resolution: Resolution::FULL_HD,
             frame_rate: 30,
-            format: PixelFormat::Bgra8,
         }
     }
 }
@@ -216,21 +140,19 @@ impl Default for CameraConfig {
 impl CameraConfig {
     /// Create a 4K configuration.
     #[must_use]
-    pub fn uhd() -> Self {
+    pub const fn uhd() -> Self {
         Self {
             resolution: Resolution::UHD,
             frame_rate: 30,
-            ..Default::default()
         }
     }
 
     /// Create a high frame rate configuration (720p60).
     #[must_use]
-    pub fn high_fps() -> Self {
+    pub const fn high_fps() -> Self {
         Self {
             resolution: Resolution::HD,
             frame_rate: 60,
-            ..Default::default()
         }
     }
 }
@@ -365,11 +287,12 @@ pub enum RawPhotoFormat {
 }
 
 /// RAW video frame stream format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RawVideoFormat {
-    /// Frame stream where each frame is BGRA8 pixels.
-    #[default]
-    Bgra8Frames,
+    /// Frame stream where each frame is biplanar 4:2:0 YCbCr as captured: the
+    /// luma rows, then the interleaved Cb/Cr rows, without padding. The
+    /// header's pixel-format byte is 3 for video range and 4 for full range.
+    Nv12Frames,
     /// Frame stream where each frame is RGBA8 pixels.
     Rgba8Frames,
 }
@@ -776,12 +699,21 @@ pub enum CameraError {
     /// GPU error.
     #[error("GPU error: {0}")]
     GpuError(String),
+    /// The frame's color description is unsupported by the frame converter.
+    #[error("unsupported frame colour: {0}")]
+    UnsupportedColor(String),
     /// Recording error.
     #[error("recording error: {0}")]
     RecordingError(String),
     /// Platform-specific error.
     #[error("platform error: {0}")]
     PlatformError(String),
+    /// A frame the camera delivered could not be imported on the GPU device,
+    /// such as an external-format buffer whose conversion descriptor set the
+    /// driver cannot allocate. It is the frame stream's last item.
+    #[cfg(target_os = "android")]
+    #[error("camera frame import failed: {0}")]
+    FrameImport(Arc<wgpu_external_frame::ahardware_buffer::HardwareBufferImportError>),
 }
 
 // ============================================================================
@@ -810,11 +742,25 @@ impl Camera {
 
     /// Open a camera by its ID with configuration and GPU device.
     ///
-    /// The camera owns references to the wgpu device and queue for creating
-    /// GPU textures from camera frames.
+    /// The camera owns references to the wgpu device and queue it imports or
+    /// uploads frames on.
+    ///
+    /// On Android, frames are imported `AHardwareBuffer`s, which needs device
+    /// extensions and a feature `wgpu` never enables by itself: open `device`
+    /// with `wgpu_external_frame::ahardware_buffer::request_device`, or
+    /// apply `ahardware_buffer::DeviceRequirements` when opening it yourself,
+    /// and request `wgpu::Features::TEXTURE_FORMAT_NV12`: drivers that map
+    /// camera buffers to a Vulkan format have them aliased as NV12 textures.
+    ///
+    /// On Windows and Linux, photos are converted upright with
+    /// [`FrameConverter`], so open `device` with
+    /// [`FrameConverter::required_features`].
     ///
     /// # Errors
-    /// Returns [`CameraError::OpenFailed`] if the camera cannot be opened.
+    /// Returns [`CameraError::OpenFailed`] if the camera cannot be opened. On
+    /// Android it returns [`CameraError::GpuError`] when `device` lacks the
+    /// import's extensions or `TEXTURE_FORMAT_NV12`, and on Windows and Linux
+    /// when [`FrameConverter::check_device`] rejects `device`.
     #[cfg_attr(
         target_arch = "wasm32",
         expect(
@@ -893,7 +839,21 @@ impl Camera {
     /// Frames are delivered at the camera's frame rate. The stream implements
     /// backpressure - if frames are not consumed fast enough, older frames
     /// will be dropped.
-    pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
+    ///
+    /// When capture fails, the stream yields the error as its last item and
+    /// then ends. On Android that includes [`CameraError::FrameImport`] when
+    /// the device cannot import the camera's buffers. Buffers a driver
+    /// describes only through an external format are converted on the GPU,
+    /// which needs nothing beyond what `request_device` enables; whether the
+    /// camera's buffers are converted shows only on the first frame.
+    ///
+    /// On Android a frame pins its camera buffer until the GPU no longer
+    /// reads it and the frame is dropped, and at most four preview images
+    /// can be out at once — one queued in the camera helper, one in the
+    /// reader channel, and the frames the consumer still holds. A consumer
+    /// may keep at most two frames alive at once; holding more makes the
+    /// camera drop new frames until one comes back.
+    pub fn frames(&self) -> impl futures::Stream<Item = Result<Frame, CameraError>> + '_ {
         self.inner.frames()
     }
 

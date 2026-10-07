@@ -1,0 +1,77 @@
+[package]
+name = "waterkit-vision"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository = "https://github.com/water-rs/waterkit"
+description = "Hardware-accelerated on-device vision requests over camera frames and still images"
+keywords = ["vision", "image", "gpu", "ocr", "barcode"]
+categories = ["multimedia::images", "multimedia::video"]
+
+[lints]
+workspace = true
+
+[dependencies]
+waterkit-core = { workspace = true }
+wgpu.workspace = true
+bytes.workspace = true
+enumset.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+icu_locale_core = { workspace = true, optional = true, features = ["alloc"] }
+waterkit-camera = { workspace = true, optional = true }
+
+# iOS
+[target.'cfg(target_os = "ios")'.dependencies]
+swift-bridge = { workspace = true, optional = true }
+
+# Android
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { workspace = true, optional = true }
+ndk-context = { workspace = true, optional = true }
+waterkit-build = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, optional = true, features = [
+    "Media_Ocr",
+    "Graphics_Imaging",
+    "Globalization",
+    "Foundation",
+    "Foundation_Collections",
+    "Storage_Streams",
+    "System_UserProfile",
+] }
+
+[build-dependencies]
+waterkit-build.workspace = true
+
+[features]
+camera = ["dep:waterkit-camera"]
+text = ["dep:icu_locale_core", "dep:windows"]
+# The one-shot system code scanner: the Google code scanner of Google Play
+# services on Android, VisionKit's `DataScannerViewController` on iOS.
+scanner = [
+    "dep:swift-bridge",
+    "dep:jni",
+    "dep:ndk-context",
+    "dep:waterkit-build",
+]
+
+# Android helper the packager compiles into the application's classpath.
+[package.metadata.waterui.android]
+kotlin-sources = ["src/sys/android/ScannerHelper.kt"]
+required-feature = "scanner"
+# The thin client of the Google code scanner; the scanner itself is Google
+# Play services' module, downloaded to the device on first use.
+maven = ["com.google.android.gms:play-services-code-scanner:16.1.0"]
+
+[dev-dependencies]
+pollster.workspace = true
+
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+# Rasterizes the test-time text fixtures; no fonts are committed to the repo.
+ab_glyph = "0.2"
+image.workspace = true

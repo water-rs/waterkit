@@ -92,6 +92,10 @@ pub use waterkit_regional as regional;
 #[doc(inline)]
 pub use waterkit_video as video;
 
+#[cfg(feature = "vision")]
+#[doc(inline)]
+pub use waterkit_vision as vision;
+
 #[cfg(feature = "bluetooth")]
 #[doc(inline)]
 pub use waterkit_bluetooth as bluetooth;
@@ -131,6 +135,10 @@ pub use waterkit_background as background;
 #[cfg(feature = "passkey")]
 #[doc(inline)]
 pub use waterkit_passkey as passkey;
+
+#[cfg(feature = "otp")]
+#[doc(inline)]
+pub use waterkit_otp as otp;
 
 #[cfg(feature = "wallet")]
 #[doc(inline)]

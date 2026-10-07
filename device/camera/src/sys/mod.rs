@@ -6,6 +6,11 @@ pub mod apple;
 #[cfg(target_os = "android")]
 pub mod android;
 
+// The session runs its reader on a `std::thread`, so its host tests need a
+// target with threads.
+#[cfg(any(target_os = "android", all(test, not(target_family = "wasm"))))]
+mod android_session;
+
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub mod desktop;
 
@@ -114,7 +119,7 @@ mod fallback {
             Resolution::HD
         }
 
-        pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
+        pub fn frames(&self) -> impl futures::Stream<Item = Result<Frame, CameraError>> + '_ {
             futures::stream::empty()
         }
 

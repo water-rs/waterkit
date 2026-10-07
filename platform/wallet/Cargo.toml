@@ -25,7 +25,7 @@ zip = { version = "6", default-features = false, features = ["deflate-flate2-zli
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
-waterkit-build.workspace = true
+waterkit-build = { workspace = true, features = ["activity-result"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 swift-bridge.workspace = true
@@ -34,5 +34,14 @@ swift-bridge.workspace = true
 waterkit-build.workspace = true
 
 [package.metadata.waterui.android]
-kotlin-sources = ["src/sys/android/WalletHelper.kt"]
+kotlin-sources = ["src/sys/android/WalletHelper.kt", "src/sys/android/SavePassesActivity.kt"]
 maven = ["com.google.android.gms:play-services-pay:16.5.0", "com.google.android.gms:play-services-base:18.5.0"]
+
+# The Google Wallet save flow runs in this library-owned trampoline activity:
+# the Wallet API delivers its result to the activity's `onActivityResult`,
+# which forwards it as its own result to the shared activity-result bridge.
+[[package.metadata.waterui.android.activity]]
+name = "waterkit.wallet.SavePassesActivity"
+exported = false
+theme = "@android:style/Theme.Translucent.NoTitleBar"
+exclude-from-recents = true

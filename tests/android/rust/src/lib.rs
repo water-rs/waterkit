@@ -2,13 +2,24 @@
 
 #![cfg(target_os = "android")]
 
+#[cfg(feature = "otp")]
+use jni::JavaVM;
 use jni::errors::ThrowRuntimeExAndDefault;
 #[cfg(feature = "location")]
 use jni::objects::JDoubleArray;
+#[cfg(any(feature = "clipboard", feature = "dialog", feature = "otp"))]
+use jni::objects::JValue;
+#[cfg(feature = "otp")]
+use jni::objects::JValueOwned;
 use jni::objects::{Global, JObject};
-use jni::sys::{jdoubleArray, jstring};
+use jni::sys::{jboolean, jdoubleArray, jstring};
 use jni::{Env, EnvUnowned};
-#[cfg(feature = "clipboard")]
+#[cfg(feature = "otp")]
+use jni::{jni_sig, jni_str};
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "otp")]
+use waterkit_build::decode_string;
+#[cfg(any(feature = "clipboard", feature = "otp"))]
 use waterkit_build::describe_jni_error;
 use waterkit_test_report::{TestCase, TestReport, to_json_pretty};
 
@@ -31,8 +42,17 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTest<'local>(
 ) {
     init_logger();
     env.with_env(|env| -> jni::errors::Result<()> {
-        let _android_context = AndroidContextOwner::new(env, &activity)?;
-        let report = run_native_report(env, &activity);
+        let _android_context = match AndroidContextOwner::new(env, &activity) {
+            Ok(owner) => owner,
+            Err(AndroidContextOwnerError::AlreadyActive) => {
+                log::error!(
+                    "Android test context is already active; do not run a manual OTP request and runTest concurrently"
+                );
+                return Ok(());
+            }
+            Err(AndroidContextOwnerError::Jni(error)) => return Err(error),
+        };
+        let report = run_native_report(env, &activity, false, false);
         log_report(&report);
         Ok(())
     })
@@ -45,11 +65,30 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTestReport<'local>
     mut env: EnvUnowned<'local>,
     _this: JObject<'local>,
     activity: JObject<'local>,
+    sms_delivery: jboolean,
+    interactive: jboolean,
 ) -> jstring {
     init_logger();
     env.with_env(|env| -> jni::errors::Result<jstring> {
-        let _android_context = AndroidContextOwner::new(env, &activity)?;
-        let report = run_native_report(env, &activity);
+        let _android_context = match AndroidContextOwner::new(env, &activity) {
+            Ok(owner) => owner,
+            Err(AndroidContextOwnerError::AlreadyActive) => {
+                let mut report = TestReport::new("android", "waterkit-test-android");
+                report.push(TestCase::failed(
+                    "harness.android_context",
+                    "Android context is already active; do not run a manual OTP request and runTestReport concurrently",
+                ));
+                log_report(&report);
+                return match env.new_string(to_json_pretty(&report).map_err(|error| {
+                    jni::errors::Error::ParseFailed(error.to_string())
+                })?) {
+                    Ok(value) => Ok(value.into_raw()),
+                    Err(error) => Err(error),
+                };
+            }
+            Err(AndroidContextOwnerError::Jni(error)) => return Err(error),
+        };
+        let report = run_native_report(env, &activity, sms_delivery, interactive);
         log_report(&report);
 
         let json = match to_json_pretty(&report) {
@@ -71,24 +110,202 @@ pub extern "system" fn Java_com_waterkit_test_MainActivity_runTestReport<'local>
     .resolve::<ThrowRuntimeExAndDefault>()
 }
 
+#[cfg(feature = "otp")]
+#[derive(Clone, Copy)]
+enum ManualOtpMode {
+    Addressed,
+    Consent,
+}
+
+#[cfg(feature = "otp")]
+/// Starts a manual addressed OTP request from the Android UI.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_waterkit_test_MainActivity_testOtpAddressed<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    activity: JObject<'local>,
+) {
+    init_logger();
+    env.with_env(|env| start_manual_otp(env, &activity, ManualOtpMode::Addressed))
+        .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[cfg(feature = "otp")]
+/// Starts a manual SMS User Consent request from the Android UI.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_waterkit_test_MainActivity_testOtpConsent<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    activity: JObject<'local>,
+) {
+    init_logger();
+    env.with_env(|env| start_manual_otp(env, &activity, ManualOtpMode::Consent))
+        .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[cfg(feature = "otp")]
+fn start_manual_otp(
+    env: &mut Env<'_>,
+    activity: &JObject<'_>,
+    mode: ManualOtpMode,
+) -> jni::errors::Result<()> {
+    let owner = match AndroidContextOwner::new(env, activity) {
+        Ok(owner) => owner,
+        Err(AndroidContextOwnerError::AlreadyActive) => {
+            let message = "waterkit-otp error=Android context is already active; do not run manual OTP and runTestReport concurrently";
+            log::error!(target: "waterkit-otp", "{message}");
+            activity_log(env, activity, message)?;
+            activity_finish_otp(env, activity)?;
+            return Ok(());
+        }
+        Err(AndroidContextOwnerError::Jni(error)) => return Err(error),
+    };
+    let java_vm = env.get_java_vm()?;
+    let activity_for_worker = env.new_global_ref(activity)?;
+    let spawn_result = std::thread::Builder::new()
+        .name("waterkit-otp-manual".to_owned())
+        .spawn(move || {
+            run_manual_otp(&java_vm, &activity_for_worker, mode);
+            drop(owner);
+        });
+    if let Err(error) = spawn_result {
+        let message = format!("waterkit-otp error=failed to start request thread: {error}");
+        log::error!(target: "waterkit-otp", "{message}");
+        activity_log(env, activity, &message)?;
+        activity_finish_otp(env, activity)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "otp")]
+fn run_manual_otp(java_vm: &JavaVM, activity: &Global<JObject<'static>>, mode: ManualOtpMode) {
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())
+        .and_then(|runtime| runtime.block_on(run_manual_otp_request(java_vm, activity, mode)));
+    if let Err(error) = result {
+        let message = format!("waterkit-otp error={error}");
+        log::error!(target: "waterkit-otp", "{message}");
+        activity_log_attached(java_vm, activity, &message);
+    }
+    if let Err(error) = activity_finish_otp_attached(java_vm, activity) {
+        log::warn!(target: "waterkit-otp", "failed to finish manual OTP UI state: {error}");
+    }
+}
+
+#[cfg(feature = "otp")]
+async fn run_manual_otp_request(
+    java_vm: &JavaVM,
+    activity: &Global<JObject<'static>>,
+    mode: ManualOtpMode,
+) -> Result<(), String> {
+    use waterkit_content::otp::{AddressedRequest, ConsentRequest};
+
+    match mode {
+        ManualOtpMode::Addressed => {
+            let request = AddressedRequest::start()
+                .await
+                .map_err(|error| error.to_string())?;
+            let token_line = format!("waterkit-otp token={}", request.token());
+            log::info!(target: "waterkit-otp", "{token_line}");
+            activity_log_attached(java_vm, activity, &token_line);
+            let message = request.message().await.map_err(|error| error.to_string())?;
+            let message_line = format!("waterkit-otp message={message}");
+            log::info!(target: "waterkit-otp", "{message_line}");
+            activity_log_attached(java_vm, activity, &message_line);
+        }
+        ManualOtpMode::Consent => {
+            let request = ConsentRequest::start(None)
+                .await
+                .map_err(|error| error.to_string())?;
+            let message = request.message().await.map_err(|error| error.to_string())?;
+            let message_line = format!("waterkit-otp message={message}");
+            log::info!(target: "waterkit-otp", "{message_line}");
+            activity_log_attached(java_vm, activity, &message_line);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "otp")]
+fn activity_log(
+    env: &mut Env<'_>,
+    activity: &JObject<'_>,
+    message: &str,
+) -> jni::errors::Result<()> {
+    let message = env.new_string(message)?;
+    env.call_method(
+        activity,
+        jni_str!("logFromNative"),
+        jni_sig!("(Ljava/lang/String;)V"),
+        &[JValue::Object(&message)],
+    )?;
+    Ok(())
+}
+
+#[cfg(feature = "otp")]
+fn activity_finish_otp(env: &mut Env<'_>, activity: &JObject<'_>) -> jni::errors::Result<()> {
+    env.call_method(activity, jni_str!("finishOtpRequest"), jni_sig!("()V"), &[])?;
+    Ok(())
+}
+
+#[cfg(feature = "otp")]
+fn activity_log_attached(java_vm: &JavaVM, activity: &Global<JObject<'static>>, message: &str) {
+    if let Err(error) = java_vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+        activity_log(env, activity.as_obj(), message)
+    }) {
+        log::warn!(target: "waterkit-otp", "failed to update manual OTP UI log: {error}");
+    }
+}
+
+#[cfg(feature = "otp")]
+fn activity_finish_otp_attached(
+    java_vm: &JavaVM,
+    activity: &Global<JObject<'static>>,
+) -> jni::errors::Result<()> {
+    java_vm.attach_current_thread(|env| activity_finish_otp(env, activity.as_obj()))
+}
+
 struct AndroidContextOwner {
     _activity: Global<JObject<'static>>,
 }
 
+static ANDROID_CONTEXT_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+enum AndroidContextOwnerError {
+    AlreadyActive,
+    Jni(jni::errors::Error),
+}
+
 impl AndroidContextOwner {
-    fn new(env: &Env<'_>, activity: &JObject<'_>) -> jni::errors::Result<Self> {
-        let java_vm = env.get_java_vm()?;
-        let activity = env.new_global_ref(activity)?;
-        // SAFETY: both pointers are retained for this owner's lifetime, and
-        // the harness creates exactly one owner around each native test run.
-        unsafe {
-            ndk_context::initialize_android_context(
-                java_vm.get_raw().cast(),
-                activity.as_obj().as_raw().cast(),
-            );
+    fn new(env: &Env<'_>, activity: &JObject<'_>) -> Result<Self, AndroidContextOwnerError> {
+        if ANDROID_CONTEXT_ACTIVE
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(AndroidContextOwnerError::AlreadyActive);
         }
-        Ok(Self {
-            _activity: activity,
+
+        let result = (|| -> jni::errors::Result<Self> {
+            let java_vm = env.get_java_vm()?;
+            let activity = env.new_global_ref(activity)?;
+            // SAFETY: both pointers are retained for this owner's lifetime,
+            // and the active-owner guard prevents concurrent initialization.
+            unsafe {
+                ndk_context::initialize_android_context(
+                    java_vm.get_raw().cast(),
+                    activity.as_obj().as_raw().cast(),
+                );
+            }
+            Ok(Self {
+                _activity: activity,
+            })
+        })();
+
+        result.map_err(|error| {
+            ANDROID_CONTEXT_ACTIVE.store(false, Ordering::Release);
+            AndroidContextOwnerError::Jni(error)
         })
     }
 }
@@ -100,6 +317,7 @@ impl Drop for AndroidContextOwner {
         unsafe {
             ndk_context::release_android_context();
         }
+        ANDROID_CONTEXT_ACTIVE.store(false, Ordering::Release);
     }
 }
 
@@ -107,114 +325,41 @@ fn init_logger() {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
+    // A panic's message goes to stderr, which an Android app does not keep,
+    // and the JNI boundary reports only that a panic happened; log it so a
+    // crashed run says why.
+    std::panic::set_hook(Box::new(|info| log::error!("Rust panic: {info}")));
 }
 
-fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
-    let mut report = TestReport::new("android", "waterkit-test-android");
-    #[cfg(any(
-        feature = "sensor",
-        feature = "location",
-        feature = "permission",
-        feature = "fs",
-        feature = "secret",
-        feature = "clipboard"
-    ))]
-    let activity_global = match env.new_global_ref(activity) {
-        Ok(value) => value,
-        Err(error) => {
-            report.push(TestCase::failed(
-                "harness.activity_ref",
-                format!("failed to create global activity ref: {error}"),
-            ));
-            return report;
-        }
-    };
-    #[cfg(not(any(
-        feature = "sensor",
-        feature = "location",
-        feature = "permission",
-        feature = "fs",
-        feature = "secret",
-        feature = "clipboard"
-    )))]
-    let _ = (env, activity);
-    let rt = tokio::runtime::Builder::new_current_thread()
+fn run_native_report(
+    env: &mut Env<'_>,
+    activity: &JObject<'_>,
+    sms_delivery: bool,
+    interactive: bool,
+) -> TestReport {
+    #[cfg(not(feature = "otp"))]
+    let _ = sms_delivery;
+    #[cfg(not(feature = "dialog"))]
+    let _ = interactive;
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("failed to build tokio runtime for Android test harness");
-
-    rt.block_on(async {
-        #[cfg(any(
-            feature = "sensor",
-            feature = "location",
-            feature = "permission",
-            feature = "fs",
-            feature = "secret",
-            feature = "clipboard"
-        ))]
-        let activity = activity_global.as_obj();
-
-        #[cfg(feature = "sensor")]
-        record_android_sensor(&mut report, env, activity);
-
-        #[cfg(feature = "location")]
-        record_android_location(&mut report, env, activity);
-
-        #[cfg(feature = "permission")]
-        record_android_permission(&mut report, env, activity);
-
-        #[cfg(feature = "camera")]
-        record_android_camera(&mut report);
-
-        #[cfg(feature = "clipboard")]
-        record_android_clipboard(&mut report).await;
-
-        #[cfg(feature = "clipboard")]
-        report.push(ClipboardFiles::record(env, activity).await);
-
-        #[cfg(feature = "fs")]
-        record_android_fs(&mut report, env, activity);
-
-        #[cfg(feature = "haptic")]
-        record_android_haptic(&mut report);
-
-        #[cfg(feature = "notification")]
-        record_android_notification(&mut report);
-
-        #[cfg(feature = "secret")]
-        record_android_secret(&mut report, env, activity);
-
-        #[cfg(feature = "system")]
-        record_android_system(&mut report);
-
-        #[cfg(feature = "background")]
-        record_android_background(&mut report);
-
-        #[cfg(feature = "passkey")]
-        record_android_passkey(&mut report).await;
-
-        #[cfg(feature = "codec")]
-        record_android_avif_decode(&mut report);
-
-        #[cfg(feature = "health")]
-        report.push(TestCase::passed_with_message(
-            "health.availability",
-            format!(
-                "available={}",
-                waterkit_content::health::capabilities().available
-            ),
-        ));
-
-        #[cfg(feature = "wallet")]
-        report.push(record_wallet_availability().await);
-
-        #[cfg(feature = "screen")]
-        record_android_screen(&mut report);
-
-        for case in unexercised_cases() {
-            report.push(case);
+    let report = TestReport::new("android", "waterkit-test-android");
+    let mut report = match Harness::new(env, activity, &runtime, report) {
+        Ok(mut harness) => {
+            #[cfg(feature = "otp")]
+            {
+                harness.sms_delivery = sms_delivery;
+            }
+            #[cfg(feature = "dialog")]
+            {
+                harness.interactive = interactive;
+            }
+            harness.run()
         }
-    });
+        Err(report) => report,
+    };
 
     // Every enabled feature records at least one case, so an empty report
     // means the harness was built without any feature.
@@ -228,73 +373,536 @@ fn run_native_report(env: &mut Env<'_>, activity: &JObject<'_>) -> TestReport {
     report
 }
 
-#[cfg(feature = "wallet")]
-async fn record_wallet_availability() -> TestCase {
-    match waterkit_content::wallet::capabilities().await {
-        Ok(capabilities) => TestCase::passed_with_message(
-            "wallet.availability",
-            format!("available={}", capabilities.available),
+#[cfg(feature = "dialog")]
+static ACTIVITY_RESULT_ECHO: waterkit_build::DexHelper =
+    waterkit_build::dex_helper!("com.waterkit.test.ActivityResultEchoActivity");
+
+#[cfg(feature = "dialog")]
+#[expect(
+    clippy::future_not_send,
+    reason = "the JNI environment belongs to the harness thread, which the current-thread runtime blocks on"
+)]
+async fn echo_activity_result(
+    env: &mut Env<'_>,
+    activity: &JObject<'_>,
+    token: &str,
+    result_code: i32,
+    use_intent_sender: bool,
+) -> Result<(waterkit_build::ResultCode, String), String> {
+    let helper_class = ACTIVITY_RESULT_ECHO
+        .class(env, activity)
+        .map_err(|error| error.to_string())?;
+    let token_string = env.new_string(token).map_err(|error| error.to_string())?;
+    let arguments = [
+        JValue::Object(activity),
+        JValue::Object(&token_string),
+        JValue::Int(result_code),
+    ];
+    let input = if use_intent_sender {
+        env.call_static_method(
+            helper_class,
+            jni::jni_str!("intentSender"),
+            jni::jni_sig!(
+                "(Landroid/content/Context;Ljava/lang/String;I)Landroid/content/IntentSender;"
+            ),
+            &arguments,
+        )
+    } else {
+        env.call_static_method(
+            helper_class,
+            jni::jni_str!("intent"),
+            jni::jni_sig!("(Landroid/content/Context;Ljava/lang/String;I)Landroid/content/Intent;"),
+            &arguments,
+        )
+    }
+    .map_err(|error| error.to_string())?
+    .l()
+    .map_err(|error| error.to_string())?;
+    let result = if use_intent_sender {
+        waterkit_build::start_intent_sender_for_result(env, &input)
+    } else {
+        waterkit_build::start_activity_for_result(env, &input)
+    }
+    .map_err(|error| error.to_string())?
+    .await
+    .map_err(|error| error.to_string())?;
+    let result_code = result.code();
+    let data = result
+        .into_data()
+        .ok_or_else(|| "echo activity returned no Intent data".to_owned())?;
+    let helper_class = ACTIVITY_RESULT_ECHO
+        .class(env, activity)
+        .map_err(|error| error.to_string())?;
+    let token = env
+        .call_static_method(
+            helper_class,
+            jni::jni_str!("token"),
+            jni::jni_sig!("(Landroid/content/Intent;)Ljava/lang/String;"),
+            &[JValue::Object(data.as_obj())],
+        )
+        .map_err(|error| error.to_string())?
+        .l()
+        .map_err(|error| error.to_string())?;
+    let token = waterkit_build::decode_optional_string(env, &token)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "echo activity returned no token".to_owned())?;
+    Ok((result_code, token))
+}
+
+#[cfg(feature = "dialog")]
+#[expect(
+    clippy::future_not_send,
+    reason = "the JNI environment belongs to the harness thread, which the current-thread runtime blocks on"
+)]
+async fn record_android_activity_results(
+    report: &mut TestReport,
+    env: &mut Env<'_>,
+    activity: &JObject<'_>,
+    interactive: bool,
+) {
+    for (name, token, code, intent_sender) in [
+        ("activity_result.intent", "activity-intent", -1, false),
+        (
+            "activity_result.intent_sender",
+            "activity-intent-sender",
+            -1,
+            true,
         ),
-        Err(error) => TestCase::failed(
-            "wallet.availability",
-            format!("wallet capability probe failed: {error}"),
-        ),
+        ("activity_result.custom_code", "activity-custom", 5, false),
+    ] {
+        match echo_activity_result(env, activity, token, code, intent_sender).await {
+            Ok((waterkit_build::ResultCode::Ok, returned_token))
+                if code == -1 && returned_token == token =>
+            {
+                report.push(TestCase::passed(name));
+            }
+            Ok((waterkit_build::ResultCode::Custom(5), returned_token))
+                if code == 5 && returned_token == token =>
+            {
+                report.push(TestCase::passed(name));
+            }
+            Ok((result_code, returned_token)) => report.push(TestCase::failed(
+                name,
+                format!("unexpected result code or token: {result_code:?}, {returned_token}"),
+            )),
+            Err(error) => report.push(TestCase::failed(name, error)),
+        }
+    }
+
+    let launch_failure = (|| -> Result<_, String> {
+        let class = env
+            .find_class(jni::jni_str!("android/content/Intent"))
+            .map_err(|error| error.to_string())?;
+        let intent = env
+            .new_object(class, jni::jni_sig!("()V"), &[])
+            .map_err(|error| error.to_string())?;
+        let action = env
+            .new_string("waterkit.test.NONEXISTENT_ACTION")
+            .map_err(|error| error.to_string())?;
+        env.call_method(
+            &intent,
+            jni::jni_str!("setAction"),
+            jni::jni_sig!("(Ljava/lang/String;)Landroid/content/Intent;"),
+            &[JValue::Object(&action)],
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(intent)
+    })();
+    match launch_failure {
+        Ok(intent) => match waterkit_build::start_activity_for_result(env, &intent) {
+            Ok(pending) => match pending.await {
+                Err(waterkit_build::ActivityResultError::Launch(_)) => {
+                    report.push(TestCase::passed("activity_result.launch_failure"));
+                }
+                Err(error) => report.push(TestCase::failed(
+                    "activity_result.launch_failure",
+                    format!("launch returned the wrong error: {error}"),
+                )),
+                Ok(_) => report.push(TestCase::failed(
+                    "activity_result.launch_failure",
+                    "nonexistent action unexpectedly returned an activity result",
+                )),
+            },
+            Err(error) => report.push(TestCase::failed(
+                "activity_result.launch_failure",
+                format!("failed before asynchronous launch: {error}"),
+            )),
+        },
+        Err(error) => report.push(TestCase::failed(
+            "activity_result.launch_failure",
+            format!("could not create invalid intent: {error}"),
+        )),
+    }
+
+    if interactive {
+        record_interactive_dialog_cases(report).await;
     }
 }
 
-/// The cases of the features this harness only links, or cannot exercise
-/// without an interactive prompt or the user's data.
-fn unexercised_cases() -> impl Iterator<Item = TestCase> {
-    [
-        (
-            cfg!(feature = "biometric"),
-            TestCase::skipped(
-                "biometric.authenticate",
-                "biometric authentication requires an interactive prompt",
-            ),
-        ),
-        (cfg!(feature = "audio"), TestCase::passed("audio.linked")),
-        (cfg!(feature = "codec"), TestCase::passed("codec.linked")),
-        (cfg!(feature = "dialog"), TestCase::passed("dialog.linked")),
-        (cfg!(feature = "video"), TestCase::passed("video.linked")),
-        (
-            cfg!(feature = "bluetooth"),
-            TestCase::passed("bluetooth.linked"),
-        ),
-        (cfg!(feature = "nfc"), TestCase::passed("nfc.linked")),
-        (
-            cfg!(feature = "share"),
-            TestCase::skipped("share.sheet", "share sheet requires an interactive chooser"),
-        ),
-        (
-            cfg!(feature = "speech"),
-            TestCase::skipped(
-                "speech.tts",
-                "speech synthesis is audible and not asserted by this harness",
-            ),
-        ),
-        (
-            cfg!(feature = "contacts"),
-            TestCase::skipped(
-                "contacts.fetch_all",
-                "contacts access depends on runtime user data permissions",
-            ),
-        ),
-        (
-            cfg!(feature = "calendar"),
-            TestCase::skipped(
-                "calendar.list",
-                "calendar access depends on runtime user data permissions",
-            ),
-        ),
-        (
-            cfg!(feature = "deeplink"),
-            TestCase::passed("deeplink.linked"),
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(enabled, case)| enabled.then_some(case))
+#[cfg(feature = "dialog")]
+async fn record_interactive_dialog_cases(report: &mut TestReport) {
+    record_photo_picker_case(report).await;
+    record_file_picker_case(report).await;
+    record_multiple_file_picker_case(report).await;
+    record_picker_cancelled_case(report).await;
 }
+
+#[cfg(feature = "dialog")]
+async fn record_photo_picker_case(report: &mut TestReport) {
+    use waterkit_content::dialog::{MediaType, PhotoPicker};
+
+    match PhotoPicker::new()
+        .with_media_type(MediaType::Image)
+        .pick()
+        .await
+    {
+        Ok(Some(handle)) => match handle.load().await {
+            Ok(path) => match std::fs::read(&path) {
+                Ok(bytes) if bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) => {
+                    report.push(TestCase::passed_with_message(
+                        "dialog.photo_picker",
+                        format!("path={} bytes={}", path.display(), bytes.len()),
+                    ));
+                }
+                Ok(bytes) => report.push(TestCase::failed(
+                    "dialog.photo_picker",
+                    format!(
+                        "selected image was not a PNG: path={} bytes={}",
+                        path.display(),
+                        bytes.len()
+                    ),
+                )),
+                Err(error) => report.push(TestCase::failed(
+                    "dialog.photo_picker",
+                    format!("could not read selected image {}: {error}", path.display()),
+                )),
+            },
+            Err(error) => report.push(TestCase::failed(
+                "dialog.photo_picker",
+                format!("could not load selected image: {error}"),
+            )),
+        },
+        Ok(None) => report.push(TestCase::failed(
+            "dialog.photo_picker",
+            "photo picker returned no selection",
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "dialog.photo_picker",
+            format!("photo picker failed: {error}"),
+        )),
+    }
+}
+
+#[cfg(feature = "dialog")]
+async fn record_file_picker_case(report: &mut TestReport) {
+    use waterkit_content::dialog::FileDialog;
+
+    let selected_file = FileDialog::new()
+        .with_filter("Text files", &["txt"])
+        .pick_single()
+        .await;
+    match selected_file {
+        Ok(Some(path)) => match std::fs::read_to_string(&path) {
+            Ok(contents) if contents == "waterkit activity results a" => {
+                report.push(TestCase::passed_with_message(
+                    "dialog.file_picker",
+                    format!("path={}", path.display()),
+                ));
+            }
+            Ok(_) => report.push(TestCase::failed(
+                "dialog.file_picker",
+                format!(
+                    "selected file did not contain the expected fixture: {}",
+                    path.display()
+                ),
+            )),
+            Err(error) => report.push(TestCase::failed(
+                "dialog.file_picker",
+                format!("could not read selected file {}: {error}", path.display()),
+            )),
+        },
+        Ok(None) => report.push(TestCase::failed(
+            "dialog.file_picker",
+            "file picker returned no selection",
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "dialog.file_picker",
+            format!("file picker failed: {error}"),
+        )),
+    }
+}
+
+#[cfg(feature = "dialog")]
+async fn record_multiple_file_picker_case(report: &mut TestReport) {
+    use waterkit_content::dialog::FileDialog;
+
+    let selected_files = FileDialog::new()
+        .with_filter("Text files", &["txt"])
+        .pick_multiple()
+        .await;
+    match selected_files {
+        Ok(Some(paths)) => {
+            let mut contents = paths
+                .iter()
+                .map(std::fs::read_to_string)
+                .collect::<Result<Vec<_>, _>>();
+            match &mut contents {
+                Ok(contents) => {
+                    contents.sort();
+                    let mut expected = vec![
+                        "waterkit activity results a".to_owned(),
+                        "waterkit activity results b".to_owned(),
+                    ];
+                    expected.sort();
+                    if paths.len() == 2 && *contents == expected {
+                        report.push(TestCase::passed_with_message(
+                            "dialog.file_picker_multiple",
+                            format!("selected={}", paths.len()),
+                        ));
+                    } else {
+                        report.push(TestCase::failed(
+                            "dialog.file_picker_multiple",
+                            format!("unexpected fixture selection: {contents:?}"),
+                        ));
+                    }
+                }
+                Err(error) => report.push(TestCase::failed(
+                    "dialog.file_picker_multiple",
+                    format!("could not read selected fixtures: {error}"),
+                )),
+            }
+        }
+        Ok(None) => report.push(TestCase::failed(
+            "dialog.file_picker_multiple",
+            "multiple file picker returned no selection",
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "dialog.file_picker_multiple",
+            format!("multiple file picker failed: {error}"),
+        )),
+    }
+}
+
+#[cfg(feature = "dialog")]
+async fn record_picker_cancelled_case(report: &mut TestReport) {
+    use waterkit_content::dialog::FileDialog;
+
+    match FileDialog::new()
+        .with_filter("Text files", &["txt"])
+        .pick_single()
+        .await
+    {
+        Ok(None) => report.push(TestCase::passed("dialog.picker_cancelled")),
+        Ok(Some(_)) => report.push(TestCase::failed(
+            "dialog.picker_cancelled",
+            "picker returned a selection instead of being cancelled",
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "dialog.picker_cancelled",
+            format!("picker cancellation failed: {error}"),
+        )),
+    }
+}
+
+/// What every capability's recorder shares: the JNI environment, a global
+/// reference to the activity, the files directory, the runtime its
+/// asynchronous calls run on, and the report its cases go into.
+#[cfg_attr(
+    not(any(
+        feature = "sensor",
+        feature = "location",
+        feature = "permission",
+        feature = "fs",
+        feature = "secret",
+        feature = "clipboard",
+        feature = "otp",
+        feature = "dialog"
+    )),
+    expect(
+        dead_code,
+        reason = "only the recorders that call into the activity read the environment and the activity"
+    )
+)]
+struct Harness<'h, 'local> {
+    env: &'h mut Env<'local>,
+    activity: Global<JObject<'static>>,
+    #[cfg(feature = "camera")]
+    files_dir: std::path::PathBuf,
+    #[cfg(feature = "otp")]
+    sms_delivery: bool,
+    #[cfg(feature = "dialog")]
+    interactive: bool,
+    runtime: &'h tokio::runtime::Runtime,
+    report: TestReport,
+}
+
+impl<'h, 'local> Harness<'h, 'local> {
+    /// Sets up what the recorders share, or returns `report` with the case
+    /// that says which part could not be set up.
+    fn new(
+        env: &'h mut Env<'local>,
+        activity: &JObject<'_>,
+        runtime: &'h tokio::runtime::Runtime,
+        mut report: TestReport,
+    ) -> Result<Self, TestReport> {
+        let global_activity = match env.new_global_ref(activity) {
+            Ok(value) => value,
+            Err(error) => {
+                report.push(TestCase::failed(
+                    "harness.activity_ref",
+                    format!("failed to create global activity ref: {error}"),
+                ));
+                return Err(report);
+            }
+        };
+        #[cfg(feature = "camera")]
+        let files_dir = match files_dir(env, activity) {
+            Ok(dir) => dir,
+            Err(error) => {
+                report.push(TestCase::failed("harness.files_dir", error.to_string()));
+                return Err(report);
+            }
+        };
+        Ok(Self {
+            env,
+            activity: global_activity,
+            #[cfg(feature = "camera")]
+            files_dir,
+            #[cfg(feature = "otp")]
+            sms_delivery: false,
+            #[cfg(feature = "dialog")]
+            interactive: false,
+            runtime,
+            report,
+        })
+    }
+
+    /// Runs every enabled capability's recorder and returns the report.
+    fn run(mut self) -> TestReport {
+        // Every recorder runs in the runtime's context, and the asynchronous
+        // ones drive their future on it.
+        let _runtime_context = self.runtime.enter();
+        for record in RECORDERS {
+            record(&mut self);
+        }
+        self.report
+    }
+}
+
+/// Records one capability's cases.
+type Recorder = fn(&mut Harness<'_, '_>);
+
+/// The recorder of every enabled capability, in report order. The features
+/// this harness only links, or cannot exercise without an interactive prompt
+/// or the user's data, record a fixed case.
+const RECORDERS: &[Recorder] = &[
+    #[cfg(feature = "sensor")]
+    |h| record_android_sensor(&mut h.report, h.env, h.activity.as_obj()),
+    #[cfg(feature = "location")]
+    |h| record_android_location(&mut h.report, h.env, h.activity.as_obj()),
+    #[cfg(feature = "permission")]
+    |h| record_android_permission(&mut h.report, h.env, h.activity.as_obj()),
+    #[cfg(feature = "camera")]
+    |h| {
+        h.runtime
+            .block_on(record_android_camera(&mut h.report, &h.files_dir));
+    },
+    #[cfg(feature = "clipboard")]
+    |h| h.runtime.block_on(record_android_clipboard(&mut h.report)),
+    #[cfg(feature = "clipboard")]
+    |h| {
+        let case = h
+            .runtime
+            .block_on(ClipboardFiles::record(h.env, h.activity.as_obj()));
+        h.report.push(case);
+    },
+    #[cfg(feature = "fs")]
+    |h| record_android_fs(&mut h.report, h.env, h.activity.as_obj()),
+    #[cfg(feature = "haptic")]
+    |h| record_android_haptic(&mut h.report),
+    #[cfg(feature = "notification")]
+    |h| record_android_notification(&mut h.report),
+    #[cfg(feature = "secret")]
+    |h| record_android_secret(&mut h.report, h.env, h.activity.as_obj()),
+    #[cfg(feature = "system")]
+    |h| record_android_system(&mut h.report),
+    #[cfg(feature = "background")]
+    |h| record_android_background(&mut h.report),
+    #[cfg(feature = "passkey")]
+    |h| h.runtime.block_on(record_android_passkey(&mut h.report)),
+    #[cfg(feature = "otp")]
+    |h| {
+        let files_dir = android_files_dir(h.env, h.activity.as_obj());
+        h.runtime
+            .block_on(record_android_otp(&mut h.report, h.sms_delivery, files_dir));
+    },
+    #[cfg(feature = "codec")]
+    |h| record_android_avif_decode(&mut h.report),
+    #[cfg(feature = "health")]
+    |h| record_android_health(&mut h.report),
+    #[cfg(feature = "wallet")]
+    |h| h.runtime.block_on(record_android_wallet(&mut h.report)),
+    #[cfg(feature = "screen")]
+    |h| record_android_screen(&mut h.report),
+    #[cfg(feature = "dialog")]
+    |h| {
+        h.runtime.block_on(record_android_activity_results(
+            &mut h.report,
+            h.env,
+            h.activity.as_obj(),
+            h.interactive,
+        ));
+    },
+    #[cfg(feature = "biometric")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "biometric.authenticate",
+            "biometric authentication requires an interactive prompt",
+        ));
+    },
+    #[cfg(feature = "audio")]
+    |h| h.report.push(TestCase::passed("audio.linked")),
+    #[cfg(feature = "codec")]
+    |h| h.report.push(TestCase::passed("codec.linked")),
+    #[cfg(feature = "video")]
+    |h| h.report.push(TestCase::passed("video.linked")),
+    #[cfg(feature = "bluetooth")]
+    |h| h.report.push(TestCase::passed("bluetooth.linked")),
+    #[cfg(feature = "nfc")]
+    |h| h.report.push(TestCase::passed("nfc.linked")),
+    #[cfg(feature = "share")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "share.sheet",
+            "share sheet requires an interactive chooser",
+        ));
+    },
+    #[cfg(feature = "speech")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "speech.tts",
+            "speech synthesis is audible and not asserted by this harness",
+        ));
+    },
+    #[cfg(feature = "contacts")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "contacts.fetch_all",
+            "contacts access depends on runtime user data permissions",
+        ));
+    },
+    #[cfg(feature = "calendar")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "calendar.list",
+            "calendar access depends on runtime user data permissions",
+        ));
+    },
+    #[cfg(feature = "deeplink")]
+    |h| h.report.push(TestCase::passed("deeplink.linked")),
+    #[cfg(feature = "vision")]
+    |h| h.runtime.block_on(record_android_vision(&mut h.report)),
+];
 
 fn log_report(report: &TestReport) {
     log::info!(
@@ -373,6 +981,16 @@ fn record_android_sensor(report: &mut TestReport, env: &mut Env<'_>, activity: &
 
 #[cfg(feature = "location")]
 fn record_android_location(report: &mut TestReport, env: &mut Env<'_>, activity: &JObject<'_>) {
+    match waterkit_content::location::android::provider_with_context(env, activity) {
+        Ok(provider) => report.push(TestCase::passed_with_message(
+            "location.provider",
+            format!("{provider:?}"),
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "location.provider",
+            format!("provider probe failed: {error}"),
+        )),
+    }
     match waterkit_content::location::android::get_location_with_context(env, activity) {
         Ok(location) => {
             let latitude = location.latitude().get();
@@ -419,18 +1037,416 @@ fn record_android_permission(report: &mut TestReport, env: &mut Env<'_>, activit
     }
 }
 
+/// The activity's private files directory, where the runner pulls artifacts
+/// from with `run-as`.
 #[cfg(feature = "camera")]
-fn record_android_camera(report: &mut TestReport) {
+fn files_dir(env: &mut Env<'_>, activity: &JObject<'_>) -> jni::errors::Result<std::path::PathBuf> {
+    use jni::{jni_sig, jni_str};
+    let dir = env
+        .call_method(
+            activity,
+            jni_str!("getFilesDir"),
+            jni_sig!("()Ljava/io/File;"),
+            &[],
+        )?
+        .l()?;
+    let path = env
+        .call_method(
+            &dir,
+            jni_str!("getAbsolutePath"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )?
+        .l()?;
+    let path = env
+        .as_cast::<jni::objects::JString>(&path)?
+        .try_to_string(env)?;
+    Ok(std::path::PathBuf::from(path))
+}
+
+#[cfg(feature = "camera")]
+async fn record_android_camera(report: &mut TestReport, files_dir: &std::path::Path) {
     match waterkit_content::camera::Camera::list() {
-        Ok(cameras) => report.push(TestCase::passed_with_message(
-            "camera.list",
-            format!("count={}", cameras.len()),
-        )),
+        Ok(cameras) => {
+            report.push(TestCase::passed_with_message(
+                "camera.list",
+                format!("count={}", cameras.len()),
+            ));
+            for camera in cameras {
+                record_android_camera_frames(report, &camera, files_dir).await;
+            }
+        }
         Err(error) => report.push(TestCase::failed(
             "camera.list",
             format!("camera list failed: {error}"),
         )),
     }
+}
+
+/// Streams `camera` for a few seconds, dropping each frame once it is
+/// converted, and reports the plane layouts, the orientations, and the frame
+/// rate; the last frame, converted upright on the GPU, is saved as
+/// `camera-<id>.png` in the files directory for inspection.
+#[cfg(feature = "camera")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one streaming pass over the camera's frames with its summary checks; splitting it would scatter a single case"
+)]
+async fn record_android_camera_frames(
+    report: &mut TestReport,
+    camera: &waterkit_content::camera::CameraInfo,
+    files_dir: &std::path::Path,
+) {
+    use futures::StreamExt;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use waterkit_content::camera::{Camera, CameraConfig, FrameConverter, wgpu};
+
+    const STREAM: Duration = Duration::from_secs(3);
+    let case = format!("camera.frames.{}", camera.id);
+
+    let (device, queue) = match camera_gpu().await {
+        Ok(gpu) => gpu,
+        Err(error) => {
+            report.push(TestCase::failed(case, error));
+            return;
+        }
+    };
+    let opened = Instant::now();
+    let camera_handle = match Camera::open(
+        &camera.id,
+        CameraConfig::default(),
+        Arc::clone(&device),
+        Arc::clone(&queue),
+    )
+    .await
+    {
+        Ok(handle) => handle,
+        Err(error) => {
+            report.push(TestCase::failed(case, format!("open failed: {error}")));
+            return;
+        }
+    };
+
+    let mut converter = FrameConverter::new(&device);
+    let mut frames = std::pin::pin!(camera_handle.frames());
+    let mut summary = FrameSummary::default();
+    let mut upright = None;
+    let started = Instant::now();
+    while started.elapsed() < STREAM {
+        let next = tokio::time::timeout(Duration::from_secs(5), frames.next()).await;
+        let frame = match next_frame(&case, summary.count, next) {
+            Ok(frame) => frame,
+            Err(outcome) => {
+                report.push(outcome);
+                return;
+            }
+        };
+        summary.record(&frame);
+        let output = upright
+            .take()
+            .filter(|texture: &wgpu::Texture| {
+                texture.size() == FrameConverter::upright_size(&frame)
+            })
+            .unwrap_or_else(|| FrameConverter::create_output(&device, &frame));
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        if let Err(error) = converter.encode(&device, &mut encoder, &frame, &output) {
+            report.push(TestCase::failed(
+                case,
+                format!("frame conversion failed: {error}"),
+            ));
+            return;
+        }
+        queue.submit([encoder.finish()]);
+        upright = Some(output);
+    }
+    let elapsed = started.elapsed().as_secs_f64();
+    let upright = upright.expect("at least one frame was converted");
+    let png = files_dir.join(format!("camera-{}.png", camera.id));
+    if let Err(error) = save_png(&device, &queue, &upright, &png) {
+        report.push(TestCase::failed(
+            case,
+            format!("saving {}: {error}", png.display()),
+        ));
+        return;
+    }
+    let FrameSummary {
+        layouts,
+        orientations,
+        count,
+        stored,
+        timestamps,
+    } = summary;
+    // A capture span cannot exceed the time since the camera was opened.
+    let span = timestamps.last;
+    if let Some(span) = span
+        && span > opened.elapsed()
+    {
+        report.push(TestCase::failed(
+            case,
+            format!("last frame timestamp {span:?} exceeds time since open"),
+        ));
+        return;
+    }
+    if let Some((index, at)) = timestamps.first_unordered {
+        report.push(TestCase::failed(
+            case,
+            format!("frame {index} timestamp {at:?} is not strictly greater than the previous"),
+        ));
+        return;
+    }
+    report.push(TestCase::passed_with_message(
+        case,
+        format!(
+            "front={} frames={count} fps={:.1} planes={layouts:?} stored={}x{} orientations={orientations:?} upright={}x{} span={:?} png={}",
+            camera.is_front_facing,
+            f64::from(count) / elapsed,
+            stored.0,
+            stored.1,
+            upright.width(),
+            upright.height(),
+            span.unwrap_or_default(),
+            png.display(),
+        ),
+    ));
+    record_android_camera_reopen(report, camera, &device, &queue).await;
+}
+
+/// Reopens `camera` right after its frames case dropped the handle, and
+/// takes one frame from each open. Dropping a camera joins its teardown, so
+/// the immediate second open passes only when teardown already finished.
+#[cfg(feature = "camera")]
+async fn record_android_camera_reopen(
+    report: &mut TestReport,
+    camera: &waterkit_content::camera::CameraInfo,
+    device: &std::sync::Arc<waterkit_content::camera::wgpu::Device>,
+    queue: &std::sync::Arc<waterkit_content::camera::wgpu::Queue>,
+) {
+    use futures::StreamExt;
+    use std::time::Duration;
+    use waterkit_content::camera::{Camera, CameraConfig};
+
+    let case = format!("camera.reopen.{}", camera.id);
+    for open in 0..2 {
+        let handle = match Camera::open(
+            &camera.id,
+            CameraConfig::default(),
+            std::sync::Arc::clone(device),
+            std::sync::Arc::clone(queue),
+        )
+        .await
+        {
+            Ok(handle) => handle,
+            Err(error) => {
+                report.push(TestCase::failed(
+                    case,
+                    format!("open {open} failed: {error}"),
+                ));
+                return;
+            }
+        };
+        {
+            let mut frames = std::pin::pin!(handle.frames());
+            let next = tokio::time::timeout(Duration::from_secs(5), frames.next()).await;
+            match next_frame(&case, 0, next) {
+                Ok(frame) => drop(frame),
+                Err(outcome) => {
+                    report.push(outcome);
+                    return;
+                }
+            }
+        }
+        drop(handle);
+    }
+    report.push(TestCase::passed(case));
+}
+
+/// The Vulkan device camera frames are imported on: Android camera frames are
+/// `AHardwareBuffer`s, which only Vulkan can take, so the device carries the
+/// import's extensions and NV12, which drivers that map camera buffers to a
+/// Vulkan format alias them as.
+#[cfg(feature = "camera")]
+async fn camera_gpu() -> Result<
+    (
+        std::sync::Arc<waterkit_content::camera::wgpu::Device>,
+        std::sync::Arc<waterkit_content::camera::wgpu::Queue>,
+    ),
+    String,
+> {
+    use std::sync::Arc;
+    use waterkit_content::camera::wgpu_external_frame::ahardware_buffer;
+    use waterkit_content::camera::{FrameConverter, wgpu};
+
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::VULKAN,
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .map_err(|error| format!("no Vulkan adapter: {error}"))?;
+    let features =
+        FrameConverter::required_features(adapter.features()) | wgpu::Features::TEXTURE_FORMAT_NV12;
+    let (device, queue) = ahardware_buffer::request_device(
+        &adapter,
+        &wgpu::DeviceDescriptor {
+            required_features: features,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| format!("no GPU device: {error}"))?;
+    Ok((Arc::new(device), Arc::new(queue)))
+}
+
+/// The next frame of a camera stream, or the failure that ends the case after
+/// `count` frames: a device opened with the import's requirements converts
+/// every camera buffer, so any end of the stream, an import error included,
+/// fails the case.
+#[cfg(feature = "camera")]
+fn next_frame(
+    case: &str,
+    count: u32,
+    next: Result<
+        Option<Result<waterkit_content::camera::Frame, waterkit_content::camera::CameraError>>,
+        tokio::time::error::Elapsed,
+    >,
+) -> Result<waterkit_content::camera::Frame, TestCase> {
+    match next {
+        Ok(Some(Ok(frame))) => Ok(frame),
+        Ok(Some(Err(error))) => Err(TestCase::failed(
+            case,
+            format!("stream failed after {count} frames: {error}"),
+        )),
+        Ok(None) => Err(TestCase::failed(
+            case,
+            format!("stream ended after {count} frames"),
+        )),
+        Err(_) => Err(TestCase::failed(
+            case,
+            format!("no frame within 5 s after {count}"),
+        )),
+    }
+}
+
+/// What a camera's frames showed while the harness streamed them.
+#[cfg(feature = "camera")]
+#[derive(Default)]
+struct FrameSummary {
+    /// Plane layouts, matrices and ranges seen.
+    layouts: std::collections::BTreeSet<&'static str>,
+    orientations: std::collections::BTreeSet<String>,
+    count: u32,
+    /// The stored size of the last frame.
+    stored: (u32, u32),
+    /// Frame timestamps seen, on the camera's capture clock.
+    timestamps: Timestamps,
+}
+
+/// What the frame timestamps showed: monotonic, from the first captured
+/// frame.
+#[cfg(feature = "camera")]
+#[derive(Default)]
+struct Timestamps {
+    /// The last frame's timestamp; the stream's capture span.
+    last: Option<std::time::Duration>,
+    /// The first frame whose timestamp did not strictly increase, as
+    /// (frame index, its timestamp).
+    first_unordered: Option<(u32, std::time::Duration)>,
+}
+
+#[cfg(feature = "camera")]
+impl FrameSummary {
+    fn record(&mut self, frame: &waterkit_content::camera::Frame) {
+        use waterkit_content::camera::{FramePlanes, MatrixCoefficients};
+
+        self.count += 1;
+        self.layouts.insert(match frame.planes() {
+            FramePlanes::Rgb(_) => "rgb",
+            FramePlanes::YCbCr420 { .. } => "ycbcr420",
+            FramePlanes::YCbCr422 { .. } => "ycbcr422",
+        });
+        if matches!(
+            frame.planes(),
+            FramePlanes::YCbCr420 { .. } | FramePlanes::YCbCr422 { .. }
+        ) {
+            self.layouts.insert(match frame.color().matrix {
+                MatrixCoefficients::Bt601 => "bt601",
+                MatrixCoefficients::Bt709 => "bt709",
+                MatrixCoefficients::Bt2020NonConstantLuminance => "bt2020",
+                MatrixCoefficients::Bt2020ConstantLuminance => "bt2020-constant-luminance",
+            });
+            self.layouts.insert(match frame.color().range {
+                waterkit_content::camera::ColorRange::Limited => "video-range",
+                waterkit_content::camera::ColorRange::Full => "full-range",
+            });
+        }
+        self.orientations
+            .insert(format!("{:?}", frame.orientation()));
+        self.stored = (frame.width(), frame.height());
+        let at = frame.timestamp();
+        if let Some(previous) = self.timestamps.last
+            && at <= previous
+            && self.timestamps.first_unordered.is_none()
+        {
+            self.timestamps.first_unordered = Some((self.count, at));
+        }
+        self.timestamps.last = Some(at);
+    }
+}
+
+/// Reads an upright `Rgba8Unorm` frame back and writes it as a PNG; the
+/// readback is test tooling, not part of the camera path.
+#[cfg(feature = "camera")]
+fn save_png(
+    device: &waterkit_content::camera::wgpu::Device,
+    queue: &waterkit_content::camera::wgpu::Queue,
+    texture: &waterkit_content::camera::wgpu::Texture,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    use waterkit_content::camera::wgpu;
+    let size = texture.size();
+    let row = size.width * 4;
+    let padded = row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("harness png readback"),
+        size: u64::from(padded * size.height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(size.height),
+            },
+        },
+        size,
+    );
+    queue.submit([encoder.finish()]);
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(10)),
+        })
+        .map_err(|error| error.to_string())?;
+    let mapped = buffer
+        .slice(..)
+        .get_mapped_range()
+        .map_err(|error| error.to_string())?;
+    let pixels: Vec<u8> = mapped
+        .chunks(padded as usize)
+        .flat_map(|line| &line[..row as usize])
+        .copied()
+        .collect();
+    image::RgbaImage::from_raw(size.width, size.height, pixels)
+        .ok_or("readback size")?
+        .save(path)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(feature = "clipboard")]
@@ -1034,6 +2050,202 @@ async fn record_android_passkey(report: &mut TestReport) {
     }
 }
 
+#[cfg(feature = "otp")]
+async fn record_android_otp(
+    report: &mut TestReport,
+    sms_delivery: bool,
+    files_dir: Result<std::path::PathBuf, String>,
+) {
+    use waterkit_content::otp::AddressedRequest;
+
+    let capabilities = match waterkit_content::otp::capabilities() {
+        Ok(capabilities) => capabilities,
+        Err(error) => {
+            report.push(TestCase::failed(
+                "otp.capabilities",
+                format!("capability query failed: {error}"),
+            ));
+            report.push(TestCase::skipped(
+                "otp.addressed",
+                "capability query failed",
+            ));
+            report.push(TestCase::skipped("otp.consent", "capability query failed"));
+            return;
+        }
+    };
+    let capability_message = otp_capability_message(capabilities);
+    if capabilities.addressed.is_some() {
+        report.push(TestCase::passed_with_message(
+            "otp.capabilities",
+            capability_message,
+        ));
+    } else {
+        report.push(TestCase::failed(
+            "otp.capabilities",
+            format!("addressed retrieval is unavailable; {capability_message}"),
+        ));
+    }
+
+    if sms_delivery {
+        let realization = capabilities.addressed.map_or_else(
+            || "unavailable".to_owned(),
+            |realization| format!("{realization:?}"),
+        );
+        match AddressedRequest::start().await {
+            Err(error) => report.push(TestCase::failed(
+                "otp.addressed",
+                format!("start failed (realization={realization}): {error}"),
+            )),
+            Ok(request) => {
+                let body = format!("Your waterkit code is 123456 {}", request.token());
+                let files_dir = match files_dir {
+                    Ok(path) => path,
+                    Err(error) => {
+                        report.push(TestCase::failed(
+                            "otp.addressed",
+                            format!("could not resolve activity filesDir: {error}"),
+                        ));
+                        return;
+                    }
+                };
+                if let Err(error) = write_sms_request(files_dir, "5551234", &body).await {
+                    report.push(TestCase::failed(
+                        "otp.addressed",
+                        format!("could not publish test SMS request: {error}"),
+                    ));
+                    return;
+                }
+
+                match tokio::time::timeout(std::time::Duration::from_secs(30), request.message())
+                    .await
+                {
+                    Ok(Ok(message)) if message == body => {
+                        report.push(TestCase::passed_with_message(
+                            "otp.addressed",
+                            format!("received exact test SMS using {realization}"),
+                        ));
+                    }
+                    Ok(Ok(_)) => report.push(TestCase::failed(
+                        "otp.addressed",
+                        format!(
+                            "received text did not match the test SMS (realization={realization})"
+                        ),
+                    )),
+                    Ok(Err(error)) => report.push(TestCase::failed(
+                        "otp.addressed",
+                        format!("message retrieval failed (realization={realization}): {error}"),
+                    )),
+                    Err(_) => report.push(TestCase::failed(
+                        "otp.addressed",
+                        format!("timed out waiting for the test SMS (realization={realization})"),
+                    )),
+                }
+            }
+        }
+    } else {
+        report.push(TestCase::skipped(
+            "otp.addressed",
+            "no host SMS delivery: physical device",
+        ));
+    }
+
+    report.push(TestCase::skipped(
+        "otp.consent",
+        format!(
+            "needs the user's consent tap; exercised manually; consent_available={}",
+            capabilities.consent
+        ),
+    ));
+}
+
+#[cfg(feature = "health")]
+fn record_android_health(report: &mut TestReport) {
+    report.push(TestCase::passed_with_message(
+        "health.availability",
+        format!(
+            "available={}",
+            waterkit_content::health::capabilities().available
+        ),
+    ));
+}
+
+#[cfg(feature = "wallet")]
+async fn record_android_wallet(report: &mut TestReport) {
+    match waterkit_content::wallet::capabilities().await {
+        Ok(capabilities) => report.push(TestCase::passed_with_message(
+            "wallet.availability",
+            format!("available={}", capabilities.available),
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "wallet.availability",
+            format!("wallet capability probe failed: {error}"),
+        )),
+    }
+}
+
+#[cfg(feature = "otp")]
+fn otp_capability_message(capabilities: waterkit_content::otp::OtpCapabilities) -> String {
+    format!(
+        "available={} addressed={:?} consent={} one_time_code_autofill={}",
+        capabilities.available,
+        capabilities.addressed,
+        capabilities.consent,
+        capabilities.one_time_code_autofill
+    )
+}
+
+#[cfg(feature = "otp")]
+fn android_files_dir(
+    env: &mut Env<'_>,
+    activity: &JObject<'_>,
+) -> Result<std::path::PathBuf, String> {
+    let files_dir = env
+        .call_method(
+            activity,
+            jni_str!("getFilesDir"),
+            jni_sig!("()Ljava/io/File;"),
+            &[],
+        )
+        .and_then(JValueOwned::l)
+        .map_err(|error| describe_jni_error(env, error))?;
+    let path = env
+        .call_method(
+            &files_dir,
+            jni_str!("getAbsolutePath"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )
+        .and_then(JValueOwned::l)
+        .map_err(|error| describe_jni_error(env, error))?;
+    decode_string(env, &path)
+        .map(std::path::PathBuf::from)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "otp")]
+async fn write_sms_request(
+    files_dir: std::path::PathBuf,
+    sender: &str,
+    body: &str,
+) -> Result<(), String> {
+    #[derive(serde::Serialize)]
+    struct SmsRequest<'a> {
+        sender: &'a str,
+        body: &'a str,
+    }
+
+    let request_path = files_dir.join("waterkit-sms-request.json");
+    let temp_path = files_dir.join("waterkit-sms-request.json.tmp");
+    let contents =
+        serde_json::to_vec(&SmsRequest { sender, body }).map_err(|error| error.to_string())?;
+    tokio::fs::write(&temp_path, contents)
+        .await
+        .map_err(|error| error.to_string())?;
+    tokio::fs::rename(temp_path, request_path)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(feature = "screen")]
 fn record_android_screen(report: &mut TestReport) {
     match waterkit_content::screen::screens() {
@@ -1225,6 +2437,41 @@ fn record_android_avif_decode(report: &mut TestReport) {
         Err(error) => report.push(TestCase::failed(
             "codec.decode_avif_platform",
             format!("decode_image failed: {error}"),
+        )),
+    }
+}
+
+/// The Google code scanner needs Play services: `capabilities()` reports
+/// the device's own answer, and without services `scan()` must fail with
+/// [`waterkit_content::vision::VisionError::Unsupported`] instead of
+/// presenting a UI or falling back to another realization.
+#[cfg(feature = "vision")]
+async fn record_android_vision(report: &mut TestReport) {
+    let available = waterkit_content::vision::CodeScanner::capabilities().available;
+    report.push(TestCase::passed_with_message(
+        "vision.scanner_capabilities",
+        format!("available={available}"),
+    ));
+    if available {
+        report.push(TestCase::skipped(
+            "vision.scanner_scan",
+            "presenting the Google code scanner requires an interactive session",
+        ));
+        return;
+    }
+    match waterkit_content::vision::CodeScanner::new(waterkit_content::vision::Symbology::Qr)
+        .scan()
+        .await
+    {
+        Err(waterkit_content::vision::VisionError::Unsupported(message)) => {
+            report.push(TestCase::passed_with_message(
+                "vision.scanner_scan",
+                format!("unsupported without Play services: {message}"),
+            ));
+        }
+        other => report.push(TestCase::failed(
+            "vision.scanner_scan",
+            format!("scan() without Play services returned {other:?}"),
         )),
     }
 }

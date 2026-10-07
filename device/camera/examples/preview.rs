@@ -1,12 +1,14 @@
 //! Camera preview example with window display.
 //!
-//! Opens a window and displays the camera feed in real-time.
+//! Opens a window and displays the camera feed in real time. A worker thread
+//! owns the camera and forwards its frames; each frame is converted upright on
+//! the GPU and drawn to the window.
 
 use futures::StreamExt;
 use shaderloom::CompiledShader;
 use std::pin::pin;
 use std::sync::Arc;
-use waterkit_camera::Camera;
+use waterkit_camera::{Camera, Frame, FrameConverter};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -21,11 +23,12 @@ struct App {
     device: Option<Arc<wgpu::Device>>,
     queue: Option<Arc<wgpu::Queue>>,
     surface_config: Option<wgpu::SurfaceConfiguration>,
-    camera: Option<Camera>,
+    frames: Option<async_channel::Receiver<Frame>>,
+    converter: Option<FrameConverter>,
     render_pipeline: Option<wgpu::RenderPipeline>,
     bind_group_layout: Option<wgpu::BindGroupLayout>,
     sampler: Option<wgpu::Sampler>,
-    current_texture: Option<wgpu::Texture>,
+    upright: Option<wgpu::Texture>,
     current_bind_group: Option<wgpu::BindGroup>,
 }
 
@@ -37,11 +40,12 @@ impl App {
             device: None,
             queue: None,
             surface_config: None,
-            camera: None,
+            frames: None,
+            converter: None,
             render_pipeline: None,
             bind_group_layout: None,
             sampler: None,
-            current_texture: None,
+            upright: None,
             current_bind_group: None,
         }
     }
@@ -129,14 +133,28 @@ impl App {
         (render_pipeline, bind_group_layout, sampler)
     }
 
-    fn update_bind_group(&mut self) {
-        if let (Some(device), Some(texture), Some(layout), Some(sampler)) = (
+    /// Converts `frame` upright into the reused output texture, recreating it
+    /// (and the bind group sampling it) when the upright size changes.
+    fn show_frame(&mut self, frame: &Frame) {
+        let (Some(device), Some(queue), Some(converter), Some(layout), Some(sampler)) = (
             &self.device,
-            &self.current_texture,
+            &self.queue,
+            &mut self.converter,
             &self.bind_group_layout,
             &self.sampler,
-        ) {
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        ) else {
+            return;
+        };
+        let size = FrameConverter::upright_size(frame);
+        if self
+            .upright
+            .as_ref()
+            .is_none_or(|texture| texture.size() != size)
+        {
+            let upright = FrameConverter::create_output(device, frame);
+            // The converted frame holds display-ready gamma values, and the
+            // surface is not sRGB, so they reach the screen unchanged.
+            let view = upright.create_view(&wgpu::TextureViewDescriptor::default());
             self.current_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Camera Bind Group"),
                 layout,
@@ -151,7 +169,19 @@ impl App {
                     },
                 ],
             }));
+            self.upright = Some(upright);
         }
+        let Some(upright) = &self.upright else {
+            return;
+        };
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Camera frame conversion"),
+        });
+        if let Err(error) = converter.encode(device, &mut encoder, frame, upright) {
+            tracing::error!("could not convert camera frame: {error}");
+            return;
+        }
+        queue.submit([encoder.finish()]);
     }
 
     fn render(&self) {
@@ -239,6 +269,7 @@ impl ApplicationHandler for App {
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Camera Device"),
+            required_features: FrameConverter::required_features(adapter.features()),
             ..Default::default()
         }))
         .expect("Failed to create device");
@@ -258,9 +289,9 @@ impl ApplicationHandler for App {
         let surface_format = surface_caps
             .formats
             .iter()
-            .find(|f| f.is_srgb())
+            .find(|f| !f.is_srgb())
             .copied()
-            .unwrap_or(surface_caps.formats[0]);
+            .expect("the window surface offers no non-sRGB format");
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -286,16 +317,33 @@ impl ApplicationHandler for App {
         self.render_pipeline = Some(pipeline);
         self.bind_group_layout = Some(bind_group_layout);
         self.sampler = Some(sampler);
+        self.converter = Some(FrameConverter::new(&device));
 
-        // Open camera
-        let camera =
-            pollster::block_on(Camera::open_default(device, queue)).expect("Failed to open camera");
-        println!(
-            "Camera opened: {}x{}",
-            camera.resolution().width,
-            camera.resolution().height
-        );
-        self.camera = Some(camera);
+        // The camera runs off the event loop; the window keeps only the
+        // newest frame it forwarded.
+        let (frame_tx, frame_rx) = async_channel::bounded(1);
+        let camera_loop = async move {
+            let camera = Camera::open_default(device, queue)
+                .await
+                .expect("Failed to open camera");
+            let resolution = camera.resolution();
+            tracing::info!("camera opened: {}x{}", resolution.width, resolution.height);
+            let mut frames = pin!(camera.frames());
+            while let Some(frame) = frames.next().await {
+                let frame = frame.expect("the camera stream failed");
+                if frame_tx.force_send(frame).is_err() {
+                    break;
+                }
+            }
+        };
+        // Natively the loop gets its own thread. On wasm32 WebGPU objects
+        // cannot leave the thread that created them, so it runs as a task on
+        // the browser's event loop instead.
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::spawn(move || pollster::block_on(camera_loop));
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(camera_loop);
+        self.frames = Some(frame_rx);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -313,16 +361,12 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // Try to get next camera frame
-                let new_texture = self.camera.as_ref().and_then(|camera| {
-                    let mut frames = pin!(camera.frames());
-                    // Get next frame
-                    pollster::block_on(frames.next()).map(waterkit_camera::Frame::into_texture)
-                });
-
-                if let Some(texture) = new_texture {
-                    self.current_texture = Some(texture);
-                    self.update_bind_group();
+                let frame = self
+                    .frames
+                    .as_ref()
+                    .and_then(|frames| frames.try_recv().ok());
+                if let Some(frame) = frame {
+                    self.show_frame(&frame);
                 }
 
                 self.render();
@@ -337,6 +381,7 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
+    tracing_subscriber::fmt::init();
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
 

@@ -1,9 +1,12 @@
 //! Add server-signed passes to Google Wallet or Apple Wallet.
 //!
 //! Android accepts a signed [`GoogleWalletJwt`]. One JWT can contain several
-//! wallet objects. The host application's published Android context must be an
-//! `Activity`, and its `onActivityResult` must forward wallet results to
-//! `WalletHelper.onActivityResult` (request code `0x5741`).
+//! wallet objects. The save flow runs in `SavePassesActivity`, a library-owned
+//! trampoline activity the crate declares for the host application through its
+//! Android manifest metadata; it is launched through the shared activity-result
+//! bridge, so the published Android context must be an
+//! `androidx.activity.ComponentActivity` and hosts do not forward
+//! `onActivityResult`.
 //!
 //! iOS accepts one or more signed [`ApplePass`] archives. Payload constructors
 //! validate structure only; Google Wallet or `PassKit` performs signature
@@ -81,6 +84,10 @@ pub enum WalletError {
     /// A platform operation failed.
     #[error("wallet platform error: {0}")]
     Platform(String),
+    /// An Android activity-result operation failed.
+    #[cfg(target_os = "android")]
+    #[error(transparent)]
+    ActivityResult(#[from] waterkit_build::ActivityResultError),
 }
 
 #[cfg(target_os = "android")]

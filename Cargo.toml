@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/notification", "tests/macos/passkey", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "multimedia/video/core", "multimedia/video/container", "multimedia/video/streaming", "multimedia/video/processing", "multimedia/video/player", "multimedia/video/cli", "identity/*", "sharing/*", "utils/build"]
+members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/notification", "tests/macos/passkey", "tests/macos/vision", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "multimedia/video/core", "multimedia/video/container", "multimedia/video/streaming", "multimedia/video/processing", "multimedia/video/player", "multimedia/video/cli", "identity/*", "sharing/*", "utils/build"]
 
 
 [workspace.package]
@@ -44,6 +44,7 @@ waterkit-clipboard = { workspace = true, optional = true }
 waterkit-fs = { workspace = true, optional = true }
 waterkit-secret = { workspace = true, optional = true }
 waterkit-camera = { workspace = true, optional = true }
+waterkit-vision = { workspace = true, optional = true }
 waterkit-sensor = { workspace = true, optional = true }
 waterkit-codec = { workspace = true, features = ["gpu", "software-encode"], optional = true }
 waterkit-screen = { workspace = true, optional = true }
@@ -60,6 +61,7 @@ waterkit-health = { workspace = true, optional = true }
 waterkit-deeplink = { workspace = true, optional = true }
 waterkit-background = { workspace = true, optional = true }
 waterkit-passkey = { workspace = true, optional = true }
+waterkit-otp = { workspace = true, optional = true }
 waterkit-wallet = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -79,6 +81,7 @@ full = [
     "fs",
     "secret",
     "camera",
+    "vision",
     "sensor",
     "codec",
     "screen",
@@ -95,6 +98,7 @@ full = [
     "deeplink",
     "background",
     "passkey",
+    "otp",
     "wallet",
 ]
 permission = ["dep:waterkit-permission"]
@@ -107,7 +111,8 @@ biometric = ["dep:waterkit-biometric"]
 clipboard = ["dep:waterkit-clipboard"]
 fs = ["dep:waterkit-fs"]
 secret = ["dep:waterkit-secret"]
-camera = ["dep:waterkit-camera"]
+camera = ["dep:waterkit-camera", "waterkit-vision?/camera"]
+vision = ["dep:waterkit-vision", "waterkit-vision/scanner"]
 sensor = ["dep:waterkit-sensor"]
 codec = ["dep:waterkit-codec"]
 # VA-API hardware video decode/encode on Linux. A still-image consumer keeps
@@ -127,6 +132,7 @@ health = ["dep:waterkit-health"]
 deeplink = ["dep:waterkit-deeplink"]
 background = ["dep:waterkit-background"]
 passkey = ["dep:waterkit-passkey"]
+otp = ["dep:waterkit-otp"]
 wallet = ["dep:waterkit-wallet"]
 
 
@@ -152,6 +158,7 @@ waterkit-clipboard = { path = "platform/clipboard", version = "0.1.4" }
 waterkit-fs = { path = "platform/fs", version = "0.1.4" }
 waterkit-secret = { path = "platform/secret", version = "0.1.4" }
 waterkit-camera = { path = "device/camera", version = "0.1.4" }
+waterkit-vision = { path = "device/vision", version = "0.1.4" }
 waterkit-sensor = { path = "device/sensor", version = "0.1.4" }
 # No default features: consumers opt into `gpu` (decoded-frame upload),
 # `software-decode` (rav1d + image decoding), `software-encode` (adds rav1e)
@@ -177,10 +184,13 @@ waterkit-health = { path = "device/health", version = "0.1.4" }
 waterkit-deeplink = { path = "platform/deeplink", version = "0.1.4" }
 waterkit-background = { path = "platform/background", version = "0.1.4" }
 waterkit-passkey = { path = "identity/passkey", version = "0.1.4" }
+waterkit-otp = { path = "identity/otp", version = "0.1.4" }
 waterkit-wallet = { path = "platform/wallet", version = "0.1.4" }
 
 # Cross-platform
+enumset = "1"
 futures = "0.3"
+futures-channel = "0.3"
 smallvec = "1.15"
 async-channel = "2.5"
 async-fs = "2"
@@ -189,6 +199,9 @@ num-traits = "0.2"
 blocking = "1"
 async-io = "2"
 async-process = "2"
+base64 = "0.22"
+hex = "0.4"
+sha2 = "0.10"
 wgpu = "30.0.1"
 wgpu-hal = { version = "30.0.1", features = ["metal"] }
 
@@ -214,6 +227,8 @@ objc2-core-foundation = "0.3"
 objc2-io-surface = "0.3"
 objc2-metal = "0.3"
 objc = "0.2"
+# Zero-copy import of platform frame buffers into wgpu textures.
+wgpu-external-frame = "0.3.0"
 
 # Security
 keyring = "4"
@@ -267,6 +282,9 @@ jiff = "0.2"
 
 # URL encoding
 percent-encoding = "2.3"
+
+# BCP-47 language identifiers shared by capability APIs.
+icu_locale_core = "2.3"
 url = "2.5"
 zenwave = { version = "0.6.1", default-features = false, features = ["hyper-backend"] }
 
@@ -325,8 +343,7 @@ filtrate-core = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4
 filtrate-derive = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }
 cherenkov-shader = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }
 
-# shaderloom's packaged-artifact API (`shaderloom::packaged`, used by
-# waterkit-codec's build script) is not on crates.io yet; pin the rev that
-# carries it, as other water-rs consumers do. The pinned rev is the head of
-# water-rs/shaderloom#21 (`build/wgpu-30`), which ports shaderloom to wgpu 30.
+# shaderloom's wgpu 30 port is not on crates.io yet; pin the rev that carries
+# it, as other water-rs consumers do. The pinned rev is the head of
+# water-rs/shaderloom#21 (`build/wgpu-30`).
 shaderloom = { git = "https://github.com/water-rs/shaderloom", rev = "84c37c8314f1bb6d228fce30f78d94872247a18f" }

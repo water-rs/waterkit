@@ -7,10 +7,13 @@ does not create payloads or verify their signatures. Android accepts a
 server-signed Google Wallet JWT, which can contain multiple objects. iOS accepts
 one or more signed `.pkpass` archives.
 
-On Android, the published `ndk-context` context must be an `Activity`. The host
-activity must forward the result from `onActivityResult` to
-`WalletHelper.onActivityResult`; the helper uses request code `0x5741`.
-Applications without Google Play services report wallet as unavailable.
+On Android, the save flow runs in `SavePassesActivity`, a trampoline activity
+the crate declares for the host application through its
+`waterui.android.activity` manifest metadata. It is launched through the
+shared `waterkit-build` activity-result bridge, so the published `ndk-context`
+context must be an `androidx.activity.ComponentActivity` and hosts do not
+forward `onActivityResult`. Applications without Google Play services report
+wallet as unavailable.
 
 macOS, Windows, Linux, and other targets report the wallet flow as unavailable
 and do not expose `add`: PassKit's add-pass review controller is iOS-only.

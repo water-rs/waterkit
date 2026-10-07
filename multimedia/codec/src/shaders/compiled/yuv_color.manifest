@@ -1,6 +1,0 @@
-msl_version = [1, 0]
-
-[[dxil]]
-stem = "yuv_color_compute_convert_to_linear_rgba"
-profile = "cs_6_0"
-entry_name = "convert_to_linear_rgba"

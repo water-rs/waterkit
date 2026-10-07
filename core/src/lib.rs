@@ -14,6 +14,7 @@
 pub mod capability;
 pub mod error;
 pub mod id;
+pub mod orientation;
 pub mod permission;
 pub mod subscribed;
 pub mod time;
@@ -22,6 +23,7 @@ pub mod units;
 pub use capability::Capabilities;
 pub use error::CoreError;
 pub use id::Uuid;
+pub use orientation::Orientation;
 pub use permission::{HealthDataKind, Permission, PermissionError, PermissionStatus};
 pub use subscribed::{Subscribed, SubscribedSink, subscribed, subscribed_with_executor};
 pub use time::{Duration, Timestamp};

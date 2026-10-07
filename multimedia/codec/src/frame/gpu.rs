@@ -24,10 +24,7 @@ use shaderloom::{CompiledShader, ShaderStage};
 #[cfg(waterkit_hw_codec_apple)]
 mod apple;
 
-const YUV_COLOR_SHADER: CompiledShader = include!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/src/shaders/compiled/yuv_color.rs"
-));
+const YUV_COLOR_SHADER: CompiledShader = include!(concat!(env!("OUT_DIR"), "/yuv_color.rs"));
 
 impl DecodedFrame {
     /// Convert to GPU frame by uploading to the user's device.
@@ -423,7 +420,9 @@ impl LinearRgbaConverter {
             sample_count: 1,
             dimension: TextureDimension::D2,
             format: TextureFormat::Rgba16Float,
-            usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+            usage: TextureUsages::STORAGE_BINDING
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC,
             view_formats: &[],
         });
 
@@ -469,6 +468,221 @@ impl LinearRgbaConverter {
         queue.submit(Some(encoder.finish()));
 
         output
+    }
+}
+
+#[cfg(all(test, waterkit_software_frames))]
+mod tests {
+    use std::time::Duration;
+
+    use half::f16;
+    use waterkit_video_core::{
+        ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo,
+    };
+
+    use super::{GpuFrame, LinearRgbaConverter};
+    use crate::DecodedPixelLayout;
+
+    const WIDTH: u32 = 64;
+    const HEIGHT: u32 = 64;
+    const MAX_CODE: u32 = 1023;
+
+    /// One 10-bit code step of tolerance. Comparing in R'G'B' keeps rgba16f
+    /// rounding of linear values (which reach ~4 for out-of-gamut chroma,
+    /// where a half f16 step is already ~1/1023) from swamping it; the inverse
+    /// transfer shrinks that rounding below a quarter step.
+    #[test]
+    fn p010_frames_convert_every_code_value_within_one_step() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+            apply_limit_buckets: false,
+        }))
+        .expect("the codec P010 GPU test needs a GPU adapter");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: shaderloom::required_features(adapter.features()),
+            ..Default::default()
+        }))
+        .expect("the codec P010 GPU test needs a GPU device");
+
+        let mut bytes = Vec::with_capacity(DecodedPixelLayout::P010.packed_len(WIDTH, HEIGHT));
+        for index in 0..WIDTH * HEIGHT {
+            bytes.extend_from_slice(&p010_element(index % (MAX_CODE + 1)));
+        }
+        for index in 0..(WIDTH / 2) * (HEIGHT / 2) {
+            bytes.extend_from_slice(&p010_element(index));
+            bytes.extend_from_slice(&p010_element(MAX_CODE - index));
+        }
+        let frame = GpuFrame::uploaded(
+            &device,
+            &queue,
+            WIDTH,
+            HEIGHT,
+            DecodedPixelLayout::P010,
+            &bytes,
+            0,
+        );
+        let converter = LinearRgbaConverter::new(&device);
+        let matrices = [
+            MatrixCoefficients::Bt601,
+            MatrixCoefficients::Bt709,
+            MatrixCoefficients::Bt2020NonConstantLuminance,
+        ];
+        let ranges = [ColorRange::Limited, ColorRange::Full];
+
+        for matrix in matrices {
+            for range in ranges {
+                let output = converter.convert(
+                    &device,
+                    &queue,
+                    &frame,
+                    VideoColorInfo {
+                        matrix,
+                        primaries: ColorPrimaries::Bt709,
+                        transfer: TransferFunction::Sdr,
+                        range,
+                        content_light_level: None,
+                        dolby_vision: false,
+                    },
+                );
+                let pixels = read_rgba16f(&device, &queue, &output);
+                for y in 0..HEIGHT {
+                    for x in 0..WIDTH {
+                        let index = (y * WIDTH + x) as usize;
+                        let y_code = (y * WIDTH + x) % (MAX_CODE + 1);
+                        let chroma_index = (y / 2) * (WIDTH / 2) + x / 2;
+                        let blue_chroma_code = chroma_index;
+                        let red_chroma_code = MAX_CODE - chroma_index;
+                        let expected = reference_rgb(
+                            [y_code, blue_chroma_code, red_chroma_code],
+                            matrix,
+                            range,
+                        );
+                        let got = pixels[index].map(bt709_from_linear);
+                        for (channel, (got, expected)) in got.into_iter().zip(expected).enumerate()
+                        {
+                            let error = (got - expected).abs();
+                            assert!(
+                                error <= 1.0 / f64::from(MAX_CODE),
+                                "{matrix:?} {range:?} pixel ({x}, {y}) Y'={y_code} Cb={blue_chroma_code} Cr={red_chroma_code} channel {channel}: got {got}, expected {expected}, error {error}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn p010_element(code: u32) -> [u8; 2] {
+        u16::try_from(code << 6)
+            .expect("10-bit P010 codes fit in the high 10 bits of u16")
+            .to_le_bytes()
+    }
+
+    fn read_rgba16f(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+    ) -> Vec<[f64; 3]> {
+        let size = texture.size();
+        let row_bytes = size.width * 8;
+        let padded_row_bytes = row_bytes.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("codec P010 test readback"),
+            size: u64::from(padded_row_bytes * size.height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_row_bytes),
+                    rows_per_image: Some(size.height),
+                },
+            },
+            size,
+        );
+        queue.submit([encoder.finish()]);
+        let slice = buffer.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            sender.send(result).expect("the readback receiver is alive");
+        });
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(30)),
+            })
+            .expect("the GPU completes P010 test readback");
+        receiver
+            .recv()
+            .expect("the readback callback completes")
+            .expect("the readback buffer maps");
+        let mapped = slice
+            .get_mapped_range()
+            .expect("the mapped readback buffer exposes its full range");
+        let pixels = (0..size.height)
+            .flat_map(|y| {
+                let row_start = (y * padded_row_bytes) as usize;
+                let row = &mapped[row_start..row_start + row_bytes as usize];
+                row.as_chunks::<8>().0.iter().map(|pixel| {
+                    [0, 1, 2].map(|channel| {
+                        let offset = channel * 2;
+                        let bits = u16::from_ne_bytes([pixel[offset], pixel[offset + 1]]);
+                        f64::from(f16::from_bits(bits).to_f32())
+                    })
+                })
+            })
+            .collect();
+        drop(mapped);
+        buffer.unmap();
+        pixels
+    }
+
+    fn reference_rgb(
+        [y, cb, cr]: [u32; 3],
+        matrix: MatrixCoefficients,
+        range: ColorRange,
+    ) -> [f64; 3] {
+        let [y, cb, cr] = [y, cb, cr].map(f64::from);
+        let (y, cb, cr) = match range {
+            ColorRange::Limited => (
+                (y - 64.0) / 876.0,
+                (cb - 512.0) / 896.0,
+                (cr - 512.0) / 896.0,
+            ),
+            ColorRange::Full => (
+                y / f64::from(MAX_CODE),
+                (cb - 512.0) / 1023.0,
+                (cr - 512.0) / 1023.0,
+            ),
+        };
+        let (kr, kb): (f64, f64) = match matrix {
+            MatrixCoefficients::Bt601 => (0.299, 0.114),
+            MatrixCoefficients::Bt709 => (0.2126, 0.0722),
+            MatrixCoefficients::Bt2020NonConstantLuminance => (0.2627, 0.0593),
+            MatrixCoefficients::Bt2020ConstantLuminance => {
+                unreachable!("the test only uses non-constant-luminance matrices")
+            }
+        };
+        let red = (2.0 * (1.0 - kr)).mul_add(cr, y);
+        let blue = (2.0 * (1.0 - kb)).mul_add(cb, y);
+        let green = kb.mul_add(-blue, kr.mul_add(-red, y)) / (1.0 - kr - kb);
+        [red, green, blue].map(|channel| channel.max(0.0))
+    }
+
+    fn bt709_from_linear(linear: f64) -> f64 {
+        if linear < 0.081 / 4.5 {
+            4.5 * linear
+        } else {
+            1.099_f64.mul_add(linear.powf(0.45), -0.099)
+        }
     }
 }
 

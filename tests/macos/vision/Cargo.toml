@@ -1,0 +1,18 @@
+[package]
+name = "waterkit-vision-test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "macOS test for waterkit-vision"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "vision-test"
+path = "src/main.rs"
+
+[dependencies]
+waterkit-vision = { workspace = true, features = ["scanner"] }
+waterkit-test-report.workspace = true
+tokio.workspace = true

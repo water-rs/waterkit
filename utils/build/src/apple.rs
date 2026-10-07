@@ -476,7 +476,7 @@ fn rustc_deployment_target(rust_target: &str) -> (String, OsVersion) {
         panic!("rustc --print deployment-target printed {line:?}, not NAME=value")
     });
     let version = OsVersion::parse(version)
-        .unwrap_or_else(|| panic!("rustc reported an unparseable deployment target {version:?}"));
+        .unwrap_or_else(|| panic!("rustc reported an unparsable deployment target {version:?}"));
     (var.to_string(), version)
 }
 

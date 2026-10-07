@@ -22,6 +22,7 @@ pub struct Vision {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
     pub(crate) policy: Policy,
+    capabilities: VisionCapabilities,
 }
 
 impl Vision {
@@ -51,13 +52,18 @@ impl Vision {
             device,
             queue,
             policy,
+            capabilities: VisionCapabilities::new(),
         }
     }
 
-    /// Capabilities compiled into this build.
+    /// Capabilities compiled into this build, as observed at construction.
+    ///
+    /// `text.native` is `OcrEngine::AvailableRecognizerLanguages` exactly on
+    /// Windows; a language absent from it is served by the portable
+    /// realization when the application carries one.
     #[must_use]
-    pub const fn capabilities(&self) -> VisionCapabilities {
-        VisionCapabilities {}
+    pub fn capabilities(&self) -> VisionCapabilities {
+        self.capabilities.clone()
     }
 
     /// Prepares the selected realization's requirements without processing an
@@ -321,6 +327,15 @@ mod tests {
         assert_eq!(PORTABLE_RUNS[2].load(Ordering::SeqCst), 0);
     }
 
+    #[cfg(feature = "text")]
+    #[test]
+    #[should_panic(expected = "PortableOnly requires portable realizations for: text")]
+    fn portable_only_requires_a_carried_portable_text() {
+        let (device, queue) = gpu();
+        let _ = Vision::with_policy(device, queue, Policy::PortableOnly);
+    }
+
+    #[cfg(not(feature = "text"))]
     #[test]
     fn portable_only_selects_portable_and_can_be_constructed_without_enabled_capabilities() {
         let (device, queue) = gpu();

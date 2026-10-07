@@ -555,7 +555,13 @@ async fn record_android_camera_frames(
             })
             .unwrap_or_else(|| FrameConverter::create_output(&device, &frame));
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        converter.encode(&device, &mut encoder, &frame, &output);
+        if let Err(error) = converter.encode(&device, &mut encoder, &frame, &output) {
+            report.push(TestCase::failed(
+                case,
+                format!("frame conversion failed: {error}"),
+            ));
+            return;
+        }
         queue.submit([encoder.finish()]);
         upright = Some(output);
     }
@@ -697,9 +703,10 @@ async fn camera_gpu() -> Result<
     Ok((Arc::new(device), Arc::new(queue)))
 }
 
-/// The next frame of a camera stream, or the outcome that ends the case after
-/// `count` frames: skipped when this GPU cannot convert the camera's
-/// driver-private buffers, failed for any other end of the stream.
+/// The next frame of a camera stream, or the failure that ends the case after
+/// `count` frames: a device opened with the import's requirements converts
+/// every camera buffer, so any end of the stream, an import error included,
+/// fails the case.
 #[cfg(feature = "camera")]
 fn next_frame(
     case: &str,
@@ -709,22 +716,8 @@ fn next_frame(
         tokio::time::error::Elapsed,
     >,
 ) -> Result<waterkit_content::camera::Frame, TestCase> {
-    use waterkit_content::camera::CameraError;
-    use waterkit_content::camera::wgpu_external_frame::ahardware_buffer::HardwareBufferImportError;
-
     match next {
         Ok(Some(Ok(frame))) => Ok(frame),
-        Ok(Some(Err(CameraError::FrameImport(error))))
-            if matches!(
-                *error,
-                HardwareBufferImportError::ConversionUnavailable { .. }
-            ) =>
-        {
-            Err(TestCase::skipped(
-                case,
-                format!("after {count} frames: {error}"),
-            ))
-        }
         Ok(Some(Err(error))) => Err(TestCase::failed(
             case,
             format!("stream failed after {count} frames: {error}"),
@@ -769,7 +762,7 @@ struct Timestamps {
 #[cfg(feature = "camera")]
 impl FrameSummary {
     fn record(&mut self, frame: &waterkit_content::camera::Frame) {
-        use waterkit_content::camera::{FramePlanes, YcbcrMatrix, YcbcrRange};
+        use waterkit_content::camera::{FramePlanes, MatrixCoefficients};
 
         self.count += 1;
         self.layouts.insert(match frame.planes() {
@@ -777,15 +770,19 @@ impl FrameSummary {
             FramePlanes::YCbCr420 { .. } => "ycbcr420",
             FramePlanes::YCbCr422 { .. } => "ycbcr422",
         });
-        if let FramePlanes::YCbCr420 { encoding, .. } = frame.planes() {
-            self.layouts.insert(match encoding.matrix {
-                YcbcrMatrix::Bt601 => "bt601",
-                YcbcrMatrix::Bt709 => "bt709",
-                YcbcrMatrix::Bt2020 => "bt2020",
+        if matches!(
+            frame.planes(),
+            FramePlanes::YCbCr420 { .. } | FramePlanes::YCbCr422 { .. }
+        ) {
+            self.layouts.insert(match frame.color().matrix {
+                MatrixCoefficients::Bt601 => "bt601",
+                MatrixCoefficients::Bt709 => "bt709",
+                MatrixCoefficients::Bt2020NonConstantLuminance => "bt2020",
+                MatrixCoefficients::Bt2020ConstantLuminance => "bt2020-constant-luminance",
             });
-            self.layouts.insert(match encoding.range {
-                YcbcrRange::Video => "video-range",
-                YcbcrRange::Full => "full-range",
+            self.layouts.insert(match frame.color().range {
+                waterkit_content::camera::ColorRange::Limited => "video-range",
+                waterkit_content::camera::ColorRange::Full => "full-range",
             });
         }
         self.orientations

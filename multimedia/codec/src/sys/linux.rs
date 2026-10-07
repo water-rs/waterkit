@@ -6,6 +6,10 @@ use crate::{
     CodecError, DecodePacket, DecodedPixelLayout,
     bitstream::{NalStreamConverter, build_h264_avcc_from_annex_b},
 };
+#[cfg(test)]
+use cros_codecs::codec::h264::parser::{Level, Profile, SpsBuilder};
+use cros_codecs::codec::h264::parser::{Nalu, NaluType, Parser, Sps};
+use cros_codecs::codec::h264::synthesizer::Synthesizer;
 use cros_codecs::decoder::stateless::h264::H264;
 use cros_codecs::decoder::stateless::h265::H265;
 use cros_codecs::decoder::stateless::{
@@ -20,8 +24,10 @@ use cros_codecs::video_frame::gbm_video_frame::{GbmDevice, GbmUsage, GbmVideoFra
 use cros_codecs::video_frame::generic_dma_video_frame::GenericDmaVideoFrame;
 use cros_codecs::{BlockingMode, DecodedFormat, Fourcc, FrameLayout, Resolution};
 use std::fmt;
+use std::io::Cursor;
 use std::rc::Rc;
 use std::sync::Arc;
+use waterkit_video_core::{CicpColor, VideoColorInfo};
 
 /// Internal codec type for Linux implementations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,6 +292,7 @@ pub struct LinuxEncoder {
     codec_type: CodecType,
     width: u32,
     height: u32,
+    color: CicpColor,
     frame_count: u64,
     codec_config: Option<Vec<u8>>,
     h264: Option<LinuxH264Encoder>,
@@ -304,7 +311,17 @@ impl fmt::Debug for LinuxEncoder {
 
 impl LinuxEncoder {
     /// Create a new Linux VA-API encoder.
-    pub fn new(codec_type: CodecType, width: u32, height: u32) -> Result<Self, CodecError> {
+    pub fn new(
+        codec_type: CodecType,
+        width: u32,
+        height: u32,
+        color: VideoColorInfo,
+    ) -> Result<Self, CodecError> {
+        if color.dolby_vision {
+            return Err(CodecError::Unsupported(
+                "VA-API H.264 encoder cannot signal Dolby Vision metadata".into(),
+            ));
+        }
         let display_resolution = Resolution { width, height };
         let coded_resolution = Resolution {
             width: align_16(width),
@@ -350,6 +367,7 @@ impl LinuxEncoder {
             codec_type,
             width,
             height,
+            color: color.cicp(),
             frame_count: 0,
             codec_config: None,
             h264,
@@ -406,10 +424,11 @@ impl LinuxEncoder {
             .poll()
             .map_err(|e| CodecError::EncodingFailed(format!("VA-API poll failed: {e}")))?
         {
+            let signaled_bitstream = signal_h264_colour(&coded.bitstream, self.color)?;
             if self.codec_config.is_none() {
-                self.codec_config = build_h264_avcc_from_annex_b(&coded.bitstream);
+                self.codec_config = build_h264_avcc_from_annex_b(&signaled_bitstream);
             }
-            packet.extend_from_slice(&coded.bitstream);
+            packet.extend_from_slice(&signaled_bitstream);
         }
 
         Ok(packet)
@@ -419,6 +438,95 @@ impl LinuxEncoder {
     #[must_use]
     pub fn get_codec_config(&self) -> Option<Vec<u8>> {
         self.codec_config.clone()
+    }
+}
+
+fn signal_h264_colour(annex_b: &[u8], colour: CicpColor) -> Result<Vec<u8>, CodecError> {
+    let mut cursor = Cursor::new(annex_b);
+    let mut output = Vec::with_capacity(annex_b.len());
+    let mut found_nalu = false;
+    loop {
+        let nalu = match Nalu::next(&mut cursor) {
+            Ok(nalu) => nalu,
+            Err(error) if error == "No NAL found" && (found_nalu || annex_b.is_empty()) => break,
+            Err(error) => {
+                return Err(CodecError::EncodingFailed(format!(
+                    "failed to parse VA-API H.264 Annex-B output: {error}"
+                )));
+            }
+        };
+        found_nalu = true;
+        if nalu.header.type_ != NaluType::Sps {
+            output.extend_from_slice(nalu.data.as_ref());
+            continue;
+        }
+
+        let mut parser = Parser::default();
+        let parsed_sps = parser.parse_sps(&nalu).map_err(|error| {
+            CodecError::EncodingFailed(format!("failed to parse VA-API H.264 SPS: {error}"))
+        })?;
+        let mut sps = clone_sps(parsed_sps.as_ref());
+        sps.vui_parameters_present_flag = true;
+        sps.vui_parameters.video_signal_type_present_flag = true;
+        sps.vui_parameters.video_format = 5;
+        sps.vui_parameters.video_full_range_flag = colour.full_range;
+        sps.vui_parameters.colour_description_present_flag = true;
+        sps.vui_parameters.colour_primaries = colour.primaries;
+        sps.vui_parameters.transfer_characteristics = colour.transfer;
+        sps.vui_parameters.matrix_coefficients = colour.matrix;
+        Synthesizer::<Sps, _>::synthesize(nalu.header.ref_idc, &sps, &mut output, true).map_err(
+            |error| {
+                CodecError::EncodingFailed(format!(
+                    "failed to synthesize color-tagged H.264 SPS: {error}"
+                ))
+            },
+        )?;
+    }
+    Ok(output)
+}
+
+fn clone_sps(source: &Sps) -> Sps {
+    Sps {
+        seq_parameter_set_id: source.seq_parameter_set_id,
+        profile_idc: source.profile_idc,
+        constraint_set0_flag: source.constraint_set0_flag,
+        constraint_set1_flag: source.constraint_set1_flag,
+        constraint_set2_flag: source.constraint_set2_flag,
+        constraint_set3_flag: source.constraint_set3_flag,
+        constraint_set4_flag: source.constraint_set4_flag,
+        constraint_set5_flag: source.constraint_set5_flag,
+        level_idc: source.level_idc,
+        chroma_format_idc: source.chroma_format_idc,
+        separate_colour_plane_flag: source.separate_colour_plane_flag,
+        bit_depth_luma_minus8: source.bit_depth_luma_minus8,
+        bit_depth_chroma_minus8: source.bit_depth_chroma_minus8,
+        qpprime_y_zero_transform_bypass_flag: source.qpprime_y_zero_transform_bypass_flag,
+        seq_scaling_matrix_present_flag: source.seq_scaling_matrix_present_flag,
+        scaling_lists_4x4: source.scaling_lists_4x4,
+        scaling_lists_8x8: source.scaling_lists_8x8,
+        log2_max_frame_num_minus4: source.log2_max_frame_num_minus4,
+        pic_order_cnt_type: source.pic_order_cnt_type,
+        log2_max_pic_order_cnt_lsb_minus4: source.log2_max_pic_order_cnt_lsb_minus4,
+        delta_pic_order_always_zero_flag: source.delta_pic_order_always_zero_flag,
+        offset_for_non_ref_pic: source.offset_for_non_ref_pic,
+        offset_for_top_to_bottom_field: source.offset_for_top_to_bottom_field,
+        num_ref_frames_in_pic_order_cnt_cycle: source.num_ref_frames_in_pic_order_cnt_cycle,
+        offset_for_ref_frame: source.offset_for_ref_frame,
+        max_num_ref_frames: source.max_num_ref_frames,
+        gaps_in_frame_num_value_allowed_flag: source.gaps_in_frame_num_value_allowed_flag,
+        pic_width_in_mbs_minus1: source.pic_width_in_mbs_minus1,
+        pic_height_in_map_units_minus1: source.pic_height_in_map_units_minus1,
+        frame_mbs_only_flag: source.frame_mbs_only_flag,
+        mb_adaptive_frame_field_flag: source.mb_adaptive_frame_field_flag,
+        direct_8x8_inference_flag: source.direct_8x8_inference_flag,
+        frame_cropping_flag: source.frame_cropping_flag,
+        frame_crop_left_offset: source.frame_crop_left_offset,
+        frame_crop_right_offset: source.frame_crop_right_offset,
+        frame_crop_top_offset: source.frame_crop_top_offset,
+        frame_crop_bottom_offset: source.frame_crop_bottom_offset,
+        expected_delta_per_pic_order_cnt_cycle: source.expected_delta_per_pic_order_cnt_cycle,
+        vui_parameters_present_flag: source.vui_parameters_present_flag,
+        vui_parameters: source.vui_parameters.clone(),
     }
 }
 
@@ -587,11 +695,64 @@ pub fn open_encoder(
     codec: crate::CodecType,
     width: u32,
     height: u32,
+    color: VideoColorInfo,
 ) -> Result<crate::EncoderInner, CodecError> {
     let codec = match codec {
         crate::CodecType::H264 => CodecType::H264,
         crate::CodecType::H265 => CodecType::H265,
         crate::CodecType::Av1 => unreachable!(),
     };
-    LinuxEncoder::new(codec, width, height).map(crate::EncoderInner::Linux)
+    LinuxEncoder::new(codec, width, height, color).map(crate::EncoderInner::Linux)
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    #[test]
+    fn signal_h264_colour_rewrites_sps_and_preserves_other_nalus() {
+        let sps = SpsBuilder::new()
+            .profile_idc(Profile::High)
+            .level_idc(Level::L3)
+            .resolution(16, 16)
+            .frame_mbs_only_flag(true)
+            .build();
+        let mut annex_b = Vec::new();
+        Synthesizer::<Sps, _>::synthesize(3, &sps, &mut annex_b, true)
+            .expect("synthesize test SPS");
+        let other_nalu = [0x00, 0x00, 0x00, 0x01, 0x09, 0xf0];
+        annex_b.extend_from_slice(&other_nalu);
+        let colour = CicpColor {
+            primaries: 6,
+            transfer: 1,
+            matrix: 6,
+            full_range: true,
+        };
+
+        let rewritten = signal_h264_colour(&annex_b, colour).expect("rewrite SPS color");
+        let mut cursor = Cursor::new(rewritten.as_slice());
+        let mut parser = Parser::default();
+        let mut found_sps = false;
+        let mut found_other = false;
+        while let Ok(nalu) = Nalu::next(&mut cursor) {
+            if nalu.header.type_ == NaluType::Sps {
+                let sps = parser.parse_sps(&nalu).expect("parse rewritten SPS");
+                let vui = &sps.vui_parameters;
+                assert!(sps.vui_parameters_present_flag);
+                assert!(vui.video_signal_type_present_flag);
+                assert_eq!(vui.video_format, 5);
+                assert!(vui.video_full_range_flag);
+                assert!(vui.colour_description_present_flag);
+                assert_eq!(vui.colour_primaries, colour.primaries);
+                assert_eq!(vui.transfer_characteristics, colour.transfer);
+                assert_eq!(vui.matrix_coefficients, colour.matrix);
+                found_sps = true;
+            } else {
+                assert_eq!(nalu.data.as_ref(), other_nalu);
+                found_other = true;
+            }
+        }
+        assert!(found_sps);
+        assert!(found_other);
+    }
 }

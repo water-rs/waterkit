@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use wgpu_external_frame::YcbcrEncoding;
+use waterkit_video_core::VideoColorInfo;
 
 pub use waterkit_core::Orientation;
 
@@ -13,6 +13,11 @@ pub use waterkit_core::Orientation;
 /// format, so sampling returns the camera's non-linear values unchanged.
 /// [`FrameConverter`](crate::FrameConverter) turns any layout into one
 /// upright RGBA texture.
+///
+/// For YCbCr planes, the frame's [`Frame::color`] matrix and range describe
+/// how to decode the samples. For RGB planes, those fields name the YCbCr
+/// encoding the source delivered before producing RGB samples; only
+/// `primaries` and `transfer` describe the RGB samples.
 #[derive(Debug, Clone)]
 pub enum FramePlanes {
     /// One 8-bit RGBA- or BGRA-ordered texture; `format()` of the view's
@@ -28,8 +33,6 @@ pub enum FramePlanes {
         luma: wgpu::TextureView,
         /// Half-resolution interleaved Cb/Cr plane.
         chroma: wgpu::TextureView,
-        /// How the samples map to R'G'B'.
-        encoding: YcbcrEncoding,
     },
     /// Packed 4:2:2 YCbCr in YUYV byte order: one `Rgba8Unorm` texture half
     /// the frame's width, each texel holding two horizontally adjacent pixels
@@ -41,8 +44,6 @@ pub enum FramePlanes {
     YCbCr422 {
         /// The packed YUYV texture.
         yuyv: wgpu::TextureView,
-        /// How the samples map to R'G'B'.
-        encoding: YcbcrEncoding,
     },
 }
 
@@ -116,6 +117,7 @@ pub fn orientation_from_camera2(
 #[derive(Debug)]
 pub struct Frame {
     planes: FramePlanes,
+    color: VideoColorInfo,
     orientation: Orientation,
     width: u32,
     height: u32,
@@ -134,6 +136,7 @@ impl Frame {
     ))]
     pub(crate) const fn new(
         planes: FramePlanes,
+        color: VideoColorInfo,
         width: u32,
         height: u32,
         orientation: Orientation,
@@ -141,6 +144,7 @@ impl Frame {
     ) -> Self {
         Self {
             planes,
+            color,
             orientation,
             width,
             height,
@@ -152,6 +156,18 @@ impl Frame {
     #[must_use]
     pub const fn planes(&self) -> &FramePlanes {
         &self.planes
+    }
+
+    /// The color description of this frame.
+    ///
+    /// For YCbCr planes, `matrix` and `range` describe how to decode the
+    /// samples. For RGB planes, they name the YCbCr encoding the source
+    /// delivered before producing RGB samples; only `primaries` and `transfer`
+    /// describe the RGB samples. `content_light_level` is `None` and
+    /// `dolby_vision` is `false` unless a backend reads those values.
+    #[must_use]
+    pub const fn color(&self) -> VideoColorInfo {
+        self.color
     }
 
     /// How the stored pixels relate to upright.
@@ -172,7 +188,21 @@ impl Frame {
         self.height
     }
 
-    /// Presentation timestamp since the camera started.
+    /// When the frame was captured, measured from the first frame the
+    /// camera delivered after it opened, on that platform's capture clock.
+    ///
+    /// The first delivered frame reads [`Duration::ZERO`]. Timestamps are
+    /// monotonic but not wall-clock time: they are not comparable between
+    /// cameras, nor between two opens of the same camera. Frames the stream
+    /// drops (newest wins) still count, so the first frame a consumer takes
+    /// need not read zero.
+    ///
+    /// The clock each platform reads: on Apple platforms the sample
+    /// buffer's presentation time (the capture session's synchronization
+    /// clock, host time); on Android the image's sensor timestamp, the
+    /// start of exposure; on Windows and Linux the moment the capture
+    /// thread receives the frame from the driver, because nokhwa reports no
+    /// capture time.
     #[must_use]
     pub const fn timestamp(&self) -> Duration {
         self.timestamp

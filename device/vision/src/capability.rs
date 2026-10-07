@@ -2,9 +2,16 @@ use crate::Policy;
 
 /// Vision capabilities available to this build.
 ///
-/// Fields arrive with the capability features (barcodes, text, scanner).
+/// Fields arrive with the capability features (text, barcodes, scanner).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisionCapabilities {
+    /// Text recognition: the languages each realization serves.
+    ///
+    /// On Windows `native` is `OcrEngine::AvailableRecognizerLanguages`
+    /// exactly; it is empty on platforms without a native recognizer.
+    #[cfg(feature = "text")]
+    pub text: RealizationSet<Vec<icu_locale_core::LanguageIdentifier>>,
+
     /// Whether this device can present the system code scanner, as
     /// [`CodeScanner::capabilities`] reports it. Present when the `scanner`
     /// feature is enabled.
@@ -14,6 +21,33 @@ pub struct VisionCapabilities {
     pub scanner: bool,
 }
 
+impl VisionCapabilities {
+    #[cfg_attr(
+        all(
+            any(not(feature = "text"), not(target_os = "windows")),
+            any(
+                not(feature = "scanner"),
+                not(any(target_os = "ios", target_os = "android"))
+            )
+        ),
+        expect(
+            clippy::missing_const_for_fn,
+            reason = "a native text recognizer's language probe or the scanner's device-support probe is a runtime call; elsewhere the capabilities are constant"
+        )
+    )]
+    pub(crate) fn new() -> Self {
+        Self {
+            #[cfg(feature = "text")]
+            text: RealizationSet {
+                native: crate::text::native_languages(),
+                portable: Portable::Absent,
+            },
+            #[cfg(feature = "scanner")]
+            scanner: crate::sys::scanner_available(),
+        }
+    }
+}
+
 /// Native and portable realizations of a capability.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RealizationSet<T> {
@@ -21,6 +55,14 @@ pub struct RealizationSet<T> {
     pub native: T,
     /// The portable realization carried by the application.
     pub portable: Portable<T>,
+}
+
+#[cfg(feature = "text")]
+impl<T> RealizationSet<Vec<T>> {
+    /// Whether either realization serves anything.
+    const fn available(&self) -> bool {
+        !self.native.is_empty() || !matches!(self.portable, Portable::Absent)
+    }
 }
 
 /// Availability of a portable realization.
@@ -38,6 +80,10 @@ pub enum Portable<T> {
 impl waterkit_core::Capabilities for VisionCapabilities {
     /// Returns whether any capability has a realization in this build.
     fn available(&self) -> bool {
+        #[cfg(feature = "text")]
+        if self.text.available() {
+            return true;
+        }
         #[cfg(feature = "scanner")]
         if self.scanner {
             return true;
@@ -55,7 +101,10 @@ impl waterkit_core::Capabilities for VisionCapabilities {
 ///
 /// [`Vision`]: crate::Vision
 /// [`Policy::PortableOnly`]: crate::Policy::PortableOnly
-pub const ENABLED: &[(&str, bool)] = &[];
+pub const ENABLED: &[(&str, bool)] = &[
+    #[cfg(feature = "text")]
+    ("text", false),
+];
 
 /// Capabilities whose portable realization is not carried when required by
 /// `policy`; this is empty under [`Policy::PreferNative`].

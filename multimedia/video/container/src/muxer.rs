@@ -2,7 +2,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use waterkit_video_core::Error;
+use waterkit_video_core::{Error, VideoColorInfo};
 
 type VideoError = Error;
 
@@ -45,6 +45,7 @@ pub struct VideoWriter {
     height: u32,
     fps: u32,
     codec: CodecType,
+    color: VideoColorInfo,
     samples: Vec<(Vec<u8>, bool)>, // (data, is_keyframe)
     codec_config: Option<Vec<u8>>,
 }
@@ -59,6 +60,7 @@ impl VideoWriter {
     /// * `height` - Video height in pixels
     /// * `fps` - Frames per second
     /// * `codec` - Video codec (H264 or H265)
+    /// * `color` - Color description signaled in the sample entry
     ///
     /// # Errors
     /// Returns [`VideoError::Io`] if the file cannot be created.
@@ -68,6 +70,7 @@ impl VideoWriter {
         height: u32,
         fps: u32,
         codec: CodecType,
+        color: VideoColorInfo,
     ) -> Result<Self, VideoError> {
         let file = File::create(path)?;
         let writer_buf = BufWriter::new(file);
@@ -78,6 +81,7 @@ impl VideoWriter {
             height,
             fps,
             codec,
+            color,
             samples: Vec::new(),
             codec_config: None,
         })
@@ -110,6 +114,7 @@ impl VideoWriter {
             height,
             fps,
             codec,
+            color,
             samples,
             codec_config,
         } = self;
@@ -161,7 +166,7 @@ impl VideoWriter {
         }
 
         // 3. Write moov
-        let moov = build_moov(width, height, fps, codec, &codec_config, &table)?;
+        let moov = build_moov(width, height, fps, codec, &codec_config, &table, color)?;
         write_box_header(&mut w, b"moov", moov.len() as u64)?;
         w.write_all(&moov)?;
 
@@ -212,6 +217,7 @@ fn build_moov(
     codec: CodecType,
     codec_config: &[u8],
     table: &SampleTable,
+    color: VideoColorInfo,
 ) -> Result<Vec<u8>, VideoError> {
     let sample_count = u32::try_from(table.sizes.len()).map_err(|_| {
         VideoError::Container(String::from("sample count exceeds the u32 table fields"))
@@ -414,6 +420,28 @@ fn build_moov(
                             };
                             write_box_header(ew, tag, codec_config.len() as u64)?;
                             ew.write_all(codec_config)?;
+
+                            let cicp = color.cicp();
+                            let mut colr_payload = Vec::with_capacity(11);
+                            colr_payload.write_all(b"nclx")?;
+                            colr_payload.write_u16::<BigEndian>(u16::from(cicp.primaries))?;
+                            colr_payload.write_u16::<BigEndian>(u16::from(cicp.transfer))?;
+                            colr_payload.write_u16::<BigEndian>(u16::from(cicp.matrix))?;
+                            colr_payload.write_u8(u8::from(cicp.full_range) << 7)?;
+                            write_box_header(ew, b"colr", colr_payload.len() as u64)?;
+                            ew.write_all(&colr_payload)?;
+
+                            if let Some(content_light) = color.content_light_level {
+                                let mut clli = Vec::with_capacity(4);
+                                clli.write_u16::<BigEndian>(
+                                    content_light.max_content_light_level(),
+                                )?;
+                                clli.write_u16::<BigEndian>(
+                                    content_light.max_frame_average_light_level(),
+                                )?;
+                                write_box_header(ew, b"clli", clli.len() as u64)?;
+                                ew.write_all(&clli)?;
+                            }
 
                             let type_code = match codec {
                                 CodecType::H264 => b"avc1",
@@ -664,8 +692,16 @@ mod tests {
             offsets: samples.iter().map(|(offset, _)| *offset).collect(),
             sync: sync_samples.to_vec(),
         };
-        let moov = build_moov(64, 48, 30, CodecType::H265, &fake_codec_config(), &table)
-            .expect("build moov");
+        let moov = build_moov(
+            64,
+            48,
+            30,
+            CodecType::H265,
+            &fake_codec_config(),
+            &table,
+            VideoColorInfo::default(),
+        )
+        .expect("build moov");
         write_box_header(&mut file, b"moov", moov.len() as u64).expect("write moov header");
         file.write_all(&moov).expect("write moov");
         file.flush().expect("flush");
@@ -699,8 +735,16 @@ mod tests {
             offsets: vec![36, 52],
             sync: vec![1],
         };
-        let moov = build_moov(64, 48, 30, CodecType::H265, &config, &table)
-            .expect("moov with small offsets");
+        let moov = build_moov(
+            64,
+            48,
+            30,
+            CodecType::H265,
+            &config,
+            &table,
+            VideoColorInfo::default(),
+        )
+        .expect("moov with small offsets");
         let stco = find_box(&moov, *b"stco").expect("small offsets must emit stco");
         assert!(find_box(&moov, *b"co64").is_none());
         assert_eq!(stco[8..16], [0_u8, 0, 0, 0, 0, 0, 0, 2]); // version/flags + count
@@ -716,8 +760,16 @@ mod tests {
             offsets: vec![36, large],
             sync: vec![1],
         };
-        let moov = build_moov(64, 48, 30, CodecType::H265, &config, &table)
-            .expect("moov with a >32-bit offset");
+        let moov = build_moov(
+            64,
+            48,
+            30,
+            CodecType::H265,
+            &config,
+            &table,
+            VideoColorInfo::default(),
+        )
+        .expect("moov with a >32-bit offset");
         assert!(find_box(&moov, *b"stco").is_none());
         let co64 = find_box(&moov, *b"co64").expect("large offset must emit co64");
         assert_eq!(co64[8..16], [0_u8, 0, 0, 0, 0, 0, 0, 2]);
@@ -729,8 +781,15 @@ mod tests {
     fn small_recording_roundtrips_through_reader() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("small.mp4");
-        let mut writer =
-            VideoWriter::new(&path, 64, 48, 30, CodecType::H265).expect("create writer");
+        let mut writer = VideoWriter::new(
+            &path,
+            64,
+            48,
+            30,
+            CodecType::H265,
+            VideoColorInfo::default(),
+        )
+        .expect("create writer");
         writer.set_codec_config(fake_codec_config());
         writer
             .write_sample(b"first-sample", true)
@@ -753,6 +812,60 @@ mod tests {
             .expect("sample 2 exists");
         assert_eq!(data, b"second");
         assert!(!keyframe);
+    }
+
+    #[test]
+    fn color_metadata_roundtrips_through_public_probe() {
+        use waterkit_video_core::{
+            ColorPrimaries, ColorRange, ContentLightLevel, MatrixCoefficients, TransferFunction,
+        };
+
+        let colors = [
+            VideoColorInfo {
+                matrix: MatrixCoefficients::Bt709,
+                primaries: ColorPrimaries::Bt709,
+                transfer: TransferFunction::Sdr,
+                range: ColorRange::Limited,
+                content_light_level: None,
+                dolby_vision: false,
+            },
+            VideoColorInfo {
+                matrix: MatrixCoefficients::Bt601,
+                primaries: ColorPrimaries::Bt601,
+                transfer: TransferFunction::Sdr,
+                range: ColorRange::Full,
+                content_light_level: None,
+                dolby_vision: false,
+            },
+            VideoColorInfo {
+                matrix: MatrixCoefficients::Bt2020NonConstantLuminance,
+                primaries: ColorPrimaries::Bt2020,
+                transfer: TransferFunction::Hlg,
+                range: ColorRange::Limited,
+                content_light_level: None,
+                dolby_vision: false,
+            },
+            VideoColorInfo {
+                matrix: MatrixCoefficients::Bt709,
+                primaries: ColorPrimaries::DisplayP3,
+                transfer: TransferFunction::Pq,
+                range: ColorRange::Full,
+                content_light_level: Some(ContentLightLevel::new(1_000, 400)),
+                dolby_vision: false,
+            },
+        ];
+        let dir = tempfile::tempdir().expect("temp dir");
+        for (index, color) in colors.into_iter().enumerate() {
+            let path = dir.path().join(format!("color-{index}.mp4"));
+            let mut writer =
+                VideoWriter::new(&path, 64, 48, 30, CodecType::H265, color).expect("create writer");
+            writer.set_codec_config(fake_codec_config());
+            writer.write_sample(b"sample", true).expect("write sample");
+            writer.finish().expect("finish");
+
+            let probed = crate::probe_mp4_color_info(&path, None).expect("probe color metadata");
+            assert_eq!(probed, color);
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! GPU helpers shared by the crate's tests.
 
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 use std::time::Duration;
 
 use crate::FrameConverter;
@@ -18,6 +18,13 @@ use crate::FrameConverter;
     )
 )]
 pub fn gpu(extra_features: wgpu::Features) -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+    static TRACING: Once = Once::new();
+    TRACING.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_test_writer()
+            .try_init();
+    });
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -26,6 +33,12 @@ pub fn gpu(extra_features: wgpu::Features) -> (Arc<wgpu::Device>, Arc<wgpu::Queu
         apply_limit_buckets: false,
     }))
     .expect("the camera GPU tests need a GPU adapter");
+    let adapter_info = adapter.get_info();
+    tracing::info!(
+        adapter = %adapter_info.name,
+        backend = ?adapter_info.backend,
+        "selected camera test adapter"
+    );
     assert!(
         adapter.features().contains(extra_features),
         "the adapter lacks {extra_features:?}"

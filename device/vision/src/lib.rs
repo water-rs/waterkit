@@ -74,6 +74,8 @@ mod symbology;
 mod sys;
 #[cfg(test)]
 mod test_support;
+#[cfg(feature = "text")]
+mod text;
 mod vision;
 
 pub use barcode::{Barcode, Payload};
@@ -86,6 +88,8 @@ pub use request::Request;
 #[cfg(feature = "scanner")]
 pub use scanner::{CodeScanner, ScannedCode, ScannerCapabilities};
 pub use symbology::Symbology;
+#[cfg(feature = "text")]
+pub use text::{RecognitionLevel, RecognizeText, TextLine, TextWord};
 pub use vision::{Policy, Vision};
 pub use waterkit_core::Orientation;
 pub use wgpu;

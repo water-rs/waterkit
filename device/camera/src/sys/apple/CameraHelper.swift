@@ -195,16 +195,18 @@ class CameraFrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        // Get presentation timestamp
+        // The presentation time is the frame's capture-clock reading: the
+        // capture session's synchronization clock, in host time.
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        let timestampNs = UInt64(CMTimeGetSeconds(pts) * 1_000_000_000)
+        precondition(pts.isNumeric, "a capture buffer's presentation time is numeric")
+        let captureTimeNs = UInt64(CMTimeConvertScale(pts, timescale: 1_000_000_000, method: .roundHalfAwayFromZero).value)
 
         // A frame whose upright orientation is not known yet is not delivered:
         // it would reach the consumer turned the wrong way.
         if let (rotationDegrees, mirrored) = frameOrientation(of: connection) {
-            deliver(pixelBuffer, timestampNs: timestampNs, rotationDegrees: rotationDegrees, mirrored: mirrored)
+            deliver(pixelBuffer, timestampNs: captureTimeNs, rotationDegrees: rotationDegrees, mirrored: mirrored)
         }
-        maybeWriteRawVideoFrame(pixelBuffer: pixelBuffer, timestampNs: timestampNs)
+        maybeWriteRawVideoFrame(pixelBuffer: pixelBuffer, timestampNs: captureTimeNs)
     }
 
     private func deliver(_ pixelBuffer: CVPixelBuffer, timestampNs: UInt64, rotationDegrees: UInt32, mirrored: Bool) {

@@ -2984,6 +2984,7 @@ checksum = "d56e28588da92eee5c3201a6eff33fabdd49b62269c8938d4ff050ce4d900deb"
 dependencies = [
  "displaydoc",
  "litemap",
+ "serde",
  "tinystr",
  "writeable",
  "zerovec",
@@ -7144,6 +7145,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1e27c91459209c2986af3dcf603a5a74a4368754ce37414f59acc971167f643"
 dependencies = [
  "displaydoc",
+ "serde_core",
  "zerovec",
 ]
 
@@ -7876,6 +7878,7 @@ dependencies = [
  "moxcms",
  "ndk",
  "ndk-sys",
+ "num-traits",
  "objc2 0.6.4",
  "objc2-core-foundation",
  "objc2-core-media",
@@ -7907,6 +7910,7 @@ dependencies = [
  "pollster 1.0.1",
  "waterkit-codec",
  "waterkit-screen",
+ "waterkit-video-core",
  "wgpu",
 ]
 
@@ -8482,9 +8486,12 @@ dependencies = [
 name = "waterkit-vision"
 version = "0.1.4"
 dependencies = [
+ "ab_glyph",
  "bytes",
  "enumset",
  "futures",
+ "icu_locale_core",
+ "image",
  "jni 0.22.4",
  "ndk-context",
  "pollster 1.0.1",
@@ -8495,6 +8502,7 @@ dependencies = [
  "waterkit-camera",
  "waterkit-core",
  "wgpu",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -8767,9 +8775,9 @@ dependencies = [
 
 [[package]]
 name = "wgpu-external-frame"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8248db9730eb67fcfdd414da3bfd7efe6a2c0c4f9f1d1ae3796e874646ea8252"
+checksum = "911f341938a2bacb3a3f270082e8cd52d3ae51e667a1a9abe8367ea530a317d5"
 dependencies = [
  "ash",
  "glow",
@@ -9914,6 +9922,7 @@ version = "0.11.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb0464e17806c1d976d5cba29399c7f08e516e279e2ba493f63123b5fca67dd8"
 dependencies = [
+ "serde",
  "yoke",
  "zerofrom",
  "zerovec-derive",

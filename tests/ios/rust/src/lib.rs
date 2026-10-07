@@ -24,128 +24,15 @@ fn run_tests_json() -> String {
 }
 
 fn build_report() -> TestReport {
-    let mut report = TestReport::new("ios", "waterkit-test-ios");
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("failed to build tokio runtime for iOS test harness");
-
-    rt.block_on(async {
-        #[cfg(feature = "sensor")]
-        record_sensor(&mut report).await;
-
-        #[cfg(feature = "location")]
-        record_location(&mut report).await;
-
-        #[cfg(feature = "permission")]
-        record_permission(&mut report).await;
-
-        #[cfg(feature = "camera")]
-        camera::record(&mut report).await;
-
-        #[cfg(feature = "clipboard")]
-        record_clipboard(&mut report).await;
-
-        #[cfg(feature = "fs")]
-        record_fs(&mut report);
-
-        #[cfg(feature = "haptic")]
-        record_haptic(&mut report);
-
-        #[cfg(feature = "notification")]
-        report.push(TestCase::skipped(
-            "notification.show",
-            "notification authorization cannot be granted headless on the simulator",
-        ));
-
-        #[cfg(feature = "secret")]
-        record_secret(&mut report).await;
-
-        #[cfg(feature = "system")]
-        record_system(&mut report);
-
-        #[cfg(feature = "screen")]
-        record_screen(&mut report);
-
-        #[cfg(feature = "background")]
-        record_background(&mut report);
-
-        #[cfg(feature = "passkey")]
-        record_passkey(&mut report).await;
-
-        #[cfg(feature = "biometric")]
-        report.push(TestCase::skipped(
-            "biometric.authenticate",
-            "biometric authentication requires an interactive prompt",
-        ));
-
-        #[cfg(feature = "audio")]
-        report.push(TestCase::passed("audio.linked"));
-
-        #[cfg(feature = "codec")]
-        report.push(TestCase::passed("codec.linked"));
-
-        #[cfg(feature = "dialog")]
-        report.push(TestCase::passed("dialog.linked"));
-
-        #[cfg(feature = "video")]
-        report.push(TestCase::passed("video.linked"));
-
-        #[cfg(feature = "bluetooth")]
-        report.push(TestCase::passed("bluetooth.linked"));
-
-        #[cfg(feature = "nfc")]
-        {
-            let available = waterkit::nfc::is_available();
-            if cfg!(target_abi = "sim") && available {
-                report.push(TestCase::failed(
-                    "nfc.availability",
-                    "NFCNDEFReaderSession.readingAvailable is true on a simulator with no NFC hardware",
-                ));
-            } else {
-                report.push(TestCase::passed_with_message(
-                    "nfc.availability",
-                    format!("available={available}"),
-                ));
-            }
-        }
-
-        #[cfg(feature = "share")]
-        report.push(TestCase::skipped(
-            "share.sheet",
-            "share sheet requires an interactive chooser",
-        ));
-
-        #[cfg(feature = "speech")]
-        report.push(TestCase::skipped(
-            "speech.tts",
-            "speech synthesis is audible and not asserted by this harness",
-        ));
-
-        #[cfg(feature = "contacts")]
-        report.push(TestCase::skipped(
-            "contacts.fetch_all",
-            "contacts access depends on runtime user data permissions",
-        ));
-
-        #[cfg(feature = "calendar")]
-        report.push(TestCase::skipped(
-            "calendar.list",
-            "calendar access depends on runtime user data permissions",
-        ));
-
-        #[cfg(feature = "health")]
-        report.push(TestCase::skipped(
-            "health.availability",
-            "waterkit-health declares extern Swift symbols but ships no Apple implementation",
-        ));
-
-        #[cfg(feature = "deeplink")]
-        report.push(TestCase::passed("deeplink.linked"));
-
-        #[cfg(feature = "vision")]
-        record_vision(&mut report).await;
-    });
+    let mut report = Harness {
+        runtime: &runtime,
+        report: TestReport::new("ios", "waterkit-test-ios"),
+    }
+    .run();
 
     // Every enabled feature records at least one case, so an empty report
     // means the harness was built without any feature.
@@ -158,6 +45,122 @@ fn build_report() -> TestReport {
 
     report
 }
+
+/// What every capability's recorder shares: the runtime its asynchronous
+/// calls run on, and the report its cases go into.
+struct Harness<'h> {
+    runtime: &'h tokio::runtime::Runtime,
+    report: TestReport,
+}
+
+impl Harness<'_> {
+    /// Runs every enabled capability's recorder and returns the report.
+    fn run(mut self) -> TestReport {
+        // Every recorder runs in the runtime's context, and the asynchronous
+        // ones drive their future on it.
+        let _runtime_context = self.runtime.enter();
+        for record in RECORDERS {
+            record(&mut self);
+        }
+        self.report
+    }
+}
+
+/// Records one capability's cases.
+type Recorder = fn(&mut Harness<'_>);
+
+/// The recorder of every enabled capability, in report order.
+const RECORDERS: &[Recorder] = &[
+    #[cfg(feature = "sensor")]
+    |h| h.runtime.block_on(record_sensor(&mut h.report)),
+    #[cfg(feature = "location")]
+    |h| h.runtime.block_on(record_location(&mut h.report)),
+    #[cfg(feature = "permission")]
+    |h| h.runtime.block_on(record_permission(&mut h.report)),
+    #[cfg(feature = "camera")]
+    |h| h.runtime.block_on(camera::record(&mut h.report)),
+    #[cfg(feature = "clipboard")]
+    |h| h.runtime.block_on(record_clipboard(&mut h.report)),
+    #[cfg(feature = "fs")]
+    |h| record_fs(&mut h.report),
+    #[cfg(feature = "haptic")]
+    |h| record_haptic(&mut h.report),
+    #[cfg(feature = "notification")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "notification.show",
+            "notification authorization cannot be granted headless on the simulator",
+        ));
+    },
+    #[cfg(feature = "secret")]
+    |h| h.runtime.block_on(record_secret(&mut h.report)),
+    #[cfg(feature = "system")]
+    |h| record_system(&mut h.report),
+    #[cfg(feature = "screen")]
+    |h| record_screen(&mut h.report),
+    #[cfg(feature = "background")]
+    |h| record_background(&mut h.report),
+    #[cfg(feature = "passkey")]
+    |h| h.runtime.block_on(record_passkey(&mut h.report)),
+    #[cfg(feature = "biometric")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "biometric.authenticate",
+            "biometric authentication requires an interactive prompt",
+        ));
+    },
+    #[cfg(feature = "audio")]
+    |h| h.report.push(TestCase::passed("audio.linked")),
+    #[cfg(feature = "codec")]
+    |h| h.report.push(TestCase::passed("codec.linked")),
+    #[cfg(feature = "dialog")]
+    |h| h.report.push(TestCase::passed("dialog.linked")),
+    #[cfg(feature = "video")]
+    |h| h.report.push(TestCase::passed("video.linked")),
+    #[cfg(feature = "bluetooth")]
+    |h| h.report.push(TestCase::passed("bluetooth.linked")),
+    #[cfg(feature = "nfc")]
+    |h| record_nfc(&mut h.report),
+    #[cfg(feature = "share")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "share.sheet",
+            "share sheet requires an interactive chooser",
+        ));
+    },
+    #[cfg(feature = "speech")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "speech.tts",
+            "speech synthesis is audible and not asserted by this harness",
+        ));
+    },
+    #[cfg(feature = "contacts")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "contacts.fetch_all",
+            "contacts access depends on runtime user data permissions",
+        ));
+    },
+    #[cfg(feature = "calendar")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "calendar.list",
+            "calendar access depends on runtime user data permissions",
+        ));
+    },
+    #[cfg(feature = "health")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "health.availability",
+            "waterkit-health declares extern Swift symbols but ships no Apple implementation",
+        ));
+    },
+    #[cfg(feature = "deeplink")]
+    |h| h.report.push(TestCase::passed("deeplink.linked")),
+    #[cfg(feature = "vision")]
+    |h| h.runtime.block_on(record_vision(&mut h.report)),
+];
 
 #[cfg(feature = "sensor")]
 async fn record_sensor(report: &mut TestReport) {
@@ -341,6 +344,22 @@ async fn clipboard_files_round_trip(
         return Err(format!("the pasteboard's file URL is {url}"));
     }
     Ok(url)
+}
+
+#[cfg(feature = "nfc")]
+fn record_nfc(report: &mut TestReport) {
+    let available = waterkit::nfc::is_available();
+    if cfg!(target_abi = "sim") && available {
+        report.push(TestCase::failed(
+            "nfc.availability",
+            "NFCNDEFReaderSession.readingAvailable is true on a simulator with no NFC hardware",
+        ));
+    } else {
+        report.push(TestCase::passed_with_message(
+            "nfc.availability",
+            format!("available={available}"),
+        ));
+    }
 }
 
 #[cfg(feature = "fs")]

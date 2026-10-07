@@ -12,9 +12,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(any(target_os = "windows", target_os = "linux", test))]
-use crate::YcbcrEncoding;
 use crate::frame::{Frame, FramePlanes, Orientation};
+use waterkit_video_core::VideoColorInfo;
 
 /// One frame's pixels in CPU memory, in the layout the platform delivered.
 pub enum CpuPlanes<'a> {
@@ -28,25 +27,16 @@ pub enum CpuPlanes<'a> {
     /// NV12: the full-size luma plane, then the interleaved chroma plane of
     /// `ceil(width / 2)` x `ceil(height / 2)` Cb/Cr pairs, each tightly packed.
     #[cfg(any(target_os = "windows", target_os = "linux", test))]
-    Nv12 {
-        data: &'a [u8],
-        encoding: YcbcrEncoding,
-    },
+    Nv12 { data: &'a [u8] },
     /// Packed YUYV 4:2:2 of an even width, tightly packed rows.
     #[cfg(any(target_os = "windows", target_os = "linux", test))]
-    Yuyv {
-        data: &'a [u8],
-        encoding: YcbcrEncoding,
-    },
+    Yuyv { data: &'a [u8] },
     /// P010: NV12's layout with 16-bit little-endian samples holding 10-bit
     /// codes in their top bits. Only the converter tests upload it, on the
     /// Apple GPUs that all offer 16-bit planes; 10-bit platform frames arrive
     /// as imported surfaces, not through CPU memory.
     #[cfg(all(test, target_vendor = "apple"))]
-    P010 {
-        data: &'a [u8],
-        encoding: YcbcrEncoding,
-    },
+    P010 { data: &'a [u8] },
 }
 
 /// Bytes of a tightly packed NV12 frame of `width` x `height` pixels.
@@ -86,6 +76,7 @@ impl FrameUploader {
     pub fn upload(
         &self,
         pixels: &CpuPlanes<'_>,
+        color: VideoColorInfo,
         width: u32,
         height: u32,
         orientation: Orientation,
@@ -107,7 +98,7 @@ impl FrameUploader {
                 FramePlanes::Rgb(view(&rgb))
             }
             #[cfg(any(target_os = "windows", target_os = "linux", test))]
-            CpuPlanes::Nv12 { data, encoding } => {
+            CpuPlanes::Nv12 { data } => {
                 let (chroma_width, chroma_height) = chroma_extent(width, height);
                 let (luma, chroma) = data.split_at(width as usize * height as usize);
                 let [luma, chroma] = self.write([
@@ -129,11 +120,10 @@ impl FrameUploader {
                 FramePlanes::YCbCr420 {
                     luma: view(&luma),
                     chroma: view(&chroma),
-                    encoding,
                 }
             }
             #[cfg(any(target_os = "windows", target_os = "linux", test))]
-            CpuPlanes::Yuyv { data, encoding } => {
+            CpuPlanes::Yuyv { data } => {
                 let [yuyv] = self.write([PlaneUpload {
                     format: wgpu::TextureFormat::Rgba8Unorm,
                     width: width / 2,
@@ -141,13 +131,10 @@ impl FrameUploader {
                     stride: width * 2,
                     data,
                 }]);
-                FramePlanes::YCbCr422 {
-                    yuyv: view(&yuyv),
-                    encoding,
-                }
+                FramePlanes::YCbCr422 { yuyv: view(&yuyv) }
             }
             #[cfg(all(test, target_vendor = "apple"))]
-            CpuPlanes::P010 { data, encoding } => {
+            CpuPlanes::P010 { data } => {
                 let (chroma_width, chroma_height) = chroma_extent(width, height);
                 let (luma, chroma) = data.split_at(width as usize * height as usize * 2);
                 let [luma, chroma] = self.write([
@@ -169,11 +156,10 @@ impl FrameUploader {
                 FramePlanes::YCbCr420 {
                     luma: view(&luma),
                     chroma: view(&chroma),
-                    encoding,
                 }
             }
         };
-        Frame::new(planes, width, height, orientation, timestamp)
+        Frame::new(planes, color, width, height, orientation, timestamp)
     }
 
     /// Creates a texture for each plane and writes the plane into it.

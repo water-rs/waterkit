@@ -21,6 +21,7 @@ enumset.workspace = true
 futures.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+icu_locale_core = { workspace = true, optional = true, features = ["alloc"] }
 waterkit-camera = { workspace = true, optional = true }
 
 # iOS
@@ -33,11 +34,23 @@ jni = { workspace = true, optional = true }
 ndk-context = { workspace = true, optional = true }
 waterkit-build = { workspace = true, optional = true }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, optional = true, features = [
+    "Media_Ocr",
+    "Graphics_Imaging",
+    "Globalization",
+    "Foundation",
+    "Foundation_Collections",
+    "Storage_Streams",
+    "System_UserProfile",
+] }
+
 [build-dependencies]
 waterkit-build.workspace = true
 
 [features]
 camera = ["dep:waterkit-camera"]
+text = ["dep:icu_locale_core", "dep:windows"]
 # The one-shot system code scanner: the Google code scanner of Google Play
 # services on Android, VisionKit's `DataScannerViewController` on iOS.
 scanner = [
@@ -57,3 +70,8 @@ maven = ["com.google.android.gms:play-services-code-scanner:16.1.0"]
 
 [dev-dependencies]
 pollster.workspace = true
+
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+# Rasterizes the test-time text fixtures; no fonts are committed to the repo.
+ab_glyph = "0.2"
+image.workspace = true

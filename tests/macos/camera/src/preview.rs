@@ -284,7 +284,8 @@ impl State {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         self.converter
-            .encode(&self.device, &mut encoder, frame, texture);
+            .encode(&self.device, &mut encoder, frame, texture)
+            .expect("camera preview frame has supported color");
         self.queue.submit([encoder.finish()]);
     }
 

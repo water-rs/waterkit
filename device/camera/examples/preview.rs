@@ -177,7 +177,10 @@ impl App {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Camera frame conversion"),
         });
-        converter.encode(device, &mut encoder, frame, upright);
+        if let Err(error) = converter.encode(device, &mut encoder, frame, upright) {
+            tracing::error!("could not convert camera frame: {error}");
+            return;
+        }
         queue.submit([encoder.finish()]);
     }
 

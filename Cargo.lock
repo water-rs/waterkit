@@ -6182,7 +6182,7 @@ dependencies = [
  "num",
  "once_cell",
  "serde",
- "sha2",
+ "sha2 0.11.0",
  "zbus",
 ]
 
@@ -6343,6 +6343,17 @@ name = "sha1"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if 1.0.4",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if 1.0.4",
  "cpufeatures 0.2.17",
@@ -7652,6 +7663,7 @@ dependencies = [
  "waterkit-location",
  "waterkit-nfc",
  "waterkit-notification",
+ "waterkit-otp",
  "waterkit-passkey",
  "waterkit-permission",
  "waterkit-regional",
@@ -8114,6 +8126,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "waterkit-otp"
+version = "0.1.4"
+dependencies = [
+ "base64 0.22.1",
+ "futures",
+ "hex",
+ "jni 0.22.4",
+ "ndk-context",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "tracing",
+ "waterkit-build",
+ "waterkit-core",
+]
+
+[[package]]
 name = "waterkit-passkey"
 version = "0.1.4"
 dependencies = [
@@ -8296,6 +8324,8 @@ dependencies = [
  "owo-colors",
  "process_control",
  "regex",
+ "serde",
+ "serde_json",
  "toml_edit",
  "tracing",
  "tracing-subscriber",
@@ -8313,6 +8343,8 @@ dependencies = [
  "jni 0.22.4",
  "log",
  "ndk-context",
+ "serde",
+ "serde_json",
  "tokio",
  "waterkit",
  "waterkit-build",

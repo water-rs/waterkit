@@ -1,0 +1,39 @@
+[package]
+name = "waterkit-otp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Cross-platform one-time-code retrieval from addressed SMS and user consent"
+keywords = ["otp", "sms", "one-time-code", "android"]
+categories = ["authentication", "os"]
+
+[lints]
+workspace = true
+
+[dependencies]
+base64.workspace = true
+futures.workspace = true
+hex.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+waterkit-core.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true
+ndk-context.workspace = true
+waterkit-build.workspace = true
+
+# Play services runs the SMS Retriever and User Consent APIs; the application
+# links only their thin client. App-specific tokens use Android's framework
+# telephony service.
+[package.metadata.waterui.android]
+kotlin-sources = ["src/sys/android/OtpHelper.kt"]
+maven = [
+    "com.google.android.gms:play-services-auth-api-phone:18.3.1",
+    "com.google.android.gms:play-services-base:18.11.0",
+    "androidx.activity:activity:1.13.0",
+]

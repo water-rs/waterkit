@@ -21,8 +21,8 @@ runs:
       id: weston
       shell: bash
       run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends weston
+        sudo apt-get -c "$GITHUB_WORKSPACE/.github/apt.conf" update
+        sudo apt-get -c "$GITHUB_WORKSPACE/.github/apt.conf" install -y --no-install-recommends weston
         runtime_dir="$RUNNER_TEMP/weston-runtime"
         mkdir -m 0700 "$runtime_dir"
         socket="$runtime_dir/wayland-waterkit"

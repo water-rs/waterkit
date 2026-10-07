@@ -4,28 +4,43 @@
 // (shaderloom's `--prepend`, or string composition in a build script) and
 // calls the functions below. It declares no bindings.
 //
-// Sample values arrive as code values normalized by the sample's largest
-// code, `code / (2^bit_depth - 1)`, so 8-bit and 10-bit sources share one
-// range definition. The output is non-linear R'G'B' in the source's own
-// transfer function and primaries; linearization belongs to the caller.
+// Callers pass raw storage elements (or unorm samples) through
+// `ycbcr_codes`/`ycbcr_unorm_codes`; `ycbcr_normalize` takes their output.
+// The result is non-linear R'G'B' in the source's own transfer function and
+// primaries; linearization belongs to the caller.
 //
 // The YCBCR_MATRIX_* and YCBCR_RANGE_* mode constants are declared ahead of
 // this text by waterkit-video-core's `YCBCR_WGSL`, from the same Rust
 // definitions converters fill their uniforms with.
 
+// Y', Cb and Cr code values, normalized by the largest code, of samples each
+// stored in the high `bit_depth` bits of an `element_bits`-wide element
+// (P010 keeps 10-bit codes in the top of 16-bit elements).
+fn ycbcr_codes(elements: vec3<u32>, element_bits: u32, bit_depth: u32) -> vec3<f32> {
+    let max_code = f32((1u << bit_depth) - 1u);
+    return vec3<f32>(elements >> vec3<u32>(element_bits - bit_depth)) / max_code;
+}
+
+// The same for samples read through a unorm texture view: recovers each
+// integer element from its `element / (2^element_bits - 1)` value first.
+fn ycbcr_unorm_codes(samples: vec3<f32>, element_bits: u32, bit_depth: u32) -> vec3<f32> {
+    let max_element = f32((1u << element_bits) - 1u);
+    return ycbcr_codes(vec3<u32>(round(samples * max_element)), element_bits, bit_depth);
+}
+
 // Removes the range offset and scale: Y' in [0, 1], Cb and Cr in [-0.5, 0.5].
 // Limited range places black at 16 and white at 235 (chroma 16..240) in
 // 8-bit codes, scaled by 2^(bit_depth - 8) for deeper samples.
-fn ycbcr_normalize(y: f32, cbcr: vec2<f32>, range_mode: u32, bit_depth: u32) -> vec3<f32> {
+fn ycbcr_normalize(codes: vec3<f32>, range_mode: u32, bit_depth: u32) -> vec3<f32> {
     let max_code = f32((1u << bit_depth) - 1u);
     let step = f32(1u << (bit_depth - 8u));
     let chroma_zero = 128.0 * step / max_code;
     if range_mode == YCBCR_RANGE_LIMITED {
-        let luma = (y - 16.0 * step / max_code) * (max_code / (219.0 * step));
-        let chroma = (cbcr - vec2<f32>(chroma_zero)) * (max_code / (224.0 * step));
+        let luma = (codes.x - 16.0 * step / max_code) * (max_code / (219.0 * step));
+        let chroma = (codes.yz - vec2<f32>(chroma_zero)) * (max_code / (224.0 * step));
         return vec3<f32>(luma, chroma);
     }
-    return vec3<f32>(y, cbcr - vec2<f32>(chroma_zero));
+    return vec3<f32>(codes.x, codes.yz - vec2<f32>(chroma_zero));
 }
 
 // Applies a non-constant-luminance matrix to normalized Y'CbCr. Negative

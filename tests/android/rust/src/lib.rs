@@ -369,6 +369,13 @@ fn record_android_capability_updates(report: &mut TestReport) {
                 "translation unavailable below API 31",
             ));
         }
+        // `Unavailable` at a supported API level means the device has no
+        // system translation service — the same state `capabilities()` reports
+        // as zero pairs, and not a registration failure.
+        (true, Err(TranslationError::Unavailable)) => report.push(TestCase::skipped(
+            "language.capability_updates",
+            "no on-device translation service on this device",
+        )),
         (_, Ok(updates)) => {
             drop(updates);
             report.push(TestCase::failed(

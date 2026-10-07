@@ -61,6 +61,7 @@ waterkit-health = { workspace = true, optional = true }
 waterkit-deeplink = { workspace = true, optional = true }
 waterkit-background = { workspace = true, optional = true }
 waterkit-passkey = { workspace = true, optional = true }
+waterkit-otp = { workspace = true, optional = true }
 
 [dev-dependencies]
 toml = { workspace = true }
@@ -96,6 +97,7 @@ full = [
     "deeplink",
     "background",
     "passkey",
+    "otp",
 ]
 permission = ["dep:waterkit-permission"]
 location = ["dep:waterkit-location", "permission"]
@@ -128,6 +130,7 @@ health = ["dep:waterkit-health"]
 deeplink = ["dep:waterkit-deeplink"]
 background = ["dep:waterkit-background"]
 passkey = ["dep:waterkit-passkey"]
+otp = ["dep:waterkit-otp"]
 
 
 [workspace.dependencies]
@@ -178,6 +181,7 @@ waterkit-health = { path = "device/health", version = "0.1.4" }
 waterkit-deeplink = { path = "platform/deeplink", version = "0.1.4" }
 waterkit-background = { path = "platform/background", version = "0.1.4" }
 waterkit-passkey = { path = "identity/passkey", version = "0.1.4" }
+waterkit-otp = { path = "identity/otp", version = "0.1.4" }
 
 # Cross-platform
 futures = "0.3"
@@ -190,6 +194,9 @@ num-traits = "0.2"
 blocking = "1"
 async-io = "2"
 async-process = "2"
+base64 = "0.22"
+hex = "0.4"
+sha2 = "0.10"
 wgpu = "30.0.1"
 wgpu-hal = { version = "30.0.1", features = ["metal"] }
 

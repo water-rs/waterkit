@@ -15,6 +15,8 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -27,7 +29,10 @@ class MainActivity : AppCompatActivity() {
     
     private lateinit var logText: TextView
     private var pendingNativeTest = false
+    private var pendingSmsDelivery = false
     private var pendingInteractiveTest = false
+    private var nativeTestRunning = false
+    private var manualOtpRunning = false
     
     companion object {
         private const val REPORT_FILE_NAME = "waterkit-test-report.json"
@@ -48,7 +53,9 @@ class MainActivity : AppCompatActivity() {
     
     // Generic runner
     private external fun runTest(activity: AppCompatActivity)
-    private external fun runTestReport(activity: AppCompatActivity, interactive: Boolean): String
+    private external fun runTestReport(activity: AppCompatActivity, smsDelivery: Boolean, interactive: Boolean): String
+    private external fun testOtpAddressed(activity: AppCompatActivity)
+    private external fun testOtpConsent(activity: AppCompatActivity)
     
     // ===== End JNI declarations =====
     
@@ -62,6 +69,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         
         val scroll = ScrollView(this)
+        applyEdgeToEdgeInsets(scroll)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 24, 24, 24)
@@ -145,6 +153,14 @@ class MainActivity : AppCompatActivity() {
             log("Starting video playback check...")
             // Invoking Rust via runTest
         })
+
+        layout.addView(sectionHeader("OTP Crate"))
+        layout.addView(testButton("Start addressed SMS request") {
+            startManualOtp("addressed") { testOtpAddressed(this) }
+        })
+        layout.addView(testButton("Start SMS consent request") {
+            startManualOtp("consent") { testOtpConsent(this) }
+        })
         
         scroll.addView(layout)
         setContentView(scroll)
@@ -154,6 +170,16 @@ class MainActivity : AppCompatActivity() {
         // armed, `onWindowFocusChanged` finds nothing pending, and the run sits
         // idle until the harness gives up.
         checkIntent(intent)
+    }
+
+    private fun applyEdgeToEdgeInsets(scroll: ScrollView) {
+        if (Build.VERSION.SDK_INT < 35) return
+
+        ViewCompat.setOnApplyWindowInsetsListener(scroll) { view, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(0, systemBars.top, 0, systemBars.bottom)
+            insets
+        }
     }
 
     override fun onPostResume() {
@@ -171,15 +197,19 @@ class MainActivity : AppCompatActivity() {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus && pendingNativeTest) {
             pendingNativeTest = false
+            val smsDelivery = pendingSmsDelivery
+            pendingSmsDelivery = false
             val interactive = pendingInteractiveTest
             pendingInteractiveTest = false
-            runNativeTest(interactive)
+            runNativeTest(smsDelivery, interactive)
         }
     }
 
     private fun checkIntent(intent: android.content.Intent) {
         if (intent.getBooleanExtra("run_test", false)) {
             intent.removeExtra("run_test")
+            pendingSmsDelivery = intent.getBooleanExtra("sms_delivery", false)
+            intent.removeExtra("sms_delivery")
             pendingInteractiveTest = intent.getBooleanExtra("interactive", false)
             intent.removeExtra("interactive")
             // The runner wakes the device just before launch. From here until
@@ -195,12 +225,19 @@ class MainActivity : AppCompatActivity() {
     private fun runPendingNativeTest() {
         if (!pendingNativeTest || !hasWindowFocus()) return
         pendingNativeTest = false
+        val smsDelivery = pendingSmsDelivery
+        pendingSmsDelivery = false
         val interactive = pendingInteractiveTest
         pendingInteractiveTest = false
-        runNativeTest(interactive)
+        runNativeTest(smsDelivery, interactive)
     }
 
-    private fun runNativeTest(interactive: Boolean) {
+    private fun runNativeTest(smsDelivery: Boolean = false, interactive: Boolean = false) {
+        if (nativeTestRunning || manualOtpRunning) {
+            log("Native test not started: another native OTP/test operation is active")
+            return
+        }
+        nativeTestRunning = true
         log("Running native test...")
         android.util.Log.i("waterkit", "Native test started with window focus")
         // Native clipboard cases write synthetic clips; hold the user's
@@ -211,7 +248,7 @@ class MainActivity : AppCompatActivity() {
         Thread {
             var restoreFailure: Throwable? = null
             val report = try {
-                runTestReport(this, interactive)
+                runTestReport(this, smsDelivery, interactive)
             } finally {
                 try {
                     restorePrimaryClip(savedClip)
@@ -233,6 +270,7 @@ class MainActivity : AppCompatActivity() {
             }
             writeReport(finalReport)
             runOnUiThread {
+                nativeTestRunning = false
                 window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 if (failure == null) {
                     log("Native test report written")
@@ -241,6 +279,29 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    private fun startManualOtp(mode: String, start: () -> Unit) {
+        if (pendingNativeTest || nativeTestRunning || manualOtpRunning) {
+            log("OTP request not started: do not run manual OTP and runTestReport concurrently")
+            return
+        }
+        manualOtpRunning = true
+        log("Starting manual OTP $mode request...")
+        try {
+            start()
+        } catch (error: Exception) {
+            manualOtpRunning = false
+            log("waterkit-otp error=${error.message}")
+        }
+    }
+
+    fun logFromNative(message: String) {
+        runOnUiThread { log(message) }
+    }
+
+    fun finishOtpRequest() {
+        runOnUiThread { manualOtpRunning = false }
     }
 
     private fun appendRestoreFailureCase(report: String, failure: Throwable): String {

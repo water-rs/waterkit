@@ -217,6 +217,32 @@ pub enum MatrixCoefficients {
 }
 
 impl MatrixCoefficients {
+    /// Returns the canonical ITU-T H.273 matrix-coefficients code point.
+    #[must_use]
+    pub const fn cicp(self) -> u8 {
+        match self {
+            Self::Bt709 => 1,
+            Self::Bt601 => 6,
+            Self::Bt2020NonConstantLuminance => 9,
+            Self::Bt2020ConstantLuminance => 10,
+        }
+    }
+
+    /// Returns the matrix coefficients represented by a known H.273 code point.
+    ///
+    /// Both code points 5 (ITU-R BT.470 System B, G) and 6 (SMPTE 170M)
+    /// use the BT.601 matrix in this API.
+    #[must_use]
+    pub const fn from_cicp(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(Self::Bt709),
+            5 | 6 => Some(Self::Bt601),
+            9 => Some(Self::Bt2020NonConstantLuminance),
+            10 => Some(Self::Bt2020ConstantLuminance),
+            _ => None,
+        }
+    }
+
     /// The [`ycbcr_mode`] matrix code [`YCBCR_WGSL`] decodes these
     /// coefficients with, or `None` for constant-luminance BT.2020, which is
     /// not a matrix and which the shared fragment does not implement.
@@ -363,12 +389,7 @@ impl VideoColorInfo {
                 TransferFunction::Pq => 16,
                 TransferFunction::Hlg => 18,
             },
-            matrix: match self.matrix {
-                MatrixCoefficients::Bt709 => 1,
-                MatrixCoefficients::Bt601 => 6,
-                MatrixCoefficients::Bt2020NonConstantLuminance => 9,
-                MatrixCoefficients::Bt2020ConstantLuminance => 10,
-            },
+            matrix: self.matrix.cicp(),
             full_range: matches!(self.range, ColorRange::Full),
         }
     }
@@ -447,6 +468,25 @@ mod tests {
         };
         let copied_color = color;
         assert_eq!(color, copied_color);
+    }
+
+    #[test]
+    fn matrix_coefficients_map_to_and_from_cicp() {
+        for (matrix, code) in [
+            (MatrixCoefficients::Bt709, 1),
+            (MatrixCoefficients::Bt601, 6),
+            (MatrixCoefficients::Bt2020NonConstantLuminance, 9),
+            (MatrixCoefficients::Bt2020ConstantLuminance, 10),
+        ] {
+            assert_eq!(matrix.cicp(), code);
+            assert_eq!(MatrixCoefficients::from_cicp(code), Some(matrix));
+        }
+        assert_eq!(
+            MatrixCoefficients::from_cicp(5),
+            Some(MatrixCoefficients::Bt601)
+        );
+        assert_eq!(MatrixCoefficients::from_cicp(0), None);
+        assert_eq!(MatrixCoefficients::from_cicp(2), None);
     }
 
     #[test]

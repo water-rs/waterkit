@@ -13,8 +13,8 @@ runs:
     - name: Install Linux dependencies
       shell: bash
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
+        sudo apt-get -c "$GITHUB_WORKSPACE/.github/apt.conf" update
+        sudo apt-get -c "$GITHUB_WORKSPACE/.github/apt.conf" install -y \
           libwayland-dev \
           libxkbcommon-dev \
           libasound2-dev \

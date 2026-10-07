@@ -1010,7 +1010,7 @@ mod tests {
         for _ in 0..2 {
             let frame = reader.next_frame().unwrap().expect("recorded YCbCr frame");
             let (pixels, remainder) = frame.data.as_chunks::<4>();
-            assert!(remainder.is_empty());
+            assert_eq!(remainder, &[] as &[u8]);
             for pixel in pixels {
                 assert!(expected[0].mul_add(-255.0, f64::from(pixel[0])).abs() <= 1.0);
                 assert!(expected[1].mul_add(-255.0, f64::from(pixel[1])).abs() <= 1.0);

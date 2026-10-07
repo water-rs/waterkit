@@ -1,11 +1,11 @@
 //! Zero-copy frames from the camera's GPU-sampled `AHardwareBuffer`s.
 //!
 //! Each preview image's buffer is handed to `wgpu-external-frame`'s importer
-//! with a lease on the image. The importer either aliases the buffer or, for a
-//! driver-private (external) YCbCr format, converts it into two plane textures
-//! on the GPU; either way it releases the lease, closing the image and
-//! returning the buffer to the `ImageReader`, as soon as the GPU no longer
-//! reads it. No pixel is read on the CPU.
+//! with a lease on the captured frame. The importer either aliases the buffer
+//! or, for a driver-private (external) YCbCr format, converts it into two
+//! plane textures on the GPU; either way it releases the lease, closing the
+//! image and returning its slot to the `ImageReader`, as soon as the GPU no
+//! longer reads it. No pixel is read on the CPU.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -67,36 +67,37 @@ pub fn check_device(device: &wgpu::Device) -> Result<(), CameraError> {
         })
 }
 
-/// A preview image the camera handed out; closing it returns its buffer to
-/// the `ImageReader`. Dropping the lease closes it too, as the importer
-/// requires of an abandoned import.
+/// A preview frame the camera handed out; closing it returns the image to
+/// the `ImageReader` and frees one of the reader's in-flight slots, which
+/// re-arms acquisition on the camera thread. Dropping the lease closes it
+/// too, as the importer requires of an abandoned import.
 #[derive(Debug)]
-pub struct ImageLease {
+pub struct FrameLease {
     bridge: Arc<AndroidBridge>,
-    image: Option<Global<JObject<'static>>>,
+    frame: Option<Global<JObject<'static>>>,
 }
 
-impl ImageLease {
-    pub const fn new(bridge: Arc<AndroidBridge>, image: Global<JObject<'static>>) -> Self {
+impl FrameLease {
+    pub const fn new(bridge: Arc<AndroidBridge>, frame: Global<JObject<'static>>) -> Self {
         Self {
             bridge,
-            image: Some(image),
+            frame: Some(frame),
         }
     }
 }
 
-impl HardwareBufferLease for ImageLease {
+impl HardwareBufferLease for FrameLease {
     fn presented(&mut self) {}
 
     fn release(self: Box<Self>) {
-        // Dropping closes the image.
+        // Dropping closes the frame.
     }
 }
 
-impl Drop for ImageLease {
+impl Drop for FrameLease {
     fn drop(&mut self) {
-        if let Some(image) = self.image.take() {
-            self.bridge.close_image(&image);
+        if let Some(frame) = self.frame.take() {
+            self.bridge.release_frame(&frame);
         }
     }
 }
@@ -113,10 +114,10 @@ pub struct RawFrame {
 }
 
 impl RawFrame {
-    /// Takes a reference on `buffer`, leased from the image `lease` closes.
+    /// Takes a reference on `buffer`, leased from the frame `lease` closes.
     pub fn new(
         buffer: &HardwareBuffer,
-        lease: ImageLease,
+        lease: FrameLease,
         display_rotation: u32,
         data_space: i32,
         dynamic_range_profile: DynamicRangeProfile,

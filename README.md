@@ -36,6 +36,7 @@ Waterkit is organized into focused, independent crates. You can use the main `wa
 | **[Speech](speech)** | Speech recognition and text-to-speech integrations. |
 | **[System](system)** | System information, connectivity status, and thermal info. |
 | **[Video](video)** | High-level video playback and processing. |
+| **[Vision](vision)** | Hardware-accelerated on-device vision requests over camera frames and still images. |
 
 ## Advanced Modern Capabilities
 

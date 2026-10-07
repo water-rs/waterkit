@@ -158,6 +158,8 @@ const RECORDERS: &[Recorder] = &[
     },
     #[cfg(feature = "deeplink")]
     |h| h.report.push(TestCase::passed("deeplink.linked")),
+    #[cfg(feature = "vision")]
+    |h| h.runtime.block_on(record_vision(&mut h.report)),
 ];
 
 #[cfg(feature = "sensor")]
@@ -468,6 +470,48 @@ fn record_background(report: &mut TestReport) {
             capabilities.supports_launch_events
         ),
     ));
+}
+
+/// `VisionKit`'s `DataScannerViewController` reports unsupported on the
+/// simulator, so `capabilities()` must say so and `scan()` must fail with
+/// [`waterkit::vision::VisionError::Unsupported`] instead of presenting a
+/// UI or falling back to another realization.
+#[cfg(feature = "vision")]
+async fn record_vision(report: &mut TestReport) {
+    let available = waterkit::vision::CodeScanner::capabilities().available;
+    if cfg!(target_abi = "sim") && available {
+        report.push(TestCase::failed(
+            "vision.scanner_capabilities",
+            "DataScannerViewController reports supported on a simulator with no camera",
+        ));
+        return;
+    }
+    report.push(TestCase::passed_with_message(
+        "vision.scanner_capabilities",
+        format!("available={available}"),
+    ));
+    if available {
+        report.push(TestCase::skipped(
+            "vision.scanner_scan",
+            "presenting the code scanner requires an interactive session",
+        ));
+        return;
+    }
+    match waterkit::vision::CodeScanner::new(waterkit::vision::Symbology::Qr)
+        .scan()
+        .await
+    {
+        Err(waterkit::vision::VisionError::Unsupported(message)) => {
+            report.push(TestCase::passed_with_message(
+                "vision.scanner_scan",
+                format!("unsupported: {message}"),
+            ));
+        }
+        other => report.push(TestCase::failed(
+            "vision.scanner_scan",
+            format!("scan() on an unsupported device returned {other:?}"),
+        )),
+    }
 }
 
 #[cfg(feature = "passkey")]

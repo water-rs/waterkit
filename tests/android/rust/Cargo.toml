@@ -53,6 +53,7 @@ full = [
     "background",
     "passkey",
     "otp",
+    "vision",
 ]
 sensor = ["waterkit_content/sensor"]
 biometric = ["waterkit_content/biometric"]
@@ -76,6 +77,7 @@ speech = ["waterkit_content/speech"]
 deeplink = ["waterkit_content/deeplink"]
 contacts = ["waterkit_content/contacts"]
 calendar = ["waterkit_content/calendar"]
+vision = ["waterkit_content/vision"]
 health = ["waterkit_content/health"]
 screen = ["waterkit_content/screen"]
 background = ["waterkit_content/background"]

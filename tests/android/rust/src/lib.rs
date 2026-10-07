@@ -543,6 +543,8 @@ const RECORDERS: &[Recorder] = &[
     },
     #[cfg(feature = "deeplink")]
     |h| h.report.push(TestCase::passed("deeplink.linked")),
+    #[cfg(feature = "vision")]
+    |h| h.runtime.block_on(record_android_vision(&mut h.report)),
 ];
 
 fn log_report(report: &TestReport) {
@@ -2064,6 +2066,41 @@ fn record_android_avif_decode(report: &mut TestReport) {
         Err(error) => report.push(TestCase::failed(
             "codec.decode_avif_platform",
             format!("decode_image failed: {error}"),
+        )),
+    }
+}
+
+/// The Google code scanner needs Play services: `capabilities()` reports
+/// the device's own answer, and without services `scan()` must fail with
+/// [`waterkit_content::vision::VisionError::Unsupported`] instead of
+/// presenting a UI or falling back to another realization.
+#[cfg(feature = "vision")]
+async fn record_android_vision(report: &mut TestReport) {
+    let available = waterkit_content::vision::CodeScanner::capabilities().available;
+    report.push(TestCase::passed_with_message(
+        "vision.scanner_capabilities",
+        format!("available={available}"),
+    ));
+    if available {
+        report.push(TestCase::skipped(
+            "vision.scanner_scan",
+            "presenting the Google code scanner requires an interactive session",
+        ));
+        return;
+    }
+    match waterkit_content::vision::CodeScanner::new(waterkit_content::vision::Symbology::Qr)
+        .scan()
+        .await
+    {
+        Err(waterkit_content::vision::VisionError::Unsupported(message)) => {
+            report.push(TestCase::passed_with_message(
+                "vision.scanner_scan",
+                format!("unsupported without Play services: {message}"),
+            ));
+        }
+        other => report.push(TestCase::failed(
+            "vision.scanner_scan",
+            format!("scan() without Play services returned {other:?}"),
         )),
     }
 }

@@ -9,9 +9,21 @@ use ndk::media::media_format::MediaFormat;
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::time::Duration;
+use waterkit_video_core::{
+    ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo,
+};
 
 const COLOR_FORMAT_YUV420_SEMIPLANAR: i32 = 0x15;
 const COLOR_FORMAT_YUV_P010: i32 = 0x36;
+const COLOR_STANDARD_BT709: i32 = 1;
+const COLOR_STANDARD_BT601_NTSC: i32 = 4;
+const COLOR_STANDARD_BT2020: i32 = 6;
+const COLOR_STANDARD_BT2020_CONSTANT_LUMINANCE: i32 = 7;
+const COLOR_TRANSFER_SDR_VIDEO: i32 = 3;
+const COLOR_TRANSFER_ST2084: i32 = 6;
+const COLOR_TRANSFER_HLG: i32 = 7;
+const COLOR_RANGE_FULL: i32 = 1;
+const COLOR_RANGE_LIMITED: i32 = 2;
 const BUFFER_FLAG_END_OF_STREAM: u32 = 4;
 const CODEC_INPUT_TIMEOUT: Duration = Duration::from_secs(1);
 const CODEC_OUTPUT_TIMEOUT: Duration = Duration::from_secs(1);
@@ -472,7 +484,13 @@ unsafe impl Sync for AndroidEncoder {}
 impl AndroidEncoder {
     /// Create a new Android hardware encoder.
     #[allow(clippy::cast_possible_wrap)] // Video dimensions won't exceed i32::MAX
-    pub fn new(codec_type: CodecType, width: u32, height: u32) -> Result<Self, CodecError> {
+    pub fn new(
+        codec_type: CodecType,
+        width: u32,
+        height: u32,
+        color: VideoColorInfo,
+    ) -> Result<Self, CodecError> {
+        let color_format = media_color_format(color)?;
         let mime_type = codec_type.mime_type();
 
         // Create MediaCodec encoder
@@ -488,6 +506,9 @@ impl AndroidEncoder {
         format.set_i32("bitrate", 4_000_000); // 4 Mbps
         format.set_i32("frame-rate", 30);
         format.set_i32("i-frame-interval", 1); // Keyframe every 1 second
+        format.set_i32("color-standard", color_format.standard);
+        format.set_i32("color-transfer", color_format.transfer);
+        format.set_i32("color-range", color_format.range);
 
         // Configure the codec
         codec
@@ -639,11 +660,151 @@ pub fn open_encoder(
     codec: crate::CodecType,
     width: u32,
     height: u32,
+    color: VideoColorInfo,
 ) -> Result<crate::EncoderInner, CodecError> {
     let codec = match codec {
         crate::CodecType::H264 => CodecType::H264,
         crate::CodecType::H265 => CodecType::H265,
         crate::CodecType::Av1 => unreachable!(),
     };
-    AndroidEncoder::new(codec, width, height).map(crate::EncoderInner::Android)
+    AndroidEncoder::new(codec, width, height, color).map(crate::EncoderInner::Android)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MediaColorFormat {
+    standard: i32,
+    transfer: i32,
+    range: i32,
+}
+
+fn media_color_format(color: VideoColorInfo) -> Result<MediaColorFormat, CodecError> {
+    let standard = match (color.primaries, color.matrix) {
+        (ColorPrimaries::Bt709, MatrixCoefficients::Bt709) => COLOR_STANDARD_BT709,
+        (ColorPrimaries::Bt601, MatrixCoefficients::Bt601) => COLOR_STANDARD_BT601_NTSC,
+        (ColorPrimaries::Bt2020, MatrixCoefficients::Bt2020NonConstantLuminance) => {
+            COLOR_STANDARD_BT2020
+        }
+        (ColorPrimaries::Bt2020, MatrixCoefficients::Bt2020ConstantLuminance) => {
+            COLOR_STANDARD_BT2020_CONSTANT_LUMINANCE
+        }
+        (primaries, matrix) => {
+            return Err(CodecError::Unsupported(format!(
+                "Android MediaCodec cannot represent color primaries/matrix pair ({primaries:?}, {matrix:?})"
+            )));
+        }
+    };
+    let transfer = match color.transfer {
+        TransferFunction::Sdr => COLOR_TRANSFER_SDR_VIDEO,
+        TransferFunction::Pq => COLOR_TRANSFER_ST2084,
+        TransferFunction::Hlg => COLOR_TRANSFER_HLG,
+    };
+    let range = match color.range {
+        ColorRange::Full => COLOR_RANGE_FULL,
+        ColorRange::Limited => COLOR_RANGE_LIMITED,
+    };
+    if color.dolby_vision {
+        return Err(CodecError::Unsupported(
+            "Android MediaCodec cannot signal Dolby Vision metadata".into(),
+        ));
+    }
+    Ok(MediaColorFormat {
+        standard,
+        transfer,
+        range,
+    })
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    fn color(
+        primaries: ColorPrimaries,
+        transfer: TransferFunction,
+        matrix: MatrixCoefficients,
+        range: ColorRange,
+    ) -> VideoColorInfo {
+        VideoColorInfo {
+            primaries,
+            transfer,
+            matrix,
+            range,
+            content_light_level: None,
+            dolby_vision: false,
+        }
+    }
+
+    #[test]
+    fn media_color_format_maps_supported_colorimetry() {
+        let cases = [
+            (
+                color(
+                    ColorPrimaries::Bt709,
+                    TransferFunction::Sdr,
+                    MatrixCoefficients::Bt709,
+                    ColorRange::Limited,
+                ),
+                MediaColorFormat {
+                    standard: COLOR_STANDARD_BT709,
+                    transfer: COLOR_TRANSFER_SDR_VIDEO,
+                    range: COLOR_RANGE_LIMITED,
+                },
+            ),
+            (
+                color(
+                    ColorPrimaries::Bt601,
+                    TransferFunction::Pq,
+                    MatrixCoefficients::Bt601,
+                    ColorRange::Full,
+                ),
+                MediaColorFormat {
+                    standard: COLOR_STANDARD_BT601_NTSC,
+                    transfer: COLOR_TRANSFER_ST2084,
+                    range: COLOR_RANGE_FULL,
+                },
+            ),
+            (
+                color(
+                    ColorPrimaries::Bt2020,
+                    TransferFunction::Hlg,
+                    MatrixCoefficients::Bt2020NonConstantLuminance,
+                    ColorRange::Limited,
+                ),
+                MediaColorFormat {
+                    standard: COLOR_STANDARD_BT2020,
+                    transfer: COLOR_TRANSFER_HLG,
+                    range: COLOR_RANGE_LIMITED,
+                },
+            ),
+            (
+                color(
+                    ColorPrimaries::Bt2020,
+                    TransferFunction::Pq,
+                    MatrixCoefficients::Bt2020ConstantLuminance,
+                    ColorRange::Full,
+                ),
+                MediaColorFormat {
+                    standard: COLOR_STANDARD_BT2020_CONSTANT_LUMINANCE,
+                    transfer: COLOR_TRANSFER_ST2084,
+                    range: COLOR_RANGE_FULL,
+                },
+            ),
+        ];
+
+        for (color, expected) in cases {
+            assert_eq!(media_color_format(color).expect("supported pair"), expected);
+        }
+    }
+
+    #[test]
+    fn media_color_format_rejects_unrepresentable_primaries_matrix_pair() {
+        let color = color(
+            ColorPrimaries::Bt709,
+            TransferFunction::Sdr,
+            MatrixCoefficients::Bt601,
+            ColorRange::Limited,
+        );
+        let error = media_color_format(color).expect_err("mismatched pair is unsupported");
+        assert!(error.to_string().contains("(Bt709, Bt601)"));
+    }
 }

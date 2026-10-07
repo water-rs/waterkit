@@ -264,6 +264,7 @@ impl Preparation for PreparedBitmap {
             Pixels::Frame {
                 planes,
                 orientation,
+                ..
             } => {
                 match planes {
                     waterkit_camera::FramePlanes::Rgb(view) => {

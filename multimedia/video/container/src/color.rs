@@ -185,6 +185,7 @@ const fn is_visual_sample_entry(kind: [u8; 4]) -> bool {
         kind,
         [b'a' | b'h', b'v', b'c', b'1']
             | [b'a', b'v', b'c', b'3']
+            | [b'a', b'v', b'0', b'1']
             | [b'h', b'e', b'v', b'1']
             | [b'd', b'v', b'h', b'e' | b'1']
             | [b'e', b'n', b'c', b'v']

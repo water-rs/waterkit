@@ -103,8 +103,13 @@ class CameraHelper(private val appContext: Context) {
     /**
      * One preview frame: the `Image` from the GPU-sampled `PRIVATE` reader,
      * its `HardwareBuffer`, and the display rotation, in degrees, when the
-     * frame arrived. Together with the sensor orientation and lens facing the
-     * rotation gives the frame's orientation.
+     * frame arrived, plus its data space and active dynamic-range profile.
+     * Together with the sensor orientation and lens facing the rotation gives
+     * the frame's orientation.
+     * Below API 33 the bridge reports `DATASPACE_UNKNOWN` (0), so each
+     * unspecified data-space component uses the captured profile's default.
+     * The profile is captured with the image so Rust does not look it up
+     * after arrival.
      *
      * The receiver owns `image` and must close it once the GPU has finished
      * with `hardwareBuffer`, which returns the buffer to the reader; it also
@@ -115,9 +120,14 @@ class CameraHelper(private val appContext: Context) {
         val image: Image,
         val hardwareBuffer: HardwareBuffer,
         val displayRotation: Int,
+        val dataSpace: Int,
+        val dynamicRangeProfile: Int,
         /** The image's sensor timestamp, the start of exposure. */
         val captureTimeNs: Long,
     )
+
+    private fun imageDataSpace(image: Image): Int =
+        if (Build.VERSION.SDK_INT >= 33) image.dataSpace else 0
 
     private val frameQueue: LinkedBlockingDeque<CapturedFrame> = LinkedBlockingDeque(1)
     private val displayManager: DisplayManager =
@@ -136,7 +146,7 @@ class CameraHelper(private val appContext: Context) {
     private var frameHeight: Int = 720
     private var frameRate: Int = 30
 
-    private var selectedDynamicRangeProfile: Int = DYNAMIC_RANGE_SDR
+    @Volatile private var selectedDynamicRangeProfile: Int = DYNAMIC_RANGE_SDR
     private var selectedPlatformDynamicRangeProfile: Long = PLATFORM_DYNAMIC_RANGE_STANDARD
     private var selectedFlashMode: Int = FLASH_OFF
     private var selectedStabilizationMode: Int = STABILIZATION_OFF
@@ -301,7 +311,16 @@ class CameraHelper(private val appContext: Context) {
                     stale.hardwareBuffer.close()
                     stale.image.close()
                 }
-                frameQueue.offerLast(CapturedFrame(image, buffer, displayRotationDegrees(), image.timestamp))
+                frameQueue.offerLast(
+                    CapturedFrame(
+                        image,
+                        buffer,
+                        displayRotationDegrees(),
+                        imageDataSpace(image),
+                        selectedDynamicRangeProfile,
+                        image.timestamp,
+                    ),
+                )
             }, handler)
 
             rawImageReader?.setOnImageAvailableListener({ reader ->

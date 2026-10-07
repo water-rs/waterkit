@@ -23,6 +23,7 @@ Waterkit is organized into focused, independent crates. You can use the main `wa
 | **[Haptic](haptic)** | Haptic feedback and vibration control. |
 | **[Health](health)** | Health data integration (HealthKit / Health Connect). |
 | **[Location](location)** | GPS and location services (CoreLocation, Android location APIs, etc.). |
+| **[Menu](menu)** | Native application menu bar (`NSMenu` on macOS, Win32 `HMENU` on Windows). |
 | **[NFC](nfc)** | NFC read/write and tag interaction workflows. |
 | **[Notification](notification)** | Local system notifications. |
 | **[Permission](permission)** | Unified API for requesting system permissions (Camera, Mic, Location, etc.). |

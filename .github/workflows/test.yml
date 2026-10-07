@@ -83,6 +83,9 @@ jobs:
       - name: Run macOS passkey integration harness
         if: runner.os == 'macOS'
         run: cargo run -p waterkit-test -- macos tests/macos/passkey
+      - name: Run macOS menu integration harness
+        if: runner.os == 'macOS'
+        run: cargo run -p waterkit-test -- macos tests/macos/menu
 
   android-device-e2e:
     name: Android device E2E

@@ -3357,6 +3357,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyboard-types"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fbe853b403ae61a04233030ae8a79d94975281ed9770a1f9e246732b534b28d"
+dependencies = [
+ "bitflags 2.13.1",
+ "serde",
+]
+
+[[package]]
 name = "keyring"
 version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7589,6 +7599,7 @@ dependencies = [
  "waterkit-haptic",
  "waterkit-health",
  "waterkit-location",
+ "waterkit-menu",
  "waterkit-nfc",
  "waterkit-notification",
  "waterkit-passkey",
@@ -8005,6 +8016,32 @@ dependencies = [
  "tokio",
  "waterkit-location",
  "waterkit-permission",
+ "waterkit-test-report",
+]
+
+[[package]]
+name = "waterkit-menu"
+version = "0.1.4"
+dependencies = [
+ "async-channel",
+ "futures",
+ "keyboard-types",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "thiserror 2.0.20",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "waterkit-menu-test"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "waterkit-menu",
  "waterkit-test-report",
 ]
 

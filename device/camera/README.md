@@ -91,13 +91,23 @@ frame.
 ## RAW Outputs
 
 - RAW photo: DNG payload via `RawPhoto`.
-- RAW video: uncompressed frame stream file (`WKRV` container):
-  - Header: magic/version/pixel-format/width/height/fps
-  - Per frame: `timestamp_ns(u64 LE) + payload_len(u32 LE) + raw pixels`
-  - Desktop: `RGBA8` frames (pixel format 2)
-  - Apple and Android: biplanar 4:2:0 frames as captured, luma rows then
-    chroma rows (pixel format 3 for video range, 4 for full range; Android's
-    `YUV_420_888` output is full range)
+- RAW video: uncompressed frame stream file (`WKRV` version 2):
+  - The 20-byte little-endian header contains magic `WKRV`, version `2`,
+    pixel format (`2` = RGBA8, `3` = NV12), H.273 matrix code, range (`0` =
+    limited, `1` = full), then width, height, and fps as `u32`.
+  - RGBA8 uses identity matrix code `0` and full range. NV12 records matrix
+    code `1` (BT.709), `6` (BT.601), or `9` (BT.2020 non-constant-luminance)
+    and its captured range. NV12 payloads contain luma rows followed by
+    interleaved CbCr rows, without padding.
+  - Each frame is `timestamp_ns(u64 LE) + payload_len(u32 LE) + pixels`.
+  - Version 1 is rejected: it does not record its YCbCr matrix, so its frames
+    cannot be decoded unambiguously. Re-record with version 2.
+  - `RawVideoReader` reads and validates the header and frames. Its
+    `RawVideoFrame::to_rgba` converts NV12 using the recorded matrix and range;
+    output is non-linear R′G′B′, with no primaries or transfer conversion
+    because those values are not stored in WKRV.
+  - Desktop recordings store RGBA8; Apple and Android store NV12 with matrix
+    and range metadata from the first captured frame.
 
 ## Example: Capability Probe
 

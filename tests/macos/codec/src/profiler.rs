@@ -2,6 +2,8 @@
 //!
 //! Tests screenshot latency and GPU streaming capture throughput.
 
+mod common;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use waterkit_codec::{CodecType, Encoder, EncoderProfile};
@@ -105,7 +107,13 @@ fn measure_streaming_encode(primary: &ScreenInfo) -> Result<(), BoxError> {
     let stream = ScreenStream::start(primary, device, queue, &config)?;
     let (width, height) = stream.dimensions();
 
-    let mut encoder = Encoder::new(CodecType::H265, width, height, EncoderProfile::Offline)?;
+    let mut encoder = Encoder::new(
+        CodecType::H265,
+        width,
+        height,
+        EncoderProfile::Offline,
+        common::bt709_sdr_limited(),
+    )?;
 
     // Wait for stream to warm up
     std::thread::sleep(Duration::from_millis(500));

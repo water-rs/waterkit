@@ -25,6 +25,11 @@ const APP_USER_MODEL_ID: &str =
 /// The toast schema allows at most this many action buttons.
 const MAX_ACTIONS: usize = 5;
 
+/// `WinRT` toasts display for about 7s (`duration="short"`) or about 25s
+/// (`duration="long"`); nothing in between or beyond can be requested.
+const SHORT_DURATION_MS: u32 = 7_000;
+const LONG_DURATION_MS: u32 = 25_000;
+
 /// Show a notification through `Windows.UI.Notifications`.
 pub fn show_notification(
     notification: &Notification,
@@ -49,7 +54,57 @@ pub fn show_notification(
 }
 
 /// Build the toast payload through the `XmlDocument` DOM API.
+///
+/// Anything the platform cannot render is rejected with
+/// [`NotificationError::Unsupported`] instead of being silently dropped.
 fn toast_document(notification: &Notification) -> Result<XmlDocument, NotificationError> {
+    if notification.title.is_empty() && notification.body.is_empty() {
+        return Err(NotificationError::Unsupported(
+            "an empty toast needs a title or a body".into(),
+        ));
+    }
+    // Freedesktop theme icon names have no WinRT equivalent; only file icons
+    // can be shown, as the app-logo image.
+    if let Some(Icon::Theme(name)) = &notification.icon {
+        return Err(NotificationError::Unsupported(format!(
+            "Icon::Theme({name:?}) is a freedesktop concept with no WinRT equivalent"
+        )));
+    }
+    match &notification.sound {
+        // Freedesktop sound themes and custom files have no
+        // `ms-winsoundevent` equivalent.
+        Some(Sound::Theme(name)) => {
+            return Err(NotificationError::Unsupported(format!(
+                "Sound::Theme({name:?}) has no ms-winsoundevent equivalent"
+            )));
+        }
+        Some(Sound::File(path)) => {
+            return Err(NotificationError::Unsupported(format!(
+                "Sound::File({}) cannot be played by toast audio",
+                path.display()
+            )));
+        }
+        _ => {}
+    }
+    if notification.actions.len() > MAX_ACTIONS {
+        return Err(NotificationError::Unsupported(format!(
+            "{} actions; the toast schema allows at most {MAX_ACTIONS}",
+            notification.actions.len()
+        )));
+    }
+    if !notification.text_input_actions.is_empty() {
+        return Err(NotificationError::Unsupported(
+            "text input actions cannot be shown on Windows".into(),
+        ));
+    }
+    // The reminder scenario keeps the toast on screen until dismissed, but
+    // requires at least one action button.
+    if matches!(notification.timeout, Timeout::Never) && notification.actions.is_empty() {
+        return Err(NotificationError::Unsupported(
+            "Timeout::Never needs an action: a reminder toast requires at least one button".into(),
+        ));
+    }
+
     let document =
         XmlDocument::new().map_err(|error| NotificationError::Platform(error.to_string()))?;
 
@@ -58,27 +113,28 @@ fn toast_document(notification: &Notification) -> Result<XmlDocument, Notificati
         .AppendChild(&toast)
         .map_err(|error| NotificationError::Platform(error.to_string()))?;
 
-    // WinRT only supports ~7s ("short") and ~25s ("long") durations; this is
-    // the same mapping notify-rust used.
+    // A requested duration is rounded up to the next representable one so a
+    // toast never disappears earlier than asked.
     let duration = match notification.timeout {
         Timeout::Default => "short",
         Timeout::Never => "long",
+        Timeout::Milliseconds(ms) if ms <= SHORT_DURATION_MS => "short",
+        Timeout::Milliseconds(ms) if ms <= LONG_DURATION_MS => "long",
         Timeout::Milliseconds(ms) => {
-            if ms >= 25_000 {
-                "long"
-            } else {
-                "short"
-            }
+            return Err(NotificationError::Unsupported(format!(
+                "a {ms} ms toast; Windows only displays ~{SHORT_DURATION_MS} ms or ~{LONG_DURATION_MS} ms"
+            )));
         }
     };
     attribute(&toast, "duration", duration)?;
+    if matches!(notification.timeout, Timeout::Never) {
+        attribute(&toast, "scenario", "reminder")?;
+    }
 
     let visual = append(&document, &toast, "visual")?;
     let binding = append(&document, &visual, "binding")?;
     attribute(&binding, "template", "ToastGeneric")?;
 
-    // Freedesktop theme icon names have no WinRT equivalent; only file icons
-    // can be shown, as the app-logo image.
     if let Some(Icon::File(path)) = &notification.icon {
         let image = append(&document, &binding, "image")?;
         attribute(&image, "placement", "appLogoOverride")?;
@@ -102,8 +158,6 @@ fn toast_document(notification: &Notification) -> Result<XmlDocument, Notificati
         attribute(&text, "placement", "attribution")?;
     }
 
-    // Freedesktop sound themes and custom files have no `ms-winsoundevent`
-    // equivalent; those keep the toast's default system sound.
     if matches!(notification.sound, Some(Sound::Suppress)) {
         let audio = append(&document, &toast, "audio")?;
         attribute(&audio, "silent", "true")?;
@@ -111,7 +165,7 @@ fn toast_document(notification: &Notification) -> Result<XmlDocument, Notificati
 
     if !notification.actions.is_empty() {
         let actions = append(&document, &toast, "actions")?;
-        for action in notification.actions.iter().take(MAX_ACTIONS) {
+        for action in &notification.actions {
             let element = append(&document, &actions, "action")?;
             // Protocol activation makes the shell open the URL on click,
             // which is all `Action` needs.
@@ -165,7 +219,7 @@ fn attribute(element: &XmlElement, name: &str, value: &str) -> Result<(), Notifi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Action, Sound, Timeout};
+    use crate::{Action, Sound, TextInputAction, Timeout};
     use std::path::PathBuf;
 
     fn toast_xml(notification: &Notification) -> String {
@@ -174,6 +228,15 @@ mod tests {
             .GetXml()
             .expect("xml")
             .to_string()
+    }
+
+    /// The unsupported-input message when building the toast fails.
+    fn unsupported(notification: &Notification) -> String {
+        match toast_document(notification) {
+            Err(NotificationError::Unsupported(message)) => message,
+            Err(error) => panic!("expected an unsupported input, got {error:?}"),
+            Ok(_) => panic!("expected an unsupported input error"),
+        }
     }
 
     #[test]
@@ -185,29 +248,60 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_notification() {
+        let message = unsupported(&Notification::new());
+        assert!(message.contains("title"), "{message}");
+    }
+
+    #[test]
     fn maps_timeout_to_duration() {
         let cases = [
             (Timeout::Default, "short"),
-            (Timeout::Never, "long"),
             (Timeout::Milliseconds(5_000), "short"),
-            (Timeout::Milliseconds(30_000), "long"),
+            (Timeout::Milliseconds(10_000), "long"),
+            (Timeout::Milliseconds(25_000), "long"),
         ];
         for (timeout, duration) in cases {
-            let notification = Notification::new().timeout(timeout);
+            let notification = Notification::new().title("t").timeout(timeout);
             let xml = toast_xml(&notification);
             assert!(xml.contains(&format!("duration=\"{duration}\"")), "{xml}");
         }
     }
 
     #[test]
+    fn rejects_unrepresentable_duration() {
+        let notification = Notification::new()
+            .title("t")
+            .timeout(Timeout::Milliseconds(30_000));
+        assert!(unsupported(&notification).contains("30000"));
+    }
+
+    #[test]
+    fn never_timeout_uses_reminder_scenario() {
+        let notification = Notification::new()
+            .title("t")
+            .timeout(Timeout::Never)
+            .action(Action::new("View", "https://waterui.dev"));
+        let xml = toast_xml(&notification);
+        assert!(xml.contains("scenario=\"reminder\""), "{xml}");
+    }
+
+    #[test]
+    fn never_timeout_needs_an_action() {
+        let notification = Notification::new().title("t").timeout(Timeout::Never);
+        assert!(unsupported(&notification).contains("Timeout::Never"));
+    }
+
+    #[test]
     fn suppresses_sound() {
-        let notification = Notification::new().sound(Sound::Suppress);
+        let notification = Notification::new().title("t").sound(Sound::Suppress);
         assert!(toast_xml(&notification).contains("<audio silent=\"true\"/>"));
     }
 
     #[test]
     fn adds_protocol_actions() {
         let notification = Notification::new()
+            .title("t")
             .action(Action::new("View", "https://waterui.dev"))
             .action(Action::new("Later", "waterui://later"));
         let xml = toast_xml(&notification);
@@ -217,37 +311,59 @@ mod tests {
     }
 
     #[test]
-    fn caps_actions_at_schema_maximum() {
-        let mut notification = Notification::new();
-        for index in 0..7 {
+    fn rejects_actions_beyond_the_schema_maximum() {
+        let mut notification = Notification::new().title("t");
+        for index in 0..6 {
             notification = notification.action(Action::new(format!("a{index}"), "https://x"));
         }
-        let xml = toast_xml(&notification);
-        assert!(xml.contains("content=\"a4\""));
-        assert!(!xml.contains("content=\"a5\""));
+        assert!(unsupported(&notification).contains("6 actions"));
+    }
+
+    #[test]
+    fn rejects_text_input_actions() {
+        let notification = Notification::new()
+            .title("t")
+            .text_input_action(TextInputAction::new("reply", "Reply"));
+        assert!(unsupported(&notification).contains("text input"));
     }
 
     #[test]
     fn maps_app_name_to_attribution() {
-        let notification = Notification::new().app_name("WaterKit");
+        let notification = Notification::new().title("t").app_name("WaterKit");
         assert!(toast_xml(&notification).contains("placement=\"attribution\""));
     }
 
     #[test]
     fn maps_file_icon_to_app_logo_override() {
-        let notification = Notification::new().icon(Icon::File(std::env::current_exe().unwrap()));
+        let notification = Notification::new()
+            .title("t")
+            .icon(Icon::File(std::env::current_exe().unwrap()));
         let xml = toast_xml(&notification);
         assert!(xml.contains("placement=\"appLogoOverride\""));
         assert!(xml.contains("src=\"file:///"));
     }
 
     #[test]
-    fn ignores_theme_icon_and_custom_sound() {
-        let notification = Notification::new()
-            .icon(Icon::Theme("mail-message-new".into()))
-            .sound(Sound::File(PathBuf::from("ding.wav")));
-        let xml = toast_xml(&notification);
-        assert!(!xml.contains("<image"));
-        assert!(!xml.contains("<audio"));
+    fn rejects_theme_icon_and_custom_sounds() {
+        let message = unsupported(
+            &Notification::new()
+                .title("t")
+                .icon(Icon::Theme("mail-message-new".into())),
+        );
+        assert!(message.contains("Icon::Theme"), "{message}");
+
+        let message = unsupported(
+            &Notification::new()
+                .title("t")
+                .sound(Sound::Theme("message-new-instant".into())),
+        );
+        assert!(message.contains("Sound::Theme"), "{message}");
+
+        let message = unsupported(
+            &Notification::new()
+                .title("t")
+                .sound(Sound::File(PathBuf::from("ding.wav"))),
+        );
+        assert!(message.contains("Sound::File"), "{message}");
     }
 }

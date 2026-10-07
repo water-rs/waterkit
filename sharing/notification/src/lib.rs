@@ -43,17 +43,20 @@
 //! | Feature | Linux | macOS | Windows | iOS | Android |
 //! |---------|-------|-------|---------|-----|---------|
 //! | title/body | ✓ | ✓ | ✓ | ✓ | ✓ |
-//! | icon | ✓ | ✓ | ✓ | ✗ | ✗ |
+//! | icon | ✓ | ✓ | ✓* | ✗ | ✗ |
 //! | subtitle | ✗ | ✓ | ✗ | ✓ | ✗ |
 //! | `interruption_level` | ✓ | ✗ | ✗ | ✓ | ✓ |
-//! | timeout | ✓ | ✗ | ✓ | ✗ | ✗ |
+//! | timeout | ✓ | ✗ | ✓* | ✗ | ✗ |
 //! | sound | ✓ | ✗ | ✓* | ✓ | ✓ |
-//! | actions (URL) | ✓ | ✓ | ✓ | ✓ | ✓ |
+//! | actions (URL) | ✓ | ✓ | ✓* | ✓ | ✓ |
 //! | quick reply | ✗ | ✓ | ✗ | ✓ | ✓ |
 //! | update by ID | ✓ | ✓ | ✓ | ✓ | ✓ |
 //!
-//! *Windows: `Sound::Default` and `Sound::Suppress` are honored; theme
-//! names and sound files have no `ms-winsoundevent` equivalent.
+//! *Windows: only `Icon::File`, `Sound::Default`/`Sound::Suppress`, and up to
+//! 5 actions are supported; `Timeout::Never` shows a reminder toast that
+//! persists until dismissed and requires an action. Anything the toast
+//! schema cannot render fails with [`NotificationError::Unsupported`] instead
+//! of being silently dropped.
 
 mod error;
 mod sys;
@@ -394,8 +397,9 @@ impl Notification {
     /// Set the notification icon.
     ///
     /// **Desktop only**: On mobile platforms, this is ignored. On Windows
-    /// only [`Icon::File`] is supported; theme icons are a freedesktop
-    /// concept with no `WinRT` equivalent.
+    /// only [`Icon::File`] is supported; [`Icon::Theme`] is a freedesktop
+    /// concept with no `WinRT` equivalent and fails with
+    /// [`NotificationError::Unsupported`].
     #[must_use]
     pub fn icon(mut self, icon: Icon) -> Self {
         self.icon = Some(icon);
@@ -405,8 +409,8 @@ impl Notification {
     /// Set the notification sound.
     ///
     /// **Linux/iOS/Android**: Custom sounds are supported.
-    /// **Windows**: `Default` and `Suppress` are honored; custom sounds
-    /// are ignored.
+    /// **Windows**: `Default` and `Suppress` are honored; `Theme` and `File`
+    /// fail with [`NotificationError::Unsupported`].
     /// **macOS**: Only default sound is used.
     #[must_use]
     pub fn sound(mut self, sound: Sound) -> Self {
@@ -423,8 +427,12 @@ impl Notification {
 
     /// Set the timeout duration for the notification.
     ///
-    /// **Linux and Windows**: Ignored on other platforms. On Windows the
-    /// timeout maps onto a short (~7s) or long (~25s) toast duration.
+    /// **Linux and Windows**: Ignored on other platforms. On Windows a
+    /// millisecond value is rounded up to the short (~7s) or long (~25s)
+    /// toast duration; anything longer and [`Timeout::Never`] without an
+    /// action fail with [`NotificationError::Unsupported`]. `Timeout::Never`
+    /// with at least one action shows a reminder toast that persists until
+    /// dismissed.
     #[must_use]
     pub const fn timeout(mut self, timeout: Timeout) -> Self {
         self.timeout = timeout;
@@ -432,6 +440,9 @@ impl Notification {
     }
 
     /// Add an action button to the notification.
+    ///
+    /// **Windows**: the toast schema allows at most 5 actions; a sixth fails
+    /// with [`NotificationError::Unsupported`].
     #[must_use]
     pub fn action(mut self, action: Action) -> Self {
         self.actions.push(action);
@@ -443,7 +454,8 @@ impl Notification {
     /// When the user taps this action, a text input field appears.
     ///
     /// **Supported:** iOS, macOS, Android
-    /// **Not supported:** Linux, Windows (silently ignored)
+    /// **Not supported:** Linux, Windows — on Windows this fails with
+    /// [`NotificationError::Unsupported`]
     #[must_use]
     pub fn text_input_action(mut self, action: TextInputAction) -> Self {
         self.text_input_actions.push(action);

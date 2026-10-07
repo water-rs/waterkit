@@ -13,7 +13,7 @@ fn main() -> Result<(), waterkit_notification::NotificationError> {
         .icon(Icon::Theme("folder-download".into())) // Linux theme icon
         .sound(Sound::Theme("complete".into())) // Linux sound theme
         .interruption_level(InterruptionLevel::Active)
-        .timeout(Timeout::Milliseconds(5000)) // Linux only
+        .timeout(Timeout::Milliseconds(5000)) // Linux/Windows
         .show()?;
 
     println!("Notification sent!");

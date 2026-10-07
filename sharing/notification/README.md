@@ -10,11 +10,11 @@ Cross-platform local notifications for Rust.
 | icon | ✓ | ✓ | ✓* | ✗ | ✗ |
 | subtitle | ✗ | ✓ | ✗ | ✓ | ✗ |
 | interruption_level | ✓ | ✗ | ✗ | ✓ | ✓ |
-| timeout | ✓ | ✗ | ✓ | ✗ | ✗ |
+| timeout | ✓ | ✗ | ✓* | ✗ | ✗ |
 | sound | ✓ | ✗ | ✓* | ✓ | ✓ |
-| actions (URL) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| actions (URL) | ✓ | ✓ | ✓* | ✓ | ✓ |
 
-*Windows: `Icon::File` only (theme icons are a freedesktop concept); `Sound::Default`/`Sound::Suppress` only (toast audio cannot play theme names or arbitrary files).
+*Windows: only `Icon::File`, `Sound::Default`/`Sound::Suppress`, and up to 5 actions are supported. `Timeout::Never` shows a reminder toast that persists until dismissed and requires at least one action. Inputs the toast schema cannot render — `Icon::Theme`, `Sound::Theme`/`Sound::File`, more than 5 actions, text input actions, `Timeout::Never` without an action, or a duration above ~25s — fail with `NotificationError::Unsupported` instead of being silently dropped.
 
 ## Installation
 
@@ -93,7 +93,7 @@ Notification::new()
     .app_name("My App")
     .icon(Icon::Theme("folder-download".into())) // Linux theme icon
     .sound(Sound::Theme("complete".into()))   // Linux sound theme
-    .timeout(Timeout::Milliseconds(5000))     // Linux only
+    .timeout(Timeout::Milliseconds(5000))     // Linux/Windows
     .interruption_level(InterruptionLevel::Active)
     .show()?;
 ```

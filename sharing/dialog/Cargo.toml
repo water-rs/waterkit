@@ -26,8 +26,7 @@ swift-bridge.workspace = true
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
-waterkit-build.workspace = true
-ndk-context.workspace = true
+waterkit-build = { workspace = true, features = ["activity-result"] }
 
 # Desktop (macOS, Windows, Linux)
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

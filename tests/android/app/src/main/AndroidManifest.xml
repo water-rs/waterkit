@@ -32,6 +32,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".ActivityResultEchoActivity"
+            android:exported="false" />
 
         <!-- waterkit-clipboard serves copied files through this provider.
              Crate metadata cannot declare manifest components yet

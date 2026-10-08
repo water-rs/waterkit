@@ -13,7 +13,11 @@ use sysinfo::{
     Components, CpuRefreshKind, MINIMUM_CPU_UPDATE_INTERVAL, MemoryRefreshKind, RefreshKind, System,
 };
 
-pub fn connectivity() -> Result<ConnectivityInfo, SystemError> {
+#[expect(
+    clippy::unused_async,
+    reason = "the public signature is async on every platform; this one resolves synchronously"
+)]
+pub async fn connectivity() -> Result<ConnectivityInfo, SystemError> {
     let transport = os::transport()?;
     Ok(ConnectivityInfo::new(
         transport,

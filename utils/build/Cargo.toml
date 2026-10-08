@@ -32,7 +32,6 @@ jni.workspace = true
 ndk-context.workspace = true
 thiserror.workspace = true
 
-[package.metadata.waterui.android]
-required-feature = "activity-result"
+[package.metadata.waterui.android.feature.activity-result]
 kotlin-sources = ["src/android_runtime/ActivityResultHelper.kt"]
 maven = ["androidx.activity:activity:1.11.0"]

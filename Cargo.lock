@@ -8576,13 +8576,18 @@ dependencies = [
 name = "waterkit-share"
 version = "0.1.4"
 dependencies = [
+ "block2 0.6.2",
  "futures",
  "jni 0.22.4",
  "ndk-context",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "objc2-ui-kit 0.3.2",
  "percent-encoding",
- "swift-bridge",
  "thiserror 2.0.20",
  "waterkit-build",
+ "waterkit-core",
  "windows 0.62.2",
  "zbus",
 ]

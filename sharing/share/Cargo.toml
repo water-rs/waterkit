@@ -19,7 +19,47 @@ futures = { workspace = true }
 percent-encoding = { workspace = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
+objc2.workspace = true
+waterkit-core.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSError",
+    "NSGeometry",
+    "NSObject",
+    "NSString",
+    "NSURL",
+] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+block2.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSKeyValueCoding",
+    "NSSet",
+] }
+objc2-ui-kit = { workspace = true, features = [
+    "UIActivityViewController",
+    "UIActivity",
+    "UIApplication",
+    "UIImage",
+    "UIResponder",
+    "UIScene",
+    "UISceneDefinitions",
+    "UIView",
+    "UIViewController",
+    "UIWindowScene",
+    "UIWindow",
+    "block2",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { workspace = true, features = [
+    "NSApplication",
+    "NSImage",
+    "NSResponder",
+    "NSSharingService",
+    "NSView",
+    "NSWindow",
+] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 waterkit-build.workspace = true
@@ -36,7 +76,3 @@ windows = { workspace = true, features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
-
-[build-dependencies]
-waterkit-build.workspace = true
-

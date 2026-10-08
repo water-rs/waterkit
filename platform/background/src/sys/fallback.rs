@@ -1,7 +1,11 @@
 use crate::{
-    AppRefreshRequest, BackgroundCapabilities, BackgroundError, BootstrapConfig,
+    AppRefreshRequest, BackgroundCapabilities, BackgroundError, BackgroundEvent, BootstrapConfig,
     ContinuedProcessingRequest, ProcessingRequest, TaskIdentifier,
 };
+
+/// The fallback task handle: this backend never launches tasks.
+#[derive(Debug, Clone)]
+pub struct TaskHandle;
 
 /// Background runtime backend for unsupported platforms.
 #[derive(Debug)]
@@ -9,8 +13,8 @@ pub struct BackgroundRuntimeInner;
 
 #[allow(clippy::unused_self)]
 impl BackgroundRuntimeInner {
-    pub const fn initialize(
-        _event_ctx: u64,
+    pub fn initialize(
+        _events_tx: async_channel::Sender<BackgroundEvent>,
         _config: &BootstrapConfig,
     ) -> Result<Self, BackgroundError> {
         Err(BackgroundError::Unsupported)
@@ -45,10 +49,10 @@ pub fn capabilities() -> BackgroundCapabilities {
     BackgroundCapabilities::default()
 }
 
-pub const fn complete_task(
-    _runtime_handle: u64,
-    _task_token: u64,
-    _success: bool,
-) -> Result<(), BackgroundError> {
+#[expect(
+    clippy::unused_async,
+    reason = "the per-platform sys contract is async; this body only returns an error"
+)]
+pub async fn complete_task(_handle: &TaskHandle, _success: bool) -> Result<(), BackgroundError> {
     Err(BackgroundError::Unsupported)
 }

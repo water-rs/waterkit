@@ -4637,6 +4637,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-authentication-services"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee6d6f7dab884a28adaec1012eb3889257a49cc145724e35f93ece2d209f8b25"
+dependencies = [
+ "bitflags 2.13.1",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-av-foundation"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4665,6 +4677,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
 dependencies = [
  "bitflags 2.13.1",
+ "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "objc2-background-tasks"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ddeb0eb84c1714d4f50e5dc29cca57628c12cc40445a099c0cf05f4ee538473"
+dependencies = [
+ "bitflags 2.13.1",
+ "block2 0.6.2",
+ "dispatch2",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
 ]
@@ -4791,6 +4817,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-core-haptics"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbf2dae8a5e651adec3af54059cbce15e3aadbf8913da9782e1e1affc29aa512"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-core-image"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4859,6 +4896,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dcf94da2dcaad7e727ad6a1ea2312293c776f0df8cbc87fde6654d100a24386a"
 dependencies = [
  "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "objc2-core-nfc"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "758693d59bdcb001f1dc43de1137934471709869206c6b0cfe4d238a47d9cc30"
+dependencies = [
+ "bitflags 2.13.1",
+ "block2 0.6.2",
+ "dispatch2",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
 ]
@@ -5070,7 +5120,19 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6ea9a706f18e32cf8a0723e99855af4f135282891e07259301bae9135ae3872"
 dependencies = [
+ "bitflags 2.13.1",
  "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "objc2-photos-ui"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdddde9dfb986546746e3115021a85c4a83e1c5e9037b3c865a688fe9bf94ebb"
+dependencies = [
+ "bitflags 2.13.1",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
 ]
@@ -5103,6 +5165,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-speech"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9eb609f9d2a25e0f8b76954f3acaa58348ce2a91285fe867643b2224ac4d263"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-avf-audio",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-symbols"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5129,7 +5203,7 @@ dependencies = [
  "objc2-link-presentation",
  "objc2-quartz-core 0.2.2",
  "objc2-symbols",
- "objc2-uniform-type-identifiers",
+ "objc2-uniform-type-identifiers 0.2.2",
  "objc2-user-notifications 0.2.2",
 ]
 
@@ -5163,6 +5237,16 @@ dependencies = [
  "block2 0.5.1",
  "objc2 0.5.2",
  "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "objc2-uniform-type-identifiers"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7902ac02859fc1f7045f8b598c63f1ae0cc7efeaa06a9bc9f3d9a3c955974fa4"
+dependencies = [
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -7924,14 +8008,18 @@ name = "waterkit-background"
 version = "0.1.4"
 dependencies = [
  "async-channel",
+ "block2 0.6.2",
+ "dispatch2",
+ "futures-channel",
  "futures-core",
  "jni 0.22.4",
  "ndk-context",
- "serde",
- "serde_json",
- "swift-bridge",
+ "objc2 0.6.4",
+ "objc2-background-tasks",
+ "objc2-foundation 0.3.2",
  "thiserror 2.0.20",
  "waterkit-build",
+ "waterkit-core",
 ]
 
 [[package]]
@@ -8065,8 +8153,13 @@ dependencies = [
  "image",
  "jni 0.22.4",
  "ndk-context",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "objc2-ui-kit 0.3.2",
+ "objc2-uniform-type-identifiers 0.3.2",
  "rustix 1.1.4",
- "swift-bridge",
  "thiserror 2.0.20",
  "tracing",
  "url",
@@ -8186,13 +8279,21 @@ dependencies = [
 name = "waterkit-dialog"
 version = "0.1.4"
 dependencies = [
+ "block2 0.6.2",
+ "dispatch2",
  "futures",
  "jni 0.22.4",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "objc2-photos",
+ "objc2-photos-ui",
+ "objc2-ui-kit 0.3.2",
+ "objc2-uniform-type-identifiers 0.3.2",
  "rfd",
  "roxmltree",
- "swift-bridge",
  "thiserror 2.0.20",
  "waterkit-build",
+ "waterkit-core",
  "waterkit-fs",
 ]
 
@@ -8233,10 +8334,15 @@ dependencies = [
 name = "waterkit-haptic"
 version = "0.1.4"
 dependencies = [
+ "block2 0.6.2",
  "futures",
  "jni 0.22.4",
  "ndk-context",
- "swift-bridge",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-haptics",
+ "objc2-foundation 0.3.2",
+ "objc2-ui-kit 0.3.2",
  "thiserror 2.0.20",
  "waterkit-build",
  "waterkit-core",
@@ -8348,13 +8454,18 @@ name = "waterkit-nfc"
 version = "0.1.4"
 dependencies = [
  "async-channel",
+ "block2 0.6.2",
+ "dispatch2",
  "futures",
  "futures-core",
  "jni 0.22.4",
  "ndk-context",
- "swift-bridge",
+ "objc2 0.6.4",
+ "objc2-core-nfc",
+ "objc2-foundation 0.3.2",
  "thiserror 2.0.20",
  "waterkit-build",
+ "waterkit-core",
  "windows 0.62.2",
  "zbus",
 ]
@@ -8409,14 +8520,20 @@ version = "0.1.4"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "dispatch2",
  "jni 0.22.4",
  "ndk-context",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-authentication-services",
+ "objc2-foundation 0.3.2",
+ "objc2-ui-kit 0.3.2",
  "serde",
  "serde_json",
- "swift-bridge",
  "thiserror 2.0.20",
  "tokio",
  "waterkit-build",
+ "waterkit-core",
  "windows 0.62.2",
  "zbus",
 ]
@@ -8542,13 +8659,18 @@ dependencies = [
 name = "waterkit-share"
 version = "0.1.4"
 dependencies = [
+ "block2 0.6.2",
  "futures",
  "jni 0.22.4",
  "ndk-context",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "objc2-ui-kit 0.3.2",
  "percent-encoding",
- "swift-bridge",
  "thiserror 2.0.20",
  "waterkit-build",
+ "waterkit-core",
  "windows 0.62.2",
  "zbus",
 ]
@@ -8559,12 +8681,17 @@ version = "0.1.4"
 dependencies = [
  "async-channel",
  "async-process",
+ "block2 0.6.2",
+ "dispatch2",
  "futures",
  "futures-core",
  "futures-timer",
  "jni 0.22.4",
  "ndk-context",
- "swift-bridge",
+ "objc2 0.6.4",
+ "objc2-avf-audio",
+ "objc2-foundation 0.3.2",
+ "objc2-speech",
  "thiserror 2.0.20",
  "tokio",
  "waterkit-build",

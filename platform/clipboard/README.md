@@ -27,7 +27,7 @@ waterkit = { version = "0.1", features = ["clipboard"] }
 | Platform | Backend |
 | :--- | :--- |
 | **macOS** | `clipboard-rs` (`NSPasteboard`) |
-| **iOS** | `UIPasteboard` (Swift Bridge) |
+| **iOS** | `UIPasteboard` (objc2) |
 | **Android** | `ClipboardManager` (Kotlin/JNI) |
 | **Windows** | `clipboard-rs` (Win32) |
 | **Linux** | `wl-clipboard-rs` (Wayland data-control) in a Wayland session, `x11rb` (X11) otherwise, for CLIPBOARD and PRIMARY alike |

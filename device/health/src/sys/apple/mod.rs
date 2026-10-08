@@ -43,14 +43,8 @@ fn sample_type(data_type: HealthDataType) -> Retained<HKSampleType> {
             // always resolves on a system that links HealthKit.
             HKObjectType::categoryTypeForIdentifier(HKCategoryTypeIdentifierSleepAnalysis)
         }
-        .map(|t| unsafe {
-            // SAFETY: `HKCategoryType` inherits `HKSampleType` — this is an upcast.
-            Retained::cast_unchecked::<HKSampleType>(t)
-        }),
-        _ => quantity_type(data_type).map(|t| unsafe {
-            // SAFETY: `HKQuantityType` inherits `HKSampleType` — this is an upcast.
-            Retained::cast_unchecked::<HKSampleType>(t)
-        }),
+        .map(Retained::into_super),
+        _ => quantity_type(data_type).map(Retained::into_super),
     };
     ty.expect("every HealthDataType identifier is a real HealthKit type")
 }
@@ -133,11 +127,9 @@ fn map_sample(data_type: HealthDataType, sample: &HKSample) -> HealthSample {
             "s",
         )
     } else {
-        // SAFETY: `sample` was queried with the quantity type matching
-        // `data_type`, so it is an `HKQuantitySample`; HealthKit only reports
-        // samples of the requested type.
-        let quantity_sample =
-            unsafe { &*std::ptr::from_ref::<HKSample>(sample).cast::<HKQuantitySample>() };
+        let quantity_sample = sample
+            .downcast_ref::<HKQuantitySample>()
+            .expect("a quantity-type query returns quantity samples");
         let (unit, label) = unit(data_type);
         let mut value = unsafe {
             // SAFETY: `quantity`/`doubleValueForUnit` are safe accessors; the
@@ -180,10 +172,12 @@ pub async fn query_samples(
     let (tx, rx) = futures::channel::oneshot::channel();
     {
         // Everything non-`Send` (the store, the block, the query) is created
-        // and dropped inside this scope; only `rx` crosses the `.await`.
+        // inside this scope and only `rx` crosses the `.await`. The copied
+        // results block retains its own clone of the store, so HealthKit
+        // cannot deallocate it (and possibly cancel the query) before
+        // answering.
         let store = unsafe {
-            // SAFETY: `HKHealthStore` is thread-safe and this thread stays alive
-            // until the query completes (its only reference is held by the query).
+            // SAFETY: `HKHealthStore` is thread-safe.
             HKHealthStore::new()
         };
         let ty = sample_type(data_type);
@@ -199,30 +193,36 @@ pub async fn query_samples(
             )
         };
         let tx = Mutex::new(Some(tx));
-        let block = RcBlock::new(
-            move |_query: NonNull<HKSampleQuery>,
-                  samples: *mut NSArray<HKSample>,
-                  error: *mut NSError| {
-                let result = if !error.is_null() {
-                    // SAFETY: `error` is a non-null pointer to a live `NSError`.
-                    let description = unsafe { &*error }.localizedDescription().to_string();
-                    Err(HealthError::Platform(description))
-                } else if samples.is_null() {
-                    Ok(Vec::new())
-                } else {
-                    // SAFETY: `samples` is a non-null pointer to a live `NSArray`.
-                    let samples: &NSArray<HKSample> = unsafe { &*samples };
-                    Ok(samples
-                        .iter()
-                        .map(|sample| map_sample(data_type, &sample))
-                        .collect())
-                };
-                let tx = tx.lock().expect("results tx poisoned").take();
-                if let Some(tx) = tx {
-                    let _ = tx.send(result);
-                }
-            },
-        );
+        let block = {
+            let store = Retained::clone(&store);
+            RcBlock::new(
+                move |_query: NonNull<HKSampleQuery>,
+                      samples: *mut NSArray<HKSample>,
+                      error: *mut NSError| {
+                    // Keeping `store` alive until the results handler runs is the
+                    // point of this capture.
+                    let _ = &store;
+                    let result = if !error.is_null() {
+                        // SAFETY: `error` is a non-null pointer to a live `NSError`.
+                        let description = unsafe { &*error }.localizedDescription().to_string();
+                        Err(HealthError::Platform(description))
+                    } else if samples.is_null() {
+                        Ok(Vec::new())
+                    } else {
+                        // SAFETY: `samples` is a non-null pointer to a live `NSArray`.
+                        let samples: &NSArray<HKSample> = unsafe { &*samples };
+                        Ok(samples
+                            .iter()
+                            .map(|sample| map_sample(data_type, &sample))
+                            .collect())
+                    };
+                    let tx = tx.lock().expect("results tx poisoned").take();
+                    if let Some(tx) = tx {
+                        let _ = tx.send(result);
+                    }
+                },
+            )
+        };
         let query = unsafe {
             // SAFETY: `block` outlives the call and is only invoked once by
             // HealthKit; `tx` inside it is `Send`, satisfying the sendable
@@ -252,7 +252,8 @@ pub async fn write_sample(sample: HealthSample) -> Result<(), HealthError> {
     let (tx, rx) = futures::channel::oneshot::channel();
     {
         let store = unsafe {
-            // SAFETY: as in `query_samples`.
+            // SAFETY: as in `query_samples`; the copied save block retains a
+            // clone of the store until the completion runs.
             HKHealthStore::new()
         };
         let data_type = sample.data_type();
@@ -312,23 +313,29 @@ pub async fn write_sample(sample: HealthSample) -> Result<(), HealthError> {
             }
         };
         let tx = Mutex::new(Some(tx));
-        let block = RcBlock::new(move |success: Bool, error: *mut NSError| {
-            let result = if !error.is_null() {
-                // SAFETY: `error` is a non-null pointer to a live `NSError`.
-                let description = unsafe { &*error }.localizedDescription().to_string();
-                Err(HealthError::Platform(description))
-            } else if success.as_bool() {
-                Ok(())
-            } else {
-                Err(HealthError::Platform(
-                    "HealthKit save reported failure without an error".into(),
-                ))
-            };
-            let tx = tx.lock().expect("save tx poisoned").take();
-            if let Some(tx) = tx {
-                let _ = tx.send(result);
-            }
-        });
+        let block = {
+            let store = Retained::clone(&store);
+            RcBlock::new(move |success: Bool, error: *mut NSError| {
+                // Keeping `store` alive until the completion runs is the point of
+                // this capture.
+                let _ = &store;
+                let result = if !error.is_null() {
+                    // SAFETY: `error` is a non-null pointer to a live `NSError`.
+                    let description = unsafe { &*error }.localizedDescription().to_string();
+                    Err(HealthError::Platform(description))
+                } else if success.as_bool() {
+                    Ok(())
+                } else {
+                    Err(HealthError::Platform(
+                        "HealthKit save reported failure without an error".into(),
+                    ))
+                };
+                let tx = tx.lock().expect("save tx poisoned").take();
+                if let Some(tx) = tx {
+                    let _ = tx.send(result);
+                }
+            })
+        };
         unsafe {
             // SAFETY: `object` is a live `HKObject`; `block` is invoked once by
             // HealthKit and `tx` is `Send`.

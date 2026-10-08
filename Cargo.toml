@@ -65,6 +65,7 @@ waterkit-passkey = { workspace = true, optional = true }
 waterkit-menu = { workspace = true, optional = true }
 waterkit-otp = { workspace = true, optional = true }
 waterkit-wallet = { workspace = true, optional = true }
+waterkit-store = { workspace = true, optional = true }
 
 [dev-dependencies]
 toml = { workspace = true }
@@ -104,6 +105,7 @@ full = [
     "menu",
     "otp",
     "wallet",
+    "store",
 ]
 permission = ["dep:waterkit-permission"]
 location = ["dep:waterkit-location", "permission"]
@@ -140,6 +142,7 @@ passkey = ["dep:waterkit-passkey"]
 menu = ["dep:waterkit-menu"]
 otp = ["dep:waterkit-otp"]
 wallet = ["dep:waterkit-wallet"]
+store = ["dep:waterkit-store"]
 
 
 [workspace.dependencies]
@@ -195,6 +198,7 @@ waterkit-passkey = { path = "identity/passkey", version = "0.1.4" }
 waterkit-menu = { path = "platform/menu", version = "0.1.4" }
 waterkit-otp = { path = "identity/otp", version = "0.1.4" }
 waterkit-wallet = { path = "platform/wallet", version = "0.1.4" }
+waterkit-store = { path = "platform/store", version = "0.1.4" }
 
 # Cross-platform
 enumset = "1.1"

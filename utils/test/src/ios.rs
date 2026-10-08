@@ -154,6 +154,23 @@ fn report_path(run_id: &str) -> String {
     format!("Documents/waterkit-test-reports/{run_id}.json")
 }
 
+/// The platform Developer frameworks directory of the selected Xcode, when it
+/// exists (`xcode-select -p` + the iPhoneSimulator platform path). The app
+/// needs it as `DYLD_FRAMEWORK_PATH` so `SKTestSession` can find `XCTest`.
+fn simulator_developer_frameworks() -> Option<PathBuf> {
+    let output = Command::new("xcode-select")
+        .arg("--print-path")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let developer_dir = String::from_utf8(output.stdout).ok()?;
+    let frameworks = PathBuf::from(developer_dir.trim())
+        .join("Platforms/iPhoneSimulator.platform/Developer/Library/Frameworks");
+    frameworks.exists().then_some(frameworks)
+}
+
 /// The harness's static library and the native link flags rustc reports for
 /// it.
 struct RustLibrary {
@@ -430,6 +447,12 @@ impl Destination for Simulator {
             "--waterkit-run-test",
             run_id,
         ]);
+        // `SKTestSession` dlopens `XCTest.framework` by leaf path through
+        // StoreKitTest's own rpath, which does not reach the platform's
+        // Developer frameworks; a child `DYLD_FRAMEWORK_PATH` resolves it.
+        if let Some(frameworks) = simulator_developer_frameworks() {
+            launch.env("SIMCTL_CHILD_DYLD_FRAMEWORK_PATH", frameworks);
+        }
         let output = run_with_timeout(launch, RUN_TIMEOUT, "run the harness app on the simulator")?;
         if !output.status.success() {
             eyre::bail!("simctl launch failed with {}", output.status);

@@ -8040,6 +8040,7 @@ dependencies = [
  "waterkit-sensor",
  "waterkit-share",
  "waterkit-speech",
+ "waterkit-store",
  "waterkit-system",
  "waterkit-video",
  "waterkit-vision",
@@ -8842,6 +8843,22 @@ dependencies = [
  "waterkit-core",
  "windows 0.62.2",
  "zbus",
+]
+
+[[package]]
+name = "waterkit-store"
+version = "0.1.4"
+dependencies = [
+ "futures",
+ "jni 0.22.4",
+ "ndk-context",
+ "serde",
+ "serde_json",
+ "swift-bridge",
+ "thiserror 2.0.20",
+ "tracing",
+ "waterkit-build",
+ "waterkit-core",
 ]
 
 [[package]]

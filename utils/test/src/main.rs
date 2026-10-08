@@ -978,6 +978,8 @@ fn get_crate_feature(package_name: &str) -> Option<&'static str> {
         Some("otp")
     } else if package_name.contains("wallet") {
         Some("wallet")
+    } else if package_name.contains("store") {
+        Some("store")
     } else {
         None
     }

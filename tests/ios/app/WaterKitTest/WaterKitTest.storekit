@@ -1,0 +1,146 @@
+{
+  "application" : {
+    "bundleID" : "com.waterkit.test"
+  },
+  "identifier" : "WATERKITTEST",
+  "locale" : "en_US",
+  "nonRenewableSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "0.99",
+      "familyShareable" : false,
+      "internalID" : "WATERKITTESTCOINS",
+      "localizations" : [
+        {
+          "description" : "A bag of test coins.",
+          "displayName" : "Coins",
+          "locale" : "en_US",
+          "price" : "0.99"
+        }
+      ],
+      "productID" : "waterkit.test.coins",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "9.99",
+      "familyShareable" : false,
+      "internalID" : "WATERKITTESTPRO",
+      "localizations" : [
+        {
+          "description" : "Unlocks the test Pro tier.",
+          "displayName" : "Pro",
+          "locale" : "en_US",
+          "price" : "9.99"
+        }
+      ],
+      "productID" : "waterkit.test.pro",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+    "_applicationInternalID" : "WATERKITTESTAPP",
+    "_developerTeamID" : "WATERKIT",
+    "_failTransactionsEnabled" : false,
+    "_lastSynchronizedDate" : 774500000,
+    "_retrievedProductIds" : [
+
+    ],
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Load Products"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Purchase"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Verification"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Store Sync"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Subscription Status"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Transaction"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Manage Subscriptions Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Refund Request Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Offer Code Redeem Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Family Share"
+      }
+    ]
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "WATERKITTESTGROUP",
+      "localizations" : [
+
+      ],
+      "name" : "Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "4.99",
+          "familyShareable" : false,
+          "groupID" : "WATERKITTESTGROUP",
+          "groupNumber" : 1,
+          "internalID" : "WATERKITTESTSUB",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Renews every month in test time.",
+              "displayName" : "Pro Monthly",
+              "locale" : "en_US",
+              "price" : "4.99"
+            }
+          ],
+          "productID" : "waterkit.test.sub",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Pro Monthly",
+          "subscriptionGroupID" : "WATERKITTESTGROUP",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}

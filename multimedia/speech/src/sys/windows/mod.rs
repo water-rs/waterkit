@@ -25,7 +25,11 @@ impl TtsInner {
         Ok(Self { synth })
     }
 
-    pub fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the async signature is part of the crate API surface and other platforms await here"
+    )]
+    pub async fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
         let _ = self;
         let voices =
             SpeechSynthesizer::AllVoices().map_err(|e| SpeechError::Platform(e.to_string()))?;
@@ -59,7 +63,11 @@ impl TtsInner {
         let _ = self;
     }
 
-    pub const fn is_speaking(&self) -> bool {
+    #[expect(
+        clippy::unused_async,
+        reason = "the async signature is part of the crate API surface and other platforms await here"
+    )]
+    pub async fn is_speaking(&self) -> bool {
         let _ = self;
         false
     }

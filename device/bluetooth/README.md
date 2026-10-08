@@ -14,7 +14,7 @@ Part of the [Waterkit](https://github.com/water-rs/waterkit) ecosystem.
 
 | Platform | Status |
 |----------|--------|
-| iOS      | Native BLE (CoreBluetooth via Swift bridge); Classic/SPP not available |
+| iOS      | Native BLE (CoreBluetooth); Classic/SPP not available |
 | macOS    | Native BLE (CoreBluetooth) + Classic/SPP (IOBluetooth) |
 | Android  | Native (BluetoothAdapter via JNI/Kotlin) |
 | Windows  | Native (Windows.Devices.Bluetooth) |

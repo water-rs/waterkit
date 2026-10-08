@@ -20,7 +20,33 @@ futures-core = "0.3"
 async-channel = { workspace = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
+objc2 = { workspace = true }
+objc2-core-bluetooth = { workspace = true, features = [
+    "std",
+    "CBAttribute",
+    "CBAdvertisementData",
+    "CBCentralManager",
+    "CBCentralManagerConstants",
+    "CBCharacteristic",
+    "CBManager",
+    "CBPeer",
+    "CBPeripheral",
+    "CBService",
+    "CBUUID",
+    "bitflags",
+    "dispatch2",
+] }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSError",
+    "NSValue",
+    "NSObject",
+    "NSString",
+    "NSUUID",
+] }
+dispatch2 = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
@@ -46,10 +72,23 @@ windows = { workspace = true, features = [
 libc = "0.2"
 zbus.workspace = true
 
-[build-dependencies]
-waterkit-build.workspace = true
-
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/BluetoothHelper.kt", "src/sys/android/BleScanBridgeCallback.kt", "src/sys/android/BleGattBridgeCallback.kt", "src/sys/android/ClassicDiscoveryBridgeCallback.kt"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-io-bluetooth = { workspace = true, features = [
+    "Bluetooth",
+    "IOBluetoothDevice",
+    "IOBluetoothDeviceInquiry",
+    "IOBluetoothObject",
+    "IOBluetoothRFCOMMChannel",
+    "IOBluetoothSDPServiceRecord",
+    "IOBluetoothSDPUUID",
+    "IOBluetoothTypes",
+    "IOBluetoothUserLib",
+    "objc2",
+    "objc2-foundation",
+    "std",
+] }

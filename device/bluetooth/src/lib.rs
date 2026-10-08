@@ -269,17 +269,25 @@ impl BleConnection {
     /// # Errors
     /// Returns error if subscription fails.
     #[allow(clippy::future_not_send)]
+    #[expect(
+        clippy::unused_async,
+        reason = "API parity: other platform impls complete asynchronously"
+    )]
     pub async fn subscribe(
         &self,
         service: &Uuid,
         characteristic: &Uuid,
     ) -> Result<impl futures_core::Stream<Item = Vec<u8>> + Send + 'static, BluetoothError> {
-        self.inner.subscribe(service, characteristic).await
+        self.inner.subscribe(service, characteristic)
     }
 
     /// Disconnect from the peripheral.
+    #[expect(
+        clippy::unused_async,
+        reason = "API parity: other platform impls complete asynchronously"
+    )]
     pub async fn disconnect(self) {
-        self.inner.disconnect().await;
+        self.inner.disconnect();
     }
 }
 
@@ -319,24 +327,36 @@ impl ClassicBluetooth {
     ///
     /// # Errors
     /// Returns error if discovery cannot be started.
+    #[expect(
+        clippy::unused_async,
+        reason = "API parity: other platform impls complete asynchronously"
+    )]
     pub async fn start_discovery(
         &self,
     ) -> Result<impl futures_core::Stream<Item = ClassicDevice> + Send + 'static, BluetoothError>
     {
-        self.inner.start_discovery().await
+        self.inner.start_discovery()
     }
 
     /// Stop device discovery.
+    #[expect(
+        clippy::unused_async,
+        reason = "API parity: other platform impls complete asynchronously"
+    )]
     pub async fn stop_discovery(&self) {
-        self.inner.stop_discovery().await;
+        self.inner.stop_discovery();
     }
 
     /// Get list of paired/bonded devices.
     ///
     /// # Errors
     /// Returns error if the list cannot be retrieved.
+    #[expect(
+        clippy::unused_async,
+        reason = "API parity: other platform impls complete asynchronously"
+    )]
     pub async fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {
-        self.inner.paired_devices().await
+        self.inner.paired_devices()
     }
 
     /// Open an SPP (Serial Port Profile) connection to a device.
@@ -380,8 +400,12 @@ impl SppStream {
     }
 
     /// Close the SPP connection.
+    #[expect(
+        clippy::unused_async,
+        reason = "API parity: other platform impls complete asynchronously"
+    )]
     pub async fn close(self) {
-        self.inner.close().await;
+        self.inner.close();
     }
 }
 

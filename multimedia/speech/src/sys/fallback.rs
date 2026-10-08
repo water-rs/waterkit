@@ -22,7 +22,11 @@ impl TtsInner {
         Err(SpeechError::Unsupported)
     }
 
-    pub fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the async signature is part of the crate API surface and other platforms await here"
+    )]
+    pub async fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
         Err(SpeechError::Unsupported)
     }
 
@@ -33,7 +37,11 @@ impl TtsInner {
 
     pub fn stop(&self) {}
 
-    pub fn is_speaking(&self) -> bool {
+    #[expect(
+        clippy::unused_async,
+        reason = "the async signature is part of the crate API surface and other platforms await here"
+    )]
+    pub async fn is_speaking(&self) -> bool {
         false
     }
 }

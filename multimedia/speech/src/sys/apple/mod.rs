@@ -1,13 +1,13 @@
 //! Speech synthesis via `AVFAudio` and speech recognition via the `Speech`
 //! framework, called through `objc2`.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use dispatch2::{MainThreadBound, run_on_main};
+use dispatch2::{DispatchQueue, MainThreadBound};
 use futures::channel::oneshot;
 use objc2::rc::Retained;
 use objc2::runtime::{NSObject, ProtocolObject};
-use objc2::{AnyThread, DefinedClass, define_class, msg_send};
+use objc2::{AnyThread, DefinedClass, MainThreadMarker, define_class, msg_send};
 use objc2_avf_audio::{
     AVSpeechBoundary, AVSpeechSynthesisVoice, AVSpeechSynthesizer, AVSpeechSynthesizerDelegate,
     AVSpeechUtterance, AVSpeechUtteranceDefaultSpeechRate,
@@ -15,6 +15,27 @@ use objc2_avf_audio::{
 use objc2_foundation::{NSObjectProtocol, NSString};
 
 use crate::{SpeechError, TtsConfig, Voice};
+
+/// Runs `work` on the main queue: inline when the caller is already on the
+/// main thread, otherwise by `exec_async` with the result carried back
+/// through a oneshot. Never blocks the caller.
+async fn on_main<R, F>(work: F) -> R
+where
+    R: Send + 'static,
+    F: FnOnce(MainThreadMarker) -> R + Send + 'static,
+{
+    if let Some(mtm) = MainThreadMarker::new() {
+        work(mtm)
+    } else {
+        let (tx, rx) = oneshot::channel();
+        DispatchQueue::main().exec_async(move || {
+            let mtm = MainThreadMarker::new().expect("exec_async runs on the main queue");
+            drop(tx.send(work(mtm)));
+        });
+        rx.await
+            .expect("the exec_async worker sends before it exits")
+    }
+}
 
 /// ivars of [`SpeechUtteranceDelegate`].
 pub struct SpeechUtteranceDelegateIvars {
@@ -84,36 +105,30 @@ impl SpeechUtteranceDelegate {
 pub struct TtsInner {
     /// The one synthesizer the engine owns, confined to the main thread
     /// (`AVSpeechSynthesizer` is not `Send`/`Sync`, and `MainThreadBound`
-    /// keeps this struct `Send + Sync` like the previous zero-sized wrapper).
-    synthesizer: MainThreadBound<Retained<AVSpeechSynthesizer>>,
+    /// keeps this struct `Send + Sync` like the previous zero-sized wrapper);
+    /// the `Arc` lets 'static main-queue hops own a share.
+    synthesizer: Arc<MainThreadBound<Retained<AVSpeechSynthesizer>>>,
 }
 
 impl TtsInner {
-    #[expect(
-        clippy::unused_async,
-        reason = "the async signature is part of the crate API surface and other platforms await here"
-    )]
     pub async fn new() -> Result<Self, SpeechError> {
         // The previous implementation reported success unconditionally.
         // SAFETY: `AVSpeechSynthesizer::new` is `[[AVSpeechSynthesizer alloc]
         // init]` with no invariants; it is created on the main thread so the
         // `MainThreadBound` marker is honest.
         Ok(Self {
-            synthesizer: run_on_main(|mtm| {
-                MainThreadBound::new(unsafe { AVSpeechSynthesizer::new() }, mtm)
-            }),
+            synthesizer: Arc::new(
+                on_main(|mtm| MainThreadBound::new(unsafe { AVSpeechSynthesizer::new() }, mtm))
+                    .await,
+            ),
         })
     }
 
     #[expect(
-        clippy::unused_self,
-        reason = "the voice list is a class accessor that does not need the synthesizer"
+        clippy::unused_async,
+        reason = "the async signature is part of the crate API surface and other platforms await here"
     )]
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "the Result is part of the crate API surface and other platforms do fail here"
-    )]
-    pub fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
+    pub async fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
         // SAFETY: `speechVoices` is a class accessor with no invariants; each
         // voice property is a read-only accessor on a live object.
         Ok(unsafe { AVSpeechSynthesisVoice::speechVoices() }
@@ -131,9 +146,12 @@ impl TtsInner {
         // Building the utterance and installing the delegate happens on the
         // main thread so `!Send` Objective-C objects never live across an
         // `await` point.
-        let receiver = run_on_main(|mtm| {
-            let synthesizer = self.synthesizer.get(mtm);
-            let string = NSString::from_str(text);
+        let synthesizer = Arc::clone(&self.synthesizer);
+        let text = text.to_owned();
+        let config = config.clone();
+        let receiver = on_main(move |mtm| {
+            let synthesizer = synthesizer.get(mtm);
+            let string = NSString::from_str(&text);
             // SAFETY: `initWithString:` is the designated initializer;
             // `string` is a live `NSString`.
             let utterance =
@@ -163,44 +181,50 @@ impl TtsInner {
             // SAFETY: both objects are live.
             unsafe { synthesizer.speakUtterance(&utterance) };
             receiver
-        });
+        })
+        .await;
         receiver
             .await
             .map_err(|_| SpeechError::Platform("speech callback dropped".into()))?
     }
 
     pub fn stop(&self) {
-        run_on_main(|mtm| {
+        let synthesizer = Arc::clone(&self.synthesizer);
+        DispatchQueue::main().exec_async(move || {
+            let mtm = MainThreadMarker::new().expect("exec_async runs on the main queue");
             // SAFETY: the synthesizer is live; the returned bool only reports
             // whether speech was stopped mid-utterance, which callers ignore.
             unsafe {
-                self.synthesizer
+                synthesizer
                     .get(mtm)
                     .stopSpeakingAtBoundary(AVSpeechBoundary::Immediate);
             }
         });
     }
 
-    pub fn is_speaking(&self) -> bool {
+    pub async fn is_speaking(&self) -> bool {
+        let synthesizer = Arc::clone(&self.synthesizer);
         // SAFETY: the synthesizer is live.
-        run_on_main(|mtm| unsafe { self.synthesizer.get(mtm).isSpeaking() })
+        on_main(move |mtm| unsafe { synthesizer.get(mtm).isSpeaking() }).await
     }
 }
 
 #[cfg(target_os = "ios")]
 mod recognition {
     use std::ptr::NonNull;
+    use std::sync::Arc;
 
     use block2::RcBlock;
-    use dispatch2::{MainThreadBound, run_on_main};
-    use objc2::AnyThread;
+    use dispatch2::{DispatchQueue, MainThreadBound};
     use objc2::rc::Retained;
+    use objc2::{AnyThread, MainThreadMarker};
     use objc2_avf_audio::{AVAudioEngine, AVAudioInputNode, AVAudioPCMBuffer, AVAudioTime};
     use objc2_foundation::{NSError, NSLocale, NSString};
     use objc2_speech::{
         SFSpeechAudioBufferRecognitionRequest, SFSpeechRecognitionTask, SFSpeechRecognizer,
     };
 
+    use super::on_main;
     use crate::{RecognitionConfig, RecognitionResult, SpeechError};
 
     /// `SFSpeechRecognizer()?.isAvailable ?? false`, one-to-one.
@@ -224,29 +248,26 @@ mod recognition {
     /// A running recognition session.
     #[derive(Debug)]
     pub struct SpeechRecognizerInner {
-        session: MainThreadBound<SessionState>,
+        session: Arc<MainThreadBound<SessionState>>,
     }
 
     impl SpeechRecognizerInner {
-        #[expect(
-            clippy::unused_async,
-            reason = "the async signature is part of the crate API surface and other platforms await here"
-        )]
         pub async fn start(
             config: RecognitionConfig,
         ) -> Result<(Self, async_channel::Receiver<RecognitionResult>), SpeechError> {
             if !recognition_is_available() {
                 return Err(SpeechError::NotAvailable);
             }
-            Self::start_inner(&config)
+            on_main(move |mtm| Self::start_inner(mtm, &config)).await
         }
 
         /// All of it on the main thread: `AVAudioEngine`/`SFSpeechRecognizer`
         /// objects are `!Send` and must not live across `await`.
         fn start_inner(
+            mtm: MainThreadMarker,
             config: &RecognitionConfig,
         ) -> Result<(Self, async_channel::Receiver<RecognitionResult>), SpeechError> {
-            run_on_main(|mtm| {
+            {
                 let locale =
                     config
                         .language
@@ -366,23 +387,25 @@ mod recognition {
 
                 Ok((
                     Self {
-                        session: MainThreadBound::new(
+                        session: Arc::new(MainThreadBound::new(
                             SessionState {
                                 engine,
                                 input,
                                 task,
                             },
                             mtm,
-                        ),
+                        )),
                     },
                     result_rx,
                 ))
-            })
+            }
         }
 
         pub fn stop(&self) {
-            run_on_main(|mtm| {
-                let state = self.session.get(mtm);
+            let session = Arc::clone(&self.session);
+            DispatchQueue::main().exec_async(move || {
+                let mtm = MainThreadMarker::new().expect("exec_async runs on the main queue");
+                let state = session.get(mtm);
                 // SAFETY: all three objects are live; `cancel` ends the task
                 // and its callbacks.
                 unsafe {

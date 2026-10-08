@@ -132,6 +132,13 @@ impl Preparation for AppleImage {
                     frame.orientation().exif(),
                 )
             }
+            Pixels::PixelBuffer {
+                buffer,
+                orientation,
+            } => ffi::vision_handler_pixel_buffer(
+                objc2_core_foundation::CFRetained::as_ptr(&buffer.0).as_ptr() as usize,
+                orientation.exif(),
+            ),
             Pixels::Encoded(bytes) => ffi::vision_handler_data(Vec::from(bytes.as_ref()), 0),
         };
         if handler == 0 {

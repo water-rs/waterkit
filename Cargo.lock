@@ -8248,6 +8248,7 @@ dependencies = [
  "roxmltree",
  "thiserror 2.0.20",
  "waterkit-build",
+ "waterkit-core",
  "waterkit-fs",
 ]
 

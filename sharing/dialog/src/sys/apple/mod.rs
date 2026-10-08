@@ -2,7 +2,7 @@
 //! through `objc2`.
 //!
 //! All presentation happens on the main queue, matching the original
-//! `DispatchQueue.main.async` hops. Delegate objects are `define_class!`
+//! `waterkit_core::apple::on_main` hops. Delegate objects are `define_class!`
 //! ivars-owning Rust senders; a delegate keeps itself alive for its
 //! presentation through a `keep_alive` self-retain cleared on completion —
 //! the role the old static `activeDelegates` registry filled. A picked
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use block2::RcBlock;
-use dispatch2::{DispatchQueue, MainThreadBound};
+use dispatch2::MainThreadBound;
 use futures::channel::oneshot;
 use objc2::Message as _;
 use objc2::rc::{Allocated, Retained};
@@ -115,27 +115,6 @@ fn has_ut_types() -> bool {
     })
 }
 
-/// Runs `work` on the main queue: inline when already there, otherwise via
-/// `exec_async` with a oneshot carrying the result back to the awaiting
-/// caller. (Same contract as the upcoming `waterkit_core::apple::on_main`.)
-async fn run_on_main_queue<T, F>(work: F) -> T
-where
-    T: Send + 'static,
-    F: FnOnce(MainThreadMarker) -> T + Send + 'static,
-{
-    if let Some(mtm) = MainThreadMarker::new() {
-        return work(mtm);
-    }
-    let (sender, receiver) = oneshot::channel();
-    DispatchQueue::main().exec_async(move || {
-        let mtm = MainThreadMarker::new().expect("the main queue only runs on the main thread");
-        let _ = sender.send(work(mtm));
-    });
-    receiver
-        .await
-        .expect("the main queue dropped the work item before it ran")
-}
-
 /// `getTopViewController()` — the key window's topmost presented view
 /// controller, falling back to the app delegate's window.
 fn top_view_controller(mtm: MainThreadMarker) -> Option<Retained<UIViewController>> {
@@ -181,7 +160,7 @@ fn alert_controller(dialog: &Dialog, mtm: MainThreadMarker) -> Retained<UIAlertC
 }
 
 pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
-    run_on_main_queue(move |mtm| {
+    waterkit_core::apple::on_main(move |mtm| {
         let Some(top) = top_view_controller(mtm) else {
             return;
         };
@@ -204,7 +183,7 @@ pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
     // The sender is shared by the OK and Cancel actions; whichever fires
     // first delivers the answer.
     let sender = Arc::new(Mutex::new(Some(sender)));
-    run_on_main_queue(move |mtm| {
+    waterkit_core::apple::on_main(move |mtm| {
         let Some(top) = top_view_controller(mtm) else {
             let _ = sender.lock().expect("confirm sender lock").take();
             return;
@@ -411,7 +390,7 @@ impl FilePickerDelegate {
 
 pub async fn show_photo_picker(media_type: MediaType) -> Result<Option<Selection>, DialogError> {
     let (sender, receiver) = oneshot::channel();
-    run_on_main_queue(move |mtm| {
+    waterkit_core::apple::on_main(move |mtm| {
         let Some(top) = top_view_controller(mtm) else {
             let _ = sender.send(None);
             return;
@@ -481,7 +460,7 @@ async fn present_document_picker(
 ) -> Result<Option<Vec<PathBuf>>, DialogError> {
     let extensions = collect_filter_extensions(dialog);
     let (sender, receiver) = oneshot::channel();
-    run_on_main_queue(move |mtm| {
+    waterkit_core::apple::on_main(move |mtm| {
         let Some(top) = top_view_controller(mtm) else {
             let _ = sender.send(None);
             return;
@@ -617,7 +596,7 @@ fn copy_to_temporary_location(
 async fn load_single_media(
     provider: Arc<MainThreadBound<Retained<NSItemProvider>>>,
 ) -> Option<LoadedMedia> {
-    let receiver = run_on_main_queue(move |mtm| {
+    let receiver = waterkit_core::apple::on_main(move |mtm| {
         let provider = provider.get(mtm);
         let movie_identifier = UTType::typeWithIdentifier(&NSString::from_str("public.movie"))
             .map(|ty| ty.identifier().to_string());
@@ -638,9 +617,13 @@ async fn load_single_media(
         let sender = RefCell::new(Some(sender));
         let suggested_name = provider.suggestedName().as_deref().map(ToString::to_string);
         let type_identifier_ns = NSString::from_str(type_identifier.as_deref().unwrap_or_default());
-        // The completion block fires on an NSItemProvider-private queue;
-        // only Send data crosses it (the sender and the copied path).
+        let provider_clone = provider.clone();
+        // The block owns a clone of the provider so the request's target
+        // outlives the framework call; the completion fires on an
+        // NSItemProvider-private queue and only Send data crosses it (the
+        // sender and the copied path).
         let handler = RcBlock::new(move |url: *mut NSURL, error: *mut NSError| {
+            let _provider = &provider_clone;
             let path = (!url.is_null() && error.is_null())
                 .then(|| {
                     // SAFETY: `url` is non-null for the duration of the
@@ -657,7 +640,8 @@ async fn load_single_media(
             }
         });
         // SAFETY: `loadFileRepresentation` may run its handler on a private
-        // queue; the block captures only Send state.
+        // queue; the block captures only Send state besides the provider
+        // clone it owns.
         unsafe {
             provider.loadFileRepresentationForTypeIdentifier_completionHandler(
                 &type_identifier_ns,
@@ -715,26 +699,34 @@ fn write_asset_resource(
     };
     let destination = temporary_destination_url(None, Some(&file_name), Some(&type_identifier));
     let destination_path = destination.path().map(|path| path.to_string().into());
-    let handler = RcBlock::new(move |error: *mut NSError| {
-        if let Some(sender) = sender.borrow_mut().take() {
-            let _ = sender.send(if error.is_null() {
-                destination_path.clone()
-            } else {
-                None
-            });
-        }
-    });
+    // SAFETY: `defaultManager` returns the shared process manager.
+    let manager = unsafe { PHAssetResourceManager::defaultManager() };
+    // The block owns a clone of the manager so the request's target lives
+    // until the framework answers; the completion fires on a private queue
+    // and only Send data crosses it (the sender and the destination path).
+    let handler = {
+        let manager = manager.clone();
+        RcBlock::new(move |error: *mut NSError| {
+            let _manager = &manager;
+            if let Some(sender) = sender.borrow_mut().take() {
+                let _ = sender.send(if error.is_null() {
+                    destination_path.clone()
+                } else {
+                    None
+                });
+            }
+        })
+    };
     // SAFETY: `writeDataForAssetResource:toFile:options:completionHandler:`
     // runs its handler on a private queue; the block captures only Send
-    // state.
+    // state besides the manager clone it owns.
     unsafe {
-        PHAssetResourceManager::defaultManager()
-            .writeDataForAssetResource_toFile_options_completionHandler(
-                resource,
-                &destination,
-                Some(options),
-                &handler,
-            );
+        manager.writeDataForAssetResource_toFile_options_completionHandler(
+            resource,
+            &destination,
+            Some(options),
+            &handler,
+        );
     }
     receiver
 }
@@ -744,7 +736,7 @@ fn write_asset_resource(
 /// the two completions into the `LoadedLivePhoto` pair.
 async fn load_live_photo(selection: &Selection) -> Option<LoadedMedia> {
     let asset_identifier = selection.asset_identifier.clone()?;
-    let (image_rx, video_rx) = run_on_main_queue(move |mtm| {
+    let (image_rx, video_rx) = waterkit_core::apple::on_main(move |mtm| {
         let _ = mtm;
         let identifiers = NSArray::from_retained_slice(&[NSString::from_str(&asset_identifier)]);
         // SAFETY: `fetchAssetsWithLocalIdentifiers:options:` is a read-only

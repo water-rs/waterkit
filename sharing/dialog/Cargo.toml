@@ -21,6 +21,7 @@ roxmltree = "0.21"
 
 # iOS - native dialogs/pickers through objc2
 [target.'cfg(target_os = "ios")'.dependencies]
+waterkit-core.workspace = true
 block2 = "0.6"
 dispatch2.workspace = true
 objc2.workspace = true

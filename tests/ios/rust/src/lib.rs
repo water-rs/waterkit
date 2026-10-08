@@ -87,7 +87,7 @@ const RECORDERS: &[Recorder] = &[
     #[cfg(feature = "fs")]
     |h| record_fs(&mut h.report),
     #[cfg(feature = "haptic")]
-    |h| record_haptic(&mut h.report),
+    |h| h.runtime.block_on(record_haptic(&mut h.report)),
     #[cfg(feature = "notification")]
     |h| {
         h.report.push(TestCase::skipped(
@@ -390,8 +390,8 @@ fn record_fs(report: &mut TestReport) {
 }
 
 #[cfg(feature = "haptic")]
-fn record_haptic(report: &mut TestReport) {
-    match waterkit::haptic::Haptic::notification_success() {
+async fn record_haptic(report: &mut TestReport) {
+    match waterkit::haptic::Haptic::notification_success().await {
         Ok(()) => report.push(TestCase::passed("haptic.notification_success")),
         Err(waterkit::haptic::HapticError::Unsupported) => report.push(TestCase::skipped(
             "haptic.notification_success",

@@ -14,8 +14,8 @@ Part of the [Waterkit](https://github.com/water-rs/waterkit) ecosystem.
 
 | Platform | Status |
 |----------|--------|
-| iOS      | Native (UIActivityViewController via Swift bridge) |
-| macOS    | Native (NSSharingServicePicker via Swift bridge) |
+| iOS      | Native (UIActivityViewController via objc2) |
+| macOS    | Native (NSSharingServicePicker via objc2) |
 | Android  | Native (Intent.ACTION_SEND via JNI/Kotlin) |
 | Windows  | Native (Windows.ApplicationModel.DataTransfer) |
 | Linux    | D-Bus / xdg-open |

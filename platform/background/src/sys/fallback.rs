@@ -49,9 +49,8 @@ pub fn capabilities() -> BackgroundCapabilities {
     BackgroundCapabilities::default()
 }
 
-pub fn complete_task(
-    _handle: &TaskHandle,
-    _success: bool,
-) -> impl core::future::Future<Output = Result<(), BackgroundError>> {
-    core::future::ready(Err(BackgroundError::Unsupported))
+// The per-platform sys contract is async; this body only returns an error.
+#[allow(clippy::unused_async)]
+pub async fn complete_task(_handle: &TaskHandle, _success: bool) -> Result<(), BackgroundError> {
+    Err(BackgroundError::Unsupported)
 }

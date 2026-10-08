@@ -18,7 +18,10 @@ use std::sync::Arc;
 use futures::channel::oneshot;
 use jni::objects::{Global, JClass, JObject, JValue, JValueOwned};
 use jni::{Env, jni_sig, jni_str};
-use waterkit_build::{DexHelper, describe_jni_error, dex_helper, with_android_context};
+use waterkit_build::{
+    AndroidError, DexHelper, FromJava, NativeCallback, describe_jni_error, dex_helper,
+    with_android_context,
+};
 
 use crate::{
     Orientation, VisionError,
@@ -56,7 +59,7 @@ pub const MODULE_JAPANESE: i32 = 3;
 pub const MODULE_KOREAN: i32 = 4;
 
 /// Runs `work` with the Android context on a dedicated thread, so the JNI
-/// calls and the helper's `Tasks.await` never block the awaiting task.
+/// calls and the bitmap decode/readback never block the awaiting task.
 pub async fn on_vision_thread<T, F>(label: &'static str, work: F) -> Result<T, VisionError>
 where
     T: Send + 'static,
@@ -74,31 +77,59 @@ where
         .map_err(|_| VisionError::Platform(format!("{label} thread died")))?
 }
 
+/// The `prepareModule` callback's payload: `null`, the helper's signal
+/// that the module is ready to serve requests.
+struct ModuleReady;
+
+impl FromJava for ModuleReady {
+    fn from_java(_env: &mut Env<'_>, object: &JObject<'_>) -> Result<Self, AndroidError> {
+        if object.is_null() {
+            Ok(Self)
+        } else {
+            Err(AndroidError::from(jni::errors::Error::WrongObjectType))
+        }
+    }
+}
+
 /// Installs `helper`'s module `module` — the barcode engine or a script's
 /// recognizer — when Play services does not already have it.
+///
+/// The install answers through a `NativeCallback` the helper completes
+/// from the tasks' listeners, so this resolves when Play services answers
+/// and nothing is parked waiting.
 ///
 /// # Errors
 ///
 /// Returns [`VisionError::ModelUnavailable`] when the module install fails.
-pub fn prepare_module(
-    env: &mut Env<'_>,
-    context: &JObject<'_>,
-    helper: &DexHelper,
-    module: i32,
-) -> Result<(), VisionError> {
-    let class = helper.class(env, context)?;
-    env.call_static_method(
-        class,
-        jni_str!("prepareModule"),
-        jni_sig!("(Landroid/content/Context;I)V"),
-        &[JValue::Object(context), JValue::Int(module)],
-    )
-    .map_err(|error| {
-        VisionError::ModelUnavailable(format!(
-            "module {module} install: {}",
-            describe_jni_error(env, error)
-        ))
+pub async fn prepare_module(helper: &DexHelper, module: i32) -> Result<(), VisionError> {
+    let rx = with_android_context(|env, context| -> Result<_, VisionError> {
+        let class = helper.class(env, context)?;
+        let (callback, rx) = NativeCallback::<ModuleReady>::new(env)?;
+        env.call_static_method(
+            class,
+            jni_str!("prepareModule"),
+            jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeCallback;I)V"),
+            &[
+                JValue::Object(context),
+                JValue::Object(callback.as_obj()),
+                JValue::Int(module),
+            ],
+        )
+        .map_err(|error| {
+            VisionError::ModelUnavailable(format!(
+                "module {module} install: {}",
+                describe_jni_error(env, error)
+            ))
+        })?;
+        Ok(rx)
     })?;
+    rx.await
+        .map_err(|_| {
+            VisionError::ModelUnavailable(String::from(
+                "the module-install callback was collected unanswered",
+            ))
+        })?
+        .map_err(|error| VisionError::ModelUnavailable(error.to_string()))?;
     Ok(())
 }
 

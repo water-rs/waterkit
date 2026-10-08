@@ -18,9 +18,6 @@ import java.io.ByteArrayInputStream
  * both `feature.*` kotlin-sources lists, where it deduplicates by name.
  */
 object MlKitInput {
-    internal const val DETECTION_TIMEOUT_MS = 30_000L
-    internal const val INSTALL_TIMEOUT_MS = 120_000L
-
     /** Wraps a camera analysis frame's `android.media.Image`; no pixel copy. */
     @JvmStatic
     fun mediaInput(image: Image, rotationDegrees: Int): InputImage =

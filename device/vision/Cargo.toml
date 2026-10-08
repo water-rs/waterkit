@@ -76,7 +76,12 @@ waterkit-build.workspace = true
 # The `DetectBarcodes` request: Apple Vision's `DetectBarcodesRequest` on
 # iOS/macOS, ML Kit's barcode engine on Android. The `Barcode`/`Payload`/
 # `Symbology` vocabulary compiles unconditionally for the system scanner.
-barcode = ["dep:jni", "dep:ndk-context", "dep:waterkit-build"]
+barcode = [
+    "dep:jni",
+    "dep:ndk-context",
+    "dep:waterkit-build",
+    "waterkit-build/native-callback",
+]
 # `RecognizeText`: Windows.Media.Ocr on Windows, Apple Vision's
 # `RecognizeTextRequest` on iOS/macOS, ML Kit's script recognizers on
 # Android.
@@ -87,6 +92,7 @@ text = [
     "dep:jni",
     "dep:ndk-context",
     "dep:waterkit-build",
+    "waterkit-build/native-callback",
 ]
 # `RecognizeDocument`: a document's paragraphs, tables, lists and barcodes.
 # A paragraph reports [`TextLine`]s, so the capability builds on `text`.

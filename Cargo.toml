@@ -245,6 +245,8 @@ objc2-image-io = { version = "0.3", default-features = false }
 objc2-io-surface = "0.3"
 objc2-local-authentication = { version = "0.3", default-features = false }
 objc2-metal = "0.3"
+objc2-pass-kit = { version = "0.3", default-features = false }
+objc2-ui-kit = { version = "0.3", default-features = false }
 objc = "0.2"
 # Zero-copy import of platform frame buffers into wgpu textures.
 wgpu-external-frame = "0.3.0"

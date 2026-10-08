@@ -230,6 +230,7 @@ core-foundation = "0.10"
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-av-foundation = { version = "0.3", default-features = false }
+objc2-av-kit = { version = "0.3", default-features = false }
 objc2-contacts = { version = "0.3", default-features = false }
 objc2-core-graphics = { version = "0.3", default-features = false }
 objc2-core-bluetooth = { version = "0.3", default-features = false }
@@ -260,6 +261,7 @@ objc2-metal = "0.3"
 objc2-core-motion = { version = "0.3", default-features = false }
 objc2-core-nfc = { version = "0.3", default-features = false }
 objc2-io-kit = { version = "0.3", default-features = false }
+objc2-quartz-core = { version = "0.3", default-features = false }
 objc2-pass-kit = { version = "0.3", default-features = false }
 objc2-speech = { version = "0.3", default-features = false }
 objc2-photos-ui = { version = "0.3", default-features = false }

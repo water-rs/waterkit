@@ -4657,11 +4657,23 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-core-image 0.3.2",
+ "objc2-core-media",
  "objc2-core-video",
  "objc2-foundation 0.3.2",
  "objc2-image-io",
  "objc2-media-toolbox",
  "objc2-quartz-core 0.3.2",
+]
+
+[[package]]
+name = "objc2-av-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15b375b013b8a710c67770ca8b45993f0fc22ad7a4ff88e95101b1efbc0b7de4"
+dependencies = [
+ "objc2 0.6.4",
+ "objc2-av-foundation",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -8923,18 +8935,30 @@ version = "0.1.4"
 dependencies = [
  "aes",
  "async-channel",
+ "block2 0.6.2",
  "bytes",
  "cbc",
+ "core-foundation 0.10.1",
+ "dispatch2",
  "futures",
  "jni 0.22.4",
  "ndk-context",
  "num-traits",
- "swift-bridge",
+ "objc2 0.6.4",
+ "objc2-av-foundation",
+ "objc2-av-kit",
+ "objc2-core-foundation",
+ "objc2-core-media",
+ "objc2-core-video",
+ "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
+ "objc2-quartz-core 0.3.2",
  "tracing",
  "transmux",
  "waterkit-audio",
  "waterkit-build",
  "waterkit-codec",
+ "waterkit-core",
  "waterkit-video-container",
  "waterkit-video-core",
  "waterkit-video-streaming",

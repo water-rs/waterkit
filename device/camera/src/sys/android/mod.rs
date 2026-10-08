@@ -1440,8 +1440,12 @@ impl CameraInner {
         &self.capabilities
     }
 
-    #[allow(clippy::too_many_lines)]
-    pub fn apply_controls(&mut self, controls: &CameraControls) -> Result<(), CameraError> {
+    #[expect(clippy::too_many_lines)]
+    #[expect(
+        clippy::unused_async,
+        reason = "the Android backend applies controls over JNI synchronously"
+    )]
+    pub async fn apply_controls(&mut self, controls: &CameraControls) -> Result<(), CameraError> {
         if let Some(ref exposure) = controls.exposure {
             if exposure.mode != ExposureMode::Auto {
                 return Err(CameraError::ControlUnsupported(
@@ -1677,7 +1681,11 @@ impl CameraInner {
         })
     }
 
-    pub fn start_recording(&mut self, path: &Path) -> Result<(), CameraError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the Android backend starts recording over JNI synchronously"
+    )]
+    pub async fn start_recording(&mut self, path: &Path) -> Result<(), CameraError> {
         if self.recording_mode.is_some() {
             return Err(CameraError::AlreadyInUse);
         }
@@ -1689,7 +1697,11 @@ impl CameraInner {
         Ok(())
     }
 
-    pub fn stop_recording(&mut self) -> Result<(), CameraError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the Android backend stops recording over JNI synchronously"
+    )]
+    pub async fn stop_recording(&mut self) -> Result<(), CameraError> {
         match self.recording_mode {
             Some(RecordingMode::Standard) => {
                 self.bridge.stop_recording()?;
@@ -1715,7 +1727,11 @@ impl CameraInner {
         }
     }
 
-    pub fn start_raw_recording(&mut self, path: &Path) -> Result<(), CameraError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the Android backend starts recording over JNI synchronously"
+    )]
+    pub async fn start_raw_recording(&mut self, path: &Path) -> Result<(), CameraError> {
         if !self.capabilities.supports_raw_video {
             return Err(CameraError::ControlUnsupported("raw_video".into()));
         }
@@ -1730,7 +1746,11 @@ impl CameraInner {
         Ok(())
     }
 
-    pub fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the Android backend stops recording over JNI synchronously"
+    )]
+    pub async fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
         match self.recording_mode {
             Some(RecordingMode::Raw) => {
                 self.bridge.stop_raw_recording()?;
@@ -1754,5 +1774,23 @@ impl CameraInner {
             ),
             _ => Duration::ZERO,
         }
+    }
+
+    /// Ends an active standard recording inline; the JNI stop is synchronous,
+    /// so `Drop` paths just run it.
+    pub fn abandon_recording(&mut self) {
+        if matches!(self.recording_mode, Some(RecordingMode::Standard)) {
+            let _ = self.bridge.stop_recording();
+        }
+        self.recording_mode = None;
+    }
+
+    /// Ends an active raw recording inline, for `Drop` paths that cannot
+    /// await.
+    pub fn abandon_raw_recording(&mut self) {
+        if matches!(self.recording_mode, Some(RecordingMode::Raw)) {
+            let _ = self.bridge.stop_raw_recording();
+        }
+        self.recording_mode = None;
     }
 }

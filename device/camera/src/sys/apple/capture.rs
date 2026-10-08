@@ -161,7 +161,7 @@ fn buffer_color(pixel_buffer: &CVPixelBuffer) -> VideoColorInfo {
 
 /// The matrix named by the buffer's `kCVImageBufferYCbCrMatrixKey`
 /// attachment, which `AVFoundation` sets on every YCbCr capture buffer.
-fn ycbcr_matrix(pixel_buffer: &CVPixelBuffer) -> MatrixCoefficients {
+pub(super) fn ycbcr_matrix(pixel_buffer: &CVPixelBuffer) -> MatrixCoefficients {
     // SAFETY: the keys and values are Core Video's own immutable constants.
     let (key, bt601, bt709, bt2020) = unsafe {
         (

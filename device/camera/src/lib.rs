@@ -612,9 +612,9 @@ impl Recording<'_> {
     ///
     /// # Errors
     /// Returns an error if recording cannot be stopped.
-    pub fn stop(mut self) -> Result<(), CameraError> {
+    pub async fn stop(mut self) -> Result<(), CameraError> {
         self.stopped = true;
-        self.camera.inner.stop_recording()
+        self.camera.inner.stop_recording().await
     }
 
     /// Get the recording duration so far.
@@ -631,7 +631,7 @@ impl Recording<'_> {
 impl Drop for Recording<'_> {
     fn drop(&mut self) {
         if !self.stopped {
-            let _ = self.camera.inner.stop_recording();
+            self.camera.inner.abandon_recording();
         }
     }
 }
@@ -648,9 +648,9 @@ impl RawRecording<'_> {
     ///
     /// # Errors
     /// Returns an error if RAW recording cannot be stopped.
-    pub fn stop(mut self) -> Result<(), CameraError> {
+    pub async fn stop(mut self) -> Result<(), CameraError> {
         self.stopped = true;
-        self.camera.inner.stop_raw_recording()
+        self.camera.inner.stop_raw_recording().await
     }
 
     /// Get the RAW recording duration so far.
@@ -667,7 +667,7 @@ impl RawRecording<'_> {
 impl Drop for RawRecording<'_> {
     fn drop(&mut self) {
         if !self.stopped {
-            let _ = self.camera.inner.stop_raw_recording();
+            self.camera.inner.abandon_raw_recording();
         }
     }
 }
@@ -837,8 +837,8 @@ impl Camera {
     /// # Errors
     /// Returns [`CameraError::ControlUnsupported`] if a control is not available.
     /// Returns [`CameraError::ValueOutOfRange`] if a value is outside the supported range.
-    pub fn apply_controls(&mut self, controls: &CameraControls) -> Result<(), CameraError> {
-        self.inner.apply_controls(controls)
+    pub async fn apply_controls(&mut self, controls: &CameraControls) -> Result<(), CameraError> {
+        self.inner.apply_controls(controls).await
     }
 
     /// Get the current control values.
@@ -929,8 +929,11 @@ impl Camera {
     ///
     /// # Errors
     /// Returns [`CameraError::RecordingError`] if recording cannot be started.
-    pub fn recording(&mut self, path: impl AsRef<Path>) -> Result<Recording<'_>, CameraError> {
-        self.inner.start_recording(path.as_ref())?;
+    pub async fn recording(
+        &mut self,
+        path: impl AsRef<Path>,
+    ) -> Result<Recording<'_>, CameraError> {
+        self.inner.start_recording(path.as_ref()).await?;
         Ok(Recording {
             camera: self,
             stopped: false,
@@ -943,11 +946,11 @@ impl Camera {
     ///
     /// # Errors
     /// Returns [`CameraError::RecordingError`] if RAW recording cannot be started.
-    pub fn raw_recording(
+    pub async fn raw_recording(
         &mut self,
         path: impl AsRef<Path>,
     ) -> Result<RawRecording<'_>, CameraError> {
-        self.inner.start_raw_recording(path.as_ref())?;
+        self.inner.start_raw_recording(path.as_ref()).await?;
         Ok(RawRecording {
             camera: self,
             stopped: false,

@@ -169,28 +169,6 @@ impl WalletAddPassesDelegate {
     }
 }
 
-/// Hand-off to the main queue. `Retained` Objective-C objects are `!Send`
-/// because `UIKit` classes are not thread-safe, but the passes and view
-/// controller here are only dereferenced on the main queue; the owning
-/// references are released there as well.
-struct SendToMainQueue<T>(T);
-// SAFETY: see the type's documentation; the payload is only accessed by the
-// closure that executes on the main queue.
-#[expect(
-    clippy::non_send_fields_in_send_ty,
-    reason = "the whole point of the wrapper is to carry `!Send` objects to the main queue"
-)]
-unsafe impl<T> Send for SendToMainQueue<T> {}
-
-impl<T> SendToMainQueue<T> {
-    /// Unwraps the payload. Routing through a method makes the closure
-    /// capture `self` whole — destructuring `self.0` in place would let
-    /// precise-capture take the `!Send` fields separately.
-    fn into_inner(self) -> T {
-        self.0
-    }
-}
-
 pub async fn capabilities() -> Result<WalletCapabilities, WalletError> {
     Ok(WalletCapabilities {
         available: wallet_is_available(),
@@ -198,104 +176,128 @@ pub async fn capabilities() -> Result<WalletCapabilities, WalletError> {
 }
 
 pub async fn add(passes: ApplePasses) -> Result<AddOutcome, WalletError> {
-    let receiver = add_inner(&passes)?;
+    let receiver = add_inner(&passes);
     receiver
         .await
         .map_err(|_| WalletError::Platform("iOS wallet callback channel closed".into()))?
 }
 
-/// Everything up to handing work to the main queue, in one synchronous scope:
-/// `PKPass` objects are `!Send`, so they must not live across `await`.
-fn add_inner(
-    passes: &ApplePasses,
-) -> Result<oneshot::Receiver<Result<AddOutcome, WalletError>>, WalletError> {
-    let mut pk_passes = Vec::with_capacity(passes.len());
-    for (index, pass) in passes.iter().enumerate() {
-        let data = NSData::from_vec(pass.as_bytes().to_vec());
-        // SAFETY: `initWithData:error:` is the designated initializer; `data`
-        // is a live `NSData`.
-        match unsafe { PKPass::initWithData_error(PKPass::alloc(), &data) } {
-            Ok(pass) => pk_passes.push(pass),
-            Err(error) => {
-                return Err(WalletError::InvalidPass(format!(
-                    "pass at index {index}: {}",
-                    error.localizedDescription()
-                )));
-            }
-        }
-    }
-
+/// Hands the raw pass bytes to the main queue. Only `Send` data (the
+/// `Vec<Vec<u8>>` and the oneshot's sender) crosses the queue hop; the `PKPass`
+/// objects — `!Send` — are built on the main queue.
+fn add_inner(passes: &ApplePasses) -> oneshot::Receiver<Result<AddOutcome, WalletError>> {
+    let bytes = passes
+        .iter()
+        .map(|pass| pass.as_bytes().to_vec())
+        .collect::<Vec<Vec<u8>>>();
     let (sender, receiver) = oneshot::channel();
-    DispatchQueue::main().exec_async(add_on_main(pk_passes, sender));
-    Ok(receiver)
+    DispatchQueue::main().exec_async(move || add_on_main(bytes, sender));
+    receiver
 }
 
-fn add_on_main(passes: Vec<Retained<PKPass>>, sender: AddSender) -> impl FnOnce() + Send {
-    let payload = SendToMainQueue((passes, sender));
-    move || {
-        let (passes, sender) = payload.into_inner();
-        // SAFETY: this closure executes on the main queue.
-        let mtm = unsafe { MainThreadMarker::new_unchecked() };
-        if !wallet_is_available() {
-            let _ = sender.send(Err(WalletError::Unavailable));
-            return;
-        }
-        let Some(view_controller) = foreground_top_view_controller(mtm) else {
-            let _ = sender.send(Err(WalletError::Platform(
-                "no foreground window to present Wallet from".into(),
-            )));
-            return;
-        };
-        if passes.len() == 1 {
-            present_review(passes, &view_controller, sender, mtm);
-            return;
-        }
-        // SAFETY: `new` is a convenience constructor with no invariants to
-        // uphold.
-        let library = unsafe { PKPassLibrary::new() };
-        let passes_array = NSArray::from_retained_slice(&passes);
-        let sender = Arc::new(Mutex::new(Some(sender)));
-        let completion = RcBlock::new(move |status: PKPassLibraryAddPassesStatus| {
-            let report = |result: Result<AddOutcome, WalletError>| {
-                if let Ok(mut guard) = sender.lock()
-                    && let Some(sender) = guard.take()
-                {
-                    let _ = sender.send(result);
-                }
-            };
-            match status {
-                PKPassLibraryAddPassesStatus::DidAddPasses => report(Ok(AddOutcome::Added)),
-                PKPassLibraryAddPassesStatus::DidCancelAddPasses => {
-                    report(Ok(AddOutcome::Cancelled));
-                }
-                PKPassLibraryAddPassesStatus::ShouldReviewPasses => {
-                    let payload = SendToMainQueue((
-                        passes.clone(),
-                        view_controller.clone(),
-                        Arc::clone(&sender),
-                    ));
-                    DispatchQueue::main().exec_async(move || {
-                        let (passes, view_controller, sender) = payload.into_inner();
-                        let sender = sender
-                            .lock()
-                            .expect("wallet add sender mutex poisoned")
-                            .take()
-                            .expect("waterkit-wallet: add-pass callback was already completed");
-                        // SAFETY: this closure executes on the main queue.
-                        let mtm = unsafe { MainThreadMarker::new_unchecked() };
-                        present_review(passes, &view_controller, sender, mtm);
-                    });
-                }
-                _ => report(Err(WalletError::Platform(format!(
-                    "unknown PassKit add-pass status {}",
-                    status.0
-                )))),
-            }
-        });
-        // SAFETY: `library` is live, the array only contains `PKPass` objects,
-        // and `completion` matches the documented `addPasses:` block signature.
-        unsafe { library.addPasses_withCompletionHandler(&passes_array, Some(&completion)) };
+/// Builds the `PKPass` objects from their serialized bytes, mapping a parse
+/// failure to `WalletError::InvalidPass` with the pass's index.
+fn build_pk_passes(bytes: &[Vec<u8>]) -> Result<Vec<Retained<PKPass>>, WalletError> {
+    let mut passes = Vec::with_capacity(bytes.len());
+    for (index, pass_bytes) in bytes.iter().enumerate() {
+        let data = NSData::from_vec(pass_bytes.clone());
+        // SAFETY: `initWithData:error:` is the designated initializer; `data`
+        // is a live `NSData`.
+        let pass =
+            unsafe { PKPass::initWithData_error(PKPass::alloc(), &data) }.map_err(|error| {
+                WalletError::InvalidPass(format!(
+                    "pass at index {index}: {}",
+                    error.localizedDescription()
+                ))
+            })?;
+        passes.push(pass);
     }
+    Ok(passes)
+}
+
+/// Runs on the main queue.
+fn add_on_main(pass_bytes: Vec<Vec<u8>>, sender: AddSender) {
+    // SAFETY: this function executes on the main queue.
+    let mtm = unsafe { MainThreadMarker::new_unchecked() };
+    let passes = match build_pk_passes(&pass_bytes) {
+        Ok(passes) => passes,
+        Err(error) => {
+            let _ = sender.send(Err(error));
+            return;
+        }
+    };
+    if !wallet_is_available() {
+        let _ = sender.send(Err(WalletError::Unavailable));
+        return;
+    }
+    let Some(view_controller) = foreground_top_view_controller(mtm) else {
+        let _ = sender.send(Err(WalletError::Platform(
+            "no foreground window to present Wallet from".into(),
+        )));
+        return;
+    };
+    if passes.len() == 1 {
+        present_review(passes, &view_controller, sender, mtm);
+        return;
+    }
+    // SAFETY: `new` is a convenience constructor with no invariants to
+    // uphold.
+    let library = unsafe { PKPassLibrary::new() };
+    let passes_array = NSArray::from_retained_slice(&passes);
+    let sender = Arc::new(Mutex::new(Some(sender)));
+    let completion = RcBlock::new(move |status: PKPassLibraryAddPassesStatus| {
+        let report = |result: Result<AddOutcome, WalletError>| {
+            if let Ok(mut guard) = sender.lock()
+                && let Some(sender) = guard.take()
+            {
+                let _ = sender.send(result);
+            }
+        };
+        match status {
+            PKPassLibraryAddPassesStatus::DidAddPasses => report(Ok(AddOutcome::Added)),
+            PKPassLibraryAddPassesStatus::DidCancelAddPasses => {
+                report(Ok(AddOutcome::Cancelled));
+            }
+            PKPassLibraryAddPassesStatus::ShouldReviewPasses => {
+                // Only `Send` data crosses back to the main queue: the pass
+                // bytes and the shared sender. The `PKPass` objects and the
+                // presenting view controller are rebuilt/re-resolved there —
+                // this completion may run on an arbitrary queue.
+                let pass_bytes = pass_bytes.clone();
+                let sender = Arc::clone(&sender);
+                DispatchQueue::main().exec_async(move || {
+                    let sender = sender
+                        .lock()
+                        .expect("wallet add sender mutex poisoned")
+                        .take()
+                        .expect("waterkit-wallet: add-pass callback was already completed");
+                    // SAFETY: this closure executes on the main queue.
+                    let mtm = unsafe { MainThreadMarker::new_unchecked() };
+                    let passes = match build_pk_passes(&pass_bytes) {
+                        Ok(passes) => passes,
+                        Err(error) => {
+                            let _ = sender.send(Err(error));
+                            return;
+                        }
+                    };
+                    let Some(view_controller) = foreground_top_view_controller(mtm) else {
+                        let _ = sender.send(Err(WalletError::Platform(
+                            "no foreground window to present Wallet from".into(),
+                        )));
+                        return;
+                    };
+                    present_review(passes, &view_controller, sender, mtm);
+                });
+            }
+            _ => report(Err(WalletError::Platform(format!(
+                "unknown PassKit add-pass status {}",
+                status.0
+            )))),
+        }
+    });
+    // SAFETY: `library` is live, the array only contains `PKPass` objects,
+    // and `completion` matches the documented `addPasses:` block signature.
+    unsafe { library.addPasses_withCompletionHandler(&passes_array, Some(&completion)) };
 }
 
 fn present_review(

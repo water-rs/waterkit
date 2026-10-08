@@ -45,7 +45,7 @@ fn supported_languages(level: RecognitionLevel) -> &'static [LanguageIdentifier]
                         tracing::warn!(
                             tag,
                             %error,
-                            "Apple Vision returned an unparseable language tag"
+                            "Apple Vision returned an unparsable language tag"
                         );
                         None
                     }

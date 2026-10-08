@@ -246,6 +246,7 @@ objc2-image-io = { version = "0.3", default-features = false }
 objc2-io-surface = "0.3"
 objc2-local-authentication = { version = "0.3", default-features = false }
 objc2-metal = "0.3"
+objc2-pass-kit = { version = "0.3", default-features = false }
 objc2-ui-kit = { version = "0.3", default-features = false }
 objc = "0.2"
 # Zero-copy import of platform frame buffers into wgpu textures.
@@ -306,6 +307,9 @@ percent-encoding = "2.3"
 
 # BCP-47 language identifiers shared by capability APIs.
 icu_locale_core = { version = "2.3", features = ["alloc"] }
+# Likely-subtags expansion (`LocaleExpander`), for routing languages to the
+# scripts a recognizer serves.
+icu_locale = "2.3"
 url = "2.5"
 zenwave = { version = "0.6.1", default-features = false, features = ["hyper-backend"] }
 

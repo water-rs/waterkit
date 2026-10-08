@@ -116,10 +116,12 @@ the upright size `FrameConverter` turns the last frame into.
 ## Manual runs
 
 `WaterKitTest.xcodeproj` can be opened in Xcode. The project links the Rust
-library named by the `WATERKIT_RUST_LIBRARY` build setting, which the runner
-passes to `xcodebuild`; a build from Xcode needs it set to the library that
-`cargo build -p waterkit-test-ios --target <target> --features <feature>`
-produced. The app has a "Run All Tests" button for local exploration.
+library named by the `WATERKIT_RUST_LIBRARY` build setting together with the
+flags in `WATERKIT_RUST_LINK_FLAGS`: the system libraries and frameworks the
+library's crates link, as rustc reports them through
+`--print=native-static-libs`. The runner passes both to `xcodebuild`; a build
+from Xcode needs them set from
+`cargo rustc -p waterkit-test-ios --lib --target <target> --features <feature> -- --print=native-static-libs`. The app has a "Run All Tests" button for local exploration.
 
 ## Requirements
 

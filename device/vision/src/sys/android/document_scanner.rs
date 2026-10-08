@@ -16,7 +16,7 @@ use crate::document_scanner::{DocumentScannerOptions, pages_from_encoded};
 use bytes::Bytes;
 use futures::channel::oneshot;
 use jni::errors::ThrowRuntimeExAndDefault;
-use jni::objects::{Global, JByteArray, JClass, JObject, JObjectArray, JValue, JValueOwned};
+use jni::objects::{Global, JByteArray, JClass, JObject, JObjectArray, JValue};
 use jni::sys::{jboolean, jlong};
 use jni::{Env, EnvUnowned, jni_sig, jni_str};
 use std::collections::HashMap;
@@ -53,23 +53,7 @@ fn scan_requests() -> &'static Mutex<HashMap<u64, ScanIntentCallback>> {
 /// Panics if `ndk_context` has no `JavaVM` or Android `Context` yet, or the
 /// JNI probe fails.
 pub fn document_scanner_available() -> bool {
-    with_android_context(|env, context| {
-        let helper_class = HELPER.class(env, context)?;
-        env.call_static_method(
-            helper_class,
-            jni_str!("hasGooglePlayServices"),
-            jni_sig!("(Landroid/content/Context;)Z"),
-            &[JValue::Object(context)],
-        )
-        .and_then(JValueOwned::z)
-        .map_err(|error| {
-            VisionError::Platform(format!(
-                "probe Google Play services failed: {}",
-                describe_jni_error(env, error)
-            ))
-        })
-    })
-    .unwrap_or_else(|error| panic!("waterkit-vision: {error}"))
+    crate::sys::android::play_services().unwrap_or_else(|error| panic!("waterkit-vision: {error}"))
 }
 
 /// The ML Kit document scanner honors both a page limit and gallery import.

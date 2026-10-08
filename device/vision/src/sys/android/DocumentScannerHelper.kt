@@ -4,8 +4,6 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.IntentSender
-import com.google.android.gms.common.ConnectionResult
-import com.google.android.gms.common.GoogleApiAvailability
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
@@ -18,17 +16,6 @@ import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
  * camera permission.
  */
 object DocumentScannerHelper {
-    /**
-     * Whether Google Play services is installed, enabled and recent enough
-     * for the linked `play-services-mlkit-document-scanner` client — the
-     * device's own answer, asked before a scan and by `capabilities()`.
-     * Kept self-contained: each feature's sources compile independently.
-     */
-    @JvmStatic
-    fun hasGooglePlayServices(context: Context): Boolean =
-        GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context) ==
-            ConnectionResult.SUCCESS
-
     /**
      * Builds the document scanner's launch `IntentSender` — honoring
      * [pageLimit] (`0` leaves the scanner's own default) and

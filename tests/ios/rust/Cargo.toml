@@ -28,9 +28,6 @@ ab_glyph = { version = "0.2", optional = true }
 dejavu = { version = "2.37", optional = true }
 
 [features]
-# `health` stays out of `full`: waterkit-health declares extern Swift symbols
-# but ships no Apple implementation, so enabling it breaks the harness link
-# (water-rs/waterkit#60).
 full = [
     "sensor",
     "biometric",
@@ -54,6 +51,7 @@ full = [
     "speech",
     "contacts",
     "calendar",
+    "health",
     "language",
     "deeplink",
     "background",

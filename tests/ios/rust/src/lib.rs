@@ -158,9 +158,10 @@ const RECORDERS: &[Recorder] = &[
     },
     #[cfg(feature = "health")]
     |h| {
-        h.report.push(TestCase::skipped(
+        let capabilities = waterkit::health::capabilities();
+        h.report.push(TestCase::passed_with_message(
             "health.availability",
-            "waterkit-health declares extern Swift symbols but ships no Apple implementation",
+            format!("available={}", capabilities.available),
         ));
     },
     #[cfg(feature = "deeplink")]

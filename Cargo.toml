@@ -235,6 +235,7 @@ objc2-core-graphics = { version = "0.3", default-features = false }
 objc2-core-image = { version = "0.3", default-features = false }
 objc2-core-location = { version = "0.3", default-features = false }
 objc2-event-kit = { version = "0.3", default-features = false }
+objc2-health-kit = { version = "0.3", default-features = false }
 objc2-photos = { version = "0.3", default-features = false }
 dispatch2 = "0.3"
 objc2-core-media = "0.3"

@@ -88,7 +88,13 @@ pub fn max_refresh_rate_hz() -> Result<f32, Error> {
     max_refresh_rate.ok_or(Error::MonitorNotFound)
 }
 
-#[allow(clippy::unused_async)]
+#[cfg_attr(
+    target_os = "macos",
+    expect(
+        clippy::unused_async,
+        reason = "Linux and Windows await a blocking::unblock hop; the IOKit brightness read on macOS is synchronous"
+    )
+)]
 #[allow(clippy::cast_precision_loss)]
 pub async fn get_brightness() -> Result<f32, Error> {
     #[cfg(target_os = "macos")]
@@ -107,7 +113,13 @@ pub async fn get_brightness() -> Result<f32, Error> {
     }
 }
 
-#[allow(clippy::unused_async)]
+#[cfg_attr(
+    target_os = "macos",
+    expect(
+        clippy::unused_async,
+        reason = "Linux and Windows await a blocking::unblock hop; the IOKit brightness write on macOS is synchronous"
+    )
+)]
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub async fn set_brightness(val: f32) -> Result<(), Error> {
     #[cfg(target_os = "macos")]
@@ -228,7 +240,10 @@ impl ScreenStreamInner {
     }
 
     /// Capture next frame asynchronously.
-    #[allow(clippy::unused_async)]
+    #[expect(
+        clippy::unused_async,
+        reason = "the public API is async on every platform"
+    )]
     #[allow(
         clippy::future_not_send,
         reason = "the Windows capture session is a thread-affine `*mut c_void`, so `ScreenStream` is deliberately not `Sync` and these futures cannot be `Send`."

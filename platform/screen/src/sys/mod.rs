@@ -116,7 +116,7 @@ pub async fn set_brightness(val: f32) -> Result<(), Error> {
     target_os = "ios",
     target_os = "android"
 )))]
-#[allow(clippy::unused_async)]
+#[expect(clippy::unused_async, reason = "the facade is async on every platform")]
 pub async fn get_brightness() -> Result<f32, Error> {
     Err(Error::Unsupported)
 }
@@ -128,7 +128,7 @@ pub async fn get_brightness() -> Result<f32, Error> {
     target_os = "ios",
     target_os = "android"
 )))]
-#[allow(clippy::unused_async)]
+#[expect(clippy::unused_async, reason = "the facade is async on every platform")]
 pub async fn set_brightness(_val: f32) -> Result<(), Error> {
     Err(Error::Unsupported)
 }

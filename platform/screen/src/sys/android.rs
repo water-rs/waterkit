@@ -230,7 +230,10 @@ fn capture_screenshot_png() -> Result<Vec<u8>, Error> {
 }
 
 /// Get screen brightness.
-#[allow(clippy::unused_async)]
+#[expect(
+    clippy::unused_async,
+    reason = "the public API is async on every platform; the JNI call is synchronous"
+)]
 pub async fn get_brightness() -> Result<f32, Error> {
     ensure_helper_initialized()?;
     with_attached_env(|env| {
@@ -248,7 +251,10 @@ pub async fn get_brightness() -> Result<f32, Error> {
 }
 
 /// Set screen brightness.
-#[allow(clippy::unused_async)]
+#[expect(
+    clippy::unused_async,
+    reason = "the public API is async on every platform; the JNI call is synchronous"
+)]
 pub async fn set_brightness(val: f32) -> Result<(), Error> {
     ensure_helper_initialized()?;
     with_attached_env(|env| {
@@ -358,7 +364,10 @@ pub struct ScreenStreamInner {
 }
 
 impl ScreenStreamInner {
-    #[allow(clippy::unused_async)]
+    #[expect(
+        clippy::unused_async,
+        reason = "the public API is async on every platform; the JNI setup is synchronous"
+    )]
     pub async fn new(
         display: &ScreenInfo,
         device: Arc<Device>,

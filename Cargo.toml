@@ -37,6 +37,7 @@ waterkit-permission = { workspace = true, optional = true }
 waterkit-location = { workspace = true, optional = true }
 waterkit-audio = { workspace = true, optional = true, features = ["playback", "recording", "streaming", "media-session", "apple-artwork"] }
 waterkit-haptic = { workspace = true, optional = true }
+waterkit-language = { workspace = true, optional = true }
 waterkit-notification = { workspace = true, optional = true }
 waterkit-dialog = { workspace = true, optional = true }
 waterkit-biometric = { workspace = true, optional = true }
@@ -75,6 +76,7 @@ full = [
     "location",
     "audio",
     "haptic",
+    "language",
     "notification",
     "dialog",
     "biometric",
@@ -107,6 +109,7 @@ permission = ["dep:waterkit-permission"]
 location = ["dep:waterkit-location", "permission"]
 audio = ["dep:waterkit-audio"]
 haptic = ["dep:waterkit-haptic"]
+language = ["dep:waterkit-language"]
 notification = ["dep:waterkit-notification"]
 dialog = ["dep:waterkit-dialog"]
 biometric = ["dep:waterkit-biometric"]
@@ -154,6 +157,7 @@ waterkit-permission = { path = "platform/permission", version = "0.1.4" }
 waterkit-location = { path = "device/location", version = "0.1.4" }
 waterkit-audio = { path = "multimedia/audio", version = "0.1.4", default-features = false }
 waterkit-haptic = { path = "device/haptic", version = "0.1.4" }
+waterkit-language = { path = "platform/language", version = "0.1.4" }
 waterkit-notification = { path = "sharing/notification", version = "0.1.4" }
 waterkit-dialog = { path = "sharing/dialog", version = "0.1.4" }
 waterkit-biometric = { path = "identity/biometric", version = "0.1.4" }
@@ -167,7 +171,7 @@ waterkit-sensor = { path = "device/sensor", version = "0.1.4" }
 # `software-decode` (rav1d + image decoding), `software-encode` (adds rav1e)
 # and `vaapi` explicitly.
 waterkit-codec = { path = "multimedia/codec", version = "0.1.4", default-features = false }
-shaderloom = { version = "0.1.2", default-features = false }
+shaderloom = { version = "0.2", default-features = false }
 waterkit-screen = { path = "platform/screen", version = "0.1.4" }
 waterkit-system = { path = "platform/system", version = "0.1.4" }
 waterkit-video = { path = "multimedia/video", version = "0.1.4" }
@@ -291,7 +295,7 @@ jiff = "0.2"
 percent-encoding = "2.3"
 
 # BCP-47 language identifiers shared by capability APIs.
-icu_locale_core = "2.3"
+icu_locale_core = { version = "2.3", features = ["alloc"] }
 url = "2.5"
 zenwave = { version = "0.6.1", default-features = false, features = ["hyper-backend"] }
 
@@ -350,7 +354,6 @@ filtrate-core = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4
 filtrate-derive = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }
 cherenkov-shader = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }
 
-# shaderloom's wgpu 30 port is not on crates.io yet; pin the rev that carries
-# it, as other water-rs consumers do. The pinned rev is the head of
-# water-rs/shaderloom#21 (`build/wgpu-30`).
-shaderloom = { git = "https://github.com/water-rs/shaderloom", rev = "84c37c8314f1bb6d228fce30f78d94872247a18f" }
+# shaderloom passes an explicit Metal `-target` (water-rs/shaderloom#36), which
+# is not on crates.io yet; pin the `dev` commit that carries it.
+shaderloom = { git = "https://github.com/water-rs/shaderloom", rev = "6ea0fb63a340809b59211cc3215bb744dfa5f107" }

@@ -102,6 +102,8 @@ const RECORDERS: &[Recorder] = &[
     |h| record_background(&mut h.report),
     #[cfg(feature = "passkey")]
     |h| h.runtime.block_on(record_passkey(&mut h.report)),
+    #[cfg(feature = "language")]
+    |h| h.runtime.block_on(record_language(&mut h.report)),
     #[cfg(feature = "wallet")]
     |h| h.runtime.block_on(record_wallet(&mut h.report)),
     #[cfg(feature = "biometric")]
@@ -537,6 +539,161 @@ async fn record_passkey(report: &mut TestReport) {
             "passkey.availability",
             format!("passkey availability failed: {error}"),
         )),
+    }
+}
+
+#[cfg(feature = "language")]
+async fn record_language(report: &mut TestReport) {
+    use waterkit::language::translation;
+
+    let capabilities = match translation::capabilities().await {
+        Ok(capabilities) => capabilities,
+        Err(error) => {
+            record_language_query_failure(report, &error);
+            return;
+        }
+    };
+    record_language_capabilities(report, &capabilities);
+    record_language_translation(report, &capabilities).await;
+    record_language_not_installed(report, &capabilities).await;
+}
+
+#[cfg(feature = "language")]
+fn record_language_query_failure(
+    report: &mut TestReport,
+    error: &waterkit::language::translation::TranslationError,
+) {
+    report.push(TestCase::failed(
+        "language.capabilities",
+        format!("capability query failed: {error}"),
+    ));
+    report.push(TestCase::skipped(
+        "language.translate",
+        "capability query failed",
+    ));
+    report.push(TestCase::skipped(
+        "language.not_installed",
+        "capability query failed",
+    ));
+}
+
+#[cfg(feature = "language")]
+fn record_language_capabilities(
+    report: &mut TestReport,
+    capabilities: &waterkit::language::translation::TranslationCapabilities,
+) {
+    let pairs = capabilities
+        .pairs()
+        .iter()
+        .map(|capability| format!("{}={:?}", capability.pair(), capability.status()))
+        .collect::<Vec<_>>();
+    report.push(TestCase::passed_with_message(
+        "language.capabilities",
+        if pairs.is_empty() {
+            "0 pairs (no on-device translation pairs on this OS)".into()
+        } else {
+            pairs.join(", ")
+        },
+    ));
+}
+
+#[cfg(feature = "language")]
+async fn record_language_translation(
+    report: &mut TestReport,
+    capabilities: &waterkit::language::translation::TranslationCapabilities,
+) {
+    use waterkit::language::translation::{AssetStatus, Translator};
+
+    if let Some(capability) = capabilities
+        .pairs()
+        .iter()
+        .find(|capability| capability.status() == AssetStatus::Installed)
+    {
+        let pair = capability.pair().clone();
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            Translator::new(pair.source().clone(), pair.target().clone()),
+        )
+        .await
+        {
+            Err(_) => report.push(TestCase::failed(
+                "language.translate",
+                "system translation service did not create a translator within 20 s",
+            )),
+            Ok(Ok(translator)) => match tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                translator.translate_batch(&["Hello", "Good morning"]),
+            )
+            .await
+            {
+                Err(_) => report.push(TestCase::failed(
+                    "language.translate",
+                    "system translation service did not translate within 20 s",
+                )),
+                Ok(Ok(translations))
+                    if translations.len() == 2
+                        && translations
+                            .iter()
+                            .all(|translation| !translation.trim().is_empty()) =>
+                {
+                    report.push(TestCase::passed_with_message(
+                        "language.translate",
+                        format!("{} => {translations:?}", translator.pair()),
+                    ));
+                }
+                Ok(Ok(translations)) => report.push(TestCase::failed(
+                    "language.translate",
+                    format!("invalid batch result: {translations:?}"),
+                )),
+                Ok(Err(error)) => report.push(TestCase::failed(
+                    "language.translate",
+                    format!("batch translation failed: {error}"),
+                )),
+            },
+            Ok(Err(error)) => report.push(TestCase::failed(
+                "language.translate",
+                format!("translator creation failed: {error}"),
+            )),
+        }
+    } else {
+        report.push(TestCase::skipped("language.translate", "no installed pair"));
+    }
+}
+
+#[cfg(feature = "language")]
+async fn record_language_not_installed(
+    report: &mut TestReport,
+    capabilities: &waterkit::language::translation::TranslationCapabilities,
+) {
+    use waterkit::language::translation::{AssetStatus, TranslationError, Translator};
+
+    if let Some(capability) = capabilities
+        .pairs()
+        .iter()
+        .find(|capability| capability.status() == AssetStatus::NeedsDownload)
+    {
+        let pair = capability.pair().clone();
+        match Translator::new(pair.source().clone(), pair.target().clone()).await {
+            Err(TranslationError::NeedsDownload(actual)) if actual == pair => {
+                report.push(TestCase::passed_with_message(
+                    "language.not_installed",
+                    format!("{actual} needs download"),
+                ));
+            }
+            Err(error) => report.push(TestCase::failed(
+                "language.not_installed",
+                format!("expected NeedsDownload for {pair}, got {error}"),
+            )),
+            Ok(_) => report.push(TestCase::failed(
+                "language.not_installed",
+                format!("unexpectedly created a translator for {pair}"),
+            )),
+        }
+    } else {
+        report.push(TestCase::skipped(
+            "language.not_installed",
+            "no pair needs downloading",
+        ));
     }
 }
 

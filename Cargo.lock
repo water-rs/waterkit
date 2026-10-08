@@ -6397,8 +6397,8 @@ dependencies = [
 
 [[package]]
 name = "shaderloom"
-version = "0.1.2"
-source = "git+https://github.com/water-rs/shaderloom?rev=84c37c8314f1bb6d228fce30f78d94872247a18f#84c37c8314f1bb6d228fce30f78d94872247a18f"
+version = "0.2.0"
+source = "git+https://github.com/water-rs/shaderloom?rev=6ea0fb63a340809b59211cc3215bb744dfa5f107#6ea0fb63a340809b59211cc3215bb744dfa5f107"
 dependencies = [
  "naga",
  "prettyplease 0.3.0",
@@ -7684,6 +7684,7 @@ dependencies = [
  "waterkit-fs",
  "waterkit-haptic",
  "waterkit-health",
+ "waterkit-language",
  "waterkit-location",
  "waterkit-menu",
  "waterkit-nfc",
@@ -8075,6 +8076,24 @@ dependencies = [
  "waterkit-build",
  "waterkit-core",
  "waterkit-fs",
+]
+
+[[package]]
+name = "waterkit-language"
+version = "0.1.4"
+dependencies = [
+ "async-channel",
+ "futures",
+ "icu_locale_core",
+ "jni 0.22.4",
+ "ndk-context",
+ "serde",
+ "serde_json",
+ "swift-bridge",
+ "thiserror 2.0.20",
+ "tracing",
+ "waterkit-build",
+ "waterkit-core",
 ]
 
 [[package]]

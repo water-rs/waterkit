@@ -704,6 +704,275 @@ async fn record_picker_cancelled_case(report: &mut TestReport) {
     }
 }
 
+#[cfg(feature = "language")]
+async fn record_android_language(report: &mut TestReport) {
+    use waterkit_content::language::translation;
+
+    let capabilities = match translation::capabilities().await {
+        Ok(capabilities) => capabilities,
+        Err(error) => {
+            record_android_language_query_failure(report, &error);
+            return;
+        }
+    };
+    record_android_capabilities(report, &capabilities);
+    record_android_translation(report, &capabilities).await;
+    record_android_not_installed(report, &capabilities).await;
+    record_android_unsupported_pair(report).await;
+    record_android_capability_updates(report);
+}
+
+#[cfg(feature = "language")]
+fn record_android_language_query_failure(
+    report: &mut TestReport,
+    error: &waterkit_content::language::translation::TranslationError,
+) {
+    report.push(TestCase::failed(
+        "language.capabilities",
+        format!("capability query failed: {error}"),
+    ));
+    report.push(TestCase::skipped(
+        "language.translate",
+        "capability query failed",
+    ));
+    report.push(TestCase::skipped(
+        "language.not_installed",
+        "capability query failed",
+    ));
+    report.push(TestCase::skipped(
+        "language.unsupported_pair",
+        "capability query failed",
+    ));
+}
+
+#[cfg(feature = "language")]
+fn record_android_capabilities(
+    report: &mut TestReport,
+    capabilities: &waterkit_content::language::translation::TranslationCapabilities,
+) {
+    let pairs = capabilities
+        .pairs()
+        .iter()
+        .map(|capability| format!("{}={:?}", capability.pair(), capability.status()))
+        .collect::<Vec<_>>();
+    report.push(TestCase::passed_with_message(
+        "language.capabilities",
+        if pairs.is_empty() {
+            "0 pairs (no on-device translation service in this image)".into()
+        } else {
+            pairs.join(", ")
+        },
+    ));
+}
+
+#[cfg(feature = "language")]
+async fn record_android_translation(
+    report: &mut TestReport,
+    capabilities: &waterkit_content::language::translation::TranslationCapabilities,
+) {
+    use waterkit_content::language::translation::{AssetStatus, Translator};
+
+    if let Some(capability) = capabilities
+        .pairs()
+        .iter()
+        .find(|capability| capability.status() == AssetStatus::Installed)
+    {
+        let pair = capability.pair().clone();
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            Translator::new(pair.source().clone(), pair.target().clone()),
+        )
+        .await
+        {
+            Err(_) => report.push(TestCase::failed(
+                "language.translate",
+                "system translation service did not create a translator within 20 s",
+            )),
+            Ok(Ok(translator)) => match tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                translator.translate_batch(&["Hello", "Good morning"]),
+            )
+            .await
+            {
+                Err(_) => report.push(TestCase::failed(
+                    "language.translate",
+                    "system translation service did not translate within 20 s",
+                )),
+                Ok(Ok(translations))
+                    if translations.len() == 2
+                        && translations
+                            .iter()
+                            .all(|translation| !translation.trim().is_empty()) =>
+                {
+                    report.push(TestCase::passed_with_message(
+                        "language.translate",
+                        format!("{} => {translations:?}", translator.pair()),
+                    ));
+                }
+                Ok(Ok(translations)) => report.push(TestCase::failed(
+                    "language.translate",
+                    format!("invalid batch result: {translations:?}"),
+                )),
+                Ok(Err(error)) => report.push(TestCase::failed(
+                    "language.translate",
+                    format!("batch translation failed: {error}"),
+                )),
+            },
+            Ok(Err(error)) => report.push(TestCase::failed(
+                "language.translate",
+                format!("translator creation failed: {error}"),
+            )),
+        }
+    } else {
+        report.push(TestCase::skipped("language.translate", "no installed pair"));
+    }
+}
+
+#[cfg(feature = "language")]
+async fn record_android_not_installed(
+    report: &mut TestReport,
+    capabilities: &waterkit_content::language::translation::TranslationCapabilities,
+) {
+    use waterkit_content::language::translation::{AssetStatus, TranslationError, Translator};
+
+    if let Some(capability) = capabilities
+        .pairs()
+        .iter()
+        .find(|capability| capability.status() == AssetStatus::NeedsDownload)
+    {
+        let pair = capability.pair().clone();
+        match Translator::new(pair.source().clone(), pair.target().clone()).await {
+            Err(TranslationError::NeedsDownload(actual)) if actual == pair => {
+                report.push(TestCase::passed_with_message(
+                    "language.not_installed",
+                    format!("{actual} needs download"),
+                ));
+            }
+            Err(error) => report.push(TestCase::failed(
+                "language.not_installed",
+                format!("expected NeedsDownload for {pair}, got {error}"),
+            )),
+            Ok(_) => report.push(TestCase::failed(
+                "language.not_installed",
+                format!("unexpectedly created a translator for {pair}"),
+            )),
+        }
+    } else {
+        report.push(TestCase::skipped(
+            "language.not_installed",
+            "no pair needs downloading",
+        ));
+    }
+}
+
+#[cfg(feature = "language")]
+async fn record_android_unsupported_pair(report: &mut TestReport) {
+    use waterkit_content::language::translation::{TranslationError, Translator};
+
+    let api_level = match android_api_level() {
+        Ok(level) => level,
+        Err(error) => {
+            report.push(TestCase::failed(
+                "language.unsupported_pair",
+                format!("could not read Android API level: {error}"),
+            ));
+            return;
+        }
+    };
+    match Translator::new(
+        waterkit_content::language::langid!("en"),
+        waterkit_content::language::langid!("en"),
+    )
+    .await
+    {
+        Err(TranslationError::UnsupportedPair(pair)) if api_level >= 31 => {
+            report.push(TestCase::passed_with_message(
+                "language.unsupported_pair",
+                format!("{pair} is unsupported"),
+            ));
+        }
+        Err(TranslationError::Unavailable) if api_level < 31 => {
+            report.push(TestCase::passed_with_message(
+                "language.unsupported_pair",
+                "translation unavailable below API 31",
+            ));
+        }
+        Err(error) => report.push(TestCase::failed(
+            "language.unsupported_pair",
+            format!("unexpected result at API {api_level}: {error}"),
+        )),
+        Ok(_) => report.push(TestCase::failed(
+            "language.unsupported_pair",
+            format!("en to en unexpectedly created a translator at API {api_level}"),
+        )),
+    }
+}
+
+#[cfg(feature = "language")]
+fn record_android_capability_updates(report: &mut TestReport) {
+    use waterkit_content::language::translation::{self, TranslationError};
+
+    let api_level = match android_api_level() {
+        Ok(level) => level,
+        Err(error) => {
+            report.push(TestCase::failed(
+                "language.capability_updates",
+                format!("could not read Android API level: {error}"),
+            ));
+            return;
+        }
+    };
+
+    match (api_level >= 31, translation::android::capability_updates()) {
+        (true, Ok(updates)) => {
+            drop(updates);
+            report.push(TestCase::passed_with_message(
+                "language.capability_updates",
+                "registered and removed capability listener",
+            ));
+        }
+        (false, Err(TranslationError::Unavailable)) => {
+            report.push(TestCase::passed_with_message(
+                "language.capability_updates",
+                "translation unavailable below API 31",
+            ));
+        }
+        // `Unavailable` at a supported API level means the device has no
+        // system translation service — the same state `capabilities()` reports
+        // as zero pairs, and not a registration failure.
+        (true, Err(TranslationError::Unavailable)) => report.push(TestCase::skipped(
+            "language.capability_updates",
+            "no on-device translation service on this device",
+        )),
+        (_, Ok(updates)) => {
+            drop(updates);
+            report.push(TestCase::failed(
+                "language.capability_updates",
+                format!("capability listener unexpectedly registered at API {api_level}"),
+            ));
+        }
+        (_, Err(error)) => report.push(TestCase::failed(
+            "language.capability_updates",
+            format!("could not register capability listener at API {api_level}: {error}"),
+        )),
+    }
+}
+
+#[cfg(feature = "language")]
+fn android_api_level() -> Result<i32, String> {
+    use jni::{jni_sig, jni_str};
+
+    waterkit_build::with_android_context(|env, _context| {
+        let sdk_version = env.get_static_field(
+            jni_str!("android/os/Build$VERSION"),
+            jni_str!("SDK_INT"),
+            jni_sig!("I"),
+        )?;
+        Ok::<_, waterkit_build::AndroidError>(sdk_version.i()?)
+    })
+    .map_err(|error| error.to_string())
+}
+
 /// What every capability's recorder shares: the JNI environment, a global
 /// reference to the activity, the files directory, the runtime its
 /// asynchronous calls run on, and the report its cases go into.
@@ -840,6 +1109,8 @@ const RECORDERS: &[Recorder] = &[
     |h| record_android_avif_decode(&mut h.report),
     #[cfg(feature = "health")]
     |h| record_android_health(&mut h.report),
+    #[cfg(feature = "language")]
+    |h| h.runtime.block_on(record_android_language(&mut h.report)),
     #[cfg(feature = "wallet")]
     |h| h.runtime.block_on(record_android_wallet(&mut h.report)),
     #[cfg(feature = "screen")]

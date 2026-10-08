@@ -171,26 +171,26 @@ pub fn is_available() -> bool {
     })
 }
 
-pub fn impact(intensity: Intensity) -> Result<(), HapticError> {
+pub async fn impact(intensity: Intensity) -> Result<(), HapticError> {
     with_android_context(|env, context| impact_with_context(env, context, intensity))
 }
 
-pub fn selection() -> Result<(), HapticError> {
+pub async fn selection() -> Result<(), HapticError> {
     with_android_context(selection_with_context)
 }
 
-pub fn notification_success() -> Result<(), HapticError> {
+pub async fn notification_success() -> Result<(), HapticError> {
     with_android_context(|env, context| notification_with_context(env, context, 0))
 }
 
-pub fn notification_warning() -> Result<(), HapticError> {
+pub async fn notification_warning() -> Result<(), HapticError> {
     with_android_context(|env, context| notification_with_context(env, context, 1))
 }
 
-pub fn notification_error() -> Result<(), HapticError> {
+pub async fn notification_error() -> Result<(), HapticError> {
     with_android_context(|env, context| notification_with_context(env, context, 2))
 }
 
-pub fn play_pattern(pattern: &HapticPattern) -> Result<(), HapticError> {
+pub async fn play_pattern(pattern: &HapticPattern) -> Result<(), HapticError> {
     with_android_context(|env, context| play_pattern_with_context(env, context, pattern))
 }

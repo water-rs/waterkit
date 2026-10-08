@@ -9,6 +9,7 @@
 //! handle joins that thread, so teardown has finished by the time the drop
 //! returns.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::clock::StreamClock;
@@ -136,6 +137,25 @@ impl<H: CameraHelper> Waiter<H> {
 /// How a reader takes the next frame of its stream out of the helper.
 type Wait<H, F> = fn(&H, &StreamClock<Duration>, i32) -> Result<Option<F>, CameraError>;
 
+/// What a starved reader drives so the camera's buffers come back: a frame's
+/// buffer returns to the camera only when wgpu destroys the textures aliasing
+/// it, and wgpu does that during device maintenance. A consumer awaiting the
+/// next frame submits nothing, so when a wait comes back empty the reader
+/// runs one non-blocking maintenance pass itself.
+pub trait Reclaim: Send + 'static {
+    /// Runs one non-blocking maintenance pass. A failure is a reader
+    /// failure: it ends the stream like a failed wait does.
+    fn reclaim(&self) -> Result<(), CameraError>;
+}
+
+impl Reclaim for Arc<wgpu::Device> {
+    fn reclaim(&self) -> Result<(), CameraError> {
+        self.poll(wgpu::PollType::Poll)
+            .map_err(|error| CameraError::GpuError(format!("device poll: {error}")))?;
+        Ok(())
+    }
+}
+
 /// The thread reading one of a capture's frame streams. When it owns the
 /// [`Capture`], it alone tears the camera down: when capture fails, or when
 /// this handle drops; dropping the handle waits for that teardown.
@@ -147,16 +167,30 @@ pub struct FrameThread<F> {
 impl<F: Send + 'static> FrameThread<F> {
     /// Spawns the reader thread for `capture`'s preview frames, waiting at
     /// most `timeout_ms` for each frame.
-    pub fn spawn<H: CameraHelper<Frame = F>>(capture: Capture<H>, timeout_ms: i32) -> Self {
-        Self::reader(Waiter::Capture(capture), timeout_ms, H::wait_for_frame)
+    pub fn spawn<H: CameraHelper<Frame = F>, R: Reclaim>(
+        capture: Capture<H>,
+        reclaim: R,
+        timeout_ms: i32,
+    ) -> Self {
+        Self::reader(
+            Waiter::Capture(capture),
+            reclaim,
+            timeout_ms,
+            H::wait_for_frame,
+        )
     }
 
     /// Spawns a reader on `helper`'s analysis stream. Unlike [`Self::spawn`]
     /// the thread owns no capture — the preview `FrameThread` tears the
     /// camera down; this thread only waits and sends.
-    pub fn spawn_analysis<H: CameraHelper<Analysis = F>>(helper: H, timeout_ms: i32) -> Self {
+    pub fn spawn_analysis<H: CameraHelper<Analysis = F>, R: Reclaim>(
+        helper: H,
+        reclaim: R,
+        timeout_ms: i32,
+    ) -> Self {
         Self::reader(
             Waiter::Shared(helper),
+            reclaim,
             timeout_ms,
             H::wait_for_analysis_frame,
         )
@@ -165,8 +199,14 @@ impl<F: Send + 'static> FrameThread<F> {
     /// The read loop every reader shares: `wait` the next frame out of the
     /// helper and forward it; newest wins, and a failure is the last item —
     /// the channel closes only after the waiter drops, which for a
-    /// [`Waiter::Capture`] is the camera's teardown.
-    fn reader<H: CameraHelper>(waiter: Waiter<H>, timeout_ms: i32, wait: Wait<H, F>) -> Self {
+    /// [`Waiter::Capture`] is the camera's teardown. An empty wait means the
+    /// camera is starved, so the reader drives `reclaim` once.
+    fn reader<H: CameraHelper, R: Reclaim>(
+        waiter: Waiter<H>,
+        reclaim: R,
+        timeout_ms: i32,
+        wait: Wait<H, F>,
+    ) -> Self {
         let (sender, frames) = async_channel::bounded(1);
         let thread = std::thread::spawn(move || {
             let clock = StreamClock::new();
@@ -178,7 +218,13 @@ impl<F: Send + 'static> FrameThread<F> {
                             break;
                         }
                     }
-                    Ok(None) => {}
+                    Ok(None) => {
+                        if let Err(error) = reclaim.reclaim() {
+                            // Closed means the owner is gone.
+                            let _ = sender.force_send(Err(error));
+                            break;
+                        }
+                    }
                     Err(error) => {
                         // Closed means the owner is gone.
                         let _ = sender.force_send(Err(error));
@@ -216,7 +262,7 @@ impl<F> Drop for FrameThread<F> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CameraHelper, FrameThread, OpenCamera};
+    use super::{CameraHelper, FrameThread, OpenCamera, Reclaim};
     use crate::clock::StreamClock;
     use crate::{CameraError, Resolution};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -234,8 +280,14 @@ mod tests {
         close_after_stop: AtomicBool,
         /// When set, `wait_for_frame` fails once.
         fail_wait: AtomicBool,
+        /// When set, `wait_for_frame` returns no frame, as a starved
+        /// camera's does.
+        starved: AtomicBool,
         /// When set, `wait_for_frame` waits on it once before answering.
         gate: Option<Barrier>,
+        /// Each reclaim pushes a token here when set, so a test can wait
+        /// for one.
+        reclaim_observer: Option<async_channel::Sender<()>>,
     }
 
     impl MockHelper {
@@ -249,7 +301,9 @@ mod tests {
                 closes: AtomicUsize::new(0),
                 close_after_stop: AtomicBool::new(false),
                 fail_wait: AtomicBool::new(false),
+                starved: AtomicBool::new(false),
                 gate: None,
+                reclaim_observer: None,
             }
         }
 
@@ -294,6 +348,9 @@ mod tests {
             if self.fail_wait.swap(false, Ordering::SeqCst) {
                 return Err(CameraError::CaptureFailed("mock capture failure".into()));
             }
+            if self.starved.load(Ordering::SeqCst) {
+                return Ok(None);
+            }
             std::thread::yield_now();
             Ok(Some(MockHelper::FRAME))
         }
@@ -317,6 +374,15 @@ mod tests {
                 self.close_after_stop.store(true, Ordering::SeqCst);
             }
             self.closes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    impl Reclaim for Arc<MockHelper> {
+        fn reclaim(&self) -> Result<(), CameraError> {
+            if let Some(observer) = &self.reclaim_observer {
+                let _ = observer.send_blocking(());
+            }
             Ok(())
         }
     }
@@ -379,8 +445,8 @@ mod tests {
             .expect("open succeeds")
             .start_capture()
             .expect("capture starts");
-        let frames = FrameThread::spawn(capture, 1);
-        let analysis = FrameThread::spawn_analysis(Arc::clone(&helper), 1);
+        let frames = FrameThread::spawn(capture, Arc::clone(&helper), 1);
+        let analysis = FrameThread::spawn_analysis(Arc::clone(&helper), Arc::clone(&helper), 1);
         drop(analysis);
         let (_, _, stops, closes) = helper.counts();
         assert_eq!(
@@ -388,6 +454,29 @@ mod tests {
             (0, 0),
             "the shared reader owns no teardown"
         );
+        drop(frames);
+        let (_, _, stops, closes) = helper.counts();
+        assert_eq!((stops, closes), (1, 1), "the owning reader tears down once");
+    }
+
+    /// A wait that returns no frame means the camera is starved, so the
+    /// reader drives the reclaim itself.
+    #[test]
+    fn an_empty_wait_drives_the_reclaim() {
+        let (observer, reclaimed) = async_channel::unbounded();
+        let helper = Arc::new(MockHelper {
+            starved: AtomicBool::new(true),
+            reclaim_observer: Some(observer),
+            ..MockHelper::new()
+        });
+        let capture = OpenCamera::open(Arc::clone(&helper), "0", Resolution::HD, 30, None)
+            .expect("open succeeds")
+            .start_capture()
+            .expect("capture starts");
+        let frames = FrameThread::spawn(capture, Arc::clone(&helper), 1);
+        reclaimed
+            .recv_blocking()
+            .expect("an empty wait triggers the reclaim");
         drop(frames);
         let (_, _, stops, closes) = helper.counts();
         assert_eq!((stops, closes), (1, 1), "the owning reader tears down once");
@@ -412,7 +501,7 @@ mod tests {
             .expect("open succeeds")
             .start_capture()
             .expect("capture starts");
-        let frame_thread = FrameThread::spawn(capture, 1);
+        let frame_thread = FrameThread::spawn(capture, Arc::clone(&helper), 1);
         drop(frame_thread);
         let (opens, starts, stops, closes) = helper.counts();
         assert_eq!(
@@ -431,7 +520,7 @@ mod tests {
             .expect("open succeeds")
             .start_capture()
             .expect("capture starts");
-        let frame_thread = FrameThread::spawn(capture, 1);
+        let frame_thread = FrameThread::spawn(capture, Arc::clone(&helper), 1);
         let first = frame_thread.frames().recv_blocking();
         assert!(matches!(first, Ok(Err(CameraError::CaptureFailed(_)))));
         // The channel stays open while the camera closes, so the next
@@ -457,7 +546,7 @@ mod tests {
                 .expect("open succeeds")
                 .start_capture()
                 .expect("capture starts");
-            let frame_thread = FrameThread::spawn(capture, 1);
+            let frame_thread = FrameThread::spawn(capture, Arc::clone(&helper), 1);
             // Release the reader's wait_for_frame just as the owner drops.
             helper.gate.as_ref().unwrap().wait();
             drop(frame_thread);

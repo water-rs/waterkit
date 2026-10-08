@@ -4,8 +4,8 @@
 //! (vibration) across iOS, macOS, Android, Windows, and Linux.
 //!
 //! All trigger functions are synchronous: the underlying platform calls
-//! return immediately after dispatching to the OS haptic engine. They
-//! must be called on the main / UI thread on Apple platforms.
+//! return once the request reaches the OS haptic engine; on Apple
+//! platforms the call hops to the main thread for the caller.
 //!
 //! # Example
 //!
@@ -13,10 +13,10 @@
 //! use waterkit_haptic::{Haptic, HapticPattern, Intensity};
 //! use std::time::Duration;
 //!
-//! # fn example() -> Result<(), waterkit_haptic::HapticError> {
-//! Haptic::impact(Intensity::MEDIUM)?;
-//! Haptic::selection()?;
-//! Haptic::notification_success()?;
+//! # async fn example() -> Result<(), waterkit_haptic::HapticError> {
+//! Haptic::impact(Intensity::MEDIUM).await?;
+//! Haptic::selection().await?;
+//! Haptic::notification_success().await?;
 //!
 //! let pattern = HapticPattern::builder()
 //!     .add(Duration::from_millis(100), Intensity::MAX)
@@ -24,7 +24,7 @@
 //!     .add(Duration::from_millis(200), Intensity::MEDIUM)
 //!     .build();
 //!
-//! Haptic::play(&pattern)?;
+//! Haptic::play(&pattern).await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -302,9 +302,9 @@ impl Capabilities for HapticCapabilities {
 /// ```no_run
 /// use waterkit_haptic::{Haptic, Intensity};
 ///
-/// # fn example() -> Result<(), waterkit_haptic::HapticError> {
+/// # async fn example() -> Result<(), waterkit_haptic::HapticError> {
 /// if Haptic::capabilities().available {
-///     Haptic::impact(Intensity::MEDIUM)?;
+///     Haptic::impact(Intensity::MEDIUM).await?;
 /// }
 /// # Ok(())
 /// # }
@@ -326,8 +326,8 @@ impl Haptic {
     /// # Errors
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
-    pub fn impact(intensity: Intensity) -> Result<(), HapticError> {
-        sys::impact(intensity)
+    pub async fn impact(intensity: Intensity) -> Result<(), HapticError> {
+        sys::impact(intensity).await
     }
 
     /// Triggers a selection feedback (light tap for UI selection changes).
@@ -335,8 +335,8 @@ impl Haptic {
     /// # Errors
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
-    pub fn selection() -> Result<(), HapticError> {
-        sys::selection()
+    pub async fn selection() -> Result<(), HapticError> {
+        sys::selection().await
     }
 
     /// Triggers a success notification feedback.
@@ -344,8 +344,8 @@ impl Haptic {
     /// # Errors
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
-    pub fn notification_success() -> Result<(), HapticError> {
-        sys::notification_success()
+    pub async fn notification_success() -> Result<(), HapticError> {
+        sys::notification_success().await
     }
 
     /// Triggers a warning notification feedback.
@@ -353,8 +353,8 @@ impl Haptic {
     /// # Errors
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
-    pub fn notification_warning() -> Result<(), HapticError> {
-        sys::notification_warning()
+    pub async fn notification_warning() -> Result<(), HapticError> {
+        sys::notification_warning().await
     }
 
     /// Triggers an error notification feedback.
@@ -362,8 +362,8 @@ impl Haptic {
     /// # Errors
     ///
     /// Returns a [`HapticError`] if haptics are not supported.
-    pub fn notification_error() -> Result<(), HapticError> {
-        sys::notification_error()
+    pub async fn notification_error() -> Result<(), HapticError> {
+        sys::notification_error().await
     }
 
     /// Plays a custom haptic pattern.
@@ -373,10 +373,10 @@ impl Haptic {
     /// Returns [`HapticError::InvalidPattern`] for an empty pattern, or
     /// [`HapticError::Unsupported`] / [`HapticError::Platform`] from the
     /// platform engine.
-    pub fn play(pattern: &HapticPattern) -> Result<(), HapticError> {
+    pub async fn play(pattern: &HapticPattern) -> Result<(), HapticError> {
         if pattern.steps.is_empty() {
             return Err(HapticError::InvalidPattern("pattern is empty".into()));
         }
-        sys::play_pattern(pattern)
+        sys::play_pattern(pattern).await
     }
 }

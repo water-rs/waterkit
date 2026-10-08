@@ -18,7 +18,30 @@ waterkit-core = { workspace = true }
 thiserror = { workspace = true }
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
+objc2.workspace = true
+
+[target.'cfg(target_os = "ios")'.dependencies]
+block2.workspace = true
+objc2-core-haptics = { workspace = true, features = [
+    "CHHapticDeviceCapability",
+    "CHHapticEngine",
+    "CHHapticEvent",
+    "CHHapticParameter",
+    "CHHapticPattern",
+    "CHHapticPatternPlayer",
+    "block2",
+] }
+objc2-foundation = { workspace = true, features = ["NSArray"] }
+objc2-ui-kit = { workspace = true, features = [
+    "UIFeedbackGenerator",
+    "UIImpactFeedbackGenerator",
+    "UINotificationFeedbackGenerator",
+    "UISelectionFeedbackGenerator",
+    "objc2-core-foundation",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { workspace = true, features = ["NSHapticFeedback"] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
@@ -26,8 +49,6 @@ jni.workspace = true
 ndk-context.workspace = true
 waterkit-build.workspace = true
 
-[build-dependencies]
-waterkit-build.workspace = true
 
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]

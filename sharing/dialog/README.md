@@ -21,7 +21,7 @@ waterkit-dialog = "0.1"
 | Platform | Backend |
 | :--- | :--- |
 | **macOS** | `rfd` (Native Cocoa) |
-| **iOS** | `UIAlertController` (Swift) |
+| **iOS** | `UIAlertController` (`objc2`) |
 | **Android** | `AlertDialog` (Kotlin/JNI) |
 | **Windows/Linux** | `rfd` (Native wrappers) |
 

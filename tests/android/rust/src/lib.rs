@@ -2476,7 +2476,7 @@ async fn record_android_system(report: &mut TestReport) {
         Ok(state) => TestCase::passed_with_message("system.thermal_state", format!("{state:?}")),
         Err(error) => TestCase::failed("system.thermal_state", error.to_string()),
     });
-    report.push(match system::load() {
+    report.push(match system::load().await {
         Ok(load) if load.memory_total() > 0 && load.memory_used() <= load.memory_total() => {
             TestCase::passed_with_message("system.load", format!("{load:?}"))
         }

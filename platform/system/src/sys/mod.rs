@@ -58,6 +58,10 @@ pub(crate) fn thermal_state() -> Result<Option<crate::ThermalState>, crate::Syst
     target_os = "windows",
     target_os = "linux"
 )))]
-pub(crate) fn load() -> Result<crate::SystemLoad, crate::SystemError> {
+#[expect(
+    clippy::unused_async,
+    reason = "the facade calls every platform's backend through the same async signature; this shim has nothing to await"
+)]
+pub(crate) async fn load() -> Result<crate::SystemLoad, crate::SystemError> {
     panic!("waterkit-system supports only macOS, iOS, Android, Windows, and Linux.")
 }

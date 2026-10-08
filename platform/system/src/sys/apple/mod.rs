@@ -193,8 +193,8 @@ pub fn thermal_state() -> Result<Option<ThermalState>, SystemError> {
     }
 }
 
-pub fn load() -> Result<SystemLoad, SystemError> {
-    let cpu_usage = host_cpu_usage()?;
+pub async fn load() -> Result<SystemLoad, SystemError> {
+    let cpu_usage = host_cpu_usage().await?;
     let memory_used = used_memory()?;
     let memory_total = NSProcessInfo::processInfo().physicalMemory();
     Ok(SystemLoad::new(Some(cpu_usage), memory_used, memory_total))
@@ -252,9 +252,9 @@ fn host_cpu_ticks() -> Result<[u64; 4], SystemError> {
 
 /// System-wide CPU usage across the sample window, or since boot if the
 /// kernel's counters did not advance.
-fn host_cpu_usage() -> Result<f32, SystemError> {
+async fn host_cpu_usage() -> Result<f32, SystemError> {
     let first = host_cpu_ticks()?;
-    std::thread::sleep(CPU_SAMPLE_INTERVAL);
+    futures_timer::Delay::new(CPU_SAMPLE_INTERVAL).await;
     let second = host_cpu_ticks()?;
 
     // The kernel's counters are 32-bit and wrap; a wrapping difference per

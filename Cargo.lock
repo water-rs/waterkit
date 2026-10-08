@@ -8720,6 +8720,7 @@ dependencies = [
  "block2 0.6.2",
  "dispatch2",
  "futures",
+ "futures-timer",
  "jni 0.22.4",
  "libc",
  "mach2 0.6.0",

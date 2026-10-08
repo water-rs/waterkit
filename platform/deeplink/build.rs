@@ -1,19 +1,15 @@
-//! Build script for waterkit-deeplink.
+//! Link the Apple frameworks the implementation calls. When the crate is
+//! packaged as a static archive the directives only reach cargo-driven
+//! links; Xcode projects consuming the archive must list the frameworks
+//! themselves (as the test harness does).
 
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
-
-    if target_os == "ios" || target_os == "macos" {
-        let mut bridge = waterkit_build::SwiftBridge::new("src/sys/apple/mod.rs")
-            .swift_source("src/sys/apple/DeepLink.swift")
-            .framework("Foundation");
-
-        if target_os == "ios" {
-            bridge = bridge.framework("UIKit");
-        } else {
-            bridge = bridge.framework("AppKit");
-        }
-
-        waterkit_build::SwiftBridges::new().bridge(bridge).compile();
+    match target_os.as_str() {
+        // UIApplication + UIScene (iOS and Mac Catalyst).
+        "ios" => println!("cargo:rustc-link-lib=framework=UIKit"),
+        // NSWorkspace + NSAppleEventManager.
+        "macos" => println!("cargo:rustc-link-lib=framework=AppKit"),
+        _ => {}
     }
 }

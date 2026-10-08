@@ -181,11 +181,6 @@ mod macos {
 
     use crate::{Error, ImageFormat};
 
-    #[expect(
-        deprecated,
-        reason = "kIOMasterPortDefault is the documented entry point on macOS < 12"
-    )]
-    use objc2_io_kit::kIOMasterPortDefault;
     use objc2_io_kit::{
         IODisplayCreateInfoDictionary, IODisplayGetFloatParameter, IODisplaySetFloatParameter,
         IOIteratorNext, IOObjectRelease, IOServiceGetMatchingServices, IOServiceMatching,
@@ -449,11 +444,6 @@ mod macos {
 
     /// Capture the primary screen and return encoded image data.
     pub async fn capture_screenshot(format: ImageFormat) -> Result<Vec<u8>, Error> {
-        if !available!(macos = 12.3, ..) {
-            // ScreenCaptureKit is required; CGWindowListCreateImage was
-            // obsoleted in macOS 15 and no longer compiles.
-            return Err(Error::Unsupported);
-        }
         let (tx, rx) = oneshot::channel::<Result<Vec<u8>, Error>>();
         let sender: ScreenshotSender = Arc::new(Mutex::new(Some(tx)));
         {
@@ -570,19 +560,9 @@ mod macos {
                 CGDisplaySerialNumber(display),
             )
         };
-        let main_port = if available!(macos = 12.0, ..) {
-            // SAFETY: constant static exported by IOKit.
-            unsafe { kIOMainPortDefault }
-        } else {
-            // SAFETY: constant static exported by IOKit.
-            #[expect(
-                deprecated,
-                reason = "kIOMasterPortDefault is the documented entry point on macOS < 12"
-            )]
-            unsafe {
-                kIOMasterPortDefault
-            }
-        };
+        // SAFETY: constant static exported by IOKit; the deployment floor
+        // (macOS 12.3) always has it.
+        let main_port = unsafe { kIOMainPortDefault };
         // SAFETY: a nul-terminated class-name literal.
         let matching =
             unsafe { IOServiceMatching(c"IODisplayConnect".as_ptr()) }.ok_or_else(|| {
@@ -956,9 +936,6 @@ mod macos {
         target_fps: u32,
         show_cursor: bool,
     ) -> Result<Retained<ScreenStreamCapturer>, Error> {
-        if !available!(macos = 12.3, ..) {
-            return Err(Error::Unsupported);
-        }
         let capturer = ScreenStreamCapturer::alloc_new();
         let (tx, rx) = oneshot::channel::<Result<(), Error>>();
         capturer.start(

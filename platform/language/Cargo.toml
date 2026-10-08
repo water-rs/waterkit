@@ -1,0 +1,41 @@
+[package]
+name = "waterkit-language"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "On-device language translation through system translation services"
+keywords = ["language", "translation", "localization"]
+categories = ["localization", "os"]
+
+[lints]
+workspace = true
+
+[dependencies]
+waterkit-core = { workspace = true }
+icu_locale_core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+futures.workspace = true
+tracing.workspace = true
+async-channel.workspace = true
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+waterkit-build.workspace = true
+jni.workspace = true
+ndk-context.workspace = true
+
+[build-dependencies]
+waterkit-build.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+
+[package.metadata.waterui.android]
+kotlin-sources = ["src/sys/android/TranslationHelper.kt"]

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/notification", "tests/macos/passkey", "tests/macos/vision", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "multimedia/video/core", "multimedia/video/container", "multimedia/video/streaming", "multimedia/video/processing", "multimedia/video/player", "multimedia/video/cli", "identity/*", "sharing/*", "utils/build"]
+members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/notification", "tests/macos/passkey", "tests/macos/menu", "tests/macos/vision", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "multimedia/video/core", "multimedia/video/container", "multimedia/video/streaming", "multimedia/video/processing", "multimedia/video/player", "multimedia/video/cli", "identity/*", "sharing/*", "utils/build"]
 
 
 [workspace.package]
@@ -37,6 +37,7 @@ waterkit-permission = { workspace = true, optional = true }
 waterkit-location = { workspace = true, optional = true }
 waterkit-audio = { workspace = true, optional = true, features = ["playback", "recording", "streaming", "media-session", "apple-artwork"] }
 waterkit-haptic = { workspace = true, optional = true }
+waterkit-language = { workspace = true, optional = true }
 waterkit-notification = { workspace = true, optional = true }
 waterkit-dialog = { workspace = true, optional = true }
 waterkit-biometric = { workspace = true, optional = true }
@@ -61,7 +62,9 @@ waterkit-health = { workspace = true, optional = true }
 waterkit-deeplink = { workspace = true, optional = true }
 waterkit-background = { workspace = true, optional = true }
 waterkit-passkey = { workspace = true, optional = true }
+waterkit-menu = { workspace = true, optional = true }
 waterkit-otp = { workspace = true, optional = true }
+waterkit-wallet = { workspace = true, optional = true }
 
 [dev-dependencies]
 toml = { workspace = true }
@@ -73,6 +76,7 @@ full = [
     "location",
     "audio",
     "haptic",
+    "language",
     "notification",
     "dialog",
     "biometric",
@@ -97,12 +101,15 @@ full = [
     "deeplink",
     "background",
     "passkey",
+    "menu",
     "otp",
+    "wallet",
 ]
 permission = ["dep:waterkit-permission"]
 location = ["dep:waterkit-location", "permission"]
 audio = ["dep:waterkit-audio"]
 haptic = ["dep:waterkit-haptic"]
+language = ["dep:waterkit-language"]
 notification = ["dep:waterkit-notification"]
 dialog = ["dep:waterkit-dialog"]
 biometric = ["dep:waterkit-biometric"]
@@ -130,7 +137,9 @@ health = ["dep:waterkit-health"]
 deeplink = ["dep:waterkit-deeplink"]
 background = ["dep:waterkit-background"]
 passkey = ["dep:waterkit-passkey"]
+menu = ["dep:waterkit-menu"]
 otp = ["dep:waterkit-otp"]
+wallet = ["dep:waterkit-wallet"]
 
 
 [workspace.dependencies]
@@ -148,6 +157,7 @@ waterkit-permission = { path = "platform/permission", version = "0.1.4" }
 waterkit-location = { path = "device/location", version = "0.1.4" }
 waterkit-audio = { path = "multimedia/audio", version = "0.1.4", default-features = false }
 waterkit-haptic = { path = "device/haptic", version = "0.1.4" }
+waterkit-language = { path = "platform/language", version = "0.1.4" }
 waterkit-notification = { path = "sharing/notification", version = "0.1.4" }
 waterkit-dialog = { path = "sharing/dialog", version = "0.1.4" }
 waterkit-biometric = { path = "identity/biometric", version = "0.1.4" }
@@ -161,7 +171,7 @@ waterkit-sensor = { path = "device/sensor", version = "0.1.4" }
 # `software-decode` (rav1d + image decoding), `software-encode` (adds rav1e)
 # and `vaapi` explicitly.
 waterkit-codec = { path = "multimedia/codec", version = "0.1.4", default-features = false }
-shaderloom = { version = "0.1.2", default-features = false }
+shaderloom = { version = "0.2", default-features = false }
 waterkit-screen = { path = "platform/screen", version = "0.1.4" }
 waterkit-system = { path = "platform/system", version = "0.1.4" }
 waterkit-video = { path = "multimedia/video", version = "0.1.4" }
@@ -181,12 +191,13 @@ waterkit-health = { path = "device/health", version = "0.1.4" }
 waterkit-deeplink = { path = "platform/deeplink", version = "0.1.4" }
 waterkit-background = { path = "platform/background", version = "0.1.4" }
 waterkit-passkey = { path = "identity/passkey", version = "0.1.4" }
+waterkit-menu = { path = "platform/menu", version = "0.1.4" }
 waterkit-otp = { path = "identity/otp", version = "0.1.4" }
+waterkit-wallet = { path = "platform/wallet", version = "0.1.4" }
 
 # Cross-platform
 enumset = "1.1"
 futures = "0.3"
-icu_locale_core = { version = "2", features = ["alloc"] }
 futures-channel = "0.3"
 smallvec = "1.15"
 async-channel = "2.5"
@@ -218,6 +229,9 @@ core-foundation = "0.10"
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-core-media = "0.3"
+objc2-app-kit = "0.3"
+# W3C KeyboardEvent key/modifier vocabulary.
+keyboard-types = "0.8"
 objc2-core-video = "0.3"
 objc2-video-toolbox = "0.3"
 objc2-core-foundation = "0.3"
@@ -280,6 +294,8 @@ jiff = "0.2"
 # URL encoding
 percent-encoding = "2.3"
 
+# BCP-47 language identifiers shared by capability APIs.
+icu_locale_core = { version = "2.3", features = ["alloc"] }
 url = "2.5"
 zenwave = { version = "0.6.1", default-features = false, features = ["hyper-backend"] }
 
@@ -338,7 +354,6 @@ filtrate-core = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4
 filtrate-derive = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }
 cherenkov-shader = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }
 
-# shaderloom's wgpu 30 port is not on crates.io yet; pin the rev that carries
-# it, as other water-rs consumers do. The pinned rev is the head of
-# water-rs/shaderloom#21 (`build/wgpu-30`).
-shaderloom = { git = "https://github.com/water-rs/shaderloom", rev = "84c37c8314f1bb6d228fce30f78d94872247a18f" }
+# shaderloom passes an explicit Metal `-target` (water-rs/shaderloom#36), which
+# is not on crates.io yet; pin the `dev` commit that carries it.
+shaderloom = { git = "https://github.com/water-rs/shaderloom", rev = "6ea0fb63a340809b59211cc3215bb744dfa5f107" }

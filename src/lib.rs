@@ -56,6 +56,10 @@ pub use waterkit_fs as fs;
 #[doc(inline)]
 pub use waterkit_haptic as haptic;
 
+#[cfg(feature = "language")]
+#[doc(inline)]
+pub use waterkit_language as language;
+
 #[cfg(feature = "location")]
 #[doc(inline)]
 pub use waterkit_location as location;
@@ -136,6 +140,13 @@ pub use waterkit_background as background;
 #[doc(inline)]
 pub use waterkit_passkey as passkey;
 
+#[cfg(feature = "menu")]
+#[doc(inline)]
+pub use waterkit_menu as menu;
 #[cfg(feature = "otp")]
 #[doc(inline)]
 pub use waterkit_otp as otp;
+
+#[cfg(feature = "wallet")]
+#[doc(inline)]
+pub use waterkit_wallet as wallet;

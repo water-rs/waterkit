@@ -315,6 +315,48 @@ fn should_link_swift_import(module: &str) -> bool {
     !matches!(module, "Foundation" | "OSLog" | "ObjectiveC")
 }
 
+/// An OS version as `major.minor[.patch]`, ordered the way deployment targets
+/// compare.
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct OsVersion {
+    major: u32,
+    minor: u32,
+    patch: u32,
+}
+
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+impl OsVersion {
+    const fn new(major: u32, minor: u32) -> Self {
+        Self {
+            major,
+            minor,
+            patch: 0,
+        }
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        let mut components = text.split('.');
+        let component = |part: Option<&str>| part.map_or(Some(0), |part| part.parse().ok());
+        Some(Self {
+            major: component(components.next())?,
+            minor: component(components.next())?,
+            patch: component(components.next())?,
+        })
+    }
+}
+
+#[cfg(any(target_os = "ios", target_os = "macos", test))]
+impl std::fmt::Display for OsVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.patch == 0 {
+            write!(f, "{}.{}", self.major, self.minor)
+        } else {
+            write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+        }
+    }
+}
+
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 fn swift_runtime_lib_dir(swift_runtime_dir: &str) -> PathBuf {
     use std::process::Command;
@@ -410,6 +452,66 @@ fn link_clang_builtins(swift_runtime_dir: &str) {
     }
 }
 
+/// The deployment target rustc stamps on binaries built for `rust_target`, as
+/// the `VAR=value` line `rustc --print deployment-target` reports.
+///
+/// Asking rustc — rather than reading the environment — gives the effective
+/// value: a `*_DEPLOYMENT_TARGET` variable overrides the target's default, and
+/// the print reflects both.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn rustc_deployment_target(rust_target: &str) -> (String, OsVersion) {
+    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    let output = std::process::Command::new(rustc)
+        .args(["--print", "deployment-target", "--target", rust_target])
+        .output()
+        .expect("failed to run rustc --print deployment-target");
+    assert!(
+        output.status.success(),
+        "rustc --print deployment-target --target {rust_target} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("rustc --print output must be UTF-8");
+    let line = stdout.trim();
+    let (var, version) = line.split_once('=').unwrap_or_else(|| {
+        panic!("rustc --print deployment-target printed {line:?}, not NAME=value")
+    });
+    let version = OsVersion::parse(version)
+        .unwrap_or_else(|| panic!("rustc reported an unparsable deployment target {version:?}"));
+    (var.to_string(), version)
+}
+
+/// Fails the build when the deployment target rustc will stamp on binaries is
+/// below `target.deployment`, the floor the Swift objects are compiled for.
+///
+/// `ld` consults the SDK stubs' back-deployment rules against the *binary's*
+/// deployment version, not the objects': below the version an OS shipped a
+/// Swift runtime library, the stub records the `@rpath` install name a bundle
+/// embedding the library would satisfy. `rustc` defaults
+/// `aarch64-apple-darwin` to macOS 11, below the Swift concurrency runtime's
+/// in-OS floor of macOS 12, so a binary linking those objects — the `waterkit`
+/// facade's test binary is one — referenced `@rpath/libswift_Concurrency.dylib`
+/// and aborted in dyld with no `LC_RPATH`. A library build script cannot raise
+/// a dependent's deployment target (`rustc-link-arg` does not propagate), so
+/// the mismatch must fail here, naming the `*_DEPLOYMENT_TARGET` override the
+/// consumer controls.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn assert_deployment_floor(target: &SwiftTarget) {
+    let (env_var, effective) = rustc_deployment_target(&target.rust_target);
+    println!("cargo:rerun-if-env-changed={env_var}");
+    let pkg = cargo_env("CARGO_PKG_NAME");
+    assert!(
+        effective >= target.deployment,
+        "{pkg} compiles Swift code with deployment target {}, but rustc links \
+         {} binaries with {env_var}={effective}, below that floor: the linker \
+         records @rpath install names for Swift runtime libraries, and every \
+         binary linking the crate aborts in dyld at launch. Set {env_var}={} \
+         or newer.",
+        target.deployment,
+        target.rust_target,
+        target.deployment,
+    );
+}
+
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 fn link_swift_runtime(swift_runtime_dir: &str) {
     let toolchain_lib = swift_runtime_lib_dir(swift_runtime_dir);
@@ -490,6 +592,9 @@ struct SwiftTarget {
     swift_triple: String,
     /// The directory of the Swift runtime under the toolchain's `lib/swift`.
     runtime_dir: &'static str,
+    /// The deployment version `swift_triple` encodes: the oldest OS version the
+    /// compiled Swift objects run on.
+    deployment: OsVersion,
     /// Whether this is a Mac Catalyst target. It compiles against the macOS
     /// SDK, whose `UIKit` lives under `System/iOSSupport`, outside `swiftc`'s
     /// default framework search path.
@@ -501,24 +606,36 @@ impl SwiftTarget {
     fn from_cargo_env() -> Self {
         let rust_target = cargo_env("TARGET");
         let mac_catalyst = rust_target.ends_with("-apple-ios-macabi");
-        let (sdk, swift_triple, runtime_dir) = if rust_target.contains("ios") {
+        let (sdk, swift_triple, runtime_dir, deployment) = if rust_target.contains("ios") {
             let arch = if rust_target.contains("x86_64") {
                 "x86_64"
             } else {
                 "arm64"
             };
+            let ios14 = OsVersion::new(14, 0);
             if mac_catalyst {
                 // Mac Catalyst: the macOS SDK and runtime, with the `-macabi`
                 // environment selecting the iOS API surface.
-                ("macosx", format!("{arch}-apple-ios14.0-macabi"), "macosx")
+                (
+                    "macosx",
+                    format!("{arch}-apple-ios14.0-macabi"),
+                    "macosx",
+                    ios14,
+                )
             } else if rust_target.contains("ios-sim") {
                 (
                     "iphonesimulator",
                     format!("{arch}-apple-ios14.0-simulator"),
                     "iphonesimulator",
+                    ios14,
                 )
             } else {
-                ("iphoneos", format!("{arch}-apple-ios14.0"), "iphoneos")
+                (
+                    "iphoneos",
+                    format!("{arch}-apple-ios14.0"),
+                    "iphoneos",
+                    ios14,
+                )
             }
         } else {
             let arch = if rust_target.contains("aarch64") || rust_target.contains("arm64") {
@@ -526,13 +643,19 @@ impl SwiftTarget {
             } else {
                 "x86_64"
             };
-            ("macosx", format!("{arch}-apple-macos12.3"), "macosx")
+            (
+                "macosx",
+                format!("{arch}-apple-macos12.3"),
+                "macosx",
+                OsVersion::new(12, 3),
+            )
         };
         Self {
             rust_target,
             sdk,
             swift_triple,
             runtime_dir,
+            deployment,
             mac_catalyst,
         }
     }
@@ -596,6 +719,7 @@ fn build_swift_library(
     fs::write(&combined_swift, combined).expect("Failed to write combined Swift file");
 
     let target = SwiftTarget::from_cargo_env();
+    assert_deployment_floor(&target);
     let sdk_path = target.sdk_path();
     let obj_file = out_dir.join(format!("{module_name}.o"));
     let mut swiftc = Command::new("swiftc");
@@ -788,7 +912,7 @@ pub fn compile_multi_swift(lib_name: &str, _crates: impl IntoIterator<Item = Swi
 #[cfg(test)]
 mod tests {
     use super::{
-        AppleTargetOs, discover_swift_bridge_crates, infer_swift_frameworks_from_source,
+        AppleTargetOs, OsVersion, discover_swift_bridge_crates, infer_swift_frameworks_from_source,
         swift_bridge_static_lib_name,
     };
 
@@ -858,5 +982,28 @@ import OSLog
             swift_bridge_static_lib_name("waterkit-haptic"),
             "waterkit_haptic_swift_bridge"
         );
+    }
+
+    #[test]
+    fn parses_and_orders_os_versions() {
+        assert_eq!(
+            OsVersion::parse("12.3"),
+            Some(OsVersion {
+                major: 12,
+                minor: 3,
+                patch: 0
+            })
+        );
+        assert_eq!(
+            OsVersion::parse("10.14.4"),
+            Some(OsVersion {
+                major: 10,
+                minor: 14,
+                patch: 4
+            })
+        );
+        assert!(OsVersion::new(12, 3) > OsVersion::parse("12.0").unwrap());
+        assert!(OsVersion::new(14, 0) < OsVersion::parse("15.0").unwrap());
+        assert_eq!(OsVersion::parse("x"), None);
     }
 }

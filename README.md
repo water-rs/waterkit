@@ -22,7 +22,9 @@ Waterkit is organized into focused, independent crates. You can use the main `wa
 | **[FS](fs)** | File system helpers, sandboxing, and file picking. |
 | **[Haptic](haptic)** | Haptic feedback and vibration control. |
 | **[Health](health)** | Health data integration (HealthKit / Health Connect). |
+| **[Language](language)** | On-device translation through the OS translation services. |
 | **[Location](location)** | GPS and location services (CoreLocation, Android location APIs, etc.). |
+| **[Menu](menu)** | Native application menu bar (`NSMenu` on macOS, Win32 `HMENU` on Windows). |
 | **[NFC](nfc)** | NFC read/write and tag interaction workflows. |
 | **[Notification](notification)** | Local system notifications. |
 | **[OTP](otp)** | One-time-code retrieval from addressed SMS and user-consented SMS. |
@@ -37,6 +39,7 @@ Waterkit is organized into focused, independent crates. You can use the main `wa
 | **[System](system)** | System information, connectivity status, and thermal info. |
 | **[Video](video)** | High-level video playback and processing. |
 | **[Vision](vision)** | Hardware-accelerated on-device vision requests over camera frames and still images. |
+| **[Wallet](wallet)** | Add server-signed passes to Google Wallet / Apple Wallet. |
 
 ## Advanced Modern Capabilities
 

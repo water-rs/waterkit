@@ -54,10 +54,12 @@ full = [
     "speech",
     "contacts",
     "calendar",
+    "language",
     "deeplink",
     "background",
     "passkey",
     "vision",
+    "wallet",
 ]
 sensor = ["waterkit/sensor"]
 biometric = ["waterkit/biometric"]
@@ -83,6 +85,7 @@ share = ["waterkit/share"]
 speech = ["waterkit/speech"]
 contacts = ["waterkit/contacts"]
 calendar = ["waterkit/calendar"]
+language = ["waterkit/language"]
 health = ["waterkit/health"]
 deeplink = ["waterkit/deeplink"]
 background = ["waterkit/background"]
@@ -99,6 +102,7 @@ vision = [
     "dep:dejavu",
     "waterkit/vision",
 ]
+wallet = ["waterkit/wallet"]
 
 [build-dependencies]
 swift-bridge-build.workspace = true

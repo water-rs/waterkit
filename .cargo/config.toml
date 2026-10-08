@@ -1,0 +1,10 @@
+# WaterKit's Swift bridges compile for deployment floors of macOS 12.3 and iOS
+# 14.0 (the version baked into `swift_triple` in `utils/build/src/apple.rs`).
+# Rustc otherwise defaults final links to macOS 11 and iOS 10, below the OS
+# version that ships the Swift concurrency runtime, so dependent binaries —
+# the facade's test binary among them — record `@rpath` install names for
+# `libswift_Concurrency` and abort in dyld at launch. These are floors, not
+# overrides: an explicitly exported value still wins.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "12.3"
+IPHONEOS_DEPLOYMENT_TARGET = "14.0"

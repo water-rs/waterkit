@@ -14,9 +14,7 @@ import com.google.android.gms.location.CurrentLocationRequest
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
-import com.google.android.gms.tasks.Task
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.atomic.AtomicReference
+import waterkit.build.NativeCallback
 
 /**
  * Helper class for requesting the device location on Android.
@@ -88,18 +86,27 @@ object LocationHelper {
 
     /**
      * Requests a fresh fix from the Fused Location Provider of Google Play
-     * services and blocks the calling thread until Play services completes
-     * the task. The caller must not be the main thread.
+     * services. The task's success and failure listeners complete
+     * [callback] on the thread Play services answers on, so no thread is
+     * parked waiting.
      */
     @JvmStatic
-    fun getFusedLocation(context: Context): Result {
-        val grant = grant(context) ?: return Result.failure(STATUS_PERMISSION_DENIED)
+    fun getFusedLocation(context: Context, callback: NativeCallback) {
+        val grant = grant(context)
+        if (grant == null) {
+            callback.complete(Result.failure(STATUS_PERMISSION_DENIED))
+            return
+        }
         val manager = context.getSystemService(LocationManager::class.java)
-            ?: return Result.failure(STATUS_UNAVAILABLE)
+        if (manager == null) {
+            callback.complete(Result.failure(STATUS_UNAVAILABLE))
+            return
+        }
         // The fused provider serves no fix while the device's location switch
         // is off; it answers `null`, which would read as "no fix" instead.
         if (!locationEnabled(manager)) {
-            return Result.failure(STATUS_SERVICE_DISABLED)
+            callback.complete(Result.failure(STATUS_SERVICE_DISABLED))
+            return
         }
 
         val request = CurrentLocationRequest.Builder()
@@ -111,27 +118,21 @@ object LocationHelper {
             )
             .build()
         val cancellation = CancellationTokenSource()
-        val completed = AtomicReference<Task<Location>?>(null)
-        val latch = CountDownLatch(1)
-        LocationServices.getFusedLocationProviderClient(context)
+        val task = LocationServices.getFusedLocationProviderClient(context)
             .getCurrentLocation(request, cancellation.token)
-            .addOnCompleteListener({ runnable -> runnable.run() }) { task ->
-                completed.set(task)
-                latch.countDown()
-            }
-
-        latch.await()
-        val task = completed.get()
-            ?: throw IllegalStateException("fused location task completed without a result")
-        if (task.isSuccessful) {
-            return task.result?.let(Result::success) ?: Result.failure(STATUS_UNAVAILABLE)
+        task.addOnSuccessListener({ runnable -> runnable.run() }) { location ->
+            callback.complete(
+                location?.let(Result::success) ?: Result.failure(STATUS_UNAVAILABLE),
+            )
         }
-        return when (val exception = task.exception) {
-            is SecurityException -> Result.failure(STATUS_PERMISSION_DENIED)
-            // Any other Google Play services failure is not a status this crate
-            // can name: it reaches Rust as the exception, on the caller's thread.
-            null -> throw IllegalStateException("fused location task failed without an exception")
-            else -> throw exception
+        task.addOnFailureListener({ runnable -> runnable.run() }) { exception ->
+            when (exception) {
+                is SecurityException ->
+                    callback.complete(Result.failure(STATUS_PERMISSION_DENIED))
+                // Any other Google Play services failure is not a status this
+                // crate can name: it reaches Rust as a rejection.
+                else -> callback.fail(exception.toString())
+            }
         }
     }
 
@@ -144,10 +145,10 @@ object LocationHelper {
         }
 
     /**
-     * Requests a fresh fix from the framework `LocationManager` and blocks the
-     * calling thread until the platform delivers it. Callbacks
-     * are delivered on the main looper below API 30, so the caller must not be
-     * the main thread.
+     * Requests a fresh fix from the framework `LocationManager`; the
+     * platform's listener completes [callback]. Callbacks are delivered on
+     * the main looper below API 30, and on the provider's answer thread
+     * from API 30.
      *
      * From API 31 the framework registers its own fused provider
      * (`com.android.location.fused`, a system app on AOSP builds, which fuses
@@ -156,16 +157,24 @@ object LocationHelper {
      * enabled, and the network provider anything else.
      */
     @JvmStatic
-    fun getFrameworkLocation(context: Context): Result {
-        val grant = grant(context) ?: return Result.failure(STATUS_PERMISSION_DENIED)
+    fun getFrameworkLocation(context: Context, callback: NativeCallback) {
+        val grant = grant(context)
+        if (grant == null) {
+            callback.complete(Result.failure(STATUS_PERMISSION_DENIED))
+            return
+        }
         val manager = context.getSystemService(LocationManager::class.java)
-            ?: return Result.failure(STATUS_UNAVAILABLE)
+        if (manager == null) {
+            callback.complete(Result.failure(STATUS_UNAVAILABLE))
+            return
+        }
 
         val provider = frameworkProvider(manager, grant)
-            ?: return Result.failure(STATUS_SERVICE_DISABLED)
+        if (provider == null) {
+            callback.complete(Result.failure(STATUS_SERVICE_DISABLED))
+            return
+        }
 
-        val received = AtomicReference<Location?>(null)
-        val latch = CountDownLatch(1)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 // The quality steers `FUSED_PROVIDER` the way the priority
@@ -184,8 +193,9 @@ object LocationHelper {
                     null,
                     { runnable -> runnable.run() },
                 ) { location ->
-                    received.set(location)
-                    latch.countDown()
+                    callback.complete(
+                        location?.let(Result::success) ?: Result.failure(STATUS_UNAVAILABLE),
+                    )
                 }
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 manager.getCurrentLocation(
@@ -193,27 +203,23 @@ object LocationHelper {
                     null,
                     { runnable -> runnable.run() },
                 ) { location ->
-                    received.set(location)
-                    latch.countDown()
+                    callback.complete(
+                        location?.let(Result::success) ?: Result.failure(STATUS_UNAVAILABLE),
+                    )
                 }
             } else {
                 @Suppress("DEPRECATION") // getCurrentLocation requires API 30.
                 manager.requestSingleUpdate(
                     provider,
                     LocationListener { location ->
-                        received.set(location)
-                        latch.countDown()
+                        callback.complete(Result.success(location))
                     },
                     Looper.getMainLooper(),
                 )
             }
         } catch (e: SecurityException) {
-            return Result.failure(STATUS_PERMISSION_DENIED)
+            callback.complete(Result.failure(STATUS_PERMISSION_DENIED))
         }
-
-        latch.await()
-        val location = received.get() ?: return Result.failure(STATUS_UNAVAILABLE)
-        return Result.success(location)
     }
 
     /** The enabled provider that serves [grant], or `null` when none is enabled. */

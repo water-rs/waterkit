@@ -146,8 +146,8 @@ impl SystemLoad {
 ///
 /// Returns [`SystemError::Platform`] if the platform's network service cannot
 /// be queried.
-pub fn connectivity() -> Result<ConnectivityInfo, SystemError> {
-    sys::connectivity()
+pub async fn connectivity() -> Result<ConnectivityInfo, SystemError> {
+    sys::connectivity().await
 }
 
 /// Snapshot of the current thermal state.
@@ -170,6 +170,6 @@ pub fn thermal_state() -> Result<Option<ThermalState>, SystemError> {
 ///
 /// Returns [`SystemError::Platform`] if the platform's CPU or memory statistics
 /// cannot be read.
-pub fn load() -> Result<SystemLoad, SystemError> {
-    sys::load()
+pub async fn load() -> Result<SystemLoad, SystemError> {
+    sys::load().await
 }

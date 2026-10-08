@@ -35,6 +35,8 @@ x11rb = { workspace = true, features = ["xfixes"] }
 
 # Apple platforms (iOS only - macOS uses clipboard-rs)
 [target.'cfg(target_os = "ios")'.dependencies]
+block2.workspace = true
+dispatch2.workspace = true
 objc2.workspace = true
 objc2-core-graphics = { workspace = true, features = [
     "CGBitmapContext",
@@ -49,15 +51,19 @@ objc2-foundation = { workspace = true, features = [
     "NSDictionary",
     "NSFileManager",
     "NSItemProvider",
+    "NSNotification",
     "NSObject",
+    "NSOperation",
     "NSString",
     "NSURL",
 ] }
 objc2-ui-kit = { workspace = true, features = [
+    "UIApplication",
     "UIPasteboard",
     "UIImage",
     "objc2-core-graphics",
 ] }
+waterkit-core.workspace = true
 objc2-uniform-type-identifiers = { workspace = true, features = [
     "UTType",
     "UTCoreTypes",

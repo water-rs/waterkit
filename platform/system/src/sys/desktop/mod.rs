@@ -13,7 +13,11 @@ use sysinfo::{
     Components, CpuRefreshKind, MINIMUM_CPU_UPDATE_INTERVAL, MemoryRefreshKind, RefreshKind, System,
 };
 
-pub fn connectivity() -> Result<ConnectivityInfo, SystemError> {
+#[expect(
+    clippy::unused_async,
+    reason = "the public signature is async on every platform; this one resolves synchronously"
+)]
+pub async fn connectivity() -> Result<ConnectivityInfo, SystemError> {
     let transport = os::transport()?;
     Ok(ConnectivityInfo::new(
         transport,
@@ -48,15 +52,16 @@ pub fn thermal_state() -> Result<Option<ThermalState>, SystemError> {
     }))
 }
 
-pub fn load() -> Result<SystemLoad, SystemError> {
+pub async fn load() -> Result<SystemLoad, SystemError> {
     let mut system = System::new_with_specifics(
         RefreshKind::nothing()
             .with_cpu(CpuRefreshKind::everything())
             .with_memory(MemoryRefreshKind::everything()),
     );
     // CPU usage is the difference between two samples taken at least
-    // `MINIMUM_CPU_UPDATE_INTERVAL` apart.
-    std::thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL);
+    // `MINIMUM_CPU_UPDATE_INTERVAL` apart. `system` is `Send`, so the
+    // future stays `Send` across the timer.
+    futures_timer::Delay::new(MINIMUM_CPU_UPDATE_INTERVAL).await;
     system.refresh_cpu_all();
     system.refresh_memory();
 

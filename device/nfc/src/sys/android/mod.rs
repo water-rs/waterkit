@@ -171,7 +171,7 @@ impl std::fmt::Debug for NfcReaderInner {
 impl NfcReaderInner {
     pub async fn start_session(
         _message: &str,
-    ) -> Result<(Self, async_channel::Receiver<NfcTag>), NfcError> {
+    ) -> Result<(Self, async_channel::Receiver<Result<NfcTag, NfcError>>), NfcError> {
         std::future::ready(()).await;
         if !nfc_is_available() {
             return Err(NfcError::NotAvailable);
@@ -188,24 +188,35 @@ impl NfcReaderInner {
             .spawn(move || {
                 let mut last_tag_id: Option<String> = None;
                 while !stop_for_thread.load(Ordering::Relaxed) {
-                    let snapshot = with_android_context(jni_api::current_tag_snapshot)
-                        .unwrap_or_else(|error| {
-                            panic!("waterkit-nfc: failed to fetch NFC tag snapshot: {error}")
-                        });
+                    // A snapshot failure (adapter disabled mid-session, JNI
+                    // error) is terminal: report it as an item and end the
+                    // stream by dropping the sender.
+                    let snapshot = match with_android_context(jni_api::current_tag_snapshot) {
+                        Ok(snapshot) => snapshot,
+                        Err(error) => {
+                            let _ = tag_tx.try_send(Err(error));
+                            break;
+                        }
+                    };
                     if let Some(snapshot) = snapshot
                         && last_tag_id.as_deref() != Some(snapshot.tag_id.as_str())
                     {
-                        let ndef_message = snapshot
-                            .ndef_records
-                            .as_deref()
-                            .map(parse_ndef_records)
-                            .transpose()
-                            .unwrap_or_else(|error| {
-                                panic!("waterkit-nfc: failed to parse NDEF payload: {error}")
-                            });
-                        let id = hex_decode(&snapshot.tag_id).unwrap_or_else(|error| {
-                            panic!("waterkit-nfc: failed to decode NFC tag id: {error}")
-                        });
+                        // This tag's parse/decode failures are error items;
+                        // remember the id so a bad tag is not reported twice.
+                        last_tag_id = Some(snapshot.tag_id.clone());
+                        let result = (|| -> Result<NfcTag, NfcError> {
+                            let ndef_message = snapshot
+                                .ndef_records
+                                .as_deref()
+                                .map(parse_ndef_records)
+                                .transpose()?;
+                            let id = hex_decode(&snapshot.tag_id)?;
+                            Ok(NfcTag {
+                                id,
+                                tag_type: snapshot.tag_type,
+                                ndef_message,
+                            })
+                        })();
 
                         {
                             let mut guard = latest_tag_for_thread.lock().unwrap_or_else(|error| {
@@ -216,18 +227,9 @@ impl NfcReaderInner {
                             *guard = Some(Arc::new(snapshot.tag));
                         }
 
-                        if tag_tx
-                            .try_send(NfcTag {
-                                id,
-                                tag_type: snapshot.tag_type,
-                                ndef_message,
-                            })
-                            .is_err()
-                        {
+                        if tag_tx.try_send(result).is_err() {
                             break;
                         }
-
-                        last_tag_id = Some(snapshot.tag_id);
                     }
 
                     std::thread::sleep(Duration::from_millis(250));

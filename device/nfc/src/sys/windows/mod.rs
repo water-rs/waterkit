@@ -42,7 +42,7 @@ impl NfcReaderInner {
     #[allow(clippy::unused_async)]
     pub async fn start_session(
         _message: &str,
-    ) -> Result<(Self, async_channel::Receiver<NfcTag>), NfcError> {
+    ) -> Result<(Self, async_channel::Receiver<Result<NfcTag, NfcError>>), NfcError> {
         let device = ProximityDevice::GetDefault().map_err(|_| NfcError::NotAvailable)?;
         let (tx, rx) = async_channel::bounded(16);
         let subscription_id = device
@@ -63,11 +63,11 @@ impl NfcReaderInner {
                             records: vec![NdefRecord::text(&data_string)],
                         })
                     };
-                    let _ = tx.try_send(NfcTag {
+                    let _ = tx.try_send(Ok(NfcTag {
                         id: Vec::new(),
                         tag_type: NfcTagType::Unknown,
                         ndef_message,
-                    });
+                    }));
                     Ok(())
                 }),
             )

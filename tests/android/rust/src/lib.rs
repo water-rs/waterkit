@@ -1117,7 +1117,7 @@ const RECORDERS: &[Recorder] = &[
     #[cfg(feature = "secret")]
     |h| record_android_secret(&mut h.report, h.env, h.activity.as_obj()),
     #[cfg(feature = "system")]
-    |h| record_android_system(&mut h.report),
+    |h| h.runtime.block_on(record_android_system(&mut h.report)),
     #[cfg(feature = "background")]
     |h| record_android_background(&mut h.report),
     #[cfg(feature = "passkey")]
@@ -2208,7 +2208,7 @@ async fn record_android_clipboard_watch(
     const FIRST: &str = "WaterKit Watch First";
     const SECOND: &str = "WaterKit Watch Second";
 
-    let mut primary_stream = match clipboard.watch() {
+    let mut primary_stream = match clipboard.watch().await {
         Ok(stream) => stream,
         Err(error) => {
             report.push(TestCase::failed(
@@ -2220,7 +2220,7 @@ async fn record_android_clipboard_watch(
     };
     // A second subscriber on the same clipboard: watchers must be
     // independent, each registering its own listener.
-    let mut second_stream = match clipboard.watch() {
+    let mut second_stream = match clipboard.watch().await {
         Ok(stream) => stream,
         Err(error) => {
             primary_stream.stop();
@@ -2278,7 +2278,7 @@ async fn record_android_clipboard_watch(
     // clip event proves the clipboard stays observable through the same
     // callback path afterwards.
     drop(second_stream);
-    match clipboard.watch() {
+    match clipboard.watch().await {
         Ok(mut fresh_stream) => {
             if let Err(error) = clipboard.set_text(FIRST) {
                 report.push(TestCase::failed(
@@ -2458,10 +2458,10 @@ fn record_android_secret(report: &mut TestReport, env: &mut Env<'_>, activity: &
 }
 
 #[cfg(feature = "system")]
-fn record_android_system(report: &mut TestReport) {
+async fn record_android_system(report: &mut TestReport) {
     use waterkit_content::system;
 
-    report.push(match system::connectivity() {
+    report.push(match system::connectivity().await {
         Ok(info) => TestCase::passed_with_message(
             "system.connectivity",
             format!(
@@ -2476,7 +2476,7 @@ fn record_android_system(report: &mut TestReport) {
         Ok(state) => TestCase::passed_with_message("system.thermal_state", format!("{state:?}")),
         Err(error) => TestCase::failed("system.thermal_state", error.to_string()),
     });
-    report.push(match system::load() {
+    report.push(match system::load().await {
         Ok(load) if load.memory_total() > 0 && load.memory_used() <= load.memory_total() => {
             TestCase::passed_with_message("system.load", format!("{load:?}"))
         }

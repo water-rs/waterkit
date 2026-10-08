@@ -32,7 +32,7 @@
 //!
 //! # async fn example() -> Result<(), waterkit_clipboard::ClipboardError> {
 //! let clipboard = Clipboard::new()?;
-//! let mut stream = clipboard.watch()?;
+//! let mut stream = clipboard.watch().await?;
 //!
 //! while let Some(event) = stream.next().await {
 //!     println!("Clipboard changed! has_text={}", event.has_text());
@@ -523,15 +523,19 @@ impl Clipboard {
     ///   selection notifications on X11. The selection held when the watch
     ///   starts is not reported, only later changes. A failure of the display
     ///   server ends the stream and is logged through `tracing`.
-    /// - **iOS**: Uses polling with `UIPasteboard.changeCount` (500ms interval).
+    /// - **iOS**: Observes `UIPasteboardChangedNotification` for changes made
+    ///   while the app is active and re-compares `UIPasteboard.changeCount`
+    ///   once on `UIApplicationDidBecomeActiveNotification`, where other
+    ///   apps' changes become visible. Dropping the watch removes both
+    ///   observers; nothing runs while nothing changes.
     /// - **Android**: Uses `ClipboardManager.OnPrimaryClipChangedListener`; every clip
     ///   notification emits an event, including same-type content updates.
     ///
     /// # Errors
     ///
     /// Returns an error if the clipboard watcher cannot be started.
-    pub fn watch(&self) -> Result<ClipboardStream, ClipboardError> {
-        let (receiver, shutdown) = sys::start_watch(&self.inner)?;
+    pub async fn watch(&self) -> Result<ClipboardStream, ClipboardError> {
+        let (receiver, shutdown) = sys::start_watch(&self.inner).await?;
         Ok(ClipboardStream::new(receiver, shutdown))
     }
 }

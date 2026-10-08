@@ -51,7 +51,11 @@ fn call_helper_object<'local>(
     Ok((!object.is_null()).then_some(object))
 }
 
-pub fn connectivity() -> Result<ConnectivityInfo, SystemError> {
+#[expect(
+    clippy::unused_async,
+    reason = "the public signature is async on every platform; this one resolves synchronously"
+)]
+pub async fn connectivity() -> Result<ConnectivityInfo, SystemError> {
     let transport = with_android_context(|env, context| {
         let value = call_helper(
             env,
@@ -115,7 +119,11 @@ pub fn thermal_state() -> Result<Option<ThermalState>, SystemError> {
         .transpose()
 }
 
-pub fn load() -> Result<SystemLoad, SystemError> {
+#[expect(
+    clippy::unused_async,
+    reason = "the facade calls every platform's backend through the same async signature; Android's helper call completes synchronously"
+)]
+pub async fn load() -> Result<SystemLoad, SystemError> {
     let (used, total) = with_android_context(|env, context| {
         let memory = call_helper_object(
             env,

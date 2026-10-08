@@ -8205,8 +8205,10 @@ dependencies = [
  "serde_json",
  "swift-bridge",
  "thiserror 2.0.20",
+ "url",
  "uuid",
  "waterkit-build",
+ "windows 0.62.2",
 ]
 
 [[package]]

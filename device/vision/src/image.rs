@@ -44,6 +44,15 @@ pub enum Pixels {
         /// The analysis frame.
         frame: waterkit_camera::AnalysisFrame,
     },
+    /// An Apple `CVPixelBuffer` and the orientation of its stored pixels,
+    /// like a page the system document scanner captured.
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    PixelBuffer {
+        /// The retained buffer.
+        buffer: crate::sys::PixelBuffer,
+        /// How the stored pixels relate to upright.
+        orientation: Orientation,
+    },
     /// JPEG, PNG, or HEIF data, decoded with its own orientation metadata by
     /// the serving realization.
     Encoded(Bytes),
@@ -76,6 +85,25 @@ impl Image {
     pub const fn from_encoded(bytes: Bytes) -> Self {
         Self {
             pixels: Pixels::Encoded(bytes),
+        }
+    }
+
+    /// Creates an image from a Core Video pixel buffer, like a page the
+    /// system document scanner captured.
+    ///
+    /// The buffer stays retained: realizations serve its pixels straight
+    /// from the buffer rather than decoding or uploading them again.
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    #[must_use]
+    pub const fn from_pixel_buffer(
+        buffer: objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>,
+        orientation: Orientation,
+    ) -> Self {
+        Self {
+            pixels: Pixels::PixelBuffer {
+                buffer: crate::sys::PixelBuffer(buffer),
+                orientation,
+            },
         }
     }
 

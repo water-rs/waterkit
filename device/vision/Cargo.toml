@@ -54,6 +54,9 @@ waterkit-build = { workspace = true, optional = true }
 # Likely-subtags expansion routes a text request's languages to the script
 # its ML Kit recognizer serves.
 icu_locale = { workspace = true, optional = true }
+# Reading the scanned pages out of the result intent is content-resolver
+# I/O, offloaded from the async executor's thread.
+blocking = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, optional = true, features = [
@@ -100,6 +103,19 @@ scanner = [
     "dep:waterkit-build",
 ]
 
+# The one-shot system document scanner: the ML Kit document scanner of
+# Google Play services on Android, VisionKit's
+# `VNDocumentCameraViewController` on iOS. The Android scanner's
+# `IntentSender` launches through `waterkit-build`'s activity-result bridge.
+document-scanner = [
+    "dep:swift-bridge",
+    "dep:jni",
+    "dep:ndk-context",
+    "dep:waterkit-build",
+    "waterkit-build/activity-result",
+    "dep:blocking",
+]
+
 # Android helpers the packager compiles into the application's classpath:
 # `feature.<name>` tables join the app only while the cargo feature is on.
 
@@ -141,6 +157,16 @@ maven = [
     "com.google.android.gms:play-services-mlkit-text-recognition-japanese:16.0.1",
     "com.google.android.gms:play-services-mlkit-text-recognition-korean:16.0.1",
 ]
+
+# Android helper the packager compiles into the application's classpath.
+[package.metadata.waterui.android.feature.document-scanner]
+kotlin-sources = [
+    "src/sys/android/DocumentScannerHelper.kt",
+    "src/sys/android/PlayServices.kt",
+]
+# The thin client of the ML Kit document scanner; the scanner itself is
+# Google Play services' module, downloaded to the device on first use.
+maven = ["com.google.android.gms:play-services-mlkit-document-scanner:16.0.0"]
 
 [dev-dependencies]
 pollster.workspace = true

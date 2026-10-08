@@ -2906,8 +2906,6 @@ fn record_android_avif_decode(report: &mut TestReport) {
     }
 }
 
-/// The Google code scanner needs Play services: `capabilities()` reports
-/// the device's own answer, and without services `scan()` must fail with
 /// The payload the generated QR still carries.
 #[cfg(feature = "vision")]
 const VISION_QR_TEXT: &str = "waterkit vision #137";
@@ -3334,6 +3332,9 @@ fn text_png(env: &mut Env<'_>, text: &str) -> jni::errors::Result<Vec<u8>> {
     env.convert_byte_array(env.cast_local::<JByteArray>(bytes)?)
 }
 
+/// The Google code scanner and the ML Kit document scanner need Play
+/// services: `capabilities()` reports the device's own answer, and without
+/// services `scan()` must fail with
 /// [`waterkit_content::vision::VisionError::Unsupported`] instead of
 /// presenting a UI or falling back to another realization.
 #[cfg(feature = "vision")]
@@ -3348,21 +3349,49 @@ async fn record_android_vision(report: &mut TestReport) {
             "vision.scanner_scan",
             "presenting the Google code scanner requires an interactive session",
         ));
-        return;
-    }
-    match waterkit_content::vision::CodeScanner::new(waterkit_content::vision::Symbology::Qr)
-        .scan()
-        .await
-    {
-        Err(waterkit_content::vision::VisionError::Unsupported(message)) => {
-            report.push(TestCase::passed_with_message(
+    } else {
+        match waterkit_content::vision::CodeScanner::new(waterkit_content::vision::Symbology::Qr)
+            .scan()
+            .await
+        {
+            Err(waterkit_content::vision::VisionError::Unsupported(message)) => {
+                report.push(TestCase::passed_with_message(
+                    "vision.scanner_scan",
+                    format!("unsupported without Play services: {message}"),
+                ));
+            }
+            other => report.push(TestCase::failed(
                 "vision.scanner_scan",
-                format!("unsupported without Play services: {message}"),
-            ));
+                format!("scan() without Play services returned {other:?}"),
+            )),
         }
-        other => report.push(TestCase::failed(
-            "vision.scanner_scan",
-            format!("scan() without Play services returned {other:?}"),
-        )),
+    }
+
+    let document_available = waterkit_content::vision::DocumentScanner::capabilities().available;
+    report.push(TestCase::passed_with_message(
+        "vision.document_scanner_capabilities",
+        format!("available={document_available}"),
+    ));
+    if document_available {
+        report.push(TestCase::skipped(
+            "vision.document_scanner_scan",
+            "presenting the ML Kit document scanner requires an interactive session",
+        ));
+    } else {
+        match waterkit_content::vision::DocumentScanner::new()
+            .scan()
+            .await
+        {
+            Err(waterkit_content::vision::VisionError::Unsupported(message)) => {
+                report.push(TestCase::passed_with_message(
+                    "vision.document_scanner_scan",
+                    format!("unsupported without Play services: {message}"),
+                ));
+            }
+            other => report.push(TestCase::failed(
+                "vision.document_scanner_scan",
+                format!("scan() without Play services returned {other:?}"),
+            )),
+        }
     }
 }

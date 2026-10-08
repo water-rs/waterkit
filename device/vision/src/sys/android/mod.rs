@@ -1,11 +1,13 @@
 //! Android vision realizations over Play services.
 //!
-//! `waterkit.vision.ScannerHelper` backs the one-shot code scanner
-//! ([`CodeScanner`], `feature = "scanner"`): it is compiled into the
+//! The one-shot system scanners are Play services' modules: the Google code
+//! scanner ([`CodeScanner`], `feature = "scanner"`, backed by
+//! `waterkit.vision.ScannerHelper`) and the ML Kit document scanner
+//! (`feature = "document-scanner"`, backed by
+//! `waterkit.vision.DocumentScannerHelper`). Each helper is compiled into the
 //! application's classpath by the packager together with the thin
-//! `play-services-code-scanner` client this crate declares, and the scanning
-//! screen itself is Play services' module, so the app needs no camera
-//! permission.
+//! Play-services client this crate declares, and the scanning screens are
+//! Play services' own, so the app needs no camera permission.
 //!
 //! `waterkit.vision.{MlKitInput,BarcodeHelper,TextHelper}` back the
 //! `barcode` and `text` requests' native realization over the unbundled
@@ -17,6 +19,8 @@
 
 #[cfg(feature = "barcode")]
 pub mod barcode;
+#[cfg(feature = "document-scanner")]
+mod document_scanner;
 #[cfg(any(feature = "barcode", feature = "text"))]
 pub mod mlkit;
 #[cfg(feature = "scanner")]
@@ -33,6 +37,8 @@ use waterkit_build::{
     AndroidError, DexHelper, describe_jni_error, dex_helper, with_android_context,
 };
 
+#[cfg(feature = "document-scanner")]
+pub use document_scanner::{document_scanner_available, document_scanner_options, scan_document};
 #[cfg(feature = "scanner")]
 pub use scanner::{scan, scanner_available, scanner_symbologies};
 

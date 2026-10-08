@@ -4927,6 +4927,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-local-authentication"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e48e0b8b339e0d9d2ed4416b7f93f9d4daadff7d4dd797f89867cde11aeac607"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-media-toolbox"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6729,10 +6740,8 @@ version = "0.1.59"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384ed39ea10f1cefabb197b7d8e67f0034b15a94ccbb1038b8e020da59bfb0be"
 dependencies = [
- "once_cell",
  "swift-bridge-build",
  "swift-bridge-macro",
- "tokio",
 ]
 
 [[package]]
@@ -7841,10 +7850,13 @@ dependencies = [
 name = "waterkit-biometric"
 version = "0.1.4"
 dependencies = [
+ "block2 0.6.2",
  "futures",
  "jni 0.22.4",
  "ndk-context",
- "swift-bridge",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "objc2-local-authentication",
  "thiserror 2.0.20",
  "tokio",
  "waterkit-build",
@@ -8110,9 +8122,9 @@ dependencies = [
  "dirs",
  "indexed_db_futures",
  "jni 0.22.4",
+ "objc2-foundation 0.3.2",
  "serde",
  "serde_json",
- "swift-bridge",
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
@@ -8677,6 +8689,7 @@ version = "0.1.4"
 dependencies = [
  "ab_glyph",
  "barcoders",
+ "blocking",
  "bytes",
  "dejavu",
  "enumset",

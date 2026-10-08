@@ -164,7 +164,7 @@ waterkit-sensor = { path = "device/sensor", version = "0.1.4" }
 # `software-decode` (rav1d + image decoding), `software-encode` (adds rav1e)
 # and `vaapi` explicitly.
 waterkit-codec = { path = "multimedia/codec", version = "0.1.4", default-features = false }
-shaderloom = { version = "0.1.2", default-features = false }
+shaderloom = { version = "0.2.1", default-features = false }
 waterkit-screen = { path = "platform/screen", version = "0.1.4" }
 waterkit-system = { path = "platform/system", version = "0.1.4" }
 waterkit-video = { path = "multimedia/video", version = "0.1.4" }
@@ -342,8 +342,3 @@ filtrate = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7
 filtrate-core = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }
 filtrate-derive = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }
 cherenkov-shader = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }
-
-# shaderloom's wgpu 30 port is not on crates.io yet; pin the rev that carries
-# it, as other water-rs consumers do. The pinned rev is the head of
-# water-rs/shaderloom#21 (`build/wgpu-30`).
-shaderloom = { git = "https://github.com/water-rs/shaderloom", rev = "84c37c8314f1bb6d228fce30f78d94872247a18f" }

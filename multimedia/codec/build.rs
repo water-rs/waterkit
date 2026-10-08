@@ -6,8 +6,6 @@
 fn main() {
     compose_yuv_shader();
 
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-
     // Codec backend predicates, defined once and emitted as cfg aliases.
     // hw_* are the four hardware backends; *_av1_software the CPU fallback;
     // *_hw_codec any hardware backend; *_any_codec any backend at all;
@@ -51,20 +49,6 @@ fn main() {
                 not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
             )
         ) },
-    }
-
-    if target_os == "ios" || target_os == "macos" {
-        waterkit_build::SwiftBridges::new()
-            .bridge(
-                waterkit_build::SwiftBridge::new("src/image_apple.rs")
-                    .swift_source("src/sys/apple/ImageDecoder.swift")
-                    .framework("Foundation")
-                    .framework("CoreGraphics")
-                    .framework("ImageIO")
-                    .framework("CoreImage")
-                    .framework("VideoToolbox"),
-            )
-            .compile();
     }
 }
 

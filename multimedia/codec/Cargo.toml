@@ -26,7 +26,6 @@ wgpu = { workspace = true, optional = true }
 shaderloom = { workspace = true, features = ["runtime"], optional = true }
 
 [build-dependencies]
-waterkit-build.workspace = true
 cfg_aliases = "0.2"
 shaderloom = { workspace = true, features = ["build"], optional = true }
 waterkit-video-core.workspace = true
@@ -47,9 +46,24 @@ objc2-video-toolbox.workspace = true
 objc2-core-media.workspace = true
 objc2-core-video.workspace = true
 objc2-core-foundation.workspace = true
-objc2-foundation.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSData",
+    "NSDictionary",
+    "NSObject",
+    "NSString",
+] }
 objc2-io-surface.workspace = true
-swift-bridge.workspace = true
+objc2-core-graphics = { workspace = true, features = ["CGColorSpace", "objc2"] }
+objc2-core-image = { workspace = true, features = [
+    "CIContext",
+    "CIImage",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+] }
+objc2-image-io = { workspace = true, features = [
+    "CGImageSource",
+    "objc2-core-graphics",
+] }
 
 # Metal interop for the GPU texture-output path only.
 objc2-metal = { workspace = true, features = ["MTLBlitCommandEncoder", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLDevice", "MTLPixelFormat", "MTLTexture", "MTLTypes"], optional = true }

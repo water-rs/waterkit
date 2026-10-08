@@ -136,7 +136,7 @@ objc2-ui-kit = { workspace = true, features = [
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
-waterkit-build.workspace = true
+waterkit-build = { workspace = true, features = ["native-callback"] }
 jni.workspace = true
 ndk-context.workspace = true
 # `HardwareBuffer::from_jni`, to reach each camera image's AHardwareBuffer.

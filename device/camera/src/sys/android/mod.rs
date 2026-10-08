@@ -27,6 +27,7 @@ use crate::{
     DynamicRangeProfile, ExposureMode, FlashMode, FocusMode, Frame, Photo, RawPhoto,
     RawPhotoFormat, RawVideoFormat, Resolution, StabilizationMode,
 };
+use futures::channel::oneshot;
 use jni::objects::{
     Global, JByteArray, JByteBuffer, JFloatArray, JIntArray, JObject, JObjectArray, JString, JValue,
 };
@@ -39,7 +40,9 @@ use std::time::Duration;
 
 use crate::clock::StreamClock;
 use crate::sys::android_session::{CameraHelper, FrameThread, OpenCamera};
-use waterkit_build::{AndroidError, DexHelper, dex_helper, jvm_and_context};
+use waterkit_build::{
+    AndroidError, DexHelper, FromJava, NativeCallback, PeerError, dex_helper, jvm_and_context,
+};
 
 /// `waterkit.camera.CameraHelper`, embedded as a DEX by this crate's build
 /// script and loaded on first use.
@@ -48,6 +51,33 @@ static HELPER: DexHelper = dex_helper!("waterkit.camera.CameraHelper");
 impl From<AndroidError> for CameraError {
     fn from(error: AndroidError) -> Self {
         Self::PlatformError(error.to_string())
+    }
+}
+
+/// The Kotlin call completed with `null`: the operation's only report is
+/// its success.
+struct Completed;
+
+impl FromJava for Completed {
+    fn from_java(_env: &mut Env<'_>, object: &JObject<'_>) -> Result<Self, AndroidError> {
+        if object.is_null() {
+            Ok(Self)
+        } else {
+            Err(AndroidError::from(jni::errors::Error::ParseFailed(
+                "expected the operation's null payload".into(),
+            )))
+        }
+    }
+}
+
+/// A `byte[]` the helper completed with — a captured photo or a DNG.
+struct CapturedBytes(Vec<u8>);
+
+impl FromJava for CapturedBytes {
+    fn from_java(env: &mut Env<'_>, object: &JObject<'_>) -> Result<Self, AndroidError> {
+        let local = env.new_local_ref(object)?;
+        let array = env.cast_local::<JByteArray>(local)?;
+        Ok(Self(env.convert_byte_array(&array)?))
     }
 }
 
@@ -136,6 +166,55 @@ impl AndroidBridge {
             .map_err(|error| {
                 CameraError::PlatformError(format!("attach_current_thread: {error}"))
             })?
+    }
+
+    /// Creates the `NativeCallback` `call` hands to the helper and runs it,
+    /// returning the receiver the operation's peer result arrives on. The
+    /// `Env` never leaves the closure, so the awaited future stays `Send`.
+    fn peer_call<T, F>(
+        &self,
+        call: F,
+    ) -> Result<oneshot::Receiver<Result<T, PeerError>>, CameraError>
+    where
+        T: FromJava + Send + 'static,
+        F: FnOnce(&mut Env<'_>, &NativeCallback<T>) -> Result<(), CameraError>,
+    {
+        self.with_env(|env| {
+            let (callback, receiver) = NativeCallback::<T>::new(env)?;
+            call(env, &callback)?;
+            Ok(receiver)
+        })
+    }
+
+    /// Awaits `receiver`, turning the peer's failure — or a callback
+    /// collected unanswered — into `error`.
+    async fn peer_result<T>(
+        receiver: oneshot::Receiver<Result<T, PeerError>>,
+        error: impl FnOnce(String) -> CameraError,
+    ) -> Result<T, CameraError> {
+        match receiver.await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(peer)) => Err(error(peer.to_string())),
+            Err(_) => Err(error("the peer callback was collected unanswered".into())),
+        }
+    }
+
+    /// Issues the void `method` with a fresh `NativeCallback` and returns
+    /// its receiver.
+    fn begin<T: FromJava + Send + 'static>(
+        &self,
+        method: &JNIStr,
+    ) -> Result<oneshot::Receiver<Result<T, PeerError>>, CameraError> {
+        self.peer_call(|env, callback| {
+            env.call_method(
+                self.helper.as_obj(),
+                method,
+                jni_sig!("(Lwaterkit/build/NativeCallback;)V"),
+                &[JValue::Object(callback.as_obj())],
+            )
+            .map_err(|error| CameraError::PlatformError(format!("{method:?} JNI call: {error}")))?;
+            Ok(())
+        })
     }
 
     fn read_java_string(
@@ -621,14 +700,6 @@ impl AndroidBridge {
         })
     }
 
-    fn call_bool_no_args(&self, method: &JNIStr) -> Result<bool, CameraError> {
-        self.with_env(|env| {
-            env.call_method(self.helper.as_obj(), method, jni_sig!("()Z"), &[])
-                .and_then(jni::objects::JValueOwned::z)
-                .map_err(|error| CameraError::PlatformError(format!("{method}: {error}")))
-        })
-    }
-
     fn call_bool_with_float(&self, method: &JNIStr, value: f32) -> Result<bool, CameraError> {
         self.with_env(|env| {
             env.call_method(
@@ -649,22 +720,6 @@ impl AndroidBridge {
                 method,
                 jni_sig!("(I)Z"),
                 &[JValue::Int(value)],
-            )
-            .and_then(jni::objects::JValueOwned::z)
-            .map_err(|error| CameraError::PlatformError(format!("{method}: {error}")))
-        })
-    }
-
-    fn call_bool_with_string(&self, method: &JNIStr, value: &str) -> Result<bool, CameraError> {
-        self.with_env(|env| {
-            let jvalue = env.new_string(value).map_err(|error| {
-                CameraError::PlatformError(format!("new_string(path): {error}"))
-            })?;
-            env.call_method(
-                self.helper.as_obj(),
-                method,
-                jni_sig!("(Ljava/lang/String;)Z"),
-                &[JValue::Object(&jvalue)],
             )
             .and_then(jni::objects::JValueOwned::z)
             .map_err(|error| CameraError::PlatformError(format!("{method}: {error}")))
@@ -729,94 +784,53 @@ impl AndroidBridge {
         }
     }
 
-    fn capture_photo_data(&self) -> Result<Vec<u8>, CameraError> {
-        if !self.call_bool_no_args(jni_str!("capturePhoto"))? {
-            return Err(CameraError::CaptureFailed(
-                "CameraHelper.capturePhoto returned false".into(),
-            ));
-        }
+    async fn capture_photo_data(&self) -> Result<Vec<u8>, CameraError> {
+        let receiver = self.begin::<CapturedBytes>(jni_str!("capturePhoto"))?;
+        let CapturedBytes(bytes) = Self::peer_result(receiver, CameraError::CaptureFailed).await?;
+        Ok(bytes)
+    }
 
-        self.with_env(|env| {
-            let data_obj = env
-                .call_method(
-                    self.helper.as_obj(),
-                    jni_str!("consumePhotoData"),
-                    jni_sig!("()[B"),
-                    &[],
-                )
-                .and_then(jni::objects::JValueOwned::l)
-                .map_err(|error| {
-                    CameraError::CaptureFailed(format!("consumePhotoData JNI call: {error}"))
-                })?;
+    async fn capture_raw_photo_data(&self) -> Result<Vec<u8>, CameraError> {
+        let receiver = self.begin::<CapturedBytes>(jni_str!("captureRawPhoto"))?;
+        let CapturedBytes(bytes) = Self::peer_result(receiver, CameraError::CaptureFailed).await?;
+        Ok(bytes)
+    }
 
-            if data_obj.is_null() {
-                return Err(CameraError::CaptureFailed(
-                    "consumePhotoData returned null".into(),
-                ));
-            }
-
-            let data = env.cast_local::<JByteArray>(data_obj).map_err(|error| {
-                CameraError::CaptureFailed(format!("photo data is not a byte array: {error}"))
+    async fn start_recording(&self, path: &str) -> Result<(), CameraError> {
+        let receiver = self.peer_call(|env, callback| {
+            let path_java = env.new_string(path).map_err(|error| {
+                CameraError::RecordingError(format!("new_string(path): {error}"))
             })?;
-            env.convert_byte_array(&data).map_err(|error| {
-                CameraError::CaptureFailed(format!("convert_byte_array(photo): {error}"))
-            })
-        })
-    }
-
-    fn capture_raw_photo_data(&self) -> Result<Vec<u8>, CameraError> {
-        if !self.call_bool_no_args(jni_str!("captureRawPhoto"))? {
-            return Err(CameraError::CaptureFailed(
-                "CameraHelper.captureRawPhoto returned false".into(),
-            ));
-        }
-
-        self.with_env(|env| {
-            let data_obj = env
-                .call_method(
-                    self.helper.as_obj(),
-                    jni_str!("consumeRawPhotoData"),
-                    jni_sig!("()[B"),
-                    &[],
-                )
-                .and_then(jni::objects::JValueOwned::l)
-                .map_err(|error| {
-                    CameraError::CaptureFailed(format!("consumeRawPhotoData JNI call: {error}"))
-                })?;
-
-            if data_obj.is_null() {
-                return Err(CameraError::CaptureFailed(
-                    "consumeRawPhotoData returned null".into(),
-                ));
-            }
-
-            let data = env.cast_local::<JByteArray>(data_obj).map_err(|error| {
-                CameraError::CaptureFailed(format!("photo data is not a byte array: {error}"))
+            env.call_method(
+                self.helper.as_obj(),
+                jni_str!("startRecording"),
+                jni_sig!("(Ljava/lang/String;Lwaterkit/build/NativeCallback;)V"),
+                &[
+                    JValue::Object(&path_java),
+                    JValue::Object(callback.as_obj()),
+                ],
+            )
+            .map_err(|error| {
+                CameraError::RecordingError(format!("startRecording JNI call: {error}"))
             })?;
-            env.convert_byte_array(&data).map_err(|error| {
-                CameraError::CaptureFailed(format!("convert_byte_array(raw photo): {error}"))
-            })
-        })
+            Ok(())
+        })?;
+        Self::peer_result::<Completed>(receiver, CameraError::RecordingError).await?;
+        Ok(())
     }
 
-    fn start_recording(&self, path: &str) -> Result<(), CameraError> {
-        if self.call_bool_with_string(jni_str!("startRecording"), path)? {
-            Ok(())
-        } else {
-            Err(CameraError::RecordingError(
-                "CameraHelper.startRecording returned false".into(),
-            ))
-        }
+    async fn stop_recording(&self) -> Result<(), CameraError> {
+        let receiver = self.begin::<Completed>(jni_str!("stopRecording"))?;
+        Self::peer_result(receiver, CameraError::RecordingError).await?;
+        Ok(())
     }
 
-    fn stop_recording(&self) -> Result<(), CameraError> {
-        if self.call_bool_no_args(jni_str!("stopRecording"))? {
-            Ok(())
-        } else {
-            Err(CameraError::RecordingError(
-                "CameraHelper.stopRecording returned false".into(),
-            ))
-        }
+    /// Issues `stopRecording` without awaiting it: `Drop` paths are
+    /// synchronous, so the peer callback is released unawaited and Kotlin's
+    /// answer — or its absence — is harmlessly dropped.
+    fn begin_stop_recording(&self) -> Result<(), CameraError> {
+        self.begin::<Completed>(jni_str!("stopRecording"))
+            .map(|_| ())
     }
 
     fn recording_duration_ms(&self) -> Result<u64, CameraError> {
@@ -841,24 +855,40 @@ impl AndroidBridge {
         })
     }
 
-    fn start_raw_recording(&self, path: &str) -> Result<(), CameraError> {
-        if self.call_bool_with_string(jni_str!("startRawRecording"), path)? {
+    async fn start_raw_recording(&self, path: &str) -> Result<(), CameraError> {
+        let receiver = self.peer_call(|env, callback| {
+            let path_java = env.new_string(path).map_err(|error| {
+                CameraError::RecordingError(format!("new_string(path): {error}"))
+            })?;
+            env.call_method(
+                self.helper.as_obj(),
+                jni_str!("startRawRecording"),
+                jni_sig!("(Ljava/lang/String;Lwaterkit/build/NativeCallback;)V"),
+                &[
+                    JValue::Object(&path_java),
+                    JValue::Object(callback.as_obj()),
+                ],
+            )
+            .map_err(|error| {
+                CameraError::RecordingError(format!("startRawRecording JNI call: {error}"))
+            })?;
             Ok(())
-        } else {
-            Err(CameraError::RecordingError(
-                "CameraHelper.startRawRecording returned false".into(),
-            ))
-        }
+        })?;
+        Self::peer_result::<Completed>(receiver, CameraError::RecordingError).await?;
+        Ok(())
     }
 
-    fn stop_raw_recording(&self) -> Result<(), CameraError> {
-        if self.call_bool_no_args(jni_str!("stopRawRecording"))? {
-            Ok(())
-        } else {
-            Err(CameraError::RecordingError(
-                "CameraHelper.stopRawRecording returned false".into(),
-            ))
-        }
+    async fn stop_raw_recording(&self) -> Result<(), CameraError> {
+        let receiver = self.begin::<Completed>(jni_str!("stopRawRecording"))?;
+        Self::peer_result(receiver, CameraError::RecordingError).await?;
+        Ok(())
+    }
+
+    /// Issues `stopRawRecording` without awaiting it; see
+    /// [`Self::begin_stop_recording`].
+    fn begin_stop_raw_recording(&self) -> Result<(), CameraError> {
+        self.begin::<Completed>(jni_str!("stopRawRecording"))
+            .map(|_| ())
     }
 
     fn raw_recording_duration_ms(&self) -> Result<u64, CameraError> {
@@ -902,14 +932,14 @@ impl CameraHelper for Arc<AndroidBridge> {
     type Frame = RawFrame;
     type Analysis = RawAnalysisFrame;
 
-    fn open_camera(
+    async fn open_camera(
         &self,
         camera_id: &str,
         resolution: Resolution,
         frame_rate: u32,
         analysis: Option<Resolution>,
     ) -> Result<(), CameraError> {
-        self.with_env(|env| {
+        let receiver = self.peer_call(|env, callback| {
             let camera_id_java = env.new_string(camera_id).map_err(|error| {
                 CameraError::OpenFailed(format!("new_string(camera id): {error}"))
             })?;
@@ -933,57 +963,31 @@ impl CameraHelper for Arc<AndroidBridge> {
                 None => (0, 0),
             };
 
-            let opened = env
-                .call_method(
-                    self.helper.as_obj(),
-                    jni_str!("openCamera"),
-                    jni_sig!("(Ljava/lang/String;IIIII)Z"),
-                    &[
-                        JValue::Object(&camera_id_java),
-                        JValue::Int(width),
-                        JValue::Int(height),
-                        JValue::Int(fps),
-                        JValue::Int(analysis_width),
-                        JValue::Int(analysis_height),
-                    ],
-                )
-                .and_then(jni::objects::JValueOwned::z)
-                .map_err(|error| {
-                    CameraError::OpenFailed(format!("openCamera JNI call: {error}"))
-                })?;
-
-            if opened {
-                Ok(())
-            } else {
-                Err(CameraError::OpenFailed(format!(
-                    "openCamera returned false for `{camera_id}`"
-                )))
-            }
-        })
+            env.call_method(
+                self.helper.as_obj(),
+                jni_str!("openCamera"),
+                jni_sig!("(Ljava/lang/String;IIIIILwaterkit/build/NativeCallback;)V"),
+                &[
+                    JValue::Object(&camera_id_java),
+                    JValue::Int(width),
+                    JValue::Int(height),
+                    JValue::Int(fps),
+                    JValue::Int(analysis_width),
+                    JValue::Int(analysis_height),
+                    JValue::Object(callback.as_obj()),
+                ],
+            )
+            .map_err(|error| CameraError::OpenFailed(format!("openCamera JNI call: {error}")))?;
+            Ok(())
+        })?;
+        AndroidBridge::peer_result::<Completed>(receiver, CameraError::OpenFailed).await?;
+        Ok(())
     }
 
-    fn start_capture(&self) -> Result<(), CameraError> {
-        self.with_env(|env| {
-            let started = env
-                .call_method(
-                    self.helper.as_obj(),
-                    jni_str!("startCapture"),
-                    jni_sig!("()Z"),
-                    &[],
-                )
-                .and_then(jni::objects::JValueOwned::z)
-                .map_err(|error| {
-                    CameraError::StartFailed(format!("startCapture JNI call: {error}"))
-                })?;
-
-            if started {
-                Ok(())
-            } else {
-                Err(CameraError::StartFailed(
-                    "startCapture returned false".into(),
-                ))
-            }
-        })
+    async fn start_capture(&self) -> Result<(), CameraError> {
+        let receiver = self.begin::<Completed>(jni_str!("startCapture"))?;
+        AndroidBridge::peer_result(receiver, CameraError::StartFailed).await?;
+        Ok(())
     }
 
     /// Takes the next preview image, if one arrives within `timeout_ms`, as a
@@ -1379,11 +1383,6 @@ impl CameraInner {
     }
 
     /// Open a camera by ID.
-    #[allow(
-        clippy::unused_async,
-        clippy::unused_async_trait_impl,
-        reason = "the cross-platform camera open API is async even when the Android JNI setup completes synchronously"
-    )]
     pub async fn open(
         camera_id: &str,
         config: CameraConfig,
@@ -1411,8 +1410,10 @@ impl CameraInner {
             config.resolution,
             config.frame_rate,
             config.analysis.map(|analysis| analysis.resolution),
-        )?
-        .start_capture()?;
+        )
+        .await?
+        .start_capture()
+        .await?;
 
         let resolution = bridge.frame_size()?;
 
@@ -1609,13 +1610,8 @@ impl CameraInner {
         )
     }
 
-    #[allow(
-        clippy::unused_async,
-        clippy::unused_async_trait_impl,
-        reason = "the cross-platform camera capture API is async even when the Android JNI call completes synchronously"
-    )]
     pub async fn capture_photo(&self) -> Result<Photo, CameraError> {
-        let encoded = self.bridge.capture_photo_data()?;
+        let encoded = self.bridge.capture_photo_data().await?;
         let (rgba, width, height) = decode_encoded_photo(&encoded)?;
 
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -1662,16 +1658,11 @@ impl CameraInner {
         })
     }
 
-    #[allow(
-        clippy::unused_async,
-        clippy::unused_async_trait_impl,
-        reason = "the cross-platform camera raw capture API is async even when the Android JNI call completes synchronously"
-    )]
     pub async fn capture_raw_photo(&self) -> Result<RawPhoto, CameraError> {
         if !self.capabilities.supports_raw_photo {
             return Err(CameraError::ControlUnsupported("raw_photo".into()));
         }
-        let dng = self.bridge.capture_raw_photo_data()?;
+        let dng = self.bridge.capture_raw_photo_data().await?;
         let resolution = self.bridge.frame_size()?;
         Ok(RawPhoto {
             data: dng,
@@ -1681,10 +1672,6 @@ impl CameraInner {
         })
     }
 
-    #[expect(
-        clippy::unused_async,
-        reason = "the Android backend starts recording over JNI synchronously"
-    )]
     pub async fn start_recording(&mut self, path: &Path) -> Result<(), CameraError> {
         if self.recording_mode.is_some() {
             return Err(CameraError::AlreadyInUse);
@@ -1692,19 +1679,15 @@ impl CameraInner {
         let path_str = path
             .to_str()
             .ok_or_else(|| CameraError::RecordingError("path must be valid UTF-8".into()))?;
-        self.bridge.start_recording(path_str)?;
+        self.bridge.start_recording(path_str).await?;
         self.recording_mode = Some(RecordingMode::Standard);
         Ok(())
     }
 
-    #[expect(
-        clippy::unused_async,
-        reason = "the Android backend stops recording over JNI synchronously"
-    )]
     pub async fn stop_recording(&mut self) -> Result<(), CameraError> {
         match self.recording_mode {
             Some(RecordingMode::Standard) => {
-                self.bridge.stop_recording()?;
+                self.bridge.stop_recording().await?;
                 self.recording_mode = None;
                 Ok(())
             }
@@ -1727,10 +1710,6 @@ impl CameraInner {
         }
     }
 
-    #[expect(
-        clippy::unused_async,
-        reason = "the Android backend starts recording over JNI synchronously"
-    )]
     pub async fn start_raw_recording(&mut self, path: &Path) -> Result<(), CameraError> {
         if !self.capabilities.supports_raw_video {
             return Err(CameraError::ControlUnsupported("raw_video".into()));
@@ -1741,19 +1720,15 @@ impl CameraInner {
         let path_str = path
             .to_str()
             .ok_or_else(|| CameraError::RecordingError("path must be valid UTF-8".into()))?;
-        self.bridge.start_raw_recording(path_str)?;
+        self.bridge.start_raw_recording(path_str).await?;
         self.recording_mode = Some(RecordingMode::Raw);
         Ok(())
     }
 
-    #[expect(
-        clippy::unused_async,
-        reason = "the Android backend stops recording over JNI synchronously"
-    )]
     pub async fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
         match self.recording_mode {
             Some(RecordingMode::Raw) => {
-                self.bridge.stop_raw_recording()?;
+                self.bridge.stop_raw_recording().await?;
                 self.recording_mode = None;
                 Ok(())
             }
@@ -1776,20 +1751,20 @@ impl CameraInner {
         }
     }
 
-    /// Ends an active standard recording inline; the JNI stop is synchronous,
-    /// so `Drop` paths just run it.
+    /// Ends an active standard recording inline; the Kotlin stop is
+    /// answered over a peer callback that `Drop` paths cannot await, so the
+    /// request is issued and its result released unheard.
     pub fn abandon_recording(&mut self) {
         if matches!(self.recording_mode, Some(RecordingMode::Standard)) {
-            let _ = self.bridge.stop_recording();
+            let _ = self.bridge.begin_stop_recording();
         }
         self.recording_mode = None;
     }
 
-    /// Ends an active raw recording inline, for `Drop` paths that cannot
-    /// await.
+    /// Ends an active raw recording inline; see [`Self::abandon_recording`].
     pub fn abandon_raw_recording(&mut self) {
         if matches!(self.recording_mode, Some(RecordingMode::Raw)) {
-            let _ = self.bridge.stop_raw_recording();
+            let _ = self.bridge.begin_stop_raw_recording();
         }
         self.recording_mode = None;
     }

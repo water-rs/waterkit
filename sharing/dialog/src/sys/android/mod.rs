@@ -249,6 +249,40 @@ fn post_confirm_with_context(
     Ok(receiver)
 }
 
+/// Show an alert dialog with JNI context.
+///
+/// Every JNI call runs before this returns; the future only awaits the
+/// user's dismissal, so it is `Send`.
+///
+/// # Errors
+/// The future fails if JNI operations fail or the dialog's callback is
+/// released unanswered.
+pub fn show_alert_with_context(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+    dialog: &Dialog,
+) -> impl Future<Output = Result<(), DialogError>> + Send + use<> {
+    let receiver = post_alert_with_context(env, context, dialog);
+    async move { answer(receiver?, "alert dialog").await.map(|Dismissed| ()) }
+}
+
+/// Show a confirmation dialog with JNI context.
+///
+/// Every JNI call runs before this returns; the future only awaits the
+/// user's answer, so it is `Send`.
+///
+/// # Errors
+/// The future fails if JNI operations fail or the dialog's callback is
+/// released unanswered.
+pub fn show_confirm_with_context(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+    dialog: &Dialog,
+) -> impl Future<Output = Result<bool, DialogError>> + Send + use<> {
+    let receiver = post_confirm_with_context(env, context, dialog);
+    async move { Ok(answer(receiver?, "confirm dialog").await?.0) }
+}
+
 /// Load media from a selection handle with JNI context.
 ///
 /// # Errors
@@ -284,9 +318,10 @@ pub fn load_media_with_context(
 /// # Errors
 /// Returns an error if `ndk-context` is unavailable or JNI operations fail.
 pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
-    let receiver =
-        with_android_context(|env, context| post_alert_with_context(env, context, &dialog))?;
-    answer(receiver, "alert dialog").await.map(|_| ())
+    with_android_context(|env, context| {
+        Ok::<_, DialogError>(show_alert_with_context(env, context, &dialog))
+    })?
+    .await
 }
 
 /// Show a confirmation dialog.
@@ -294,9 +329,10 @@ pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
 /// # Errors
 /// Returns an error if `ndk-context` is unavailable or JNI operations fail.
 pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
-    let receiver =
-        with_android_context(|env, context| post_confirm_with_context(env, context, &dialog))?;
-    Ok(answer(receiver, "confirm dialog").await?.0)
+    with_android_context(|env, context| {
+        Ok::<_, DialogError>(show_confirm_with_context(env, context, &dialog))
+    })?
+    .await
 }
 
 /// Show a photo picker.

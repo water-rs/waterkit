@@ -28,7 +28,9 @@ mod sys;
 /// Use these functions when you already have an Android `Context` via JNI.
 #[cfg(target_os = "android")]
 pub mod android {
-    pub use crate::sys::android::{Selection, load_media_with_context};
+    pub use crate::sys::android::{
+        Selection, load_media_with_context, show_alert_with_context, show_confirm_with_context,
+    };
 }
 
 mod error;

@@ -40,19 +40,21 @@ zbus.workspace = true
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 tracing.workspace = true
 
-# Apple (iOS/macOS)
+# Apple (iOS/macOS): `objc2-network` is generated on `objc2`'s main branch
+# but not yet released; `block2`/`dispatch2` come from the same pinned revision
+# so their `Block`/`DispatchQueue` types match `objc2-network`'s API.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-swift-bridge = { workspace = true, features = [] }
-swift-rs.workspace = true
+block2 = { git = "https://github.com/madsmtm/objc2", rev = "e45c53301628aec4ead5c086dde282942ca972db" }
+dispatch2 = { git = "https://github.com/madsmtm/objc2", rev = "e45c53301628aec4ead5c086dde282942ca972db" }
+libc = "0.2"
+objc2-foundation = { workspace = true, features = ["NSProcessInfo"] }
+objc2-network = { workspace = true, features = ["std", "dispatch2"] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 waterkit-build.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
-
-[build-dependencies]
-waterkit-build.workspace = true
 
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).

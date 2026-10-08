@@ -253,6 +253,7 @@ mach2 = "0.6"
 objc2-io-kit = { version = "0.3", default-features = false }
 objc2-pass-kit = { version = "0.3", default-features = false }
 objc2-ui-kit = { version = "0.3", default-features = false }
+||||||| parent of b1b4b47 (refactor(system)!: call Network and Foundation through objc2 instead of Swift)
 objc = "0.2"
 # Zero-copy import of platform frame buffers into wgpu textures.
 wgpu-external-frame = "0.3.0"

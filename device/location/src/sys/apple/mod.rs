@@ -122,7 +122,9 @@ define_class!(
             }
             let code = CLError(error.code());
             if code == CLError::Denied {
-                self.finish(Err(LocationError::PermissionDenied));
+                // SAFETY: diagnostic read on the main thread.
+                let status = unsafe { _manager.authorizationStatus() };
+                self.finish(Err(LocationError::Platform(format!("EXP237 didFailWithError kCLErrorDenied, manager status={}", status.0))));
             } else if code != CLError::LocationUnknown {
                 self.finish(Err(LocationError::NotAvailable));
             }
@@ -135,7 +137,7 @@ define_class!(
             if status == CLAuthorizationStatus::Denied
                 || status == CLAuthorizationStatus::Restricted
             {
-                self.finish(Err(LocationError::PermissionDenied));
+                self.finish(Err(LocationError::Platform(format!("EXP237 didChangeAuthorization status={}", status.0))));
             }
         }
     }
@@ -193,7 +195,7 @@ impl LocationRequest {
         // main thread, like every other manager use.
         let status = unsafe { manager.authorizationStatus() };
         if status == CLAuthorizationStatus::Denied || status == CLAuthorizationStatus::Restricted {
-            self.finish(Err(LocationError::PermissionDenied));
+            self.finish(Err(LocationError::Platform(format!("EXP237 start_on_main status={}", status.0))));
             return;
         }
         // SAFETY: `delegate` is a weak property; the request stays alive

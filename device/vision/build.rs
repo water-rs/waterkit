@@ -6,7 +6,11 @@ fn main() {
     let vision = apple
         && (std::env::var("CARGO_FEATURE_BARCODE").is_ok()
             || std::env::var("CARGO_FEATURE_TEXT").is_ok());
-    let scanner = target_os == "ios" && std::env::var("CARGO_FEATURE_SCANNER").is_ok();
+    // `DataScannerViewController` is unavailable on Mac Catalyst, so the
+    // scanner bridge only compiles for iOS without the `macabi` ABI.
+    let scanner = target_os == "ios"
+        && std::env::var("CARGO_CFG_TARGET_ABI").as_deref() != Ok("macabi")
+        && std::env::var("CARGO_FEATURE_SCANNER").is_ok();
 
     if !(vision || scanner) {
         return;

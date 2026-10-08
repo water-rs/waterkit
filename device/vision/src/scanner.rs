@@ -23,10 +23,10 @@ use crate::{Payload, Symbology, VisionError, sys};
 ///   when UPC-A was requested and the EAN-13 payload has the leading 0
 ///   that makes it a UPC-A.
 ///
-/// There is no system scanner on macOS, Windows, Linux or Android
-/// devices without Play services: [`CodeScanner::capabilities`] reports
-/// the scanner unavailable there and [`CodeScanner::scan`] fails with
-/// [`VisionError::Unsupported`]. A [`CodeScanner`] is never silently
+/// There is no system scanner on macOS, Mac Catalyst, Windows, Linux or
+/// Android devices without Play services: [`CodeScanner::capabilities`]
+/// reports the scanner unavailable there and [`CodeScanner::scan`] fails
+/// with [`VisionError::Unsupported`]. A [`CodeScanner`] is never silently
 /// served another way; `WaterUI` owns the fallback scanning view.
 #[derive(Debug, Clone)]
 pub struct CodeScanner {
@@ -100,7 +100,10 @@ impl CodeScanner {
     /// published to `ndk_context` yet or the JNI probe fails.
     #[must_use]
     #[cfg_attr(
-        not(any(target_os = "ios", target_os = "android")),
+        not(any(
+            target_os = "android",
+            all(target_os = "ios", not(target_abi = "macabi"))
+        )),
         expect(
             clippy::missing_const_for_fn,
             reason = "the iOS and Android availability probes are runtime calls; on other platforms the probe is a constant and clippy suggests const"

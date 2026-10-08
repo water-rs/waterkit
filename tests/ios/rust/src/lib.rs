@@ -199,9 +199,19 @@ async fn record_sensor(report: &mut TestReport) {
     }
 }
 
-#[cfg(feature = "location")]
 #[cfg(feature = "calendar")]
 async fn record_calendar(report: &mut TestReport) {
+    match waterkit::permission::check(waterkit::permission::Permission::Calendar).await {
+        waterkit::permission::PermissionStatus::Granted => {}
+        status => {
+            report.push(TestCase::skipped(
+                "calendar.list",
+                format!("calendar permission is {status:?}"),
+            ));
+            return;
+        }
+    }
+
     match waterkit::calendar::list_calendars().await {
         Ok(calendars) => {
             report.push(TestCase::passed_with_message(
@@ -224,6 +234,7 @@ async fn record_calendar(report: &mut TestReport) {
     }
 }
 
+#[cfg(feature = "location")]
 async fn record_location(report: &mut TestReport) {
     match waterkit::permission::check(waterkit::permission::Permission::Location).await {
         waterkit::permission::PermissionStatus::Granted => {}

@@ -23,9 +23,11 @@ block2.workspace = true
 dispatch2.workspace = true
 objc2.workspace = true
 objc2-foundation = { workspace = true, features = [
+    "NSBundle",
     "NSError",
     "NSObject",
     "NSProcessInfo",
+    "NSString",
 ] }
 objc2-av-foundation = { workspace = true, features = [
     "AVCaptureDevice",

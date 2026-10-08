@@ -26,6 +26,7 @@ block2.workspace = true
 objc2.workspace = true
 objc2-foundation = { workspace = true, features = [
     "NSArray",
+    "NSBundle",
     "NSCalendar",
     "NSError",
     "NSPredicate",

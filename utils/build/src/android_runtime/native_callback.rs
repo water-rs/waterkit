@@ -20,7 +20,7 @@ use std::marker::PhantomData;
 
 static CALLBACK: DexHelper = DexHelper::new("waterkit.build.NativeCallback");
 static CHANNEL: DexHelper = DexHelper::new("waterkit.build.NativeChannel");
-static PEER_NATIVES: DexHelper = DexHelper::new("waterkit.build.NativeChannel$PeerNatives");
+static PEER_NATIVES: DexHelper = DexHelper::new("waterkit.build.PeerNatives");
 
 /// Converts a Java payload object into the Rust value a caller waits on.
 ///
@@ -238,7 +238,7 @@ fn new_peer_object(
 
 fn register_peer_natives(env: &mut Env<'_>, context: &JObject<'_>) -> Result<(), AndroidError> {
     let class = PEER_NATIVES.class(env, context)?;
-    // SAFETY: `release` on `NativeChannel$PeerNatives` matches the static
+    // SAFETY: `release` on `PeerNatives` matches the static
     // `extern "system"` fn below (`class: JClass` second parameter).
     unsafe {
         env.register_native_methods(

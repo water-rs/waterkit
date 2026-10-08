@@ -357,9 +357,9 @@ impl AudioPlayer {
             });
     }
 
-    fn apply_playback_preferences(&self) -> Result<(), PlayerError> {
-        self.player.set_playback_rate(self.playback_rate())?;
-        self.player.set_preserve_pitch(self.preserve_pitch())
+    fn apply_playback_preferences(&self) {
+        self.player.set_playback_rate(self.playback_rate());
+        self.player.set_preserve_pitch(self.preserve_pitch());
     }
 
     /// Open audio from a file path.
@@ -400,7 +400,7 @@ impl AudioPlayer {
         let path_str = path
             .to_str()
             .expect("waterkit-audio iOS file paths must be valid UTF-8");
-        runtime.player.load_file(path_str)?;
+        runtime.player.load_file(path_str);
 
         let mut metadata = Self::metadata_from_path(path);
         let state = runtime.player.state();
@@ -421,7 +421,7 @@ impl AudioPlayer {
             background_thread: Some(runtime.background_thread),
             command_receiver: runtime.command_receiver,
         };
-        player.apply_playback_preferences()?;
+        player.apply_playback_preferences();
         player.update_now_playing();
         Ok(player)
     }
@@ -488,31 +488,37 @@ impl AudioPlayer {
         if output.selected_device().is_some() {
             return Err(PlayerError::OutputDeviceSelectionUnavailable);
         }
-        let runtime = Self::initialize_runtime()?;
-        runtime.player.load_url(url)?;
+        let url = url.to_owned();
+        // AVPlayer construction and access are main-queue work; hop through
+        // `on_main` so nothing blocks inside this async fn.
+        crate::sys::on_main(move |_| {
+            let runtime = Self::initialize_runtime()?;
+            runtime.player.load_url(&url)?;
 
-        let mut metadata = MediaMetadata::default().with_title(Self::title_from_url(url));
-        let state = runtime.player.state();
-        if let Some(duration) = state.duration {
-            metadata = metadata.with_duration(duration);
-        }
+            let mut metadata = MediaMetadata::default().with_title(Self::title_from_url(&url));
+            let state = runtime.player.state();
+            if let Some(duration) = state.duration {
+                metadata = metadata.with_duration(duration);
+            }
 
-        let player = Self {
-            player: runtime.player,
-            metadata,
-            source_format: None,
-            output_format: None,
-            media_session: runtime.media_session,
-            metadata_dirty: AtomicBool::new(false),
-            playback_rate_bits: AtomicU32::new(1.0f32.to_bits()),
-            preserve_pitch: AtomicBool::new(true),
-            shutdown_handle: runtime.shutdown_handle,
-            background_thread: Some(runtime.background_thread),
-            command_receiver: runtime.command_receiver,
-        };
-        player.apply_playback_preferences()?;
-        player.update_now_playing();
-        Ok(player)
+            let player = Self {
+                player: runtime.player,
+                metadata,
+                source_format: None,
+                output_format: None,
+                media_session: runtime.media_session,
+                metadata_dirty: AtomicBool::new(false),
+                playback_rate_bits: AtomicU32::new(1.0f32.to_bits()),
+                preserve_pitch: AtomicBool::new(true),
+                shutdown_handle: runtime.shutdown_handle,
+                background_thread: Some(runtime.background_thread),
+                command_receiver: runtime.command_receiver,
+            };
+            player.apply_playback_preferences();
+            player.update_now_playing();
+            Ok(player)
+        })
+        .await
     }
 
     /// Open audio from a URL (async) with spatial rendering enabled.
@@ -700,17 +706,16 @@ impl AudioPlayer {
     /// Panics if the platform media session cannot be cleared or audio focus cannot be released.
     pub fn stop(&self) {
         self.flush_metadata();
-        if self.player.stop().is_ok() {
-            self.media_session.clear().unwrap_or_else(|error| {
-                panic!("waterkit-audio: failed to clear media session after stop: {error}")
+        self.player.stop();
+        self.media_session.clear().unwrap_or_else(|error| {
+            panic!("waterkit-audio: failed to clear media session after stop: {error}")
+        });
+        self.media_session
+            .abandon_audio_focus()
+            .unwrap_or_else(|error| {
+                panic!("waterkit-audio: failed to abandon audio focus after stop: {error}")
             });
-            self.media_session
-                .abandon_audio_focus()
-                .unwrap_or_else(|error| {
-                    panic!("waterkit-audio: failed to abandon audio focus after stop: {error}")
-                });
-            self.update_now_playing();
-        }
+        self.update_now_playing();
     }
 
     /// Seek to a specific position.
@@ -723,21 +728,21 @@ impl AudioPlayer {
 
     /// Set volume (0.0 to 1.0).
     pub fn set_volume(&self, volume: f32) {
-        let _ = self.player.set_volume(volume.clamp(0.0, 1.0));
+        self.player.set_volume(volume.clamp(0.0, 1.0));
     }
 
     /// Set playback rate (1.0 = normal speed).
     pub fn set_playback_rate(&self, rate: f32) {
         let clamped = clamp_playback_rate(rate);
         self.set_playback_rate_bits(clamped);
-        let _ = self.player.set_playback_rate(clamped);
+        self.player.set_playback_rate(clamped);
         self.update_now_playing();
     }
 
     /// Enable/disable pitch preservation during rate changes.
     pub fn set_preserve_pitch(&self, preserve_pitch: bool) {
         self.preserve_pitch.store(preserve_pitch, Ordering::Release);
-        let _ = self.player.set_preserve_pitch(preserve_pitch);
+        self.player.set_preserve_pitch(preserve_pitch);
         self.update_now_playing();
     }
 
@@ -822,7 +827,7 @@ impl AudioPlayer {
 
 impl Drop for AudioPlayer {
     fn drop(&mut self) {
-        let _ = self.player.stop();
+        self.player.stop();
         drop(std::mem::take(&mut self.shutdown_handle));
         if let Some(handle) = self.background_thread.take() {
             let _ = handle.join();

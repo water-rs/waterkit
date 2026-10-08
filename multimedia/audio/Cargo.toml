@@ -37,8 +37,16 @@ streaming = [
 he-aac = ["streaming", "dep:symphonia-adapter-fdk-aac"]
 media-session = [
     "dep:tracing",
-    "dep:waterkit-build",
-    "dep:swift-bridge",
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-core-foundation",
+    "dep:objc2-media-player",
+    "dep:objc2-core-media",
+    "dep:objc2-av-foundation",
+    "dep:objc2-ui-kit",
+    "dep:objc2-app-kit",
+    "dep:block2",
+    "dep:dispatch2",
     "dep:jni",
     "dep:ndk-context",
     "dep:windows",
@@ -81,11 +89,12 @@ js-sys = "0.3"
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["Navigator", "Window"] }
 
-[build-dependencies]
-waterkit-build.workspace = true
-
 [dev-dependencies]
 hex = "0.4"
+
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { workspace = true, optional = true, features = ["NSImage"] }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos", target_os = "android", target_os = "windows", target_os = "linux"))'.dependencies]
 # Cross-platform audio playback (default features include vorbis/mp3/flac/wav)
@@ -95,10 +104,46 @@ cpal = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 rodio = { workspace = true, optional = true }
+objc2-av-foundation = { workspace = true, optional = true, features = [
+    "AVAudioProcessingSettings",
+    "AVPlayer",
+    "AVPlayerItem",
+    "objc2-core-foundation",
+    "objc2-core-media",
+] }
+objc2-ui-kit = { workspace = true, optional = true, features = ["UIImage", "objc2-core-foundation"] }
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge = { workspace = true, optional = true }
+objc2 = { workspace = true, optional = true }
+objc2-foundation = { workspace = true, optional = true, features = [
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSError",
+    "NSNotification",
+    "NSObject",
+    "NSOperation",
+    "NSValue",
+    "NSString",
+    "NSURL",
+    "block2",
+] }
+objc2-core-foundation = { workspace = true, optional = true }
+objc2-media-player = { workspace = true, optional = true, features = [
+    "MPMediaItem",
+    "MPNowPlayingInfoCenter",
+    "MPRemoteCommand",
+    "MPRemoteCommandCenter",
+    "MPRemoteCommandEvent",
+    "block2",
+    "objc2-app-kit",
+    "objc2-core-foundation",
+] }
+objc2-core-media = { workspace = true, optional = true }
+block2 = { workspace = true, optional = true }
+dispatch2 = { workspace = true, optional = true }
+
 zenwave = { version = "0.6.1", default-features = false, features = ["hyper-native-tls", "ws"], optional = true }
 
 # Android - use rustls with ring backend (avoids aws-lc-rs CMake issues)

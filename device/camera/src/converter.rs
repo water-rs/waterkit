@@ -623,7 +623,6 @@ mod tests {
 
     /// 10-bit codes that use their two low bits, so a converter reading them
     /// as 8-bit, or least-significant-aligned, misses the reference.
-    #[cfg(target_vendor = "apple")]
     fn p010_codes() -> Vec<u16> {
         nv12((WIDTH, HEIGHT))
             .into_iter()
@@ -780,9 +779,8 @@ mod tests {
         }
     }
 
-    /// 16-bit planes need `TEXTURE_FORMAT_16BIT_NORM`, which every Apple GPU
-    /// offers; other test hosts' adapters may not.
-    #[cfg(target_vendor = "apple")]
+    /// 16-bit planes need `TEXTURE_FORMAT_16BIT_NORM`; the test GPU asserts
+    /// the adapter offers it, so a host without it fails instead of skipping.
     #[test]
     fn ten_bit_ycbcr420_frames_decode_every_encoding() {
         let mut gpu = Gpu::new(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);

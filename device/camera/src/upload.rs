@@ -32,10 +32,9 @@ pub enum CpuPlanes<'a> {
     #[cfg(any(target_os = "windows", target_os = "linux", test))]
     Yuyv { data: &'a [u8] },
     /// P010: NV12's layout with 16-bit little-endian samples holding 10-bit
-    /// codes in their top bits. Only the converter tests upload it, on the
-    /// Apple GPUs that all offer 16-bit planes; 10-bit platform frames arrive
-    /// as imported surfaces, not through CPU memory.
-    #[cfg(all(test, target_vendor = "apple"))]
+    /// codes in their top bits. Only the converter tests upload it; 10-bit
+    /// platform frames arrive as imported surfaces, not through CPU memory.
+    #[cfg(test)]
     P010 { data: &'a [u8] },
 }
 
@@ -133,7 +132,7 @@ impl FrameUploader {
                 }]);
                 FramePlanes::YCbCr422 { yuyv: view(&yuyv) }
             }
-            #[cfg(all(test, target_vendor = "apple"))]
+            #[cfg(test)]
             CpuPlanes::P010 { data } => {
                 let (chroma_width, chroma_height) = chroma_extent(width, height);
                 let (luma, chroma) = data.split_at(width as usize * height as usize * 2);

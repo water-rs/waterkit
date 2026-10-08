@@ -31,31 +31,10 @@ use std::{
 #[cfg(feature = "apple-artwork")]
 mod host_bridge;
 
-/// Run `work` on the main queue — inline when the caller is already on the
-/// main thread, otherwise through `exec_async` resolved by a oneshot.
-///
-/// Private copy of `waterkit_core::apple::on_main` (water-rs/waterkit#299);
-/// the signature matches so the swap is an import change only.
-#[cfg(all(target_os = "ios", feature = "playback"))]
-pub async fn on_main<R, F>(work: F) -> R
-where
-    F: FnOnce(objc2::MainThreadMarker) -> R + Send + 'static,
-    R: Send + 'static,
-{
-    if let Some(mtm) = objc2::MainThreadMarker::new() {
-        work(mtm)
-    } else {
-        let (sender, receiver) = futures::channel::oneshot::channel();
-        dispatch2::DispatchQueue::main().exec_async(move || {
-            let mtm = objc2::MainThreadMarker::new()
-                .expect("exec_async closure must run on the main queue");
-            let _ = sender.send(work(mtm));
-        });
-        receiver
-            .await
-            .expect("main-queue completion was dropped before replying")
-    }
-}
+/// Shared main-queue hop; re-exported so `crate::sys::on_main` keeps
+/// working for the iOS player paths.
+#[cfg(all(feature = "playback", target_os = "ios"))]
+pub use waterkit_core::apple::on_main;
 
 // ---------------------------------------------------------------------------
 // Command queue (NSCondition-backed, mirroring the previous channel).
@@ -110,11 +89,9 @@ impl CommandQueue {
 // recently activated session. Here each session owns a `SessionCore` and
 // `activate` removes every registered handler (`-[MPRemoteCommand
 // removeTarget:]` with nil removes all targets) before installing this
-// session's blocks, which yields the same "last activated wins" behavior
-// without a global registry. One divergence: closing the active session
-// leaves the command center unowned until another session performs a call
-// and re-activates; the previous implementation promoted the previous
-// session immediately.
+// session's blocks, which yields the same "last activated wins" behavior.
+// `SESSIONS` keeps weak references in activation order so `clear` can
+// promote the previous session, exactly like the earlier registry did.
 // ---------------------------------------------------------------------------
 
 /// `NSNotificationCenter` observer tokens for audio-session events (iOS).
@@ -128,13 +105,19 @@ type ObserverTokens = dispatch2::MainThreadBound<
 struct SessionCore {
     active: AtomicBool,
     commands: CommandQueue,
+    /// Set by `register_system_event_observers` once the main-queue
+    /// registration has run.
     #[cfg(target_os = "ios")]
-    observer_tokens: ObserverTokens,
+    observer_tokens: std::sync::OnceLock<ObserverTokens>,
     /// Keeps the macOS silent-activation player and its delegate alive for
     /// the duration of the session.
     #[cfg(target_os = "macos")]
     _silent_delegate: Retained<macos::WaterkitSilentPlayerDelegate>,
 }
+
+/// Live session cores in activation order; `clear` promotes the previous
+/// session to own the command center when the active one closes.
+static SESSIONS: Mutex<Vec<std::sync::Weak<SessionCore>>> = Mutex::new(Vec::new());
 
 impl SessionCore {
     fn new() -> Arc<Self> {
@@ -142,9 +125,7 @@ impl SessionCore {
             active: AtomicBool::new(false),
             commands: CommandQueue::default(),
             #[cfg(target_os = "ios")]
-            observer_tokens: dispatch2::run_on_main(|mtm| {
-                dispatch2::MainThreadBound::new(Mutex::new(Vec::new()), mtm)
-            }),
+            observer_tokens: std::sync::OnceLock::new(),
 
             #[cfg(target_os = "macos")]
             _silent_delegate: macos::activate_audio_session_with_silence(),
@@ -315,6 +296,7 @@ impl MediaSessionInner {
     pub fn new() -> Result<Self, MediaError> {
         let core = SessionCore::new();
         core.activate();
+        SESSIONS.lock().unwrap().push(Arc::downgrade(&core));
         #[cfg(target_os = "ios")]
         ios::register_system_event_observers(&core);
 
@@ -474,10 +456,28 @@ impl MediaSessionInner {
         reason = "the public Result-returning signature is fixed by the crate API"
     )]
     pub fn clear(&self) -> Result<(), MediaError> {
-        if self.core.deactivate() {
+        let was_active = self.core.deactivate();
+        if was_active {
             // SAFETY: nil clears the center's now-playing information.
             unsafe { now_playing_center().setNowPlayingInfo(None) };
         }
+        let mut sessions = SESSIONS.lock().unwrap();
+        sessions.retain(|weak| {
+            weak.upgrade()
+                .is_some_and(|core| !Arc::ptr_eq(&core, &self.core))
+        });
+        if was_active {
+            // Promote the previous session so the command center keeps an
+            // owner, as the earlier registry did.
+            while let Some(weak) = sessions.last() {
+                if let Some(previous) = weak.upgrade() {
+                    previous.activate();
+                    break;
+                }
+                sessions.pop();
+            }
+        }
+        drop(sessions);
         #[cfg(target_os = "ios")]
         ios::unregister_system_event_observers(&self.core);
         self.core.commands.close();
@@ -563,98 +563,25 @@ fn platform_artwork(artwork: &crate::MediaArtwork) -> Retained<MPMediaItemArtwor
 mod ios {
     use super::{MediaCommand, MediaError, SessionCore};
     use block2::RcBlock;
-    use objc2::{
-        extern_class, extern_conformance, extern_methods,
-        rc::Retained,
-        runtime::{NSObject, NSObjectProtocol, ProtocolObject},
+    use objc2::rc::Retained;
+    use objc2::runtime::ProtocolObject;
+    use objc2_avf_audio::{
+        AVAudioSession, AVAudioSessionCategoryOptions, AVAudioSessionCategoryPlayback,
+        AVAudioSessionInterruptionNotification, AVAudioSessionInterruptionOptionKey,
+        AVAudioSessionInterruptionOptions, AVAudioSessionInterruptionType,
+        AVAudioSessionInterruptionTypeKey, AVAudioSessionModeDefault,
+        AVAudioSessionRouteChangeNotification, AVAudioSessionRouteChangeReason,
+        AVAudioSessionRouteChangeReasonKey, AVAudioSessionSetActiveOptions,
+        AVAudioSessionSilenceSecondaryAudioHintNotification,
+        AVAudioSessionSilenceSecondaryAudioHintType,
+        AVAudioSessionSilenceSecondaryAudioHintTypeKey,
     };
     use objc2_foundation::{
-        NSError, NSNotification, NSNotificationCenter, NSNotificationName, NSNumber,
-        NSOperationQueue, NSString,
+        NSNotification, NSNotificationCenter, NSNotificationName, NSNumber, NSOperationQueue,
+        NSString,
     };
     use std::ptr::NonNull;
     use std::sync::Arc;
-
-    extern_class!(
-        /// [Apple's documentation](https://developer.apple.com/documentation/avfaudio/avaudiosession?language=objc)
-        #[unsafe(super(NSObject))]
-        #[name = "AVAudioSession"]
-        #[derive(Debug, PartialEq, Eq, Hash)]
-        pub struct AVAudioSession;
-    );
-
-    extern_conformance!(
-        unsafe impl NSObjectProtocol for AVAudioSession {}
-    );
-
-    #[allow(non_upper_case_globals)]
-    unsafe extern "C" {
-        /// `AVAudioSessionCategoryPlayback` — uninterrupted playback.
-        pub static AVAudioSessionCategoryPlayback: &'static NSString;
-        /// `AVAudioSessionModeDefault` — default audio mode.
-        pub static AVAudioSessionModeDefault: &'static NSString;
-
-        /// Posted when an audio-session interruption begins/ends.
-        pub static AVAudioSessionInterruptionNotification: &'static NSNotificationName;
-        /// Posted when the audio route changes.
-        pub static AVAudioSessionRouteChangeNotification: &'static NSNotificationName;
-        /// Posted when the system asks to silence secondary audio.
-        pub static AVAudioSessionSilenceSecondaryAudioHintNotification: &'static NSNotificationName;
-
-        /// `userInfo` key carrying `AVAudioSessionInterruptionType`.
-        pub static AVAudioSessionInterruptionTypeKey: &'static NSString;
-        /// `userInfo` key carrying `AVAudioSessionInterruptionOptions`.
-        pub static AVAudioSessionInterruptionOptionKey: &'static NSString;
-        /// `userInfo` key carrying `AVAudioSessionRouteChangeReason`.
-        pub static AVAudioSessionRouteChangeReasonKey: &'static NSString;
-        /// `userInfo` key carrying `AVAudioSessionSilenceSecondaryAudioHintType`.
-        pub static AVAudioSessionSilenceSecondaryAudioHintTypeKey: &'static NSString;
-    }
-
-    // `AVAudioSessionInterruptionType` (AVAudioSessionTypes.h).
-    const INTERRUPTION_TYPE_ENDED: usize = 0;
-    const INTERRUPTION_TYPE_BEGAN: usize = 1;
-    // `AVAudioSessionInterruptionOptionShouldResume`.
-    const INTERRUPTION_OPTION_SHOULD_RESUME: usize = 1;
-    // `AVAudioSessionRouteChangeReasonOldDeviceUnavailable`.
-    const ROUTE_CHANGE_OLD_DEVICE_UNAVAILABLE: usize = 2;
-    // `AVAudioSessionSilenceSecondaryAudioHintType`.
-    const SILENCE_HINT_END: usize = 0;
-    const SILENCE_HINT_BEGIN: usize = 1;
-    // `AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation`.
-    const SET_ACTIVE_NOTIFY_OTHERS_ON_DEACTIVATION: usize = 1;
-
-    impl AVAudioSession {
-        extern_methods!(
-            /// The process-wide audio session.
-            #[unsafe(method(sharedInstance))]
-            #[unsafe(method_family = none)]
-            pub unsafe fn shared_instance() -> Retained<AVAudioSession>;
-
-            /// `setCategory:mode:error:`
-            #[unsafe(method(setCategory:mode:error:_))]
-            #[unsafe(method_family = none)]
-            pub unsafe fn set_category_mode_error(
-                &self,
-                category: &NSString,
-                mode: &NSString,
-            ) -> Result<(), Retained<NSError>>;
-
-            /// `setActive:error:`
-            #[unsafe(method(setActive:error:_))]
-            #[unsafe(method_family = none)]
-            pub unsafe fn set_active_error(&self, active: bool) -> Result<(), Retained<NSError>>;
-
-            /// `setActive:withOptions:error:`
-            #[unsafe(method(setActive:withOptions:error:_))]
-            #[unsafe(method_family = none)]
-            pub unsafe fn set_active_with_options_error(
-                &self,
-                active: bool,
-                options: usize,
-            ) -> Result<(), Retained<NSError>>;
-        );
-    }
 
     fn send_if_active(core: &Arc<SessionCore>, command: MediaCommand) {
         if core.is_active() {
@@ -671,50 +598,64 @@ mod ios {
     }
 
     fn handle_interruption(core: &Arc<SessionCore>, notification: &NSNotification) {
-        match user_info_number(notification, unsafe { AVAudioSessionInterruptionTypeKey }) {
-            Some(INTERRUPTION_TYPE_BEGAN) => {
+        let Some(kind) = user_info_number(notification, unsafe {
+            AVAudioSessionInterruptionTypeKey.expect("AVAudioSessionInterruptionTypeKey is present")
+        })
+        .map(AVAudioSessionInterruptionType) else {
+            return;
+        };
+        match kind {
+            AVAudioSessionInterruptionType::Began => {
                 send_if_active(core, MediaCommand::AudioFocusLostTransient);
             }
-            Some(INTERRUPTION_TYPE_ENDED) => {
-                let options =
-                    user_info_number(notification, unsafe { AVAudioSessionInterruptionOptionKey })
-                        .unwrap_or(0);
-                if options & INTERRUPTION_OPTION_SHOULD_RESUME != 0 {
+            AVAudioSessionInterruptionType::Ended => {
+                let options = user_info_number(notification, unsafe {
+                    AVAudioSessionInterruptionOptionKey
+                        .expect("AVAudioSessionInterruptionOptionKey is present")
+                })
+                .map_or(
+                    AVAudioSessionInterruptionOptions(0),
+                    AVAudioSessionInterruptionOptions,
+                );
+                if options.contains(AVAudioSessionInterruptionOptions::ShouldResume) {
                     send_if_active(core, MediaCommand::AudioFocusGained);
                 } else {
                     send_if_active(core, MediaCommand::AudioFocusLost);
                 }
             }
-            Some(other) => panic!("unsupported AVAudioSession interruption type {other}"),
-            None => {}
+            other => panic!("unsupported AVAudioSession interruption type {other:?}"),
         }
     }
 
     fn handle_route_change(core: &Arc<SessionCore>, notification: &NSNotification) {
-        match user_info_number(notification, unsafe { AVAudioSessionRouteChangeReasonKey }) {
-            Some(ROUTE_CHANGE_OLD_DEVICE_UNAVAILABLE) => {
-                send_if_active(core, MediaCommand::AudioBecomingNoisy);
-            }
-            // newDeviceAvailable(1), categoryChange(3), override(4),
-            // wakeFromSleep(5), noSuitableRouteForCategory(6),
-            // routeConfigurationChange(7), unknown(0) — ignored as before.
-            Some(0..=7) | None => {}
-            Some(other) => panic!("unsupported AVAudioSession route change reason {other}"),
+        let reason = user_info_number(notification, unsafe {
+            AVAudioSessionRouteChangeReasonKey
+                .expect("AVAudioSessionRouteChangeReasonKey is present")
+        })
+        .map(AVAudioSessionRouteChangeReason);
+        // newDeviceAvailable(1), categoryChange(3), override(4),
+        // wakeFromSleep(5), noSuitableRouteForCategory(6),
+        // routeConfigurationChange(7), unknown(0) — ignored as before.
+        if reason == Some(AVAudioSessionRouteChangeReason::OldDeviceUnavailable) {
+            send_if_active(core, MediaCommand::AudioBecomingNoisy);
         }
     }
 
     fn handle_silence_hint(core: &Arc<SessionCore>, notification: &NSNotification) {
         match user_info_number(notification, unsafe {
             AVAudioSessionSilenceSecondaryAudioHintTypeKey
-        }) {
-            Some(SILENCE_HINT_BEGIN) => {
+                .expect("AVAudioSessionSilenceSecondaryAudioHintTypeKey is present")
+        })
+        .map(AVAudioSessionSilenceSecondaryAudioHintType)
+        {
+            Some(AVAudioSessionSilenceSecondaryAudioHintType::Begin) => {
                 send_if_active(core, MediaCommand::AudioFocusLostDuck);
             }
-            Some(SILENCE_HINT_END) => {
+            Some(AVAudioSessionSilenceSecondaryAudioHintType::End) => {
                 send_if_active(core, MediaCommand::AudioFocusGained);
             }
             Some(other) => {
-                panic!("unsupported AVAudioSession silence secondary audio hint type {other}")
+                panic!("unsupported AVAudioSession silence secondary audio hint type {other:?}")
             }
             None => {}
         }
@@ -726,7 +667,7 @@ mod ios {
         name: &'static NSNotificationName,
         core: &Arc<SessionCore>,
         handler: fn(&Arc<SessionCore>, &NSNotification),
-    ) -> Retained<ProtocolObject<dyn NSObjectProtocol>> {
+    ) -> Retained<ProtocolObject<dyn objc2::runtime::NSObjectProtocol>> {
         let core = Arc::clone(core);
         let block = RcBlock::new(move |notification: NonNull<NSNotification>| {
             // SAFETY: the notification pointer is valid for the block call.
@@ -744,41 +685,65 @@ mod ios {
         }
     }
 
+    /// Register the session's interruption/route-change/hint observers on
+    /// the main queue. No main-thread answer is needed, so this hops with
+    /// `exec_async` — `MediaSessionInner::new` stays synchronous.
     pub(super) fn register_system_event_observers(core: &Arc<SessionCore>) {
-        core.observer_tokens.get_on_main(|tokens| {
+        let core = Arc::clone(core);
+        dispatch2::DispatchQueue::main().exec_async(move || {
+            let mtm = objc2::MainThreadMarker::new()
+                .expect("exec_async closure must run on the main queue");
             // SAFETY: `sharedInstance`/`defaultCenter` return process
             // singletons; both are created here on the main queue and stay
             // local to this call.
-            let session = unsafe { AVAudioSession::shared_instance() };
+            let session = unsafe { AVAudioSession::sharedInstance() };
             let center = NSNotificationCenter::defaultCenter();
-            tokens.lock().unwrap().extend([
-                observe(
-                    &center,
-                    &session,
-                    unsafe { AVAudioSessionInterruptionNotification },
-                    core,
-                    handle_interruption,
-                ),
-                observe(
-                    &center,
-                    &session,
-                    unsafe { AVAudioSessionRouteChangeNotification },
-                    core,
-                    handle_route_change,
-                ),
-                observe(
-                    &center,
-                    &session,
-                    unsafe { AVAudioSessionSilenceSecondaryAudioHintNotification },
-                    core,
-                    handle_silence_hint,
-                ),
-            ]);
+            let tokens = dispatch2::MainThreadBound::new(
+                std::sync::Mutex::new(vec![
+                    observe(
+                        &center,
+                        &session,
+                        unsafe {
+                            AVAudioSessionInterruptionNotification
+                                .expect("interruption notification is exported")
+                        },
+                        &core,
+                        handle_interruption,
+                    ),
+                    observe(
+                        &center,
+                        &session,
+                        unsafe {
+                            AVAudioSessionRouteChangeNotification
+                                .expect("route-change notification is exported")
+                        },
+                        &core,
+                        handle_route_change,
+                    ),
+                    observe(
+                        &center,
+                        &session,
+                        unsafe {
+                            AVAudioSessionSilenceSecondaryAudioHintNotification
+                                .expect("silence-hint notification is exported")
+                        },
+                        &core,
+                        handle_silence_hint,
+                    ),
+                ]),
+                mtm,
+            );
+            // Registered before `deactivate` can run `unregister`; a second
+            // `set` only happens if the session was already closed.
+            let _ = core.observer_tokens.set(tokens);
         });
     }
 
     pub(super) fn unregister_system_event_observers(core: &Arc<SessionCore>) {
-        core.observer_tokens.get_on_main(|tokens| {
+        let Some(tokens) = core.observer_tokens.get() else {
+            return;
+        };
+        tokens.get_on_main(|tokens| {
             let mut tokens = tokens.lock().unwrap();
             if tokens.is_empty() {
                 return;
@@ -794,21 +759,27 @@ mod ios {
     pub(super) fn request_audio_focus() -> Result<(), MediaError> {
         // SAFETY: `sharedInstance` returns the process-wide session; the
         // category/mode constants are exported by AVFAudio.
-        let session = unsafe { AVAudioSession::shared_instance() };
+        let session = unsafe { AVAudioSession::sharedInstance() };
         let configured = unsafe {
-            session
-                .set_category_mode_error(AVAudioSessionCategoryPlayback, AVAudioSessionModeDefault)
+            session.setCategory_mode_options_error(
+                AVAudioSessionCategoryPlayback.expect("playback category is exported"),
+                AVAudioSessionModeDefault.expect("default mode is exported"),
+                AVAudioSessionCategoryOptions(0),
+            )
         };
         configured
-            .and_then(|()| unsafe { session.set_active_error(true) })
+            .and_then(|()| unsafe { session.setActive_error(true) })
             .map_err(|_error| MediaError::AudioFocusDenied)
     }
 
     pub(super) fn abandon_audio_focus() -> Result<(), MediaError> {
         // SAFETY: `sharedInstance` returns the process-wide session.
-        let session = unsafe { AVAudioSession::shared_instance() };
+        let session = unsafe { AVAudioSession::sharedInstance() };
         unsafe {
-            session.set_active_with_options_error(false, SET_ACTIVE_NOTIFY_OTHERS_ON_DEACTIVATION)
+            session.setActive_withOptions_error(
+                false,
+                AVAudioSessionSetActiveOptions::NotifyOthersOnDeactivation,
+            )
         }
         .map_err(|_error| MediaError::UpdateFailed("failed to deactivate AVAudioSession".into()))
     }
@@ -819,100 +790,39 @@ mod ios {
 // objc2-av-foundation 0.3.x — declared here)
 // ---------------------------------------------------------------------------
 
-#[expect(
-    clippy::missing_safety_doc,
-    reason = "extern_protocol! items are linted at the macro call site; the optional delegate callbacks carry no implementer-side safety contract"
-)]
 #[cfg(target_os = "macos")]
 mod macos {
     use objc2::{
-        AnyThread, DeclaredClass, define_class, extern_class, extern_conformance, extern_methods,
-        extern_protocol, msg_send,
+        AnyThread, DeclaredClass, define_class, msg_send,
         rc::Retained,
         runtime::{NSObject, NSObjectProtocol, ProtocolObject},
     };
+    use objc2_avf_audio::{AVAudioPlayer, AVAudioPlayerDelegate};
     use objc2_foundation::{NSData, NSError};
     use std::sync::Mutex;
 
-    extern_class!(
-        /// [Apple's documentation](https://developer.apple.com/documentation/avfaudio/avaudioplayer?language=objc)
-        #[unsafe(super(NSObject))]
-        #[name = "AVAudioPlayer"]
-        #[derive(Debug, PartialEq, Eq, Hash)]
-        pub struct AVAudioPlayer;
-    );
-
-    extern_conformance!(
-        unsafe impl NSObjectProtocol for AVAudioPlayer {}
-    );
-
-    /// `AVAudioPlayer` is safe to call and share across threads; generated
-    /// objc2-* crates emit the same impls for thread-safe classes.
+    /// `AVAudioPlayer` is not `Send`/`Sync` in `objc2-avf-audio` 0.3.x, so
+    /// the silent-pulse player is kept inside this wrapper.
     ///
     /// # Safety
     ///
-    /// Apple documents `AVAudioPlayer` as thread-safe; the silent-pulse
-    /// player here is additionally only touched through a `Mutex`.
+    /// Apple documents `AVAudioPlayer` as thread-safe, and the delegate
+    /// touches the player only through the ivar `Mutex`.
+    struct SilentPlayer {
+        _player: Retained<AVAudioPlayer>,
+    }
     #[expect(
         clippy::non_send_fields_in_send_ty,
-        reason = "extern class: the opaque object pointer is the only field"
+        reason = "AVAudioPlayer is thread-safe per Apple docs; accesses go through the ivar Mutex"
     )]
-    unsafe impl Send for AVAudioPlayer {}
+    unsafe impl Send for SilentPlayer {}
     /// # Safety
     ///
     /// See the `Send` impl.
-    unsafe impl Sync for AVAudioPlayer {}
-
-    impl AVAudioPlayer {
-        extern_methods!(
-            #[unsafe(method(setVolume:))]
-            #[unsafe(method_family = none)]
-            pub unsafe fn set_volume(&self, volume: f32);
-
-            #[unsafe(method(setDelegate:))]
-            #[unsafe(method_family = none)]
-            pub unsafe fn set_delegate(
-                &self,
-                delegate: Option<&ProtocolObject<dyn AVAudioPlayerDelegate>>,
-            );
-
-            #[unsafe(method(prepareToPlay))]
-            #[unsafe(method_family = none)]
-            pub unsafe fn prepare_to_play(&self) -> bool;
-
-            #[unsafe(method(play))]
-            #[unsafe(method_family = none)]
-            pub unsafe fn play(&self) -> bool;
-        );
-    }
-
-    extern_protocol!(
-        /// [Apple's documentation](https://developer.apple.com/documentation/avfaudio/avaudioplayerdelegate?language=objc)
-        pub unsafe trait AVAudioPlayerDelegate: NSObjectProtocol {
-            /// `audioPlayerDidFinishPlaying:successfully:`
-            #[optional]
-            #[unsafe(method(audioPlayerDidFinishPlaying:successfully:))]
-            #[unsafe(method_family = none)]
-            unsafe fn audio_player_did_finish_playing_successfully(
-                &self,
-                player: &AVAudioPlayer,
-                flag: bool,
-            );
-
-            /// `audioPlayerDecodeErrorDidOccur:error:`
-            #[optional]
-            #[unsafe(method(audioPlayerDecodeErrorDidOccur:error:))]
-            #[unsafe(method_family = none)]
-            unsafe fn audio_player_decode_error_did_occur_error(
-                &self,
-                player: &AVAudioPlayer,
-                error: Option<&NSError>,
-            );
-        }
-    );
+    unsafe impl Sync for SilentPlayer {}
 
     pub struct SilentPlayerIvars {
-        player: Mutex<Option<Retained<AVAudioPlayer>>>,
+        player: Mutex<Option<SilentPlayer>>,
     }
 
     define_class!(
@@ -927,8 +837,12 @@ mod macos {
         unsafe impl NSObjectProtocol for WaterkitSilentPlayerDelegate {}
 
         unsafe impl AVAudioPlayerDelegate for WaterkitSilentPlayerDelegate {
+            #[expect(
+                non_snake_case,
+                reason = "method name is fixed by the generated objc2 trait"
+            )]
             #[unsafe(method(audioPlayerDidFinishPlaying:successfully:))]
-            fn audio_player_did_finish_playing_successfully(
+            fn audioPlayerDidFinishPlaying_successfully(
                 &self,
                 _player: &AVAudioPlayer,
                 _flag: bool,
@@ -936,8 +850,12 @@ mod macos {
                 self.ivars().player.lock().unwrap().take();
             }
 
+            #[expect(
+                non_snake_case,
+                reason = "method name is fixed by the generated objc2 trait"
+            )]
             #[unsafe(method(audioPlayerDecodeErrorDidOccur:error:))]
-            fn audio_player_decode_error_did_occur_error(
+            fn audioPlayerDecodeErrorDidOccur_error(
                 &self,
                 _player: &AVAudioPlayer,
                 error: Option<&NSError>,
@@ -1003,33 +921,26 @@ mod macos {
         // SAFETY: `initWithData:error:` is a documented `AVAudioPlayer`
         // initializer; `data` is a complete WAV payload, and `error` is a
         // valid `NSError **` out-pointer.
-        let player: Option<Retained<AVAudioPlayer>> = {
-            let mut error: Option<Retained<NSError>> = None;
-            let result = unsafe {
-                msg_send![
-                    AVAudioPlayer::alloc(),
-                    initWithData: &*data,
-                    error: &mut error
-                ]
+        // SAFETY: `initWithData:error:` is a documented `AVAudioPlayer`
+        // initializer; `data` is a complete WAV payload.
+        let player =
+            match unsafe { AVAudioPlayer::initWithData_error(AVAudioPlayer::alloc(), &data) } {
+                Ok(player) => player,
+                Err(error) => {
+                    tracing::warn!(%error, "failed to create silent audio player");
+                    return delegate;
+                }
             };
-            if let Some(error) = error {
-                tracing::warn!(%error, "failed to create silent audio player");
-            }
-            result
-        };
-        let Some(player) = player else {
-            return delegate;
-        };
         unsafe {
-            player.set_volume(0.0);
-            player.set_delegate(Some(ProtocolObject::from_ref(&*delegate)));
-            player.prepare_to_play();
+            player.setVolume(0.0);
+            player.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+            player.prepareToPlay();
             if !player.play() {
                 tracing::warn!("silent audio activation pulse did not start playback");
                 return delegate;
             }
         }
-        *delegate.ivars().player.lock().unwrap() = Some(player);
+        *delegate.ivars().player.lock().unwrap() = Some(SilentPlayer { _player: player });
         delegate
     }
 }
@@ -1040,13 +951,16 @@ mod macos {
 
 #[cfg(all(target_os = "ios", feature = "playback"))]
 mod player {
-    use super::ios::{AVAudioSession, AVAudioSessionCategoryPlayback, AVAudioSessionModeDefault};
     use crate::{PlaybackStatus, PlayerError};
     use dispatch2::MainThreadBound;
+    use objc2::MainThreadMarker;
     use objc2::rc::Retained;
     use objc2_av_foundation::{
         AVAudioTimePitchAlgorithmSpectral, AVAudioTimePitchAlgorithmVarispeed, AVPlayer,
         AVPlayerItem,
+    };
+    use objc2_avf_audio::{
+        AVAudioSession, AVAudioSessionCategoryPlayback, AVAudioSessionModeDefault,
     };
     use objc2_core_media::CMTime;
     use objc2_foundation::{NSNumber, NSString, NSURL};
@@ -1055,10 +969,8 @@ mod player {
         MPNowPlayingInfoPropertyPlaybackRate, MPNowPlayingPlaybackState,
     };
     use std::{
-        sync::{
-            Mutex,
-            atomic::{AtomicBool, AtomicU32, Ordering},
-        },
+        sync::Mutex,
+        sync::atomic::{AtomicBool, AtomicU32, Ordering},
         time::Duration,
     };
 
@@ -1100,25 +1012,28 @@ mod player {
     }
 
     impl NativeAudioPlayerInner {
+        /// Construct the player shell; the main-thread `MainThreadBound` is
+        /// created through `waterkit_core::apple::on_main`.
         pub fn new() -> Result<Self, PlayerError> {
             // SAFETY: `sharedInstance` returns the process-wide session.
-            let session = unsafe { AVAudioSession::shared_instance() };
+            let session = unsafe { AVAudioSession::sharedInstance() };
             let configured = unsafe {
-                session.set_category_mode_error(
-                    AVAudioSessionCategoryPlayback,
-                    AVAudioSessionModeDefault,
+                session.setCategory_mode_options_error(
+                    AVAudioSessionCategoryPlayback.expect("playback category is exported"),
+                    AVAudioSessionModeDefault.expect("default mode is exported"),
+                    objc2_avf_audio::AVAudioSessionCategoryOptions(0),
                 )
             };
-            // `AVAudioSession` category/mode constants are extern statics;
-            // reading them is covered by the enclosing `unsafe` block.
             configured
-                .and_then(|()| unsafe { session.set_active_error(true) })
+                .and_then(|()| unsafe { session.setActive_error(true) })
                 .map_err(|error| {
                     tracing::error!(%error, "failed to activate AVAudioSession");
                     PlayerError::LoadFailed("Apple audio player failed to load media".into())
                 })?;
+            let player =
+                dispatch2::run_on_main(|mtm| MainThreadBound::new(Mutex::new(None), mtm));
             Ok(Self {
-                player: dispatch2::run_on_main(|mtm| MainThreadBound::new(Mutex::new(None), mtm)),
+                player,
                 requested_rate: AtomicU32::new(1.0f32.to_bits()),
                 preserve_pitch: AtomicBool::new(true),
                 volume: AtomicU32::new(1.0f32.to_bits()),
@@ -1207,9 +1122,10 @@ mod player {
         }
 
         fn load_url_object(&self, url: &NSURL) {
-            dispatch2::run_on_main(|mtm| {
-                let guard = self.player.get(mtm);
-                let mut player_slot = guard.lock().unwrap();
+            self.player.get_on_main(|slot| {
+                let mtm = MainThreadMarker::new()
+                    .expect("MainThreadBound::get_on_main runs on the main queue");
+                let mut player_slot = slot.lock().unwrap();
                 // Stop the current player first (`stopCurrentPlayer`).
                 if let Some(player) = player_slot.as_ref() {
                     unsafe {
@@ -1240,6 +1156,7 @@ mod player {
                     player.pause();
                 }
                 *player_slot = Some(player);
+                drop(player_slot);
             });
             self.update_now_playing();
         }

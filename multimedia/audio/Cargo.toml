@@ -43,6 +43,8 @@ media-session = [
     "dep:objc2-media-player",
     "dep:objc2-core-media",
     "dep:objc2-av-foundation",
+    "dep:objc2-avf-audio",
+    "dep:waterkit-core",
     "dep:objc2-ui-kit",
     "dep:objc2-app-kit",
     "dep:block2",
@@ -141,6 +143,12 @@ objc2-media-player = { workspace = true, optional = true, features = [
     "objc2-core-foundation",
 ] }
 objc2-core-media = { workspace = true, optional = true }
+objc2-avf-audio = { workspace = true, optional = true, features = [
+    "AVAudioPlayer",
+    "AVAudioSession",
+    "AVAudioSessionTypes",
+] }
+waterkit-core = { workspace = true, optional = true }
 block2 = { workspace = true, optional = true }
 dispatch2 = { workspace = true, optional = true }
 

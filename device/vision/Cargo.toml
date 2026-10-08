@@ -72,6 +72,9 @@ waterkit-build.workspace = true
 barcode = []
 # `RecognizeText`.
 text = ["dep:icu_locale_core", "dep:windows"]
+# `RecognizeDocument`: a document's paragraphs, tables, lists and barcodes.
+# A paragraph reports [`TextLine`]s, so the capability builds on `text`.
+document = ["text"]
 # Camera `Frame` images through `waterkit-camera`.
 camera = ["dep:waterkit-camera"]
 

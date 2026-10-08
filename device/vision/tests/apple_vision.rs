@@ -9,6 +9,8 @@ use bytes::Bytes;
 use enumset::EnumSet;
 use image::{DynamicImage, Rgba, RgbaImage};
 use waterkit_core::Capabilities;
+#[cfg(feature = "document")]
+use waterkit_vision::{Block, RecognizeDocument};
 use waterkit_vision::{
     DetectBarcodes, Image, Orientation, RecognitionLevel, RecognizeText, Symbology, Vision,
     VisionError,
@@ -71,16 +73,16 @@ fn code128_rgba(content: &str) -> RgbaImage {
     clippy::cast_sign_loss
 )]
 // glyph bounds are whole-pixel values; canvas sizes and coverage are small
-fn text_rgba(line: &str, width: u32, height: u32) -> RgbaImage {
+fn draw_text(image: &mut RgbaImage, text: &str, origin: (f32, f32), size: f32) {
     use ab_glyph::{Font, FontArc, PxScale, ScaleFont, point};
 
     let font = FontArc::try_from_slice(dejavu::sans::regular()).expect("DejaVu Sans parses");
-    let scale = PxScale::from(56.0);
+    let scale = PxScale::from(size);
     let scaled = font.as_scaled(scale);
-    let mut image = RgbaImage::from_pixel(width, height, Rgba([255, 255, 255, 255]));
-    let mut caret = point(24.0, 24.0 + scaled.ascent());
+    let (width, height) = (i64::from(image.width()), i64::from(image.height()));
+    let mut caret = point(origin.0, origin.1 + scaled.ascent());
     let mut last = None;
-    for ch in line.chars() {
+    for ch in text.chars() {
         let id = scaled.glyph_id(ch);
         if let Some(previous) = last {
             caret.x += scaled.kern(previous, id);
@@ -91,7 +93,7 @@ fn text_rgba(line: &str, width: u32, height: u32) -> RgbaImage {
             outline.draw(|dx, dy, coverage| {
                 let x = bounds.min.x as i64 + i64::from(dx);
                 let y = bounds.min.y as i64 + i64::from(dy);
-                if (0..width as i64).contains(&x) && (0..height as i64).contains(&y) {
+                if (0..width).contains(&x) && (0..height).contains(&y) {
                     let shade = 255 - (coverage * 255.0) as u8;
                     *image.get_pixel_mut(x as u32, y as u32) = Rgba([shade, shade, shade, 255]);
                 }
@@ -100,6 +102,11 @@ fn text_rgba(line: &str, width: u32, height: u32) -> RgbaImage {
         caret.x += scaled.h_advance(id);
         last = Some(id);
     }
+}
+
+fn text_rgba(line: &str, width: u32, height: u32) -> RgbaImage {
+    let mut image = RgbaImage::from_pixel(width, height, Rgba([255, 255, 255, 255]));
+    draw_text(&mut image, line, (24.0, 24.0), 56.0);
     image
 }
 
@@ -308,6 +315,227 @@ fn an_unserved_language_fails_ahead_of_time_and_names_it() {
         message.contains("tlh"),
         "the error names the language: {message}"
     );
+}
+
+#[cfg(feature = "document")]
+fn fill_rect(image: &mut RgbaImage, x: u32, y: u32, width: u32, height: u32) {
+    for row in 0..height {
+        for column in 0..width {
+            image.put_pixel(x + column, y + row, Rgba([0, 0, 0, 255]));
+        }
+    }
+}
+
+/// A page holding two paragraphs, a bordered 2x2 table and a numbered
+/// two-item list, rendered at test time.
+#[cfg(feature = "document")]
+fn document_page_rgba() -> RgbaImage {
+    let mut page = RgbaImage::from_pixel(1000, 1400, Rgba([255, 255, 255, 255]));
+    draw_text(
+        &mut page,
+        "The quarterly report summarizes revenue",
+        (60.0, 80.0),
+        36.0,
+    );
+    draw_text(
+        &mut page,
+        "across all regions for the period.",
+        (60.0, 140.0),
+        36.0,
+    );
+    draw_text(
+        &mut page,
+        "Contact the sales office for further",
+        (60.0, 260.0),
+        36.0,
+    );
+    draw_text(
+        &mut page,
+        "details before the end of the month.",
+        (60.0, 320.0),
+        36.0,
+    );
+
+    // A bordered 2x2 grid: outer frame, one horizontal and one vertical
+    // divider, with text in each cell.
+    let (left, top, bottom) = (60, 460, 700);
+    let (middle_x, middle_y) = (500, 580);
+    fill_rect(&mut page, left, top, 880, 3);
+    fill_rect(&mut page, left, middle_y, 880, 3);
+    fill_rect(&mut page, left, bottom, 880, 3);
+    fill_rect(&mut page, left, top, 3, bottom - top);
+    fill_rect(&mut page, middle_x, top, 3, bottom - top);
+    fill_rect(&mut page, left + 877, top, 3, bottom - top);
+    draw_text(&mut page, "Region", (90.0, 490.0), 30.0);
+    draw_text(&mut page, "Total", (530.0, 490.0), 30.0);
+    draw_text(&mut page, "North", (90.0, 610.0), 30.0);
+    draw_text(&mut page, "42", (530.0, 610.0), 30.0);
+
+    draw_text(
+        &mut page,
+        "1. First item of the summary",
+        (60.0, 780.0),
+        36.0,
+    );
+    draw_text(
+        &mut page,
+        "2. Second item of the summary",
+        (60.0, 840.0),
+        36.0,
+    );
+    page
+}
+
+/// A page with two columns of two paragraphs each.
+#[cfg(feature = "document")]
+fn two_column_page_rgba() -> RgbaImage {
+    let mut page = RgbaImage::from_pixel(1000, 1400, Rgba([255, 255, 255, 255]));
+    draw_text(&mut page, "Left column opens the page", (60.0, 100.0), 34.0);
+    draw_text(
+        &mut page,
+        "with a first paragraph here.",
+        (60.0, 155.0),
+        34.0,
+    );
+    draw_text(&mut page, "A second paragraph follows", (60.0, 300.0), 34.0);
+    draw_text(
+        &mut page,
+        "below it in the left column.",
+        (60.0, 355.0),
+        34.0,
+    );
+    draw_text(
+        &mut page,
+        "Right column starts with its",
+        (560.0, 100.0),
+        34.0,
+    );
+    draw_text(
+        &mut page,
+        "own first paragraph on top.",
+        (560.0, 155.0),
+        34.0,
+    );
+    draw_text(
+        &mut page,
+        "And a second paragraph sits",
+        (560.0, 300.0),
+        34.0,
+    );
+    draw_text(
+        &mut page,
+        "below in the right column.",
+        (560.0, 355.0),
+        34.0,
+    );
+    page
+}
+
+#[test]
+#[cfg(feature = "document")]
+fn a_rendered_page_recognizes_its_document_structure() {
+    let (vision, _, _) = vision();
+    let document = pollster::block_on(
+        vision.perform(&encoded(&document_page_rgba()), &RecognizeDocument::new()),
+    )
+    .expect("Vision recognizes the page's structure");
+
+    let kinds: Vec<&str> = document
+        .blocks
+        .iter()
+        .map(|block| match block {
+            Block::Paragraph(_) => "paragraph",
+            Block::Table(_) => "table",
+            Block::List(_) => "list",
+            Block::Barcode(_) => "barcode",
+            Block::Formula(_) => "formula",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        ["paragraph", "paragraph", "table", "list"],
+        "blocks in reading order: {document:#?}"
+    );
+
+    let [Block::Paragraph(first), Block::Paragraph(second), ..] = &document.blocks[..] else {
+        unreachable!("the kinds assertion above orders paragraphs first")
+    };
+    assert!(first.text.contains("quarterly report"), "{first:?}");
+    assert!(second.text.contains("sales office"), "{second:?}");
+
+    let Some(Block::Table(table)) = document.blocks.get(2) else {
+        unreachable!()
+    };
+    assert_eq!((table.rows, table.columns), (2, 2));
+    assert_eq!(table.cells.len(), 4);
+    for cell in &table.cells {
+        assert_eq!(cell.rows.end - cell.rows.start, 1);
+        assert_eq!(cell.columns.end - cell.columns.start, 1);
+        assert!(
+            matches!(cell.content[..], [Block::Paragraph(_)]),
+            "cell {cell:?} holds one paragraph"
+        );
+    }
+
+    let Some(Block::List(list)) = document.blocks.get(3) else {
+        unreachable!()
+    };
+    assert_eq!(list.items.len(), 2);
+    let items: Vec<String> = list
+        .items
+        .iter()
+        .map(|item| {
+            item.content
+                .iter()
+                .filter_map(|block| match block {
+                    Block::Paragraph(paragraph) => Some(paragraph.text.as_str()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect();
+    assert!(
+        items[0].contains("First") && items[1].contains("Second"),
+        "list items: {items:?}"
+    );
+}
+
+#[test]
+#[cfg(feature = "document")]
+fn a_two_column_page_reads_left_column_then_right() {
+    let (vision, _, _) = vision();
+    let document = pollster::block_on(
+        vision.perform(&encoded(&two_column_page_rgba()), &RecognizeDocument::new()),
+    )
+    .expect("Vision recognizes the page's structure");
+
+    let paragraphs: Vec<&str> = document
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::Paragraph(paragraph) => Some(paragraph.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        paragraphs.len(),
+        4,
+        "four paragraphs in column order: {document:#?}"
+    );
+    let columns: Vec<&str> = paragraphs
+        .iter()
+        .map(|text| {
+            let text = text.to_lowercase();
+            if text.contains("left") {
+                "left"
+            } else if text.contains("right") {
+                "right"
+            } else {
+                panic!("paragraph names its column: {text}")
+            }
+        })
+        .collect();
+    assert_eq!(columns, ["left", "left", "right", "right"]);
 }
 
 #[test]

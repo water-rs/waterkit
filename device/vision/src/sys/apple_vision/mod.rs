@@ -6,16 +6,16 @@
 //! Parameters and results cross the bridge as JSON, as the crate's other
 //! Apple bridges do.
 
-#[cfg(any(feature = "barcode", feature = "text"))]
+#[cfg(any(feature = "barcode", feature = "text", feature = "document"))]
 use futures::channel::oneshot;
 #[cfg(feature = "barcode")]
 use std::sync::OnceLock;
-#[cfg(any(feature = "barcode", feature = "text"))]
+#[cfg(any(feature = "barcode", feature = "text", feature = "document"))]
 use std::{ffi::c_void, ptr};
 
 #[cfg(feature = "barcode")]
 use crate::sealed::{Offer, Pass};
-#[cfg(any(feature = "barcode", feature = "text"))]
+#[cfg(any(feature = "barcode", feature = "text", feature = "document"))]
 use crate::{
     VisionError,
     image::Pixels,
@@ -58,25 +58,35 @@ pub mod ffi {
             languages: &str,
             callback: Box<dyn FnOnce(String)>,
         );
+        // A JSON array of BCP-47 languages `RecognizeDocumentsRequest`
+        // serves; empty below the request API's availability.
+        pub fn vision_supported_document_languages() -> String;
+        // Runs document recognition constrained to the JSON `languages`
+        // array; the callback receives the JSON outcome.
+        pub fn vision_recognize_document(
+            handler: usize,
+            languages: &str,
+            callback: Box<dyn FnOnce(String)>,
+        );
     }
 }
 
 /// The request handler shared by requests in one pass.
-#[cfg(any(feature = "barcode", feature = "text"))]
+#[cfg(any(feature = "barcode", feature = "text", feature = "document"))]
 #[derive(Debug)]
 pub struct AppleImage {
     /// The retained `ImageRequestHandler`, as an `Unmanaged` pointer.
     pub handler: usize,
 }
 
-#[cfg(any(feature = "barcode", feature = "text"))]
+#[cfg(any(feature = "barcode", feature = "text", feature = "document"))]
 impl Drop for AppleImage {
     fn drop(&mut self) {
         ffi::vision_handler_release(self.handler);
     }
 }
 
-#[cfg(any(feature = "barcode", feature = "text"))]
+#[cfg(any(feature = "barcode", feature = "text", feature = "document"))]
 impl Preparation for AppleImage {
     async fn prepare(_context: Context<'_>, pixels: &Pixels) -> Result<Self, VisionError> {
         let handler = match pixels {
@@ -134,7 +144,7 @@ impl Preparation for AppleImage {
 }
 
 /// The retained `MTLTexture` a wgpu texture is, as an FFI pointer.
-#[cfg(any(feature = "barcode", feature = "text"))]
+#[cfg(any(feature = "barcode", feature = "text", feature = "document"))]
 fn metal_texture(texture: &wgpu::Texture) -> Result<usize, VisionError> {
     // SAFETY: `texture` outlives the FFI call this handle is passed to; the
     // hal texture is only read for its raw handle.
@@ -145,7 +155,7 @@ fn metal_texture(texture: &wgpu::Texture) -> Result<usize, VisionError> {
 }
 
 /// Runs `call` with a result callback and awaits the JSON it answers.
-#[cfg(any(feature = "barcode", feature = "text"))]
+#[cfg(any(feature = "barcode", feature = "text", feature = "document"))]
 pub async fn ffi_outcome<T: serde::de::DeserializeOwned>(
     call: impl FnOnce(Box<dyn FnOnce(String)>),
 ) -> Result<Vec<T>, VisionError> {
@@ -167,7 +177,7 @@ pub async fn ffi_outcome<T: serde::de::DeserializeOwned>(
 }
 
 /// The JSON envelope every Vision result callback returns.
-#[cfg(any(feature = "barcode", feature = "text"))]
+#[cfg(any(feature = "barcode", feature = "text", feature = "document"))]
 #[derive(Debug, serde::Deserialize)]
 pub struct WireOutcome<T> {
     /// The results; absent on failure.
@@ -177,7 +187,7 @@ pub struct WireOutcome<T> {
 }
 
 /// Corners normalized to the upright image, decoded from interleaved x/y.
-#[cfg(any(feature = "barcode", feature = "text"))]
+#[cfg(any(feature = "barcode", feature = "text", feature = "document"))]
 pub const fn wire_quad(corners: [f32; 8]) -> crate::Quad {
     crate::Quad([
         crate::Point {
@@ -231,7 +241,7 @@ const fn name(symbology: crate::Symbology) -> &'static str {
 }
 
 /// The symbology a canonical `name` is.
-#[cfg(feature = "barcode")]
+#[cfg(any(feature = "barcode", feature = "document"))]
 fn symbology_from_name(name: &str) -> Option<crate::Symbology> {
     use crate::Symbology;
     Some(match name {
@@ -309,9 +319,9 @@ pub async fn detect_barcodes(
 }
 
 /// A barcode as the bridge reports it.
-#[cfg(feature = "barcode")]
+#[cfg(any(feature = "barcode", feature = "document"))]
 #[derive(Debug, serde::Deserialize)]
-struct WireBarcode {
+pub struct WireBarcode {
     /// Its canonical symbology name.
     symbology: String,
     /// The decoded payload bytes.
@@ -320,9 +330,9 @@ struct WireBarcode {
     corners: [f32; 8],
 }
 
-#[cfg(feature = "barcode")]
+#[cfg(any(feature = "barcode", feature = "document"))]
 impl WireBarcode {
-    fn into_barcode(self) -> crate::Barcode {
+    pub fn into_barcode(self) -> crate::Barcode {
         crate::Barcode {
             symbology: symbology_from_name(&self.symbology).unwrap_or_else(|| {
                 panic!(
@@ -336,6 +346,53 @@ impl WireBarcode {
             bounds: wire_quad(self.corners),
         }
     }
+}
+
+/// A text line as the bridge reports it, shared by the text request and by
+/// document paragraphs.
+#[cfg(any(feature = "text", feature = "document"))]
+#[derive(Debug, serde::Deserialize)]
+pub struct WireTextLine {
+    /// The recognized text.
+    text: String,
+    /// Vision's confidence, 0 to 1.
+    confidence: f32,
+    /// The four upright corners in reading order, x/y interleaved.
+    corners: [f32; 8],
+    /// The line's words in reading order.
+    words: Vec<WireTextWord>,
+}
+
+#[cfg(any(feature = "text", feature = "document"))]
+impl WireTextLine {
+    pub fn into_line(self) -> crate::TextLine {
+        crate::TextLine {
+            text: self.text,
+            confidence: Some(self.confidence),
+            bounds: wire_quad(self.corners),
+            words: self
+                .words
+                .into_iter()
+                .map(|word| crate::TextWord {
+                    text: word.text,
+                    confidence: Some(word.confidence),
+                    bounds: wire_quad(word.corners),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// A recognized word as the bridge reports it.
+#[cfg(any(feature = "text", feature = "document"))]
+#[derive(Debug, serde::Deserialize)]
+struct WireTextWord {
+    /// The recognized text.
+    text: String,
+    /// The line candidate's confidence, 0 to 1.
+    confidence: f32,
+    /// The four upright corners in reading order, x/y interleaved.
+    corners: [f32; 8],
 }
 
 #[cfg(all(test, feature = "camera", feature = "barcode"))]

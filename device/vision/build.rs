@@ -5,7 +5,8 @@ fn main() {
     let apple = matches!(target_os.as_str(), "ios" | "macos");
     let vision = apple
         && (std::env::var("CARGO_FEATURE_BARCODE").is_ok()
-            || std::env::var("CARGO_FEATURE_TEXT").is_ok());
+            || std::env::var("CARGO_FEATURE_TEXT").is_ok()
+            || std::env::var("CARGO_FEATURE_DOCUMENT").is_ok());
     // `DataScannerViewController` is unavailable on Mac Catalyst, so the
     // scanner bridge only compiles for iOS without the `macabi` ABI.
     let scanner = target_os == "ios"
@@ -27,6 +28,7 @@ fn main() {
                 .framework("Foundation")
                 .framework("CoreVideo")
                 .framework("CoreImage")
+                .framework("DataDetection")
                 .framework("ImageIO")
                 .framework("Metal")
                 .framework("Vision"),

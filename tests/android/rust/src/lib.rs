@@ -1484,6 +1484,50 @@ async fn record_android_camera_frames(
     record_android_camera_reopen(report, camera, &device, &queue).await;
 }
 
+/// Checks that two consecutive analysis frames carry an advancing stream
+/// clock, a size, a live `Image` and planes large enough for their strides.
+#[cfg(feature = "camera")]
+fn check_analysis_frames(
+    frame: &waterkit_content::camera::AnalysisFrame,
+    second: &waterkit_content::camera::AnalysisFrame,
+) -> Result<(), String> {
+    if second.timestamp().is_zero() || second.timestamp() <= frame.timestamp() {
+        return Err(format!(
+            "analysis timestamps do not advance: {:?} then {:?}",
+            frame.timestamp(),
+            second.timestamp()
+        ));
+    }
+    if frame.width() == 0 || frame.height() == 0 {
+        return Err("analysis frame has no size".to_owned());
+    }
+    if frame.media_image().as_obj().is_null() {
+        return Err("analysis frame holds a null image".to_owned());
+    }
+    let planes = frame.planes();
+    let chroma_width = frame.width().div_ceil(2) as usize;
+    let chroma_height = frame.height().div_ceil(2) as usize;
+    for (name, plane, width, height) in [
+        (
+            "luma",
+            &planes.luma,
+            frame.width() as usize,
+            frame.height() as usize,
+        ),
+        ("cb", &planes.cb, chroma_width, chroma_height),
+        ("cr", &planes.cr, chroma_width, chroma_height),
+    ] {
+        let need = plane.row_stride() * (height - 1) + plane.pixel_stride() * (width - 1) + 1;
+        if plane.bytes().len() < need {
+            return Err(format!(
+                "{name} plane has {} bytes, needs {need}",
+                plane.bytes().len()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Opens `camera` with an analysis output and takes its first two analysis
 /// frames, then one preview frame while the analysis stream is open — the
 /// GPU preview must keep streaming next to the `YUV_420_888` reader.
@@ -1548,50 +1592,11 @@ async fn record_android_camera_analysis(
             return;
         }
     };
-    if second.timestamp().is_zero() || second.timestamp() <= frame.timestamp() {
-        report.push(TestCase::failed(
-            case,
-            format!(
-                "analysis timestamps do not advance: {:?} then {:?}",
-                frame.timestamp(),
-                second.timestamp()
-            ),
-        ));
-        return;
-    }
-    if frame.width() == 0 || frame.height() == 0 {
-        report.push(TestCase::failed(case, "analysis frame has no size".to_owned()));
-        return;
-    }
-    if frame.media_image().as_obj().is_null() {
-        report.push(TestCase::failed(
-            case,
-            "analysis frame holds a null image".to_owned(),
-        ));
+    if let Err(error) = check_analysis_frames(&frame, &second) {
+        report.push(TestCase::failed(case, error));
         return;
     }
     let planes = frame.planes();
-    let chroma_width = frame.width().div_ceil(2) as usize;
-    let chroma_height = frame.height().div_ceil(2) as usize;
-    for (name, plane, width, height) in [
-        (
-            "luma",
-            &planes.luma,
-            frame.width() as usize,
-            frame.height() as usize,
-        ),
-        ("cb", &planes.cb, chroma_width, chroma_height),
-        ("cr", &planes.cr, chroma_width, chroma_height),
-    ] {
-        let need = plane.row_stride() * (height - 1) + plane.pixel_stride() * (width - 1) + 1;
-        if plane.bytes().len() < need {
-            report.push(TestCase::failed(
-                case,
-                format!("{name} plane has {} bytes, needs {need}", plane.bytes().len()),
-            ));
-            return;
-        }
-    }
 
     // A preview frame while the analysis stream stays open proves the
     // GPU stream keeps running next to the YUV_420_888 reader.
@@ -1752,10 +1757,7 @@ fn next_analysis_frame(
     count: u32,
     next: Result<
         Option<
-            Result<
-                waterkit_content::camera::AnalysisFrame,
-                waterkit_content::camera::CameraError,
-            >,
+            Result<waterkit_content::camera::AnalysisFrame, waterkit_content::camera::CameraError>,
         >,
         tokio::time::error::Elapsed,
     >,

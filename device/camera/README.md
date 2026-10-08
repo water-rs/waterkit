@@ -221,7 +221,7 @@ async fn main() -> Result<(), CameraError> {
 
 | Platform | Backend |
 | :--- | :--- |
-| iOS / macOS | AVFoundation + Swift bridge |
+| iOS / macOS | AVFoundation + objc2 |
 | Android | Camera2 + MediaRecorder + Kotlin bridge |
 | Windows / Linux | `nokhwa` |
 

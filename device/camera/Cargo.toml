@@ -31,7 +31,6 @@ waterkit-video-core.workspace = true
 yuv = "0.8.16"
 
 [build-dependencies]
-waterkit-build.workspace = true
 # The frame converter's shaders are composed with the shared Y'CbCr fragment
 # and compiled to the target's native shader format at build time.
 shaderloom = { workspace = true, features = ["build"] }
@@ -74,12 +73,43 @@ nokhwa = { workspace = true, features = ["input-native"] }
 waterkit-codec = { workspace = true, features = ["software-encode"] }
 waterkit-video-container.workspace = true
 
-# Apple platforms (iOS, macOS) - use native AVCaptureSession
+# Apple platforms (iOS, macOS) - AVCaptureSession through objc2
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
-objc.workspace = true
+objc2.workspace = true
+dispatch2 = { workspace = true, features = ["block2"] }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSDictionary",
+    "NSError",
+    "NSNotification",
+    "NSString",
+    "NSURL",
+    "NSValue",
+] }
+objc2-av-foundation = { workspace = true, features = [
+    "dispatch2",
+    "block2",
+    "objc2-core-foundation",
+    "objc2-core-media",
+    "AVCaptureDevice",
+    "AVCaptureFileOutput",
+    "AVCaptureInput",
+    "AVCaptureOutput",
+    "AVCaptureOutputBase",
+    "AVCapturePhotoOutput",
+    "AVCaptureSession",
+    "AVCaptureSessionPreset",
+    "AVCaptureVideoDataOutput",
+    "AVMediaFormat",
+    "AVVideoSettings",
+] }
+objc2-core-media = { workspace = true, features = [
+    "CMFormatDescription",
+    "CMSampleBuffer",
+    "CMTime",
+] }
 core-graphics-types = "0.2"
-objc2-core-foundation = { workspace = true, features = ["CFString"] }
+objc2-core-foundation = { workspace = true, features = ["CFString", "CFCGTypes"] }
 objc2-core-video = { workspace = true, features = [
     "CVBase",
     "CVBuffer",
@@ -90,6 +120,19 @@ objc2-core-video = { workspace = true, features = [
     "objc2-io-surface",
 ] }
 objc2-io-surface.workspace = true
+
+# iOS only: interface orientation drives each frame's rotation.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = { workspace = true, features = [
+    "UIApplication",
+    "UIInterface",
+    "UIResponder",
+    "UIScene",
+    "UISceneDefinitions",
+    "UIOrientation",
+    "UISceneSizeRestrictions",
+    "UIWindowScene",
+] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]

@@ -98,7 +98,14 @@ mod fallback {
             &EMPTY
         }
 
-        pub fn apply_controls(&mut self, _controls: &CameraControls) -> Result<(), CameraError> {
+        #[expect(
+            clippy::unused_async,
+            reason = "the fallback camera never does session work"
+        )]
+        pub async fn apply_controls(
+            &mut self,
+            _controls: &CameraControls,
+        ) -> Result<(), CameraError> {
             Err(CameraError::Unsupported)
         }
 
@@ -139,25 +146,45 @@ mod fallback {
             Err(CameraError::Unsupported)
         }
 
-        pub fn start_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
+        #[expect(
+            clippy::unused_async,
+            reason = "the fallback camera never does session work"
+        )]
+        pub async fn start_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
             Err(CameraError::Unsupported)
         }
 
-        pub fn stop_recording(&mut self) -> Result<(), CameraError> {
+        #[expect(
+            clippy::unused_async,
+            reason = "the fallback camera never does session work"
+        )]
+        pub async fn stop_recording(&mut self) -> Result<(), CameraError> {
             Err(CameraError::Unsupported)
         }
+
+        pub fn abandon_recording(&mut self) {}
 
         pub fn recording_duration(&self) -> Duration {
             Duration::ZERO
         }
 
-        pub fn start_raw_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
+        #[expect(
+            clippy::unused_async,
+            reason = "the fallback camera never does session work"
+        )]
+        pub async fn start_raw_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
             Err(CameraError::Unsupported)
         }
 
-        pub fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
+        #[expect(
+            clippy::unused_async,
+            reason = "the fallback camera never does session work"
+        )]
+        pub async fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
             Err(CameraError::Unsupported)
         }
+
+        pub fn abandon_raw_recording(&mut self) {}
 
         pub fn raw_recording_duration(&self) -> Duration {
             Duration::ZERO

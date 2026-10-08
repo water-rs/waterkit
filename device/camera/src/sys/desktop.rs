@@ -518,7 +518,11 @@ impl CameraInner {
         &self.capabilities
     }
 
-    pub fn apply_controls(&mut self, controls: &CameraControls) -> Result<(), CameraError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the desktop backend applies controls synchronously"
+    )]
+    pub async fn apply_controls(&mut self, controls: &CameraControls) -> Result<(), CameraError> {
         // Desktop cameras don't support professional controls
         if controls.exposure.is_some() {
             return Err(CameraError::ControlUnsupported("exposure".into()));
@@ -633,7 +637,11 @@ impl CameraInner {
         ))
     }
 
-    pub fn start_recording(&mut self, path: &Path) -> Result<(), CameraError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the desktop backend starts recording synchronously"
+    )]
+    pub async fn start_recording(&mut self, path: &Path) -> Result<(), CameraError> {
         if self.recording.is_some() {
             return Err(CameraError::AlreadyInUse);
         }
@@ -649,8 +657,26 @@ impl CameraInner {
         Ok(())
     }
 
-    pub fn stop_recording(&mut self) -> Result<(), CameraError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the desktop backend stops recording synchronously"
+    )]
+    pub async fn stop_recording(&mut self) -> Result<(), CameraError> {
         self.recording.take().map_or(Ok(()), RecordingSession::stop)
+    }
+
+    /// Ends the active recording inline; the desktop session stops
+    /// synchronously, so `Drop` paths just run it.
+    pub fn abandon_recording(&mut self) {
+        if let Some(session) = self.recording.take() {
+            let _ = session.stop();
+        }
+    }
+
+    /// Same as [`Self::abandon_recording`]: the desktop backend keeps one
+    /// recording slot for both modes.
+    pub fn abandon_raw_recording(&mut self) {
+        self.abandon_recording();
     }
 
     pub fn recording_duration(&self) -> Duration {
@@ -659,7 +685,11 @@ impl CameraInner {
             .map_or(Duration::ZERO, RecordingSession::duration)
     }
 
-    pub fn start_raw_recording(&mut self, path: &Path) -> Result<(), CameraError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the desktop backend starts recording synchronously"
+    )]
+    pub async fn start_raw_recording(&mut self, path: &Path) -> Result<(), CameraError> {
         if self.recording.is_some() {
             return Err(CameraError::AlreadyInUse);
         }
@@ -674,7 +704,11 @@ impl CameraInner {
         Ok(())
     }
 
-    pub fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the desktop backend stops recording synchronously"
+    )]
+    pub async fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
         self.recording.take().map_or(Ok(()), RecordingSession::stop)
     }
 

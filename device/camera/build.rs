@@ -26,27 +26,6 @@ fn main() {
 
     #[cfg(feature = "preview-example")]
     shaderloom::build::compile_wgsl_shader("examples/preview.wgsl", "camera_preview");
-
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
-
-    if target_os == "ios" || target_os == "macos" {
-        use waterkit_build::{SwiftBridge, SwiftBridges};
-
-        let mut bridge = SwiftBridge::new("src/sys/apple/mod.rs")
-            .swift_source("src/sys/apple/CameraHelper.swift")
-            .framework("Foundation")
-            .framework("AVFoundation")
-            .framework("CoreMedia")
-            .framework("CoreVideo");
-
-        if target_os == "ios" {
-            bridge = bridge.framework("UIKit");
-        } else {
-            bridge = bridge.framework("AppKit");
-        }
-
-        SwiftBridges::new().bridge(bridge).compile();
-    }
 }
 
 /// Composes each converter module from its parts and compiles it with

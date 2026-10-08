@@ -192,12 +192,27 @@ pub struct ScreenStreamInner {
 #[cfg(not(target_os = "macos"))]
 impl ScreenStreamInner {
     /// Create a new screen stream.
-    pub fn new(
+    #[cfg_attr(
+        target_os = "windows",
+        expect(
+            clippy::unused_async,
+            reason = "the facade awaits this on every platform; the xcap monitor is thread-affine on Windows so the lookup has no await inside"
+        )
+    )]
+    pub async fn new(
         display: &ScreenInfo,
         device: Arc<Device>,
         queue: Arc<Queue>,
         _config: &StreamConfig,
     ) -> Result<Self, Error> {
+        #[cfg(target_os = "linux")]
+        let monitor = {
+            let display_id = display.id();
+            blocking::unblock(move || monitor_by_id(display_id)).await?
+        };
+        // `xcap::Monitor` is thread-affine on Windows, so the lookup stays on
+        // the calling thread there.
+        #[cfg(target_os = "windows")]
         let monitor = monitor_by_id(display.id())?;
 
         let width = display.width();

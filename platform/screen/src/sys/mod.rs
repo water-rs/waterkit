@@ -202,7 +202,11 @@ pub struct ScreenStreamInner;
     reason = "this unsupported-platform shim keeps no state and computes nothing, but the facade calls every platform's backend through the same non-const `&self` methods"
 )]
 impl ScreenStreamInner {
-    pub fn new(
+    #[expect(
+        clippy::unused_async,
+        reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
+    )]
+    pub async fn new(
         _display: &ScreenInfo,
         _device: std::sync::Arc<wgpu::Device>,
         _queue: std::sync::Arc<wgpu::Queue>,

@@ -97,7 +97,7 @@ impl HardwareBufferLease for FrameLease {
 impl Drop for FrameLease {
     fn drop(&mut self) {
         if let Some(frame) = self.frame.take() {
-            self.bridge.release_frame(&frame);
+            self.bridge.release_image(&frame);
         }
     }
 }
@@ -193,7 +193,7 @@ impl RawFrame {
 /// components use the dynamic-range profile captured with this image. Below
 /// API 33, the Kotlin bridge reports `DATASPACE_UNKNOWN` (zero), so each
 /// unspecified data-space component uses that profile's default.
-fn frame_color(
+pub(super) fn frame_color(
     data_space: i32,
     profile: DynamicRangeProfile,
     ycbcr: Option<YcbcrEncoding>,

@@ -173,7 +173,8 @@ impl RecordingPipeline {
         match &frame.pixels {
             CapturedPixels::Nv12(nv12) => self.encode(nv12),
             CapturedPixels::Yuyv(yuyv) => {
-                self.nv12 = yuyv_to_nv12(yuyv, self.width, self.height)?;
+                self.nv12 = yuyv_to_nv12(yuyv, self.width, self.height)
+                    .map_err(|error| yuv_error(&error))?;
                 self.encode_buffered()
             }
             CapturedPixels::Rgba(rgba) => {
@@ -603,7 +604,7 @@ impl RawVideoWriter {
 
 /// Re-subsample packed YUYV 4:2:2 to NV12 4:2:0; the samples keep their
 /// encoding.
-fn yuyv_to_nv12(yuyv: &[u8], width: u32, height: u32) -> Result<Vec<u8>, CameraError> {
+pub(super) fn yuyv_to_nv12(yuyv: &[u8], width: u32, height: u32) -> Result<Vec<u8>, yuv::YuvError> {
     let mut planar = YuvPlanarImageMut::alloc(width, height, YuvChromaSubsampling::Yuv420);
     yuv::yuyv422_to_yuv420(
         &mut planar,
@@ -613,8 +614,7 @@ fn yuyv_to_nv12(yuyv: &[u8], width: u32, height: u32) -> Result<Vec<u8>, CameraE
             width,
             height,
         },
-    )
-    .map_err(|error| yuv_error(&error))?;
+    )?;
     let mut nv12 = Vec::with_capacity(width as usize * height as usize * 3 / 2);
     nv12.extend_from_slice(planar.y_plane.borrow());
     for (u, v) in planar.u_plane.borrow().iter().zip(planar.v_plane.borrow()) {

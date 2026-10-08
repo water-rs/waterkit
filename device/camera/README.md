@@ -88,6 +88,42 @@ On Android, open the device with
 Desktop uploads the planes the webcam delivers into textures created for each
 frame.
 
+## Analysis Frames
+
+`CameraConfig::analysis` opts into a second stream of CPU-readable
+`Y'CbCr` 4:2:0 frames for image analysis — barcode scanning, text
+recognition, and friends — next to the GPU frame stream:
+
+```rust
+use futures::StreamExt;
+use waterkit_camera::{AnalysisConfig, Camera, CameraConfig};
+
+let config = CameraConfig {
+    analysis: Some(AnalysisConfig::default()), // 1280×720
+    ..CameraConfig::default()
+};
+let camera = Camera::open(&camera_id, config, device, queue).await?;
+let mut analysis = camera.analysis_frames();
+while let Some(frame) = analysis.next().await {
+    let frame = frame?;
+    let planes = frame.planes(); // luma, Cb and Cr slices with strides
+    // or hand it to waterkit-vision: `Image::from(&frame)`
+}
+```
+
+- `AnalysisFrame` carries width/height, `Orientation`, `VideoColorInfo`, and
+  a timestamp on the same capture clock `Frame::timestamp` reads.
+- The stream is newest-wins: a consumer that falls behind drops pending
+  frames rather than stalling the camera.
+- Calling `analysis_frames` on a camera opened without `analysis` yields
+  `CameraError::AnalysisNotConfigured` once and ends.
+- Platform payloads: on Android the frame holds the acquired
+  `android.media.Image` (`AnalysisFrame::media_image`), closed when the last
+  clone drops; on iOS/macOS it retains the capture output's `CVPixelBuffer`
+  (`AnalysisFrame::pixel_buffer`), which the CPU reads without a copy; on
+  Windows/Linux it holds the pixels the capture thread delivered, before
+  upload.
+
 ## RAW Outputs
 
 - RAW photo: DNG payload via `RawPhoto`.

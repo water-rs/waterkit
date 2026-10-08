@@ -34,6 +34,16 @@ pub enum Pixels {
         #[cfg(any(target_os = "ios", target_os = "macos"))]
         pixel_buffer: Option<crate::sys::PixelBuffer>,
     },
+    /// A camera's CPU-readable analysis frame.
+    ///
+    /// Native realizations serve straight from the frame's platform payload:
+    /// its `CVPixelBuffer` on Apple platforms, its `android.media.Image` on
+    /// Android.
+    #[cfg(feature = "camera")]
+    Analysis {
+        /// The analysis frame.
+        frame: waterkit_camera::AnalysisFrame,
+    },
     /// JPEG, PNG, or HEIF data, decoded with its own orientation metadata by
     /// the serving realization.
     Encoded(Bytes),
@@ -122,6 +132,19 @@ impl From<&waterkit_camera::Frame> for Image {
             image
         };
         image
+    }
+}
+
+#[cfg(feature = "camera")]
+impl From<&waterkit_camera::AnalysisFrame> for Image {
+    /// Shares the analysis frame — cloning it retains the platform payload,
+    /// copying no pixels.
+    fn from(frame: &waterkit_camera::AnalysisFrame) -> Self {
+        Self {
+            pixels: Pixels::Analysis {
+                frame: frame.clone(),
+            },
+        }
     }
 }
 

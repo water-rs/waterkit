@@ -9,18 +9,26 @@
 //! hoarding consumer drops camera frames instead of exhausting the pool. A
 //! frame's orientation combines the sensor orientation, the lens facing and
 //! the display rotation at the time the frame arrived.
+//!
+//! When the camera opens with `CameraConfig::analysis`, the session adds a
+//! second `ImageReader` in `YUV_420_888` at the analysis size, read by a
+//! second reader thread into `AnalysisFrame`s whose images close when the
+//! last clone drops.
 
+mod analysis;
 mod frames;
 
+pub use analysis::AnalysisImage;
+use analysis::{ImagePlane, RawAnalysisFrame};
 use frames::{FrameLease, RawFrame};
 
 use crate::{
-    CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
-    ExposureMode, FlashMode, FocusMode, Frame, Photo, RawPhoto, RawPhotoFormat, RawVideoFormat,
-    Resolution, StabilizationMode,
+    AnalysisFrame, CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo,
+    DynamicRangeProfile, ExposureMode, FlashMode, FocusMode, Frame, Photo, RawPhoto,
+    RawPhotoFormat, RawVideoFormat, Resolution, StabilizationMode,
 };
 use jni::objects::{
-    Global, JByteArray, JFloatArray, JIntArray, JObject, JObjectArray, JString, JValue,
+    Global, JByteArray, JByteBuffer, JFloatArray, JIntArray, JObject, JObjectArray, JString, JValue,
 };
 use jni::strings::JNIStr;
 use jni::{Env, JavaVM, jni_sig, jni_str};
@@ -584,18 +592,19 @@ impl AndroidBridge {
         self.with_env(|env| self.frame_size_internal(env))
     }
 
-    /// Closes a captured preview frame, returning its image to the reader
-    /// and freeing one in-flight slot so acquisition resumes.
-    fn release_frame(&self, frame: &Global<JObject<'static>>) {
+    /// Closes a captured image — a preview `CapturedFrame` or an analysis
+    /// `android.media.Image` — returning it to its reader so acquisition
+    /// resumes.
+    fn release_image(&self, frame: &Global<JObject<'static>>) {
         let released = self.with_env(|env| {
             env.call_method(frame.as_obj(), jni_str!("close"), jni_sig!("()V"), &[])
                 .map(drop)
                 .map_err(|error| {
-                    CameraError::PlatformError(format!("CapturedFrame.close: {error}"))
+                    CameraError::PlatformError(format!("captured image close: {error}"))
                 })
         });
         if let Err(error) = released {
-            panic!("a camera frame could not be returned to its reader: {error}");
+            panic!("a camera image could not be returned to its reader: {error}");
         }
     }
 
@@ -888,15 +897,17 @@ fn dynamic_range_profile(value: i32) -> Result<DynamicRangeProfile, CameraError>
 }
 
 /// `Arc<AndroidBridge>` is the [`CameraHelper`] a capture session sequences;
-/// clones let the reader thread and image leases share the helper.
+/// clones let the reader threads and image leases share the helper.
 impl CameraHelper for Arc<AndroidBridge> {
     type Frame = RawFrame;
+    type Analysis = RawAnalysisFrame;
 
     fn open_camera(
         &self,
         camera_id: &str,
         resolution: Resolution,
         frame_rate: u32,
+        analysis: Option<Resolution>,
     ) -> Result<(), CameraError> {
         self.with_env(|env| {
             let camera_id_java = env.new_string(camera_id).map_err(|error| {
@@ -909,17 +920,31 @@ impl CameraHelper for Arc<AndroidBridge> {
                 .map_err(|_| CameraError::OpenFailed("camera height exceeds i32".into()))?;
             let fps = i32::try_from(frame_rate.max(1))
                 .map_err(|_| CameraError::OpenFailed("camera frame rate exceeds i32".into()))?;
+            // Zero analysis dimensions mean no analysis stream.
+            let (analysis_width, analysis_height) = match analysis {
+                Some(analysis) => (
+                    i32::try_from(analysis.width).map_err(|_| {
+                        CameraError::OpenFailed("analysis width exceeds i32".into())
+                    })?,
+                    i32::try_from(analysis.height).map_err(|_| {
+                        CameraError::OpenFailed("analysis height exceeds i32".into())
+                    })?,
+                ),
+                None => (0, 0),
+            };
 
             let opened = env
                 .call_method(
                     self.helper.as_obj(),
                     jni_str!("openCamera"),
-                    jni_sig!("(Ljava/lang/String;III)Z"),
+                    jni_sig!("(Ljava/lang/String;IIIII)Z"),
                     &[
                         JValue::Object(&camera_id_java),
                         JValue::Int(width),
                         JValue::Int(height),
                         JValue::Int(fps),
+                        JValue::Int(analysis_width),
+                        JValue::Int(analysis_height),
                     ],
                 )
                 .and_then(jni::objects::JValueOwned::z)
@@ -1079,6 +1104,200 @@ impl CameraHelper for Arc<AndroidBridge> {
         })
     }
 
+    /// Takes the next analysis image, if one arrives within `timeout_ms`, as
+    /// a frame holding the `android.media.Image` globally: its planes'
+    /// direct-buffer addresses and strides are resolved now, while an env is
+    /// attached, and dropping the frame closes the image.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one linear JNI fetch of an image and its three planes; splitting it would share the same locals across helpers that mean nothing alone"
+    )]
+    fn wait_for_analysis_frame(
+        &self,
+        clock: &StreamClock<Duration>,
+        timeout_ms: i32,
+    ) -> Result<Option<RawAnalysisFrame>, CameraError> {
+        self.with_env(|env| {
+            let frame_obj = env
+                .call_method(
+                    self.helper.as_obj(),
+                    jni_str!("waitForNextAnalysisFrame"),
+                    jni_sig!("(I)Lwaterkit/camera/CameraHelper$AnalysisFrame;"),
+                    &[JValue::Int(timeout_ms.max(0))],
+                )
+                .and_then(jni::objects::JValueOwned::l)
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!(
+                        "waitForNextAnalysisFrame JNI call: {error}"
+                    ))
+                })?;
+
+            if frame_obj.is_null() {
+                return Ok(None);
+            }
+
+            let image_obj = env
+                .call_method(
+                    &frame_obj,
+                    jni_str!("getImage"),
+                    jni_sig!("()Landroid/media/Image;"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::l)
+                .map_err(|error| CameraError::CaptureFailed(format!("getImage: {error}")))?;
+            if image_obj.is_null() {
+                return Err(CameraError::CaptureFailed(
+                    "an analysis frame carries a null image".into(),
+                ));
+            }
+            let display_rotation = env
+                .call_method(
+                    &frame_obj,
+                    jni_str!("getDisplayRotation"),
+                    jni_sig!("()I"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::i)
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("getDisplayRotation: {error}"))
+                })?;
+            let display_rotation = u32::try_from(display_rotation).map_err(|_| {
+                CameraError::CaptureFailed(format!("display rotation {display_rotation}"))
+            })?;
+            let data_space = env
+                .call_method(&frame_obj, jni_str!("getDataSpace"), jni_sig!("()I"), &[])
+                .and_then(jni::objects::JValueOwned::i)
+                .map_err(|error| CameraError::CaptureFailed(format!("getDataSpace: {error}")))?;
+            let capture_time_ns = env
+                .call_method(
+                    &frame_obj,
+                    jni_str!("getCaptureTimeNs"),
+                    jni_sig!("()J"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::j)
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("getCaptureTimeNs: {error}"))
+                })?;
+            let capture_time_ns = u64::try_from(capture_time_ns).map_err(|_| {
+                CameraError::CaptureFailed(format!(
+                    "sensor timestamp is negative: {capture_time_ns}"
+                ))
+            })?;
+            let image = env.new_global_ref(&image_obj).map_err(|error| {
+                CameraError::CaptureFailed(format!("new_global_ref(image): {error}"))
+            })?;
+
+            let width = env
+                .call_method(&image_obj, jni_str!("getWidth"), jni_sig!("()I"), &[])
+                .and_then(jni::objects::JValueOwned::i)
+                .map_err(|error| CameraError::CaptureFailed(format!("getWidth: {error}")))?;
+            let width = u32::try_from(width)
+                .map_err(|_| CameraError::CaptureFailed(format!("invalid image width: {width}")))?;
+            let height = env
+                .call_method(&image_obj, jni_str!("getHeight"), jni_sig!("()I"), &[])
+                .and_then(jni::objects::JValueOwned::i)
+                .map_err(|error| CameraError::CaptureFailed(format!("getHeight: {error}")))?;
+            let height = u32::try_from(height).map_err(|_| {
+                CameraError::CaptureFailed(format!("invalid image height: {height}"))
+            })?;
+
+            let plane_list = env
+                .call_method(
+                    &image_obj,
+                    jni_str!("getPlanes"),
+                    jni_sig!("()[Landroid/media/Image$Plane;"),
+                    &[],
+                )
+                .and_then(jni::objects::JValueOwned::l)
+                .map_err(|error| CameraError::CaptureFailed(format!("getPlanes: {error}")))?;
+            if plane_list.is_null() {
+                return Err(CameraError::CaptureFailed(
+                    "an analysis image carries no planes".into(),
+                ));
+            }
+            let plane_array = env
+                .cast_local::<JObjectArray>(plane_list)
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("getPlanes is not an array: {error}"))
+                })?;
+            let plane_count = plane_array.len(env).map_err(|error| {
+                CameraError::CaptureFailed(format!("getPlanes length: {error}"))
+            })?;
+            if plane_count != 3 {
+                return Err(CameraError::CaptureFailed(format!(
+                    "a YUV_420_888 image has 3 planes, not {plane_count}"
+                )));
+            }
+            let mut image_planes = [ImagePlane {
+                address: 0,
+                len: 0,
+                row_stride: 0,
+                pixel_stride: 0,
+            }; 3];
+            for (index, slot) in image_planes.iter_mut().enumerate() {
+                let plane = plane_array.get_element(env, index).map_err(|error| {
+                    CameraError::CaptureFailed(format!("getPlanes[{index}]: {error}"))
+                })?;
+                let buffer_obj = env
+                    .call_method(
+                        &plane,
+                        jni_str!("getBuffer"),
+                        jni_sig!("()Ljava/nio/ByteBuffer;"),
+                        &[],
+                    )
+                    .and_then(jni::objects::JValueOwned::l)
+                    .map_err(|error| {
+                        CameraError::CaptureFailed(format!("plane {index} getBuffer: {error}"))
+                    })?;
+                let buffer = env.cast_local::<JByteBuffer>(buffer_obj).map_err(|error| {
+                    CameraError::CaptureFailed(format!(
+                        "plane {index} buffer is not a ByteBuffer: {error}"
+                    ))
+                })?;
+                let address = env.get_direct_buffer_address(&buffer).map_err(|error| {
+                    CameraError::CaptureFailed(format!(
+                        "plane {index} is not a direct buffer: {error}"
+                    ))
+                })?;
+                let capacity = env.get_direct_buffer_capacity(&buffer).map_err(|error| {
+                    CameraError::CaptureFailed(format!("plane {index} capacity: {error}"))
+                })?;
+                let row_stride = env
+                    .call_method(&plane, jni_str!("getRowStride"), jni_sig!("()I"), &[])
+                    .and_then(jni::objects::JValueOwned::i)
+                    .map_err(|error| {
+                        CameraError::CaptureFailed(format!("plane {index} getRowStride: {error}"))
+                    })?;
+                let pixel_stride = env
+                    .call_method(&plane, jni_str!("getPixelStride"), jni_sig!("()I"), &[])
+                    .and_then(jni::objects::JValueOwned::i)
+                    .map_err(|error| {
+                        CameraError::CaptureFailed(format!("plane {index} getPixelStride: {error}"))
+                    })?;
+                *slot = ImagePlane {
+                    address: address as usize,
+                    len: capacity,
+                    row_stride: usize::try_from(row_stride).map_err(|_| {
+                        CameraError::CaptureFailed(format!("plane {index} row stride {row_stride}"))
+                    })?,
+                    pixel_stride: usize::try_from(pixel_stride).map_err(|_| {
+                        CameraError::CaptureFailed(format!(
+                            "plane {index} pixel stride {pixel_stride}"
+                        ))
+                    })?,
+                };
+            }
+
+            Ok(Some(RawAnalysisFrame {
+                image: AnalysisImage::new(Self::clone(self), image, image_planes, width, height),
+                display_rotation,
+                data_space,
+                timestamp: clock.timestamp(Duration::from_nanos(capture_time_ns)),
+            }))
+        })
+    }
+
     fn stop_capture(&self) -> Result<(), CameraError> {
         self.with_env(|env| {
             env.call_method(
@@ -1114,6 +1333,10 @@ pub struct CameraInner {
     controls: CameraControls,
     resolution: Resolution,
     mounting: SensorMounting,
+    /// The analysis reader thread, `Some` only when the camera was opened
+    /// with `CameraConfig::analysis`. It drops before `frames_thread` so the
+    /// analysis reader stops before the preview thread tears the camera down.
+    analysis_thread: Option<FrameThread<RawAnalysisFrame>>,
     /// Owns the capture session: its drop stops capture, closes the camera,
     /// and returns once the reader thread has finished the teardown.
     frames_thread: FrameThread<RawFrame>,
@@ -1176,6 +1399,7 @@ impl CameraInner {
             camera_id,
             config.resolution,
             config.frame_rate,
+            config.analysis.map(|analysis| analysis.resolution),
         )?
         .start_capture()?;
 
@@ -1191,6 +1415,9 @@ impl CameraInner {
             controls: CameraControls::default(),
             resolution,
             mounting,
+            analysis_thread: config
+                .analysis
+                .map(|_| FrameThread::spawn_analysis(Arc::clone(&bridge), frame_wait_ms)),
             frames_thread: FrameThread::spawn(capture, frame_wait_ms),
             bridge,
             recording_mode: None,
@@ -1350,6 +1577,21 @@ impl CameraInner {
             let next = frame.is_ok().then_some((importer, receiver));
             Some((frame, next))
         })
+    }
+
+    /// The analysis stream: each item becomes an [`AnalysisFrame`] sharing
+    /// the acquired image, with the frame's mounting turning its display
+    /// rotation into an orientation.
+    pub fn analysis_frames(
+        &self,
+    ) -> impl futures::Stream<Item = Result<AnalysisFrame, CameraError>> + '_ {
+        let mounting = self.mounting;
+        crate::analysis::stream(
+            self.analysis_thread
+                .as_ref()
+                .map(|thread| thread.frames().clone()),
+            move |raw| raw.and_then(|frame| frame.into_frame(mounting)),
+        )
     }
 
     #[allow(

@@ -8106,8 +8106,10 @@ name = "waterkit-clipboard"
 version = "0.1.4"
 dependencies = [
  "async-channel",
+ "block2 0.6.2",
  "blocking",
  "clipboard-rs",
+ "dispatch2",
  "futures",
  "image",
  "jni 0.22.4",
@@ -8124,6 +8126,7 @@ dependencies = [
  "url",
  "wasm-bindgen-futures",
  "waterkit-build",
+ "waterkit-core",
  "web-sys",
  "wl-clipboard-rs",
  "x11rb",

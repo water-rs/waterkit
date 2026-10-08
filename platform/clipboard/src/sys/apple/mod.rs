@@ -9,11 +9,12 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::Duration;
+use std::sync::atomic::{AtomicIsize, Ordering};
 
+use block2::RcBlock;
+use dispatch2::{DispatchQueue, MainThreadBound};
 use objc2::AllocAnyThread as _;
+use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
@@ -21,9 +22,14 @@ use objc2_core_graphics::{
     CGBitmapContextCreate, CGColorSpace, CGContext, CGImage, CGImageAlphaInfo,
 };
 use objc2_foundation::{
-    NSArray, NSData, NSDictionary, NSFileManager, NSItemProvider, NSString, NSURL,
+    NSArray, NSData, NSDictionary, NSFileManager, NSItemProvider, NSNotification,
+    NSNotificationCenter, NSOperationQueue, NSString, NSURL,
 };
-use objc2_ui_kit::{UIImage, UIPasteboard};
+use objc2_ui_kit::{
+    UIApplicationDidBecomeActiveNotification, UIImage, UIPasteboard,
+    UIPasteboardChangedNotification,
+};
+use waterkit_core::apple::on_main;
 
 /// Reinterprets an object as a plain [`AnyObject`] for the untyped
 /// pasteboard-item dictionaries.
@@ -407,51 +413,134 @@ fn file_url(path: &str) -> Result<Retained<NSURL>, ClipboardError> {
     })
 }
 
+/// The two `NSNotificationCenter` observer tokens a live watch holds,
+/// `Send`-wrapped: they were created on the main thread and are dropped
+/// there.
+type ObserverTokens = MainThreadBound<(Retained<AnyObject>, Retained<AnyObject>)>;
+
+/// Owns the notifications a clipboard watch is registered for.
+///
+/// Dropping the guard removes both observers; the channel the watch stream
+/// reads then closes once its queued events drain.
+pub struct AppleWatchGuard {
+    tokens: Option<ObserverTokens>,
+}
+
+impl std::fmt::Debug for AppleWatchGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppleWatchGuard").finish_non_exhaustive()
+    }
+}
+
+impl Drop for AppleWatchGuard {
+    fn drop(&mut self) {
+        let Some(tokens) = self.tokens.take() else {
+            return;
+        };
+        DispatchQueue::main().exec_async(move || {
+            // SAFETY: the closure runs on the main queue, where the tokens
+            // were created.
+            let mtm = unsafe { MainThreadMarker::new_unchecked() };
+            let (changed, became_active) = tokens.into_inner(mtm);
+            let center = NSNotificationCenter::defaultCenter();
+            // SAFETY: `changed` and `became_active` are this watch's two
+            // live observer registrations.
+            unsafe {
+                center.removeObserver(&changed);
+                center.removeObserver(&became_active);
+            }
+        });
+    }
+}
+
+/// Emit an event when the pasteboard's `changeCount` moved past `last`.
+/// Runs on the main queue inside the observer blocks.
+fn emit_if_changed(last: &AtomicIsize, sender: &async_channel::Sender<ClipboardEvent>) {
+    // SAFETY: the read-only `changeCount` query runs on the main queue,
+    // where the process-global pasteboard is valid to query.
+    let pasteboard = UIPasteboard::generalPasteboard();
+    let current = unsafe { pasteboard.changeCount() };
+    if current == last.swap(current, Ordering::SeqCst) {
+        return;
+    }
+    let event = ClipboardEvent::new(
+        // SAFETY: same read-only queries.
+        unsafe { pasteboard.hasStrings() },
+        pasteboard.containsPasteboardTypes(&NSArray::from_retained_slice(&[types::html()])),
+        pasteboard.containsPasteboardTypes(&NSArray::from_retained_slice(&[types::file_url()])),
+        unsafe { pasteboard.hasImages() },
+    );
+    // A failed send only means the stream is gone; the guard's drop
+    // unregisters the observer behind it.
+    let _ = sender.try_send(event);
+}
+
 /// Start watching clipboard changes.
 ///
-/// Uses polling with `UIPasteboard.changeCount`.
-/// Returns a receiver and a stop flag.
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "the cross-platform clipboard watch API is fallible on other backends"
-)]
-pub fn start_watch()
--> Result<(async_channel::Receiver<ClipboardEvent>, Arc<AtomicBool>), ClipboardError> {
+/// Registers two `NSNotificationCenter` observers whose blocks run on the
+/// main queue: `UIPasteboardChangedNotification` covers changes made while
+/// the app is active, and `UIApplicationDidBecomeActiveNotification`
+/// triggers one `changeCount` comparison on returning to the foreground,
+/// which is where changes made by other apps become visible. Both feed the
+/// unbounded channel the watch stream yields from; nothing runs while
+/// nothing changes.
+///
+/// # Errors
+///
+/// Infallible today; returns [`ClipboardError`] for parity with other
+/// backends.
+pub async fn start_watch()
+-> Result<(async_channel::Receiver<ClipboardEvent>, AppleWatchGuard), ClipboardError> {
     let (sender, receiver) = async_channel::unbounded();
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_clone = Arc::clone(&stop);
+    let sender_clone = sender.clone();
 
-    thread::spawn(move || {
-        // SAFETY: the read-only queries below match the calls every other
-        // pasteboard consumer makes; the poller is the only thread driving
-        // them, as before.
-        let mut last_count = unsafe { UIPasteboard::generalPasteboard().changeCount() };
+    let tokens = on_main(move |mtm| {
+        // SAFETY: the read-only `changeCount` query runs on the main thread
+        // and only seeds the deduplication counter.
+        let last = Arc::new(AtomicIsize::new(unsafe {
+            UIPasteboard::generalPasteboard().changeCount()
+        }));
 
-        while !stop_clone.load(Ordering::SeqCst) {
-            thread::sleep(Duration::from_millis(500));
+        let changed_block = RcBlock::new({
+            let sender = sender_clone.clone();
+            let last = Arc::clone(&last);
+            move |_notification: NonNull<NSNotification>| emit_if_changed(&last, &sender)
+        });
+        let became_active_block = RcBlock::new({
+            let sender = sender_clone;
+            let last = Arc::clone(&last);
+            move |_notification: NonNull<NSNotification>| emit_if_changed(&last, &sender)
+        });
 
-            let pasteboard = UIPasteboard::generalPasteboard();
-            // SAFETY: same read-only polling as before.
-            let current_count = unsafe { pasteboard.changeCount() };
-            if current_count != last_count {
-                last_count = current_count;
+        let center = NSNotificationCenter::defaultCenter();
+        // SAFETY: both blocks capture only `Send` state (the channel and
+        // the counter) and run on the main queue, where the pasteboard
+        // queries are valid.
+        let changed = unsafe {
+            center.addObserverForName_object_queue_usingBlock(
+                Some(UIPasteboardChangedNotification),
+                None,
+                Some(&NSOperationQueue::mainQueue()),
+                &changed_block,
+            )
+        };
+        let became_active = unsafe {
+            center.addObserverForName_object_queue_usingBlock(
+                Some(UIApplicationDidBecomeActiveNotification),
+                None,
+                Some(&NSOperationQueue::mainQueue()),
+                &became_active_block,
+            )
+        };
 
-                let event = ClipboardEvent::new(
-                    // SAFETY: read-only queries.
-                    unsafe { pasteboard.hasStrings() },
-                    pasteboard
-                        .containsPasteboardTypes(&NSArray::from_retained_slice(&[types::html()])),
-                    pasteboard.containsPasteboardTypes(&NSArray::from_retained_slice(&[
-                        types::file_url(),
-                    ])),
-                    unsafe { pasteboard.hasImages() },
-                );
-                if sender.try_send(event).is_err() {
-                    break;
-                }
-            }
-        }
-    });
+        MainThreadBound::new((as_any_object(changed), as_any_object(became_active)), mtm)
+    })
+    .await;
 
-    Ok((receiver, stop))
+    Ok((
+        receiver,
+        AppleWatchGuard {
+            tokens: Some(tokens),
+        },
+    ))
 }

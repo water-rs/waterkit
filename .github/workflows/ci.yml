@@ -28,6 +28,9 @@ jobs:
   fmt:
     name: Format
     runs-on: ubuntu-latest
+    # The slowest job takes about 9 minutes; a hung step must fail the
+    # run instead of holding a runner until the 6-hour default.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -38,6 +41,7 @@ jobs:
   clippy:
     name: Clippy (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -75,6 +79,7 @@ jobs:
   cross-clippy:
     name: Clippy (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -168,6 +173,7 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       # `shaderloom` compiles WGSL to DXIL on Windows and shells out to `dxc`,
@@ -209,6 +215,7 @@ jobs:
   typos:
     name: Typos
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: crate-ci/typos@v1.49.0
@@ -216,6 +223,7 @@ jobs:
   audit:
     name: Security Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Generate Cargo.lock
@@ -230,6 +238,7 @@ jobs:
   unused-deps:
     name: Unused Dependencies
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -242,6 +251,7 @@ jobs:
   feature-checks:
     name: Features
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       # `shaderloom` compiles WGSL to DXIL on Windows and shells out to `dxc`,

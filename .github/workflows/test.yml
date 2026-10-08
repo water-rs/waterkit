@@ -13,6 +13,9 @@ jobs:
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # The slowest job takes about 9 minutes; a hung step must fail the
+    # run instead of holding a runner until the 6-hour default.
+    timeout-minutes: 30
     strategy:
       # Each OS runs a different set of platform backends, so one OS failing
       # says nothing about the others; cancelling them would hide their
@@ -90,6 +93,7 @@ jobs:
   android-device-e2e:
     name: Android device E2E
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -141,6 +145,7 @@ jobs:
   ios-device-e2e:
     name: iOS device E2E
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

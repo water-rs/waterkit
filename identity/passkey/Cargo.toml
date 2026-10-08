@@ -23,6 +23,7 @@ tokio = { workspace = true, features = ["sync"] }
 
 # Apple platforms (iOS, macOS) - native AuthenticationServices through objc2
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+waterkit-core.workspace = true
 dispatch2.workspace = true
 objc2.workspace = true
 objc2-foundation = { workspace = true, features = [

@@ -241,6 +241,7 @@ objc2-core-media = "0.3"
 objc2-avf-audio = { version = "0.3", default-features = false }
 objc2-app-kit = "0.3"
 objc2-authentication-services = { version = "0.3", default-features = false }
+objc2-background-tasks = { version = "0.3", default-features = false }
 # W3C KeyboardEvent key/modifier vocabulary.
 keyboard-types = "0.8"
 objc2-core-video = "0.3"

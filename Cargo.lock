@@ -4683,6 +4683,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-background-tasks"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ddeb0eb84c1714d4f50e5dc29cca57628c12cc40445a099c0cf05f4ee538473"
+dependencies = [
+ "bitflags 2.13.1",
+ "block2 0.6.2",
+ "dispatch2",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-cloud-kit"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7950,12 +7963,13 @@ name = "waterkit-background"
 version = "0.1.4"
 dependencies = [
  "async-channel",
+ "block2 0.6.2",
  "futures-core",
  "jni 0.22.4",
  "ndk-context",
- "serde",
- "serde_json",
- "swift-bridge",
+ "objc2 0.6.4",
+ "objc2-background-tasks",
+ "objc2-foundation 0.3.2",
  "thiserror 2.0.20",
  "waterkit-build",
 ]

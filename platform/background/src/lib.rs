@@ -16,9 +16,6 @@ mod sys;
 use std::fmt;
 use std::time::Duration;
 
-#[cfg(target_os = "ios")]
-use serde::Serialize;
-
 pub use error::BackgroundError;
 
 /// Background task kind.
@@ -296,42 +293,6 @@ impl BootstrapConfig {
     pub(crate) const fn android_config_ref(&self) -> Option<&AndroidConfig> {
         self.android.as_ref()
     }
-
-    #[cfg(target_os = "ios")]
-    pub(crate) fn registrations_json(&self) -> Result<String, BackgroundError> {
-        #[derive(Serialize)]
-        struct Registration<'a> {
-            identifier: &'a str,
-            kind: u8,
-        }
-
-        let mut registrations = Vec::new();
-        registrations.extend(
-            self.app_refresh_identifiers
-                .iter()
-                .map(|identifier| Registration {
-                    identifier: identifier.as_str(),
-                    kind: TaskKind::AppRefresh.as_raw(),
-                }),
-        );
-        registrations.extend(
-            self.processing_identifiers
-                .iter()
-                .map(|identifier| Registration {
-                    identifier: identifier.as_str(),
-                    kind: TaskKind::Processing.as_raw(),
-                }),
-        );
-        registrations.extend(self.continued_processing_patterns.iter().map(|pattern| {
-            Registration {
-                identifier: pattern.as_str(),
-                kind: TaskKind::ContinuedProcessing.as_raw(),
-            }
-        }));
-
-        serde_json::to_string(&registrations)
-            .map_err(|error| BackgroundError::Platform(format!("serialize registrations: {error}")))
-    }
 }
 
 /// Request to schedule an app refresh task.
@@ -360,11 +321,6 @@ impl AppRefreshRequest {
 
     pub(crate) const fn identifier(&self) -> &TaskIdentifier {
         &self.identifier
-    }
-
-    #[cfg(target_os = "ios")]
-    pub(crate) const fn earliest_begin_after_value(&self) -> Option<Duration> {
-        self.earliest_begin_after
     }
 }
 
@@ -413,21 +369,6 @@ impl ProcessingRequest {
     pub(crate) const fn identifier(&self) -> &TaskIdentifier {
         &self.identifier
     }
-
-    #[cfg(target_os = "ios")]
-    pub(crate) const fn earliest_begin_after_value(&self) -> Option<Duration> {
-        self.earliest_begin_after
-    }
-
-    #[cfg(target_os = "ios")]
-    pub(crate) const fn requires_network_connectivity_value(&self) -> bool {
-        self.requires_network_connectivity
-    }
-
-    #[cfg(target_os = "ios")]
-    pub(crate) const fn requires_external_power_value(&self) -> bool {
-        self.requires_external_power
-    }
 }
 
 /// iOS continued-processing submission strategy.
@@ -437,16 +378,6 @@ pub enum ContinuedProcessingStrategy {
     Fail,
     /// Queue and run when resources become available.
     Queue,
-}
-
-impl ContinuedProcessingStrategy {
-    #[cfg(target_os = "ios")]
-    pub(crate) const fn as_raw(self) -> u8 {
-        match self {
-            Self::Fail => 0,
-            Self::Queue => 1,
-        }
-    }
 }
 
 /// Request to schedule a continued processing task (iOS 26+).
@@ -508,26 +439,6 @@ impl ContinuedProcessingRequest {
 
     pub(crate) const fn identifier(&self) -> &TaskIdentifier {
         &self.identifier
-    }
-
-    #[cfg(target_os = "ios")]
-    pub(crate) fn title(&self) -> &str {
-        &self.title
-    }
-
-    #[cfg(target_os = "ios")]
-    pub(crate) fn subtitle(&self) -> &str {
-        &self.subtitle
-    }
-
-    #[cfg(target_os = "ios")]
-    pub(crate) const fn strategy_value(&self) -> ContinuedProcessingStrategy {
-        self.strategy
-    }
-
-    #[cfg(target_os = "ios")]
-    pub(crate) const fn requires_gpu_value(&self) -> bool {
-        self.requires_gpu
     }
 }
 

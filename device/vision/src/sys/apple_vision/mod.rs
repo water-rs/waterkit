@@ -251,6 +251,7 @@ fn symbology_from_name(name: &str) -> Option<crate::Symbology> {
 
 /// Symbologies Vision serves on this OS, fetched once.
 #[cfg(feature = "barcode")]
+#[must_use]
 pub fn supported_symbologies() -> enumset::EnumSet<crate::Symbology> {
     static SYMBOLOGIES: OnceLock<enumset::EnumSet<crate::Symbology>> = OnceLock::new();
     *SYMBOLOGIES.get_or_init(|| {

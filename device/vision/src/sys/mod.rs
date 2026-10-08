@@ -78,6 +78,7 @@ pub mod native {
 
     /// There is no native realization on this platform.
     #[cfg(feature = "barcode")]
+    #[must_use]
     pub const fn supported_symbologies() -> enumset::EnumSet<crate::Symbology> {
         enumset::EnumSet::empty()
     }
@@ -85,6 +86,17 @@ pub mod native {
     /// There is no native realization on this platform, so `select` can
     /// never resolve a native realization here.
     #[cfg(feature = "barcode")]
+    #[expect(
+        clippy::unused_async,
+        reason = "keeps the signature every platform's native realization shares"
+    )]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
+        )
+    )]
     pub async fn detect_barcodes(
         _pass: &mut crate::sealed::Pass<'_>,
         _symbologies: enumset::EnumSet<crate::Symbology>,

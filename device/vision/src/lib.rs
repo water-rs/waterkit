@@ -59,8 +59,17 @@
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 // Apple bridges reach `wgpu`'s hal handles and mark `CVPixelBuffer`
-// thread-boundaries; every other target stays forbidding unsafe code.
-#![cfg_attr(not(any(target_os = "ios", target_os = "macos")), forbid(unsafe_code))]
+// thread-boundaries; Android's scanner JNI export is the one unsafe
+// attribute a `no_mangle` bridge cannot avoid. Every other target stays
+// forbidding unsafe code.
+#![cfg_attr(
+    not(any(
+        target_os = "ios",
+        target_os = "macos",
+        all(target_os = "android", feature = "scanner")
+    )),
+    forbid(unsafe_code)
+)]
 
 mod barcode;
 mod capability;

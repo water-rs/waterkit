@@ -112,11 +112,15 @@ impl Image {
 #[cfg(feature = "camera")]
 impl From<&waterkit_camera::Frame> for Image {
     fn from(frame: &waterkit_camera::Frame) -> Self {
-        let mut image = Self::from_planes(frame.planes(), frame.color(), frame.orientation());
+        let image = Self::from_planes(frame.planes(), frame.color(), frame.orientation());
         #[cfg(any(target_os = "ios", target_os = "macos"))]
-        if let Pixels::Frame { pixel_buffer, .. } = &mut image.pixels {
-            *pixel_buffer = frame.pixel_buffer().map(crate::sys::PixelBuffer);
-        }
+        let image = {
+            let mut image = image;
+            if let Pixels::Frame { pixel_buffer, .. } = &mut image.pixels {
+                *pixel_buffer = frame.pixel_buffer().map(crate::sys::PixelBuffer);
+            }
+            image
+        };
         image
     }
 }

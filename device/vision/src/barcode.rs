@@ -70,10 +70,7 @@ impl AsRef<[u8]> for Payload {
 /// the shared [`Symbology`] vocabulary; it is empty on platforms without a
 /// native detector.
 #[cfg(feature = "barcode")]
-#[must_use]
-pub fn native_symbologies() -> EnumSet<Symbology> {
-    crate::sys::native::supported_symbologies()
-}
+pub use crate::sys::native::supported_symbologies as native_symbologies;
 
 /// Detect barcodes in an image, in the given symbologies.
 #[cfg(feature = "barcode")]
@@ -136,12 +133,26 @@ impl Sealed for DetectBarcodes {
 
 #[cfg(feature = "barcode")]
 impl Plan<DetectBarcodes> for BarcodePlan {
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
+        )
+    )]
     async fn prepare(&self, _context: Context<'_>) -> Result<(), crate::VisionError> {
         // Everything the native realization needs is prepared lazily, on the
         // pass's shared image handler.
         Ok(())
     }
 
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
+        )
+    )]
     async fn run(self, pass: &mut Pass<'_>) -> Result<Vec<Barcode>, crate::VisionError> {
         match self.realization {
             crate::sealed::Realization::Native => {

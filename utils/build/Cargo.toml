@@ -14,7 +14,8 @@ categories = ["development-tools::build-utils"]
 workspace = true
 
 [features]
-activity-result = ["dep:futures-channel"]
+activity-result = ["native-callback"]
+native-callback = []
 
 # The build-time half. Build scripts are compiled for the host, so these cfgs
 # match the build host, not the app's target: Swift bridge generation compiles
@@ -27,11 +28,23 @@ swift-bridge-build.workspace = true
 # The runtime half. Only a build *targeting* Android pulls these in, which is why
 # the Swift/Kotlin toolchain never reaches an application's dependency closure.
 [target.'cfg(target_os = "android")'.dependencies]
-futures-channel = { workspace = true, optional = true }
+futures-channel.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
+thiserror.workspace = true
+
+# `peers.rs` is compiled under `cfg(any(test, target_os = "android"))`, so the
+# test build needs the same channels and error derive as the Android glue.
+[dev-dependencies]
+futures-channel.workspace = true
 thiserror.workspace = true
 
 [package.metadata.waterui.android.feature.activity-result]
 kotlin-sources = ["src/android_runtime/ActivityResultHelper.kt"]
 maven = ["androidx.activity:activity:1.11.0"]
+
+[package.metadata.waterui.android.feature.native-callback]
+kotlin-sources = [
+    "src/android_runtime/NativeCallback.kt",
+    "src/android_runtime/NativeChannel.kt",
+]

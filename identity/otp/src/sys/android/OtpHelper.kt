@@ -23,6 +23,16 @@ import com.google.android.gms.common.api.Status
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.FutureTask
+import waterkit.build.NativeChannel
+
+/** Events an OTP request streams into Rust through its [NativeChannel]. */
+sealed interface OtpEvent {
+    object Started : OtpEvent
+    class Message(val text: String) : OtpEvent
+    object Timeout : OtpEvent
+    object Denied : OtpEvent
+    class Failed(val error: String) : OtpEvent
+}
 
 object OtpHelper {
     private const val PLAY_SERVICES = 1 shl 0
@@ -42,8 +52,8 @@ object OtpHelper {
         var launcher: ActivityResultLauncher<Intent>? = null,
     )
 
-    private val registrations = ConcurrentHashMap<Long, Registration>()
-    private val cancelled = ConcurrentHashMap.newKeySet<Long>()
+    private val registrations = ConcurrentHashMap<NativeChannel, Registration>()
+    private val cancelled = ConcurrentHashMap.newKeySet<NativeChannel>()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     @JvmStatic
@@ -97,44 +107,44 @@ object OtpHelper {
     }
 
     @JvmStatic
-    fun startSmsRetriever(context: Context, id: Long) {
+    fun startSmsRetriever(context: Context, channel: NativeChannel) {
         runOnMain {
-            if (cancelled.remove(id)) return@runOnMain
+            if (cancelled.remove(channel)) return@runOnMain
             try {
-                registerRetrieverReceiver(context, id, consent = false)
+                registerRetrieverReceiver(context, channel, consent = false)
                 SmsRetriever.getClient(context).startSmsRetriever()
-                    .addOnSuccessListener { onStarted(id) }
+                    .addOnSuccessListener { channel.send(OtpEvent.Started) }
                     .addOnFailureListener { error ->
-                        finish(id) { onFailed(id, error.message ?: "SMS Retriever failed") }
+                        finish(channel, OtpEvent.Failed(error.message ?: "SMS Retriever failed"))
                     }
             } catch (error: Exception) {
-                finish(id) { onFailed(id, error.message ?: "SMS Retriever setup failed") }
+                finish(channel, OtpEvent.Failed(error.message ?: "SMS Retriever setup failed"))
             }
         }
     }
 
     @JvmStatic
     @Suppress("DEPRECATION")
-    fun createAppSpecificSmsToken(context: Context, id: Long): String =
+    fun createAppSpecificSmsToken(context: Context, channel: NativeChannel): String =
         runOnMainSync {
-            check(!cancelled.remove(id)) { "SMS token request was cancelled" }
-            val action = "${context.packageName}$TOKEN_ACTION_SUFFIX$id"
+            check(!cancelled.remove(channel)) { "SMS token request was cancelled" }
+            val action = "${context.packageName}$TOKEN_ACTION_SUFFIX${System.identityHashCode(channel)}"
             val registration = Registration(context)
-            check(registrations.putIfAbsent(id, registration) == null) {
-                "duplicate OTP request id $id"
+            check(registrations.putIfAbsent(channel, registration) == null) {
+                "duplicate OTP request channel"
             }
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(receiverContext: Context, intent: Intent) {
                     val message = Telephony.Sms.Intents.getMessagesFromIntent(intent)
                         .joinToString(separator = "") { it.messageBody }
-                    finish(id) { onMessage(id, message) }
+                    finish(channel, OtpEvent.Message(message))
                 }
             }
             registration.receiver = receiver
             try {
                 registerPrivateReceiver(context, receiver, IntentFilter(action))
             } catch (error: Exception) {
-                registrations.remove(id, registration)
+                registrations.remove(channel, registration)
                 throw error
             }
 
@@ -146,7 +156,7 @@ object OtpHelper {
                 }
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
-                id.toInt(),
+                System.identityHashCode(channel),
                 Intent(action).setPackage(context.packageName),
                 pendingIntentFlags,
             )
@@ -162,36 +172,38 @@ object OtpHelper {
         }
 
     @JvmStatic
-    fun startSmsUserConsent(context: Context, sender: String?, id: Long) {
+    fun startSmsUserConsent(context: Context, sender: String?, channel: NativeChannel) {
         runOnMain {
-            if (cancelled.remove(id)) return@runOnMain
+            if (cancelled.remove(channel)) return@runOnMain
             try {
-                registerRetrieverReceiver(context, id, consent = true)
+                registerRetrieverReceiver(context, channel, consent = true)
                 SmsRetriever.getClient(context).startSmsUserConsent(sender)
-                    .addOnSuccessListener { onStarted(id) }
+                    .addOnSuccessListener { channel.send(OtpEvent.Started) }
                     .addOnFailureListener { error ->
-                        finish(id) { onFailed(id, error.message ?: "SMS User Consent failed") }
+                        finish(channel, OtpEvent.Failed(error.message ?: "SMS User Consent failed"))
                     }
             } catch (error: Exception) {
-                finish(id) { onFailed(id, error.message ?: "SMS User Consent setup failed") }
+                finish(channel, OtpEvent.Failed(error.message ?: "SMS User Consent setup failed"))
             }
         }
     }
 
     @JvmStatic
     @Suppress("UNUSED_PARAMETER")
-    fun cancel(context: Context, id: Long) {
-        cancelled.add(id)
+    fun cancel(context: Context, channel: NativeChannel) {
+        cancelled.add(channel)
         check(mainHandler.post {
-            unregister(id)
-            cancelled.remove(id)
+            cancelled.remove(channel)
+            if (unregister(channel)) {
+                channel.close()
+            }
         }) { "main looper rejected OTP cancellation" }
     }
 
-    private fun registerRetrieverReceiver(context: Context, id: Long, consent: Boolean) {
+    private fun registerRetrieverReceiver(context: Context, channel: NativeChannel, consent: Boolean) {
         val registration = Registration(context)
-        check(registrations.putIfAbsent(id, registration) == null) {
-            "duplicate OTP request id $id"
+        check(registrations.putIfAbsent(channel, registration) == null) {
+            "duplicate OTP request channel"
         }
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(receiverContext: Context, intent: Intent) {
@@ -202,31 +214,31 @@ object OtpHelper {
                             val consentIntent =
                                 intent.parcelableExtra<Intent>(SmsRetriever.EXTRA_CONSENT_INTENT)
                             if (consentIntent == null || !validConsentIntent(context, consentIntent)) {
-                                finish(id) {
-                                    onFailed(id, "SMS User Consent returned an untrusted intent")
-                                }
+                                finish(
+                                    channel,
+                                    OtpEvent.Failed("SMS User Consent returned an untrusted intent"),
+                                )
                             } else {
-                                launchConsent(context, id, consentIntent)
+                                launchConsent(context, channel, consentIntent)
                             }
                         } else {
                             val message = intent.getStringExtra(SmsRetriever.EXTRA_SMS_MESSAGE)
                             if (message == null) {
-                                finish(id) {
-                                    onFailed(id, "SMS Retriever returned no message")
-                                }
+                                finish(
+                                    channel,
+                                    OtpEvent.Failed("SMS Retriever returned no message"),
+                                )
                             } else {
-                                finish(id) { onMessage(id, message) }
+                                finish(channel, OtpEvent.Message(message))
                             }
                         }
                     }
 
-                    CommonStatusCodes.TIMEOUT -> finish(id) { onTimeout(id) }
-                    else -> finish(id) {
-                        onFailed(
-                            id,
-                            "SMS API returned unknown status ${status?.statusCode}",
-                        )
-                    }
+                    CommonStatusCodes.TIMEOUT -> finish(channel, OtpEvent.Timeout)
+                    else -> finish(
+                        channel,
+                        OtpEvent.Failed("SMS API returned unknown status ${status?.statusCode}"),
+                    )
                 }
             }
         }
@@ -234,46 +246,47 @@ object OtpHelper {
         try {
             registerPlayServicesReceiver(context, receiver)
         } catch (error: Exception) {
-            registrations.remove(id, registration)
+            registrations.remove(channel, registration)
             throw error
         }
     }
 
-    private fun launchConsent(context: Context, id: Long, consentIntent: Intent) {
+    private fun launchConsent(context: Context, channel: NativeChannel, consentIntent: Intent) {
         val activity = context as? ComponentActivity
         if (activity == null) {
-            finish(id) {
-                onFailed(
-                    id,
+            finish(
+                channel,
+                OtpEvent.Failed(
                     "SMS User Consent requires the Android context to be a ComponentActivity",
-                )
-            }
+                ),
+            )
             return
         }
 
         try {
             val launcher = activity.activityResultRegistry.register(
-                "$CONSENT_KEY_PREFIX$id",
+                "$CONSENT_KEY_PREFIX${System.identityHashCode(channel)}",
                 ActivityResultContracts.StartActivityForResult(),
             ) { result ->
                 if (result.resultCode == Activity.RESULT_OK) {
                     val message =
                         result.data?.getStringExtra(SmsRetriever.EXTRA_SMS_MESSAGE)
                     if (message == null) {
-                        finish(id) {
-                            onFailed(id, "SMS User Consent returned no message")
-                        }
+                        finish(
+                            channel,
+                            OtpEvent.Failed("SMS User Consent returned no message"),
+                        )
                     } else {
-                        finish(id) { onMessage(id, message) }
+                        finish(channel, OtpEvent.Message(message))
                     }
                 } else {
-                    finish(id) { onDenied(id) }
+                    finish(channel, OtpEvent.Denied)
                 }
             }
-            registrations[id]?.launcher = launcher
+            registrations[channel]?.launcher = launcher
             launcher.launch(consentIntent)
         } catch (error: Exception) {
-            finish(id) { onFailed(id, error.message ?: "SMS consent prompt failed") }
+            finish(channel, OtpEvent.Failed(error.message ?: "SMS consent prompt failed"))
         }
     }
 
@@ -315,14 +328,18 @@ object OtpHelper {
         }
     }
 
-    private fun finish(id: Long, callback: () -> Unit) {
+    /** Terminal event: unregisters the request, then sends it and closes the channel. */
+    private fun finish(channel: NativeChannel, event: OtpEvent) {
         runOnMain {
-            if (unregister(id)) callback()
+            if (unregister(channel)) {
+                channel.send(event)
+                channel.close()
+            }
         }
     }
 
-    private fun unregister(id: Long): Boolean {
-        val registration = registrations.remove(id) ?: return false
+    private fun unregister(channel: NativeChannel): Boolean {
+        val registration = registrations.remove(channel) ?: return false
         registration.receiver?.let { registration.context.unregisterReceiver(it) }
         registration.launcher?.unregister()
         return true
@@ -357,19 +374,4 @@ object OtpHelper {
             getParcelableExtra(name) as? T
         }
     }
-
-    @JvmStatic
-    external fun onStarted(id: Long)
-
-    @JvmStatic
-    external fun onMessage(id: Long, text: String)
-
-    @JvmStatic
-    external fun onTimeout(id: Long)
-
-    @JvmStatic
-    external fun onDenied(id: Long)
-
-    @JvmStatic
-    external fun onFailed(id: Long, message: String)
 }

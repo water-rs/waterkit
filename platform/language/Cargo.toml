@@ -21,18 +21,17 @@ serde_json.workspace = true
 thiserror.workspace = true
 futures.workspace = true
 tracing.workspace = true
-async-channel.workspace = true
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 swift-bridge.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
-waterkit-build.workspace = true
+waterkit-build = { workspace = true, features = ["native-callback"] }
 jni.workspace = true
 ndk-context.workspace = true
 
 [build-dependencies]
-waterkit-build.workspace = true
+waterkit-build = { workspace = true, features = ["native-callback"] }
 
 [dev-dependencies]
 futures.workspace = true

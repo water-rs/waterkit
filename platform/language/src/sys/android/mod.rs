@@ -1,23 +1,13 @@
 //! Android `TranslationManager` implementation.
 
-use std::{
-    collections::HashMap,
-    sync::{
-        Mutex, OnceLock,
-        atomic::{AtomicI64, Ordering},
-    },
-};
-
-use futures::channel::oneshot;
+use futures::StreamExt;
 use jni::{
-    Env, EnvUnowned,
-    errors::ThrowRuntimeExAndDefault,
-    jni_sig, jni_str,
+    Env, jni_sig, jni_str,
     objects::{Global, JClass, JObject, JString, JValue},
-    sys::jlong,
 };
 use waterkit_build::{
-    AndroidError, DexHelper, decode_string, describe_jni_error, dex_helper, with_android_context,
+    AndroidError, DexHelper, NativeCallback, NativeChannel, PeerError, decode_string,
+    describe_jni_error, dex_helper, with_android_context,
 };
 
 use crate::{
@@ -26,33 +16,35 @@ use crate::{
 };
 
 static HELPER: DexHelper = dex_helper!("waterkit.language.TranslationHelper");
-static NEXT_CALL_ID: AtomicI64 = AtomicI64::new(1);
-static PENDING_CALLS: OnceLock<Mutex<HashMap<i64, PendingCall>>> = OnceLock::new();
 
-enum PendingCall {
-    Json(oneshot::Sender<Result<String, TranslationError>>),
-    Translator(oneshot::Sender<Result<Global<JObject<'static>>, TranslationError>>),
-}
-
-struct PendingCallGuard {
-    id: i64,
+/// Cancels the `CancellationSignal` of an in-flight translation when its
+/// caller is dropped before the result arrives. [`CallGuard::disarm`]
+/// clears the signal once the helper has answered.
+struct CallGuard {
     cancellation_signal: Option<Global<JObject<'static>>>,
 }
 
-impl PendingCallGuard {
-    const fn new(id: i64) -> Self {
+impl CallGuard {
+    const fn new() -> Self {
         Self {
-            id,
             cancellation_signal: None,
         }
     }
+
+    /// Records the call's `CancellationSignal`.
+    fn arm(&mut self, signal: Global<JObject<'static>>) {
+        self.cancellation_signal = Some(signal);
+    }
+
+    /// The helper answered; nothing left to cancel.
+    fn disarm(&mut self) {
+        self.cancellation_signal = None;
+    }
 }
 
-impl Drop for PendingCallGuard {
+impl Drop for CallGuard {
     fn drop(&mut self) {
-        if remove_pending_call(self.id).is_some()
-            && let Some(cancellation_signal) = self.cancellation_signal.take()
-        {
+        if let Some(cancellation_signal) = self.cancellation_signal.take() {
             let result: Result<(), TranslationError> = with_android_context(|env, _context| {
                 env.call_method(
                     cancellation_signal.as_obj(),
@@ -77,12 +69,6 @@ pub struct CapabilityUpdate {
     status: Option<AssetStatus>,
 }
 
-type CapabilityUpdateResult = Result<CapabilityUpdate, TranslationError>;
-type CapabilityListener = async_channel::Sender<CapabilityUpdateResult>;
-type CapabilityListeners = Mutex<HashMap<i64, CapabilityListener>>;
-
-static CAPABILITY_LISTENERS: OnceLock<CapabilityListeners> = OnceLock::new();
-
 impl CapabilityUpdate {
     /// The source and target languages that changed.
     #[must_use]
@@ -103,16 +89,10 @@ impl From<AndroidError> for TranslationError {
     }
 }
 
-fn pending_calls() -> &'static Mutex<HashMap<i64, PendingCall>> {
-    PENDING_CALLS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn capability_listeners() -> &'static CapabilityListeners {
-    CAPABILITY_LISTENERS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn next_call_id() -> i64 {
-    NEXT_CALL_ID.fetch_add(1, Ordering::Relaxed)
+impl From<PeerError> for TranslationError {
+    fn from(error: PeerError) -> Self {
+        Self::Platform(error.to_string())
+    }
 }
 
 fn helper_class(
@@ -126,37 +106,19 @@ fn jni_error(env: &Env<'_>, call: &str, error: jni::errors::Error) -> Translatio
     TranslationError::Platform(format!("{call}: {}", describe_jni_error(env, error)))
 }
 
-fn begin_json_call() -> (
-    PendingCallGuard,
-    oneshot::Receiver<Result<String, TranslationError>>,
-) {
-    let id = next_call_id();
-    let (sender, receiver) = oneshot::channel();
-    pending_calls()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(id, PendingCall::Json(sender));
-    (PendingCallGuard::new(id), receiver)
+/// A one-shot helper call: the `NativeCallback` handed to Kotlin plus the
+/// receiver its answer lands on.
+type HelperCall<T> = (
+    NativeCallback<T>,
+    futures::channel::oneshot::Receiver<Result<T, PeerError>>,
+);
+
+fn begin_json_call() -> Result<HelperCall<String>, TranslationError> {
+    with_android_context(|env, _context| Ok(NativeCallback::<String>::new(env)?))
 }
 
-fn begin_translator_call() -> (
-    PendingCallGuard,
-    oneshot::Receiver<Result<Global<JObject<'static>>, TranslationError>>,
-) {
-    let id = next_call_id();
-    let (sender, receiver) = oneshot::channel();
-    pending_calls()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(id, PendingCall::Translator(sender));
-    (PendingCallGuard::new(id), receiver)
-}
-
-fn remove_pending_call(id: i64) -> Option<PendingCall> {
-    pending_calls()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&id)
+fn begin_translator_call() -> Result<HelperCall<Global<JObject<'static>>>, TranslationError> {
+    with_android_context(|env, _context| Ok(NativeCallback::<Global<JObject<'static>>>::new(env)?))
 }
 
 fn decode_callback_string(env: &Env<'_>, value: &JString<'_>) -> Result<String, TranslationError> {
@@ -174,14 +136,14 @@ fn check_api_level() -> Result<bool, TranslationError> {
 }
 
 pub async fn capabilities() -> Result<TranslationCapabilities, TranslationError> {
-    let (call, receiver) = begin_json_call();
+    let (callback, receiver) = begin_json_call()?;
     let started: Result<(), TranslationError> = with_android_context(|env, context| {
         let helper = helper_class(env, context)?;
         env.call_static_method(
             helper,
             jni_str!("getCapabilities"),
-            jni_sig!("(Landroid/content/Context;J)V"),
-            &[JValue::Object(context), JValue::Long(call.id)],
+            jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeCallback;)V"),
+            &[JValue::Object(context), JValue::Object(callback.as_obj())],
         )
         .map_err(|error| jni_error(env, "TranslationHelper.getCapabilities", error))?;
         Ok(())
@@ -208,7 +170,7 @@ pub struct Translator {
 
 impl Translator {
     pub async fn create(pair: &LanguagePair) -> Result<Self, TranslationError> {
-        let (call, receiver) = begin_translator_call();
+        let (callback, receiver) = begin_translator_call()?;
         let started: Result<(), TranslationError> = with_android_context(|env, context| {
             let helper = helper_class(env, context)?;
             let source = env
@@ -220,12 +182,14 @@ impl Translator {
             env.call_static_method(
                 helper,
                 jni_str!("createTranslator"),
-                jni_sig!("(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;J)V"),
+                jni_sig!(
+                    "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Lwaterkit/build/NativeCallback;)V"
+                ),
                 &[
                     JValue::Object(context),
                     JValue::Object(&source),
                     JValue::Object(&target),
-                    JValue::Long(call.id),
+                    JValue::Object(callback.as_obj()),
                 ],
             )
             .map_err(|error| jni_error(env, "TranslationHelper.createTranslator", error))?;
@@ -243,7 +207,8 @@ impl Translator {
 
     pub async fn translate(&self, texts: &[&str]) -> Result<Vec<String>, TranslationError> {
         let texts_json = wire::encode_texts(texts)?;
-        let (mut call, receiver) = begin_json_call();
+        let (callback, receiver) = begin_json_call()?;
+        let mut call = CallGuard::new();
         let cancellation_signal = with_android_context(|env, context| {
             let helper = helper_class(env, context)?;
             let texts_json = env
@@ -254,11 +219,11 @@ impl Translator {
                 helper,
                 jni_str!("translate"),
                 jni_sig!(
-                    "(Landroid/view/translation/Translator;JLjava/lang/String;)Landroid/os/CancellationSignal;"
+                    "(Landroid/view/translation/Translator;Lwaterkit/build/NativeCallback;Ljava/lang/String;)Landroid/os/CancellationSignal;"
                 ),
                 &[
                     JValue::Object(self.inner.as_obj()),
-                    JValue::Long(call.id),
+                    JValue::Object(callback.as_obj()),
                     JValue::Object(&texts_json),
                 ],
             )
@@ -274,10 +239,12 @@ impl Translator {
                 jni_error(env, "retain Android translation cancellation signal", error)
             })
         });
-        call.cancellation_signal = Some(cancellation_signal?);
-        let json = receiver.await.map_err(|_| {
+        call.arm(cancellation_signal?);
+        let result = receiver.await.map_err(|_| {
             TranslationError::Platform("Android translation callback was dropped".into())
-        })??;
+        });
+        call.disarm();
+        let json = result??;
         wire::decode_translations(&json, &self.pair, texts.len())
     }
 }
@@ -332,12 +299,9 @@ pub fn open_download_settings() -> Result<(), TranslationError> {
 /// Starts listening for changes to Android translation capabilities.
 pub fn capability_updates()
 -> Result<crate::translation::android::CapabilityUpdates, TranslationError> {
-    let id = next_call_id();
-    let (sender, receiver) = async_channel::unbounded();
-    capability_listeners()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(id, sender);
+    let (channel, receiver) = with_android_context(|env, _context| {
+        Ok::<_, TranslationError>(NativeChannel::<String>::new(env)?)
+    })?;
 
     let result = with_android_context(|env, context| {
         let helper = helper_class(env, context)?;
@@ -345,8 +309,10 @@ pub fn capability_updates()
             .call_static_method(
                 helper,
                 jni_str!("registerCapabilityUpdates"),
-                jni_sig!("(Landroid/content/Context;J)Ljava/lang/String;"),
-                &[JValue::Object(context), JValue::Long(id)],
+                jni_sig!(
+                    "(Landroid/content/Context;Lwaterkit/build/NativeChannel;)Ljava/lang/String;"
+                ),
+                &[JValue::Object(context), JValue::Object(channel.as_obj())],
             )
             .map_err(|error| jni_error(env, "TranslationHelper.registerCapabilityUpdates", error))?
             .l()
@@ -363,42 +329,31 @@ pub fn capability_updates()
         decode_callback_string(env, &result)
     });
 
-    let json = match result {
-        Ok(json) => json,
-        Err(error) => {
-            capability_listeners()
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(&id);
-            return Err(error);
-        }
-    };
-    if let Err(error) = wire::decode::<serde_json::Value>(&json, None) {
-        capability_listeners()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&id);
-        return Err(error);
-    }
+    let json = result?;
+    wire::decode::<serde_json::Value>(&json, None)?;
 
+    let updates = receiver.map(|item| {
+        item.map_err(TranslationError::from).and_then(|json| {
+            wire::decode_capability_update(&json)
+                .map(|(pair, status)| CapabilityUpdate { pair, status })
+        })
+    });
     Ok(crate::translation::android::CapabilityUpdates::new(
-        id, receiver,
+        channel, updates,
     ))
 }
 
-pub fn remove_capability_listener(id: i64) {
-    capability_listeners()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&id);
+pub fn remove_capability_listener(channel: &JObject<'_>) {
     let result = with_android_context(|env, context| {
         let helper = helper_class(env, context)?;
         let result = env
             .call_static_method(
                 helper,
                 jni_str!("removeCapabilityUpdates"),
-                jni_sig!("(Landroid/content/Context;J)Ljava/lang/String;"),
-                &[JValue::Object(context), JValue::Long(id)],
+                jni_sig!(
+                    "(Landroid/content/Context;Lwaterkit/build/NativeChannel;)Ljava/lang/String;"
+                ),
+                &[JValue::Object(context), JValue::Object(channel)],
             )
             .map_err(|error| jni_error(env, "TranslationHelper.removeCapabilityUpdates", error))?
             .l()
@@ -424,91 +379,4 @@ pub fn remove_capability_listener(id: i64) {
             tracing::error!(%error, "failed to remove Android translation capability listener");
         }
     }
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_language_TranslationHelper_onResult<'local>(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    call_id: jlong,
-    json: JString<'local>,
-) {
-    env.with_env(|env| -> jni::errors::Result<()> {
-        let result = decode_callback_string(env, &json);
-        if let Some(PendingCall::Json(sender)) = remove_pending_call(call_id) {
-            let _ = sender.send(result);
-        }
-        Ok(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_language_TranslationHelper_onTranslatorCreated<'local>(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    call_id: jlong,
-    translator: JObject<'local>,
-) {
-    env.with_env(|env| -> jni::errors::Result<()> {
-        if let Some(PendingCall::Translator(sender)) = remove_pending_call(call_id) {
-            let result = if translator.is_null() {
-                Err(TranslationError::Platform(
-                    "system translation service returned a null translator".into(),
-                ))
-            } else {
-                env.new_global_ref(translator)
-                    .map_err(|error| jni_error(env, "create global translator reference", error))
-            };
-            let _ = sender.send(result);
-        } else if !translator.is_null() {
-            env.call_method(&translator, jni_str!("destroy"), jni_sig!("()V"), &[])?;
-        }
-        Ok(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_language_TranslationHelper_onTranslatorFailed<'local>(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    call_id: jlong,
-    message: JString<'local>,
-) {
-    env.with_env(|env| -> jni::errors::Result<()> {
-        let message =
-            decode_callback_string(env, &message).unwrap_or_else(|error| error.to_string());
-        if let Some(PendingCall::Translator(sender)) = remove_pending_call(call_id) {
-            let _ = sender.send(Err(TranslationError::Platform(message)));
-        }
-        Ok(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_language_TranslationHelper_onCapabilityUpdate<'local>(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    listener_id: jlong,
-    json: JString<'local>,
-) {
-    env.with_env(|env| -> jni::errors::Result<()> {
-        let message = match decode_callback_string(env, &json) {
-            Ok(json) => wire::decode_capability_update(&json)
-                .map(|(pair, status)| CapabilityUpdate { pair, status }),
-            Err(error) => Err(error),
-        };
-        let sender = capability_listeners()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&listener_id)
-            .cloned();
-        if let Some(sender) = sender {
-            let _ = sender.try_send(message);
-        }
-        Ok(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
 }

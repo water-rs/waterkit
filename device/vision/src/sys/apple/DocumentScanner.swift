@@ -58,30 +58,29 @@ private func documentScanPageBuffer(
     return pixelBuffer
 }
 
-// The delegate the presented scanner keeps until the scan settles.
-@MainActor
-private var activeDocumentScanDelegates: [UInt64: DocumentScanDelegate] = [:]
+// The presented controller owns its delegate for the presentation's life:
+// the association releases the delegate when the controller goes away.
+private var documentScanDelegateKey: UInt8 = 0
 
 @MainActor
 private func finishDocumentScan(
-    cbId: UInt64,
+    delegate: DocumentScanDelegate,
     scanner: VNDocumentCameraViewController,
     pages: RustVec<UInt>,
     error: String?
 ) {
-    activeDocumentScanDelegates.removeValue(forKey: cbId)
     scanner.dismiss(animated: true) {
-        on_document_scan_result(cbId, pages, error)
+        document_scan_reply_complete(delegate.reply, pages, error)
     }
 }
 
 @MainActor
 private final class DocumentScanDelegate: NSObject, VNDocumentCameraViewControllerDelegate {
-    let cbId: UInt64
+    let reply: DocumentScanReply
     private var finished = false
 
-    init(cbId: UInt64) {
-        self.cbId = cbId
+    init(reply: DocumentScanReply) {
+        self.reply = reply
     }
 
     private func finish(
@@ -92,7 +91,7 @@ private final class DocumentScanDelegate: NSObject, VNDocumentCameraViewControll
         guard !finished else { return }
         finished = true
         finishDocumentScan(
-            cbId: cbId, scanner: scanner, pages: pages, error: error)
+            delegate: self, scanner: scanner, pages: pages, error: error)
     }
 
     func documentCameraViewController(
@@ -162,25 +161,26 @@ func document_scanner_supported_bridge() -> Bool {
     }
 }
 
-func scan_document_bridge(cb_id: UInt64) {
+func scan_document_bridge(reply: DocumentScanReply) {
     DispatchQueue.main.async {
         guard VNDocumentCameraViewController.isSupported else {
-            on_document_scan_result(
-                cb_id, RustVec(),
+            document_scan_reply_complete(
+                reply, RustVec(),
                 "VNDocumentCameraViewController is unsupported")
             return
         }
         guard let topVC = documentScannerTopViewController() else {
-            on_document_scan_result(
-                cb_id, RustVec(),
+            document_scan_reply_complete(
+                reply, RustVec(),
                 "no key window scene to present the scanner from")
             return
         }
-        let delegate = DocumentScanDelegate(cbId: cb_id)
+        let delegate = DocumentScanDelegate(reply: reply)
         let scanner = VNDocumentCameraViewController()
         scanner.delegate = delegate
 
-        activeDocumentScanDelegates[cb_id] = delegate
+        objc_setAssociatedObject(
+            scanner, &documentScanDelegateKey, delegate, .OBJC_ASSOCIATION_RETAIN)
         topVC.present(scanner, animated: true)
     }
 }

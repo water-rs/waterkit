@@ -101,6 +101,7 @@ scanner = [
     "dep:jni",
     "dep:ndk-context",
     "dep:waterkit-build",
+    "waterkit-build/native-callback",
 ]
 
 # The one-shot system document scanner: the ML Kit document scanner of
@@ -113,6 +114,7 @@ document-scanner = [
     "dep:ndk-context",
     "dep:waterkit-build",
     "waterkit-build/activity-result",
+    "waterkit-build/native-callback",
     "dep:blocking",
 ]
 

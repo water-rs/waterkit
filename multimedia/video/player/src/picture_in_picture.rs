@@ -77,6 +77,8 @@ pub enum PictureInPictureCommand {
 /// so this stream closes immediately there.
 pub struct PictureInPictureCommandStream {
     host_id: PictureInPictureHostId,
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    channel: std::sync::Arc<apple::CommandChannel>,
     receiver: async_channel::Receiver<PictureInPictureCommand>,
     worker: Option<JoinHandle<()>>,
 }
@@ -88,21 +90,14 @@ impl PictureInPictureCommandStream {
         let (sender, receiver) = async_channel::unbounded();
 
         #[cfg(any(target_os = "ios", target_os = "macos"))]
+        let channel = apple::open_picture_in_picture_command_channel(host_id);
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
         let worker = {
-            apple::open_picture_in_picture_command_channel(host_id);
+            let channel = std::sync::Arc::clone(&channel);
             Some(std::thread::spawn(move || {
-                loop {
-                    match apple::wait_picture_in_picture_command(host_id) {
-                        Ok(Some(command)) => {
-                            if sender.send_blocking(command).is_err() {
-                                break;
-                            }
-                        }
-                        Ok(None) => break,
-                        Err(error) => {
-                            tracing::error!(%error, host_id = host_id.get(), "invalid Apple picture-in-picture command");
-                            break;
-                        }
+                while let Some(command) = channel.wait() {
+                    if sender.send_blocking(command).is_err() {
+                        break;
                     }
                 }
             }))
@@ -116,6 +111,8 @@ impl PictureInPictureCommandStream {
 
         Self {
             host_id,
+            #[cfg(any(target_os = "ios", target_os = "macos"))]
+            channel,
             receiver,
             worker,
         }
@@ -142,6 +139,8 @@ impl std::fmt::Debug for PictureInPictureCommandStream {
 
 impl Drop for PictureInPictureCommandStream {
     fn drop(&mut self) {
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        self.channel.close();
         #[cfg(any(target_os = "ios", target_os = "macos"))]
         apple::close_picture_in_picture_command_channel(self.host_id);
         if let Some(worker) = self.worker.take() {
@@ -508,12 +507,12 @@ mod apple {
 
     use std::collections::{HashMap, VecDeque};
     use std::rc::Rc;
-    use std::sync::{Arc, Condvar, LazyLock, Mutex, OnceLock};
+    use std::sync::{Arc, Condvar, Mutex, OnceLock};
     use std::time::Duration;
     use waterkit_video_core::Error as VideoError;
 
     use block2::{Block, RcBlock};
-    use dispatch2::MainThreadBound;
+    use dispatch2::{DispatchQueue, MainThreadBound};
     use objc2::available;
     use objc2::rc::{Retained, Weak};
     use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
@@ -569,7 +568,7 @@ mod apple {
 
     /// Blocking command queue one `PiP` host drains on its worker thread; `close`
     /// wakes the waiter, mirroring the `NSCondition` channel the bridge used.
-    struct CommandChannel {
+    pub(super) struct CommandChannel {
         state: Mutex<CommandChannelState>,
         condition: Condvar,
     }
@@ -600,7 +599,7 @@ mod apple {
             self.condition.notify_one();
         }
 
-        fn wait(&self) -> Option<PictureInPictureCommand> {
+        pub(super) fn wait(&self) -> Option<PictureInPictureCommand> {
             let mut state = self.state.lock().unwrap();
             loop {
                 if let Some(command) = state.commands.pop_front() {
@@ -613,7 +612,7 @@ mod apple {
             }
         }
 
-        fn close(&self) {
+        pub(super) fn close(&self) {
             {
                 let mut state = self.state.lock().unwrap();
                 state.closed = true;
@@ -621,24 +620,9 @@ mod apple {
             }
             self.condition.notify_all();
         }
-    }
 
-    static COMMAND_CHANNELS: LazyLock<Mutex<HashMap<u64, Arc<CommandChannel>>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
-
-    fn open_command_channel(host_id: u64) -> Arc<CommandChannel> {
-        let mut channels = COMMAND_CHANNELS.lock().unwrap();
-        Arc::clone(
-            channels
-                .entry(host_id)
-                .or_insert_with(|| Arc::new(CommandChannel::new())),
-        )
-    }
-
-    fn close_command_channel(host_id: u64) {
-        let channel = COMMAND_CHANNELS.lock().unwrap().remove(&host_id);
-        if let Some(channel) = channel {
-            channel.close();
+        fn is_closed(&self) -> bool {
+            self.state.lock().unwrap().closed
         }
     }
 
@@ -652,7 +636,28 @@ mod apple {
         active: Cell<bool>,
         playing: Cell<bool>,
         aspect_ratio: Cell<Option<(u32, u32)>>,
-        command_channel: Arc<CommandChannel>,
+        /// The channel the host's open command stream drains. `None` until a
+        /// `PictureInPictureCommandStream` attaches one for `host_id`, or
+        /// again once that stream detaches.
+        command_channel: RefCell<Option<Arc<CommandChannel>>>,
+    }
+
+    impl HostRegistration {
+        /// Delivers a command to the open command stream, if any.
+        fn send_command(&self, command: PictureInPictureCommand) {
+            if let Some(channel) = &*self.command_channel.borrow() {
+                channel.send(command);
+            }
+        }
+
+        /// Installs the channel a command stream is draining; closing a
+        /// replaced channel wakes its waiter. `None` detaches so platform
+        /// callbacks stop delivering.
+        fn set_command_channel(&self, channel: Option<Arc<CommandChannel>>) {
+            if let Some(previous) = self.command_channel.replace(channel) {
+                previous.close();
+            }
+        }
     }
 
     /// Pointer helpers for `CFMutableDictionary::set_value`, which takes
@@ -687,6 +692,9 @@ mod apple {
     /// The shared manager; every use happens on the main thread.
     struct PictureInPictureManager {
         hosts: HashMap<u64, Rc<HostRegistration>>,
+        /// Command channels opened before their host registered; consumed by
+        /// the host's registration.
+        pending_channels: HashMap<u64, Arc<CommandChannel>>,
         active_session: Option<Retained<PictureInPictureSession>>,
     }
 
@@ -699,6 +707,7 @@ mod apple {
             .get_or_init(|| {
                 MainThreadBound::new(
                     RefCell::new(PictureInPictureManager {
+                        pending_channels: HashMap::new(),
                         hosts: HashMap::new(),
                         active_session: None,
                     }),
@@ -755,8 +764,7 @@ mod apple {
             fn did_start(&self, _controller: &AVPictureInPictureController) {
                 self.ivars()
                     .host
-                    .command_channel
-                    .send(PictureInPictureCommand::ActiveChanged(true));
+                    .send_command(PictureInPictureCommand::ActiveChanged(true));
             }
 
             #[unsafe(method(pictureInPictureControllerWillStopPictureInPicture:))]
@@ -769,8 +777,7 @@ mod apple {
                 let host_id = self.ivars().host.host_id;
                 self.ivars()
                     .host
-                    .command_channel
-                    .send(PictureInPictureCommand::ActiveChanged(false));
+                    .send_command(PictureInPictureCommand::ActiveChanged(false));
                 let mtm = MainThreadMarker::new()
                     .expect("PiP controller delegates run on the main thread");
                 manager(mtm).borrow_mut().session_did_stop(host_id);
@@ -786,8 +793,7 @@ mod apple {
                 let host_id = self.ivars().host.host_id;
                 self.ivars()
                     .host
-                    .command_channel
-                    .send(PictureInPictureCommand::ActiveChanged(false));
+                    .send_command(PictureInPictureCommand::ActiveChanged(false));
                 let mtm = MainThreadMarker::new()
                     .expect("PiP controller delegates run on the main thread");
                 manager(mtm).borrow_mut().session_did_stop(host_id);
@@ -797,7 +803,7 @@ mod apple {
         unsafe impl AVPictureInPictureSampleBufferPlaybackDelegate for PictureInPictureSession {
             #[unsafe(method(pictureInPictureController:setPlaying:))]
             fn set_playing(&self, _controller: &AVPictureInPictureController, playing: bool) {
-                self.ivars().host.command_channel.send(if playing {
+                self.ivars().host.send_command(if playing {
                     PictureInPictureCommand::Play
                 } else {
                     PictureInPictureCommand::Pause
@@ -847,15 +853,13 @@ mod apple {
                 if seconds > 0.0 {
                     self.ivars()
                         .host
-                        .command_channel
-                        .send(PictureInPictureCommand::SeekForward(
+                        .send_command(PictureInPictureCommand::SeekForward(
                             Duration::from_secs_f64(seconds),
                         ));
                 } else if seconds < 0.0 {
                     self.ivars()
                         .host
-                        .command_channel
-                        .send(PictureInPictureCommand::SeekBackward(
+                        .send_command(PictureInPictureCommand::SeekBackward(
                             Duration::from_secs_f64(-seconds),
                         ));
                 }
@@ -1417,6 +1421,7 @@ mod apple {
                 host.set_external_rendering.set(set_external_rendering);
                 return;
             }
+            let command_channel = self.pending_channels.remove(&host_id);
             self.hosts.insert(
                 host_id,
                 Rc::new(HostRegistration {
@@ -1427,7 +1432,7 @@ mod apple {
                     active: Cell::new(false),
                     playing: Cell::new(false),
                     aspect_ratio: Cell::new(None),
-                    command_channel: open_command_channel(host_id),
+                    command_channel: RefCell::new(command_channel),
                 }),
             );
         }
@@ -1438,8 +1443,35 @@ mod apple {
             {
                 self.active_session = None;
             }
-            self.hosts.remove(&host_id);
-            close_command_channel(host_id);
+            if let Some(host) = self.hosts.remove(&host_id) {
+                host.set_command_channel(None);
+            }
+            if let Some(channel) = self.pending_channels.remove(&host_id) {
+                channel.close();
+            }
+        }
+
+        /// Attaches an opened command channel to its host, or holds it until
+        /// the host registers. A stream that already closed leaves nothing
+        /// for a late registration to adopt.
+        fn attach_command_channel(&mut self, host_id: u64, channel: Arc<CommandChannel>) {
+            if channel.is_closed() {
+                return;
+            }
+            if let Some(host) = self.hosts.get(&host_id) {
+                host.set_command_channel(Some(channel));
+            } else {
+                self.pending_channels.insert(host_id, channel);
+            }
+        }
+
+        /// Detaches a closed stream's channel so platform callbacks stop
+        /// delivering into it.
+        fn detach_command_channel(&mut self, host_id: u64) {
+            if let Some(host) = self.hosts.get(&host_id) {
+                host.set_command_channel(None);
+            }
+            self.pending_channels.remove(&host_id);
         }
 
         fn sync_host_state(
@@ -1449,6 +1481,7 @@ mod apple {
             playing: bool,
             aspect_ratio: Option<(u32, u32)>,
         ) {
+            let command_channel = self.pending_channels.remove(&host_id);
             let host = self.hosts.entry(host_id).or_insert_with(|| {
                 Rc::new(HostRegistration {
                     host_id,
@@ -1458,7 +1491,7 @@ mod apple {
                     active: Cell::new(false),
                     playing: Cell::new(false),
                     aspect_ratio: Cell::new(None),
-                    command_channel: open_command_channel(host_id),
+                    command_channel: RefCell::new(command_channel),
                 })
             });
             host.active.set(active);
@@ -1592,29 +1625,35 @@ mod apple {
         }
     }
 
-    pub(super) fn open_picture_in_picture_command_channel(host_id: PictureInPictureHostId) {
-        let _ = open_command_channel(host_id.get());
-    }
-
-    pub(super) fn close_picture_in_picture_command_channel(host_id: PictureInPictureHostId) {
-        close_command_channel(host_id.get());
-    }
-
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "the caller destructures the channel wait as a fallible op"
-    )]
-    pub(super) fn wait_picture_in_picture_command(
+    /// Opens a command channel for `host_id` and hands it to the host on the
+    /// main thread, where the manager lives; callbacks post into it from
+    /// then on. The worker drains through the returned `Arc` directly.
+    pub(super) fn open_picture_in_picture_command_channel(
         host_id: PictureInPictureHostId,
-    ) -> Result<Option<PictureInPictureCommand>, VideoError> {
-        let channel = {
-            let channels = COMMAND_CHANNELS.lock().unwrap();
-            channels.get(&host_id.get()).cloned()
-        };
-        let Some(channel) = channel else {
-            return Ok(None);
-        };
-        Ok(channel.wait())
+    ) -> Arc<CommandChannel> {
+        let channel = Arc::new(CommandChannel::new());
+        let attach = Arc::clone(&channel);
+        DispatchQueue::main().exec_async(move || {
+            let mtm = MainThreadMarker::new()
+                .expect("the main dispatch queue always runs on the main thread");
+            manager(mtm)
+                .borrow_mut()
+                .attach_command_channel(host_id.get(), attach);
+        });
+        channel
+    }
+
+    /// Detaches the channel so platform callbacks stop delivering; the
+    /// stream closes the channel itself to wake its worker without waiting
+    /// for the main queue.
+    pub(super) fn close_picture_in_picture_command_channel(host_id: PictureInPictureHostId) {
+        DispatchQueue::main().exec_async(move || {
+            let mtm = MainThreadMarker::new()
+                .expect("the main dispatch queue always runs on the main thread");
+            manager(mtm)
+                .borrow_mut()
+                .detach_command_channel(host_id.get());
+        });
     }
 }
 

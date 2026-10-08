@@ -6,29 +6,24 @@
 //! [`PendingActivityResult`]. The helper uses the host
 //! `ComponentActivity`'s `AndroidX` activity-result registry, so applications do
 //! not need to forward request codes through `onActivityResult`.
+//!
+//! The launched request resolves through a
+//! [`NativeCallback`](super::native_callback::NativeCallback) the Kotlin helper
+//! receives as an argument: `complete` carries the
+//! `androidx.activity.result.ActivityResult` object (or `null` when the host
+//! activity was destroyed without one), and `fail` carries a launch failure.
 
-use super::{android_error_with_pending_exception, decode_string};
+use super::{
+    AndroidError, FromJava, NativeCallback, PeerError, android_error_with_pending_exception,
+};
 use futures_channel::oneshot;
-use jni::errors::ThrowRuntimeExAndDefault;
-use jni::objects::{Global, JClass, JObject, JValue};
-use jni::sys::{jint, jlong};
-use jni::{Env, EnvUnowned, jni_sig, jni_str};
-use std::collections::HashMap;
+use jni::objects::{Global, JObject, JValue, JValueOwned};
+use jni::{Env, jni_sig, jni_str};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Mutex, OnceLock};
 use std::task::{Context, Poll};
 
 static HELPER: super::DexHelper = super::DexHelper::new("waterkit.build.ActivityResultHelper");
-static NEXT_REQUEST_ID: AtomicI64 = AtomicI64::new(1);
-
-type ResultSender = oneshot::Sender<Result<ActivityResult, ActivityResultError>>;
-
-fn pending_results() -> &'static Mutex<HashMap<i64, ResultSender>> {
-    static RESULTS: OnceLock<Mutex<HashMap<i64, ResultSender>>> = OnceLock::new();
-    RESULTS.get_or_init(|| Mutex::new(HashMap::new()))
-}
 
 /// The result code returned by an Android activity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +73,37 @@ impl ActivityResult {
     }
 }
 
+/// What `NativeCallback.complete` carries for an activity launch:
+/// `Some` for a delivered `androidx.activity.result.ActivityResult`, `None`
+/// when the host activity was destroyed before the result arrived.
+impl FromJava for Option<ActivityResult> {
+    fn from_java(env: &mut Env<'_>, object: &JObject<'_>) -> Result<Self, AndroidError> {
+        if object.is_null() {
+            return Ok(None);
+        }
+        let code = env
+            .call_method(object, jni_str!("getResultCode"), jni_sig!("()I"), &[])
+            .and_then(JValueOwned::i)?;
+        let data = env
+            .call_method(
+                object,
+                jni_str!("getData"),
+                jni_sig!("()Landroid/content/Intent;"),
+                &[],
+            )
+            .and_then(JValueOwned::l)?;
+        let data = if data.is_null() {
+            None
+        } else {
+            Some(env.new_global_ref(&data)?)
+        };
+        Ok(Some(ActivityResult {
+            code: code.into(),
+            data,
+        }))
+    }
+}
+
 /// An error while launching or awaiting an Android activity result.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -93,7 +119,8 @@ pub enum ActivityResultError {
         context_class: String,
     },
 
-    /// The host activity was destroyed before the launched activity returned.
+    /// The host activity was destroyed before the launched activity returned,
+    /// or the request was otherwise collected unanswered.
     #[error("the host activity was destroyed before the launched activity returned its result")]
     ActivityDestroyed,
 
@@ -103,22 +130,30 @@ pub enum ActivityResultError {
 
     /// A JNI operation failed.
     #[error(transparent)]
-    Android(#[from] super::AndroidError),
+    Android(#[from] AndroidError),
 }
 
 /// A future for an Android activity result.
 #[must_use]
 #[derive(Debug)]
-pub struct PendingActivityResult(oneshot::Receiver<Result<ActivityResult, ActivityResultError>>);
+pub struct PendingActivityResult(oneshot::Receiver<Result<Option<ActivityResult>, PeerError>>);
 
 impl Future for PendingActivityResult {
     type Output = Result<ActivityResult, ActivityResultError>;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         match Pin::new(&mut self.get_mut().0).poll(context) {
-            Poll::Ready(Ok(result)) => Poll::Ready(result),
-            Poll::Ready(Err(_)) => {
-                panic!("waterkit-build activity-result sender dropped before delivering a result")
+            Poll::Ready(Ok(Ok(Some(result)))) => Poll::Ready(Ok(result)),
+            // `complete(null)` means the host activity was destroyed, and a
+            // collected-unanswered peer cancels the oneshot the same way.
+            Poll::Ready(Ok(Ok(None)) | Err(_)) => {
+                Poll::Ready(Err(ActivityResultError::ActivityDestroyed))
+            }
+            Poll::Ready(Ok(Err(PeerError::Rejected(message)))) => {
+                Poll::Ready(Err(ActivityResultError::Launch(message)))
+            }
+            Poll::Ready(Ok(Err(PeerError::Decode(error)))) => {
+                Poll::Ready(Err(ActivityResultError::Android(error)))
             }
             Poll::Pending => Poll::Pending,
         }
@@ -179,48 +214,35 @@ fn launch(
     kind: LaunchKind,
 ) -> Result<PendingActivityResult, ActivityResultError> {
     let helper_class = HELPER.class(env, context)?;
-    let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    let (sender, receiver) = oneshot::channel();
-    pending_results()
-        .lock()
-        .unwrap_or_else(|error| panic!("waterkit-build activity-result map poisoned: {error}"))
-        .insert(request_id, sender);
+    let (callback, receiver) =
+        NativeCallback::<Option<ActivityResult>>::new(env).map_err(ActivityResultError::from)?;
 
     let launch_result = match kind {
         LaunchKind::Activity => env.call_static_method(
             helper_class,
             jni_str!("startActivityForResult"),
-            jni_sig!("(Landroid/content/Context;JLandroid/content/Intent;)Z"),
+            jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeCallback;Landroid/content/Intent;)Z"),
             &[
                 JValue::Object(context),
-                JValue::Long(request_id),
+                JValue::Object(callback.as_obj()),
                 JValue::Object(input),
             ],
         ),
         LaunchKind::IntentSender => env.call_static_method(
             helper_class,
             jni_str!("startIntentSenderForResult"),
-            jni_sig!("(Landroid/content/Context;JLandroid/content/IntentSender;)Z"),
+            jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeCallback;Landroid/content/IntentSender;)Z"),
             &[
                 JValue::Object(context),
-                JValue::Long(request_id),
+                JValue::Object(callback.as_obj()),
                 JValue::Object(input),
             ],
         ),
     };
 
     let launched = match launch_result {
-        Ok(value) => match value.z() {
-            Ok(launched) => launched,
-            Err(error) => {
-                remove_pending(request_id);
-                return Err(ActivityResultError::Android(super::AndroidError::from(
-                    error,
-                )));
-            }
-        },
+        Ok(value) => value.z().map_err(AndroidError::from)?,
         Err(error) => {
-            remove_pending(request_id);
             return Err(ActivityResultError::Android(
                 android_error_with_pending_exception(env, error),
             ));
@@ -228,7 +250,6 @@ fn launch(
     };
 
     if !launched {
-        remove_pending(request_id);
         return Err(ActivityResultError::NotComponentActivity {
             context_class: context_class_name(env, context)?,
         });
@@ -267,77 +288,5 @@ fn context_class_name(
             ));
         }
     };
-    Ok(decode_string(env, &class_name)?)
-}
-
-fn remove_pending(request_id: i64) -> ResultSender {
-    pending_results()
-        .lock()
-        .unwrap_or_else(|error| panic!("waterkit-build activity-result map poisoned: {error}"))
-        .remove(&request_id)
-        .unwrap_or_else(|| {
-            panic!("waterkit-build: unknown activity-result request id: {request_id}")
-        })
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_build_ActivityResultHelper_deliverResult<'caller>(
-    mut env: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    request_id: jlong,
-    result_code: jint,
-    data: JObject<'caller>,
-) {
-    env.with_env(|env| -> jni::errors::Result<()> {
-        let sender = remove_pending(request_id);
-        let data = if data.is_null() {
-            None
-        } else {
-            match env.new_global_ref(&data) {
-                Ok(data) => Some(data),
-                Err(error) => {
-                    let _ = sender.send(Err(ActivityResultError::Android(
-                        android_error_with_pending_exception(env, error),
-                    )));
-                    return Ok(());
-                }
-            }
-        };
-        let _ = sender.send(Ok(ActivityResult {
-            code: result_code.into(),
-            data,
-        }));
-        Ok(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_build_ActivityResultHelper_deliverDestroyed<'caller>(
-    mut env: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    request_id: jlong,
-) {
-    env.with_env(|_env| -> jni::errors::Result<()> {
-        let sender = remove_pending(request_id);
-        let _ = sender.send(Err(ActivityResultError::ActivityDestroyed));
-        Ok(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_build_ActivityResultHelper_deliverLaunchFailure<'caller>(
-    mut env: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    request_id: jlong,
-    description: JObject<'caller>,
-) {
-    env.with_env(|env| -> jni::errors::Result<()> {
-        let description = decode_string(env, &description).map_err(|error| error.0)?;
-        let sender = remove_pending(request_id);
-        let _ = sender.send(Err(ActivityResultError::Launch(description)));
-        Ok(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
+    Ok(super::decode_string(env, &class_name)?)
 }

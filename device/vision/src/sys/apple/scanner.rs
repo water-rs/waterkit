@@ -3,24 +3,20 @@
 //!
 //! The bridge functions live in `Scanner.swift`, compiled into the crate by
 //! `build.rs`. The Swift side hops onto the main queue for presentation and
-//! answers through `on_scan_result`, so nothing blocks: the callback
-//! completes the awaiting [`crate::CodeScanner::scan`] through a oneshot.
+//! answers through the `ScanReply` it was issued, so nothing blocks: the
+//! reply completes the awaiting [`crate::CodeScanner::scan`] through a
+//! oneshot.
 
 use crate::{Payload, ScannedCode, Symbology, VisionError};
 use bytes::Bytes;
 use enumset::EnumSet;
 use futures::channel::oneshot;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
 
-type ScanCallback = oneshot::Sender<Result<Option<ScannedCode>, VisionError>>;
-
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
-fn callbacks() -> &'static Mutex<HashMap<u64, ScanCallback>> {
-    static LOCK: OnceLock<Mutex<HashMap<u64, ScanCallback>>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(HashMap::new()))
+/// The reply the presented scanner carries back to Rust: Swift owns the
+/// opaque object for the life of the presentation and calls
+/// `scan_reply_complete` exactly once, consuming it.
+struct ScanReply {
+    sender: oneshot::Sender<Result<Option<ScannedCode>, VisionError>>,
 }
 
 /// The symbology id `Scanner.swift` maps onto `VNBarcodeSymbology`.
@@ -85,12 +81,15 @@ mod ffi {
     extern "Swift" {
         fn scanner_supported_bridge() -> bool;
         fn symbology_supported_bridge(id: &str) -> bool;
-        fn scan_bridge(symbologies_csv: &str, cb_id: u64);
+        fn scan_bridge(symbologies_csv: &str, reply: ScanReply);
     }
 
     extern "Rust" {
-        fn on_scan_result(
-            cb_id: u64,
+        type ScanReply;
+
+        // `reply` is consumed: the answer is delivered exactly once.
+        fn scan_reply_complete(
+            reply: ScanReply,
             payload: Option<String>,
             symbology: Option<String>,
             error: Option<String>,
@@ -98,18 +97,19 @@ mod ffi {
     }
 }
 
-fn on_scan_result(
-    cb_id: u64,
+impl ScanReply {
+    const fn new(sender: oneshot::Sender<Result<Option<ScannedCode>, VisionError>>) -> Self {
+        Self { sender }
+    }
+}
+
+/// Answers the awaiting [`scan`].
+fn scan_reply_complete(
+    reply: ScanReply,
     payload: Option<String>,
     symbology: Option<String>,
     error: Option<String>,
 ) {
-    let tx = callbacks()
-        .lock()
-        .unwrap_or_else(|error| panic!("waterkit-vision: scan callback map lock poisoned: {error}"))
-        .remove(&cb_id)
-        .unwrap_or_else(|| panic!("waterkit-vision: unknown scan callback id in result: {cb_id}"));
-
     let result = match (error, payload) {
         (Some(message), _) => Err(VisionError::Platform(message)),
         (None, Some(payload)) => symbology
@@ -128,7 +128,7 @@ fn on_scan_result(
             .map(Some),
         (None, None) => Ok(None),
     };
-    let _ = tx.send(result);
+    let _ = reply.sender.send(result);
 }
 
 /// Whether `DataScannerViewController` is supported on this device — false
@@ -165,18 +165,13 @@ pub async fn scan(symbologies: EnumSet<Symbology>) -> Result<Option<ScannedCode>
         ));
     }
     let (tx, rx) = oneshot::channel();
-    let cb_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    callbacks()
-        .lock()
-        .map_err(|_| VisionError::Platform("scan callback map lock poisoned".to_owned()))?
-        .insert(cb_id, tx);
 
     let symbologies_csv = symbologies
         .iter()
         .map(symbology_id)
         .collect::<Vec<_>>()
         .join(",");
-    ffi::scan_bridge(&symbologies_csv, cb_id);
+    ffi::scan_bridge(&symbologies_csv, ScanReply::new(tx));
 
     rx.await
         .map_err(|_| VisionError::Platform("scan result channel closed".to_owned()))?

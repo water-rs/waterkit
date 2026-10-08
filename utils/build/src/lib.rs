@@ -33,6 +33,10 @@
 mod android_runtime;
 #[cfg(not(target_os = "android"))]
 mod apple;
+/// JVM-independent peer state for the native callback/channel machinery,
+/// host-compiled so its tests run under `cargo nextest`.
+#[cfg(any(test, all(target_os = "android", feature = "native-callback")))]
+mod peers;
 
 #[cfg(not(target_os = "android"))]
 pub use apple::{SwiftBridge, SwiftBridges};
@@ -48,3 +52,6 @@ pub use android_runtime::{
     ActivityResult, ActivityResultError, PendingActivityResult, ResultCode,
     start_activity_for_result, start_intent_sender_for_result,
 };
+
+#[cfg(all(target_os = "android", feature = "native-callback"))]
+pub use android_runtime::{FromJava, NativeCallback, NativeChannel, PeerError};

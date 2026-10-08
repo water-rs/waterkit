@@ -286,10 +286,7 @@ pub async fn write_sample(sample: HealthSample) -> Result<(), HealthError> {
                     &end_date,
                 )
             };
-            unsafe {
-                // SAFETY: `HKCategorySample` inherits `HKObject` — upcast.
-                Retained::cast_unchecked(category_sample)
-            }
+            category_sample.into_super().into_super()
         } else {
             let quantity_type =
                 quantity_type(data_type).expect("non-sleep data types are quantity types");
@@ -307,10 +304,7 @@ pub async fn write_sample(sample: HealthSample) -> Result<(), HealthError> {
                     &end_date,
                 )
             };
-            unsafe {
-                // SAFETY: `HKQuantitySample` inherits `HKObject` — upcast.
-                Retained::cast_unchecked(quantity_sample)
-            }
+            quantity_sample.into_super().into_super()
         };
         let tx = Mutex::new(Some(tx));
         let block = {

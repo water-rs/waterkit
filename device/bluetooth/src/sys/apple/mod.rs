@@ -1014,8 +1014,9 @@ mod classic {
         devices
             .iter()
             .map(|d| {
-                // SAFETY: `pairedDevices` returns `IOBluetoothDevice` objects.
-                let device = unsafe { Retained::cast_unchecked::<IOBluetoothDevice>(d) };
+                let device = d
+                    .downcast::<IOBluetoothDevice>()
+                    .expect("pairedDevices returns IOBluetoothDevice objects");
                 classic_device(&device)
             })
             .collect()

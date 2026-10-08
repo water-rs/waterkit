@@ -65,11 +65,12 @@ impl Vision {
     ///
     /// `barcodes.native` is `DetectBarcodesRequest.supportedSymbologies` and
     /// `text.native` the per-level `supportedRecognitionLanguages`
-    /// intersection on Apple; `text.native` is
-    /// `OcrEngine::AvailableRecognizerLanguages` on Windows. What they lack
-    /// is served by the portable realization when the application carries
-    /// one. `scanner` reports the device-support probe
-    /// `CodeScanner::capabilities` performs.
+    /// intersection on Apple; `documents.native` is
+    /// `RecognizeDocumentsRequest`'s `supportedRecognitionLanguages`;
+    /// `text.native` is `OcrEngine::AvailableRecognizerLanguages` on
+    /// Windows. What they lack is served by the portable realization when
+    /// the application carries one. `scanner` reports the device-support
+    /// probe `CodeScanner::capabilities` performs.
     #[must_use]
     pub fn capabilities(&self) -> VisionCapabilities {
         self.capabilities.clone()

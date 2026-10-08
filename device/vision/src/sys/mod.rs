@@ -7,12 +7,12 @@
 //!
 //! The `scanner` capability has its own per-platform modules: the Google
 //! code scanner on Android and `VisionKit`'s `DataScannerViewController` on
-//! iOS, with no system scanner elsewhere. The `barcode` and `text`
-//! capabilities' Apple realization lives in [`apple_vision`].
+//! iOS, with no system scanner elsewhere. The `barcode`, `text` and
+//! `document` capabilities' Apple realization lives in [`apple_vision`].
 
 #[cfg(all(
     any(target_os = "ios", target_os = "macos"),
-    any(feature = "barcode", feature = "text")
+    any(feature = "barcode", feature = "text", feature = "document")
 ))]
 pub mod apple_vision;
 

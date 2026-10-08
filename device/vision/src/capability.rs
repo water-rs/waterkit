@@ -21,6 +21,14 @@ pub struct VisionCapabilities {
     /// platforms without a native recognizer.
     #[cfg(feature = "text")]
     pub text: RealizationSet<Vec<icu_locale_core::LanguageIdentifier>>,
+    /// Document structure recognition: the languages each realization
+    /// serves.
+    ///
+    /// On Apple `native` is `RecognizeDocumentsRequest`'s
+    /// `supportedRecognitionLanguages` exactly; it is empty on platforms
+    /// without a native recognizer.
+    #[cfg(feature = "document")]
+    pub documents: RealizationSet<Vec<icu_locale_core::LanguageIdentifier>>,
 
     /// Whether this device can present the system code scanner, as
     /// [`CodeScanner::capabilities`] reports it. Present when the `scanner`
@@ -43,6 +51,10 @@ impl VisionCapabilities {
                 not(any(target_os = "windows", target_os = "ios", target_os = "macos"))
             ),
             any(
+                not(feature = "document"),
+                not(any(target_os = "ios", target_os = "macos"))
+            ),
+            any(
                 not(feature = "scanner"),
                 not(any(target_os = "ios", target_os = "android"))
             )
@@ -62,6 +74,11 @@ impl VisionCapabilities {
             #[cfg(feature = "text")]
             text: RealizationSet {
                 native: crate::text::native_languages(),
+                portable: Portable::Absent,
+            },
+            #[cfg(feature = "document")]
+            documents: RealizationSet {
+                native: crate::document::native_languages(),
                 portable: Portable::Absent,
             },
             #[cfg(feature = "scanner")]
@@ -110,6 +127,10 @@ impl waterkit_core::Capabilities for VisionCapabilities {
         if self.text.available() {
             return true;
         }
+        #[cfg(feature = "document")]
+        if self.documents.available() {
+            return true;
+        }
         #[cfg(feature = "scanner")]
         if self.scanner {
             return true;
@@ -135,6 +156,8 @@ pub const ENABLED: &[(&str, bool)] = &[
     ("barcode", false),
     #[cfg(feature = "text")]
     ("text", false),
+    #[cfg(feature = "document")]
+    ("document", false),
 ];
 
 /// Capabilities whose portable realization is not carried when required by

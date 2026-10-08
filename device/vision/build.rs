@@ -5,7 +5,8 @@ fn main() {
     let apple = matches!(target_os.as_str(), "ios" | "macos");
     let vision = apple
         && (std::env::var("CARGO_FEATURE_BARCODE").is_ok()
-            || std::env::var("CARGO_FEATURE_TEXT").is_ok());
+            || std::env::var("CARGO_FEATURE_TEXT").is_ok()
+            || std::env::var("CARGO_FEATURE_DOCUMENT").is_ok());
     let scanner = target_os == "ios" && std::env::var("CARGO_FEATURE_SCANNER").is_ok();
 
     if !(vision || scanner) {
@@ -22,6 +23,7 @@ fn main() {
                 .swift_source("src/sys/apple_vision/Vision.swift")
                 .framework("CoreVideo")
                 .framework("CoreImage")
+                .framework("DataDetection")
                 .framework("ImageIO")
                 .framework("Metal")
                 .framework("Vision"),

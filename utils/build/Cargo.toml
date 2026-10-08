@@ -14,7 +14,8 @@ categories = ["development-tools::build-utils"]
 workspace = true
 
 [features]
-activity-result = ["dep:futures-channel"]
+activity-result = ["dep:futures-channel", "native-callback"]
+native-callback = ["dep:futures-channel"]
 
 # The build-time half. Build scripts are compiled for the host, so these cfgs
 # match the build host, not the app's target: Swift bridge generation compiles
@@ -35,3 +36,9 @@ thiserror.workspace = true
 [package.metadata.waterui.android.feature.activity-result]
 kotlin-sources = ["src/android_runtime/ActivityResultHelper.kt"]
 maven = ["androidx.activity:activity:1.11.0"]
+
+[package.metadata.waterui.android.feature.native-callback]
+kotlin-sources = [
+    "src/android_runtime/NativeCallback.kt",
+    "src/android_runtime/NativeChannel.kt",
+]

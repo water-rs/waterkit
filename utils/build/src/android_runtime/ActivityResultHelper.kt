@@ -18,22 +18,22 @@ object ActivityResultHelper {
     @JvmStatic
     fun startActivityForResult(
         context: Context,
-        requestId: Long,
+        callback: NativeCallback,
         intent: Intent,
     ): Boolean = launch(
         context,
-        requestId,
+        callback,
         ActivityResultContracts.StartActivityForResult(),
     ) { intent }
 
     @JvmStatic
     fun startIntentSenderForResult(
         context: Context,
-        requestId: Long,
+        callback: NativeCallback,
         intentSender: IntentSender,
     ): Boolean = launch(
         context,
-        requestId,
+        callback,
         ActivityResultContracts.StartIntentSenderForResult(),
     ) {
         IntentSenderRequest.Builder(intentSender).build()
@@ -41,45 +41,36 @@ object ActivityResultHelper {
 
     private fun <I> launch(
         context: Context,
-        requestId: Long,
+        callback: NativeCallback,
         contract: ActivityResultContract<I, ActivityResult>,
         input: () -> I,
     ): Boolean {
         val activity = context as? ComponentActivity ?: return false
         Handler(Looper.getMainLooper()).post {
             if (activity.lifecycle.currentState == Lifecycle.State.DESTROYED) {
-                deliverDestroyed(requestId)
+                callback.complete(null)
                 return@post
             }
 
-            val request = PendingRequest<I>(activity, requestId)
+            val request = PendingRequest<I>(activity, callback)
             try {
                 request.register(contract)
                 request.observe()
                 request.launch(input())
             } catch (error: Exception) {
                 request.settle {
-                    deliverLaunchFailure(requestId, error.toString())
+                    callback.fail(error.toString())
                 }
             }
         }
         return true
     }
 
-    @JvmStatic
-    external fun deliverResult(requestId: Long, resultCode: Int, data: Intent?)
-
-    @JvmStatic
-    external fun deliverDestroyed(requestId: Long)
-
-    @JvmStatic
-    external fun deliverLaunchFailure(requestId: Long, description: String)
-
     private class PendingRequest<I>(
         private val activity: ComponentActivity,
-        private val requestId: Long,
+        private val callback: NativeCallback,
     ) {
-        private val key = "waterkit.activity-result.$requestId"
+        private val key = "waterkit.activity-result.${System.identityHashCode(this)}"
         private var launcher: ActivityResultLauncher<I>? = null
         private var observer: LifecycleEventObserver? = null
         private var settled = false
@@ -87,7 +78,7 @@ object ActivityResultHelper {
         fun register(contract: ActivityResultContract<I, ActivityResult>) {
             launcher = activity.activityResultRegistry.register(key, contract) { result ->
                 settle {
-                    deliverResult(requestId, result.resultCode, result.data)
+                    callback.complete(result)
                 }
             }
         }
@@ -96,7 +87,7 @@ object ActivityResultHelper {
             val lifecycleObserver = LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_DESTROY) {
                     settle {
-                        deliverDestroyed(requestId)
+                        callback.complete(null)
                     }
                 }
             }

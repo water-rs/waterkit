@@ -15,34 +15,29 @@ use crate::VisionError;
 use crate::document_scanner::{DocumentScannerOptions, pages_from_encoded};
 use bytes::Bytes;
 use futures::channel::oneshot;
-use jni::errors::ThrowRuntimeExAndDefault;
-use jni::objects::{Global, JByteArray, JClass, JObject, JObjectArray, JValue};
-use jni::sys::{jboolean, jlong};
-use jni::{Env, EnvUnowned, jni_sig, jni_str};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use jni::objects::{Global, JByteArray, JObject, JObjectArray, JValue};
+use jni::sys::jboolean;
+use jni::{Env, jni_sig, jni_str};
 use waterkit_build::{
-    DexHelper, ResultCode, decode_optional_string, describe_jni_error, dex_helper,
-    start_intent_sender_for_result, with_android_context,
+    AndroidError, DexHelper, FromJava, NativeCallback, PeerError, ResultCode, describe_jni_error,
+    dex_helper, start_intent_sender_for_result, with_android_context,
 };
 
 /// `waterkit.vision.DocumentScannerHelper`, compiled into the app's DEX by
 /// the packager and resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.vision.DocumentScannerHelper");
 
-/// A pending `getStartScanIntent` call's outcome: the scanner's
-/// `IntentSender` — `None` when the task cancelled before an intent existed.
-type ScanIntentResult = Result<Option<Global<JObject<'static>>>, VisionError>;
+/// What the Kotlin helper completes the request's `NativeCallback` with:
+/// the `IntentSender` on success, `null` when the intent task cancelled.
+struct IntentOutcome(Option<Global<JObject<'static>>>);
 
-/// The pending `getStartScanIntent` calls.
-type ScanIntentCallback = oneshot::Sender<ScanIntentResult>;
-
-static NEXT_SCAN_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
-
-fn scan_requests() -> &'static Mutex<HashMap<u64, ScanIntentCallback>> {
-    static LOCK: OnceLock<Mutex<HashMap<u64, ScanIntentCallback>>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(HashMap::new()))
+impl FromJava for IntentOutcome {
+    fn from_java(env: &mut Env<'_>, object: &JObject<'_>) -> Result<Self, AndroidError> {
+        if object.is_null() {
+            return Ok(Self(None));
+        }
+        Ok(Self(Some(env.new_global_ref(object)?)))
+    }
 }
 
 /// Whether Google Play services is usable on this device — the device's own
@@ -69,48 +64,32 @@ fn launch_scan_with_context(
     context: &JObject<'_>,
     page_limit: Option<u16>,
     gallery_import: bool,
-) -> Result<oneshot::Receiver<ScanIntentResult>, VisionError> {
+) -> Result<oneshot::Receiver<Result<IntentOutcome, PeerError>>, VisionError> {
     let helper_class = HELPER.class(env, context)?;
 
-    let request_id = NEXT_SCAN_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    let request_id_jlong = jlong::try_from(request_id).map_err(|_| {
-        VisionError::Platform(format!(
-            "document scan request id exceeds jlong range: {request_id}"
-        ))
+    let (callback, rx) = NativeCallback::<IntentOutcome>::new(env).map_err(|error| {
+        VisionError::Platform(format!("create the document scan callback failed: {error}"))
     })?;
-    let (tx, rx) = oneshot::channel();
-    scan_requests()
-        .lock()
-        .map_err(|error| {
-            VisionError::Platform(format!("document scan request map lock poisoned: {error}"))
-        })?
-        .insert(request_id, tx);
 
     // A zero page limit leaves the scanner's own default in place.
     let page_limit_jint = page_limit.map_or(0, i32::from);
-    let launch_result = env.call_static_method(
+    env.call_static_method(
         helper_class,
         jni_str!("scan"),
-        jni_sig!("(Landroid/content/Context;JIZ)V"),
+        jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeCallback;IZ)V"),
         &[
             JValue::Object(context),
-            JValue::Long(request_id_jlong),
+            JValue::Object(callback.as_obj()),
             JValue::Int(page_limit_jint),
             JValue::Bool(jboolean::from(gallery_import)),
         ],
-    );
-    if let Err(error) = launch_result {
-        scan_requests()
-            .lock()
-            .map_err(|error| {
-                VisionError::Platform(format!("document scan request map lock poisoned: {error}"))
-            })?
-            .remove(&request_id);
-        return Err(VisionError::Platform(format!(
+    )
+    .map_err(|error| {
+        VisionError::Platform(format!(
             "launch the system document scanner failed: {}",
             describe_jni_error(env, error)
-        )));
-    }
+        ))
+    })?;
     Ok(rx)
 }
 
@@ -187,8 +166,11 @@ pub async fn scan_document(
     })?;
     let sender = rx
         .await
-        .map_err(|_| VisionError::Platform("document scan request channel closed".to_owned()))??;
-    let Some(sender) = sender else {
+        .map_err(|_| {
+            VisionError::Platform("the document scan callback was collected unanswered".to_owned())
+        })?
+        .map_err(|error| VisionError::Platform(error.to_string()))?;
+    let Some(sender) = sender.0 else {
         // `getStartScanIntent` cancelled before an intent existed.
         return Ok(None);
     };
@@ -220,60 +202,4 @@ pub async fn scan_document(
             "the document scanner returned an unexpected result code: {code}"
         ))),
     }
-}
-
-// The Kotlin helper resolves its `external fun` through this symbol; the
-// export attribute is the only unsafe construct a JNI bridge cannot avoid.
-#[allow(unsafe_code)]
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_vision_DocumentScannerHelper_onScanIntent<'caller>(
-    mut env: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    request_id: jlong,
-    sender: JObject<'caller>,
-    error: JObject<'caller>,
-) {
-    env.with_env(|env| -> jni::errors::Result<()> {
-        assert!(
-            request_id > 0,
-            "waterkit-vision: invalid document scan request id: {request_id}"
-        );
-        let request_id = u64::try_from(request_id).unwrap_or_else(|_| {
-            panic!("waterkit-vision: document scan request id conversion failed: {request_id}")
-        });
-        let tx = scan_requests()
-            .lock()
-            .unwrap_or_else(|error| {
-                panic!("waterkit-vision: document scan request map lock poisoned: {error}")
-            })
-            .remove(&request_id)
-            .unwrap_or_else(|| {
-                panic!(
-                    "waterkit-vision: unknown document scan request id in callback: {request_id}"
-                )
-            });
-
-        let message = decode_optional_string(env, &error).unwrap_or_else(|decode_error| {
-            panic!("waterkit-vision: decode document scan error message failed: {decode_error}")
-        });
-        let result = message.map_or_else(
-            || {
-                if sender.is_null() {
-                    // The intent task cancelled before an intent existed.
-                    Ok(None)
-                } else {
-                    env.new_global_ref(&sender).map(Some).map_err(|error| {
-                        VisionError::Platform(format!(
-                            "retain the scan intent sender failed: {}",
-                            describe_jni_error(env, error)
-                        ))
-                    })
-                }
-            },
-            |message| Err(VisionError::Platform(message)),
-        );
-        let _ = tx.send(result);
-        Ok(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
 }

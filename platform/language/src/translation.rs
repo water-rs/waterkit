@@ -241,20 +241,28 @@ pub mod android {
     pub use crate::sys::android::CapabilityUpdate;
 
     /// A stream of Android translation capability changes.
-    #[derive(Debug)]
+    ///
+    /// Dropping it removes the system listener behind the `NativeChannel` it
+    /// carries.
     pub struct CapabilityUpdates {
-        id: i64,
-        receiver: Pin<Box<async_channel::Receiver<Result<CapabilityUpdate, TranslationError>>>>,
+        channel: waterkit_build::NativeChannel<String>,
+        updates: Pin<Box<dyn Stream<Item = Result<CapabilityUpdate, TranslationError>> + Send>>,
+    }
+
+    impl std::fmt::Debug for CapabilityUpdates {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("CapabilityUpdates").finish_non_exhaustive()
+        }
     }
 
     impl CapabilityUpdates {
         pub(crate) fn new(
-            id: i64,
-            receiver: async_channel::Receiver<Result<CapabilityUpdate, TranslationError>>,
+            channel: waterkit_build::NativeChannel<String>,
+            updates: impl Stream<Item = Result<CapabilityUpdate, TranslationError>> + Send + 'static,
         ) -> Self {
             Self {
-                id,
-                receiver: Box::pin(receiver),
+                channel,
+                updates: Box::pin(updates),
             }
         }
     }
@@ -264,13 +272,13 @@ pub mod android {
 
         fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             let this = self.get_mut();
-            this.receiver.as_mut().poll_next(cx)
+            this.updates.as_mut().poll_next(cx)
         }
     }
 
     impl Drop for CapabilityUpdates {
         fn drop(&mut self) {
-            sys::android::remove_capability_listener(self.id);
+            sys::android::remove_capability_listener(self.channel.as_obj());
         }
     }
 

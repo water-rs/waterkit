@@ -27,12 +27,12 @@ async-channel.workspace = true
 swift-bridge.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
-waterkit-build.workspace = true
+waterkit-build = { workspace = true, features = ["native-callback"] }
 jni.workspace = true
 ndk-context.workspace = true
 
 [build-dependencies]
-waterkit-build.workspace = true
+waterkit-build = { workspace = true, features = ["native-callback"] }
 
 [dev-dependencies]
 futures.workspace = true

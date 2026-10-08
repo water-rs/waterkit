@@ -3,10 +3,10 @@ package waterkit.vision
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
-import android.content.IntentSender
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
+import waterkit.build.NativeCallback
 
 /**
  * Helper class for the one-shot system document scanner.
@@ -19,20 +19,17 @@ object DocumentScannerHelper {
     /**
      * Builds the document scanner's launch `IntentSender` — honoring
      * [pageLimit] (`0` leaves the scanner's own default) and
-     * [galleryImport] — and hands it to Rust through [onScanIntent]: a
-     * sender on success (launched through the waterkit-build
-     * activity-result bridge), a cancel (null sender, null error) or a
-     * failure (non-null error).
+     * [galleryImport] — and completes [callback] with it on success
+     * (launched through the waterkit-build activity-result bridge), with
+     * `null` when the intent task cancelled, or reports the failure through
+     * [NativeCallback.fail].
      */
     @JvmStatic
-    fun scan(context: Context, requestId: Long, pageLimit: Int, galleryImport: Boolean) {
-        require(requestId > 0) { "invalid document scan request id: $requestId" }
+    fun scan(context: Context, callback: NativeCallback, pageLimit: Int, galleryImport: Boolean) {
         require(pageLimit >= 0) { "invalid page limit: $pageLimit" }
         val activity = context as? Activity
         if (activity == null) {
-            onScanIntent(
-                requestId,
-                null,
+            callback.fail(
                 "the published Context is not an Activity; the document scanner cannot launch",
             )
             return
@@ -47,10 +44,10 @@ object DocumentScannerHelper {
         }
         GmsDocumentScanning.getClient(builder.build())
             .getStartScanIntent(activity)
-            .addOnSuccessListener { sender -> onScanIntent(requestId, sender, null) }
-            .addOnCanceledListener { onScanIntent(requestId, null, null) }
+            .addOnSuccessListener { sender -> callback.complete(sender) }
+            .addOnCanceledListener { callback.complete(null) }
             .addOnFailureListener { error ->
-                onScanIntent(requestId, null, error.message ?: error.javaClass.name)
+                callback.fail(error.message ?: error.javaClass.name)
             }
     }
 
@@ -70,11 +67,4 @@ object DocumentScannerHelper {
                 ?: error("could not open scanned page $uri")
         }
     }
-
-    @JvmStatic
-    private external fun onScanIntent(
-        requestId: Long,
-        sender: IntentSender?,
-        error: String?,
-    )
 }

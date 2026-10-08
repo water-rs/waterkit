@@ -16,12 +16,16 @@ use std::sync::OnceLock;
 
 #[cfg(feature = "activity-result")]
 mod activity_result;
+#[cfg(feature = "native-callback")]
+mod native_callback;
 
 #[cfg(feature = "activity-result")]
 pub use activity_result::{
     ActivityResult, ActivityResultError, PendingActivityResult, ResultCode,
     start_activity_for_result, start_intent_sender_for_result,
 };
+#[cfg(feature = "native-callback")]
+pub use native_callback::{FromJava, NativeCallback, NativeChannel, PeerError};
 
 /// Failure while bridging into the Android platform.
 ///
@@ -66,7 +70,7 @@ fn take_pending_exception(env: &Env<'_>, error: jni::errors::Error) -> jni::erro
     caught
 }
 
-#[cfg(feature = "activity-result")]
+#[cfg(any(feature = "activity-result", feature = "native-callback"))]
 fn android_error_with_pending_exception(env: &Env<'_>, error: jni::errors::Error) -> AndroidError {
     AndroidError::from(take_pending_exception(env, error))
 }

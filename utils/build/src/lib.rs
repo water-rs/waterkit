@@ -48,3 +48,6 @@ pub use android_runtime::{
     ActivityResult, ActivityResultError, PendingActivityResult, ResultCode,
     start_activity_for_result, start_intent_sender_for_result,
 };
+
+#[cfg(all(target_os = "android", feature = "native-callback"))]
+pub use android_runtime::{FromJava, NativeCallback, NativeChannel, PeerError};

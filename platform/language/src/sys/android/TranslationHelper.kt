@@ -19,6 +19,8 @@ import android.icu.util.ULocale
 import androidx.annotation.RequiresApi
 import org.json.JSONArray
 import org.json.JSONObject
+import waterkit.build.NativeCallback
+import waterkit.build.NativeChannel
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -31,41 +33,29 @@ object TranslationHelper {
     private const val TRANSLATOR_CREATION_TIMEOUT_SECONDS = 60L
 
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
-    private val listeners = ConcurrentHashMap<Long, Consumer<TranslationCapability>>()
-
-    @JvmStatic
-    external fun onResult(callId: Long, json: String)
-
-    @JvmStatic
-    external fun onTranslatorCreated(callId: Long, translator: Translator?)
-
-    @JvmStatic
-    external fun onTranslatorFailed(callId: Long, message: String)
-
-    @JvmStatic
-    external fun onCapabilityUpdate(listenerId: Long, json: String)
+    private val listeners = ConcurrentHashMap<NativeChannel, Consumer<TranslationCapability>>()
 
     @JvmStatic
     fun isApiSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
     @JvmStatic
-    fun getCapabilities(context: Context, callId: Long) {
+    fun getCapabilities(context: Context, callback: NativeCallback) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            onResult(callId, error("unavailable", "Android API 31 is required"))
+            callback.complete( error("unavailable", "Android API 31 is required"))
             return
         }
         try {
-            getCapabilitiesApi31(context, callId)
+            getCapabilitiesApi31(context, callback)
         } catch (exception: Exception) {
-            onResult(callId, error("platform", describe(exception)))
+            callback.complete( error("platform", describe(exception)))
         }
     }
 
     @RequiresApi(Build.VERSION_CODES.S)
-    private fun getCapabilitiesApi31(context: Context, callId: Long) {
+    private fun getCapabilitiesApi31(context: Context, callback: NativeCallback) {
         val manager = context.getSystemService(TranslationManager::class.java)
         if (manager == null) {
-            onResult(callId, ok(JSONObject().put("pairs", JSONArray())))
+            callback.complete( ok(JSONObject().put("pairs", JSONArray())))
             return
         }
         executor.execute {
@@ -84,31 +74,34 @@ object TranslationHelper {
                             .put("status", state ?: JSONObject.NULL)
                     )
                 }
-                onResult(callId, ok(JSONObject().put("pairs", pairs)))
+                callback.complete( ok(JSONObject().put("pairs", pairs)))
             } catch (exception: Exception) {
-                onResult(callId, error("platform", describe(exception)))
+                callback.complete( error("platform", describe(exception)))
             }
         }
     }
 
     @JvmStatic
-    fun createTranslator(context: Context, source: String, target: String, callId: Long) {
+    fun createTranslator(context: Context, source: String, target: String, callback: NativeCallback) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            onTranslatorFailed(callId, "Android API 31 is required")
+            callback.fail(
+                    "Android API 31 is required")
             return
         }
         try {
-            createTranslatorApi31(context, source, target, callId)
+            createTranslatorApi31(context, source, target, callback)
         } catch (exception: Exception) {
-            onTranslatorFailed(callId, describe(exception))
+            callback.fail(
+                    describe(exception))
         }
     }
 
     @RequiresApi(Build.VERSION_CODES.S)
-    private fun createTranslatorApi31(context: Context, source: String, target: String, callId: Long) {
+    private fun createTranslatorApi31(context: Context, source: String, target: String, callback: NativeCallback) {
         val manager = context.getSystemService(TranslationManager::class.java)
         if (manager == null) {
-            onTranslatorFailed(callId, "system translation service is unavailable for $source to $target")
+            callback.fail(
+                    "system translation service is unavailable for $source to $target")
             return
         }
         val delivered = AtomicBoolean(false)
@@ -117,9 +110,8 @@ object TranslationHelper {
         val timeout = executor.schedule(
             {
                 if (delivered.compareAndSet(false, true)) {
-                    onTranslatorFailed(
-                        callId,
-                        "the system translation service did not create a translator for $source to $target within 60 s"
+                    callback.fail(
+                    "the system translation service did not create a translator for $source to $target within 60 s"
                     )
                 }
             },
@@ -135,12 +127,11 @@ object TranslationHelper {
                 if (delivered.compareAndSet(false, true)) {
                     timeout.cancel(false)
                     if (translator == null) {
-                        onTranslatorFailed(
-                            callId,
-                            "system translation service could not create a translator for $source to $target"
+                        callback.fail(
+                    "system translation service could not create a translator for $source to $target"
                         )
                     } else {
-                        onTranslatorCreated(callId, translator)
+                        callback.complete(translator)
                     }
                 } else {
                     try {
@@ -153,22 +144,23 @@ object TranslationHelper {
         } catch (exception: Exception) {
             if (delivered.compareAndSet(false, true)) {
                 timeout.cancel(false)
-                onTranslatorFailed(callId, describe(exception))
+                callback.fail(
+                    describe(exception))
             }
         }
     }
 
     @JvmStatic
-    fun translate(translator: Translator, callId: Long, textsJson: String): CancellationSignal {
+    fun translate(translator: Translator, callback: NativeCallback, textsJson: String): CancellationSignal {
         val cancellationSignal = CancellationSignal()
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            onResult(callId, error("unavailable", "Android API 31 is required"))
+            callback.complete( error("unavailable", "Android API 31 is required"))
             return cancellationSignal
         }
         try {
-            translateApi31(translator, callId, textsJson, cancellationSignal)
+            translateApi31(translator, callback, textsJson, cancellationSignal)
         } catch (exception: Exception) {
-            onResult(callId, error("platform", describe(exception)))
+            callback.complete( error("platform", describe(exception)))
         }
         return cancellationSignal
     }
@@ -176,7 +168,7 @@ object TranslationHelper {
     @RequiresApi(Build.VERSION_CODES.S)
     private fun translateApi31(
         translator: Translator,
-        callId: Long,
+        callback: NativeCallback,
         textsJson: String,
         cancellationSignal: CancellationSignal
     ) {
@@ -192,9 +184,9 @@ object TranslationHelper {
             .build()
         translator.translate(request, cancellationSignal, executor) { response ->
             try {
-                onResult(callId, translationResponse(response, input.length()))
+                callback.complete( translationResponse(response, input.length()))
             } catch (exception: Exception) {
-                onResult(callId, error("platform", describe(exception)))
+                callback.complete( error("platform", describe(exception)))
             }
         }
     }
@@ -249,19 +241,19 @@ object TranslationHelper {
     }
 
     @JvmStatic
-    fun registerCapabilityUpdates(context: Context, listenerId: Long): String {
+    fun registerCapabilityUpdates(context: Context, channel: NativeChannel): String {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             return error("unavailable", "Android API 31 is required")
         }
         return try {
-            registerCapabilityUpdatesApi31(context, listenerId)
+            registerCapabilityUpdatesApi31(context, channel)
         } catch (exception: Exception) {
             error("platform", describe(exception))
         }
     }
 
     @RequiresApi(Build.VERSION_CODES.S)
-    private fun registerCapabilityUpdatesApi31(context: Context, listenerId: Long): String {
+    private fun registerCapabilityUpdatesApi31(context: Context, channel: NativeChannel): String {
         val manager = context.getSystemService(TranslationManager::class.java)
             ?: return error("unavailable", "system translation service is unavailable")
         val listener = Consumer<TranslationCapability> { capability ->
@@ -271,44 +263,44 @@ object TranslationHelper {
                     .put("source", capability.sourceSpec.locale.toLanguageTag())
                     .put("target", capability.targetSpec.locale.toLanguageTag())
                     .put("status", status ?: JSONObject.NULL)
-                onCapabilityUpdate(listenerId, ok(update))
+                channel.send( ok(update))
             } catch (exception: Exception) {
-                onCapabilityUpdate(
-                    listenerId,
+                channel.send(
                     error("platform", describe(exception))
                 )
             }
         }
-        listeners[listenerId] = listener
+        listeners[channel] = listener
         try {
             manager.addOnDeviceTranslationCapabilityUpdateListener(executor, listener)
         } catch (exception: Exception) {
-            listeners.remove(listenerId, listener)
+            listeners.remove(channel, listener)
             throw exception
         }
         return ok(JSONObject())
     }
 
     @JvmStatic
-    fun removeCapabilityUpdates(context: Context, listenerId: Long): String {
+    fun removeCapabilityUpdates(context: Context, channel: NativeChannel): String {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            listeners.remove(listenerId)
+            listeners.remove(channel)
             return error("unavailable", "Android API 31 is required")
         }
         return try {
-            removeCapabilityUpdatesApi31(context, listenerId)
+            removeCapabilityUpdatesApi31(context, channel)
         } catch (exception: Exception) {
             error("platform", describe(exception))
         }
     }
 
     @RequiresApi(Build.VERSION_CODES.S)
-    private fun removeCapabilityUpdatesApi31(context: Context, listenerId: Long): String {
-        val listener = listeners.remove(listenerId)
+    private fun removeCapabilityUpdatesApi31(context: Context, channel: NativeChannel): String {
+        val listener = listeners.remove(channel)
             ?: return ok(JSONObject())
         val manager = context.getSystemService(TranslationManager::class.java)
             ?: return error("unavailable", "system translation service is unavailable")
         manager.removeOnDeviceTranslationCapabilityUpdateListener(listener)
+        channel.close()
         return ok(JSONObject())
     }
 

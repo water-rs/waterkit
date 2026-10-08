@@ -94,34 +94,34 @@ private func getTopViewController() -> UIViewController? {
 
 // The delegate the presented scanner keeps until the scan settles.
 @available(iOS 16.0, *)
-private var activeScannerDelegates: [UInt64: ScannerDelegate] = [:]
+private var activeScannerDelegates: Set<ScannerDelegate> = []
 
 @available(iOS 16.0, *)
 @MainActor
 private func finishScan(
-    cbId: UInt64,
+    delegate: ScannerDelegate,
     scanner: DataScannerViewController,
     payload: String?,
     symbology: String?,
     error: String?
 ) {
-    activeScannerDelegates.removeValue(forKey: cbId)
+    activeScannerDelegates.remove(delegate)
     scanner.stopScanning()
     scanner.dismiss(animated: true) {
-        on_scan_result(cbId, payload, symbology, error)
+        scan_reply_complete(delegate.reply, payload, symbology, error)
     }
 }
 
 @available(iOS 16.0, *)
 @MainActor
 private class ScannerDelegate: NSObject, DataScannerViewControllerDelegate {
-    let cbId: UInt64
+    let reply: ScanReply
     let requestedUpca: Bool
     weak var scanner: DataScannerViewController?
     private var finished = false
 
-    init(cbId: UInt64, requestedUpca: Bool) {
-        self.cbId = cbId
+    init(reply: ScanReply, requestedUpca: Bool) {
+        self.reply = reply
         self.requestedUpca = requestedUpca
     }
 
@@ -139,7 +139,7 @@ private class ScannerDelegate: NSObject, DataScannerViewControllerDelegate {
         guard !finished else { return }
         finished = true
         finishScan(
-            cbId: cbId, scanner: scanner, payload: payload,
+            delegate: self, scanner: scanner, payload: payload,
             symbology: symbology, error: error)
     }
 
@@ -211,23 +211,23 @@ func scanner_supported_bridge() -> Bool {
     }
 }
 
-func scan_bridge(symbologies_csv: RustStr, cb_id: UInt64) {
+func scan_bridge(symbologies_csv: RustStr, reply: ScanReply) {
     let csv = symbologies_csv.toString()
     DispatchQueue.main.async {
         guard #available(iOS 16.0, *), DataScannerViewController.isSupported else {
-            on_scan_result(
-                cb_id, nil as String?, nil as String?,
+            scan_reply_complete(
+                reply, nil as String?, nil as String?,
                 "DataScannerViewController is unsupported")
             return
         }
         guard let topVC = getTopViewController() else {
-            on_scan_result(
-                cb_id, nil as String?, nil as String?,
+            scan_reply_complete(
+                reply, nil as String?, nil as String?,
                 "no key window scene to present the scanner from")
             return
         }
         let delegate = ScannerDelegate(
-            cbId: cb_id,
+            reply: reply,
             requestedUpca: csv.split(separator: ",").contains("upca"))
         let scanner = DataScannerViewController(
             recognizedDataTypes: [.barcode(symbologies: barcodeSymbologies(csv))],
@@ -259,13 +259,13 @@ func scan_bridge(symbologies_csv: RustStr, cb_id: UInt64) {
                 constant: -16),
         ])
 
-        activeScannerDelegates[cb_id] = delegate
+        activeScannerDelegates.insert(delegate)
         topVC.present(scanner, animated: true) {
             do {
                 try scanner.startScanning()
             } catch {
                 finishScan(
-                    cbId: cb_id, scanner: scanner, payload: nil, symbology: nil,
+                    delegate: delegate, scanner: scanner, payload: nil, symbology: nil,
                     error: "start scanning: \(error.localizedDescription)")
             }
         }

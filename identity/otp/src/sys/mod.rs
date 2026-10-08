@@ -1,10 +1,19 @@
-use futures::StreamExt;
+//! OTP backend dispatch: Android's app-classpath helper realization or the
+//! `NotAvailable` fallback.
+
+#[cfg(not(target_os = "android"))]
 use futures::channel::mpsc;
+use futures::{Stream, StreamExt};
+use std::pin::Pin;
 #[cfg(target_os = "android")]
 use tracing::warn;
 
 use crate::{AppToken, OtpCapabilities, OtpError, Sender};
 
+/// An event the platform realization reports through a request.
+///
+/// `Failed` carries a platform-side message; `Timeout` and `Denied` are the
+/// terminal outcomes the other platforms model the same way.
 #[cfg_attr(
     not(target_os = "android"),
     expect(
@@ -21,20 +30,18 @@ pub enum Event {
     Failed(String),
 }
 
-#[derive(Debug)]
 pub struct Request {
-    #[cfg_attr(
-        not(target_os = "android"),
-        expect(
-            dead_code,
-            reason = "Android request drops cancel their Kotlin listener"
-        )
-    )]
-    id: u64,
-    events: mpsc::UnboundedReceiver<Event>,
+    /// The Java `NativeChannel` the helper calls back through. Drop cancels
+    /// the registration it carries on Android.
+    #[cfg(target_os = "android")]
+    pub(super) channel: Option<waterkit_build::NativeChannel<Event>>,
+    events: Pin<Box<dyn Stream<Item = Event> + Send>>,
 }
 
 impl Request {
+    /// A request whose events come through `events` — on Android the
+    /// `NativeChannel` stays in the request so dropping it cancels the
+    /// platform listener.
     #[cfg_attr(
         not(target_os = "android"),
         expect(
@@ -42,8 +49,32 @@ impl Request {
             reason = "the Android backend creates callback request handles"
         )
     )]
-    pub const fn new(id: u64, events: mpsc::UnboundedReceiver<Event>) -> Self {
-        Self { id, events }
+    #[cfg(target_os = "android")]
+    pub fn new(
+        channel: waterkit_build::NativeChannel<Event>,
+        events: impl Stream<Item = Event> + Send + 'static,
+    ) -> Self {
+        Self {
+            channel: Some(channel),
+            events: Box::pin(events),
+        }
+    }
+
+    /// The fallback constructor for platforms without an OTP backend.
+    #[cfg(not(target_os = "android"))]
+    #[expect(dead_code, reason = "the Android backend creates request handles")]
+    pub fn new(events: mpsc::UnboundedReceiver<Event>) -> Self {
+        Self {
+            events: Box::pin(events),
+        }
+    }
+
+    /// The `NativeChannel` an Android request carries for its listeners.
+    #[cfg(target_os = "android")]
+    pub(super) const fn channel(&self) -> &waterkit_build::NativeChannel<Event> {
+        self.channel
+            .as_ref()
+            .expect("an Android OTP request always carries its channel")
     }
 
     #[cfg_attr(
@@ -73,8 +104,11 @@ impl Request {
 #[cfg(target_os = "android")]
 impl Drop for Request {
     fn drop(&mut self) {
-        if let Err(error) = cancel(self.id) {
-            warn!(request_id = self.id, %error, "failed to cancel OTP request");
+        let Some(channel) = self.channel.take() else {
+            return;
+        };
+        if let Err(error) = cancel(channel.as_obj()) {
+            warn!(%error, "failed to cancel OTP request");
         }
     }
 }
@@ -117,7 +151,14 @@ pub const fn capabilities() -> Result<OtpCapabilities, OtpError> {
     Ok(platform_capabilities())
 }
 
+/// Cancels the request whose `NativeChannel` is `channel`.
 #[cfg(target_os = "android")]
-pub fn cancel(id: u64) -> Result<(), OtpError> {
-    platform_cancel(id)
+pub fn cancel(channel: &jni::objects::JObject<'_>) -> Result<(), OtpError> {
+    platform_cancel(channel)
+}
+
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Request").finish_non_exhaustive()
+    }
 }

@@ -31,8 +31,6 @@ const SHORT_DURATION_MS: u32 = 7_000;
 const LONG_DURATION_MS: u32 = 25_000;
 
 /// Show a notification through `Windows.UI.Notifications`.
-// The per-platform sys contract is async; WinRT toasts post synchronously.
-#[allow(clippy::unused_async)]
 pub async fn show_notification(
     notification: &Notification,
 ) -> Result<NotificationHandleInner, NotificationError> {

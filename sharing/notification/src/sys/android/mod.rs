@@ -133,8 +133,6 @@ pub fn show_notification_with_context(
 /// # Panics
 ///
 /// Panics if `ndk_context` has no `JavaVM` or Android `Context` yet.
-// The per-platform sys contract is async; JNI calls complete synchronously.
-#[allow(clippy::unused_async)]
 pub async fn show_notification(
     notification: &Notification,
 ) -> Result<NotificationHandleInner, NotificationError> {

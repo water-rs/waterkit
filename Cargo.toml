@@ -241,7 +241,7 @@ objc2-core-media = "0.3"
 objc2-app-kit = "0.3"
 # W3C KeyboardEvent key/modifier vocabulary.
 keyboard-types = "0.8"
-mach2 = "0.7"
+mach2 = "0.6"
 objc2-core-video = "0.3"
 objc2-video-toolbox = "0.3"
 objc2-core-foundation = "0.3"
@@ -250,11 +250,9 @@ objc2-io-surface = "0.3"
 objc2-local-authentication = { version = "0.3", default-features = false }
 objc2-metal = "0.3"
 objc2-core-motion = { version = "0.3", default-features = false }
-mach2 = "0.6"
 objc2-io-kit = { version = "0.3", default-features = false }
 objc2-pass-kit = { version = "0.3", default-features = false }
 objc2-ui-kit = { version = "0.3", default-features = false }
-||||||| parent of b1b4b47 (refactor(system)!: call Network and Foundation through objc2 instead of Swift)
 objc = "0.2"
 # Zero-copy import of platform frame buffers into wgpu textures.
 wgpu-external-frame = "0.3.0"

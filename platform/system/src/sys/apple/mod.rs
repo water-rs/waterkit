@@ -1,45 +1,132 @@
+//! `Network.framework` path monitoring via in-crate declarations of the seven
+//! C functions used (`objc2-network` is unreleased and a git pin would drag a
+//! second copy of `objc2`/`block2`/`objc2-encode` into every consumer).
+
 use core::ffi::c_void;
 use core::time::Duration;
+use std::mem::ManuallyDrop;
+use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
 use block2::{Block, RcBlock};
-use dispatch2::{DispatchQueue, DispatchQueueAttr, DispatchSemaphore, DispatchTime};
+use dispatch2::{DispatchQueue, DispatchQueueAttr};
 use objc2_foundation::{NSProcessInfo, NSProcessInfoThermalState};
-use objc2_network::{NWPath, NWPathMonitor, nw_interface_type_t, nw_path_status_t};
 
 use crate::{ConnectionType, ConnectivityInfo, SystemError, SystemLoad, ThermalState};
 
-// `nw_path_monitor_set_update_handler` redeclared with a block argument a
-// Rust closure can satisfy. The generated `set_update_handler` types the
-// block as `fn(NonNull<NWPath>)`, but `NWPath` is a plain `nw_object`
-// without `RefEncode`, so that signature cannot be produced here;
-// `nw_path_t` is a pointer-sized argument, ABI-identical to `*mut c_void`.
+/// `nw_path_monitor_t` — opaque `Network.framework` object.
+#[repr(C)]
+struct NwPathMonitor {
+    _private: [u8; 0],
+}
+
+/// `nw_path_t` — opaque `Network.framework` object.
+#[repr(C)]
+struct NwPath {
+    _private: [u8; 0],
+}
+
+/// `nw_path_status_t` (Network/Headers/NWPathMonitor.h): the path cannot
+/// reach the destination.
+type NwPathStatusT = i32;
+/// `nw_path_status_invalid = 0` — the path is in an invalid state.
+#[expect(dead_code, reason = "full constant set documented for completeness")]
+const NW_PATH_STATUS_INVALID: NwPathStatusT = 0;
+/// `nw_path_status_satisfied = 1` — the path is ready for data transfer.
+const NW_PATH_STATUS_SATISFIED: NwPathStatusT = 1;
+/// `nw_path_status_unsatisfied = 2` — the interface cannot reach the
+/// destination.
+#[expect(dead_code, reason = "full constant set documented for completeness")]
+const NW_PATH_STATUS_UNSATISFIED: NwPathStatusT = 2;
+/// `nw_path_status_satisfiable = 3` — the path could satisfy if a route were
+/// established (e.g. waiting on connectivity).
+#[expect(dead_code, reason = "full constant set documented for completeness")]
+const NW_PATH_STATUS_SATISFIABLE: NwPathStatusT = 3;
+
+/// `nw_interface_type_t` (Network/Headers/NWPath.h): interface kinds a path
+/// may use.
+type NwInterfaceTypeT = i32;
+/// `nw_interface_type_other = 0` — any interface not listed below.
+#[expect(dead_code, reason = "full constant set documented for completeness")]
+const NW_INTERFACE_TYPE_OTHER: NwInterfaceTypeT = 0;
+/// `nw_interface_type_wifi = 1` — IEEE 802.11 wireless.
+const NW_INTERFACE_TYPE_WIFI: NwInterfaceTypeT = 1;
+/// `nw_interface_type_cellular = 2` — cellular radio.
+const NW_INTERFACE_TYPE_CELLULAR: NwInterfaceTypeT = 2;
+/// `nw_interface_type_wired = 3` — wired ethernet (also used for USB tethering
+/// class links).
+const NW_INTERFACE_TYPE_WIRED: NwInterfaceTypeT = 3;
+/// `nw_interface_type_loopback = 4` — loopback interface.
+#[expect(dead_code, reason = "full constant set documented for completeness")]
+const NW_INTERFACE_TYPE_LOOPBACK: NwInterfaceTypeT = 4;
+
+#[link(name = "Network", kind = "framework")]
 unsafe extern "C-unwind" {
+    fn nw_path_monitor_create() -> *mut NwPathMonitor;
+    fn nw_path_monitor_set_queue(monitor: *mut NwPathMonitor, queue: &DispatchQueue);
     fn nw_path_monitor_set_update_handler(
-        monitor: &NWPathMonitor,
-        update_handler: &Block<'static, fn(*mut c_void)>,
+        monitor: *mut NwPathMonitor,
+        update_handler: &Block<dyn Fn(*mut c_void)>,
+    );
+    fn nw_path_monitor_start(monitor: *mut NwPathMonitor);
+    fn nw_path_monitor_cancel(monitor: *mut NwPathMonitor);
+    fn nw_path_get_status(path: *mut NwPath) -> NwPathStatusT;
+    fn nw_path_uses_interface_type(path: *mut NwPath, interface_type: NwInterfaceTypeT) -> bool;
+    /// `nw_release` (`nw_object.h`): releases a `Network.framework` object.
+    fn nw_release(object: *mut c_void);
+}
+
+unsafe extern "C-unwind" {
+    /// `dispatch_async_f` (dispatch/queue.h, libSystem): schedules
+    /// `work(context)` on `queue` — the function-pointer sibling of
+    /// `dispatch_async`, usable where a block is not.
+    fn dispatch_async_f(
+        queue: &DispatchQueue,
+        context: *mut c_void,
+        work: extern "C-unwind" fn(*mut c_void),
     );
 }
 
-/// How long `connectivity` waits for `NWPathMonitor` to report the current
-/// path. The monitor reports it as soon as it starts, so running out of this
-/// is a failure, not a slow network.
-const PATH_REPORT_TIMEOUT: Duration = Duration::from_secs(1);
+/// Owning `nw_path_monitor_t`: `Drop` cancels the monitor and releases it.
+struct PathMonitor(NonNull<NwPathMonitor>);
+
+/// Cancels then releases the monitor. Callable both from `Drop` and as a
+/// `dispatch_async_f` work item (the deferred release path used from inside
+/// the update handler).
+extern "C-unwind" fn release_path_monitor(context: *mut c_void) {
+    // SAFETY: `context` is the `nw_path_monitor_t` a `PathMonitor` or its
+    // update handler handed over.
+    unsafe {
+        nw_path_monitor_cancel(context.cast::<NwPathMonitor>());
+        nw_release(context);
+    }
+}
+
+impl Drop for PathMonitor {
+    fn drop(&mut self) {
+        release_path_monitor(self.0.as_ptr().cast());
+    }
+}
 
 /// How far apart `load` takes its two CPU tick samples, matching the
 /// `sysinfo::MINIMUM_CPU_UPDATE_INTERVAL` the desktop path waits between its
 /// own samples.
 const CPU_SAMPLE_INTERVAL: Duration = Duration::from_millis(200);
 
-fn read_path(path: &NWPath) -> (ConnectionType, bool) {
-    if path.status() != nw_path_status_t::satisfied {
+fn read_path(path: *mut NwPath) -> (ConnectionType, bool) {
+    // SAFETY: `nw_path_monitor` invokes its update handler with a non-null
+    // `nw_path_t` while the monitor runs; `nw_path_get_status` is a pure query.
+    let status = unsafe { nw_path_get_status(path) };
+    if status != NW_PATH_STATUS_SATISFIED {
         return (ConnectionType::None, false);
     }
-    let connection_type = if path.uses_interface_type(nw_interface_type_t::wifi) {
+    // SAFETY: `nw_path_uses_interface_type` is a pure query on the same path.
+    let uses = |interface_type| unsafe { nw_path_uses_interface_type(path, interface_type) };
+    let connection_type = if uses(NW_INTERFACE_TYPE_WIFI) {
         ConnectionType::Wifi
-    } else if path.uses_interface_type(nw_interface_type_t::cellular) {
+    } else if uses(NW_INTERFACE_TYPE_CELLULAR) {
         ConnectionType::Cellular
-    } else if path.uses_interface_type(nw_interface_type_t::wired) {
+    } else if uses(NW_INTERFACE_TYPE_WIRED) {
         ConnectionType::Ethernet
     } else {
         ConnectionType::Other
@@ -47,60 +134,49 @@ fn read_path(path: &NWPath) -> (ConnectionType, bool) {
     (connection_type, true)
 }
 
-pub fn connectivity() -> Result<ConnectivityInfo, SystemError> {
-    let monitor = NWPathMonitor::new();
-    let queue = DispatchQueue::new(
-        Some(c"waterkit.system.connectivity"),
-        DispatchQueueAttr::SERIAL,
-    );
-    let semaphore = DispatchSemaphore::new(0);
-    let snapshot = Arc::new(Mutex::new(None::<(ConnectionType, bool)>));
-
-    let update_handler = {
-        let snapshot = Arc::clone(&snapshot);
-        let semaphore = semaphore.clone();
-        RcBlock::new(move |path: *mut c_void| {
-            // SAFETY: `NWPathMonitor` invokes its update handler with a
-            // non-null `nw_path_t` while the monitor is running.
-            let path = unsafe { &*path.cast::<NWPath>() };
-            let report = read_path(path);
-            // Only the first report is the snapshot; the handler keeps firing
-            // on the queue until the monitor is cancelled.
-            let fresh = {
-                let mut slot = snapshot.lock().expect("connectivity snapshot lock");
-                let fresh = slot.is_none();
-                if fresh {
-                    *slot = Some(report);
+pub async fn connectivity() -> Result<ConnectivityInfo, SystemError> {
+    let (tx, rx) = futures::channel::oneshot::channel();
+    {
+        // Everything dispatch/object-shaped lives in this scope and ends
+        // before the `.await`; only the `Send` oneshot receiver crosses it.
+        let monitor = PathMonitor(
+            // SAFETY: a null return means monitor creation failed.
+            NonNull::new(unsafe { nw_path_monitor_create() }).ok_or_else(|| {
+                SystemError::Platform("nw_path_monitor_create returned null".into())
+            })?,
+        );
+        let queue = DispatchQueue::new("waterkit.system.connectivity", DispatchQueueAttr::SERIAL);
+        let ptr = monitor.0.as_ptr();
+        let tx = Arc::new(Mutex::new(Some(tx)));
+        let update_handler = {
+            let tx = Arc::clone(&tx);
+            let queue = queue.clone();
+            RcBlock::new(move |path: *mut c_void| {
+                let report = read_path(path.cast::<NwPath>());
+                let tx = tx.lock().expect("connectivity sender lock").take();
+                if let Some(tx) = tx {
+                    // The first report is the snapshot. Schedule the deferred
+                    // release on the same serial queue: it runs after this
+                    // callback, cancels the monitor, and frees it. Sending
+                    // happens unconditionally so a dropped receiver still
+                    // tears the monitor down.
+                    unsafe { dispatch_async_f(&queue, ptr.cast(), release_path_monitor) };
+                    let _ = tx.send(report);
                 }
-                fresh
-            };
-            if fresh {
-                let _ = semaphore.signal();
-            }
-        })
-    };
-    // SAFETY: `update_handler` outlives the monitor, which is cancelled below
-    // before this function returns.
-    unsafe { nw_path_monitor_set_update_handler(&monitor, &update_handler) };
-    // SAFETY: `queue` is a private serial queue owned by this call.
-    unsafe { monitor.set_queue(&queue) };
-    monitor.start();
-
-    let waited =
-        semaphore.wait(DispatchTime::NOW.time(
-            i64::try_from(PATH_REPORT_TIMEOUT.as_nanos()).expect("one second in ns fits i64"),
-        ));
-    monitor.cancel();
-
-    let reported = (waited == 0)
-        .then(|| snapshot.lock().expect("connectivity snapshot lock").take())
-        .flatten();
-    let Some((connection_type, is_connected)) = reported else {
-        return Err(SystemError::Platform(format!(
-            "NWPathMonitor reported no network path within {} s",
-            PATH_REPORT_TIMEOUT.as_secs()
-        )));
-    };
+            })
+        };
+        // SAFETY: `queue` serialises handler invocations; `update_handler` is
+        // copied by the monitor and invoked only there.
+        unsafe { nw_path_monitor_set_update_handler(ptr, &update_handler) };
+        unsafe { nw_path_monitor_set_queue(ptr, &queue) };
+        unsafe { nw_path_monitor_start(ptr) };
+        // The monitor's lifetime is now owned by the update handler's
+        // deferred release — `Drop` must not run.
+        let _ = ManuallyDrop::new(monitor);
+    }
+    let (connection_type, is_connected) = rx
+        .await
+        .expect("the monitor's update handler always answers");
     Ok(ConnectivityInfo::new(connection_type, is_connected))
 }
 

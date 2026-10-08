@@ -145,8 +145,8 @@ fn capture_thread(
         show_cursor: true,
     };
 
-    let stream =
-        ScreenStream::start(primary, device, queue, &config).expect("Failed to start stream");
+    let stream = pollster::block_on(ScreenStream::start(primary, device, queue, &config))
+        .expect("Failed to start stream");
 
     // Wait for stream warmup
     std::thread::sleep(Duration::from_millis(500));

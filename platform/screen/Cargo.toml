@@ -13,15 +13,13 @@ categories = ["os", "gui", "multimedia"]
 [lints]
 workspace = true
 
-[build-dependencies]
-waterkit-build.workspace = true
-
 [dependencies]
 waterkit-core = { workspace = true }
 thiserror.workspace = true
 wgpu.workspace = true
 async-channel.workspace = true
 blocking.workspace = true
+futures.workspace = true
 tracing.workspace = true
 
 # Desktop screen capture
@@ -36,11 +34,39 @@ brightness = { version = "0.8", default-features = false }
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
-core-foundation.workspace = true
 objc2.workspace = true
-objc2-foundation = { workspace = true, features = ["NSObject"] }
+objc2-foundation = { workspace = true, features = ["NSArray", "NSError", "NSObject"] }
+objc2-core-foundation = { workspace = true, features = [
+    "CFData", "CFDictionary", "CFNumber", "CFString", "CFCGTypes",
+] }
+objc2-core-graphics = { workspace = true, features = ["CGDirectDisplay", "CGImage"] }
+objc2-image-io = { workspace = true, features = ["CGImageDestination", "objc2-core-graphics"] }
+block2.workspace = true
+dispatch2.workspace = true
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = { workspace = true, features = [
+    "UIApplication", "UIGraphicsImageRenderer", "UIGraphicsRenderer", "UIImage",
+    "UIResponder", "UIScreen", "UIView", "UIWindow",
+    "block2", "objc2-core-foundation", "objc2-core-graphics",
+] }
+objc2-foundation = { workspace = true, features = ["NSData"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+objc2-core-image = { workspace = true, features = [
+    "CIContext", "CIImage", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-video",
+] }
+objc2-core-media = { workspace = true, features = ["CMSampleBuffer", "CMTime"] }
+objc2-core-video = { workspace = true, features = [
+    "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVPixelBufferIOSurface", "objc2-io-surface",
+] }
+objc2-io-kit = { workspace = true, features = ["graphics", "libc"] }
 objc2-io-surface.workspace = true
+objc2-screen-capture-kit = { workspace = true, features = [
+    "SCScreenshotManager", "SCShareableContent", "SCStream",
+    "block2", "dispatch2", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-media",
+] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]

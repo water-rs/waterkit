@@ -88,7 +88,13 @@ pub fn max_refresh_rate_hz() -> Result<f32, Error> {
     max_refresh_rate.ok_or(Error::MonitorNotFound)
 }
 
-#[allow(clippy::unused_async)]
+#[cfg_attr(
+    target_os = "macos",
+    expect(
+        clippy::unused_async,
+        reason = "Linux and Windows await a blocking::unblock hop; the IOKit brightness read on macOS is synchronous"
+    )
+)]
 #[allow(clippy::cast_precision_loss)]
 pub async fn get_brightness() -> Result<f32, Error> {
     #[cfg(target_os = "macos")]
@@ -107,7 +113,13 @@ pub async fn get_brightness() -> Result<f32, Error> {
     }
 }
 
-#[allow(clippy::unused_async)]
+#[cfg_attr(
+    target_os = "macos",
+    expect(
+        clippy::unused_async,
+        reason = "Linux and Windows await a blocking::unblock hop; the IOKit brightness write on macOS is synchronous"
+    )
+)]
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub async fn set_brightness(val: f32) -> Result<(), Error> {
     #[cfg(target_os = "macos")]
@@ -129,7 +141,7 @@ pub async fn set_brightness(val: f32) -> Result<(), Error> {
 }
 
 /// Capture a screenshot of the specified display.
-pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
+pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
     // HEIF/AVIF not supported on desktop (Windows/Linux)
     // macOS uses the Apple module for these formats
     #[cfg(not(target_os = "macos"))]
@@ -140,23 +152,27 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
     // On macOS, delegate HEIF/AVIF to Apple native APIs
     #[cfg(target_os = "macos")]
     if matches!(format, ImageFormat::Heif | ImageFormat::Avif) {
-        return super::apple::screenshot(display, format);
+        return super::apple::screenshot(display, format).await;
     }
 
-    let monitor = monitor_by_id(display.id())?;
-    let image = monitor.capture_image().map_err(map_xcap_error)?;
+    let display_id = display.id();
+    blocking::unblock(move || {
+        let monitor = monitor_by_id(display_id)?;
+        let image = monitor.capture_image().map_err(map_xcap_error)?;
 
-    let width = image.width();
-    let height = image.height();
+        let width = image.width();
+        let height = image.height();
 
-    // Encode as PNG
-    let mut buffer = Vec::new();
-    let mut cursor = Cursor::new(&mut buffer);
-    image
-        .write_to(&mut cursor, xcap::image::ImageFormat::Png)
-        .map_err(|e| Error::Encoding(e.to_string()))?;
+        // Encode as PNG
+        let mut buffer = Vec::new();
+        let mut cursor = Cursor::new(&mut buffer);
+        image
+            .write_to(&mut cursor, xcap::image::ImageFormat::Png)
+            .map_err(|e| Error::Encoding(e.to_string()))?;
 
-    Ok(Screenshot::new(buffer, width, height, ImageFormat::Png))
+        Ok(Screenshot::new(buffer, width, height, ImageFormat::Png))
+    })
+    .await
 }
 
 // ============================================================================
@@ -188,12 +204,27 @@ pub struct ScreenStreamInner {
 #[cfg(not(target_os = "macos"))]
 impl ScreenStreamInner {
     /// Create a new screen stream.
-    pub fn new(
+    #[cfg_attr(
+        target_os = "windows",
+        expect(
+            clippy::unused_async,
+            reason = "the facade awaits this on every platform; the xcap monitor is thread-affine on Windows so the lookup has no await inside"
+        )
+    )]
+    pub async fn new(
         display: &ScreenInfo,
         device: Arc<Device>,
         queue: Arc<Queue>,
         _config: &StreamConfig,
     ) -> Result<Self, Error> {
+        #[cfg(target_os = "linux")]
+        let monitor = {
+            let display_id = display.id();
+            blocking::unblock(move || monitor_by_id(display_id)).await?
+        };
+        // `xcap::Monitor` is thread-affine on Windows, so the lookup stays on
+        // the calling thread there.
+        #[cfg(target_os = "windows")]
         let monitor = monitor_by_id(display.id())?;
 
         let width = display.width();
@@ -209,7 +240,10 @@ impl ScreenStreamInner {
     }
 
     /// Capture next frame asynchronously.
-    #[allow(clippy::unused_async)]
+    #[expect(
+        clippy::unused_async,
+        reason = "the public API is async on every platform"
+    )]
     #[allow(
         clippy::future_not_send,
         reason = "the Windows capture session is a thread-affine `*mut c_void`, so `ScreenStream` is deliberately not `Sync` and these futures cannot be `Send`."

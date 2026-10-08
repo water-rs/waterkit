@@ -168,13 +168,21 @@ pub fn max_refresh_rate_hz() -> Result<f32, Error> {
 }
 
 /// Capture a screenshot on Android using `MediaProjection`.
-pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
+pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
     if !matches!(format, ImageFormat::Png) {
         return Err(Error::Unsupported);
     }
 
+    let (width, height) = (display.width(), display.height());
+    let data = blocking::unblock(capture_screenshot_png).await?;
+
+    Ok(Screenshot::new(data, width, height, format))
+}
+
+/// Runs the `MediaProjection` screenshot JNI calls off the executor thread.
+fn capture_screenshot_png() -> Result<Vec<u8>, Error> {
     ensure_helper_initialized()?;
-    let data = with_attached_env(|env| {
+    with_attached_env(|env| {
         let helper_class = get_helper_class(env)?;
         let has_permission = env
             .call_static_method(
@@ -218,18 +226,14 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
             ));
         }
         Ok(data)
-    })?;
-
-    Ok(Screenshot::new(
-        data,
-        display.width(),
-        display.height(),
-        format,
-    ))
+    })
 }
 
 /// Get screen brightness.
-#[allow(clippy::unused_async)]
+#[expect(
+    clippy::unused_async,
+    reason = "the public API is async on every platform; the JNI call is synchronous"
+)]
 pub async fn get_brightness() -> Result<f32, Error> {
     ensure_helper_initialized()?;
     with_attached_env(|env| {
@@ -247,7 +251,10 @@ pub async fn get_brightness() -> Result<f32, Error> {
 }
 
 /// Set screen brightness.
-#[allow(clippy::unused_async)]
+#[expect(
+    clippy::unused_async,
+    reason = "the public API is async on every platform; the JNI call is synchronous"
+)]
 pub async fn set_brightness(val: f32) -> Result<(), Error> {
     ensure_helper_initialized()?;
     with_attached_env(|env| {
@@ -357,7 +364,11 @@ pub struct ScreenStreamInner {
 }
 
 impl ScreenStreamInner {
-    pub fn new(
+    #[expect(
+        clippy::unused_async,
+        reason = "the public API is async on every platform; the JNI setup is synchronous"
+    )]
+    pub async fn new(
         display: &ScreenInfo,
         device: Arc<Device>,
         queue: Arc<Queue>,

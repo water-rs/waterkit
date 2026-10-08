@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         show_cursor: true,
     };
 
-    let stream = ScreenStream::start(primary, device, queue, &config)?;
+    let stream = pollster::block_on(ScreenStream::start(primary, device, queue, &config))?;
 
     println!("Stream started. Capturing for 5 seconds...\n");
 

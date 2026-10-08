@@ -269,25 +269,17 @@ impl BleConnection {
     /// # Errors
     /// Returns error if subscription fails.
     #[allow(clippy::future_not_send)]
-    #[expect(
-        clippy::unused_async,
-        reason = "API parity: other platform impls complete asynchronously"
-    )]
     pub async fn subscribe(
         &self,
         service: &Uuid,
         characteristic: &Uuid,
     ) -> Result<impl futures_core::Stream<Item = Vec<u8>> + Send + 'static, BluetoothError> {
-        self.inner.subscribe(service, characteristic)
+        self.inner.subscribe(service, characteristic).await
     }
 
     /// Disconnect from the peripheral.
-    #[expect(
-        clippy::unused_async,
-        reason = "API parity: other platform impls complete asynchronously"
-    )]
     pub async fn disconnect(self) {
-        self.inner.disconnect();
+        self.inner.disconnect().await;
     }
 }
 
@@ -335,12 +327,8 @@ impl ClassicBluetooth {
     }
 
     /// Stop device discovery.
-    #[expect(
-        clippy::unused_async,
-        reason = "API parity: other platform impls complete asynchronously"
-    )]
     pub async fn stop_discovery(&self) {
-        self.inner.stop_discovery();
+        self.inner.stop_discovery().await;
     }
 
     /// Get list of paired/bonded devices.
@@ -392,12 +380,8 @@ impl SppStream {
     }
 
     /// Close the SPP connection.
-    #[expect(
-        clippy::unused_async,
-        reason = "API parity: other platform impls complete asynchronously"
-    )]
     pub async fn close(self) {
-        self.inner.close();
+        self.inner.close().await;
     }
 }
 

@@ -708,33 +708,6 @@ impl BleConnectionInner {
             .map_err(|_| BluetoothError::GattError("callback dropped".into()))?
     }
 
-    /// Run `op` against the characteristic on the main queue; fails fast when
-    /// the peripheral or characteristic is missing.
-    fn with_characteristic(
-        central: Arc<MainThreadBound<Retained<CentralDelegate>>>,
-        service: &Uuid,
-        characteristic: &Uuid,
-        op: impl FnOnce(&PeripheralDelegate, &CBPeripheral, Retained<CBCharacteristic>) + Send + 'static,
-    ) {
-        let service = service.as_str().to_string();
-        let characteristic = characteristic.as_str().to_string();
-        DispatchQueue::main().exec_async(move || {
-            let mtm = MainThreadMarker::new().expect("on the main queue");
-            let delegate = central.get(mtm);
-            let periph_delegate = delegate.ivars().peripheral_delegate.borrow();
-            let peripheral = delegate.ivars().peripheral.borrow();
-            let (Some(periph_delegate), Some(peripheral)) =
-                (periph_delegate.as_ref(), peripheral.as_ref())
-            else {
-                return;
-            };
-            if let Some(characteristic) = find_characteristic(peripheral, &service, &characteristic)
-            {
-                op(periph_delegate, peripheral, characteristic);
-            }
-        });
-    }
-
     /// Prime the read oneshot and kick `readValueForCharacteristic`.
     pub async fn read_characteristic(
         &self,
@@ -825,40 +798,47 @@ impl BleConnectionInner {
 
     /// Register a notify channel and enable notifications on the
     /// characteristic.
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "fallible for parity with the other platform impls"
-    )]
-    pub fn subscribe(
+    pub async fn subscribe(
         &self,
         service: &Uuid,
         characteristic: &Uuid,
     ) -> Result<Receiver<Vec<u8>>, BluetoothError> {
         let central = Arc::clone(&self.delegate);
+        let service_uuid = service.as_str().to_string();
+        let characteristic_uuid = characteristic.as_str().to_string();
         let (tx, rx) = async_channel::bounded(64);
-        Self::with_characteristic(
-            central,
-            service,
-            characteristic,
-            move |periph_delegate, peripheral, characteristic| {
-                periph_delegate
-                    .ivars()
-                    .notify_txs
-                    .borrow_mut()
-                    .insert(characteristic_key(&characteristic), tx);
-                // SAFETY: `setNotifyValue` on a live characteristic.
-                unsafe { peripheral.setNotifyValue_forCharacteristic(true, &characteristic) };
-            },
-        );
+        on_main(move |mtm| {
+            let delegate = central.get(mtm);
+            let periph_delegate = delegate.ivars().peripheral_delegate.borrow();
+            let peripheral = delegate.ivars().peripheral.borrow();
+            let (Some(periph_delegate), Some(peripheral)) =
+                (periph_delegate.as_ref(), peripheral.as_ref())
+            else {
+                return Err(BluetoothError::GattError("peripheral unavailable".into()));
+            };
+            let Some(characteristic) =
+                find_characteristic(peripheral, &service_uuid, &characteristic_uuid)
+            else {
+                return Err(BluetoothError::GattError("characteristic not found".into()));
+            };
+            periph_delegate
+                .ivars()
+                .notify_txs
+                .borrow_mut()
+                .insert(characteristic_key(&characteristic), tx);
+            // SAFETY: `setNotifyValue` on a live characteristic.
+            unsafe { peripheral.setNotifyValue_forCharacteristic(true, &characteristic) };
+            Ok(())
+        })
+        .await?;
         Ok(rx)
     }
 
     /// Cancel the connection and release the central delegate on the main
     /// queue.
-    pub fn disconnect(self) {
+    pub async fn disconnect(self) {
         let delegate = Arc::clone(&self.delegate);
-        DispatchQueue::main().exec_async(move || {
-            let mtm = MainThreadMarker::new().expect("on the main queue");
+        on_main(move |mtm| {
             let delegate = delegate.get(mtm);
             let manager = delegate.ivars().manager.borrow();
             let peripheral = delegate.ivars().peripheral.borrow();
@@ -868,7 +848,8 @@ impl BleConnectionInner {
             }
             // `delegate` (Arc<MainThreadBound>) drops at the end of this
             // closure, releasing the object on the main queue.
-        });
+        })
+        .await;
     }
 }
 
@@ -1603,15 +1584,10 @@ impl ClassicBluetoothInner {
         }
         #[cfg(target_os = "macos")]
         {
-            self.stop_discovery();
+            self.stop_discovery().await;
             let (tx, rx) = async_channel::unbounded();
-            *self.inquiry.lock().expect("inquiry mutex") =
-                on_main(|mtm| classic::start_discovery(mtm, tx)).await.ok();
-            if self.inquiry.lock().expect("inquiry mutex").is_none() {
-                return Err(BluetoothError::Platform(
-                    "IOBluetoothDeviceInquiry start failed".into(),
-                ));
-            }
+            let inquiry = on_main(|mtm| classic::start_discovery(mtm, tx)).await?;
+            *self.inquiry.lock().expect("inquiry mutex") = Some(inquiry);
             Ok(rx)
         }
     }
@@ -1620,9 +1596,9 @@ impl ClassicBluetoothInner {
     /// main queue.
     #[cfg_attr(
         target_os = "ios",
-        expect(clippy::missing_const_for_fn, reason = "macOS cfg body is non-const")
+        expect(clippy::unused_async, reason = "iOS has no Classic inquiry to stop")
     )]
-    pub fn stop_discovery(&self) {
+    pub async fn stop_discovery(&self) {
         #[cfg(target_os = "ios")]
         {
             let _ = self;
@@ -1631,10 +1607,7 @@ impl ClassicBluetoothInner {
         {
             let inquiry = self.inquiry.lock().expect("inquiry mutex").take();
             if let Some(inquiry) = inquiry {
-                DispatchQueue::main().exec_async(move || {
-                    let mtm = MainThreadMarker::new().expect("on the main queue");
-                    classic::stop_inquiry(inquiry, mtm);
-                });
+                on_main(move |mtm| classic::stop_inquiry(inquiry, mtm)).await;
             }
         }
     }
@@ -1772,7 +1745,11 @@ impl SppStreamInner {
     }
 
     /// Close the channel on the main queue and release the stream.
-    pub fn close(self) {
+    #[cfg_attr(
+        target_os = "ios",
+        expect(clippy::unused_async, reason = "iOS has no SPP channel to close")
+    )]
+    pub async fn close(self) {
         #[cfg(target_os = "ios")]
         {
             let _ = self;
@@ -1780,10 +1757,7 @@ impl SppStreamInner {
         #[cfg(target_os = "macos")]
         {
             let stream = Arc::clone(&self.stream);
-            DispatchQueue::main().exec_async(move || {
-                let mtm = MainThreadMarker::new().expect("on the main queue");
-                classic::spp_close(stream, mtm);
-            });
+            on_main(move |mtm| classic::spp_close(stream, mtm)).await;
             // `self` drops here without touching the stream bound again.
         }
     }

@@ -22,7 +22,22 @@ serde = { workspace = true }
 waterkit-fs = { workspace = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = ["NSArray", "NSDate", "NSError", "NSString"] }
+objc2-core-graphics.workspace = true
+objc2-event-kit = { workspace = true, features = [
+    "EKCalendar",
+    "EKCalendarItem",
+    "EKEvent",
+    "EKEventStore",
+    "EKObject",
+    "EKTypes",
+    "bitflags",
+    "block2",
+    "std",
+    "objc2-core-graphics",
+] }
+block2.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 waterkit-build.workspace = true

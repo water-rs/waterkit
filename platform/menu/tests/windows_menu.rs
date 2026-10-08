@@ -175,41 +175,25 @@ fn bars_with_shortcuts_expose_an_accelerator_table() {
     assert!(bar.accelerator_table().is_none());
 }
 
-/// The bar assigns Win32 item ids from 1 upward per bar, so a process can
-/// build far more than 65,535 commands across rebuilds.
+/// Win32 item ids are allocated per bar: a bar built after another was
+/// built and dropped starts its ids at 1 again rather than continuing a
+/// process-global count. Exhaustion of the 16-bit id space is covered by
+/// the allocator's unit test.
 #[test]
 fn item_ids_are_per_bar_across_rebuilds() {
     let window = TestWindow::new();
-    let mut next = 0u64;
-    // 7 × 10,000 = 70,000 commands, beyond the 16-bit Win32 id space.
-    for _ in 0..7 {
-        let mut file = Submenu::new("File");
-        for _ in 0..10_000 {
-            next += 1;
-            file = file.entry(Command::new(CommandId::new(next), "x"));
-        }
-        let bar = MenuBar::new([file]).expect("MenuBar::new failed");
-        drop(bar);
-    }
+    // A first bar of 3 commands, then dropped: a process-global counter
+    // would hand the next bar id 4.
+    let file = Submenu::new("File")
+        .entry(Command::new(CommandId::new(1), "One"))
+        .entry(Command::new(CommandId::new(2), "Two"))
+        .entry(Command::new(CommandId::new(3), "Three"));
+    drop(MenuBar::new([file]).expect("MenuBar::new failed"));
 
-    // The latest bar's first item carries Win32 id 1 again.
-    let mut file = Submenu::new("File");
-    next += 1;
-    let last_id = CommandId::new(next);
-    file = file.entry(Command::new(last_id, "Last"));
-    let bar = MenuBar::new([file]).expect("MenuBar::new failed");
+    // The next bar's first item carries Win32 id 1 again.
+    let last = Submenu::new("File").entry(Command::new(CommandId::new(4), "Last"));
+    let bar = MenuBar::new([last]).expect("MenuBar::new failed");
     let _attachment = bar.attach(window.hwnd).expect("attach failed");
     let item_id = unsafe { GetMenuItemID(GetSubMenu(GetMenu(window.hwnd), 0), 0) };
     assert_eq!(item_id, 1);
-}
-
-/// A single bar that runs out of Win32 item ids reports it.
-#[test]
-fn a_bar_beyond_65535_items_errors() {
-    let mut file = Submenu::new("File");
-    for id in 1..=0x1_0000 {
-        file = file.entry(Command::new(CommandId::new(id), "x"));
-    }
-    let error = MenuBar::new([file]).expect_err("more than 0xFFFF items must fail");
-    assert!(matches!(error, MenuError::ItemLimitExceeded));
 }

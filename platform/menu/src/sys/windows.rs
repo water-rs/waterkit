@@ -47,9 +47,26 @@ use crate::{Command, CommandId, Entry, MenuError, Modifiers, Shortcut, Submenu};
 /// `uidsubclass` value identifying this bar's subclass procedure.
 const SUBCLASS_ID: usize = 0x574B_4D4E; // 'WKMN'
 
-/// The highest Win32 menu-item id a bar can hand out: `WM_COMMAND` reports
-/// item ids through the low word of `wParam`.
-const MAX_ITEM_ID: usize = 0xFFFF;
+/// A bar's allocator of Win32 menu-item ids: hands out ids from 1 upward and
+/// stops at 0xFFFF, the highest id `WM_COMMAND` can carry in the low word of
+/// `wParam`. The `u16` return type is the bound, so an allocated id needs no
+/// narrowing check where it is used.
+#[derive(Debug)]
+struct ItemIds {
+    next: u32,
+}
+
+impl ItemIds {
+    const fn new() -> Self {
+        Self { next: 1 }
+    }
+
+    fn allocate(&mut self) -> Result<u16, MenuError> {
+        let id = u16::try_from(self.next).map_err(|_| MenuError::ItemLimitExceeded)?;
+        self.next += 1;
+        Ok(id)
+    }
+}
 
 /// The data a subclass procedure needs to report an activation. Owned by the
 /// [`Attachment`]; the window stores a borrowed pointer in `dwRefData`.
@@ -57,7 +74,7 @@ const MAX_ITEM_ID: usize = 0xFFFF;
 struct AttachContext {
     sender: Sender<CommandId>,
     /// Win32 menu-item id (the low word of `WM_COMMAND`'s `wParam`) → id.
-    commands: HashMap<usize, CommandId>,
+    commands: HashMap<u16, CommandId>,
 }
 
 /// A [`Command`]'s slot in the menu tree: where it lives plus the state the
@@ -92,14 +109,14 @@ pub struct MenuBarInner {
     menu: HMENU,
     items: HashMap<CommandId, ItemSlot>,
     /// Win32 item id → `CommandId`, cloned into the attach context.
-    commands: HashMap<usize, CommandId>,
+    commands: HashMap<u16, CommandId>,
     /// Accelerator entries collected while building; consumed by
     /// `build_accel_table`.
     accels: Vec<ACCEL>,
     /// The accelerator table for hosts that run `TranslateAcceleratorW`.
     accel: Option<HACCEL>,
-    /// Next per-bar Win32 item id, assigned from 1 upward.
-    next_item_id: usize,
+    /// This bar's Win32 item-id allocator.
+    item_ids: ItemIds,
     sender: Sender<CommandId>,
     /// `Some(hwnd)` while an [`Attachment`] is alive.
     attachment: Cell<Option<HWND>>,
@@ -117,13 +134,15 @@ impl MenuBarInner {
             commands: HashMap::new(),
             accels: Vec::new(),
             accel: None,
-            next_item_id: 1,
+            item_ids: ItemIds::new(),
             sender: sender.clone(),
             attachment: Cell::new(None),
         };
         // A bar that failed to build is dropped here, and its `Drop` destroys
         // the partial menu tree.
-        inner.build(menus).and_then(|()| inner.build_accel_table())?;
+        inner
+            .build(menus)
+            .and_then(|()| inner.build_accel_table())?;
         Ok(inner)
     }
 
@@ -176,11 +195,7 @@ impl MenuBarInner {
         if self.items.contains_key(&command.id()) {
             return Err(MenuError::DuplicateCommandId(command.id()));
         }
-        let item_id = self.next_item_id;
-        if item_id > MAX_ITEM_ID {
-            return Err(MenuError::ItemLimitExceeded);
-        }
-        self.next_item_id += 1;
+        let item_id = self.item_ids.allocate()?;
         let mut flags = MF_STRING;
         if !command.enabled {
             flags |= MF_GRAYED;
@@ -194,7 +209,7 @@ impl MenuBarInner {
                 self.accels.push(ACCEL {
                     fVirt: accel_flags(shortcut.modifiers),
                     key: virtual_key.0,
-                    cmd: u16::try_from(item_id).expect("item ids are <= 0xFFFF"),
+                    cmd: item_id,
                 });
                 format!(
                     "{}\t{}",
@@ -210,8 +225,15 @@ impl MenuBarInner {
         }
         // SAFETY: `wide` outlives the call; the menu copies the string.
         let mut wide = to_wide(&title);
-        unsafe { AppendMenuW(parent, flags, item_id, PCWSTR(wide.as_mut_ptr())) }
-            .map_err(|error| MenuError::Platform(format!("AppendMenuW: {error}")))?;
+        unsafe {
+            AppendMenuW(
+                parent,
+                flags,
+                usize::from(item_id),
+                PCWSTR(wide.as_mut_ptr()),
+            )
+        }
+        .map_err(|error| MenuError::Platform(format!("AppendMenuW: {error}")))?;
         self.items.insert(
             command.id(),
             ItemSlot {
@@ -406,7 +428,9 @@ unsafe extern "system" fn menu_subclass_proc(
     } else if msg == WM_COMMAND {
         // SAFETY: upheld by the attach/remove contract described above.
         let context = unsafe { &*(dwrefdata as *const AttachContext) };
-        if let Some(id) = context.commands.get(&(wparam.0 & 0xFFFF)) {
+        // The item id is the low word of `wParam`.
+        let item_id = u16::try_from(wparam.0 & 0xFFFF).expect("LOWORD fits in u16");
+        if let Some(id) = context.commands.get(&item_id) {
             context
                 .sender
                 .try_send(*id)
@@ -607,6 +631,18 @@ mod tests {
 
     fn unmappable(key: &Key) {
         assert!(matches!(map_key(key), Err(MenuError::UnmappableKey(_))));
+    }
+
+    /// A fresh allocator hands out 1, 0xFFFF as its 65,535th id, then
+    /// [`MenuError::ItemLimitExceeded`] — the whole 16-bit space and nothing
+    /// more.
+    #[test]
+    fn item_ids_allocate_from_1_to_ffff_then_error() {
+        let mut ids = ItemIds::new();
+        for expected in 1..=u16::MAX {
+            assert_eq!(ids.allocate().unwrap(), expected);
+        }
+        assert!(matches!(ids.allocate(), Err(MenuError::ItemLimitExceeded)));
     }
 
     #[test]

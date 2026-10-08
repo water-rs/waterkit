@@ -1076,13 +1076,7 @@ type Recorder = fn(&mut Harness<'_, '_>);
 /// or the user's data, record a fixed case.
 const RECORDERS: &[Recorder] = &[
     #[cfg(feature = "sensor")]
-    |h| {
-        h.runtime.block_on(record_android_sensor(
-            &mut h.report,
-            h.env,
-            h.activity.as_obj(),
-        ));
-    },
+    |h| record_android_sensor(&mut h.report, h.env, h.activity.as_obj(), h.runtime),
     #[cfg(feature = "location")]
     |h| record_android_location(&mut h.report, h.env, h.activity.as_obj()),
     #[cfg(feature = "permission")]
@@ -1228,7 +1222,12 @@ fn log_report(report: &TestReport) {
 }
 
 #[cfg(feature = "sensor")]
-async fn record_android_sensor(report: &mut TestReport, env: &mut Env<'_>, activity: &JObject<'_>) {
+fn record_android_sensor(
+    report: &mut TestReport,
+    env: &mut Env<'_>,
+    activity: &JObject<'_>,
+    runtime: &tokio::runtime::Runtime,
+) {
     match waterkit_content::sensor::android::is_sensor_available_with_context(
         env,
         activity,
@@ -1251,13 +1250,13 @@ async fn record_android_sensor(report: &mut TestReport, env: &mut Env<'_>, activ
         }
     }
 
-    match waterkit_content::sensor::android::read_sensor_with_context(
+    // The read issues its JNI calls here; the runtime only awaits the reply.
+    let read = waterkit_content::sensor::android::read_sensor_with_context(
         env,
         activity,
         ANDROID_SENSOR_TYPE_ACCELEROMETER,
-    )
-    .await
-    {
+    );
+    match runtime.block_on(read) {
         Ok(data) if data.x().is_finite() && data.y().is_finite() && data.z().is_finite() => {
             report.push(TestCase::passed_with_message(
                 "sensor.accelerometer",

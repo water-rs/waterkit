@@ -14,9 +14,9 @@ categories = ["multimedia::video"]
 workspace = true
 
 [build-dependencies]
-waterkit-build.workspace = true
 
 [dependencies]
+waterkit-build.workspace = true
 waterkit-video-core.workspace = true
 waterkit-video-container.workspace = true
 waterkit-video-streaming = { workspace = true, optional = true }
@@ -41,12 +41,24 @@ transmux.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
-waterkit-build.workspace = true
 ndk-context.workspace = true
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
 waterkit-audio = { workspace = true, features = ["apple-artwork"] }
+block2.workspace = true
+core-foundation.workspace = true
+dispatch2.workspace = true
+objc2.workspace = true
+objc2-av-foundation = { workspace = true, features = ["AVAnimation", "AVQueuedSampleBufferRendering", "AVSampleBufferDisplayLayer", "AVSampleBufferVideoRenderer", "block2", "objc2-core-media", "objc2-quartz-core"] }
+objc2-av-kit = { workspace = true, features = ["AVPictureInPictureController", "AVPictureInPictureController_AVSampleBufferDisplayLayerSupport", "objc2-av-foundation"] }
+objc2-core-foundation.workspace = true
+objc2-core-media.workspace = true
+objc2-core-video.workspace = true
+objc2-foundation.workspace = true
+objc2-quartz-core.workspace = true
+objc2-metal.workspace = true
+tracing.workspace = true
+futures.workspace = true
 
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).

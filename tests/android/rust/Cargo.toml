@@ -22,6 +22,8 @@ waterkit_content = { path = "../../..", package = "waterkit", default-features =
 waterkit-test-report.workspace = true
 # Saves converted camera frames for inspection.
 image = { workspace = true, default-features = false, features = ["png"] }
+# Draws the barcode test image at run time; the harness ships no fixtures.
+qrcodegen = "1.8"
 waterkit-build.workspace = true
 
 [features]
@@ -79,7 +81,9 @@ speech = ["waterkit_content/speech"]
 deeplink = ["waterkit_content/deeplink"]
 contacts = ["waterkit_content/contacts"]
 calendar = ["waterkit_content/calendar"]
-vision = ["waterkit_content/vision"]
+# Vision stills test the ML Kit clients alone; a live camera frame exercises
+# the frame-plane path, so the camera cases and their helpers join the run.
+vision = ["camera", "waterkit_content/vision"]
 health = ["waterkit_content/health"]
 language = ["waterkit_content/language"]
 screen = ["waterkit_content/screen"]

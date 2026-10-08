@@ -154,9 +154,20 @@ fn report_path(run_id: &str) -> String {
     format!("Documents/waterkit-test-reports/{run_id}.json")
 }
 
-/// Builds the harness's static library for `rust_target` and returns the path
-/// cargo reports for it.
-fn build_library(root: &Path, rust_target: &str, feature: &str) -> Result<PathBuf> {
+/// The harness's static library and the native link flags rustc reports for
+/// it.
+struct RustLibrary {
+    /// The archive cargo built.
+    archive: PathBuf,
+    /// rustc's `native-static-libs` flags: every system library and framework
+    /// the archive's crates declare with `#[link]`, which a static archive
+    /// cannot carry to its consumer's link.
+    link_flags: String,
+}
+
+/// Builds the harness's static library for `rust_target` and returns it with
+/// the native link flags rustc reports for it.
+fn build_library(root: &Path, rust_target: &str, feature: &str) -> Result<RustLibrary> {
     info!(
         "{}",
         format!("Building iOS test library for {rust_target}...")
@@ -164,41 +175,95 @@ fn build_library(root: &Path, rust_target: &str, feature: &str) -> Result<PathBu
             .bold()
     );
     let manifest = root.join(HARNESS_MANIFEST);
+    // `cargo rustc` passes `--print=native-static-libs` to the harness crate
+    // alone, and Cargo replays the resulting note on a fresh unit as well as
+    // on a rebuilt one. Diagnostics stay JSON on stdout, where the note can be
+    // read; every other diagnostic is logged as rustc rendered it.
     let mut child = Command::new("cargo")
         .current_dir(root)
-        .args(["build", "--message-format=json-render-diagnostics"])
+        .args([
+            "rustc",
+            "--lib",
+            "--message-format=json-diagnostic-rendered-ansi",
+        ])
         .arg("--manifest-path")
         .arg(&manifest)
         .args(["--target", rust_target, "--features", feature])
+        .args(["--", "--print=native-static-libs"])
         .stdout(Stdio::piped())
         .spawn()
-        .context("Failed to run cargo build")?;
+        .context("Failed to run cargo rustc")?;
 
     let stdout = child
         .stdout
         .take()
         .expect("cargo's stdout was requested as a pipe");
-    let mut library = None;
+    let mut archive = None;
+    let mut link_flags = None;
     for message in Message::parse_stream(BufReader::new(stdout)) {
-        let message = message.context("Failed to read cargo's build messages")?;
-        if let Message::CompilerArtifact(artifact) = message
-            && artifact.manifest_path.as_std_path() == manifest
-            && artifact.target.is_kind(TargetKind::StaticLib)
-        {
-            library = artifact
-                .filenames
-                .into_iter()
-                .find(|file| file.extension() == Some("a"));
+        match message.context("Failed to read cargo's build messages")? {
+            Message::CompilerArtifact(artifact)
+                if artifact.manifest_path.as_std_path() == manifest
+                    && artifact.target.is_kind(TargetKind::StaticLib) =>
+            {
+                archive = artifact
+                    .filenames
+                    .into_iter()
+                    .find(|file| file.extension() == Some("a"));
+            }
+            Message::CompilerMessage(message) => {
+                if let Some(flags) = message.message.message.strip_prefix("native-static-libs: ") {
+                    link_flags = Some(app_link_flags(flags));
+                } else if let Some(rendered) = message.message.rendered {
+                    warn!("{}", rendered.trim_end());
+                }
+            }
+            _ => {}
         }
     }
 
-    let status = child.wait().context("Failed to wait for cargo build")?;
+    let status = child.wait().context("Failed to wait for cargo rustc")?;
     if !status.success() {
         eyre::bail!("iOS test library build failed for {rust_target}");
     }
-    library
+    let archive = archive
         .map(Into::into)
-        .ok_or_else(|| eyre::eyre!("cargo built no static library from {}", manifest.display()))
+        .ok_or_else(|| eyre::eyre!("cargo built no static library from {}", manifest.display()))?;
+    let link_flags = link_flags.ok_or_else(|| {
+        eyre::eyre!(
+            "rustc reported no native-static-libs for {}",
+            manifest.display()
+        )
+    })?;
+    Ok(RustLibrary {
+        archive,
+        link_flags,
+    })
+}
+
+/// The app link's share of rustc's `native-static-libs` flags, each library
+/// once in first-seen order. `clang_rt.*` is left out: rustc names it without
+/// the toolchain directory that holds it, and the clang driver `xcodebuild`
+/// links the app with adds the platform's compiler runtime itself.
+fn app_link_flags(flags: &str) -> String {
+    let mut words = flags.split_whitespace();
+    let mut kept: Vec<String> = Vec::new();
+    while let Some(word) = words.next() {
+        let flag = if word == "-framework" {
+            let name = words
+                .next()
+                .expect("rustc names a framework after every -framework");
+            format!("-framework {name}")
+        } else if word.starts_with("-lclang_rt.") {
+            continue;
+        } else {
+            word.to_owned()
+        };
+        if !kept.contains(&flag) {
+            kept.push(flag);
+        }
+    }
+    kept.join(" ")
 }
 
 /// Builds the app around `library` with `xcodebuild`, signed for
@@ -207,9 +272,14 @@ fn build_library(root: &Path, rust_target: &str, feature: &str) -> Result<PathBu
 /// Every run builds from clean: the project links the library through a build
 /// setting, which Xcode does not track as a link input, so an incremental
 /// build could keep a binary linked against an older library.
-fn build_app(root: &Path, destination: &impl Destination, library: &Path) -> Result<PathBuf> {
+fn build_app(
+    root: &Path,
+    destination: &impl Destination,
+    library: &RustLibrary,
+) -> Result<PathBuf> {
     info!("{}", "Building and signing the app...".yellow().bold());
     let products = library
+        .archive
         .parent()
         .expect("a cargo artifact path has a parent directory")
         .join("WaterKitTest-xcode");
@@ -222,7 +292,14 @@ fn build_app(root: &Path, destination: &impl Destination, library: &Path) -> Res
             "CONFIGURATION_BUILD_DIR",
             products.join("Products").into_os_string(),
         ),
-        ("WATERKIT_RUST_LIBRARY", library.as_os_str().to_owned()),
+        (
+            "WATERKIT_RUST_LIBRARY",
+            library.archive.as_os_str().to_owned(),
+        ),
+        (
+            "WATERKIT_RUST_LINK_FLAGS",
+            OsString::from(&library.link_flags),
+        ),
     ] {
         let mut setting = OsString::from(format!("{name}="));
         setting.push(value);
@@ -672,7 +749,7 @@ fn remote_word(word: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::remote_word;
+    use super::{app_link_flags, remote_word};
 
     #[test]
     fn quotes_remote_words() {
@@ -686,5 +763,16 @@ mod tests {
     fn rejects_words_shells_quote_differently() {
         assert!(remote_word("it's").is_err());
         assert!(remote_word(r"a\b").is_err());
+    }
+
+    #[test]
+    fn app_link_flags_drop_the_compiler_runtime_and_repeats() {
+        assert_eq!(
+            app_link_flags(
+                "-lclang_rt.iossim -framework Foundation -lSystem -framework UIKit \
+                 -lclang_rt.iossim -framework Foundation -lSystem -lobjc"
+            ),
+            "-framework Foundation -lSystem -framework UIKit -lobjc"
+        );
     }
 }

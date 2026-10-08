@@ -5,11 +5,13 @@
 //! selected by the `portable-*` features (#130, #132); none exists yet, so
 //! every portable offer is [`Offer::Absent`].
 //!
-//! The `scanner` capability has its own per-platform modules: the Google
-//! code scanner on Android and `VisionKit`'s `DataScannerViewController` on
-//! iOS — Mac Catalyst excluded, where `DataScannerViewController` is
-//! unavailable — with no system scanner elsewhere. The `barcode`, `text` and
-//! `document` capabilities' Apple realization lives in [`apple_vision`].
+//! The `scanner` and `document-scanner` capabilities have their own
+//! per-platform modules: the Google code scanner and ML Kit document scanner
+//! on Android, `VisionKit`'s `DataScannerViewController` and
+//! `VNDocumentCameraViewController` on iOS — Mac Catalyst excluded, where
+//! both are unavailable — with no system scanner elsewhere. The `barcode`,
+//! `text` and `document` capabilities' Apple realization lives in
+//! [`apple_vision`].
 
 #[cfg(all(
     any(target_os = "ios", target_os = "macos"),
@@ -21,15 +23,16 @@ pub mod apple_vision;
 ///
 /// Core Foundation's reference counting is thread-safe, and nothing here
 /// reads or writes the buffer's pixels on the CPU: it is only handed to
-/// Vision, which samples it on the GPU.
-#[cfg(all(any(target_os = "ios", target_os = "macos"), feature = "camera"))]
+/// Vision, which samples it on the GPU. A camera frame carries one; the
+/// iOS document scanner hands back each scanned page as one.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
 #[derive(Debug, Clone)]
 pub struct PixelBuffer(pub objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>);
 
 // SAFETY: see the type's documentation; the buffer is only retained, released
 // and handed to Vision, all thread-safe in Core Video. `Sync` comes with the
 // same argument: readers only carry the reference.
-#[cfg(all(any(target_os = "ios", target_os = "macos"), feature = "camera"))]
+#[cfg(any(target_os = "ios", target_os = "macos"))]
 #[expect(
     clippy::non_send_fields_in_send_ty,
     reason = "the Core Foundation reference is exactly what this impl vouches for"
@@ -37,15 +40,28 @@ pub struct PixelBuffer(pub objc2_core_foundation::CFRetained<objc2_core_video::C
 unsafe impl Send for PixelBuffer {}
 
 // SAFETY: as above.
-#[cfg(all(any(target_os = "ios", target_os = "macos"), feature = "camera"))]
+#[cfg(any(target_os = "ios", target_os = "macos"))]
 unsafe impl Sync for PixelBuffer {}
 
-#[cfg(all(feature = "scanner", target_os = "android"))]
-mod android;
-#[cfg(all(feature = "scanner", target_os = "ios", not(target_abi = "macabi")))]
+// The Android module hosts the one-shot scanners and the ML Kit requests.
+#[cfg(all(
+    target_os = "android",
+    any(
+        feature = "scanner",
+        feature = "document-scanner",
+        feature = "barcode",
+        feature = "text"
+    )
+))]
+pub mod android;
+#[cfg(all(
+    any(feature = "scanner", feature = "document-scanner"),
+    target_os = "ios",
+    not(target_abi = "macabi")
+))]
 mod apple;
 #[cfg(all(
-    feature = "scanner",
+    any(feature = "scanner", feature = "document-scanner"),
     not(any(
         target_os = "android",
         all(target_os = "ios", not(target_abi = "macabi"))
@@ -53,10 +69,26 @@ mod apple;
 ))]
 mod unsupported;
 
+#[cfg(all(feature = "document-scanner", target_os = "android"))]
+pub use android::{document_scanner_available, document_scanner_options, scan_document};
 #[cfg(all(feature = "scanner", target_os = "android"))]
 pub use android::{scan, scanner_available, scanner_symbologies};
+#[cfg(all(
+    feature = "document-scanner",
+    target_os = "ios",
+    not(target_abi = "macabi")
+))]
+pub use apple::{document_scanner_available, document_scanner_options, scan_document};
 #[cfg(all(feature = "scanner", target_os = "ios", not(target_abi = "macabi")))]
 pub use apple::{scan, scanner_available, scanner_symbologies};
+#[cfg(all(
+    feature = "document-scanner",
+    not(any(
+        target_os = "android",
+        all(target_os = "ios", not(target_abi = "macabi"))
+    ))
+))]
+pub use unsupported::{document_scanner_available, document_scanner_options, scan_document};
 #[cfg(all(
     feature = "scanner",
     not(any(
@@ -69,7 +101,12 @@ pub use unsupported::{scan, scanner_available, scanner_symbologies};
 #[cfg(all(any(target_os = "ios", target_os = "macos"), feature = "barcode"))]
 pub use apple_vision as native;
 
-#[cfg(not(any(target_os = "ios", target_os = "macos")))]
+/// On Android the native barcode realization is ML Kit's barcode engine,
+/// delivered by Play services' modules.
+#[cfg(all(target_os = "android", feature = "barcode"))]
+pub use android::barcode as native;
+
+#[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
 pub mod native {
     //! Stub offers for platforms without a native realization: selection
     //! falls to portable or `Unsupported`, and the run functions are never

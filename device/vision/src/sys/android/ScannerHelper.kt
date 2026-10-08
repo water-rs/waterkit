@@ -1,8 +1,6 @@
 package waterkit.vision
 
 import android.content.Context
-import com.google.android.gms.common.ConnectionResult
-import com.google.android.gms.common.GoogleApiAvailability
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 
@@ -14,16 +12,6 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
  * permission.
  */
 object ScannerHelper {
-    /**
-     * Whether Google Play services is installed, enabled and recent enough
-     * for the linked `play-services-code-scanner` client — the device's own
-     * answer, asked before a scan and by `capabilities()`.
-     */
-    @JvmStatic
-    fun hasGooglePlayServices(context: Context): Boolean =
-        GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context) ==
-            ConnectionResult.SUCCESS
-
     /**
      * Presents the Google code scanner restricted to [formats]
      * (`Barcode#FORMAT_*` values) with auto-zoom on, and reports the outcome

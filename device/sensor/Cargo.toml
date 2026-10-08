@@ -40,7 +40,7 @@ objc2-core-motion = { workspace = true, features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-mach2 = "0.6"
+mach2.workspace = true
 objc2-core-foundation = { workspace = true, features = ["CFDictionary"] }
 objc2-io-kit = { workspace = true, features = ["libc"] }
 

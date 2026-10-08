@@ -3,14 +3,15 @@
 //!
 //! The bridge functions live in `DocumentScanner.swift`, compiled into the
 //! crate by `build.rs`. The Swift side hops onto the main queue for
-//! presentation, encodes each page of the `VNDocumentCameraScan` as a JPEG
-//! off the main actor and answers through `on_document_scan_result`, so
-//! nothing blocks: the callback completes the awaiting
-//! [`crate::DocumentScanner::scan`] through a oneshot. Pages cross the
-//! bridge as a JSON array of base64-encoded JPEGs, the format every bridge
-//! result in this crate crosses in.
+//! presentation, renders each page of the `VNDocumentCameraScan` into a
+//! `CVPixelBuffer` off the main actor and answers through
+//! `on_document_scan_result`, so nothing blocks: the callback completes
+//! the awaiting [`crate::DocumentScanner::scan`] through a oneshot. Pages
+//! cross the bridge as the addresses of `CVPixelBuffer`s the Swift side
+//! retained for Rust to adopt, like the buffers `apple_vision` hands to
+//! Vision request handlers.
 
-use crate::document_scanner::{DocumentScannerOptions, pages_from_base64_json};
+use crate::document_scanner::{DocumentScannerOptions, pages_from_buffers};
 use crate::{Image, VisionError};
 use futures::channel::oneshot;
 use std::collections::HashMap;
@@ -34,16 +35,13 @@ mod ffi {
     }
 
     extern "Rust" {
-        // `pages_json` is a JSON array of base64-encoded JPEG pages.
-        fn on_document_scan_result(
-            cb_id: u64,
-            pages_json: Option<String>,
-            error: Option<String>,
-        );
+        // `pages` holds one retained `CVPixelBuffer` address per scanned
+        // page; empty means the user cancelled.
+        fn on_document_scan_result(cb_id: u64, pages: Vec<usize>, error: Option<String>);
     }
 }
 
-fn on_document_scan_result(cb_id: u64, pages_json: Option<String>, error: Option<String>) {
+fn on_document_scan_result(cb_id: u64, pages: Vec<usize>, error: Option<String>) {
     let tx = callbacks()
         .lock()
         .unwrap_or_else(|error| {
@@ -54,10 +52,10 @@ fn on_document_scan_result(cb_id: u64, pages_json: Option<String>, error: Option
             panic!("waterkit-vision: unknown document scan callback id in result: {cb_id}")
         });
 
-    let result = match (error, pages_json) {
+    let result = match (error, pages.is_empty()) {
         (Some(message), _) => Err(VisionError::Platform(message)),
-        (None, Some(json)) => pages_from_base64_json(&json).map(Some),
-        (None, None) => Ok(None),
+        (None, true) => Ok(None),
+        (None, false) => pages_from_buffers(pages).map(Some),
     };
     let _ = tx.send(result);
 }

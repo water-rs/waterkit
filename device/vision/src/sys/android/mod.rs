@@ -13,15 +13,15 @@ use waterkit_build::AndroidError;
 
 use crate::VisionError;
 
-#[cfg(feature = "scanner")]
-mod scanner;
 #[cfg(feature = "document-scanner")]
 mod document_scanner;
-
 #[cfg(feature = "scanner")]
-pub use scanner::{scan, scanner_available, scanner_symbologies};
+mod scanner;
+
 #[cfg(feature = "document-scanner")]
 pub use document_scanner::{document_scanner_available, document_scanner_options, scan_document};
+#[cfg(feature = "scanner")]
+pub use scanner::{scan, scanner_available, scanner_symbologies};
 
 impl From<AndroidError> for VisionError {
     fn from(error: AndroidError) -> Self {

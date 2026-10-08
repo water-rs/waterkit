@@ -1,15 +1,14 @@
+import CoreFoundation
+import CoreImage
+import CoreVideo
 import Foundation
 import UIKit
 import VisionKit
 
-// Pages are photographs of documents; JPEG keeps them small enough to cross
-// the bridge while preserving the detail recognition needs.
-private let documentPageJPEGQuality: CGFloat = 0.9
-
-// The same key-window lookup the code scanner's bridge performs; `private`
-// keeps it file-scoped so the two bridges compile independently per
-// feature.
-private func getTopViewController() -> UIViewController? {
+// The same key-window lookup the code scanner's bridge performs. All of the
+// crate's Swift bridges concatenate into one file, so this copy carries a
+// feature-specific name to keep it distinct from the code scanner's.
+private func documentScannerTopViewController() -> UIViewController? {
     let keyWindow = UIApplication.shared.connectedScenes
         .filter({ $0.activationState == .foregroundActive })
         .compactMap({ $0 as? UIWindowScene })
@@ -23,6 +22,42 @@ private func getTopViewController() -> UIViewController? {
     return top
 }
 
+// A page crosses the bridge as a retained `CVPixelBuffer` so Vision serves
+// it without any decode or re-encode; the crate's buffers all share the
+// 32BGRA IOSurface-backed layout the video player's render targets use.
+private func documentScanPageBuffer(
+    _ image: UIImage,
+    context: CIContext
+) -> CVPixelBuffer? {
+    guard let cgImage = image.cgImage else { return nil }
+    let width = cgImage.width
+    let height = cgImage.height
+    var pixelBuffer: CVPixelBuffer?
+    let attributes: [CFString: Any] = [
+        kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+        kCVPixelBufferWidthKey: width,
+        kCVPixelBufferHeightKey: height,
+        kCVPixelBufferMetalCompatibilityKey: true,
+        kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+    ]
+    let status = CVPixelBufferCreate(
+        kCFAllocatorDefault,
+        width,
+        height,
+        kCVPixelFormatType_32BGRA,
+        attributes as CFDictionary,
+        &pixelBuffer
+    )
+    guard status == kCVReturnSuccess, let pixelBuffer else { return nil }
+    context.render(
+        CIImage(cgImage: cgImage),
+        to: pixelBuffer,
+        bounds: CGRect(x: 0, y: 0, width: width, height: height),
+        colorSpace: CGColorSpaceCreateDeviceRGB()
+    )
+    return pixelBuffer
+}
+
 // The delegate the presented scanner keeps until the scan settles.
 @MainActor
 private var activeDocumentScanDelegates: [UInt64: DocumentScanDelegate] = [:]
@@ -31,12 +66,12 @@ private var activeDocumentScanDelegates: [UInt64: DocumentScanDelegate] = [:]
 private func finishDocumentScan(
     cbId: UInt64,
     scanner: VNDocumentCameraViewController,
-    pagesJson: String?,
+    pages: RustVec<UInt>,
     error: String?
 ) {
     activeDocumentScanDelegates.removeValue(forKey: cbId)
     scanner.dismiss(animated: true) {
-        on_document_scan_result(cbId, pagesJson, error)
+        on_document_scan_result(cbId, pages, error)
     }
 }
 
@@ -51,13 +86,13 @@ private final class DocumentScanDelegate: NSObject, VNDocumentCameraViewControll
 
     private func finish(
         _ scanner: VNDocumentCameraViewController,
-        pagesJson: String? = nil,
+        pages: RustVec<UInt> = RustVec(),
         error: String? = nil
     ) {
         guard !finished else { return }
         finished = true
         finishDocumentScan(
-            cbId: cbId, scanner: scanner, pagesJson: pagesJson, error: error)
+            cbId: cbId, scanner: scanner, pages: pages, error: error)
     }
 
     func documentCameraViewController(
@@ -65,34 +100,36 @@ private final class DocumentScanDelegate: NSObject, VNDocumentCameraViewControll
         didFinishWith scan: VNDocumentCameraScan
     ) {
         guard !finished else { return }
-        // JPEG-encoding a page is CPU work sized by the photo; keep it off
-        // the main actor while the camera tears itself down.
+        // Rendering a page is GPU work sized by the photo; keep it off the
+        // main actor while the camera tears itself down.
         DispatchQueue.global(qos: .userInitiated).async {
-            var pages: [String] = []
-            pages.reserveCapacity(scan.pageCount)
+            let context = CIContext()
+            var buffers: [CVPixelBuffer] = []
+            buffers.reserveCapacity(scan.pageCount)
             var failure: String?
             for index in 0..<scan.pageCount {
-                guard let jpeg = scan.imageOfPage(at: index)
-                    .jpegData(compressionQuality: documentPageJPEGQuality)
+                guard let buffer = documentScanPageBuffer(
+                    scan.imageOfPage(at: index), context: context)
                 else {
-                    failure = "scanned page \(index) did not encode as JPEG"
+                    failure = "scanned page \(index) did not render into a pixel buffer"
                     break
                 }
-                pages.append(jpeg.base64EncodedString())
+                buffers.append(buffer)
             }
-            let pagesJson: String? = if failure == nil {
-                (try? JSONSerialization.data(withJSONObject: pages))
-                    .flatMap({ String(data: $0, encoding: .utf8) })
-            } else {
-                nil
+            let pages = RustVec<UInt>()
+            if failure == nil {
+                for buffer in buffers {
+                    // Rust adopts this retain when it wraps the address
+                    // back in a `CFRetained`.
+                    pages.push(value: UInt(
+                        bitPattern: Unmanaged.passRetained(buffer).toOpaque()))
+                }
             }
             DispatchQueue.main.async {
                 if let failure {
                     self.finish(controller, error: failure)
-                } else if let pagesJson {
-                    self.finish(controller, pagesJson: pagesJson)
                 } else {
-                    self.finish(controller, error: "the scanned pages did not serialize")
+                    self.finish(controller, pages: pages)
                 }
             }
         }
@@ -129,13 +166,13 @@ func scan_document_bridge(cb_id: UInt64) {
     DispatchQueue.main.async {
         guard VNDocumentCameraViewController.isSupported else {
             on_document_scan_result(
-                cb_id, nil as String?,
+                cb_id, RustVec(),
                 "VNDocumentCameraViewController is unsupported")
             return
         }
-        guard let topVC = getTopViewController() else {
+        guard let topVC = documentScannerTopViewController() else {
             on_document_scan_result(
-                cb_id, nil as String?,
+                cb_id, RustVec(),
                 "no key window scene to present the scanner from")
             return
         }

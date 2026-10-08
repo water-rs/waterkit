@@ -2927,8 +2927,7 @@ async fn record_android_vision(report: &mut TestReport) {
         }
     }
 
-    let document_available =
-        waterkit_content::vision::DocumentScanner::capabilities().available;
+    let document_available = waterkit_content::vision::DocumentScanner::capabilities().available;
     report.push(TestCase::passed_with_message(
         "vision.document_scanner_capabilities",
         format!("available={document_available}"),
@@ -2939,7 +2938,10 @@ async fn record_android_vision(report: &mut TestReport) {
             "presenting the ML Kit document scanner requires an interactive session",
         ));
     } else {
-        match waterkit_content::vision::DocumentScanner::new().scan().await {
+        match waterkit_content::vision::DocumentScanner::new()
+            .scan()
+            .await
+        {
             Err(waterkit_content::vision::VisionError::Unsupported(message)) => {
                 report.push(TestCase::passed_with_message(
                     "vision.document_scanner_scan",

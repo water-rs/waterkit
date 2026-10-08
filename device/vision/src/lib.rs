@@ -111,13 +111,13 @@ pub use document::{
     Block, DataKind, DetectedData, Document, Formula, List, ListItem, Paragraph, RecognizeDocument,
     Table, TableCell,
 };
+#[cfg(feature = "document-scanner")]
+pub use document_scanner::{DocumentScanner, DocumentScannerCapabilities};
 pub use enumset::EnumSet;
 pub use error::VisionError;
 pub use geometry::{Point, Quad};
 pub use image::Image;
 pub use request::Request;
-#[cfg(feature = "document-scanner")]
-pub use document_scanner::{DocumentScanner, DocumentScannerCapabilities};
 #[cfg(feature = "scanner")]
 pub use scanner::{CodeScanner, ScannedCode, ScannerCapabilities};
 pub use symbology::Symbology;

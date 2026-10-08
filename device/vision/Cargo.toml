@@ -28,9 +28,6 @@ waterkit-camera = { workspace = true, optional = true }
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 swift-bridge.workspace = true
 serde = { workspace = true, features = ["derive"] }
-# The iOS document-scanner bridge hands pages back as a JSON array of
-# base64 JPEGs; the decode is unit-tested on macOS too.
-base64 = { workspace = true, optional = true }
 # Results cross the bridge as JSON.
 serde_json.workspace = true
 objc2.workspace = true
@@ -104,7 +101,6 @@ document-scanner = [
     "dep:waterkit-build",
     "waterkit-build/activity-result",
     "dep:blocking",
-    "dep:base64",
 ]
 
 # Android helper the packager compiles into the application's classpath.

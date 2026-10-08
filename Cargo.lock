@@ -8622,7 +8622,6 @@ version = "0.1.4"
 dependencies = [
  "ab_glyph",
  "barcoders",
- "base64 0.22.1",
  "blocking",
  "bytes",
  "dejavu",

@@ -18,8 +18,9 @@ use crate::{Image, VisionError, sys};
 ///   by Play services on first use. Pages come back as JPEG images; the
 ///   optional PDF result format is not requested.
 /// - **iOS:** `VisionKit`'s `VNDocumentCameraViewController`, presented from
-///   the app's key window scene. Its UI has neither a page limit nor a
-///   gallery import, so configuring either is an
+///   the app's key window scene. Pages come back as `CVPixelBuffer`s a
+///   request serves without a decode. Its UI has neither a page limit nor
+///   a gallery import, so configuring either is an
 ///   [`VisionError::Unsupported`] error rather than a silent no-op.
 ///
 /// There is no system document scanner on macOS, Mac Catalyst, Windows,
@@ -127,7 +128,7 @@ impl DocumentScanner {
     /// Presents the system scanner and resolves to the scanned pages in
     /// order, or `Ok(None)` when the user cancels, like the dialog pickers.
     ///
-    /// Every page is a decoded [`Image`]; passing a page to
+    /// Every page arrives as an [`Image`]; passing a page to
     /// [`crate::Vision::perform`] with a [`crate::RecognizeDocument`] or
     /// [`crate::RecognizeText`] request needs no conversion step.
     ///
@@ -140,6 +141,13 @@ impl DocumentScanner {
     /// [`DocumentScanner::capabilities`] performs. Returns
     /// [`VisionError::Platform`] when a supported scanner fails while
     /// presenting, scanning or delivering its pages.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future returning their `Image`s"
+        )
+    )]
     pub async fn scan(self) -> Result<Option<Vec<Image>>, VisionError> {
         let options = sys::document_scanner_options();
         let mut inexpressible = Vec::new();
@@ -193,50 +201,53 @@ pub struct DocumentScannerOptions {
 }
 
 /// Builds the pages a scan resolves to: one [`Image`] per encoded page, in
-/// scan order. Both system scanners produce JPEG pages, which
+/// scan order. The Android scanner delivers JPEG pages, which
 /// [`Image::from_encoded`] feeds to every request with no conversion step.
 #[cfg(any(
     target_os = "android",
-    all(target_os = "ios", not(target_abi = "macabi")),
     all(test, any(target_os = "ios", target_os = "macos"))
 ))]
 pub fn pages_from_encoded(pages: Vec<bytes::Bytes>) -> Vec<Image> {
     pages.into_iter().map(Image::from_encoded).collect()
 }
 
-/// Decodes the page payload the iOS bridge hands back: a JSON array of
-/// base64-encoded JPEG pages, the format every bridge result in this crate
-/// crosses in.
+/// Builds the pages the iOS bridge hands back: each element is the address
+/// of a `CVPixelBuffer` the Swift side retained for Rust to adopt, like
+/// the buffers `sys::apple_vision` hands to Vision request handlers. The
+/// rendered pages are already upright, so every image reports
+/// [`crate::Orientation::Up`].
+///
+/// # Errors
+///
+/// Returns [`VisionError::Platform`] when a delivered address is null.
 #[cfg(any(
     all(target_os = "ios", not(target_abi = "macabi")),
     all(test, any(target_os = "ios", target_os = "macos"))
 ))]
-pub fn pages_from_base64_json(json: &str) -> Result<Vec<Image>, VisionError> {
-    use base64::Engine as _;
-    let encoded: Vec<String> = serde_json::from_str(json).map_err(|error| {
-        VisionError::Platform(format!(
-            "the document scanner returned an unreadable page payload: {error}"
-        ))
-    })?;
-    let pages = encoded
-        .iter()
-        .map(|page| {
-            base64::engine::general_purpose::STANDARD
-                .decode(page)
-                .map(bytes::Bytes::from)
+pub fn pages_from_buffers(pages: Vec<usize>) -> Result<Vec<Image>, VisionError> {
+    pages
+        .into_iter()
+        .map(|address| {
+            let pointer = std::ptr::NonNull::new(address as *mut objc2_core_video::CVPixelBuffer)
+                .ok_or_else(|| {
+                VisionError::Platform("the document scanner returned a null page buffer".to_owned())
+            })?;
+            // SAFETY: the Swift bridge produced this address with
+            // `Unmanaged.passRetained`, so the buffer carries one retain
+            // that `from_raw` adopts.
+            let buffer = unsafe { objc2_core_foundation::CFRetained::from_raw(pointer) };
+            Ok(Image::from_pixel_buffer(buffer, crate::Orientation::Up))
         })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| {
-            VisionError::Platform(format!(
-                "the document scanner returned an undecodable page: {error}"
-            ))
-        })?;
-    Ok(pages_from_encoded(pages))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::DocumentScanner;
+    #[cfg(not(any(
+        target_os = "android",
+        all(target_os = "ios", not(target_abi = "macabi"))
+    )))]
     use crate::VisionError;
 
     #[test]
@@ -296,9 +307,7 @@ mod tests {
     /// request accepts directly.
     #[test]
     #[cfg(any(target_os = "ios", target_os = "macos"))]
-    fn page_payloads_decode_to_encoded_images() {
-        use base64::Engine as _;
-
+    fn encoded_pages_become_encoded_images() {
         let mut rgba = image::RgbaImage::new(8, 8);
         for pixel in rgba.pixels_mut() {
             *pixel = image::Rgba([200, 180, 160, 255]);
@@ -307,15 +316,9 @@ mod tests {
         image::DynamicImage::ImageRgba8(rgba)
             .write_to(&mut jpeg, image::ImageFormat::Jpeg)
             .expect("the test page encodes as JPEG");
-        let jpeg = jpeg.into_inner();
+        let jpeg = bytes::Bytes::from(jpeg.into_inner());
 
-        let json = serde_json::to_string(&[
-            base64::engine::general_purpose::STANDARD.encode(&jpeg),
-            base64::engine::general_purpose::STANDARD.encode(&jpeg),
-        ])
-        .expect("the page payload serializes");
-
-        let pages = super::pages_from_base64_json(&json).expect("the payload decodes");
+        let pages = super::pages_from_encoded(vec![jpeg.clone(), jpeg]);
         assert_eq!(pages.len(), 2);
         for page in &pages {
             let crate::image::Pixels::Encoded(bytes) = page.pixels() else {
@@ -324,5 +327,54 @@ mod tests {
             let decoded = image::load_from_memory(bytes).expect("the page stays decodable");
             assert_eq!((decoded.width(), decoded.height()), (8, 8));
         }
+    }
+
+    /// A page the iOS bridge hands over — the address of a retained
+    /// `CVPixelBuffer` — must arrive as a
+    /// [`crate::image::Pixels::PixelBuffer`] image reporting itself
+    /// upright.
+    #[test]
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    fn buffer_addresses_become_pixel_buffer_images() {
+        use std::ptr::NonNull;
+
+        use objc2_core_foundation::{CFDictionary, CFRetained, CFString, CFType};
+        use objc2_core_video::{
+            CVPixelBuffer, CVPixelBufferCreate, kCVPixelBufferIOSurfacePropertiesKey,
+            kCVPixelFormatType_32BGRA,
+        };
+
+        // SAFETY: Core Video's immutable attribute key; an empty
+        // dictionary marks the buffer IOSurface-backed.
+        let io_surface = unsafe { kCVPixelBufferIOSurfacePropertiesKey };
+        let no_properties = CFDictionary::<CFString, CFType>::empty();
+        let attributes =
+            CFDictionary::<CFString, CFType>::from_slices(&[io_surface], &[no_properties.as_ref()]);
+        let mut buffer: *mut CVPixelBuffer = std::ptr::null_mut();
+        // SAFETY: the out pointer is valid for the call; a created buffer
+        // carries one reference that the page handoff consumes through
+        // `into_raw` and adopts in `pages_from_buffers`.
+        let buffer = unsafe {
+            assert_eq!(
+                CVPixelBufferCreate(
+                    None,
+                    8,
+                    8,
+                    kCVPixelFormatType_32BGRA,
+                    Some(attributes.as_opaque()),
+                    NonNull::from(&mut buffer),
+                ),
+                0
+            );
+            CFRetained::from_raw(NonNull::new(buffer).expect("a created pixel buffer"))
+        };
+        let address = CFRetained::into_raw(buffer).as_ptr() as usize;
+
+        let pages = super::pages_from_buffers(vec![address]).expect("the buffers adopt");
+        assert_eq!(pages.len(), 1);
+        let crate::image::Pixels::PixelBuffer { orientation, .. } = pages[0].pixels() else {
+            panic!("a scanned page keeps its pixel buffer")
+        };
+        assert_eq!(*orientation, crate::Orientation::Up);
     }
 }

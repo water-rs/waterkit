@@ -31,10 +31,12 @@ use waterkit_build::{
 /// the packager and resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.vision.DocumentScannerHelper");
 
-/// The pending `getStartScanIntent` calls: each resolves to the scanner's
+/// A pending `getStartScanIntent` call's outcome: the scanner's
 /// `IntentSender` — `None` when the task cancelled before an intent existed.
-type ScanIntentCallback =
-    oneshot::Sender<Result<Option<Global<JObject<'static>>>, VisionError>>;
+type ScanIntentResult = Result<Option<Global<JObject<'static>>>, VisionError>;
+
+/// The pending `getStartScanIntent` calls.
+type ScanIntentCallback = oneshot::Sender<ScanIntentResult>;
 
 static NEXT_SCAN_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -83,8 +85,7 @@ fn launch_scan_with_context(
     context: &JObject<'_>,
     page_limit: Option<u16>,
     gallery_import: bool,
-) -> Result<oneshot::Receiver<Result<Option<Global<JObject<'static>>>, VisionError>>, VisionError>
-{
+) -> Result<oneshot::Receiver<ScanIntentResult>, VisionError> {
     let helper_class = HELPER.class(env, context)?;
 
     let request_id = NEXT_SCAN_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
@@ -154,20 +155,24 @@ fn read_pages(
         .map_err(|error| {
             VisionError::Platform(format!("the scanned pages are not an array: {error}"))
         })?;
-    let array: JObjectArray<JByteArray> = env.cast_local(array).map_err(|error| {
-        VisionError::Platform(format!("the scanned pages are not byte arrays: {error}"))
+    let array = env
+        .cast_local::<JObjectArray<JByteArray>>(array)
+        .map_err(|error| {
+            VisionError::Platform(format!("the scanned pages are not byte arrays: {error}"))
+        })?;
+    let len = array.len(env).map_err(|error| {
+        VisionError::Platform(format!("count the scanned pages failed: {error}"))
     })?;
-    let len = array
-        .len(env)
-        .map_err(|error| VisionError::Platform(format!("count the scanned pages failed: {error}")))?;
     (0..len)
         .map(|index| {
             let page = array.get_element(env, index).map_err(|error| {
                 VisionError::Platform(format!("read scanned page {index} failed: {error}"))
             })?;
-            env.convert_byte_array(&page).map(Bytes::from).map_err(|error| {
-                VisionError::Platform(format!("copy scanned page {index} failed: {error}"))
-            })
+            env.convert_byte_array(&page)
+                .map(Bytes::from)
+                .map_err(|error| {
+                    VisionError::Platform(format!("copy scanned page {index} failed: {error}"))
+                })
         })
         .collect()
 }
@@ -209,14 +214,14 @@ pub async fn scan_document(
         })
     })?;
     let result = pending.await.map_err(|error| {
-        VisionError::Platform(format!("the document scanner's result failed to arrive: {error}"))
+        VisionError::Platform(format!(
+            "the document scanner's result failed to arrive: {error}"
+        ))
     })?;
     match result.code() {
         ResultCode::Ok => {
             let data = result.into_data().ok_or_else(|| {
-                VisionError::Platform(
-                    "the document scanner returned no result intent".to_owned(),
-                )
+                VisionError::Platform("the document scanner returned no result intent".to_owned())
             })?;
             // Reading the page URIs is content-resolver I/O; keep it off the
             // async executor's thread.
@@ -259,26 +264,30 @@ pub extern "system" fn Java_waterkit_vision_DocumentScannerHelper_onScanIntent<'
             })
             .remove(&request_id)
             .unwrap_or_else(|| {
-                panic!("waterkit-vision: unknown document scan request id in callback: {request_id}")
+                panic!(
+                    "waterkit-vision: unknown document scan request id in callback: {request_id}"
+                )
             });
 
-        let result = if let Some(message) =
-            decode_optional_string(env, &error).unwrap_or_else(|decode_error| {
-                panic!("waterkit-vision: decode document scan error message failed: {decode_error}")
-            })
-        {
-            Err(VisionError::Platform(message))
-        } else if sender.is_null() {
-            // The intent task cancelled before an intent existed.
-            Ok(None)
-        } else {
-            env.new_global_ref(&sender).map(Some).map_err(|error| {
-                VisionError::Platform(format!(
-                    "retain the scan intent sender failed: {}",
-                    describe_jni_error(env, error)
-                ))
-            })
-        };
+        let message = decode_optional_string(env, &error).unwrap_or_else(|decode_error| {
+            panic!("waterkit-vision: decode document scan error message failed: {decode_error}")
+        });
+        let result = message.map_or_else(
+            || {
+                if sender.is_null() {
+                    // The intent task cancelled before an intent existed.
+                    Ok(None)
+                } else {
+                    env.new_global_ref(&sender).map(Some).map_err(|error| {
+                        VisionError::Platform(format!(
+                            "retain the scan intent sender failed: {}",
+                            describe_jni_error(env, error)
+                        ))
+                    })
+                }
+            },
+            |message| Err(VisionError::Platform(message)),
+        );
         let _ = tx.send(result);
         Ok(())
     })

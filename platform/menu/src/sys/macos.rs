@@ -71,6 +71,7 @@ pub struct MenuBarInner {
     commands: HashMap<CommandId, Retained<NSMenuItem>>,
     targets: Vec<Retained<MenuCommandTarget>>,
     services_menu: Option<Retained<NSMenu>>,
+    windows_menu: Option<Retained<NSMenu>>,
 }
 
 impl MenuBarInner {
@@ -86,6 +87,7 @@ impl MenuBarInner {
             commands: HashMap::new(),
             targets: Vec::new(),
             services_menu: None,
+            windows_menu: None,
         };
         // Manual state management: with auto-validation on, AppKit would
         // re-enable items at display time because our targets implement no
@@ -106,6 +108,11 @@ impl MenuBarInner {
             app.setServicesMenu(Some(services));
         }
         app.setMainMenu(Some(&self.bar));
+        // The windows menu lives inside the installed bar, so registration
+        // follows `setMainMenu`: AppKit keeps the live window list on the
+        // marked submenu. A bar marking none clears a previous bar's
+        // registration.
+        app.setWindowsMenu(self.windows_menu.as_deref());
     }
 
     pub(crate) fn set_enabled(&self, id: CommandId, enabled: bool) {
@@ -140,6 +147,11 @@ impl MenuBarInner {
         for entry in &submenu.entries {
             let item = self.entry_item(entry, mtm, sender)?;
             menu.addItem(&item);
+        }
+        if submenu.windows_menu {
+            // `MenuBar::new` rejects a second mark, so this is assigned at
+            // most once.
+            self.windows_menu = Some(menu.clone());
         }
         let item = NSMenuItem::new(mtm);
         item.setTitle(&NSString::from_str(&submenu.title));
@@ -246,6 +258,23 @@ impl MenuBarInner {
                 unsafe { menu_item.setAction(Some(sel!(terminate:))) };
                 menu_item.setKeyEquivalent(&NSString::from_str("q"));
                 menu_item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
+            }
+            StandardItem::Minimize => {
+                menu_item.setTitle(&NSString::from_str("Minimize"));
+                // SAFETY: `performMiniaturize:` is the standard AppKit
+                // minimize action; the nil target routes it to the key window.
+                unsafe { menu_item.setAction(Some(sel!(performMiniaturize:))) };
+            }
+            StandardItem::Zoom => {
+                menu_item.setTitle(&NSString::from_str("Zoom"));
+                // SAFETY: `performZoom:` is the standard AppKit zoom action.
+                unsafe { menu_item.setAction(Some(sel!(performZoom:))) };
+            }
+            StandardItem::BringAllToFront => {
+                menu_item.setTitle(&NSString::from_str("Bring All to Front"));
+                // SAFETY: `arrangeInFront:` is the standard AppKit
+                // order-to-front action.
+                unsafe { menu_item.setAction(Some(sel!(arrangeInFront:))) };
             }
         }
         menu_item

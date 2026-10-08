@@ -8,7 +8,10 @@ Native application menu bar for macOS and Windows.
 - **macOS** — an `NSMenu` installed as `NSApp.mainMenu` (through `objc2` /
   `objc2-app-kit`). `MenuBar::install` replaces the current bar; the
   `StandardItem`s give the application menu its About, Services, Hide, Show
-  All and Quit items with the platform's standard actions and equivalents.
+  All and Quit items, and the windows menu its Minimize, Zoom and Bring All
+  to Front, with the platform's standard actions and equivalents. A
+  `Submenu` marked `windows_menu()` is registered as `NSApp.windowsMenu` on
+  install, which is what makes AppKit keep the live window list on it.
 - **Windows** — a Win32 `HMENU` attached to an `HWND` (through the `windows`
   crate). `MenuBar::attach` subclasses the window with `SetWindowSubclass` so
   `WM_COMMAND` activations reach the bar's event stream; the returned

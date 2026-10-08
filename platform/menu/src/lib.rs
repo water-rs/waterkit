@@ -87,16 +87,22 @@ impl MenuBar {
     /// Fails with [`MenuError::UnmappableKey`] on a shortcut the platform
     /// cannot use as a menu key equivalent, with
     /// [`MenuError::DuplicateCommandId`] when two commands carry the same id,
-    /// with [`MenuError::ItemLimitExceeded`] when the bar holds more items
+    /// with [`MenuError::DuplicateWindowsMenu`] when more than one submenu is
+    /// marked [`Submenu::windows_menu`], with
+    /// [`MenuError::ItemLimitExceeded`] when the bar holds more items
     /// than the platform can address, and with
-    /// [`MenuError::StandardItemUnsupported`] when a [`StandardItem`] appears
-    /// outside macOS.
+    /// [`MenuError::StandardItemUnsupported`] when a [`StandardItem`] or a
+    /// [`Submenu::windows_menu`] mark appears outside macOS.
     ///
     /// # Panics
     ///
     /// On macOS, panics when called off the main thread: `AppKit` objects must
     /// be created on the main thread.
     pub fn new(menus: impl IntoIterator<Item = Submenu>) -> Result<Self, MenuError> {
+        let menus: Vec<Submenu> = menus.into_iter().collect();
+        if marked_windows_menus(&menus) > 1 {
+            return Err(MenuError::DuplicateWindowsMenu);
+        }
         let (sender, events) = async_channel::unbounded();
         let inner = sys::MenuBarInner::new(menus, &sender)?;
         Ok(Self {
@@ -173,5 +179,41 @@ impl MenuBar {
         &self,
     ) -> Option<windows::Win32::UI::WindowsAndMessaging::HACCEL> {
         self.inner.accelerator_table()
+    }
+}
+
+/// The number of submenus marked [`Submenu::windows_menu`] in `menus`, at
+/// any depth — the bar may mark at most one.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn marked_windows_menus(menus: &[Submenu]) -> usize {
+    fn marked(submenu: &Submenu) -> usize {
+        usize::from(submenu.windows_menu)
+            + submenu
+                .entries
+                .iter()
+                .map(|entry| match entry {
+                    Entry::Submenu(nested) => marked(nested),
+                    _ => 0,
+                })
+                .sum::<usize>()
+    }
+    menus.iter().map(marked).sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{MenuBar, MenuError, Submenu};
+
+    /// `MenuBar::new` rejects a second `windows_menu` mark before any
+    /// platform object is built, so the check needs no main thread.
+    #[test]
+    fn duplicate_windows_menu_mark_is_rejected() {
+        assert!(matches!(
+            MenuBar::new([
+                Submenu::new("Window").windows_menu(),
+                Submenu::new("Other").windows_menu(),
+            ]),
+            Err(MenuError::DuplicateWindowsMenu)
+        ));
     }
 }

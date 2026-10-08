@@ -89,6 +89,12 @@ fn run(report: &mut TestReport) {
             .entry(delete_forward)
             .entry(delete_backward)
             .entry(close_window),
+        Submenu::new("Window")
+            .windows_menu()
+            .entry(StandardItem::Minimize)
+            .entry(StandardItem::Zoom)
+            .entry(Entry::Separator)
+            .entry(StandardItem::BringAllToFront),
     ]) {
         Ok(bar) => bar,
         Err(error) => {
@@ -112,13 +118,13 @@ fn run(report: &mut TestReport) {
     };
     report.push(TestCase::passed("menubar.install"));
 
-    // ---- Bar shape: three pull-downs, each carrying a submenu. ----
+    // ---- Bar shape: four pull-downs, each carrying a submenu. ----
     check(
         report,
         "menubar.top-level",
-        main_menu.numberOfItems() == 3,
+        main_menu.numberOfItems() == 4,
         format!(
-            "expected 3 top-level items, found {}",
+            "expected 4 top-level items, found {}",
             main_menu.numberOfItems()
         ),
     );
@@ -127,7 +133,7 @@ fn run(report: &mut TestReport) {
     check(
         report,
         "menubar.top-level-titles",
-        titles == ["Test App", "File", "Edit"],
+        titles == ["Test App", "File", "Edit", "Window"],
         format!("titles: {titles:?}"),
     );
     let submenus: Vec<Option<Retained<NSMenu>>> = top.iter().map(|item| item.submenu()).collect();
@@ -284,6 +290,46 @@ fn run(report: &mut TestReport) {
             edit_items[0].state(),
             file_items[1].isEnabled(),
         ),
+    );
+
+    // ---- Window menu: standard window items and windowsMenu registration. ----
+    let window_menu = submenus[3].as_ref().expect("checked above");
+    let window_items = menu_items(window_menu);
+    let window_titles: Vec<String> = window_items
+        .iter()
+        .map(|item| item.title().to_string())
+        .collect();
+    check(
+        report,
+        "window-menu.standard-titles",
+        window_titles == ["Minimize", "Zoom", "", "Bring All to Front"],
+        format!("titles: {window_titles:?}"),
+    );
+    check(
+        report,
+        "window-menu.standard-selectors",
+        window_items[0].action() == Some(sel!(performMiniaturize:))
+            && window_items[1].action() == Some(sel!(performZoom:))
+            && window_items[3].action() == Some(sel!(arrangeInFront:)),
+        format!(
+            "actions: {:?}",
+            window_items
+                .iter()
+                .map(|item| item.action())
+                .collect::<Vec<_>>()
+        ),
+    );
+    check(
+        report,
+        "window-menu.standard-targets",
+        window_items.iter().all(|item| item.target().is_none()),
+        "standard window items keep a nil target so the responder chain handles them".to_owned(),
+    );
+    check(
+        report,
+        "window-menu.registered",
+        app.windowsMenu().as_deref() == Some(&**window_menu),
+        "NSApp.windowsMenu is not the marked submenu".to_owned(),
     );
 
     // ---- set_enabled / set_checked ----

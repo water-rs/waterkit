@@ -54,6 +54,7 @@ impl fmt::Display for CommandId {
 pub struct Submenu {
     pub(crate) title: String,
     pub(crate) entries: Vec<Entry>,
+    pub(crate) windows_menu: bool,
 }
 
 impl Submenu {
@@ -62,6 +63,7 @@ impl Submenu {
         Self {
             title: title.into(),
             entries: Vec::new(),
+            windows_menu: false,
         }
     }
 
@@ -69,6 +71,23 @@ impl Submenu {
     #[must_use]
     pub fn entry(mut self, entry: impl Into<Entry>) -> Self {
         self.entries.push(entry.into());
+        self
+    }
+
+    /// Marks this submenu as the application's windows menu:
+    /// [`MenuBar::install`](crate::MenuBar::install) registers it as
+    /// `NSApp.windowsMenu`, which is what makes `AppKit` keep the live
+    /// window list on it.
+    ///
+    /// The mark exists only on macOS:
+    /// [`MenuBar::new`](crate::MenuBar::new) fails with
+    /// [`MenuError::StandardItemUnsupported`](crate::MenuError::StandardItemUnsupported)
+    /// on any other platform, and with
+    /// [`MenuError::DuplicateWindowsMenu`](crate::MenuError::DuplicateWindowsMenu)
+    /// when more than one submenu in the bar is marked.
+    #[must_use]
+    pub const fn windows_menu(mut self) -> Self {
+        self.windows_menu = true;
         self
     }
 }
@@ -270,12 +289,15 @@ impl fmt::Debug for Modifiers {
     }
 }
 
-/// One of the macOS application menu's system items.
+/// One of the macOS menu bar's system items.
 ///
-/// These live in the first (application) menu of the bar and get the
-/// platform's standard actions and key equivalents. Constructing one on a
-/// platform without a macOS application menu fails [`MenuBar::new`](crate::MenuBar::new)
-/// with [`MenuError::StandardItemUnsupported`](crate::MenuError::StandardItemUnsupported).
+/// These get the platform's standard action — and key equivalent where the
+/// platform assigns one — through the responder chain rather than reporting
+/// a [`CommandId`]: the application menu holds About, Services, Hide, Hide
+/// Others, Show All and Quit, and the windows menu holds Minimize, Zoom and
+/// Bring All to Front. They exist only on macOS: constructing one on
+/// another platform fails [`MenuBar::new`](crate::MenuBar::new) with
+/// [`MenuError::StandardItemUnsupported`](crate::MenuError::StandardItemUnsupported).
 #[derive(Debug)]
 pub enum StandardItem {
     /// "About `name`" — opens the standard About panel.
@@ -300,4 +322,11 @@ pub enum StandardItem {
         /// The application name shown in the item title.
         name: String,
     },
+    /// "Minimize" — minimizes the key window (`performMiniaturize:`).
+    Minimize,
+    /// "Zoom" — zooms the key window (`performZoom:`).
+    Zoom,
+    /// "Bring All to Front" — orders the application's windows to the
+    /// front (`arrangeInFront:`).
+    BringAllToFront,
 }

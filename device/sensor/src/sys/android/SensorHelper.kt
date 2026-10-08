@@ -6,8 +6,8 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
-import android.os.HandlerThread
-import android.os.SystemClock
+import android.os.Looper
+import waterkit.build.NativeCallback
 
 /**
  * Helper class for accessing sensors on Android.
@@ -18,14 +18,14 @@ object SensorHelper {
     // Sensor type constants matching Android SDK
     const val TYPE_ACCELEROMETER = 1
     const val TYPE_GYROSCOPE = 4
-    const val TYPE_MAGNETOMETER = 2
+    const val TYPE_MAGNETIC_FIELD = 2
     const val TYPE_PRESSURE = 6
+    const val TYPE_LIGHT = 5
 
-    /** How long a read waits for the sensor's first sample. */
-    private const val EVENT_TIMEOUT_MS = 1000L
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     /**
-     * Check if a sensor type is available.
+     * Check if a sensor type is available on this device.
      */
     @JvmStatic
     fun isSensorAvailable(context: Context, sensorType: Int): Boolean {
@@ -35,127 +35,85 @@ object SensorHelper {
     }
 
     /**
-     * Read a 3-axis sensor (accelerometer, gyroscope, magnetometer).
-     * Returns array: [success, x, y, z, timestamp]
-     * On failure: [0.0]
+     * Take a one-shot reading of [sensorType]: the listener completes
+     * [callback] with `[x, y, z, timestamp]` (epoch milliseconds) on its first
+     * event and unregisters itself. [callback] fails when the sensor is absent
+     * or registration is refused.
      */
     @JvmStatic
-    fun readSensor(context: Context, sensorType: Int): DoubleArray =
-        awaitFirstEvent(context, sensorType, 3) { event ->
+    fun readSensor(context: Context, sensorType: Int, callback: NativeCallback) {
+        readFirstEvent(context, sensorType, 3, callback) { event ->
             doubleArrayOf(
-                1.0, // success
                 event.values[0].toDouble(),
                 event.values[1].toDouble(),
                 event.values[2].toDouble(),
                 event.timestamp.toDouble() / 1_000_000.0 // ns to ms
             )
         }
+    }
 
     /**
-     * Read pressure sensor (barometer).
-     * Returns array: [success, pressure_hPa, timestamp]
-     * On failure: [0.0]
+     * Take a one-shot pressure reading: completes [callback] with
+     * `[hectopascals, timestamp]` (epoch milliseconds).
      */
     @JvmStatic
-    fun readPressure(context: Context): DoubleArray =
-        readScalarSensor(context, Sensor.TYPE_PRESSURE)
-
-    /**
-     * Read ambient light sensor.
-     * Returns array: [success, lux, timestamp]
-     * On failure: [0.0]
-     */
-    @JvmStatic
-    fun readLight(context: Context): DoubleArray =
-        readScalarSensor(context, Sensor.TYPE_LIGHT)
-
-    /**
-     * Read a single-value sensor.
-     * Returns array: [success, value, timestamp]
-     * On failure: [0.0]
-     */
-    private fun readScalarSensor(context: Context, sensorType: Int): DoubleArray =
-        awaitFirstEvent(context, sensorType, 1) { event ->
+    fun readPressure(context: Context, callback: NativeCallback) {
+        readFirstEvent(context, Sensor.TYPE_PRESSURE, 1, callback) { event ->
             doubleArrayOf(
-                1.0, // success
                 event.values[0].toDouble(),
-                event.timestamp.toDouble() / 1_000_000.0 // ns to ms
+                event.timestamp.toDouble() / 1_000_000.0
             )
-        }
-
-    /**
-     * Register for [sensorType], block until its first sample carrying at least
-     * [minimumValues] values arrives, and shape it with [transform].
-     * Returns the "unavailable" marker [0.0] when the sensor is missing or stays
-     * silent for [EVENT_TIMEOUT_MS].
-     */
-    private fun awaitFirstEvent(
-        context: Context,
-        sensorType: Int,
-        minimumValues: Int,
-        transform: (SensorEvent) -> DoubleArray,
-    ): DoubleArray {
-        val manager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
-            ?: return unavailable()
-
-        val sensor = manager.getDefaultSensor(sensorType) ?: return unavailable()
-
-        // The caller blocks until the first event arrives, so delivery must not
-        // depend on a looper the caller may itself be blocking. Delivering on
-        // the main looper made a read from the UI thread queue its own callback
-        // behind the wait that callback has to satisfy, so it timed out every
-        // time and reported a working sensor as unavailable.
-        val deliveryThread = HandlerThread("waterkit-sensor")
-        deliveryThread.start()
-
-        try {
-            var result: DoubleArray? = null
-            val lock = Object()
-
-            val listener = object : SensorEventListener {
-                override fun onSensorChanged(event: SensorEvent) {
-                    synchronized(lock) {
-                        if (result == null && event.values.size >= minimumValues) {
-                            result = transform(event)
-                        }
-                        lock.notifyAll()
-                    }
-                }
-
-                override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
-            }
-
-            synchronized(lock) {
-                manager.registerListener(
-                    listener,
-                    sensor,
-                    SensorManager.SENSOR_DELAY_GAME,
-                    Handler(deliveryThread.looper),
-                )
-
-                val deadline = SystemClock.uptimeMillis() + EVENT_TIMEOUT_MS
-                while (result == null) {
-                    val remaining = deadline - SystemClock.uptimeMillis()
-                    if (remaining <= 0L) {
-                        break
-                    }
-                    try {
-                        lock.wait(remaining)
-                    } catch (e: InterruptedException) {
-                        Thread.currentThread().interrupt()
-                        break
-                    }
-                }
-            }
-
-            manager.unregisterListener(listener)
-
-            return synchronized(lock) { result } ?: unavailable()
-        } finally {
-            deliveryThread.quitSafely()
         }
     }
 
-    /** The marker the Rust side decodes as [`SensorError::NotAvailable`]. */
-    private fun unavailable() = doubleArrayOf(0.0)
+    /**
+     * Take a one-shot ambient light reading: completes [callback] with
+     * `[lux, timestamp]` (epoch milliseconds).
+     */
+    @JvmStatic
+    fun readLight(context: Context, callback: NativeCallback) {
+        readFirstEvent(context, Sensor.TYPE_LIGHT, 1, callback) { event ->
+            doubleArrayOf(
+                event.values[0].toDouble(),
+                event.timestamp.toDouble() / 1_000_000.0
+            )
+        }
+    }
+
+    /**
+     * Registers a listener for [sensorType] on the main looper; the first
+     * event carrying at least [minimumValues] values is shaped by [transform]
+     * and completes [callback], then the listener unregisters itself.
+     */
+    private fun readFirstEvent(
+        context: Context,
+        sensorType: Int,
+        minimumValues: Int,
+        callback: NativeCallback,
+        transform: (SensorEvent) -> DoubleArray,
+    ) {
+        val manager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+            ?: return callback.fail("sensor service is unavailable")
+        val sensor = manager.getDefaultSensor(sensorType)
+            ?: return callback.fail("sensor type $sensorType is not available")
+
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                manager.unregisterListener(this)
+                if (event.values.size >= minimumValues) {
+                    callback.complete(transform(event))
+                } else {
+                    callback.fail(
+                        "sensor type $sensorType reported too few values: ${event.values.size}"
+                    )
+                }
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
+        }
+
+        if (!manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME, mainHandler)) {
+            callback.fail("sensor type $sensorType refused registration")
+        }
+    }
 }

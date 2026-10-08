@@ -47,7 +47,7 @@ objc2-io-kit = { workspace = true, features = ["libc"] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
-waterkit-build.workspace = true
+waterkit-build = { workspace = true, features = ["native-callback"] }
 jni.workspace = true
 ndk-context.workspace = true
 

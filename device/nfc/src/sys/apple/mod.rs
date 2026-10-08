@@ -3,10 +3,10 @@
 #[cfg(target_os = "ios")]
 mod imp {
     use core::cell::{Cell, RefCell};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use block2::RcBlock;
-    use dispatch2::{DispatchQueue, MainThreadBound, run_on_main};
+    use dispatch2::{DispatchQueue, MainThreadBound};
     use futures::channel::oneshot;
     use objc2::rc::{Retained, Weak};
     use objc2::runtime::{NSObject, ProtocolObject};
@@ -297,31 +297,49 @@ mod imp {
         }
     }
 
+    /// Runs `work` on the main queue: inline when the caller is already on
+    /// the main thread, otherwise by `exec_async` with the result carried
+    /// back through a oneshot. Never blocks the caller.
+    async fn on_main<R, F>(work: F) -> R
+    where
+        R: Send + 'static,
+        F: FnOnce(MainThreadMarker) -> R + Send + 'static,
+    {
+        if let Some(mtm) = MainThreadMarker::new() {
+            work(mtm)
+        } else {
+            let (tx, rx) = oneshot::channel();
+            DispatchQueue::main().exec_async(move || {
+                let mtm = MainThreadMarker::new().expect("exec_async runs on the main queue");
+                drop(tx.send(work(mtm)));
+            });
+            rx.await
+                .expect("the exec_async worker sends before it exits")
+        }
+    }
+
     /// A running reader session.
     #[derive(Debug)]
     pub struct NfcReaderInner {
         /// The reader session; delegates callbacks to `delegate` on the main
         /// queue.
-        session: MainThreadBound<Retained<NFCNDEFReaderSession>>,
+        session: Arc<MainThreadBound<Retained<NFCNDEFReaderSession>>>,
         /// The delegate owning the session's state; also retained by the
         /// session itself.
-        delegate: MainThreadBound<Retained<NfcSession>>,
+        delegate: Arc<MainThreadBound<Retained<NfcSession>>>,
     }
 
     impl NfcReaderInner {
-        #[expect(
-            clippy::unused_async,
-            reason = "the async signature is part of the crate API surface and other platforms await here"
-        )]
         pub async fn start_session(
             message: &str,
         ) -> Result<(Self, async_channel::Receiver<NfcTag>), NfcError> {
             if !nfc_is_available() {
                 return Err(NfcError::NotAvailable);
             }
-            let (tag_tx, tag_rx) = async_channel::bounded(16);
+            let (tag_tx, tag_rx) = async_channel::unbounded();
             let (error_tx, mut error_rx) = oneshot::channel::<String>();
-            let (session, delegate) = run_on_main(|mtm| {
+            let message = message.to_owned();
+            let (session, delegate) = on_main(move |mtm| {
                 let delegate = NfcSession::new(tag_tx, error_tx, mtm);
                 // SAFETY: `initWithDelegate:queue:invalidateAfterFirstRead:` is
                 // the designated initializer; `delegate` conforms to the
@@ -335,7 +353,7 @@ mod imp {
                         false,
                     )
                 };
-                let alert = NSString::from_str(message);
+                let alert = NSString::from_str(&message);
                 // SAFETY: `session` is live and `alertMessage` is a plain
                 // property setter.
                 unsafe { session.setAlertMessage(&alert) };
@@ -343,10 +361,11 @@ mod imp {
                 // invariants.
                 unsafe { session.beginSession() };
                 (
-                    MainThreadBound::new(session, mtm),
-                    MainThreadBound::new(delegate, mtm),
+                    Arc::new(MainThreadBound::new(session, mtm)),
+                    Arc::new(MainThreadBound::new(delegate, mtm)),
                 )
-            });
+            })
+            .await;
             // Same contract as before: a session-start error can only arrive
             // synchronously (it never does on iOS), so one immediate check
             // decides.
@@ -361,8 +380,9 @@ mod imp {
 
         pub async fn write(&self, message: NdefMessage) -> Result<(), NfcError> {
             let (tx, rx) = oneshot::channel::<Result<(), String>>();
-            run_on_main(|mtm| {
-                let ivars = self.delegate.get(mtm).ivars();
+            let delegate = Arc::clone(&self.delegate);
+            on_main(move |mtm| {
+                let ivars = delegate.get(mtm).ivars();
                 if ivars.invalidated.get() {
                     let _ = tx.send(Err("No active session".to_string()));
                 } else {
@@ -371,17 +391,20 @@ mod imp {
                         callback: tx,
                     });
                 }
-            });
+            })
+            .await;
             rx.await
                 .map_err(|_| NfcError::Platform("callback dropped".into()))?
                 .map_err(NfcError::WriteFailed)
         }
 
         pub fn stop(&self) {
-            run_on_main(|mtm| {
+            let session = Arc::clone(&self.session);
+            DispatchQueue::main().exec_async(move || {
+                let mtm = MainThreadMarker::new().expect("exec_async runs on the main queue");
                 // SAFETY: the session is live; `invalidateSession` ends it and
                 // its callbacks.
-                unsafe { self.session.get(mtm).invalidateSession() };
+                unsafe { session.get(mtm).invalidateSession() };
             });
         }
     }

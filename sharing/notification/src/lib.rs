@@ -6,13 +6,14 @@
 //! # Example
 //!
 //! ```no_run
-//! use waterkit_notification::{Notification, InterruptionLevel};
+//! use waterkit_notification::Notification;
 //!
-//! fn main() -> Result<(), waterkit_notification::NotificationError> {
+//! async fn greet() -> Result<(), waterkit_notification::NotificationError> {
 //!     Notification::new()
 //!         .title("Hello")
 //!         .body("World from WaterKit!")
-//!         .show()?;
+//!         .show()
+//!         .await?;
 //!     Ok(())
 //! }
 //! ```
@@ -24,18 +25,22 @@
 //! ```no_run
 //! use waterkit_notification::Notification;
 //!
+//! # async fn run() -> Result<(), waterkit_notification::NotificationError> {
 //! // Show initial notification
 //! let handle = Notification::new()
 //!     .title("Downloading...")
 //!     .body("0%")
-//!     .show()?;
+//!     .show()
+//!     .await?;
 //!
 //! // Update the same notification using the handle
 //! handle.update()
 //!     .title("Downloading...")
 //!     .body("50%")
-//!     .show()?;
-//! # Ok::<(), waterkit_notification::NotificationError>(())
+//!     .show()
+//!     .await?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # Platform Feature Support
@@ -297,16 +302,20 @@ pub enum NotificationResponse {
 /// ```no_run
 /// use waterkit_notification::Notification;
 ///
-/// let mut handle = Notification::new()
+/// # async fn run() -> Result<(), waterkit_notification::NotificationError> {
+/// let handle = Notification::new()
 ///     .title("Downloading...")
 ///     .body("0%")
-///     .show()?;
+///     .show()
+///     .await?;
 ///
 /// // Update the notification
 /// handle.update()
 ///     .body("50%")
-///     .show()?;
-/// # Ok::<(), waterkit_notification::NotificationError>(())
+///     .show()
+///     .await?;
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Debug)]
 pub struct NotificationHandle {

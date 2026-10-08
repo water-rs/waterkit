@@ -28,11 +28,12 @@ waterkit-notification = "0.1"
 ```rust
 use waterkit_notification::Notification;
 
-fn main() -> Result<(), waterkit_notification::NotificationError> {
+async fn greet() -> Result<(), waterkit_notification::NotificationError> {
     Notification::new()
         .title("Hello")
         .body("World from WaterKit!")
-        .show()?;
+        .show()
+        .await?;
     Ok(())
 }
 ```
@@ -48,7 +49,8 @@ Notification::new()
     .title("Meeting Starting")
     .body("Your meeting starts in 5 minutes")
     .time_sensitive()
-    .show()?;
+    .show()
+    .await?;
 ```
 
 ### Interruption Levels
@@ -74,7 +76,8 @@ Notification::new()
     .body("A new version of WaterUI is ready to download")
     .action(Action::new("View Details", "https://waterui.dev"))
     .action(Action::new("Later", "waterui://dismiss"))
-    .show()?;
+    .show()
+    .await?;
 ```
 
 Actions work on Linux, macOS, iOS, and Android. Each action opens the specified URL when clicked.
@@ -95,7 +98,8 @@ Notification::new()
     .sound(Sound::Theme("complete".into()))   // Linux sound theme
     .timeout(Timeout::Milliseconds(5000))     // Linux/Windows
     .interruption_level(InterruptionLevel::Active)
-    .show()?;
+    .show()
+    .await?;
 ```
 
 ## Platform Backends

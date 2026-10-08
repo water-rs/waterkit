@@ -31,16 +31,16 @@ pub enum Event {
 }
 
 pub struct Request {
-    /// The Java `NativeChannel` the helper calls back through. Drop cancels
-    /// the registration it carries on Android.
+    /// The Java `OtpRequest` the helper drives the request through. Drop
+    /// cancels the registration it owns on Android.
     #[cfg(target_os = "android")]
-    pub(super) channel: Option<waterkit_build::NativeChannel<Event>>,
+    pub(super) handle: Option<jni::objects::Global<jni::objects::JObject<'static>>>,
     events: Pin<Box<dyn Stream<Item = Event> + Send>>,
 }
 
 impl Request {
     /// A request whose events come through `events` — on Android the
-    /// `NativeChannel` stays in the request so dropping it cancels the
+    /// `OtpRequest` handle stays in the request so dropping it cancels the
     /// platform listener.
     #[cfg_attr(
         not(target_os = "android"),
@@ -51,11 +51,11 @@ impl Request {
     )]
     #[cfg(target_os = "android")]
     pub fn new(
-        channel: waterkit_build::NativeChannel<Event>,
+        handle: jni::objects::Global<jni::objects::JObject<'static>>,
         events: impl Stream<Item = Event> + Send + 'static,
     ) -> Self {
         Self {
-            channel: Some(channel),
+            handle: Some(handle),
             events: Box::pin(events),
         }
     }
@@ -69,12 +69,12 @@ impl Request {
         }
     }
 
-    /// The `NativeChannel` an Android request carries for its listeners.
+    /// The `OtpRequest` an Android request owns its listener through.
     #[cfg(target_os = "android")]
-    pub(super) const fn channel(&self) -> &waterkit_build::NativeChannel<Event> {
-        self.channel
+    pub(super) const fn handle(&self) -> &jni::objects::Global<jni::objects::JObject<'static>> {
+        self.handle
             .as_ref()
-            .expect("an Android OTP request always carries its channel")
+            .expect("an Android OTP request always carries its request object")
     }
 
     #[cfg_attr(
@@ -104,10 +104,10 @@ impl Request {
 #[cfg(target_os = "android")]
 impl Drop for Request {
     fn drop(&mut self) {
-        let Some(channel) = self.channel.take() else {
+        let Some(handle) = self.handle.take() else {
             return;
         };
-        if let Err(error) = cancel(channel.as_obj()) {
+        if let Err(error) = cancel(handle.as_obj()) {
             warn!(%error, "failed to cancel OTP request");
         }
     }

@@ -20,9 +20,7 @@ import com.google.android.gms.auth.api.phone.SmsRetriever
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.common.api.Status
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ExecutionException
-import java.util.concurrent.FutureTask
+import waterkit.build.NativeCallback
 import waterkit.build.NativeChannel
 
 /** Events an OTP request streams into Rust through its [NativeChannel]. */
@@ -34,26 +32,249 @@ sealed interface OtpEvent {
     class Failed(val error: String) : OtpEvent
 }
 
+/**
+ * One in-flight OTP request. Owns its broadcast receiver / consent launcher and
+ * the [NativeChannel] its events stream through; the Rust request handle keeps
+ * a global reference and cancels through [cancel].
+ */
+class OtpRequest(
+    private val context: Context,
+    private val channel: NativeChannel,
+) {
+    private var receiver: BroadcastReceiver? = null
+    private var launcher: ActivityResultLauncher<Intent>? = null
+    private var registered = false
+    private var cancelled = false
+
+    fun startSmsRetriever() {
+        OtpHelper.runOnMain {
+            if (cancelled) return@runOnMain
+            try {
+                registerRetrieverReceiver(consent = false)
+                SmsRetriever.getClient(context).startSmsRetriever()
+                    .addOnSuccessListener { channel.send(OtpEvent.Started) }
+                    .addOnFailureListener { error ->
+                        finish(OtpEvent.Failed(error.message ?: "SMS Retriever failed"))
+                    }
+            } catch (error: Exception) {
+                finish(OtpEvent.Failed(error.message ?: "SMS Retriever setup failed"))
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    fun createAppSpecificSmsToken(callback: NativeCallback) {
+        OtpHelper.runOnMain {
+            try {
+                callback.complete(createAppSpecificSmsTokenOnMain())
+            } catch (error: Exception) {
+                callback.fail(error.message ?: "SMS token request failed")
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun createAppSpecificSmsTokenOnMain(): String {
+        check(!cancelled) { "SMS token request was cancelled" }
+        check(!registered) { "OTP request already has a listener" }
+        val action =
+            "${context.packageName}${OtpHelper.TOKEN_ACTION_SUFFIX}${System.identityHashCode(this)}"
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context, intent: Intent) {
+                val message = Telephony.Sms.Intents.getMessagesFromIntent(intent)
+                    .joinToString(separator = "") { it.messageBody }
+                finish(OtpEvent.Message(message))
+            }
+        }
+        registered = true
+        this.receiver = receiver
+        try {
+            OtpHelper.registerPrivateReceiver(context, receiver, IntentFilter(action))
+        } catch (error: Exception) {
+            registered = false
+            this.receiver = null
+            throw error
+        }
+
+        val pendingIntentFlags =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_MUTABLE
+            } else {
+                PendingIntent.FLAG_ONE_SHOT
+            }
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            System.identityHashCode(this),
+            Intent(action).setPackage(context.packageName),
+            pendingIntentFlags,
+        )
+        val smsManager =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                context.getSystemService(SmsManager::class.java)
+                    ?: throw IllegalStateException("SmsManager is unavailable")
+            } else {
+                SmsManager.getDefault()
+            }
+        return smsManager.createAppSpecificSmsToken(pendingIntent)
+            ?: throw IllegalStateException("SmsManager returned no app-specific token")
+    }
+
+    fun startSmsUserConsent(sender: String?) {
+        OtpHelper.runOnMain {
+            if (cancelled) return@runOnMain
+            try {
+                registerRetrieverReceiver(consent = true)
+                SmsRetriever.getClient(context).startSmsUserConsent(sender)
+                    .addOnSuccessListener { channel.send(OtpEvent.Started) }
+                    .addOnFailureListener { error ->
+                        finish(OtpEvent.Failed(error.message ?: "SMS User Consent failed"))
+                    }
+            } catch (error: Exception) {
+                finish(OtpEvent.Failed(error.message ?: "SMS User Consent setup failed"))
+            }
+        }
+    }
+
+    /**
+     * Cancels the request: unregisters its receiver / consent launcher and ends
+     * the event stream. Runs on the main looper; called again is a no-op.
+     */
+    fun cancel() {
+        OtpHelper.runOnMain {
+            cancelled = true
+            if (unregister()) {
+                channel.close()
+            }
+        }
+    }
+
+    private fun registerRetrieverReceiver(consent: Boolean) {
+        check(!registered) { "OTP request already has a listener" }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context, intent: Intent) {
+                val status = intent.parcelableExtra<Status>(SmsRetriever.EXTRA_STATUS)
+                when (status?.statusCode) {
+                    CommonStatusCodes.SUCCESS -> {
+                        if (consent) {
+                            val consentIntent =
+                                intent.parcelableExtra<Intent>(SmsRetriever.EXTRA_CONSENT_INTENT)
+                            if (consentIntent == null || !OtpHelper.validConsentIntent(context, consentIntent)) {
+                                finish(
+                                    OtpEvent.Failed("SMS User Consent returned an untrusted intent"),
+                                )
+                            } else {
+                                launchConsent(consentIntent)
+                            }
+                        } else {
+                            val message = intent.getStringExtra(SmsRetriever.EXTRA_SMS_MESSAGE)
+                            if (message == null) {
+                                finish(
+                                    OtpEvent.Failed("SMS Retriever returned no message"),
+                                )
+                            } else {
+                                finish(OtpEvent.Message(message))
+                            }
+                        }
+                    }
+
+                    CommonStatusCodes.TIMEOUT -> finish(OtpEvent.Timeout)
+                    else -> finish(
+                        OtpEvent.Failed("SMS API returned unknown status ${status?.statusCode}"),
+                    )
+                }
+            }
+        }
+        registered = true
+        this.receiver = receiver
+        try {
+            OtpHelper.registerPlayServicesReceiver(context, receiver)
+        } catch (error: Exception) {
+            registered = false
+            this.receiver = null
+            throw error
+        }
+    }
+
+    private fun launchConsent(consentIntent: Intent) {
+        val activity = context as? ComponentActivity
+        if (activity == null) {
+            finish(
+                OtpEvent.Failed(
+                    "SMS User Consent requires the Android context to be a ComponentActivity",
+                ),
+            )
+            return
+        }
+
+        try {
+            val launcher = activity.activityResultRegistry.register(
+                "${OtpHelper.CONSENT_KEY_PREFIX}${System.identityHashCode(this)}",
+                ActivityResultContracts.StartActivityForResult(),
+            ) { result ->
+                if (result.resultCode == Activity.RESULT_OK) {
+                    val message =
+                        result.data?.getStringExtra(SmsRetriever.EXTRA_SMS_MESSAGE)
+                    if (message == null) {
+                        finish(
+                            OtpEvent.Failed("SMS User Consent returned no message"),
+                        )
+                    } else {
+                        finish(OtpEvent.Message(message))
+                    }
+                } else {
+                    finish(OtpEvent.Denied)
+                }
+            }
+            this.launcher = launcher
+            launcher.launch(consentIntent)
+        } catch (error: Exception) {
+            finish(OtpEvent.Failed(error.message ?: "SMS consent prompt failed"))
+        }
+    }
+
+    /** Terminal event: unregisters the request, then sends it and closes the channel. */
+    private fun finish(event: OtpEvent) {
+        OtpHelper.runOnMain {
+            if (unregister()) {
+                channel.send(event)
+                channel.close()
+            }
+        }
+    }
+
+    private fun unregister(): Boolean {
+        if (!registered) return false
+        registered = false
+        receiver?.let { context.unregisterReceiver(it) }
+        receiver = null
+        launcher?.unregister()
+        launcher = null
+        return true
+    }
+
+    @Suppress("DEPRECATION")
+    private inline fun <reified T : Parcelable> Intent.parcelableExtra(name: String): T? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableExtra(name, T::class.java)
+        } else {
+            getParcelableExtra(name) as? T
+        }
+    }
+}
+
+/** Shared main-looper helpers and the static entry points of the OTP backend. */
 object OtpHelper {
     private const val PLAY_SERVICES = 1 shl 0
     private const val TELEPHONY_MESSAGING = 1 shl 1
-    private const val TOKEN_ACTION_SUFFIX = ".waterkit.otp.SMS_TOKEN."
-    private const val CONSENT_KEY_PREFIX = "waterkit.otp.consent."
+    const val TOKEN_ACTION_SUFFIX = ".waterkit.otp.SMS_TOKEN."
+    const val CONSENT_KEY_PREFIX = "waterkit.otp.consent."
 
-    private const val URI_PERMISSION_FLAGS =
+    internal const val URI_PERMISSION_FLAGS =
         Intent.FLAG_GRANT_READ_URI_PERMISSION or
             Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
             Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
             Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
 
-    private data class Registration(
-        val context: Context,
-        var receiver: BroadcastReceiver? = null,
-        var launcher: ActivityResultLauncher<Intent>? = null,
-    )
-
-    private val registrations = ConcurrentHashMap<NativeChannel, Registration>()
-    private val cancelled = ConcurrentHashMap.newKeySet<NativeChannel>()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     @JvmStatic
@@ -106,197 +327,13 @@ object OtpHelper {
         return signers.single().toByteArray()
     }
 
-    @JvmStatic
-    fun startSmsRetriever(context: Context, channel: NativeChannel) {
-        runOnMain {
-            if (cancelled.remove(channel)) return@runOnMain
-            try {
-                registerRetrieverReceiver(context, channel, consent = false)
-                SmsRetriever.getClient(context).startSmsRetriever()
-                    .addOnSuccessListener { channel.send(OtpEvent.Started) }
-                    .addOnFailureListener { error ->
-                        finish(channel, OtpEvent.Failed(error.message ?: "SMS Retriever failed"))
-                    }
-            } catch (error: Exception) {
-                finish(channel, OtpEvent.Failed(error.message ?: "SMS Retriever setup failed"))
-            }
-        }
-    }
-
-    @JvmStatic
-    @Suppress("DEPRECATION")
-    fun createAppSpecificSmsToken(context: Context, channel: NativeChannel): String =
-        runOnMainSync {
-            check(!cancelled.remove(channel)) { "SMS token request was cancelled" }
-            val action = "${context.packageName}$TOKEN_ACTION_SUFFIX${System.identityHashCode(channel)}"
-            val registration = Registration(context)
-            check(registrations.putIfAbsent(channel, registration) == null) {
-                "duplicate OTP request channel"
-            }
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(receiverContext: Context, intent: Intent) {
-                    val message = Telephony.Sms.Intents.getMessagesFromIntent(intent)
-                        .joinToString(separator = "") { it.messageBody }
-                    finish(channel, OtpEvent.Message(message))
-                }
-            }
-            registration.receiver = receiver
-            try {
-                registerPrivateReceiver(context, receiver, IntentFilter(action))
-            } catch (error: Exception) {
-                registrations.remove(channel, registration)
-                throw error
-            }
-
-            val pendingIntentFlags =
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_MUTABLE
-                } else {
-                    PendingIntent.FLAG_ONE_SHOT
-                }
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                System.identityHashCode(channel),
-                Intent(action).setPackage(context.packageName),
-                pendingIntentFlags,
-            )
-            val smsManager =
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    context.getSystemService(SmsManager::class.java)
-                        ?: throw IllegalStateException("SmsManager is unavailable")
-                } else {
-                    SmsManager.getDefault()
-                }
-            smsManager.createAppSpecificSmsToken(pendingIntent)
-                ?: throw IllegalStateException("SmsManager returned no app-specific token")
-        }
-
-    @JvmStatic
-    fun startSmsUserConsent(context: Context, sender: String?, channel: NativeChannel) {
-        runOnMain {
-            if (cancelled.remove(channel)) return@runOnMain
-            try {
-                registerRetrieverReceiver(context, channel, consent = true)
-                SmsRetriever.getClient(context).startSmsUserConsent(sender)
-                    .addOnSuccessListener { channel.send(OtpEvent.Started) }
-                    .addOnFailureListener { error ->
-                        finish(channel, OtpEvent.Failed(error.message ?: "SMS User Consent failed"))
-                    }
-            } catch (error: Exception) {
-                finish(channel, OtpEvent.Failed(error.message ?: "SMS User Consent setup failed"))
-            }
-        }
-    }
-
-    @JvmStatic
-    @Suppress("UNUSED_PARAMETER")
-    fun cancel(context: Context, channel: NativeChannel) {
-        cancelled.add(channel)
-        check(mainHandler.post {
-            cancelled.remove(channel)
-            if (unregister(channel)) {
-                channel.close()
-            }
-        }) { "main looper rejected OTP cancellation" }
-    }
-
-    private fun registerRetrieverReceiver(context: Context, channel: NativeChannel, consent: Boolean) {
-        val registration = Registration(context)
-        check(registrations.putIfAbsent(channel, registration) == null) {
-            "duplicate OTP request channel"
-        }
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(receiverContext: Context, intent: Intent) {
-                val status = intent.parcelableExtra<Status>(SmsRetriever.EXTRA_STATUS)
-                when (status?.statusCode) {
-                    CommonStatusCodes.SUCCESS -> {
-                        if (consent) {
-                            val consentIntent =
-                                intent.parcelableExtra<Intent>(SmsRetriever.EXTRA_CONSENT_INTENT)
-                            if (consentIntent == null || !validConsentIntent(context, consentIntent)) {
-                                finish(
-                                    channel,
-                                    OtpEvent.Failed("SMS User Consent returned an untrusted intent"),
-                                )
-                            } else {
-                                launchConsent(context, channel, consentIntent)
-                            }
-                        } else {
-                            val message = intent.getStringExtra(SmsRetriever.EXTRA_SMS_MESSAGE)
-                            if (message == null) {
-                                finish(
-                                    channel,
-                                    OtpEvent.Failed("SMS Retriever returned no message"),
-                                )
-                            } else {
-                                finish(channel, OtpEvent.Message(message))
-                            }
-                        }
-                    }
-
-                    CommonStatusCodes.TIMEOUT -> finish(channel, OtpEvent.Timeout)
-                    else -> finish(
-                        channel,
-                        OtpEvent.Failed("SMS API returned unknown status ${status?.statusCode}"),
-                    )
-                }
-            }
-        }
-        registration.receiver = receiver
-        try {
-            registerPlayServicesReceiver(context, receiver)
-        } catch (error: Exception) {
-            registrations.remove(channel, registration)
-            throw error
-        }
-    }
-
-    private fun launchConsent(context: Context, channel: NativeChannel, consentIntent: Intent) {
-        val activity = context as? ComponentActivity
-        if (activity == null) {
-            finish(
-                channel,
-                OtpEvent.Failed(
-                    "SMS User Consent requires the Android context to be a ComponentActivity",
-                ),
-            )
-            return
-        }
-
-        try {
-            val launcher = activity.activityResultRegistry.register(
-                "$CONSENT_KEY_PREFIX${System.identityHashCode(channel)}",
-                ActivityResultContracts.StartActivityForResult(),
-            ) { result ->
-                if (result.resultCode == Activity.RESULT_OK) {
-                    val message =
-                        result.data?.getStringExtra(SmsRetriever.EXTRA_SMS_MESSAGE)
-                    if (message == null) {
-                        finish(
-                            channel,
-                            OtpEvent.Failed("SMS User Consent returned no message"),
-                        )
-                    } else {
-                        finish(channel, OtpEvent.Message(message))
-                    }
-                } else {
-                    finish(channel, OtpEvent.Denied)
-                }
-            }
-            registrations[channel]?.launcher = launcher
-            launcher.launch(consentIntent)
-        } catch (error: Exception) {
-            finish(channel, OtpEvent.Failed(error.message ?: "SMS consent prompt failed"))
-        }
-    }
-
-    private fun validConsentIntent(context: Context, intent: Intent): Boolean {
+    internal fun validConsentIntent(context: Context, intent: Intent): Boolean {
         val packageName = intent.resolveActivity(context.packageManager)?.packageName
         return packageName == "com.google.android.gms" &&
             intent.flags and URI_PERMISSION_FLAGS == 0
     }
 
-    private fun registerPlayServicesReceiver(context: Context, receiver: BroadcastReceiver) {
+    internal fun registerPlayServicesReceiver(context: Context, receiver: BroadcastReceiver) {
         val filter = IntentFilter(SmsRetriever.SMS_RETRIEVED_ACTION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.registerReceiver(
@@ -316,7 +353,7 @@ object OtpHelper {
         }
     }
 
-    private fun registerPrivateReceiver(
+    internal fun registerPrivateReceiver(
         context: Context,
         receiver: BroadcastReceiver,
         filter: IntentFilter,
@@ -328,24 +365,7 @@ object OtpHelper {
         }
     }
 
-    /** Terminal event: unregisters the request, then sends it and closes the channel. */
-    private fun finish(channel: NativeChannel, event: OtpEvent) {
-        runOnMain {
-            if (unregister(channel)) {
-                channel.send(event)
-                channel.close()
-            }
-        }
-    }
-
-    private fun unregister(channel: NativeChannel): Boolean {
-        val registration = registrations.remove(channel) ?: return false
-        registration.receiver?.let { registration.context.unregisterReceiver(it) }
-        registration.launcher?.unregister()
-        return true
-    }
-
-    private inline fun runOnMain(crossinline block: () -> Unit) {
+    internal inline fun runOnMain(crossinline block: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             block()
         } else {
@@ -353,25 +373,4 @@ object OtpHelper {
         }
     }
 
-    private fun <T> runOnMainSync(block: () -> T): T {
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            return block()
-        }
-        val task = FutureTask(block)
-        check(mainHandler.post(task)) { "main looper rejected OTP operation" }
-        return try {
-            task.get()
-        } catch (error: ExecutionException) {
-            throw (error.cause ?: error)
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    private inline fun <reified T : Parcelable> Intent.parcelableExtra(name: String): T? {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            getParcelableExtra(name, T::class.java)
-        } else {
-            getParcelableExtra(name) as? T
-        }
-    }
 }

@@ -296,21 +296,20 @@ pub fn open_download_settings() -> Result<(), TranslationError> {
     wire::decode::<serde_json::Value>(&json, None).map(|_| ())
 }
 
-/// Starts listening for changes to Android translation capabilities.
+/// Starts listening for changes to Android translation capabilities. The
+/// helper returns a `CapabilityUpdates` object owning the platform listener;
+/// the returned handle drops it through `close()`.
 pub fn capability_updates()
 -> Result<crate::translation::android::CapabilityUpdates, TranslationError> {
-    let (channel, receiver) = with_android_context(|env, _context| {
-        Ok::<_, TranslationError>(NativeChannel::<String>::new(env)?)
-    })?;
-
-    let result = with_android_context(|env, context| {
+    with_android_context(|env, context| {
+        let (channel, receiver) = NativeChannel::<String>::new(env)?;
         let helper = helper_class(env, context)?;
-        let result = env
+        let registration = env
             .call_static_method(
                 helper,
                 jni_str!("registerCapabilityUpdates"),
                 jni_sig!(
-                    "(Landroid/content/Context;Lwaterkit/build/NativeChannel;)Ljava/lang/String;"
+                    "(Landroid/content/Context;Lwaterkit/build/NativeChannel;)Lwaterkit/language/CapabilityUpdates;"
                 ),
                 &[JValue::Object(context), JValue::Object(channel.as_obj())],
             )
@@ -323,60 +322,31 @@ pub fn capability_updates()
                     error,
                 )
             })?;
-        let result = env
-            .as_cast::<JString>(&result)
-            .map_err(|error| jni_error(env, "cast capability registration response", error))?;
-        decode_callback_string(env, &result)
-    });
+        let registration = env
+            .new_global_ref(registration)
+            .map_err(|error| jni_error(env, "retain capability registration", error))?;
 
-    let json = result?;
-    wire::decode::<serde_json::Value>(&json, None)?;
-
-    let updates = receiver.map(|item| {
-        item.map_err(TranslationError::from).and_then(|json| {
-            wire::decode_capability_update(&json)
-                .map(|(pair, status)| CapabilityUpdate { pair, status })
-        })
-    });
-    Ok(crate::translation::android::CapabilityUpdates::new(
-        channel, updates,
-    ))
+        let updates = receiver.map(|item| {
+            item.map_err(TranslationError::from).and_then(|json| {
+                wire::decode_capability_update(&json)
+                    .map(|(pair, status)| CapabilityUpdate { pair, status })
+            })
+        });
+        Ok(crate::translation::android::CapabilityUpdates::new(
+            registration,
+            updates,
+        ))
+    })
 }
 
-pub fn remove_capability_listener(channel: &JObject<'_>) {
-    let result = with_android_context(|env, context| {
-        let helper = helper_class(env, context)?;
-        let result = env
-            .call_static_method(
-                helper,
-                jni_str!("removeCapabilityUpdates"),
-                jni_sig!(
-                    "(Landroid/content/Context;Lwaterkit/build/NativeChannel;)Ljava/lang/String;"
-                ),
-                &[JValue::Object(context), JValue::Object(channel)],
-            )
-            .map_err(|error| jni_error(env, "TranslationHelper.removeCapabilityUpdates", error))?
-            .l()
-            .map_err(|error| {
-                jni_error(
-                    env,
-                    "TranslationHelper.removeCapabilityUpdates result",
-                    error,
-                )
-            })?;
-        let result = env
-            .as_cast::<JString>(&result)
-            .map_err(|error| jni_error(env, "cast capability removal response", error))?;
-        decode_callback_string(env, &result)
-    });
-    match result {
-        Ok(json) => {
-            if let Err(error) = wire::decode::<serde_json::Value>(&json, None) {
-                tracing::error!(%error, "failed to remove Android translation capability listener");
-            }
-        }
-        Err(error) => {
-            tracing::error!(%error, "failed to remove Android translation capability listener");
-        }
+/// Ends a capability registration: removes the platform listener and closes
+/// its channel.
+pub fn remove_capability_listener(registration: &JObject<'_>) {
+    if let Err(error) = with_android_context(|env, _context| {
+        env.call_method(registration, jni_str!("close"), jni_sig!("()V"), &[])
+            .map(|_| ())
+            .map_err(|error| jni_error(env, "CapabilityUpdates.close", error))
+    }) {
+        tracing::error!(%error, "failed to remove Android translation capability listener");
     }
 }

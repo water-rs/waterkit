@@ -1,12 +1,11 @@
 //! Android OTP backend via the app-classpath Kotlin helper.
 
-use futures::channel::oneshot;
 use futures::{Stream, StreamExt};
 use jni::objects::{Global, JByteArray, JClass, JObject, JString, JValue, JValueOwned};
 use jni::{Env, jni_sig, jni_str};
 use waterkit_build::{
-    AndroidError, DexHelper, FromJava, NativeChannel, decode_string, describe_jni_error,
-    dex_helper, with_android_context,
+    AndroidError, DexHelper, FromJava, NativeCallback, NativeChannel, decode_string,
+    describe_jni_error, dex_helper, with_android_context,
 };
 
 use crate::{AddressedRealization, AppToken, OtpCapabilities, OtpError, Sender, derive_app_token};
@@ -16,6 +15,9 @@ use super::{Event, Request};
 /// `waterkit.otp.OtpHelper`, compiled into the app's DEX by the packager and
 /// resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.otp.OtpHelper");
+/// `waterkit.otp.OtpRequest`, the per-request object the helper constructs:
+/// the Rust request handle keeps a global reference and cancels through it.
+static REQUEST: DexHelper = dex_helper!("waterkit.otp.OtpRequest");
 
 /// The `OtpEvent` subclasses, resolved through the same application class
 /// loader as `OtpHelper` so dispatch is by type, never by name.
@@ -121,15 +123,28 @@ fn helper_class(
     Ok(HELPER.class(env, context)?)
 }
 
-/// A request whose events arrive through the helper's `NativeChannel`. Peer
-/// rejections surface as `Event::Failed` with their message.
-fn request() -> Result<(NativeChannel<Event>, impl Stream<Item = Event>), OtpError> {
-    let (channel, receiver) =
-        with_android_context(|env, _context| Ok::<_, OtpError>(NativeChannel::<Event>::new(env)?))?;
-    Ok((
-        channel,
-        receiver.map(|item| item.unwrap_or_else(|error| Event::Failed(error.to_string()))),
-    ))
+/// A request whose events arrive through the helper's `NativeChannel`, with
+/// the per-request Kotlin object the handle cancels through. Peer rejections
+/// surface as `Event::Failed` with their message.
+fn request() -> Result<(Global<JObject<'static>>, impl Stream<Item = Event>), OtpError> {
+    with_android_context(|env, context| {
+        let (channel, receiver) = NativeChannel::<Event>::new(env)?;
+        let class = REQUEST.class(env, context)?;
+        let request = env
+            .new_object(
+                class,
+                jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeChannel;)V"),
+                &[JValue::Object(context), JValue::Object(channel.as_obj())],
+            )
+            .map_err(|error| jni_error(env, "OtpRequest.<init>", error))?;
+        let request = env
+            .new_global_ref(request)
+            .map_err(|error| jni_error(env, "retain OTP request", error))?;
+        Ok((
+            request,
+            receiver.map(|item| item.unwrap_or_else(|error| Event::Failed(error.to_string()))),
+        ))
+    })
 }
 
 fn capability_bits() -> Result<i32, OtpError> {
@@ -165,19 +180,13 @@ pub fn capabilities() -> Result<OtpCapabilities, OtpError> {
     })
 }
 
-/// Cancels the request behind `channel`: unregisters its Kotlin listener and
+/// Cancels the request behind `request`: unregisters its Kotlin listener and
 /// closes the stream.
-pub fn cancel(channel: &JObject<'_>) -> Result<(), OtpError> {
-    with_android_context(|env, context| {
-        let class = helper_class(env, context)?;
-        env.call_static_method(
-            class,
-            jni_str!("cancel"),
-            &jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeChannel;)V"),
-            &[JValue::Object(context), JValue::Object(channel)],
-        )
-        .map(|_| ())
-        .map_err(|error| jni_error(env, "OtpHelper.cancel", error))
+pub fn cancel(request: &JObject<'_>) -> Result<(), OtpError> {
+    with_android_context(|env, _context| {
+        env.call_method(request, jni_str!("cancel"), jni_sig!("()V"), &[])
+            .map(|_| ())
+            .map_err(|error| jni_error(env, "OtpRequest.cancel", error))
     })
 }
 
@@ -205,22 +214,18 @@ pub async fn start_addressed() -> Result<(AppToken, Request), OtpError> {
 }
 
 async fn start_sms_retriever() -> Result<(AppToken, Request), OtpError> {
-    let (channel, events) = request()?;
-    let mut request = Request::new(channel, events);
+    let (handle, events) = request()?;
+    let mut request = Request::new(handle, events);
 
     let token = with_android_context(|env, context| -> Result<AppToken, OtpError> {
         let token = retriever_token(env, context)?;
-        let class = helper_class(env, context)?;
-        env.call_static_method(
-            class,
+        env.call_method(
+            request_handle(&request),
             jni_str!("startSmsRetriever"),
-            &jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeChannel;)V"),
-            &[
-                JValue::Object(context),
-                JValue::Object(request_channel(&request)),
-            ],
+            jni_sig!("()V"),
+            &[],
         )
-        .map_err(|error| jni_error(env, "OtpHelper.startSmsRetriever", error))?;
+        .map_err(|error| jni_error(env, "OtpRequest.startSmsRetriever", error))?;
         Ok(token)
     })?;
 
@@ -228,9 +233,9 @@ async fn start_sms_retriever() -> Result<(AppToken, Request), OtpError> {
     Ok((token, request))
 }
 
-/// The `NativeChannel` inside the request, for calls that hand it to Kotlin.
-fn request_channel(request: &Request) -> &JObject<'_> {
-    request.channel().as_obj()
+/// The `OtpRequest` inside the request, for calls that drive it.
+fn request_handle(request: &Request) -> &JObject<'_> {
+    request.handle().as_obj()
 }
 
 /// Derives the 11-character SMS Retriever hash of the running application.
@@ -267,49 +272,28 @@ fn retriever_token(env: &mut Env<'_>, context: &JObject<'_>) -> Result<AppToken,
 }
 
 async fn start_app_specific_token() -> Result<(AppToken, Request), OtpError> {
-    let (channel, events) = request()?;
-    let request = Request::new(channel, events);
+    let (handle, events) = request()?;
+    let request = Request::new(handle, events);
 
-    let (sender, receiver) = oneshot::channel();
-    std::thread::Builder::new()
-        .name("waterkit-otp-token".into())
-        .spawn(move || {
-            let request = request;
-            let result = with_android_context(|env, context| {
-                let class = helper_class(env, context)?;
-                let token = env
-                    .call_static_method(
-                        class,
-                        jni_str!("createAppSpecificSmsToken"),
-                        &jni_sig!(
-                            "(Landroid/content/Context;Lwaterkit/build/NativeChannel;)Ljava/lang/String;"
-                        ),
-                        &[
-                            JValue::Object(context),
-                            JValue::Object(request_channel(&request)),
-                        ],
-                    )
-                    .and_then(JValueOwned::l)
-                    .map_err(|error| {
-                        jni_error(env, "OtpHelper.createAppSpecificSmsToken", error)
-                    })?;
-                AppToken::new(decode_string(env, &token)?)
-            });
-            // The request (and its channel) travels back through the same
-            // oneshot so the returned handle still owns them.
-            let _ = sender.send((result, request));
-        })
-        .map_err(|error| {
-            OtpError::Platform(format!("failed to start OTP token worker: {error}"))
-        })?;
-    let (result, request) = receiver
+    let receiver = with_android_context(|env, _context| {
+        let (callback, receiver) = NativeCallback::<String>::new(env)?;
+        env.call_method(
+            request_handle(&request),
+            jni_str!("createAppSpecificSmsToken"),
+            jni_sig!("(Lwaterkit/build/NativeCallback;)V"),
+            &[JValue::Object(callback.as_obj())],
+        )
+        .map_err(|error| jni_error(env, "OtpRequest.createAppSpecificSmsToken", error))?;
+        Ok::<_, OtpError>(receiver)
+    })?;
+    let token = receiver
         .await
-        .map_err(|_| OtpError::Platform("Android OTP token worker stopped".into()))?;
-    let token = result?;
+        .map_err(|_| OtpError::Platform("SMS token request was abandoned".into()))?
+        .map_err(|error| OtpError::Platform(error.to_string()))?;
 
-    // `createAppSpecificSmsToken` returns once the receiver and the token
-    // exist, so the system is already listening here.
-    Ok((token, request))
+    // The callback completes once the receiver and the token exist, so the
+    // system is already listening here.
+    Ok((AppToken::new(token)?, request))
 }
 
 pub async fn start_consent(sender: Option<Sender>) -> Result<Request, OtpError> {
@@ -317,31 +301,24 @@ pub async fn start_consent(sender: Option<Sender>) -> Result<Request, OtpError> 
         return Err(OtpError::Unavailable);
     }
 
-    let (channel, events) = request()?;
-    let mut request = Request::new(channel, events);
+    let (handle, events) = request()?;
+    let mut request = Request::new(handle, events);
 
-    with_android_context(|env, context| {
+    with_android_context(|env, _context| {
         let sender = match sender.as_ref() {
             Some(sender) => env
                 .new_string(sender.as_str())
                 .map_err(|error| jni_error(env, "new sender string", error))?,
             None => JString::null(),
         };
-        let class = helper_class(env, context)?;
-        env.call_static_method(
-            class,
+        env.call_method(
+            request_handle(&request),
             jni_str!("startSmsUserConsent"),
-            &jni_sig!(
-                "(Landroid/content/Context;Ljava/lang/String;Lwaterkit/build/NativeChannel;)V"
-            ),
-            &[
-                JValue::Object(context),
-                JValue::Object(&sender),
-                JValue::Object(request_channel(&request)),
-            ],
+            jni_sig!("(Ljava/lang/String;)V"),
+            &[JValue::Object(&sender)],
         )
         .map(|_| ())
-        .map_err(|error| jni_error(env, "OtpHelper.startSmsUserConsent", error))
+        .map_err(|error| jni_error(env, "OtpRequest.startSmsUserConsent", error))
     })?;
 
     await_started(&mut request).await?;

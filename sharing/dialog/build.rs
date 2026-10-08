@@ -4,15 +4,15 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
 
     if target_os == "ios" {
-        use waterkit_build::AppleSwiftConfig;
-
-        let config = AppleSwiftConfig::new("waterkit-dialog", "DialogHelper")
-            .swift_source("src/sys/apple/Alert.swift")
-            .framework("Foundation")
-            .framework("UIKit")
-            .framework("PhotosUI")
-            .framework("UniformTypeIdentifiers");
-
-        waterkit_build::compile_swift("src/sys/apple/mod.rs", &config);
+        waterkit_build::SwiftBridges::new()
+            .bridge(
+                waterkit_build::SwiftBridge::new("src/sys/apple/mod.rs")
+                    .swift_source("src/sys/apple/Alert.swift")
+                    .framework("Foundation")
+                    .framework("UIKit")
+                    .framework("PhotosUI")
+                    .framework("UniformTypeIdentifiers"),
+            )
+            .compile();
     }
 }

@@ -69,6 +69,13 @@ class CameraHelper(private val appContext: Context) {
          */
         private const val PREVIEW_IMAGES = PREVIEW_MAX_IN_FLIGHT + 1
 
+        /**
+         * Analysis images out at once: one queued in `analysisQueue` plus the
+         * slot `acquireLatestImage` needs while it drains. The listener keeps
+         * only the newest image; images nobody takes are closed.
+         */
+        private const val ANALYSIS_IMAGES = 2
+
         private const val OPEN_TIMEOUT_SECONDS = 5L
         private const val SESSION_TIMEOUT_SECONDS = 5L
         private const val PHOTO_TIMEOUT_SECONDS = 5L
@@ -103,6 +110,11 @@ class CameraHelper(private val appContext: Context) {
     private var previewRequestBuilder: CaptureRequest.Builder? = null
 
     private var previewImageReader: ImageReader? = null
+    /**
+     * CPU-readable YUV_420_888 frames for image analysis, present only when
+     * the camera was opened with an analysis output.
+     */
+    private var analysisImageReader: ImageReader? = null
     /** CPU-readable YUV frames for RAW video recording, present only while it runs. */
     private var rawVideoImageReader: ImageReader? = null
     private var stillImageReader: ImageReader? = null
@@ -169,6 +181,27 @@ class CameraHelper(private val appContext: Context) {
         if (Build.VERSION.SDK_INT >= 33) image.dataSpace else 0
 
     private val frameQueue: LinkedBlockingDeque<CapturedFrame> = LinkedBlockingDeque(1)
+
+    /**
+     * One analysis image acquired from `analysisImageReader`: the
+     * `YUV_420_888` `Image`, the display rotation in degrees when it
+     * arrived, its data space, and its sensor timestamp. The consumer owns
+     * the image and closes it once read; the queue closes one a consumer
+     * never takes.
+     */
+    class AnalysisFrame(
+        val image: Image,
+        val displayRotation: Int,
+        val dataSpace: Int,
+        /** The image's sensor timestamp, the start of exposure. */
+        val captureTimeNs: Long,
+    )
+
+    /**
+     * The newest pending analysis frame; a second frame evicts — and closes
+     * — the one nobody took.
+     */
+    private val analysisQueue: LinkedBlockingDeque<AnalysisFrame> = LinkedBlockingDeque(1)
 
     /**
      * Preview images acquired from `previewImageReader` and not yet closed:
@@ -286,6 +319,8 @@ class CameraHelper(private val appContext: Context) {
         requestedWidth: Int,
         requestedHeight: Int,
         requestedFrameRate: Int,
+        analysisWidth: Int,
+        analysisHeight: Int,
     ): Boolean {
         closeCamera()
 
@@ -343,6 +378,19 @@ class CameraHelper(private val appContext: Context) {
                 HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE,
             )
             stillImageReader = ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.JPEG, 2)
+            // The analysis reader runs beside the preview at its own size;
+            // the PRIVATE preview plus YUV_420_888 combination at preview
+            // size is guaranteed on every hardware level.
+            analysisImageReader = if (analysisWidth > 0 && analysisHeight > 0) {
+                ImageReader.newInstance(
+                    analysisWidth,
+                    analysisHeight,
+                    ImageFormat.YUV_420_888,
+                    ANALYSIS_IMAGES,
+                )
+            } else {
+                null
+            }
             // RAW_SENSOR streams only come in the sizes the sensor reads
             // out, normally just its full array; a reader at the preview size
             // makes the whole capture session fail to configure.
@@ -359,6 +407,21 @@ class CameraHelper(private val appContext: Context) {
 
             previewImageReader?.setOnImageAvailableListener({ reader ->
                 drainPreviewReader(reader, handler)
+            }, handler)
+
+            analysisImageReader?.setOnImageAvailableListener({ reader ->
+                val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+                // Newest wins: the queued image nobody took goes back to the
+                // reader, so the queue never holds a stale frame.
+                analysisQueue.pollLast()?.let { stale -> stale.image.close() }
+                analysisQueue.offerLast(
+                    AnalysisFrame(
+                        image,
+                        displayRotationDegrees(),
+                        imageDataSpace(image),
+                        image.timestamp,
+                    ),
+                )
             }, handler)
 
             rawImageReader?.setOnImageAvailableListener({ reader ->
@@ -864,6 +927,26 @@ class CameraHelper(private val appContext: Context) {
      * slot: the pending frame stays with the producer and is dropped once a
      * leased image's close re-arms the drain through [releasePreviewImage].
      */
+    /**
+     * Wait for the next analysis frame and consume it.
+     * Returns null on timeout or when the camera was opened without an
+     * analysis output, whose queue never fills.
+     *
+     * The receiver owns the returned frame's image and closes it once read.
+     */
+    fun waitForNextAnalysisFrame(timeoutMs: Int): AnalysisFrame? {
+        return try {
+            if (timeoutMs <= 0) {
+                analysisQueue.pollFirst()
+            } else {
+                analysisQueue.pollFirst(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+            }
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            null
+        }
+    }
+
     private fun drainPreviewReader(reader: ImageReader, handler: Handler) {
         if (reader !== previewImageReader || previewDrainActive) {
             return
@@ -996,6 +1079,8 @@ class CameraHelper(private val appContext: Context) {
 
         previewImageReader?.close()
         previewImageReader = null
+        analysisImageReader?.close()
+        analysisImageReader = null
         stillImageReader?.close()
         stillImageReader = null
         rawImageReader?.close()
@@ -1009,6 +1094,10 @@ class CameraHelper(private val appContext: Context) {
         while (true) {
             val stale = frameQueue.pollFirst() ?: break
             stale.hardwareBuffer.close()
+            stale.image.close()
+        }
+        while (true) {
+            val stale = analysisQueue.pollFirst() ?: break
             stale.image.close()
         }
         previewImagesInFlight = 0
@@ -1477,12 +1566,14 @@ class CameraHelper(private val appContext: Context) {
         }
 
         val rawVideoSurface = rawVideoImageReader?.surface
+        val analysisSurface = analysisImageReader?.surface
         val surfaces = mutableListOf<Surface>(
             previewReader.surface,
             stillReader.surface,
         )
         rawImageReader?.surface?.let { surfaces.add(it) }
         rawVideoSurface?.let { surfaces.add(it) }
+        analysisSurface?.let { surfaces.add(it) }
 
         if (includeRecorderSurface) {
             val surface = recorderSurface ?: run {
@@ -1508,6 +1599,7 @@ class CameraHelper(private val appContext: Context) {
                     val builder = device.createCaptureRequest(template)
                     builder.addTarget(previewReader.surface)
                     rawVideoSurface?.let { builder.addTarget(it) }
+                    analysisSurface?.let { builder.addTarget(it) }
                     if (includeRecorderSurface) {
                         val recordingSurface = recorderSurface
                             ?: error("Recorder surface lost during session configuration")

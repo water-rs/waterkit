@@ -1345,6 +1345,7 @@ async fn record_android_camera(report: &mut TestReport, files_dir: &std::path::P
             ));
             for camera in cameras {
                 record_android_camera_frames(report, &camera, files_dir).await;
+                record_android_camera_analysis(report, &camera).await;
             }
         }
         Err(error) => report.push(TestCase::failed(
@@ -1483,6 +1484,155 @@ async fn record_android_camera_frames(
     record_android_camera_reopen(report, camera, &device, &queue).await;
 }
 
+/// Checks that two consecutive analysis frames carry an advancing stream
+/// clock, a size, a live `Image` and planes large enough for their strides.
+#[cfg(feature = "camera")]
+fn check_analysis_frames(
+    frame: &waterkit_content::camera::AnalysisFrame,
+    second: &waterkit_content::camera::AnalysisFrame,
+) -> Result<(), String> {
+    if second.timestamp().is_zero() || second.timestamp() <= frame.timestamp() {
+        return Err(format!(
+            "analysis timestamps do not advance: {:?} then {:?}",
+            frame.timestamp(),
+            second.timestamp()
+        ));
+    }
+    if frame.width() == 0 || frame.height() == 0 {
+        return Err("analysis frame has no size".to_owned());
+    }
+    if frame.media_image().as_obj().is_null() {
+        return Err("analysis frame holds a null image".to_owned());
+    }
+    let planes = frame.planes();
+    let chroma_width = frame.width().div_ceil(2) as usize;
+    let chroma_height = frame.height().div_ceil(2) as usize;
+    for (name, plane, width, height) in [
+        (
+            "luma",
+            &planes.luma,
+            frame.width() as usize,
+            frame.height() as usize,
+        ),
+        ("cb", &planes.cb, chroma_width, chroma_height),
+        ("cr", &planes.cr, chroma_width, chroma_height),
+    ] {
+        let need = plane.row_stride() * (height - 1) + plane.pixel_stride() * (width - 1) + 1;
+        if plane.bytes().len() < need {
+            return Err(format!(
+                "{name} plane has {} bytes, needs {need}",
+                plane.bytes().len()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Opens `camera` with an analysis output and takes its first two analysis
+/// frames, then one preview frame while the analysis stream is open — the
+/// GPU preview must keep streaming next to the `YUV_420_888` reader.
+#[cfg(feature = "camera")]
+async fn record_android_camera_analysis(
+    report: &mut TestReport,
+    camera: &waterkit_content::camera::CameraInfo,
+) {
+    use futures::StreamExt;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use waterkit_content::camera::{AnalysisConfig, Camera, CameraConfig};
+
+    let case = format!("camera.analysis.{}", camera.id);
+    let (device, queue) = match camera_gpu().await {
+        Ok(gpu) => gpu,
+        Err(error) => {
+            report.push(TestCase::failed(case, error));
+            return;
+        }
+    };
+    let handle = match Camera::open(
+        &camera.id,
+        CameraConfig {
+            analysis: Some(AnalysisConfig::default()),
+            ..CameraConfig::default()
+        },
+        Arc::clone(&device),
+        Arc::clone(&queue),
+    )
+    .await
+    {
+        Ok(handle) => handle,
+        Err(error) => {
+            report.push(TestCase::failed(case, format!("open failed: {error}")));
+            return;
+        }
+    };
+
+    let mut analysis = std::pin::pin!(handle.analysis_frames());
+    let frame = match next_analysis_frame(
+        &case,
+        0,
+        tokio::time::timeout(Duration::from_secs(5), analysis.next()).await,
+    ) {
+        Ok(frame) => frame,
+        Err(outcome) => {
+            report.push(outcome);
+            return;
+        }
+    };
+    // The stream clock reads zero on the first analysis frame, like
+    // `Frame::timestamp`; the second frame must carry a later, nonzero one.
+    let second = match next_analysis_frame(
+        &case,
+        1,
+        tokio::time::timeout(Duration::from_secs(5), analysis.next()).await,
+    ) {
+        Ok(frame) => frame,
+        Err(outcome) => {
+            report.push(outcome);
+            return;
+        }
+    };
+    if let Err(error) = check_analysis_frames(&frame, &second) {
+        report.push(TestCase::failed(case, error));
+        return;
+    }
+    let planes = frame.planes();
+
+    // A preview frame while the analysis stream stays open proves the
+    // GPU stream keeps running next to the YUV_420_888 reader.
+    let mut frames = std::pin::pin!(handle.frames());
+    let preview = match next_frame(
+        &case,
+        0,
+        tokio::time::timeout(Duration::from_secs(5), frames.next()).await,
+    ) {
+        Ok(frame) => frame,
+        Err(outcome) => {
+            report.push(outcome);
+            return;
+        }
+    };
+
+    report.push(TestCase::passed_with_message(
+        case,
+        format!(
+            "{}x{} strides luma={}x{} cb={}x{} cr={}x{} ts={:?} preview={}x{}@{:?}",
+            frame.width(),
+            frame.height(),
+            planes.luma.row_stride(),
+            planes.luma.pixel_stride(),
+            planes.cb.row_stride(),
+            planes.cb.pixel_stride(),
+            planes.cr.row_stride(),
+            planes.cr.pixel_stride(),
+            second.timestamp(),
+            preview.width(),
+            preview.height(),
+            preview.timestamp(),
+        ),
+    ));
+}
+
 /// Reopens `camera` right after its frames case dropped the handle, and
 /// takes one frame from each open. Dropping a camera joins its teardown, so
 /// the immediate second open passes only when teardown already finished.
@@ -1595,6 +1745,36 @@ fn next_frame(
         Err(_) => Err(TestCase::failed(
             case,
             format!("no frame within 5 s after {count}"),
+        )),
+    }
+}
+
+/// The next analysis frame, or the failure that ends the case after `count`
+/// frames; the analysis stream ends only when the camera's capture does.
+#[cfg(feature = "camera")]
+fn next_analysis_frame(
+    case: &str,
+    count: u32,
+    next: Result<
+        Option<
+            Result<waterkit_content::camera::AnalysisFrame, waterkit_content::camera::CameraError>,
+        >,
+        tokio::time::error::Elapsed,
+    >,
+) -> Result<waterkit_content::camera::AnalysisFrame, TestCase> {
+    match next {
+        Ok(Some(Ok(frame))) => Ok(frame),
+        Ok(Some(Err(error))) => Err(TestCase::failed(
+            case,
+            format!("analysis stream failed after {count} frames: {error}"),
+        )),
+        Ok(None) => Err(TestCase::failed(
+            case,
+            format!("analysis stream ended after {count} frames"),
+        )),
+        Err(_) => Err(TestCase::failed(
+            case,
+            format!("no analysis frame within 5 s after {count}"),
         )),
     }
 }

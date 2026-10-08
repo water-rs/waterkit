@@ -1,19 +1,15 @@
 //! Build script for waterkit-clipboard.
+//!
+//! Emits the framework link flags the Apple backend needs. `cargo` applies
+//! them for every Rust-driven link, and `rustc --print=native-static-libs`
+//! reports them to embedders that link the crate as a static library.
 
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
 
-    // iOS uses Swift bridge (macOS uses clipboard-rs)
     if target_os == "ios" {
-        waterkit_build::SwiftBridges::new()
-            .bridge(
-                waterkit_build::SwiftBridge::new("src/sys/apple/mod.rs")
-                    .swift_source("src/sys/apple/clipboard.swift")
-                    .framework("Foundation")
-                    .framework("UIKit")
-                    .framework("UniformTypeIdentifiers")
-                    .framework("MobileCoreServices"),
-            )
-            .compile();
+        println!("cargo:rustc-link-lib=framework=UIKit");
+        println!("cargo:rustc-link-lib=framework=UniformTypeIdentifiers");
+        println!("cargo:rustc-link-lib=framework=MobileCoreServices");
     }
 }

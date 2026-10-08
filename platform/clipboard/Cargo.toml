@@ -35,10 +35,33 @@ x11rb = { workspace = true, features = ["xfixes"] }
 
 # Apple platforms (iOS only - macOS uses clipboard-rs)
 [target.'cfg(target_os = "ios")'.dependencies]
-swift-bridge.workspace = true
-
-[target.'cfg(target_os = "ios")'.build-dependencies]
-waterkit-build.workspace = true
+objc2.workspace = true
+objc2-core-graphics = { workspace = true, features = [
+    "CGBitmapContext",
+    "CGColorSpace",
+    "CGContext",
+    "CGImage",
+] }
+objc2-core-foundation.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSFileManager",
+    "NSItemProvider",
+    "NSObject",
+    "NSString",
+    "NSURL",
+] }
+objc2-ui-kit = { workspace = true, features = [
+    "UIPasteboard",
+    "UIImage",
+    "objc2-core-graphics",
+] }
+objc2-uniform-type-identifiers = { workspace = true, features = [
+    "UTType",
+    "UTCoreTypes",
+] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
@@ -53,8 +76,6 @@ waterkit-build.workspace = true
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Clipboard", "Navigator", "Window"] }
 
-[build-dependencies]
-waterkit-build.workspace = true
 
 [dev-dependencies]
 image = { workspace = true }

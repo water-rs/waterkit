@@ -8637,6 +8637,7 @@ version = "0.1.4"
 dependencies = [
  "ab_glyph",
  "barcoders",
+ "blocking",
  "bytes",
  "dejavu",
  "enumset",

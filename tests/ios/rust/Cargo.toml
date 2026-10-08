@@ -17,6 +17,7 @@ ignored = ["waterkit"]
 futures = { workspace = true, optional = true }
 swift-bridge.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tracing-subscriber.workspace = true
 waterkit = { path = "../../..", default-features = false }
 waterkit-test-report.workspace = true
 wgpu = { workspace = true, optional = true }

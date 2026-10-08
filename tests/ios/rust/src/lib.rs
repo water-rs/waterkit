@@ -21,6 +21,15 @@ fn run_tests() {
 }
 
 fn run_tests_json() -> String {
+    // `simctl launch --console` copies stderr into the CI log, so warnings
+    // land next to the report they explain.
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_new("warn,waterkit=debug,waterkit_location=debug")
+                .expect("the harness's tracing filter directives are valid"),
+        )
+        .try_init();
     let report = build_report();
     to_json_pretty(&report).expect("failed to serialize WaterKit iOS test report")
 }

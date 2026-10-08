@@ -146,6 +146,7 @@ wallet = ["dep:waterkit-wallet"]
 aes = "0.9.1"
 cbc = "0.2.1"
 tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 # Reactive primitive used by waterkit-core.
 nami = "0.12"
 nami-core = "0.4"

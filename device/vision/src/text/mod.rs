@@ -1,12 +1,14 @@
 //! The `text` capability: recognizing printed text in an image.
 //!
-//! [`RecognizeText`] is served natively by `Windows.Media.Ocr` on Windows
-//! and by Play services ML Kit's script recognizers on Android.
-//! `Windows.Media.Ocr`'s single quality mode serves both
-//! [`RecognitionLevel`] values; a requested language it lacks selects the
-//! portable realization when the application carries one. ML Kit serves
-//! writing systems — Latin, Chinese, Devanagari, Japanese, Korean — so a
-//! request's languages must resolve to one script to be served natively.
+//! [`RecognizeText`] is served natively by `Windows.Media.Ocr` on Windows,
+//! by Apple Vision's `RecognizeTextRequest` on iOS and macOS, and by Play
+//! services ML Kit's script recognizers on Android. `Windows.Media.Ocr`'s
+//! single quality mode serves both [`RecognitionLevel`] values; Vision
+//! serves its per-level language sets; ML Kit serves writing systems —
+//! Latin, Chinese, Devanagari, Japanese, Korean — so an Android request's
+//! languages must resolve to one script to be served natively. A requested
+//! language a realization lacks selects the portable realization when the
+//! application carries one.
 
 mod sys;
 
@@ -38,7 +40,7 @@ pub struct TextWord {
     /// The serving realization's confidence, if it reports one.
     ///
     /// `Windows.Media.Ocr` reports no confidence, so its words carry
-    /// [`None`].
+    /// [`None`]; Apple Vision reports the line candidate's confidence.
     pub confidence: Option<f32>,
     /// Normalized corners in reading order: top-left, top-right,
     /// bottom-right, bottom-left of the upright image.
@@ -53,7 +55,7 @@ pub struct TextLine {
     /// The serving realization's confidence, if it reports one.
     ///
     /// `Windows.Media.Ocr` reports no confidence, so its lines carry
-    /// [`None`].
+    /// [`None`]; Apple Vision reports its candidate's confidence.
     pub confidence: Option<f32>,
     /// Normalized corners in reading order: top-left, top-right,
     /// bottom-right, bottom-left of the upright image.
@@ -127,7 +129,12 @@ impl Sealed for RecognizeText {
 #[doc(hidden)]
 #[derive(Debug)]
 #[cfg_attr(
-    not(any(target_os = "windows", target_os = "android")),
+    not(any(
+        target_os = "windows",
+        target_os = "ios",
+        target_os = "macos",
+        target_os = "android"
+    )),
     expect(
         dead_code,
         reason = "only a native realization reads the languages and level, and this platform has none yet"
@@ -149,7 +156,7 @@ impl Plan<RecognizeText> for TextPlan {
     )]
     async fn prepare(&self, _context: Context<'_>) -> Result<(), VisionError> {
         match self.realization {
-            Realization::Native => sys::prepare(self).await,
+            Realization::Native => sys::prepare(self),
             Realization::Portable => unreachable!("no portable text realization exists yet"),
         }
     }

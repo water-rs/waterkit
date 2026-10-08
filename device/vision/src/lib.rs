@@ -51,14 +51,25 @@
 //! feature: [`CodeScanner`] presents the platform's own scanning UI — the
 //! Google code scanner of Google Play services on Android (no camera
 //! permission required) and `VisionKit`'s `DataScannerViewController` on iOS —
-//! and resolves to the decoded [`Barcode`]. macOS, Windows and Linux have no
-//! system scanner; [`CodeScanner::capabilities`] reports it unavailable there
+//! and resolves to the decoded [`Barcode`]. macOS, Mac Catalyst, Windows and
+//! Linux have no system scanner; [`CodeScanner::capabilities`] reports it unavailable there
 //! and [`CodeScanner::scan`] is an error, never a fallback: `WaterUI` owns
 //! the fallback scanning view.
 
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
-#![deny(unsafe_code)]
+// Apple bridges reach `wgpu`'s hal handles and mark `CVPixelBuffer`
+// thread-boundaries; Android's scanner JNI export is the one unsafe
+// attribute a `no_mangle` bridge cannot avoid. Every other target stays
+// forbidding unsafe code.
+#![cfg_attr(
+    not(any(
+        target_os = "ios",
+        target_os = "macos",
+        all(target_os = "android", feature = "scanner")
+    )),
+    forbid(unsafe_code)
+)]
 
 mod barcode;
 mod capability;

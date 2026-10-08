@@ -20,11 +20,7 @@ pub const fn offer(_request: &RecognizeText) -> Offer {
 
 /// Native text is never selected here; `offer` is always
 /// [`Offer::Absent`].
-#[expect(
-    clippy::unused_async,
-    reason = "keeps the signature every platform's native realization shares"
-)]
-pub async fn prepare(_plan: &TextPlan) -> Result<(), VisionError> {
+pub fn prepare(_plan: &TextPlan) -> Result<(), VisionError> {
     unreachable!("a platform without a native text recognizer never selects it")
 }
 

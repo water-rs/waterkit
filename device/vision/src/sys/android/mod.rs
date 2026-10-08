@@ -7,13 +7,16 @@
 //! screen itself is Play services' module, so the app needs no camera
 //! permission.
 //!
-//! `waterkit.vision.VisionHelper` backs the `barcode` and `text` requests'
-//! native realization over the unbundled `play-services-mlkit-*` clients
-//! ([`mlkit`]). The format table below is shared: `GmsBarcodeScanning` and
-//! ML Kit's barcode engine read the same `Barcode.FORMAT_*` constants.
+//! `waterkit.vision.{MlKitInput,BarcodeHelper,TextHelper}` back the
+//! `barcode` and `text` requests' native realization over the unbundled
+//! `play-services-mlkit-*` clients ([`mlkit`], [`barcode`]). The format
+//! table below is shared: `GmsBarcodeScanning` and ML Kit's barcode engine
+//! read the same `Barcode.FORMAT_*` constants.
 //!
 //! [`CodeScanner`]: crate::CodeScanner
 
+#[cfg(feature = "barcode")]
+pub mod barcode;
 #[cfg(any(feature = "barcode", feature = "text"))]
 pub mod mlkit;
 #[cfg(feature = "scanner")]
@@ -24,10 +27,40 @@ use crate::Symbology;
 use crate::VisionError;
 #[cfg(any(feature = "scanner", feature = "barcode"))]
 use enumset::EnumSet;
-use waterkit_build::AndroidError;
+use jni::objects::{JValue, JValueOwned};
+use jni::{jni_sig, jni_str};
+use waterkit_build::{
+    AndroidError, DexHelper, describe_jni_error, dex_helper, with_android_context,
+};
 
 #[cfg(feature = "scanner")]
 pub use scanner::{scan, scanner_available, scanner_symbologies};
+
+/// `waterkit.vision.PlayServices`, the helper every Android feature stage —
+/// the single Play services probe the scanner, barcode and text
+/// realizations share.
+static PLAY_SERVICES: DexHelper = dex_helper!("waterkit.vision.PlayServices");
+
+/// Whether Google Play services is usable on this device, probed on each
+/// call — availability can change under the process, so nothing is cached.
+pub fn play_services() -> Result<bool, VisionError> {
+    with_android_context(|env, context| {
+        let class = PLAY_SERVICES.class(env, context)?;
+        env.call_static_method(
+            class,
+            jni_str!("hasGooglePlayServices"),
+            jni_sig!("(Landroid/content/Context;)Z"),
+            &[JValue::Object(context)],
+        )
+        .and_then(JValueOwned::z)
+        .map_err(|error| {
+            VisionError::Platform(format!(
+                "probe Play services: {}",
+                describe_jni_error(env, error)
+            ))
+        })
+    })
+}
 
 impl From<AndroidError> for VisionError {
     fn from(error: AndroidError) -> Self {

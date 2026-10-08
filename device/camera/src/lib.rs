@@ -36,6 +36,7 @@
 
 #![warn(missing_docs)]
 
+mod analysis;
 /// Only the platforms with a camera backend measure capture time.
 #[cfg(any(
     target_os = "ios",
@@ -59,6 +60,7 @@ mod test_support;
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 mod upload;
 
+pub use analysis::{AnalysisConfig, AnalysisFrame, AnalysisPlane, AnalysisPlanes};
 pub use converter::{FrameConverter, UPRIGHT_FORMAT};
 pub use frame::{Frame, FramePlanes, Orientation};
 pub use raw_video::{RawVideoError, RawVideoFrame, RawVideoHeader, RawVideoLayout, RawVideoReader};
@@ -126,6 +128,14 @@ pub struct CameraConfig {
     pub resolution: Resolution,
     /// Desired frame rate.
     pub frame_rate: u32,
+    /// The CPU-readable analysis output, or `None` to capture none.
+    ///
+    /// When set, [`Camera::analysis_frames`] streams [`AnalysisFrame`]s next
+    /// to the GPU frame stream. On Android the capture session opens a
+    /// second `YUV_420_888` `ImageReader` at the analysis resolution; on
+    /// Apple platforms the capture output's buffers serve both streams, and
+    /// on Windows and Linux the captured CPU pixels do.
+    pub analysis: Option<AnalysisConfig>,
 }
 
 impl Default for CameraConfig {
@@ -133,6 +143,7 @@ impl Default for CameraConfig {
         Self {
             resolution: Resolution::FULL_HD,
             frame_rate: 30,
+            analysis: None,
         }
     }
 }
@@ -144,6 +155,7 @@ impl CameraConfig {
         Self {
             resolution: Resolution::UHD,
             frame_rate: 30,
+            analysis: None,
         }
     }
 
@@ -153,6 +165,7 @@ impl CameraConfig {
         Self {
             resolution: Resolution::HD,
             frame_rate: 60,
+            analysis: None,
         }
     }
 }
@@ -714,6 +727,12 @@ pub enum CameraError {
     #[cfg(target_os = "android")]
     #[error("camera frame import failed: {0}")]
     FrameImport(Arc<wgpu_external_frame::ahardware_buffer::HardwareBufferImportError>),
+    /// [`Camera::analysis_frames`] was called on a camera opened without
+    /// [`CameraConfig::analysis`].
+    #[error(
+        "this camera was opened without `CameraConfig::analysis`, so it captures no analysis frames"
+    )]
+    AnalysisNotConfigured,
 }
 
 // ============================================================================
@@ -855,6 +874,31 @@ impl Camera {
     /// camera drop new frames until one comes back.
     pub fn frames(&self) -> impl futures::Stream<Item = Result<Frame, CameraError>> + '_ {
         self.inner.frames()
+    }
+
+    /// Get an async stream of CPU-readable `Y'CbCr` 4:2:0 analysis frames.
+    ///
+    /// Analysis frames are the stream image analysis runs on: unlike
+    /// [`Frame`]s, whose pixels may live in GPU-only storage, every
+    /// [`AnalysisFrame`] reads on the CPU through [`AnalysisFrame::planes`].
+    /// The stream is newest-wins — a consumer that falls behind drops
+    /// pending frames rather than stalling the camera — and it ends when the
+    /// camera's capture does.
+    ///
+    /// The camera captures analysis frames only when it was opened with
+    /// [`CameraConfig::analysis`] set; otherwise this stream yields
+    /// [`CameraError::AnalysisNotConfigured`] once and ends.
+    ///
+    /// On Android each frame holds its acquired `android.media.Image`
+    /// (`AnalysisFrame::media_image`), which closing the last clone
+    /// returns to the reader; on Apple platforms each frame retains the
+    /// capture output's `CVPixelBuffer` (`AnalysisFrame::pixel_buffer`) —
+    /// `IOSurface`-backed, so reading it costs no copy — and on Windows and
+    /// Linux it holds the CPU pixels captured before upload.
+    pub fn analysis_frames(
+        &self,
+    ) -> impl futures::Stream<Item = Result<AnalysisFrame, CameraError>> + '_ {
+        self.inner.analysis_frames()
     }
 
     /// Capture a high-quality photo.

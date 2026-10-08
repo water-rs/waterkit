@@ -117,11 +117,7 @@ pub fn offer(request: &RecognizeText) -> Offer {
 }
 
 /// Verifies that an engine exists for the selected languages.
-#[expect(
-    clippy::unused_async,
-    reason = "keeps the signature every platform's native realization shares"
-)]
-pub async fn prepare(plan: &TextPlan) -> Result<(), VisionError> {
+pub fn prepare(plan: &TextPlan) -> Result<(), VisionError> {
     engine(&plan.languages).map(|_| ())
 }
 
@@ -308,6 +304,12 @@ impl Preparation for PreparedBitmap {
                         bitmap_from_raster(&raster)?
                     }
                 }
+            }
+            #[cfg(feature = "camera")]
+            Pixels::Analysis { .. } => {
+                return Err(VisionError::Unsupported(
+                    "camera analysis frames cannot be served by Windows.Media.Ocr yet".to_owned(),
+                ));
             }
             Pixels::Encoded(bytes) => decode_encoded(bytes).await?,
         };

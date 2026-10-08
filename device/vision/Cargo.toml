@@ -24,6 +24,24 @@ tracing.workspace = true
 icu_locale_core = { workspace = true, optional = true, features = ["alloc"] }
 waterkit-camera = { workspace = true, optional = true }
 
+# Apple platforms (iOS, macOS) - the system Vision framework.
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+serde = { workspace = true, features = ["derive"] }
+# Results cross the bridge as JSON.
+serde_json.workspace = true
+objc2.workspace = true
+objc2-core-foundation = { workspace = true, features = ["CFDictionary", "CFString"] }
+objc2-core-video = { workspace = true, features = [
+    "CVBuffer",
+    "CVImageBuffer",
+    "CVPixelBuffer",
+    "CVReturn",
+] }
+objc2-metal.workspace = true
+# The wgpu Metal backend, for recovering the `MTLTexture` an image texture is.
+wgpu-hal.workspace = true
+
 # iOS
 [target.'cfg(target_os = "ios")'.dependencies]
 swift-bridge = { workspace = true, optional = true }
@@ -52,11 +70,13 @@ windows = { workspace = true, optional = true, features = [
 waterkit-build.workspace = true
 
 [features]
-camera = ["dep:waterkit-camera"]
-# The `DetectBarcodes` request: ML Kit's barcode engine on Android.
+# The `DetectBarcodes` request: Apple Vision's `DetectBarcodesRequest` on
+# iOS/macOS, ML Kit's barcode engine on Android. The `Barcode`/`Payload`/
+# `Symbology` vocabulary compiles unconditionally for the system scanner.
 barcode = ["dep:jni", "dep:ndk-context", "dep:waterkit-build"]
-# The `RecognizeText` request: Windows.Media.Ocr on Windows, ML Kit's script
-# recognizers on Android.
+# `RecognizeText`: Windows.Media.Ocr on Windows, Apple Vision's
+# `RecognizeTextRequest` on iOS/macOS, ML Kit's script recognizers on
+# Android.
 text = [
     "dep:icu_locale_core",
     "dep:icu_locale",
@@ -65,6 +85,9 @@ text = [
     "dep:ndk-context",
     "dep:waterkit-build",
 ]
+# Camera `Frame` and `AnalysisFrame` images through `waterkit-camera`.
+camera = ["dep:waterkit-camera"]
+
 # The one-shot system code scanner: the Google code scanner of Google Play
 # services on Android, VisionKit's `DataScannerViewController` on iOS.
 scanner = [
@@ -74,19 +97,41 @@ scanner = [
     "dep:waterkit-build",
 ]
 
-# Android helpers the packager compiles into the application's classpath.
-# The metadata table is a single object, so the helpers ship together:
-# `ScannerHelper` needs `play-services-code-scanner` and `VisionHelper` the
-# unbundled ML Kit clients — thin clients each, whose engines live in Play
-# services' modules, downloaded to the device on demand and never in the app.
-[package.metadata.waterui.android]
+# Android helpers the packager compiles into the application's classpath:
+# `feature.<name>` tables join the app only while the cargo feature is on.
+
+[package.metadata.waterui.android.feature.scanner]
+# `PlayServices.kt` hosts the shared Play services probe; every feature
+# stages it, and the packager deduplicates it by filename.
 kotlin-sources = [
+    "src/sys/android/PlayServices.kt",
     "src/sys/android/ScannerHelper.kt",
-    "src/sys/android/VisionHelper.kt",
+]
+# The thin client of the Google code scanner; the scanner itself is Google
+# Play services' module, downloaded to the device on first use.
+maven = ["com.google.android.gms:play-services-code-scanner:16.1.0"]
+
+# ML Kit's unbundled barcode client. `MlKitInput.kt` builds the `InputImage`
+# both helpers take; it is deduplicated by filename when both features are
+# enabled. The engine lives in Play services' modules, downloaded on demand.
+[package.metadata.waterui.android.feature.barcode]
+kotlin-sources = [
+    "src/sys/android/MlKitInput.kt",
+    "src/sys/android/PlayServices.kt",
+    "src/sys/android/VisionBarcodeHelper.kt",
+]
+maven = ["com.google.android.gms:play-services-mlkit-barcode-scanning:18.3.1"]
+
+# ML Kit's unbundled script recognizers, same shape: `MlKitInput.kt` is the
+# shared `InputImage` builder, and each recognizer module is delivered by
+# Play services on demand.
+[package.metadata.waterui.android.feature.text]
+kotlin-sources = [
+    "src/sys/android/MlKitInput.kt",
+    "src/sys/android/PlayServices.kt",
+    "src/sys/android/VisionTextHelper.kt",
 ]
 maven = [
-    "com.google.android.gms:play-services-code-scanner:16.1.0",
-    "com.google.android.gms:play-services-mlkit-barcode-scanning:18.3.1",
     "com.google.android.gms:play-services-mlkit-text-recognition:19.0.1",
     "com.google.android.gms:play-services-mlkit-text-recognition-chinese:16.0.1",
     "com.google.android.gms:play-services-mlkit-text-recognition-devanagari:16.0.1",
@@ -96,8 +141,12 @@ maven = [
 
 [dev-dependencies]
 pollster.workspace = true
-
-[target.'cfg(target_os = "windows")'.dev-dependencies]
-# Rasterizes the test-time text fixtures; no fonts are committed to the repo.
-ab_glyph = "0.2"
 image.workspace = true
+# Renders a QR code at test time; no image fixture is committed.
+qrcode = "0.14"
+# Renders 1D symbologies at test time.
+barcoders = "1"
+# Rasterizes glyphs for text recognition tests.
+ab_glyph = "0.2"
+# A bundled DejaVu font; no font binary is committed.
+dejavu = "2.37"

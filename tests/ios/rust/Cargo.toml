@@ -19,6 +19,13 @@ swift-bridge.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 waterkit = { path = "../../..", default-features = false }
 waterkit-test-report.workspace = true
+wgpu = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+qrcode = { version = "0.14", optional = true }
+barcoders = { version = "1", optional = true }
+ab_glyph = { version = "0.2", optional = true }
+dejavu = { version = "2.37", optional = true }
 
 [features]
 # `health` stays out of `full`: waterkit-health declares extern Swift symbols
@@ -47,6 +54,7 @@ full = [
     "speech",
     "contacts",
     "calendar",
+    "language",
     "deeplink",
     "background",
     "passkey",
@@ -77,11 +85,23 @@ share = ["waterkit/share"]
 speech = ["waterkit/speech"]
 contacts = ["waterkit/contacts"]
 calendar = ["waterkit/calendar"]
+language = ["waterkit/language"]
 health = ["waterkit/health"]
 deeplink = ["waterkit/deeplink"]
 background = ["waterkit/background"]
-vision = ["waterkit/vision"]
 passkey = ["waterkit/passkey"]
+# The vision case generates QR/barcode/text images and runs real Vision
+# requests through them.
+vision = [
+    "dep:wgpu",
+    "dep:image",
+    "dep:bytes",
+    "dep:qrcode",
+    "dep:barcoders",
+    "dep:ab_glyph",
+    "dep:dejavu",
+    "waterkit/vision",
+]
 wallet = ["waterkit/wallet"]
 
 [build-dependencies]

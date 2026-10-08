@@ -51,6 +51,7 @@ full = [
     "contacts",
     "calendar",
     "health",
+    "language",
     "screen",
     "background",
     "passkey",
@@ -84,6 +85,7 @@ calendar = ["waterkit_content/calendar"]
 # the frame-plane path, so the camera cases and their helpers join the run.
 vision = ["camera", "waterkit_content/vision"]
 health = ["waterkit_content/health"]
+language = ["waterkit_content/language"]
 screen = ["waterkit_content/screen"]
 background = ["waterkit_content/background"]
 passkey = ["waterkit_content/passkey"]

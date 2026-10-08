@@ -27,6 +27,22 @@ pub enum Pixels {
         color: waterkit_camera::VideoColorInfo,
         /// How the stored pixels relate to upright.
         orientation: Orientation,
+        /// The captured `CVPixelBuffer`, when the frame carries one.
+        ///
+        /// Native realizations serve straight from it; frames uploaded from
+        /// memory carry no buffer and prepare through their planes.
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        pixel_buffer: Option<crate::sys::PixelBuffer>,
+    },
+    /// A camera's CPU-readable analysis frame.
+    ///
+    /// Native realizations serve straight from the frame's platform payload:
+    /// its `CVPixelBuffer` on Apple platforms, its `android.media.Image` on
+    /// Android.
+    #[cfg(feature = "camera")]
+    Analysis {
+        /// The analysis frame.
+        frame: waterkit_camera::AnalysisFrame,
     },
     /// JPEG, PNG, or HEIF data, decoded with its own orientation metadata by
     /// the serving realization.
@@ -73,6 +89,18 @@ impl Image {
         }
     }
 
+    /// Mutable access for tests that need to construct a `Pixels` variant no
+    /// public constructor produces, like a frame carrying its pixel buffer.
+    #[cfg(all(
+        test,
+        feature = "camera",
+        feature = "barcode",
+        any(target_os = "ios", target_os = "macos")
+    ))]
+    pub(crate) const fn pixels_mut(&mut self) -> &mut Pixels {
+        &mut self.pixels
+    }
+
     #[cfg(feature = "camera")]
     pub(crate) fn from_planes(
         planes: &waterkit_camera::FramePlanes,
@@ -84,6 +112,8 @@ impl Image {
                 planes: planes.clone(),
                 color,
                 orientation,
+                #[cfg(any(target_os = "ios", target_os = "macos"))]
+                pixel_buffer: None,
             },
         }
     }
@@ -92,7 +122,29 @@ impl Image {
 #[cfg(feature = "camera")]
 impl From<&waterkit_camera::Frame> for Image {
     fn from(frame: &waterkit_camera::Frame) -> Self {
-        Self::from_planes(frame.planes(), frame.color(), frame.orientation())
+        let image = Self::from_planes(frame.planes(), frame.color(), frame.orientation());
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        let image = {
+            let mut image = image;
+            if let Pixels::Frame { pixel_buffer, .. } = &mut image.pixels {
+                *pixel_buffer = frame.pixel_buffer().map(crate::sys::PixelBuffer);
+            }
+            image
+        };
+        image
+    }
+}
+
+#[cfg(feature = "camera")]
+impl From<&waterkit_camera::AnalysisFrame> for Image {
+    /// Shares the analysis frame — cloning it retains the platform payload,
+    /// copying no pixels.
+    fn from(frame: &waterkit_camera::AnalysisFrame) -> Self {
+        Self {
+            pixels: Pixels::Analysis {
+                frame: frame.clone(),
+            },
+        }
     }
 }
 
@@ -210,6 +262,7 @@ mod tests {
                 planes: FramePlanes::Rgb(view),
                 color: actual_color,
                 orientation,
+                ..
             } => {
                 assert_eq!(*actual_color, color);
                 assert_eq!(*orientation, Orientation::Right);
@@ -237,6 +290,7 @@ mod tests {
                     },
                 color: actual_color,
                 orientation,
+                ..
             } => {
                 assert_eq!(*actual_color, color);
                 assert_eq!(*orientation, Orientation::Right);
@@ -257,6 +311,7 @@ mod tests {
                 planes: FramePlanes::YCbCr422 { yuyv: actual_yuyv },
                 color: actual_color,
                 orientation,
+                ..
             } => {
                 assert_eq!(*actual_color, color);
                 assert_eq!(*orientation, Orientation::Right);

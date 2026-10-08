@@ -3,8 +3,8 @@
 //!
 //! The `play-services-mlkit-text-recognition*` artifacts are thin clients;
 //! the engines live in modules Play services delivers on demand and
-//! [`prepare`] installs. ML Kit serves writing systems, not languages — one
-//! engine reads every language written in its script — so a request's
+//! [`recognize`] installs. ML Kit serves writing systems, not languages —
+//! one engine reads every language written in its script — so a request's
 //! languages route through likely-subtags expansion to their script, and
 //! languages resolving to several scripts decline the offer.
 
@@ -17,11 +17,12 @@ use jni::{Env, jni_sig, jni_str};
 use waterkit_build::{decode_string, describe_jni_error};
 
 use crate::sys::android::mlkit::{
-    HELPER, MlInput, SharedInput, on_vision_thread, play_services, prepare_module, quad,
-};
-use crate::sys::android::mlkit::{
     MODULE_CHINESE, MODULE_DEVANAGARI, MODULE_JAPANESE, MODULE_KOREAN, MODULE_LATIN,
 };
+use crate::sys::android::mlkit::{
+    MlInput, SharedInput, TEXT_HELPER, on_vision_thread, prepare_module, quad,
+};
+use crate::sys::android::play_services;
 use crate::{
     TextLine, TextWord, VisionError,
     sealed::{Offer, Pass},
@@ -40,7 +41,7 @@ enum Script {
 }
 
 impl Script {
-    /// The `VisionHelper` module code for the script.
+    /// The `VisionTextHelper` module code for the script.
     const fn module(self) -> i32 {
         match self {
             Self::Latin => MODULE_LATIN,
@@ -135,7 +136,7 @@ fn route(languages: &[LanguageIdentifier]) -> Result<Script, Vec<String>> {
 /// # Panics
 ///
 /// Panics if `ndk_context` has no `JavaVM` or Android `Context` yet, or the
-/// JNI probe fails.
+/// JNI probe fails — a probe failure is a bug, not an absent realization.
 pub fn recognizer_languages() -> Vec<LanguageIdentifier> {
     match play_services() {
         Ok(true) => SCRIPTS.iter().map(|script| script.identifier()).collect(),
@@ -161,14 +162,14 @@ pub fn offer(request: &RecognizeText) -> Offer {
     }
 }
 
-/// Installs the script's recognizer module when Play services does not
-/// already have it.
-///
-/// # Errors
-///
-/// Returns [`VisionError::ModelUnavailable`] when the module install fails.
-pub async fn prepare(plan: &TextPlan) -> Result<(), VisionError> {
-    prepare_module(script(plan).module()).await
+/// The script's recognizer module is installed on the worker thread that
+/// runs the request, so plan preparation is pure routing — nothing to do.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "keeps the signature every platform's native realization shares"
+)]
+pub const fn prepare(_plan: &TextPlan) -> Result<(), VisionError> {
+    Ok(())
 }
 
 /// The script the plan's languages resolve to; `offer` already declined a
@@ -310,13 +311,14 @@ pub async fn recognize(pass: &mut Pass<'_>, plan: &TextPlan) -> Result<Vec<TextL
     let input = Arc::clone(&pass.prepared::<SharedInput>().await?.0);
     let script = script(plan).module();
     on_vision_thread("waterkit-vision-text", move |env, context| {
-        let class = HELPER.class(env, context)?;
+        prepare_module(env, context, &TEXT_HELPER, script)?;
+        let class = TEXT_HELPER.class(env, context)?;
         let rows = env
             .call_static_method(
                 class,
                 jni_str!("recognizeText"),
                 jni_sig!(
-                    "(Lcom/google/mlkit/vision/common/InputImage;I)[Lwaterkit/vision/VisionHelper$TextRow;"
+                    "(Lcom/google/mlkit/vision/common/InputImage;I)[Lwaterkit/vision/VisionTextHelper$TextRow;"
                 ),
                 &[JValue::Object(input.input.as_obj()), JValue::Int(script)],
             )

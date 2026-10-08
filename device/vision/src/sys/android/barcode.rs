@@ -1,11 +1,12 @@
-//! Android native barcode realization: Play services ML Kit's barcode
+//! Android's native barcode realization: Play services ML Kit's barcode
 //! engine, unbundled.
 //!
 //! `play-services-mlkit-barcode-scanning` is a thin client; the engine lives
-//! in a Play services module [`prepare`] installs on demand. The request's
-//! symbologies map onto `Barcode.FORMAT_*` constants
-//! ([`crate::sys::android`]); one the engine cannot express declines the
-//! offer, so `detect` only ever hands the engine formats it reads.
+//! in a Play services module [`BARCODE_HELPER`](super::mlkit::BARCODE_HELPER)
+//! installs on demand. A request's symbologies map onto `Barcode.FORMAT_*`
+//! constants ([`crate::sys::android`]); one the engine cannot express
+//! declines the offer, so detection only ever hands the engine formats it
+//! reads.
 
 use std::sync::Arc;
 
@@ -15,25 +16,22 @@ use jni::objects::{JByteArray, JIntArray, JObject, JObjectArray, JValue, JValueO
 use jni::{Env, jni_sig, jni_str};
 use waterkit_build::describe_jni_error;
 
-use crate::sys::android::mlkit::{
-    HELPER, MODULE_BARCODE, MlInput, SharedInput, on_vision_thread, play_services, prepare_module,
-    quad,
-};
-use crate::sys::android::{format_of, served_symbologies, symbology_of};
+use super::mlkit::{BARCODE_HELPER, MlInput, SharedInput, on_vision_thread, prepare_module, quad};
+use super::{format_of, play_services, served_symbologies, symbology_of};
 use crate::{
     Barcode, Payload, Symbology, VisionError,
-    barcode::{BarcodePlan, DetectBarcodes},
     sealed::{Offer, Pass},
 };
 
-/// The symbologies this device serves natively: ML Kit's format list when
-/// Google Play services is usable, none when it is not.
+/// The symbologies this device's native barcode realization serves: ML
+/// Kit's format list when Google Play services is usable, none when it is
+/// not.
 ///
 /// # Panics
 ///
 /// Panics if `ndk_context` has no `JavaVM` or Android `Context` yet, or the
-/// JNI probe fails.
-pub fn native_symbologies() -> EnumSet<Symbology> {
+/// JNI probe fails — a probe failure is a bug, not an absent realization.
+pub fn supported_symbologies() -> EnumSet<Symbology> {
     match play_services() {
         Ok(true) => served_symbologies(),
         Ok(false) => EnumSet::empty(),
@@ -41,13 +39,11 @@ pub fn native_symbologies() -> EnumSet<Symbology> {
     }
 }
 
-/// What the native realization offers for `request`: every requested
+/// What the native realization offers for `requested`: every requested
 /// symbology ML Kit's barcode engine expresses, or [`Offer::Lacks`] naming
 /// the ones it cannot; [`Offer::Absent`] when Play services is unavailable.
-pub fn offer(request: &DetectBarcodes) -> Offer {
-    let missing: Vec<Symbology> = (request.symbologies - served_symbologies())
-        .iter()
-        .collect();
+pub fn barcodes_offer(requested: EnumSet<Symbology>) -> Offer {
+    let missing: Vec<Symbology> = (requested - served_symbologies()).iter().collect();
     if !missing.is_empty() {
         return Offer::Lacks(format!(
             "symbologies {}",
@@ -63,15 +59,6 @@ pub fn offer(request: &DetectBarcodes) -> Offer {
         Ok(false) => Offer::Absent,
         Err(error) => Offer::Lacks(error.to_string()),
     }
-}
-
-/// Installs the barcode module when Play services does not already have it.
-///
-/// # Errors
-///
-/// Returns [`VisionError::ModelUnavailable`] when the module install fails.
-pub async fn prepare(_plan: &BarcodePlan) -> Result<(), VisionError> {
-    prepare_module(MODULE_BARCODE).await
 }
 
 /// Reads one `BarcodeRow` into a [`Barcode`].
@@ -120,18 +107,22 @@ fn barcode_row(
     })
 }
 
-/// Runs the request's formats over the pass's shared [`MlInput`].
-pub async fn detect(pass: &mut Pass<'_>, plan: &BarcodePlan) -> Result<Vec<Barcode>, VisionError> {
+/// Runs `symbologies` over the pass's shared [`MlInput`], installing the
+/// barcode module on the worker thread when Play services lacks it.
+pub async fn detect_barcodes(
+    pass: &mut Pass<'_>,
+    symbologies: EnumSet<Symbology>,
+) -> Result<Vec<Barcode>, VisionError> {
     let input = Arc::clone(&pass.prepared::<SharedInput>().await?.0);
-    let formats: Vec<i32> = plan
-        .symbologies
+    let formats: Vec<i32> = symbologies
         .iter()
         .map(|symbology| {
             format_of(symbology).expect("the offer rejected symbologies ML Kit cannot serve")
         })
         .collect();
     on_vision_thread("waterkit-vision-barcode", move |env, context| {
-        let class = HELPER.class(env, context)?;
+        prepare_module(env, context, &BARCODE_HELPER, 0)?;
+        let class = BARCODE_HELPER.class(env, context)?;
         let formats_array = JIntArray::new(env, formats.len())
             .map_err(|error| VisionError::Platform(format!("formats array: {error}")))?;
         formats_array
@@ -142,7 +133,7 @@ pub async fn detect(pass: &mut Pass<'_>, plan: &BarcodePlan) -> Result<Vec<Barco
                 class,
                 jni_str!("detectBarcodes"),
                 jni_sig!(
-                    "(Lcom/google/mlkit/vision/common/InputImage;[I)[Lwaterkit/vision/VisionHelper$BarcodeRow;"
+                    "(Lcom/google/mlkit/vision/common/InputImage;[I)[Lwaterkit/vision/BarcodeHelper$BarcodeRow;"
                 ),
                 &[
                     JValue::Object(input.input.as_obj()),

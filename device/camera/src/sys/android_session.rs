@@ -18,13 +18,17 @@ use crate::{CameraError, Resolution};
 pub trait CameraHelper: Send + Sync + 'static {
     /// A frame as `wait_for_frame` produces it.
     type Frame: Send + 'static;
+    /// An analysis frame as `wait_for_analysis_frame` produces it.
+    type Analysis: Send + 'static;
 
-    /// Opens `camera_id` at `resolution` and `frame_rate`.
+    /// Opens `camera_id` at `resolution` and `frame_rate`, capturing a
+    /// second CPU-readable stream at `analysis`'s resolution when set.
     fn open_camera(
         &self,
         camera_id: &str,
         resolution: Resolution,
         frame_rate: u32,
+        analysis: Option<Resolution>,
     ) -> Result<(), CameraError>;
 
     /// Starts the opened camera's capture session.
@@ -38,6 +42,15 @@ pub trait CameraHelper: Send + Sync + 'static {
         clock: &StreamClock<Duration>,
         timeout_ms: i32,
     ) -> Result<Option<Self::Frame>, CameraError>;
+
+    /// The next analysis frame, or `None` when none arrived within
+    /// `timeout_ms` — including when the camera was opened without an
+    /// analysis output, whose queue never fills.
+    fn wait_for_analysis_frame(
+        &self,
+        clock: &StreamClock<Duration>,
+        timeout_ms: i32,
+    ) -> Result<Option<Self::Analysis>, CameraError>;
 
     /// Stops the capture session.
     fn stop_capture(&self) -> Result<(), CameraError>;
@@ -53,14 +66,16 @@ pub struct OpenCamera<H: CameraHelper> {
 }
 
 impl<H: CameraHelper> OpenCamera<H> {
-    /// Opens `camera_id` on `helper`.
+    /// Opens `camera_id` on `helper`, with an analysis stream at
+    /// `analysis`'s resolution when set.
     pub fn open(
         helper: H,
         camera_id: &str,
         resolution: Resolution,
         frame_rate: u32,
+        analysis: Option<Resolution>,
     ) -> Result<Self, CameraError> {
-        helper.open_camera(camera_id, resolution, frame_rate)?;
+        helper.open_camera(camera_id, resolution, frame_rate, analysis)?;
         Ok(Self { helper })
     }
 
@@ -100,25 +115,64 @@ impl<H: CameraHelper> Drop for Capture<H> {
     }
 }
 
-/// The thread reading a capture's frames. It owns the [`Capture`], so it
-/// alone tears the camera down: when capture fails, or when this handle
-/// drops; dropping the handle waits for that teardown.
+/// What a reader thread waits on. A [`Capture`] owns the camera; a shared
+/// helper only reads one of its streams.
+enum Waiter<H: CameraHelper> {
+    /// The owning reader: its drop tears the camera down.
+    Capture(Capture<H>),
+    /// A secondary reader, which must not tear the camera down.
+    Shared(H),
+}
+
+impl<H: CameraHelper> Waiter<H> {
+    const fn helper(&self) -> &H {
+        match self {
+            Self::Capture(capture) => capture.helper(),
+            Self::Shared(helper) => helper,
+        }
+    }
+}
+
+/// How a reader takes the next frame of its stream out of the helper.
+type Wait<H, F> = fn(&H, &StreamClock<Duration>, i32) -> Result<Option<F>, CameraError>;
+
+/// The thread reading one of a capture's frame streams. When it owns the
+/// [`Capture`], it alone tears the camera down: when capture fails, or when
+/// this handle drops; dropping the handle waits for that teardown.
 pub struct FrameThread<F> {
     frames: async_channel::Receiver<Result<F, CameraError>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl<F: Send + 'static> FrameThread<F> {
-    /// Spawns the reader thread for `capture`, waiting at most `timeout_ms`
-    /// for each frame.
+    /// Spawns the reader thread for `capture`'s preview frames, waiting at
+    /// most `timeout_ms` for each frame.
     pub fn spawn<H: CameraHelper<Frame = F>>(capture: Capture<H>, timeout_ms: i32) -> Self {
-        // Newest wins, and a failure is the last item: the channel closes
-        // only after the camera has closed.
+        Self::reader(Waiter::Capture(capture), timeout_ms, H::wait_for_frame)
+    }
+
+    /// Spawns a reader on `helper`'s analysis stream. Unlike [`Self::spawn`]
+    /// the thread owns no capture — the preview `FrameThread` tears the
+    /// camera down; this thread only waits and sends.
+    pub fn spawn_analysis<H: CameraHelper<Analysis = F>>(helper: H, timeout_ms: i32) -> Self {
+        Self::reader(
+            Waiter::Shared(helper),
+            timeout_ms,
+            H::wait_for_analysis_frame,
+        )
+    }
+
+    /// The read loop every reader shares: `wait` the next frame out of the
+    /// helper and forward it; newest wins, and a failure is the last item —
+    /// the channel closes only after the waiter drops, which for a
+    /// [`Waiter::Capture`] is the camera's teardown.
+    fn reader<H: CameraHelper>(waiter: Waiter<H>, timeout_ms: i32, wait: Wait<H, F>) -> Self {
         let (sender, frames) = async_channel::bounded(1);
         let thread = std::thread::spawn(move || {
             let clock = StreamClock::new();
+            let helper = waiter.helper();
             while !sender.is_closed() {
-                match capture.helper().wait_for_frame(&clock, timeout_ms) {
+                match wait(helper, &clock, timeout_ms) {
                     Ok(Some(frame)) => {
                         if sender.force_send(Ok(frame)).is_err() {
                             break;
@@ -133,7 +187,7 @@ impl<F: Send + 'static> FrameThread<F> {
                 }
             }
             // Teardown before the channel closes.
-            drop(capture);
+            drop(waiter);
             drop(sender);
         });
         Self {
@@ -142,7 +196,7 @@ impl<F: Send + 'static> FrameThread<F> {
         }
     }
 
-    /// The capture's frame stream.
+    /// The reader's frame stream.
     pub const fn frames(&self) -> &async_channel::Receiver<Result<F, CameraError>> {
         &self.frames
     }
@@ -211,12 +265,14 @@ mod tests {
 
     impl CameraHelper for Arc<MockHelper> {
         type Frame = Resolution;
+        type Analysis = Resolution;
 
         fn open_camera(
             &self,
             _camera_id: &str,
             _resolution: Resolution,
             _frame_rate: u32,
+            _analysis: Option<Resolution>,
         ) -> Result<(), CameraError> {
             self.opens.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -242,6 +298,15 @@ mod tests {
             Ok(Some(MockHelper::FRAME))
         }
 
+        fn wait_for_analysis_frame(
+            &self,
+            _clock: &StreamClock<Duration>,
+            _timeout_ms: i32,
+        ) -> Result<Option<Self::Analysis>, CameraError> {
+            std::thread::yield_now();
+            Ok(None)
+        }
+
         fn stop_capture(&self) -> Result<(), CameraError> {
             self.stops.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -263,12 +328,14 @@ mod tests {
 
     impl CameraHelper for Arc<FailingStart> {
         type Frame = Resolution;
+        type Analysis = Resolution;
 
         fn open_camera(
             &self,
             _camera_id: &str,
             _resolution: Resolution,
             _frame_rate: u32,
+            _analysis: Option<Resolution>,
         ) -> Result<(), CameraError> {
             Ok(())
         }
@@ -285,6 +352,14 @@ mod tests {
             unreachable!("no capture started, so no frame is waited for")
         }
 
+        fn wait_for_analysis_frame(
+            &self,
+            _clock: &StreamClock<Duration>,
+            _timeout_ms: i32,
+        ) -> Result<Option<Self::Analysis>, CameraError> {
+            unreachable!("no capture started, so no analysis frame is waited for")
+        }
+
         fn stop_capture(&self) -> Result<(), CameraError> {
             unreachable!("no capture started, so none is stopped")
         }
@@ -295,13 +370,36 @@ mod tests {
         }
     }
 
+    /// A shared reader on the analysis stream joins on drop but never stops
+    /// or closes the camera — the owning reader alone does that.
+    #[test]
+    fn a_shared_analysis_reader_never_tears_the_camera_down() {
+        let helper = Arc::new(MockHelper::new());
+        let capture = OpenCamera::open(Arc::clone(&helper), "0", Resolution::HD, 30, None)
+            .expect("open succeeds")
+            .start_capture()
+            .expect("capture starts");
+        let frames = FrameThread::spawn(capture, 1);
+        let analysis = FrameThread::spawn_analysis(Arc::clone(&helper), 1);
+        drop(analysis);
+        let (_, _, stops, closes) = helper.counts();
+        assert_eq!(
+            (stops, closes),
+            (0, 0),
+            "the shared reader owns no teardown"
+        );
+        drop(frames);
+        let (_, _, stops, closes) = helper.counts();
+        assert_eq!((stops, closes), (1, 1), "the owning reader tears down once");
+    }
+
     #[test]
     fn a_failed_start_closes_the_camera_once_without_stopping() {
         let helper = Arc::new(FailingStart {
             closes: AtomicUsize::new(0),
         });
-        let opened =
-            OpenCamera::open(Arc::clone(&helper), "0", Resolution::HD, 30).expect("open succeeds");
+        let opened = OpenCamera::open(Arc::clone(&helper), "0", Resolution::HD, 30, None)
+            .expect("open succeeds");
         let result = opened.start_capture();
         assert!(matches!(result, Err(CameraError::StartFailed(_))));
         assert_eq!(helper.closes.load(Ordering::SeqCst), 1);
@@ -310,7 +408,7 @@ mod tests {
     #[test]
     fn dropping_the_handle_tears_down_once_before_drop_returns() {
         let helper = Arc::new(MockHelper::new());
-        let capture = OpenCamera::open(Arc::clone(&helper), "0", Resolution::HD, 30)
+        let capture = OpenCamera::open(Arc::clone(&helper), "0", Resolution::HD, 30, None)
             .expect("open succeeds")
             .start_capture()
             .expect("capture starts");
@@ -329,7 +427,7 @@ mod tests {
     fn a_capture_failure_ends_the_stream_after_teardown() {
         let helper = Arc::new(MockHelper::new());
         helper.fail_wait.store(true, Ordering::SeqCst);
-        let capture = OpenCamera::open(Arc::clone(&helper), "0", Resolution::HD, 30)
+        let capture = OpenCamera::open(Arc::clone(&helper), "0", Resolution::HD, 30, None)
             .expect("open succeeds")
             .start_capture()
             .expect("capture starts");
@@ -355,7 +453,7 @@ mod tests {
                 ..MockHelper::new()
             });
             helper.fail_wait.store(true, Ordering::SeqCst);
-            let capture = OpenCamera::open(Arc::clone(&helper), "0", Resolution::HD, 30)
+            let capture = OpenCamera::open(Arc::clone(&helper), "0", Resolution::HD, 30, None)
                 .expect("open succeeds")
                 .start_capture()
                 .expect("capture starts");

@@ -14,7 +14,7 @@ use bytes::Bytes;
 use enumset::EnumSet;
 use futures::channel::oneshot;
 use jni::errors::ThrowRuntimeExAndDefault;
-use jni::objects::{JByteArray, JClass, JObject, JValue, JValueOwned};
+use jni::objects::{JByteArray, JClass, JObject, JValue};
 use jni::sys::{jint, jlong};
 use jni::{Env, EnvUnowned, jni_sig, jni_str};
 use std::collections::HashMap;
@@ -62,23 +62,7 @@ pub fn scanner_symbologies() -> EnumSet<Symbology> {
 /// Panics if `ndk_context` has no `JavaVM` or Android `Context` yet, or the
 /// JNI probe fails.
 pub fn scanner_available() -> bool {
-    with_android_context(|env, context| {
-        let helper_class = HELPER.class(env, context)?;
-        env.call_static_method(
-            helper_class,
-            jni_str!("hasGooglePlayServices"),
-            jni_sig!("(Landroid/content/Context;)Z"),
-            &[JValue::Object(context)],
-        )
-        .and_then(JValueOwned::z)
-        .map_err(|error| {
-            VisionError::Platform(format!(
-                "probe Google Play services failed: {}",
-                describe_jni_error(env, error)
-            ))
-        })
-    })
-    .unwrap_or_else(|error| panic!("waterkit-vision: {error}"))
+    crate::sys::android::play_services().unwrap_or_else(|error| panic!("waterkit-vision: {error}"))
 }
 
 fn launch_scan_with_context(

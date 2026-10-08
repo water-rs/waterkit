@@ -1,19 +1,12 @@
+//! Barcode detection request and results.
+
 use bytes::Bytes;
 #[cfg(feature = "barcode")]
 use enumset::EnumSet;
 
+#[cfg(feature = "barcode")]
+use crate::sealed::{Context, Pass, Plan, Sealed};
 use crate::{Quad, Symbology};
-#[cfg(feature = "barcode")]
-use crate::{
-    VisionError,
-    sealed::{Context, Offer, Pass, Plan, Realization, Sealed},
-};
-
-#[cfg(feature = "barcode")]
-mod sys;
-
-#[cfg(feature = "barcode")]
-pub use sys::native_symbologies;
 
 /// A decoded barcode with its symbology, payload and geometry — the output
 /// of a `DetectBarcodes` request, where the bounds always exist.
@@ -71,37 +64,50 @@ impl AsRef<[u8]> for Payload {
     }
 }
 
-/// A barcode detection request over one image.
+/// The symbologies the native barcode realization detects on this device.
 ///
-/// `symbologies` selects the formats to look for; the union of every
-/// [`Symbology`] the crate names asks for all of them. Selection checks the
-/// serving realization covers the set, so the request never lands on an
-/// engine that cannot read part of it: a symbology ML Kit's barcode engine
-/// cannot express declines the native offer and fails with
-/// [`VisionError::Unsupported`] naming it when no portable realization is
-/// carried.
+/// On Apple this is `DetectBarcodesRequest.supportedSymbologies` mapped to
+/// the shared [`Symbology`] vocabulary; it is empty on platforms without a
+/// native detector.
+#[cfg(feature = "barcode")]
+pub use crate::sys::native::supported_symbologies as native_symbologies;
+
+/// Detect barcodes in an image, in the given symbologies.
 #[cfg(feature = "barcode")]
 #[derive(Debug)]
 pub struct DetectBarcodes {
+    /// The symbologies to look for.
     symbologies: EnumSet<Symbology>,
 }
 
 #[cfg(feature = "barcode")]
 impl DetectBarcodes {
-    /// A request for `symbologies`.
+    /// A request detecting the given symbologies.
     ///
-    /// # Panics
-    ///
-    /// Panics when `symbologies` is empty: a request restricted to nothing
-    /// can never produce a barcode.
+    /// An empty set detects nothing; the serving realization fails symbologies
+    /// it cannot express ahead of time, when the request is planned.
+    #[must_use]
     pub fn new(symbologies: impl Into<EnumSet<Symbology>>) -> Self {
-        let symbologies = symbologies.into();
-        assert!(
-            !symbologies.is_empty(),
-            "DetectBarcodes requires at least one symbology"
-        );
-        Self { symbologies }
+        Self {
+            symbologies: symbologies.into(),
+        }
     }
+
+    /// The symbologies this request looks for.
+    #[must_use]
+    pub const fn symbologies(&self) -> EnumSet<Symbology> {
+        self.symbologies
+    }
+}
+
+/// The detection plan a [`crate::Request`] for barcodes resolves to.
+#[cfg(feature = "barcode")]
+#[derive(Debug)]
+pub struct BarcodePlan {
+    /// The symbologies the request looks for.
+    symbologies: EnumSet<Symbology>,
+    /// Where detection runs.
+    realization: crate::sealed::Realization,
 }
 
 #[cfg(feature = "barcode")]
@@ -113,31 +119,16 @@ impl crate::Request for DetectBarcodes {
 impl Sealed for DetectBarcodes {
     type Plan = BarcodePlan;
 
-    fn plan(&self, context: Context<'_>) -> Result<Self::Plan, VisionError> {
+    fn plan(&self, context: Context<'_>) -> Result<Self::Plan, crate::VisionError> {
         Ok(BarcodePlan {
             symbologies: self.symbologies,
-            realization: context.select("barcode", &sys::offer(self), &Offer::Absent)?,
+            realization: context.select(
+                "barcode detection",
+                &crate::sys::native::barcodes_offer(self.symbologies),
+                &crate::sys::portable_barcodes_offer(),
+            )?,
         })
     }
-}
-
-/// A barcode request's selected realization.
-///
-/// Public only because the sealed [`crate::Request`] contract names it;
-/// realization code constructs it.
-#[cfg(feature = "barcode")]
-#[doc(hidden)]
-#[derive(Debug)]
-#[cfg_attr(
-    not(target_os = "android"),
-    expect(
-        dead_code,
-        reason = "only a native realization reads the symbology set, and this platform has none yet"
-    )
-)]
-pub struct BarcodePlan {
-    symbologies: EnumSet<Symbology>,
-    realization: Realization,
 }
 
 #[cfg(feature = "barcode")]
@@ -149,13 +140,10 @@ impl Plan<DetectBarcodes> for BarcodePlan {
             reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
         )
     )]
-    async fn prepare(&self, _context: Context<'_>) -> Result<(), VisionError> {
-        match self.realization {
-            Realization::Native => sys::prepare(self).await,
-            Realization::Portable => {
-                unreachable!("no portable barcode realization exists yet")
-            }
-        }
+    async fn prepare(&self, _context: Context<'_>) -> Result<(), crate::VisionError> {
+        // Everything the native realization needs is prepared lazily, on the
+        // pass's shared image handler.
+        Ok(())
     }
 
     #[cfg_attr(
@@ -165,11 +153,13 @@ impl Plan<DetectBarcodes> for BarcodePlan {
             reason = "on wasm32 wgpu devices, queues and textures are not `Send`, so neither is a future holding them"
         )
     )]
-    async fn run(self, pass: &mut Pass<'_>) -> Result<Vec<Barcode>, VisionError> {
+    async fn run(self, pass: &mut Pass<'_>) -> Result<Vec<Barcode>, crate::VisionError> {
         match self.realization {
-            Realization::Native => sys::detect(pass, &self).await,
-            Realization::Portable => {
-                unreachable!("no portable barcode realization exists yet")
+            crate::sealed::Realization::Native => {
+                crate::sys::native::detect_barcodes(pass, self.symbologies).await
+            }
+            crate::sealed::Realization::Portable => {
+                unreachable!("portable barcode detection is not in this build")
             }
         }
     }

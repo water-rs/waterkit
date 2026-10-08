@@ -22,3 +22,5 @@ NdefFormatable = "NdefFormatable"
 cros = "cros"
 # Apple's Unique Device Identifier, as `devicectl` and Xcode name it.
 UDID = "UDID"
+# Win32 accelerator flag on `ACCEL::fVirt`, alongside FSHIFT and FCONTROL.
+FALT = "FALT"

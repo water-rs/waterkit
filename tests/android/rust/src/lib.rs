@@ -704,6 +704,275 @@ async fn record_picker_cancelled_case(report: &mut TestReport) {
     }
 }
 
+#[cfg(feature = "language")]
+async fn record_android_language(report: &mut TestReport) {
+    use waterkit_content::language::translation;
+
+    let capabilities = match translation::capabilities().await {
+        Ok(capabilities) => capabilities,
+        Err(error) => {
+            record_android_language_query_failure(report, &error);
+            return;
+        }
+    };
+    record_android_capabilities(report, &capabilities);
+    record_android_translation(report, &capabilities).await;
+    record_android_not_installed(report, &capabilities).await;
+    record_android_unsupported_pair(report).await;
+    record_android_capability_updates(report);
+}
+
+#[cfg(feature = "language")]
+fn record_android_language_query_failure(
+    report: &mut TestReport,
+    error: &waterkit_content::language::translation::TranslationError,
+) {
+    report.push(TestCase::failed(
+        "language.capabilities",
+        format!("capability query failed: {error}"),
+    ));
+    report.push(TestCase::skipped(
+        "language.translate",
+        "capability query failed",
+    ));
+    report.push(TestCase::skipped(
+        "language.not_installed",
+        "capability query failed",
+    ));
+    report.push(TestCase::skipped(
+        "language.unsupported_pair",
+        "capability query failed",
+    ));
+}
+
+#[cfg(feature = "language")]
+fn record_android_capabilities(
+    report: &mut TestReport,
+    capabilities: &waterkit_content::language::translation::TranslationCapabilities,
+) {
+    let pairs = capabilities
+        .pairs()
+        .iter()
+        .map(|capability| format!("{}={:?}", capability.pair(), capability.status()))
+        .collect::<Vec<_>>();
+    report.push(TestCase::passed_with_message(
+        "language.capabilities",
+        if pairs.is_empty() {
+            "0 pairs (no on-device translation service in this image)".into()
+        } else {
+            pairs.join(", ")
+        },
+    ));
+}
+
+#[cfg(feature = "language")]
+async fn record_android_translation(
+    report: &mut TestReport,
+    capabilities: &waterkit_content::language::translation::TranslationCapabilities,
+) {
+    use waterkit_content::language::translation::{AssetStatus, Translator};
+
+    if let Some(capability) = capabilities
+        .pairs()
+        .iter()
+        .find(|capability| capability.status() == AssetStatus::Installed)
+    {
+        let pair = capability.pair().clone();
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            Translator::new(pair.source().clone(), pair.target().clone()),
+        )
+        .await
+        {
+            Err(_) => report.push(TestCase::failed(
+                "language.translate",
+                "system translation service did not create a translator within 20 s",
+            )),
+            Ok(Ok(translator)) => match tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                translator.translate_batch(&["Hello", "Good morning"]),
+            )
+            .await
+            {
+                Err(_) => report.push(TestCase::failed(
+                    "language.translate",
+                    "system translation service did not translate within 20 s",
+                )),
+                Ok(Ok(translations))
+                    if translations.len() == 2
+                        && translations
+                            .iter()
+                            .all(|translation| !translation.trim().is_empty()) =>
+                {
+                    report.push(TestCase::passed_with_message(
+                        "language.translate",
+                        format!("{} => {translations:?}", translator.pair()),
+                    ));
+                }
+                Ok(Ok(translations)) => report.push(TestCase::failed(
+                    "language.translate",
+                    format!("invalid batch result: {translations:?}"),
+                )),
+                Ok(Err(error)) => report.push(TestCase::failed(
+                    "language.translate",
+                    format!("batch translation failed: {error}"),
+                )),
+            },
+            Ok(Err(error)) => report.push(TestCase::failed(
+                "language.translate",
+                format!("translator creation failed: {error}"),
+            )),
+        }
+    } else {
+        report.push(TestCase::skipped("language.translate", "no installed pair"));
+    }
+}
+
+#[cfg(feature = "language")]
+async fn record_android_not_installed(
+    report: &mut TestReport,
+    capabilities: &waterkit_content::language::translation::TranslationCapabilities,
+) {
+    use waterkit_content::language::translation::{AssetStatus, TranslationError, Translator};
+
+    if let Some(capability) = capabilities
+        .pairs()
+        .iter()
+        .find(|capability| capability.status() == AssetStatus::NeedsDownload)
+    {
+        let pair = capability.pair().clone();
+        match Translator::new(pair.source().clone(), pair.target().clone()).await {
+            Err(TranslationError::NeedsDownload(actual)) if actual == pair => {
+                report.push(TestCase::passed_with_message(
+                    "language.not_installed",
+                    format!("{actual} needs download"),
+                ));
+            }
+            Err(error) => report.push(TestCase::failed(
+                "language.not_installed",
+                format!("expected NeedsDownload for {pair}, got {error}"),
+            )),
+            Ok(_) => report.push(TestCase::failed(
+                "language.not_installed",
+                format!("unexpectedly created a translator for {pair}"),
+            )),
+        }
+    } else {
+        report.push(TestCase::skipped(
+            "language.not_installed",
+            "no pair needs downloading",
+        ));
+    }
+}
+
+#[cfg(feature = "language")]
+async fn record_android_unsupported_pair(report: &mut TestReport) {
+    use waterkit_content::language::translation::{TranslationError, Translator};
+
+    let api_level = match android_api_level() {
+        Ok(level) => level,
+        Err(error) => {
+            report.push(TestCase::failed(
+                "language.unsupported_pair",
+                format!("could not read Android API level: {error}"),
+            ));
+            return;
+        }
+    };
+    match Translator::new(
+        waterkit_content::language::langid!("en"),
+        waterkit_content::language::langid!("en"),
+    )
+    .await
+    {
+        Err(TranslationError::UnsupportedPair(pair)) if api_level >= 31 => {
+            report.push(TestCase::passed_with_message(
+                "language.unsupported_pair",
+                format!("{pair} is unsupported"),
+            ));
+        }
+        Err(TranslationError::Unavailable) if api_level < 31 => {
+            report.push(TestCase::passed_with_message(
+                "language.unsupported_pair",
+                "translation unavailable below API 31",
+            ));
+        }
+        Err(error) => report.push(TestCase::failed(
+            "language.unsupported_pair",
+            format!("unexpected result at API {api_level}: {error}"),
+        )),
+        Ok(_) => report.push(TestCase::failed(
+            "language.unsupported_pair",
+            format!("en to en unexpectedly created a translator at API {api_level}"),
+        )),
+    }
+}
+
+#[cfg(feature = "language")]
+fn record_android_capability_updates(report: &mut TestReport) {
+    use waterkit_content::language::translation::{self, TranslationError};
+
+    let api_level = match android_api_level() {
+        Ok(level) => level,
+        Err(error) => {
+            report.push(TestCase::failed(
+                "language.capability_updates",
+                format!("could not read Android API level: {error}"),
+            ));
+            return;
+        }
+    };
+
+    match (api_level >= 31, translation::android::capability_updates()) {
+        (true, Ok(updates)) => {
+            drop(updates);
+            report.push(TestCase::passed_with_message(
+                "language.capability_updates",
+                "registered and removed capability listener",
+            ));
+        }
+        (false, Err(TranslationError::Unavailable)) => {
+            report.push(TestCase::passed_with_message(
+                "language.capability_updates",
+                "translation unavailable below API 31",
+            ));
+        }
+        // `Unavailable` at a supported API level means the device has no
+        // system translation service — the same state `capabilities()` reports
+        // as zero pairs, and not a registration failure.
+        (true, Err(TranslationError::Unavailable)) => report.push(TestCase::skipped(
+            "language.capability_updates",
+            "no on-device translation service on this device",
+        )),
+        (_, Ok(updates)) => {
+            drop(updates);
+            report.push(TestCase::failed(
+                "language.capability_updates",
+                format!("capability listener unexpectedly registered at API {api_level}"),
+            ));
+        }
+        (_, Err(error)) => report.push(TestCase::failed(
+            "language.capability_updates",
+            format!("could not register capability listener at API {api_level}: {error}"),
+        )),
+    }
+}
+
+#[cfg(feature = "language")]
+fn android_api_level() -> Result<i32, String> {
+    use jni::{jni_sig, jni_str};
+
+    waterkit_build::with_android_context(|env, _context| {
+        let sdk_version = env.get_static_field(
+            jni_str!("android/os/Build$VERSION"),
+            jni_str!("SDK_INT"),
+            jni_sig!("I"),
+        )?;
+        Ok::<_, waterkit_build::AndroidError>(sdk_version.i()?)
+    })
+    .map_err(|error| error.to_string())
+}
+
 /// What every capability's recorder shares: the JNI environment, a global
 /// reference to the activity, the files directory, the runtime its
 /// asynchronous calls run on, and the report its cases go into.
@@ -854,6 +1123,8 @@ const RECORDERS: &[Recorder] = &[
     |h| record_android_avif_decode(&mut h.report),
     #[cfg(feature = "health")]
     |h| record_android_health(&mut h.report),
+    #[cfg(feature = "language")]
+    |h| h.runtime.block_on(record_android_language(&mut h.report)),
     #[cfg(feature = "wallet")]
     |h| h.runtime.block_on(record_android_wallet(&mut h.report)),
     #[cfg(feature = "screen")]
@@ -1088,6 +1359,7 @@ async fn record_android_camera(report: &mut TestReport, files_dir: &std::path::P
             ));
             for camera in cameras {
                 record_android_camera_frames(report, &camera, files_dir).await;
+                record_android_camera_analysis(report, &camera).await;
             }
         }
         Err(error) => report.push(TestCase::failed(
@@ -1226,6 +1498,155 @@ async fn record_android_camera_frames(
     record_android_camera_reopen(report, camera, &device, &queue).await;
 }
 
+/// Checks that two consecutive analysis frames carry an advancing stream
+/// clock, a size, a live `Image` and planes large enough for their strides.
+#[cfg(feature = "camera")]
+fn check_analysis_frames(
+    frame: &waterkit_content::camera::AnalysisFrame,
+    second: &waterkit_content::camera::AnalysisFrame,
+) -> Result<(), String> {
+    if second.timestamp().is_zero() || second.timestamp() <= frame.timestamp() {
+        return Err(format!(
+            "analysis timestamps do not advance: {:?} then {:?}",
+            frame.timestamp(),
+            second.timestamp()
+        ));
+    }
+    if frame.width() == 0 || frame.height() == 0 {
+        return Err("analysis frame has no size".to_owned());
+    }
+    if frame.media_image().as_obj().is_null() {
+        return Err("analysis frame holds a null image".to_owned());
+    }
+    let planes = frame.planes();
+    let chroma_width = frame.width().div_ceil(2) as usize;
+    let chroma_height = frame.height().div_ceil(2) as usize;
+    for (name, plane, width, height) in [
+        (
+            "luma",
+            &planes.luma,
+            frame.width() as usize,
+            frame.height() as usize,
+        ),
+        ("cb", &planes.cb, chroma_width, chroma_height),
+        ("cr", &planes.cr, chroma_width, chroma_height),
+    ] {
+        let need = plane.row_stride() * (height - 1) + plane.pixel_stride() * (width - 1) + 1;
+        if plane.bytes().len() < need {
+            return Err(format!(
+                "{name} plane has {} bytes, needs {need}",
+                plane.bytes().len()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Opens `camera` with an analysis output and takes its first two analysis
+/// frames, then one preview frame while the analysis stream is open — the
+/// GPU preview must keep streaming next to the `YUV_420_888` reader.
+#[cfg(feature = "camera")]
+async fn record_android_camera_analysis(
+    report: &mut TestReport,
+    camera: &waterkit_content::camera::CameraInfo,
+) {
+    use futures::StreamExt;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use waterkit_content::camera::{AnalysisConfig, Camera, CameraConfig};
+
+    let case = format!("camera.analysis.{}", camera.id);
+    let (device, queue) = match camera_gpu().await {
+        Ok(gpu) => gpu,
+        Err(error) => {
+            report.push(TestCase::failed(case, error));
+            return;
+        }
+    };
+    let handle = match Camera::open(
+        &camera.id,
+        CameraConfig {
+            analysis: Some(AnalysisConfig::default()),
+            ..CameraConfig::default()
+        },
+        Arc::clone(&device),
+        Arc::clone(&queue),
+    )
+    .await
+    {
+        Ok(handle) => handle,
+        Err(error) => {
+            report.push(TestCase::failed(case, format!("open failed: {error}")));
+            return;
+        }
+    };
+
+    let mut analysis = std::pin::pin!(handle.analysis_frames());
+    let frame = match next_analysis_frame(
+        &case,
+        0,
+        tokio::time::timeout(Duration::from_secs(5), analysis.next()).await,
+    ) {
+        Ok(frame) => frame,
+        Err(outcome) => {
+            report.push(outcome);
+            return;
+        }
+    };
+    // The stream clock reads zero on the first analysis frame, like
+    // `Frame::timestamp`; the second frame must carry a later, nonzero one.
+    let second = match next_analysis_frame(
+        &case,
+        1,
+        tokio::time::timeout(Duration::from_secs(5), analysis.next()).await,
+    ) {
+        Ok(frame) => frame,
+        Err(outcome) => {
+            report.push(outcome);
+            return;
+        }
+    };
+    if let Err(error) = check_analysis_frames(&frame, &second) {
+        report.push(TestCase::failed(case, error));
+        return;
+    }
+    let planes = frame.planes();
+
+    // A preview frame while the analysis stream stays open proves the
+    // GPU stream keeps running next to the YUV_420_888 reader.
+    let mut frames = std::pin::pin!(handle.frames());
+    let preview = match next_frame(
+        &case,
+        0,
+        tokio::time::timeout(Duration::from_secs(5), frames.next()).await,
+    ) {
+        Ok(frame) => frame,
+        Err(outcome) => {
+            report.push(outcome);
+            return;
+        }
+    };
+
+    report.push(TestCase::passed_with_message(
+        case,
+        format!(
+            "{}x{} strides luma={}x{} cb={}x{} cr={}x{} ts={:?} preview={}x{}@{:?}",
+            frame.width(),
+            frame.height(),
+            planes.luma.row_stride(),
+            planes.luma.pixel_stride(),
+            planes.cb.row_stride(),
+            planes.cb.pixel_stride(),
+            planes.cr.row_stride(),
+            planes.cr.pixel_stride(),
+            second.timestamp(),
+            preview.width(),
+            preview.height(),
+            preview.timestamp(),
+        ),
+    ));
+}
+
 /// Reopens `camera` right after its frames case dropped the handle, and
 /// takes one frame from each open. Dropping a camera joins its teardown, so
 /// the immediate second open passes only when teardown already finished.
@@ -1338,6 +1759,36 @@ fn next_frame(
         Err(_) => Err(TestCase::failed(
             case,
             format!("no frame within 5 s after {count}"),
+        )),
+    }
+}
+
+/// The next analysis frame, or the failure that ends the case after `count`
+/// frames; the analysis stream ends only when the camera's capture does.
+#[cfg(feature = "camera")]
+fn next_analysis_frame(
+    case: &str,
+    count: u32,
+    next: Result<
+        Option<
+            Result<waterkit_content::camera::AnalysisFrame, waterkit_content::camera::CameraError>,
+        >,
+        tokio::time::error::Elapsed,
+    >,
+) -> Result<waterkit_content::camera::AnalysisFrame, TestCase> {
+    match next {
+        Ok(Some(Ok(frame))) => Ok(frame),
+        Ok(Some(Err(error))) => Err(TestCase::failed(
+            case,
+            format!("analysis stream failed after {count} frames: {error}"),
+        )),
+        Ok(None) => Err(TestCase::failed(
+            case,
+            format!("analysis stream ended after {count} frames"),
+        )),
+        Err(_) => Err(TestCase::failed(
+            case,
+            format!("no analysis frame within 5 s after {count}"),
         )),
     }
 }
@@ -2591,9 +3042,10 @@ async fn record_vision_text(
     }
 }
 
-/// The camera path: a frame's planes reach ML Kit through the `NV21` luma
-/// readback. The emulator's virtual scene may hold nothing, so an empty
-/// result still passes.
+/// The camera path: an analysis frame's `android.media.Image` reaches ML
+/// Kit through `InputImage.fromMediaImage`, with no pixel copy. The
+/// emulator's virtual scene may hold nothing, so an empty result still
+/// passes.
 #[cfg(feature = "vision")]
 async fn record_vision_frame(
     report: &mut TestReport,
@@ -2603,8 +3055,8 @@ async fn record_vision_frame(
 ) {
     match camera_vision_frame(vision, device, queue).await {
         Ok((barcodes, lines)) => report.push(TestCase::passed_with_message(
-            "vision.camera_frame",
-            format!("camera frame served: barcodes={barcodes} lines={lines}"),
+            "vision.analysis_frame",
+            format!("analysis frame served: barcodes={barcodes} lines={lines}"),
         )),
         Err(case) => report.push(case),
     }
@@ -2637,8 +3089,9 @@ fn record_vision_capabilities(report: &mut TestReport, vision: &waterkit_content
     }
 }
 
-/// One live camera frame served to `vision`: barcode and text requests
-/// together prove the frame's planes reach ML Kit.
+/// One live analysis frame served to `vision`: barcode and text requests
+/// together prove the frame's `android.media.Image` reaches ML Kit with no
+/// pixel copy.
 #[cfg(feature = "vision")]
 async fn camera_vision_frame(
     vision: &waterkit_content::vision::Vision,
@@ -2648,10 +3101,10 @@ async fn camera_vision_frame(
     use futures::StreamExt;
     use std::sync::Arc;
     use std::time::Duration;
-    use waterkit_content::camera::{Camera, CameraConfig};
+    use waterkit_content::camera::{AnalysisConfig, Camera, CameraConfig};
     use waterkit_content::vision::{DetectBarcodes, EnumSet, Image, RecognizeText, Symbology};
 
-    const CASE: &str = "vision.camera_frame";
+    const CASE: &str = "vision.analysis_frame";
     let cameras = Camera::list()
         .map_err(|error| TestCase::failed(CASE, format!("camera list failed: {error}")))?;
     let Some(camera) = cameras.into_iter().next() else {
@@ -2659,15 +3112,18 @@ async fn camera_vision_frame(
     };
     let handle = Camera::open(
         &camera.id,
-        CameraConfig::default(),
+        CameraConfig {
+            analysis: Some(AnalysisConfig::default()),
+            ..CameraConfig::default()
+        },
         Arc::clone(device),
         Arc::clone(queue),
     )
     .await
     .map_err(|error| TestCase::failed(CASE, format!("open failed: {error}")))?;
-    let mut frames = std::pin::pin!(handle.frames());
+    let mut frames = std::pin::pin!(handle.analysis_frames());
     let next = tokio::time::timeout(Duration::from_secs(10), frames.next()).await;
-    let frame = next_frame(CASE, 0, next)?;
+    let frame = next_analysis_frame(CASE, 0, next)?;
     let image = Image::from(&frame);
     vision
         .perform(

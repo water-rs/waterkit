@@ -3,20 +3,20 @@
 //!
 //! The `play-services-mlkit-*` artifacts are thin clients: the detection
 //! engines live in modules Play services delivers on demand, never in the
-//! app. `VisionHelper.kt` wraps the client calls; `ModuleInstallClient`
-//! installs a missing module in `prepare`.
+//! app. `MlKitInput.kt` builds the `InputImage` both helpers take;
+//! `VisionBarcodeHelper.kt`/`VisionTextHelper.kt` wrap the client calls and
+//! each module's `ModuleInstallClient` install.
 //!
-//! Image inputs reach ML Kit without a CPU copy whenever the platform
-//! allows: encoded bytes decode through `BitmapFactory` with EXIF applied,
-//! and a camera frame's luma plane reads back into an `NV21` byte array —
-//! ML Kit works on luminance, so chroma is never touched. Only a `wgpu`
-//! texture reads back RGBA into a bitmap, as no public Android API accepts
-//! a GPU texture.
+//! Camera frames reach ML Kit without a CPU copy: the analysis stream's
+//! `android.media.Image` goes straight into `InputImage.fromMediaImage`.
+//! Encoded bytes decode through `BitmapFactory` with EXIF applied. Only a
+//! `wgpu` texture reads back RGBA into a bitmap, as no public Android API
+//! accepts a GPU texture.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use futures::channel::oneshot;
-use jni::objects::{Global, JObject, JValue, JValueOwned};
+use jni::objects::{Global, JClass, JObject, JValue, JValueOwned};
 use jni::{Env, jni_sig, jni_str};
 use waterkit_build::{DexHelper, describe_jni_error, dex_helper, with_android_context};
 
@@ -27,51 +27,33 @@ use crate::{
     sealed::{Context, Preparation},
 };
 
-/// `waterkit.vision.VisionHelper`, compiled from this crate's
+/// `waterkit.vision.MlKitInput`, compiled from this crate's
 /// `kotlin-sources` and resolved through the application's class loader.
-pub static HELPER: DexHelper = dex_helper!("waterkit.vision.VisionHelper");
+/// The `InputImage` builders both features share live here.
+pub static INPUT: DexHelper = dex_helper!("waterkit.vision.MlKitInput");
 
-// Module codes mirrored in `VisionHelper`: what `prepareModule` and
-// `recognizeText` take.
+/// `waterkit.vision.VisionBarcodeHelper`, holding the barcode scanner
+/// clients.
 #[cfg(feature = "barcode")]
-pub const MODULE_BARCODE: i32 = 0;
-#[cfg(feature = "text")]
-pub const MODULE_LATIN: i32 = 1;
-#[cfg(feature = "text")]
-pub const MODULE_CHINESE: i32 = 2;
-#[cfg(feature = "text")]
-pub const MODULE_DEVANAGARI: i32 = 3;
-#[cfg(feature = "text")]
-pub const MODULE_JAPANESE: i32 = 4;
-#[cfg(feature = "text")]
-pub const MODULE_KOREAN: i32 = 5;
+pub static BARCODE_HELPER: DexHelper = dex_helper!("waterkit.vision.VisionBarcodeHelper");
 
-/// Whether Google Play services is usable on this device, probed once: its
-/// presence never changes over the process' lifetime.
-pub fn play_services() -> Result<bool, VisionError> {
-    static PLAY_SERVICES: OnceLock<bool> = OnceLock::new();
-    if let Some(available) = PLAY_SERVICES.get() {
-        return Ok(*available);
-    }
-    let available = with_android_context(|env, context| {
-        let class = HELPER.class(env, context)?;
-        env.call_static_method(
-            class,
-            jni_str!("hasGooglePlayServices"),
-            jni_sig!("(Landroid/content/Context;)Z"),
-            &[JValue::Object(context)],
-        )
-        .and_then(JValueOwned::z)
-        .map_err(|error| {
-            VisionError::Platform(format!(
-                "probe Play services: {}",
-                describe_jni_error(env, error)
-            ))
-        })
-    })?;
-    tracing::debug!(available, "waterkit-vision: probed Play services");
-    Ok(*PLAY_SERVICES.get_or_init(|| available))
-}
+/// `waterkit.vision.VisionTextHelper`, holding the script recognizer
+/// clients.
+#[cfg(feature = "text")]
+pub static TEXT_HELPER: DexHelper = dex_helper!("waterkit.vision.VisionTextHelper");
+
+// Module codes mirrored in `VisionTextHelper`: the recognizer `prepareModule`
+// installs. `BarcodeHelper.prepareModule` takes no code — it has one module.
+#[cfg(feature = "text")]
+pub const MODULE_LATIN: i32 = 0;
+#[cfg(feature = "text")]
+pub const MODULE_CHINESE: i32 = 1;
+#[cfg(feature = "text")]
+pub const MODULE_DEVANAGARI: i32 = 2;
+#[cfg(feature = "text")]
+pub const MODULE_JAPANESE: i32 = 3;
+#[cfg(feature = "text")]
+pub const MODULE_KOREAN: i32 = 4;
 
 /// Runs `work` with the Android context on a dedicated thread, so the JNI
 /// calls and the helper's `Tasks.await` never block the awaiting task.
@@ -92,26 +74,32 @@ where
         .map_err(|_| VisionError::Platform(format!("{label} thread died")))?
 }
 
-/// Fetches the module serving `module`, when Play services does not already
-/// have it.
-pub async fn prepare_module(module: i32) -> Result<(), VisionError> {
-    on_vision_thread("waterkit-vision-prepare", move |env, context| {
-        let class = HELPER.class(env, context)?;
-        env.call_static_method(
-            class,
-            jni_str!("prepareModule"),
-            jni_sig!("(Landroid/content/Context;I)V"),
-            &[JValue::Object(context), JValue::Int(module)],
-        )
-        .map_err(|error| {
-            VisionError::ModelUnavailable(format!(
-                "module {module} install: {}",
-                describe_jni_error(env, error)
-            ))
-        })?;
-        Ok(())
-    })
-    .await
+/// Installs `helper`'s module `module` — the barcode engine or a script's
+/// recognizer — when Play services does not already have it.
+///
+/// # Errors
+///
+/// Returns [`VisionError::ModelUnavailable`] when the module install fails.
+pub fn prepare_module(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+    helper: &DexHelper,
+    module: i32,
+) -> Result<(), VisionError> {
+    let class = helper.class(env, context)?;
+    env.call_static_method(
+        class,
+        jni_str!("prepareModule"),
+        jni_sig!("(Landroid/content/Context;I)V"),
+        &[JValue::Object(context), JValue::Int(module)],
+    )
+    .map_err(|error| {
+        VisionError::ModelUnavailable(format!(
+            "module {module} install: {}",
+            describe_jni_error(env, error)
+        ))
+    })?;
+    Ok(())
 }
 
 /// The `InputImage` every request in a pass shares, built once from the
@@ -150,22 +138,32 @@ fn rotation_degrees(orientation: Orientation) -> Result<i32, VisionError> {
     }
 }
 
-/// Reads `texture`'s `aspect` plane back into tightly packed bytes of
-/// `bytes_per_pixel`.
-fn read_texture(
+/// Reads `texture` back into tightly packed RGBA bytes.
+///
+/// `Pixels::Texture` is the only CPU-copied still input path: ML Kit accepts
+/// `android.media.Image`, `Bitmap`, bytes or a file, and a wgpu texture is
+/// none of those.
+fn readback_rgba(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     texture: &wgpu::Texture,
-    bytes_per_pixel: u32,
-    aspect: wgpu::TextureAspect,
 ) -> Result<(Vec<u8>, u32, u32), VisionError> {
     if !texture.usage().contains(wgpu::TextureUsages::COPY_SRC) {
         return Err(VisionError::Unsupported(String::from(
             "the image texture lacks COPY_SRC, so its pixels cannot reach ML Kit",
         )));
     }
+    let swizzle_bgra = match texture.format() {
+        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => false,
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => true,
+        format => {
+            return Err(VisionError::Unsupported(format!(
+                "ML Kit inputs need an 8-bit RGBA texture, not {format:?}"
+            )));
+        }
+    };
     let size = texture.size();
-    let row_bytes = size.width * bytes_per_pixel;
+    let row_bytes = size.width * 4;
     let padded_row = row_bytes.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("waterkit-vision texture readback"),
@@ -175,12 +173,7 @@ fn read_texture(
     });
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect,
-        },
+        texture.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
             layout: wgpu::TexelCopyBufferLayout {
@@ -212,145 +205,19 @@ fn read_texture(
         .slice(..)
         .get_mapped_range()
         .map_err(|error| VisionError::Gpu(format!("texture readback range: {error}")))?;
-    let bytes: Vec<u8> = mapped
+    let mut rgba: Vec<u8> = mapped
         .chunks(padded_row as usize)
         .flat_map(|row| &row[..row_bytes as usize])
         .copied()
         .collect();
     drop(mapped);
     buffer.unmap();
-    Ok((bytes, size.width, size.height))
-}
-
-/// Reads `texture` back into tightly packed RGBA bytes.
-///
-/// `Pixels::Texture` is the only CPU-copied still input path: ML Kit accepts
-/// `android.media.Image`, `Bitmap`, bytes or a file, and a wgpu texture is
-/// none of those.
-fn readback_rgba(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
-) -> Result<(Vec<u8>, u32, u32), VisionError> {
-    let swizzle_bgra = match texture.format() {
-        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => false,
-        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => true,
-        format => {
-            return Err(VisionError::Unsupported(format!(
-                "ML Kit inputs need an 8-bit RGBA texture, not {format:?}"
-            )));
-        }
-    };
-    let (mut rgba, width, height) =
-        read_texture(device, queue, texture, 4, wgpu::TextureAspect::All)?;
     if swizzle_bgra {
         rgba.as_chunks_mut::<4>().0.iter_mut().for_each(|pixel| {
             pixel.swap(0, 2);
         });
     }
-    Ok((rgba, width, height))
-}
-
-/// One luma byte per pixel: `R8` planes copy as-is, the `luma` view of an
-/// `NV12` texture that aliases the camera's buffer reads its first plane,
-/// `R16` planes (P010) keep each code's most significant byte, and
-/// `YCbCr422`'s packed YUYV texture keeps the first and third byte of each
-/// four-byte texel (Y'0, Y'1).
-///
-/// The `NV21` chroma plane is neutral — ML Kit's detectors read luminance,
-/// so chroma is never touched.
-#[cfg(feature = "camera")]
-fn luma_nv21(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    view: &wgpu::TextureView,
-) -> Result<(Vec<u8>, u32, u32), VisionError> {
-    let texture = view.texture();
-    let (bytes, width, height) = match texture.format() {
-        wgpu::TextureFormat::R8Unorm => {
-            read_texture(device, queue, texture, 1, wgpu::TextureAspect::All)?
-        }
-        wgpu::TextureFormat::NV12 => {
-            read_texture(device, queue, texture, 1, wgpu::TextureAspect::Plane0)?
-        }
-        wgpu::TextureFormat::R16Unorm => {
-            let (bytes, width, height) =
-                read_texture(device, queue, texture, 2, wgpu::TextureAspect::All)?;
-            (
-                bytes
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|code| code[1])
-                    .collect(),
-                width,
-                height,
-            )
-        }
-        wgpu::TextureFormat::Rgba8Unorm => {
-            let (bytes, texture_width, height) =
-                read_texture(device, queue, texture, 4, wgpu::TextureAspect::All)?;
-            (
-                bytes
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .flat_map(|texel| [texel[0], texel[2]])
-                    .collect(),
-                // A YUYV texel packs two horizontally adjacent pixels.
-                texture_width * 2,
-                height,
-            )
-        }
-        format => {
-            return Err(VisionError::Unsupported(format!(
-                "a camera plane formatted {format:?} cannot feed ML Kit"
-            )));
-        }
-    };
-    let chroma_len = (width.div_ceil(2) * height.div_ceil(2) * 2) as usize;
-    let mut nv21 = bytes;
-    nv21.resize(nv21.len() + chroma_len, 0x80);
-    Ok((nv21, width, height))
-}
-
-/// Builds an `InputImage` from an `NV21` byte array and its stored-space
-/// `rotation`.
-#[cfg(feature = "camera")]
-fn nv21_input<'local>(
-    env: &mut Env<'local>,
-    class: &Global<jni::objects::JClass<'static>>,
-    nv21: &[u8],
-    width: u32,
-    height: u32,
-    rotation: i32,
-) -> Result<(JObject<'local>, i32), VisionError> {
-    let data = env
-        .byte_array_from_slice(nv21)
-        .map_err(|error| VisionError::Platform(format!("encode frame luma: {error}")))?;
-    let image = env
-        .call_static_method(
-            class,
-            jni_str!("nv21Input"),
-            jni_sig!("([BIII)Lcom/google/mlkit/vision/common/InputImage;"),
-            &[
-                JValue::Object(&data),
-                JValue::Int(
-                    i32::try_from(width)
-                        .map_err(|error| VisionError::Platform(format!("frame width: {error}")))?,
-                ),
-                JValue::Int(
-                    i32::try_from(height)
-                        .map_err(|error| VisionError::Platform(format!("frame height: {error}")))?,
-                ),
-                JValue::Int(rotation),
-            ],
-        )
-        .and_then(JValueOwned::l)
-        .map_err(|error| {
-            VisionError::Platform(format!("frame input: {}", describe_jni_error(env, error)))
-        })?;
-    Ok((image, rotation))
+    Ok((rgba, size.width, size.height))
 }
 
 /// Builds the pass' `InputImage` from `pixels` on the worker thread.
@@ -361,7 +228,7 @@ fn input_image(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
 ) -> Result<MlInput, VisionError> {
-    let class = HELPER.class(env, context)?;
+    let class = INPUT.class(env, context)?;
     let input = match pixels {
         Pixels::Encoded(bytes) => {
             let data = env
@@ -392,26 +259,37 @@ fn input_image(
             rgba_input(env, class, &rgba, width, height, *orientation)?
         }
         #[cfg(feature = "camera")]
-        Pixels::Frame {
-            planes,
-            orientation,
-            ..
-        } => match planes {
-            waterkit_camera::FramePlanes::Rgb(view) => {
-                let (rgba, width, height) = readback_rgba(device, queue, view.texture())?;
-                rgba_input(env, class, &rgba, width, height, *orientation)?
-            }
-            waterkit_camera::FramePlanes::YCbCr420 { luma, .. } => {
-                let rotation = rotation_degrees(*orientation)?;
-                let (nv21, width, height) = luma_nv21(device, queue, luma)?;
-                nv21_input(env, class, &nv21, width, height, rotation)?
-            }
-            waterkit_camera::FramePlanes::YCbCr422 { yuyv } => {
-                let rotation = rotation_degrees(*orientation)?;
-                let (nv21, width, height) = luma_nv21(device, queue, yuyv)?;
-                nv21_input(env, class, &nv21, width, height, rotation)?
-            }
-        },
+        Pixels::Frame { .. } => {
+            return Err(VisionError::Unsupported(String::from(
+                "camera frames are GPU-only on Android and cannot feed ML \
+                 Kit; open the camera with `CameraConfig::analysis` and serve \
+                 the request from its `AnalysisFrame`",
+            )));
+        }
+        #[cfg(feature = "camera")]
+        Pixels::Analysis { frame } => {
+            // `fromMediaImage` borrows the `android.media.Image` the
+            // `AnalysisFrame` keeps acquired — no pixel copy.
+            let rotation = rotation_degrees(frame.orientation())?;
+            let image = env
+                .call_static_method(
+                    class,
+                    jni_str!("mediaInput"),
+                    jni_sig!("(Landroid/media/Image;I)Lcom/google/mlkit/vision/common/InputImage;"),
+                    &[
+                        JValue::Object(frame.media_image().as_obj()),
+                        JValue::Int(rotation),
+                    ],
+                )
+                .and_then(JValueOwned::l)
+                .map_err(|error| {
+                    VisionError::Platform(format!(
+                        "media image input: {}",
+                        describe_jni_error(env, error)
+                    ))
+                })?;
+            (image, rotation)
+        }
     };
     finish_input(env, input)
 }
@@ -419,7 +297,7 @@ fn input_image(
 /// Wraps `bitmap` — already upright — as an `InputImage`.
 fn bitmap_input<'local>(
     env: &mut Env<'local>,
-    class: &Global<jni::objects::JClass<'static>>,
+    class: &Global<JClass<'static>>,
     bitmap: &JObject<'local>,
 ) -> Result<(JObject<'local>, i32), VisionError> {
     let input = env
@@ -440,7 +318,7 @@ fn bitmap_input<'local>(
 /// bitmap path; `orientation` applies as the EXIF value.
 fn rgba_input<'local>(
     env: &mut Env<'local>,
-    class: &Global<jni::objects::JClass<'static>>,
+    class: &Global<JClass<'static>>,
     rgba: &[u8],
     width: u32,
     height: u32,
@@ -534,21 +412,26 @@ impl Preparation for SharedInput {
 // `Point`'s f32 fields, so the narrowing is intentional.
 #[allow(clippy::cast_possible_truncation)]
 fn normalize_point(x: i32, y: i32, rotation_degrees: i32, width: u32, height: u32) -> Point {
-    let (w, h) = (f64::from(width), f64::from(height));
-    let (upright_x, upright_y) = match rotation_degrees {
-        90 => (h - f64::from(y), f64::from(x)),
-        180 => (w - f64::from(x), h - f64::from(y)),
-        270 => (f64::from(y), w - f64::from(x)),
-        _ => (f64::from(x), f64::from(y)),
+    let (x, y, width, height) = (
+        f64::from(x),
+        f64::from(y),
+        f64::from(width),
+        f64::from(height),
+    );
+    let (x, y) = match rotation_degrees {
+        90 => (height - y, x),
+        180 => (width - x, height - y),
+        270 => (y, width - x),
+        _ => (x, y),
     };
-    let (upright_w, upright_h) = if rotation_degrees % 180 == 90 {
-        (h, w)
+    let (width, height) = if rotation_degrees % 180 == 0 {
+        (width, height)
     } else {
-        (w, h)
+        (height, width)
     };
     Point {
-        x: (upright_x / upright_w) as f32,
-        y: (upright_y / upright_h) as f32,
+        x: (x / width) as f32,
+        y: (y / height) as f32,
     }
 }
 

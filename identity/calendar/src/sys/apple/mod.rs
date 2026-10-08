@@ -8,7 +8,7 @@
 
 use futures::channel::oneshot;
 use objc2::rc::Retained;
-use objc2::{ClassType, msg_send};
+
 use objc2_core_graphics::CGColor;
 use objc2_event_kit::{
     EKAuthorizationStatus, EKCalendar, EKEntityType, EKEvent, EKEventStore, EKSpan,
@@ -115,53 +115,85 @@ fn map_event(event: &EKEvent) -> Event {
 /// create events but cannot enumerate calendars or read events.
 async fn event_store(for_write: bool) -> Result<Retained<EKEventStore>, CalendarError> {
     // SAFETY: class-level authorization query.
-    let status = unsafe { EKEventStore::authorizationStatusForEntityType(EKEntityType::Event) };
-    let granted = if status == EKAuthorizationStatus::NotDetermined {
-        let (tx, rx) = oneshot::channel::<bool>();
-        {
-            // SAFETY: `alloc` on a live class + `init` on the allocated
-            // object. This store exists only to issue the access request —
-            // it is dropped before the await below.
-            let store = unsafe { EKEventStore::init(msg_send![EKEventStore::class(), alloc]) };
-            let tx = std::sync::Mutex::new(Some(tx));
-            let block =
-                block2::RcBlock::new(move |granted: objc2::runtime::Bool, _error: *mut NSError| {
-                    let tx = tx.lock().expect("sender mutex").take();
-                    if let Some(tx) = tx {
-                        let _ = tx.send(granted.as_bool());
+    let mut status = unsafe { EKEventStore::authorizationStatusForEntityType(EKEntityType::Event) };
+    if status == EKAuthorizationStatus::NotDetermined {
+        request_access().await?;
+        // SAFETY: re-read after the user answered the prompt.
+        status = unsafe { EKEventStore::authorizationStatusForEntityType(EKEntityType::Event) };
+    }
+    match status {
+        // `Authorized` is the `FullAccess` alias — one arm covers both.
+        s if s == EKAuthorizationStatus::FullAccess => (),
+        s if s == EKAuthorizationStatus::WriteOnly && for_write => (),
+        _ => return Err(CalendarError::PermissionDenied),
+    }
+    // SAFETY: `new` on a live class. The store is created after the last
+    // `.await` because `Retained` is not `Send`.
+    Ok(unsafe { EKEventStore::new() })
+}
+
+/// Requests event access on a throwaway store and waits for the answer.
+/// The completion block retains a clone of the store, so `EventKit` cannot
+/// deallocate it (and possibly cancel the request) before answering.
+async fn request_access() -> Result<(), CalendarError> {
+    let (tx, rx) = oneshot::channel::<Result<(), CalendarError>>();
+    let tx = std::sync::Mutex::new(Some(tx));
+    {
+        // Everything non-`Send` (`store`, `block`) is created and dropped
+        // inside this scope; only `rx` crosses the `.await`. The copied
+        // block retains its own clone of the store, so `EventKit` cannot
+        // deallocate it (and possibly cancel the request) before answering.
+        // SAFETY: `new` on a live class; this store only issues the request.
+        let store = unsafe { EKEventStore::new() };
+        let block = {
+            let store = Retained::clone(&store);
+            block2::RcBlock::new(move |granted: objc2::runtime::Bool, error: *mut NSError| {
+                // Keeping `store` alive until the completion runs is the
+                // point of this capture.
+                let _ = &store;
+                let result = if error.is_null() {
+                    if granted.as_bool() {
+                        Ok(())
+                    } else {
+                        Err(CalendarError::PermissionDenied)
                     }
-                });
-            // SAFETY: the completion block is copied by EventKit for the
-            // duration of the request, so this reference outlives the call.
+                } else {
+                    // SAFETY: `error` is a non-null pointer to a live `NSError`.
+                    Err(CalendarError::Platform(
+                        unsafe { &*error }.localizedDescription().to_string(),
+                    ))
+                };
+                let tx = tx.lock().expect("sender mutex").take();
+                if let Some(tx) = tx {
+                    let _ = tx.send(result);
+                }
+            })
+        };
+        // `requestFullAccessToEventsWithCompletion:` exists only from iOS 17 /
+        // macOS 14; the workspace deployment floor is iOS 14 / macOS 12.3, so
+        // older systems take the pre-17 request API — an OS-version branch,
+        // not a fallback.
+        if objc2::available!(ios = 17.0, macos = 14.0) {
+            // SAFETY: `RcBlock::as_ptr` yields the block pointer the completion
+            // parameter expects; EventKit copies the block for the request.
             unsafe {
-                store.requestFullAccessToEventsWithCompletion(
-                    (&raw const *block)
-                        .cast_mut()
-                        .cast::<block2::DynBlock<dyn Fn(objc2::runtime::Bool, *mut NSError)>>(),
+                store.requestFullAccessToEventsWithCompletion(block2::RcBlock::as_ptr(&block));
+            }
+        } else {
+            #[expect(
+                deprecated,
+                reason = "requestAccessToEntityType:completion: is the only request API on iOS < 17 / macOS < 14"
+            )]
+            unsafe {
+                store.requestAccessToEntityType_completion(
+                    EKEntityType::Event,
+                    block2::RcBlock::as_ptr(&block),
                 );
             }
         }
-        let granted = rx
-            .await
-            .map_err(|_| CalendarError::Platform("access callback dropped".into()))?;
-        // SAFETY: re-read the status after the user answered.
-        granted
-            && matches!(
-                unsafe { EKEventStore::authorizationStatusForEntityType(EKEntityType::Event) },
-                s if s == EKAuthorizationStatus::FullAccess || s == EKAuthorizationStatus::WriteOnly
-            )
-    } else {
-        status == EKAuthorizationStatus::FullAccess || status == EKAuthorizationStatus::WriteOnly
-    };
-    if !granted || (!for_write && status != EKAuthorizationStatus::FullAccess) {
-        // SAFETY: re-read for the write-only distinction.
-        let status = unsafe { EKEventStore::authorizationStatusForEntityType(EKEntityType::Event) };
-        if !granted || (!for_write && status == EKAuthorizationStatus::WriteOnly) {
-            return Err(CalendarError::PermissionDenied);
-        }
     }
-    // SAFETY: `alloc` on a live class + `init` on the allocated object.
-    Ok(unsafe { EKEventStore::init(msg_send![EKEventStore::class(), alloc]) })
+    rx.await
+        .map_err(|_| CalendarError::Platform("access completion dropped".into()))?
 }
 
 /// Lists all event calendars on the device.

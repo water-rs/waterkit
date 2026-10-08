@@ -68,10 +68,9 @@ impl WatcherShutdown {
             // Dropping the guard stops the watch.
             #[cfg(target_os = "linux")]
             ShutdownInner::Linux(guard) => drop(take(guard)),
+            // Dropping the guard removes the watch's observers.
             #[cfg(target_os = "ios")]
-            ShutdownInner::Apple(stop_flag) => {
-                stop_flag.store(true, std::sync::atomic::Ordering::SeqCst);
-            }
+            ShutdownInner::Apple(guard) => drop(take(guard)),
             #[cfg(target_os = "android")]
             ShutdownInner::Android(session) => {
                 if let Some(session) = take(session) {
@@ -86,8 +85,8 @@ impl WatcherShutdown {
 
 /// Take the stopper out of `slot`, so that only the first stop runs it.
 #[cfg_attr(
-    any(target_os = "ios", target_arch = "wasm32"),
-    expect(dead_code, reason = "the iOS and browser watchers stop without a slot")
+    target_arch = "wasm32",
+    expect(dead_code, reason = "the browser watcher stops without a slot")
 )]
 fn take<T>(slot: &Mutex<Option<T>>) -> Option<T> {
     match slot.lock() {
@@ -103,7 +102,7 @@ enum ShutdownInner {
     #[cfg(target_os = "linux")]
     Linux(Mutex<Option<linux::WatchGuard>>),
     #[cfg(target_os = "ios")]
-    Apple(Arc<std::sync::atomic::AtomicBool>),
+    Apple(Mutex<Option<apple::AppleWatchGuard>>),
     #[cfg(target_os = "android")]
     Android(Mutex<Option<android::WatchSession>>),
     #[cfg(target_arch = "wasm32")]
@@ -124,7 +123,11 @@ type Watch = (
 ///
 /// Returns a receiver that yields `ClipboardEvent`s and a shutdown handle.
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-pub fn start_watch(_clipboard: &ClipboardInner) -> Result<Watch, ClipboardError> {
+#[expect(
+    clippy::unused_async,
+    reason = "the facade calls every platform's backend through the same async signature; this backend registers its watcher synchronously"
+)]
+pub async fn start_watch(_clipboard: &ClipboardInner) -> Result<Watch, ClipboardError> {
     let (receiver, shutdown) = desktop::start_watch()?;
     Ok((
         receiver,
@@ -137,7 +140,11 @@ pub fn start_watch(_clipboard: &ClipboardInner) -> Result<Watch, ClipboardError>
 /// Start watching for clipboard changes on the display server `clipboard`
 /// chose.
 #[cfg(target_os = "linux")]
-pub fn start_watch(clipboard: &ClipboardInner) -> Result<Watch, ClipboardError> {
+#[expect(
+    clippy::unused_async,
+    reason = "the facade calls every platform's backend through the same async signature; this backend registers its watcher synchronously"
+)]
+pub async fn start_watch(clipboard: &ClipboardInner) -> Result<Watch, ClipboardError> {
     let (receiver, guard) = clipboard.watch()?;
     Ok((
         receiver,
@@ -149,25 +156,33 @@ pub fn start_watch(clipboard: &ClipboardInner) -> Result<Watch, ClipboardError> 
 
 /// Start watching for clipboard changes.
 #[cfg(target_arch = "wasm32")]
-pub fn start_watch(_clipboard: &ClipboardInner) -> Result<Watch, ClipboardError> {
+#[expect(
+    clippy::unused_async,
+    reason = "the facade calls every platform's backend through the same async signature; this shim has nothing to await"
+)]
+pub async fn start_watch(_clipboard: &ClipboardInner) -> Result<Watch, ClipboardError> {
     Err(ClipboardError::UnsupportedType("watch".into()))
 }
 
 /// Start watching for clipboard changes.
 #[cfg(target_os = "ios")]
-pub fn start_watch(_clipboard: &ClipboardInner) -> Result<Watch, ClipboardError> {
-    let (receiver, stop_flag) = apple::start_watch()?;
+pub async fn start_watch(_clipboard: &ClipboardInner) -> Result<Watch, ClipboardError> {
+    let (receiver, guard) = apple::start_watch().await?;
     Ok((
         receiver,
         Arc::new(WatcherShutdown {
-            inner: ShutdownInner::Apple(stop_flag),
+            inner: ShutdownInner::Apple(Mutex::new(Some(guard))),
         }),
     ))
 }
 
 /// Start watching for clipboard changes.
 #[cfg(target_os = "android")]
-pub fn start_watch(_clipboard: &ClipboardInner) -> Result<Watch, ClipboardError> {
+#[expect(
+    clippy::unused_async,
+    reason = "the facade calls every platform's backend through the same async signature; this backend registers its watcher synchronously"
+)]
+pub async fn start_watch(_clipboard: &ClipboardInner) -> Result<Watch, ClipboardError> {
     let (receiver, session) = android::start_watch()?;
     Ok((
         receiver,

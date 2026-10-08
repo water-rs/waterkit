@@ -261,7 +261,7 @@ fn clear(_: &External, clipboard: &mut Clipboard) -> Result<(), ClipboardError> 
 /// when it started.
 fn watch(external: &External, clipboard: &mut Clipboard) -> Result<(), ClipboardError> {
     clipboard.set_text(TEXT)?;
-    let mut stream = clipboard.watch()?;
+    let mut stream = block_on(clipboard.watch())?;
     external.write(EXTERNAL_HTML.as_bytes(), Some("text/html"));
 
     let (sender, receiver) = mpsc::channel::<Option<ClipboardEvent>>();

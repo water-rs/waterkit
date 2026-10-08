@@ -61,7 +61,8 @@ full = [
 ]
 sensor = ["waterkit/sensor"]
 biometric = ["waterkit/biometric"]
-location = ["waterkit/location"]
+# The location case checks access through waterkit-permission first.
+location = ["waterkit/location", "waterkit/permission"]
 audio = ["waterkit/audio"]
 # The camera case asks for camera access through waterkit-permission before
 # it opens a camera.
@@ -82,7 +83,9 @@ nfc = ["waterkit/nfc"]
 share = ["waterkit/share"]
 speech = ["waterkit/speech"]
 contacts = ["waterkit/contacts"]
-calendar = ["waterkit/calendar"]
+# The calendar case checks access through waterkit-permission before
+# listing, like location and camera.
+calendar = ["waterkit/calendar", "waterkit/permission"]
 language = ["waterkit/language"]
 health = ["waterkit/health"]
 deeplink = ["waterkit/deeplink"]

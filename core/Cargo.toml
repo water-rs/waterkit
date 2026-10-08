@@ -24,6 +24,7 @@ uuid = { version = "1", default-features = false, features = ["std"] }
 objc2.workspace = true
 dispatch2.workspace = true
 futures.workspace = true
+objc2-foundation = { workspace = true, features = ["NSBundle", "NSString"] }
 
 [dev-dependencies]
 futures = { workspace = true }

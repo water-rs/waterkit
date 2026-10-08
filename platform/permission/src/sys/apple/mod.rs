@@ -259,6 +259,10 @@ fn request_photos_permission(sender: RequestSender) {
 
 /// `CNContactStore.requestAccess(for: .contacts)`.
 fn request_contacts_permission(sender: RequestSender) {
+    waterkit_core::apple::require_usage_description(
+        "NSContactsUsageDescription",
+        "contacts access",
+    );
     // SAFETY: `CNContactStore` is `[[CNContactStore alloc] init]`.
     let store = unsafe { CNContactStore::new() };
     let pending = RefCell::new(Some(sender));
@@ -297,6 +301,16 @@ fn has_full_access_events() -> bool {
 /// `EKEventStore.requestFullAccessToEvents` (iOS 17 / macOS 14 and later)
 /// or the older `requestAccess(to: .event)` below that boundary.
 fn request_calendar_permission(sender: RequestSender) {
+    // The usage key this OS version's request needs, matching
+    // `has_full_access_events`.
+    waterkit_core::apple::require_usage_description(
+        if has_full_access_events() {
+            "NSCalendarsFullAccessUsageDescription"
+        } else {
+            "NSCalendarsUsageDescription"
+        },
+        "calendar access",
+    );
     let pending = RefCell::new(Some(sender));
     // SAFETY: `EKEventStore` is `[[EKEventStore alloc] init]`. The
     // completion block is retained by the framework until the request

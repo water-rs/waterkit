@@ -150,12 +150,7 @@ const RECORDERS: &[Recorder] = &[
         ));
     },
     #[cfg(feature = "calendar")]
-    |h| {
-        h.report.push(TestCase::skipped(
-            "calendar.list",
-            "calendar access depends on runtime user data permissions",
-        ));
-    },
+    |h| h.runtime.block_on(record_calendar(&mut h.report)),
     #[cfg(feature = "health")]
     |h| {
         let capabilities = waterkit::health::capabilities();
@@ -202,6 +197,41 @@ async fn record_sensor(report: &mut TestReport) {
             "sensor.accelerometer",
             format!("accelerometer reported available but read failed: {error}"),
         )),
+    }
+}
+
+#[cfg(feature = "calendar")]
+async fn record_calendar(report: &mut TestReport) {
+    match waterkit::permission::check(waterkit::permission::Permission::Calendar).await {
+        waterkit::permission::PermissionStatus::Granted => {}
+        status => {
+            report.push(TestCase::skipped(
+                "calendar.list",
+                format!("calendar permission is {status:?}"),
+            ));
+            return;
+        }
+    }
+
+    match waterkit::calendar::list_calendars().await {
+        Ok(calendars) => {
+            report.push(TestCase::passed_with_message(
+                "calendar.list",
+                format!("count={}", calendars.len()),
+            ));
+        }
+        Err(
+            waterkit::calendar::CalendarError::PermissionDenied
+            | waterkit::calendar::CalendarError::NotAvailable,
+        ) => {
+            report.push(TestCase::skipped(
+                "calendar.list",
+                "calendar access depends on runtime user data permissions",
+            ));
+        }
+        Err(error) => {
+            report.push(TestCase::failed("calendar.list", format!("{error}")));
+        }
     }
 }
 

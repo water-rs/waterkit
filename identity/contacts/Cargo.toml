@@ -31,6 +31,7 @@ objc2-foundation = { workspace = true, features = [
     "NSPredicate",
     "NSString",
 ] }
+waterkit-core.workspace = true
 objc2-contacts = { workspace = true, features = [
     "block2",
     "CNContact",

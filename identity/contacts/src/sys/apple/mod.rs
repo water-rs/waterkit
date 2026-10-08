@@ -28,6 +28,10 @@ pub async fn fetch_all() -> Result<Vec<Contact>, ContactsError> {
 }
 
 fn request_contacts_access() -> oneshot::Receiver<Result<Vec<Contact>, ContactsError>> {
+    waterkit_core::apple::require_usage_description(
+        "NSContactsUsageDescription",
+        "contacts access",
+    );
     // SAFETY: `new` is a convenience constructor with no invariants to uphold.
     let store = unsafe { CNContactStore::new() };
     let (sender, receiver) = oneshot::channel();

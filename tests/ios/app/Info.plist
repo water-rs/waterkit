@@ -26,6 +26,10 @@
 	<string>WaterKit integration tests stream frames from every camera to check their layout.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>WaterKit integration tests may exercise microphone-backed capabilities.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>WaterKit integration tests enumerate calendars and events.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>WaterKit integration tests enumerate calendars and events.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

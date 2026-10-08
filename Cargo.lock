@@ -4985,6 +4985,7 @@ dependencies = [
  "bitflags 2.13.1",
  "block2 0.6.2",
  "objc2 0.6.4",
+ "objc2-core-graphics",
  "objc2-foundation 0.3.2",
 ]
 
@@ -8155,12 +8156,16 @@ dependencies = [
 name = "waterkit-calendar"
 version = "0.1.4"
 dependencies = [
+ "block2 0.6.2",
  "blocking",
  "futures",
  "jni 0.22.4",
  "ndk-context",
+ "objc2 0.6.4",
+ "objc2-core-graphics",
+ "objc2-event-kit",
+ "objc2-foundation 0.3.2",
  "serde",
- "swift-bridge",
  "thiserror 2.0.20",
  "waterkit-build",
  "waterkit-core",
@@ -8315,6 +8320,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.20",
  "waterkit-build",
+ "waterkit-core",
  "waterkit-fs",
 ]
 
@@ -8331,6 +8337,7 @@ dependencies = [
  "nami",
  "objc2 0.6.4",
  "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
  "thiserror 2.0.20",
  "uuid",
 ]

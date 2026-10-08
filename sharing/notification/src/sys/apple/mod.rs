@@ -3,13 +3,11 @@
 //!
 //! Authorization and delivery resolve through `block2` completion handlers
 //! answering an `mpsc` channel that the synchronous [`show_notification`]
-//! waits on with the same five-second deadline the Swift FFI boundary used.
-//! Action responses are handled by a `define_class!`
-//! `UNUserNotificationCenterDelegate` that opens action URLs; installing it
-//! deliberately retains it for the process lifetime — the center's
-//! `delegate` property is weak and responses keep being handled after the
-//! caller's handle drops, exactly like the Swift realization's shared
-//! delegate.
+//! waits on with a five-second deadline. Action responses are handled by a
+//! `define_class!` `UNUserNotificationCenterDelegate` that opens action
+//! URLs; installing it deliberately retains it for the process lifetime —
+//! the center's `delegate` property is weak and responses keep being
+//! handled after the caller's handle drops.
 
 use core::cell::RefCell;
 use core::time::Duration;
@@ -34,14 +32,13 @@ use objc2_user_notifications::{
 
 use crate::{Action, InterruptionLevel, Notification, NotificationError, TextInputAction};
 
-/// The deadline the Swift FFI boundary put on the whole show flow
+/// The deadline put on the whole show flow
 /// (`DispatchSemaphore.wait(timeout: .now() + 5.0)`): a slower answer — for
 /// example a first-run authorization prompt nobody dismisses — reports
 /// failure.
 const SHOW_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The `#available(iOS major, macOS major)`-style OS gates the Swift source
-/// used, as one `NSProcessInfo` version probe: `ios_major` applies on iOS
+/// The `#available(iOS major, macOS major)`-style OS gates used, as one `NSProcessInfo` version probe: `ios_major` applies on iOS
 /// proper, `macos_major` on macOS and Mac Catalyst (where `NSProcessInfo`
 /// reports the macOS version — the paired boundary).
 fn has_availability(ios_major: isize, macos_major: isize) -> bool {
@@ -83,7 +80,7 @@ fn legacy_presentation_options() -> UNNotificationPresentationOptions {
     UNNotificationPresentationOptions::Alert | UNNotificationPresentationOptions::Sound
 }
 
-/// Opens `url` the way the Swift delegate did: re-dispatched to the main
+/// Opens `url`: re-dispatched to the main
 /// queue on iOS, a direct call on macOS.
 #[cfg(target_os = "ios")]
 fn open_url(url: &NSURL) {
@@ -161,7 +158,7 @@ define_class!(
             completion_handler.call(());
         }
 
-        /// Foreground presentation mirrors the Swift `#available` split:
+        /// Foreground presentation mirrors the `#available` split:
         /// banners where the OS has them, alerts below.
         #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
         fn will_present_notification(
@@ -189,17 +186,32 @@ impl NotificationDelegate {
     }
 }
 
-/// Installs the action delegate once per process. `delegate` is a weak
-/// property, so the installed object is deliberately retained for the
-/// process lifetime — the same residency the Swift `NotificationDelegate
-/// .shared` singleton had.
-fn install_delegate(center: &UNUserNotificationCenter) {
-    if center.delegate().is_some() {
-        return;
+/// Installs the action delegate once per process.
+///
+/// The center owns exactly one `delegate` (a weak property), so the
+/// installed `NotificationDelegate` is deliberately retained for the
+/// process lifetime — it is the center's one delegate, the same residency
+/// the process-shared delegate had. An installed
+/// delegate of our class is kept; a delegate of any other class means the
+/// host already owns the notification center's delegate, which is an
+/// error — silently keeping it would stop action taps from opening their
+/// URLs with no signal.
+fn install_delegate(center: &UNUserNotificationCenter) -> Result<(), NotificationError> {
+    if let Some(delegate) = center.delegate() {
+        return delegate.downcast::<NotificationDelegate>().map_or_else(
+            |_| {
+                Err(NotificationError::Platform(
+                    "UNUserNotificationCenter already has a delegate owned by the host; the host owns the notification center's delegate and waterkit cannot install its action handler"
+                        .into(),
+                ))
+            },
+            |_| Ok(()),
+        );
     }
     let delegate = NotificationDelegate::new();
     center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     std::mem::forget(delegate);
+    Ok(())
 }
 
 /// The owned fields of a [`Notification`] the completion blocks build
@@ -214,7 +226,7 @@ struct NotificationParams {
     text_input_actions: Vec<TextInputAction>,
 }
 
-/// `UNMutableNotificationContent` populated like the Swift realization:
+/// `UNMutableNotificationContent` populated with the original behavior:
 /// sound always, subtitle only when non-empty, the interruption level where
 /// the OS supports it, and a `waterkit_<id>` category carrying every action
 /// when the notification has any.
@@ -283,18 +295,20 @@ fn notification_content(
 
 /// `showNotificationAsync`'s synchronous port: the work rides the same
 /// completion-handler chain, bounded by [`SHOW_TIMEOUT`].
-fn show(notification: &Notification) -> bool {
+fn show(notification: &Notification) -> Result<(), NotificationError> {
     // On macOS, `UNUserNotificationCenter` requires a valid app bundle.
     #[cfg(target_os = "macos")]
     if objc2_foundation::NSBundle::mainBundle()
         .bundleIdentifier()
         .is_none()
     {
-        return false;
+        return Err(NotificationError::Platform(
+            "UNUserNotificationCenter requires a valid app bundle".into(),
+        ));
     }
 
     let center = UNUserNotificationCenter::currentNotificationCenter();
-    install_delegate(&center);
+    install_delegate(&center)?;
 
     let notification = NotificationParams {
         id: notification.id.clone().unwrap_or_default(),
@@ -338,7 +352,13 @@ fn show(notification: &Notification) -> bool {
         &authorize,
     );
 
-    receiver.recv_timeout(SHOW_TIMEOUT).unwrap_or(false)
+    if receiver.recv_timeout(SHOW_TIMEOUT).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(NotificationError::Platform(
+            "failed to show notification".into(),
+        ))
+    }
 }
 
 /// Handle to a shown notification (iOS/macOS).
@@ -349,11 +369,6 @@ pub struct NotificationHandleInner;
 pub fn show_notification(
     notification: &Notification,
 ) -> Result<NotificationHandleInner, NotificationError> {
-    if show(notification) {
-        Ok(NotificationHandleInner)
-    } else {
-        Err(NotificationError::Platform(
-            "failed to show notification".into(),
-        ))
-    }
+    show(notification)?;
+    Ok(NotificationHandleInner)
 }

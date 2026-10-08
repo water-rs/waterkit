@@ -19,13 +19,25 @@ waterkit-permission = { workspace = true }
 thiserror = { workspace = true }
 jiff = { workspace = true }
 
-[build-dependencies]
-waterkit-build.workspace = true
-
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 futures.workspace = true
-swift-bridge.workspace = true
+dispatch2.workspace = true
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSDate",
+    "NSError",
+    "NSObject",
+    "NSString",
+] }
+objc2-core-location = { workspace = true, features = [
+    "CLError",
+    "CLErrorDomain",
+    "CLLocation",
+    "CLLocationManager",
+    "CLLocationManagerDelegate",
+] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]

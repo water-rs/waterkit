@@ -113,7 +113,7 @@ define_class!(
         }
 
         #[unsafe(method(locationManager:didFailWithError:))]
-        fn did_fail_with_error(&self, _manager: &CLLocationManager, error: &NSError) {
+        fn did_fail_with_error(&self, manager: &CLLocationManager, error: &NSError) {
             // SAFETY: `kCLErrorDomain` is a constant string emitted by
             // CoreLocation; read-only access.
             if !error.domain().isEqualToString(unsafe { kCLErrorDomain }) {
@@ -122,6 +122,14 @@ define_class!(
             }
             let code = CLError(error.code());
             if code == CLError::Denied {
+                // SAFETY: read-only accessor on the main thread, like every
+                // other manager use.
+                let status = unsafe { manager.authorizationStatus() };
+                tracing::warn!(
+                    path = "didFailWithError",
+                    status = i64::from(status.0),
+                    "location permission denied"
+                );
                 self.finish(Err(LocationError::PermissionDenied));
             } else if code != CLError::LocationUnknown {
                 self.finish(Err(LocationError::NotAvailable));
@@ -135,6 +143,11 @@ define_class!(
             if status == CLAuthorizationStatus::Denied
                 || status == CLAuthorizationStatus::Restricted
             {
+                tracing::warn!(
+                    path = "didChangeAuthorization",
+                    status = i64::from(status.0),
+                    "location permission denied"
+                );
                 self.finish(Err(LocationError::PermissionDenied));
             }
         }
@@ -193,6 +206,11 @@ impl LocationRequest {
         // main thread, like every other manager use.
         let status = unsafe { manager.authorizationStatus() };
         if status == CLAuthorizationStatus::Denied || status == CLAuthorizationStatus::Restricted {
+            tracing::warn!(
+                path = "start_on_main",
+                status = i64::from(status.0),
+                "location permission denied"
+            );
             self.finish(Err(LocationError::PermissionDenied));
             return;
         }

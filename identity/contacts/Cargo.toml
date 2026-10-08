@@ -22,15 +22,32 @@ jiff = { workspace = true, features = ["serde"] }
 waterkit-fs = { workspace = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
+block2.workspace = true
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSCalendar",
+    "NSError",
+    "NSPredicate",
+    "NSString",
+] }
+objc2-contacts = { workspace = true, features = [
+    "block2",
+    "CNContact",
+    "CNContactFetchRequest",
+    "CNContactStore",
+    "CNContact_Predicates",
+    "CNFetchRequest",
+    "CNLabeledValue",
+    "CNMutableContact",
+    "CNPhoneNumber",
+    "CNSaveRequest",
+] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 waterkit-build.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
-
-[build-dependencies]
-waterkit-build.workspace = true
 
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).

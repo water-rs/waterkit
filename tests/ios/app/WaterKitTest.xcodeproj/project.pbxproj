@@ -164,6 +164,16 @@
 					CoreFoundation,
 					"-framework",
 					Security,
+					"-framework",
+					AVFoundation,
+					"-framework",
+					Contacts,
+					"-framework",
+					CoreLocation,
+					"-framework",
+					EventKit,
+					"-framework",
+					Photos,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.waterkit.test;
 				PRODUCT_NAME = "$(TARGET_NAME)";

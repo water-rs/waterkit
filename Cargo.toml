@@ -226,9 +226,14 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 
 # Apple
 core-foundation = "0.10"
+block2 = "0.6"
 objc2 = "0.6"
 objc2-foundation = "0.3"
+objc2-av-foundation = { version = "0.3", default-features = false }
+objc2-contacts = { version = "0.3", default-features = false }
 objc2-core-location = { version = "0.3", default-features = false }
+objc2-event-kit = { version = "0.3", default-features = false }
+objc2-photos = { version = "0.3", default-features = false }
 dispatch2 = "0.3"
 objc2-core-media = "0.3"
 objc2-app-kit = "0.3"

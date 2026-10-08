@@ -16,13 +16,33 @@ workspace = true
 [dependencies]
 waterkit-core = { workspace = true }
 
-[build-dependencies]
-waterkit-build.workspace = true
-
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 futures.workspace = true
-swift-bridge.workspace = true
+block2.workspace = true
+dispatch2.workspace = true
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSError",
+    "NSObject",
+    "NSProcessInfo",
+] }
+objc2-av-foundation = { workspace = true, features = [
+    "AVCaptureDevice",
+    "AVMediaFormat",
+    "block2",
+] }
+objc2-contacts = { workspace = true, features = ["CNContactStore", "block2"] }
+objc2-event-kit = { workspace = true, features = [
+    "EKEventStore",
+    "EKTypes",
+    "block2",
+] }
+objc2-core-location = { workspace = true, features = [
+    "CLLocationManager",
+    "CLLocationManagerDelegate",
+] }
+objc2-photos = { workspace = true, features = ["PHPhotoLibrary", "block2"] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]

@@ -11,13 +11,14 @@ mod imp {
     use objc2::rc::{Retained, Weak};
     use objc2::runtime::{NSObject, ProtocolObject};
     use objc2::{
-        AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
+        AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
     };
     use objc2_core_nfc::{
         NFCNDEFMessage, NFCNDEFPayload, NFCNDEFReaderSession, NFCNDEFReaderSessionDelegate,
         NFCNDEFStatus, NFCNDEFTag, NFCReaderSession, NFCReaderSessionProtocol, NFCTypeNameFormat,
     };
     use objc2_foundation::{NSArray, NSData, NSError, NSObjectProtocol, NSString};
+    use waterkit_core::apple::on_main;
 
     use crate::{NdefMessage, NdefRecord, NfcError, NfcTag, NfcTagType};
 
@@ -102,7 +103,11 @@ mod imp {
                 };
                 let this = Weak::new(self);
                 let tag_in_connect = tag.clone();
+                // The completion owns the session so it lives until the
+                // framework answers `connectToTag:`.
+                let session_in_connect = session.retain();
                 let connect = RcBlock::new(move |error: *mut NSError| {
+                    let _keep_session_alive = &session_in_connect;
                     let Some(this) = this.load() else {
                         return;
                     };
@@ -176,7 +181,11 @@ mod imp {
         /// `tag.readNDEF` from the `didDetectTags` flow.
         fn read_records(&self, tag: &ProtocolObject<dyn NFCNDEFTag>) {
             let this = Weak::new(self);
+            // The completion owns the tag so it lives until `readNDEF:`
+            // answers.
+            let tag_in_read = tag.retain();
             let read = RcBlock::new(move |message: *mut NFCNDEFMessage, error: *mut NSError| {
+                let _keep_tag_alive = &tag_in_read;
                 let Some(this) = this.load() else {
                     return;
                 };
@@ -237,7 +246,11 @@ mod imp {
                 unsafe { NFCNDEFMessage::initWithNDEFRecords(NFCNDEFMessage::alloc(), &array) };
             // `Mutex` because the block must be `Fn`, not `FnOnce`.
             let callback = Mutex::new(Some(pending.callback));
+            // The completion owns the tag so it lives until `writeNDEF:`
+            // answers.
+            let tag_in_write = tag.retain();
             let write = RcBlock::new(move |error: *mut NSError| {
+                let _keep_tag_alive = &tag_in_write;
                 let Some(callback) = callback
                     .lock()
                     .expect("nfc write callback mutex poisoned")
@@ -294,27 +307,6 @@ mod imp {
             0x05 => Some(NFCTypeNameFormat::Unknown),
             0x06 => Some(NFCTypeNameFormat::Unchanged),
             _ => None,
-        }
-    }
-
-    /// Runs `work` on the main queue: inline when the caller is already on
-    /// the main thread, otherwise by `exec_async` with the result carried
-    /// back through a oneshot. Never blocks the caller.
-    async fn on_main<R, F>(work: F) -> R
-    where
-        R: Send + 'static,
-        F: FnOnce(MainThreadMarker) -> R + Send + 'static,
-    {
-        if let Some(mtm) = MainThreadMarker::new() {
-            work(mtm)
-        } else {
-            let (tx, rx) = oneshot::channel();
-            DispatchQueue::main().exec_async(move || {
-                let mtm = MainThreadMarker::new().expect("exec_async runs on the main queue");
-                drop(tx.send(work(mtm)));
-            });
-            rx.await
-                .expect("the exec_async worker sends before it exits")
         }
     }
 

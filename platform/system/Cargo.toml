@@ -15,6 +15,7 @@ workspace = true
 
 [dependencies]
 thiserror.workspace = true
+futures.workspace = true
 
 # Desktop (System Info & Thermal)
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
@@ -40,19 +41,18 @@ zbus.workspace = true
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 tracing.workspace = true
 
-# Apple (iOS/macOS)
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-swift-bridge = { workspace = true, features = [] }
-swift-rs.workspace = true
+block2.workspace = true
+dispatch2.workspace = true
+libc = "0.2"
+mach2.workspace = true
+objc2-foundation = { workspace = true, features = ["NSProcessInfo"] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 waterkit-build.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
-
-[build-dependencies]
-waterkit-build.workspace = true
 
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).

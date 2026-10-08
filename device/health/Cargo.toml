@@ -22,7 +22,28 @@ serde = { workspace = true }
 waterkit-fs = { workspace = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
+objc2.workspace = true
+objc2-foundation.workspace = true
+block2.workspace = true
+objc2-health-kit = { workspace = true, features = [
+    "HKCategorySample",
+    "HKCategoryValues",
+    "HKDefines",
+    "HKHealthStore",
+    "HKObject",
+    "HKObjectType",
+    "HKQuantity",
+    "HKQuantitySample",
+    "HKQuery",
+    "HKSample",
+    "HKSampleQuery",
+    "HKSource",
+    "HKSourceRevision",
+    "HKTypeIdentifiers",
+    "HKUnit",
+    "block2",
+    "std",
+] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 waterkit-build.workspace = true

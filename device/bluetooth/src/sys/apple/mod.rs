@@ -7,19 +7,22 @@
 //! All Objective-C work happens on the main queue: the managers, delegates
 //! and their callback state are main-thread-bound `define_class!` objects
 //! whose ivars own the pending senders (no global/static callback registry —
-//! each delegate instance owns its state). Public entry points hop onto the
-//! main queue and shuttle results back through channels; the raw object
-//! addresses crossing queue hops are `usize` values reconstructed into
-//! `Retained`/references on the main thread.
+//! each delegate instance owns its state). Objects never cross threads:
+//! owning `*Inner` structs hold `MainThreadBound<Retained<T>>` handles that
+//! are only touched on the main thread, and every hop onto the main queue is
+//! `exec_async` plus a `futures` oneshot — never `exec_sync`, so nothing
+//! blocks an executor thread. Results that cross back are plain `Send` data
+//! or the `MainThreadBound` handle itself.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use std::sync::Mutex;
 
 use async_channel::{Receiver, Sender};
 use core::cell::RefCell;
 use core::ffi::c_void;
-use dispatch2::DispatchQueue;
+use dispatch2::{DispatchQueue, MainThreadBound};
 use futures::channel::oneshot;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, ProtocolObject};
@@ -55,48 +58,32 @@ type PendingWrite = (
     oneshot::Sender<Result<usize, BluetoothError>>,
     objc2::rc::Retained<NSData>,
 );
+#[cfg(target_os = "macos")]
+type StreamOwner = Arc<MainThreadBound<Retained<classic::SppStream>>>;
 
-/// Run `work` on the main queue, blocking the caller until it finishes.
-fn on_main<R: Send>(work: impl FnOnce() -> R + Send) -> R {
-    if MainThreadMarker::new().is_some() {
-        return work();
+/// Run `work` on the main queue and await its result. When already on the
+/// main thread it runs inline; otherwise it hops through `exec_async` — the
+/// caller is suspended on a oneshot, never blocked.
+async fn hop<R: Send + 'static>(work: impl FnOnce(MainThreadMarker) -> R + Send + 'static) -> R {
+    if let Some(mtm) = MainThreadMarker::new() {
+        return work(mtm);
     }
-    let mut slot = Some(work);
-    let mut result: Option<R> = None;
-    let result_ref = &mut result;
-    let slot_ref = &mut slot;
-    DispatchQueue::main().exec_sync(move || {
-        *result_ref = Some(slot_ref.take().expect("main-queue hop runs exactly once")());
+    let (tx, rx) = oneshot::channel();
+    DispatchQueue::main().exec_async(move || {
+        let mtm = MainThreadMarker::new().expect("on the main queue");
+        let _ = tx.send(work(mtm));
     });
-    result.expect("dispatch_sync on the main queue always runs")
+    rx.await.expect("the main queue ran the task")
 }
 
-/// Submit `work` for execution on the main queue without blocking.
+/// Submit `work` for execution on the main queue without awaiting it (used
+/// by `Drop`/`stop` paths where fire-and-forget release is correct).
 fn dispatch_main(work: impl FnOnce() + Send + 'static) {
     if MainThreadMarker::new().is_some() {
         work();
     } else {
         DispatchQueue::main().exec_async(work);
     }
-}
-
-/// Cast an object reference to `&AnyObject` for the informal-delegate
-/// parameters in `IOBluetooth` (`setDelegate:`, `performSDPQuery:` target).
-const fn as_any_object<T: objc2::Message>(obj: &T) -> &AnyObject {
-    // SAFETY: every Objective-C object has the same layout — an `isa`
-    // pointer — so any `Message` reference is a valid `AnyObject` reference.
-    unsafe { &*core::ptr::from_ref(obj).cast::<AnyObject>() }
-}
-
-/// Rebuild a `&T` reference from an address previously produced by
-/// `Retained::into_raw`, on the main thread where the object is owned.
-///
-/// # Safety
-/// `ptr` must be a live address previously leaked with `Retained::into_raw`
-/// and this must run on the main thread.
-const unsafe fn from_addr<'a, T>(ptr: usize) -> &'a T {
-    // SAFETY: guaranteed by the caller — see the doc comment above.
-    unsafe { &*(ptr as *const T) }
 }
 
 fn ns_error(error: Option<&NSError>, fallback: &str) -> String {
@@ -165,7 +152,7 @@ fn characteristic_value(characteristic: &CBCharacteristic) -> Vec<u8> {
     // SAFETY: `value` is a read-only accessor; the NSData is copied out
     // immediately.
     unsafe { characteristic.value() }.map_or_else(Vec::new, |data| {
-        // SAFETY: `bytes`/`length` describe a live contiguous buffer.
+        // SAFETY: `as_bytes_unchecked` reads a live contiguous buffer.
         unsafe { data.as_bytes_unchecked().to_vec() }
     })
 }
@@ -198,57 +185,46 @@ fn find_characteristic(
 
 // ---------------------------------------------------------------------------
 // CoreBluetooth central delegate
-// ---------------------------------------------------------------------------
 
-/// State carried by the `CBCentralManager` delegate. Each session (a one-shot
-/// adapter-state query, a `BleScanner`, a `BleConnection`) owns its own
-/// delegate, which in turn owns the manager — `CBCentralManager.delegate` is
-/// a weak property.
-#[derive(Debug)]
-struct CentralDelegateIvars {
+pub struct CentralDelegateIvars {
     manager: RefCell<Option<Retained<CBCentralManager>>>,
-    /// One-shot senders waiting for the first non-unknown adapter state.
     state_txs: RefCell<Vec<oneshot::Sender<AdapterState>>>,
-    /// Scan-result stream (the `BleScanner` case).
     scan_tx: RefCell<Option<Sender<ScanResult>>>,
-    /// Connect completions keyed by peripheral UUID string.
     connect_txs: RefCell<HashMap<String, oneshot::Sender<Result<(), BluetoothError>>>>,
-    /// Connected peripheral + its delegate (the `BleConnection` case).
     peripheral: RefCell<Option<Retained<CBPeripheral>>>,
     peripheral_delegate: RefCell<Option<Retained<PeripheralDelegate>>>,
-    /// Self-retain keeping a bare `adapter_state` session alive until the
-    /// state resolves.
+    /// Self-retain keeping the delegate (and its manager) alive across async
+    /// callbacks; released once the pending sender count hits zero.
     keep_alive: RefCell<Option<Retained<CentralDelegate>>>,
 }
 
 define_class!(
-    // SAFETY:
-    // - NSObject has no subclassing requirements.
-    // - `CentralDelegate` does not implement `Drop`.
+    // SAFETY: ivars are all `RefCell`/plain data touched only on the main
+    // thread; the delegate object itself stays on the main queue for life.
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "WaterkitBleCentralDelegate"]
     #[ivars = CentralDelegateIvars]
-    #[derive(Debug)]
-    struct CentralDelegate;
+    pub struct CentralDelegate;
 
     unsafe impl NSObjectProtocol for CentralDelegate {}
 
     unsafe impl CBCentralManagerDelegate for CentralDelegate {
         #[unsafe(method(centralManagerDidUpdateState:))]
-        fn did_update_state(&self, central: &CBCentralManager) {
-            // SAFETY: `state` is a read-only accessor on the live manager.
-            let state = map_state(unsafe { central.state() });
+        fn did_update_state(&self, _central: &CBCentralManager) {
+            // SAFETY: `state` is a read-only accessor on a live manager.
+            let state = map_state(unsafe { _central.state() });
             if state == AdapterState::Unknown {
                 return;
             }
-            for tx in self.ivars().state_txs.borrow_mut().drain(..) {
+            let txs: Vec<_> = self.ivars().state_txs.borrow_mut().drain(..).collect();
+            for tx in txs {
                 let _ = tx.send(state);
             }
-            if self.ivars().state_txs.borrow().is_empty() {
-                // A bare adapter-state session is done once resolved;
-                // dropping the self-retain tears it down.
-                self.ivars().keep_alive.borrow_mut().take();
+            if self.ivars().state_txs.borrow().is_empty()
+                && self.ivars().connect_txs.borrow().is_empty()
+            {
+                *self.ivars().keep_alive.borrow_mut() = None;
             }
         }
 
@@ -260,50 +236,46 @@ define_class!(
             advertisement_data: &NSDictionary<NSString, AnyObject>,
             rssi: &NSNumber,
         ) {
-            let scan_tx = self.ivars().scan_tx.borrow();
-            let Some(tx) = scan_tx.as_ref() else {
+            let Some(scan_tx) = self.ivars().scan_tx.borrow().clone() else {
                 return;
             };
-            // SAFETY: read-only accessors on live objects delivered by the
-            // framework on the main thread.
-            let (identifier, name, connected) = unsafe {
-                (
-                    peripheral.identifier().UUIDString().to_string(),
-                    peripheral.name().map(|name| name.to_string()),
-                    peripheral.state() == CBPeripheralState::Connected,
-                )
-            };
+            // SAFETY: `identifier`/`UUIDString` are read-only accessors.
+            let address = unsafe { peripheral.identifier().UUIDString() }.to_string();
+            let name = unsafe { peripheral.name() }.map(|name| name.to_string());
             let service_uuids = advertisement_data
                 .objectForKey(unsafe { CBAdvertisementDataServiceUUIDsKey })
                 .map_or_else(Vec::new, |object| {
-                    // SAFETY: `CBAdvertisementDataServiceUUIDsKey` always
-                    // maps to an `NSArray<CBUUID>` in advertisement data.
+                    // SAFETY: `CBAdvertisementDataServiceUUIDsKey` always maps
+                    // to an `NSArray<CBUUID>` in advertisement data.
                     let uuids = unsafe { &*Retained::as_ptr(&object).cast::<NSArray<CBUUID>>() };
                     uuids
                         .iter()
                         .map(|uuid| Uuid::new(unsafe { uuid.UUIDString() }.to_string()))
                         .collect()
                 });
-            let device = BluetoothDevice {
-                id: DeviceId::new(identifier),
-                name,
-                rssi: Some(rssi.shortValue()),
-                is_connected: connected,
-            };
-            let _ = tx.try_send(ScanResult {
-                device,
+            // SAFETY: `state` is a read-only accessor.
+            let is_connected = unsafe { peripheral.state() } == CBPeripheralState::Connected;
+            let result = ScanResult {
+                device: BluetoothDevice {
+                    id: DeviceId::new(&address),
+                    name,
+                    rssi: Some(rssi.shortValue()),
+                    is_connected,
+                },
                 service_uuids,
                 manufacturer_data: HashMap::new(),
-            });
+            };
+            let _ = scan_tx.try_send(result);
         }
 
         #[unsafe(method(centralManager:didConnectPeripheral:))]
         fn did_connect(&self, _central: &CBCentralManager, peripheral: &CBPeripheral) {
-            // SAFETY: read-only accessor used as the callback key.
-            let key = unsafe { peripheral.identifier() }.UUIDString().to_string();
+            // SAFETY: read-only accessors.
+            let key = unsafe { peripheral.identifier().UUIDString() }.to_string();
             if let Some(tx) = self.ivars().connect_txs.borrow_mut().remove(&key) {
                 let _ = tx.send(Ok(()));
             }
+            *self.ivars().keep_alive.borrow_mut() = None;
         }
 
         #[unsafe(method(centralManager:didFailToConnectPeripheral:error:))]
@@ -313,36 +285,30 @@ define_class!(
             peripheral: &CBPeripheral,
             error: Option<&NSError>,
         ) {
-            // SAFETY: read-only accessor used as the callback key.
-            let key = unsafe { peripheral.identifier() }.UUIDString().to_string();
+            let key = unsafe { peripheral.identifier().UUIDString() }.to_string();
             if let Some(tx) = self.ivars().connect_txs.borrow_mut().remove(&key) {
                 let _ = tx.send(Err(BluetoothError::ConnectionFailed(ns_error(
                     error,
-                    "failed to connect",
+                    "connection failed",
                 ))));
             }
+            *self.ivars().keep_alive.borrow_mut() = None;
         }
     }
 );
 
 impl CentralDelegate {
-    /// Create a delegate + `CBCentralManager` pair. Must run on the main
-    /// thread (the manager dispatches delegate callbacks on the main queue).
-    fn spawn() -> Retained<Self> {
-        let mtm = MainThreadMarker::new().expect("on main queue");
+    fn spawn(mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(CentralDelegateIvars {
             manager: RefCell::new(None),
             state_txs: RefCell::new(Vec::new()),
-            connect_txs: RefCell::new(HashMap::new()),
             scan_tx: RefCell::new(None),
+            connect_txs: RefCell::new(HashMap::new()),
             peripheral: RefCell::new(None),
             peripheral_delegate: RefCell::new(None),
             keep_alive: RefCell::new(None),
         });
         let delegate: Retained<Self> = unsafe { msg_send![super(this), init] };
-        // SAFETY: `initWithDelegate:queue:` is the documented CoreBluetooth
-        // initializer; the delegate conforms to `CBCentralManagerDelegate`
-        // and the ivar keeps the manager alive.
         let manager = unsafe {
             CBCentralManager::initWithDelegate_queue(
                 msg_send![CBCentralManager::class(), alloc],
@@ -354,12 +320,12 @@ impl CentralDelegate {
         delegate
     }
 
-    /// Queue `tx` for the next non-unknown adapter state (or resolve it
-    /// immediately when the manager already knows its state).
+    /// Send `tx` the adapter state — immediately if already known, else when
+    /// the first `centralManagerDidUpdateState:` arrives.
     fn watch_state(&self, tx: oneshot::Sender<AdapterState>) {
         let manager = self.ivars().manager.borrow();
-        let manager = manager.as_ref().expect("central manager exists");
-        // SAFETY: `state` is a read-only accessor.
+        let manager = manager.as_ref().expect("manager created in spawn");
+        // SAFETY: `state` is a read-only accessor on a live manager.
         let state = map_state(unsafe { manager.state() });
         if state == AdapterState::Unknown {
             self.ivars().state_txs.borrow_mut().push(tx);
@@ -371,19 +337,14 @@ impl CentralDelegate {
 
 // ---------------------------------------------------------------------------
 // CoreBluetooth peripheral delegate
-// ---------------------------------------------------------------------------
 
-/// A pending `discover_services` round trip: the accumulated services plus a
-/// countdown of `didDiscoverCharacteristicsForService` callbacks.
-#[derive(Debug)]
 struct DiscoverState {
     remaining: usize,
     services: Vec<GattService>,
     sender: oneshot::Sender<Result<Vec<GattService>, BluetoothError>>,
 }
 
-#[derive(Debug)]
-struct PeripheralDelegateIvars {
+pub struct PeripheralDelegateIvars {
     discover: RefCell<Option<DiscoverState>>,
     read_txs: RefCell<HashMap<String, ReadTx>>,
     write_txs: RefCell<HashMap<String, WriteUnitTx>>,
@@ -391,48 +352,39 @@ struct PeripheralDelegateIvars {
 }
 
 define_class!(
-    // SAFETY:
-    // - NSObject has no subclassing requirements.
-    // - `PeripheralDelegate` does not implement `Drop`.
+    // SAFETY: ivars are only touched through the main-queue callbacks below.
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "WaterkitBlePeripheralDelegate"]
     #[ivars = PeripheralDelegateIvars]
-    #[derive(Debug)]
-    struct PeripheralDelegate;
+    pub struct PeripheralDelegate;
 
     unsafe impl NSObjectProtocol for PeripheralDelegate {}
 
     unsafe impl CBPeripheralDelegate for PeripheralDelegate {
         #[unsafe(method(peripheralDidDiscoverServices:))]
         fn did_discover_services(&self, peripheral: &CBPeripheral, error: Option<&NSError>) {
-            if error.is_some() {
-                self.finish_discover(Err(BluetoothError::GattError(ns_error(
-                    error,
-                    "service discovery failed",
-                ))));
+            if let Some(error) = error {
+                self.finish_discover(Err(BluetoothError::GattError(
+                    error.localizedDescription().to_string(),
+                )));
                 return;
             }
             // SAFETY: read-only accessor.
-            let Some(services) = (unsafe { peripheral.services() }) else {
-                self.finish_discover(Ok(Vec::new()));
-                return;
-            };
-            {
-                let mut slot = self.ivars().discover.borrow_mut();
-                let Some(state) = slot.as_mut() else {
-                    return;
-                };
-                state.remaining = services.len();
-            }
+            let services = unsafe { peripheral.services() }.unwrap_or_default();
             if services.is_empty() {
                 self.finish_discover(Ok(Vec::new()));
                 return;
             }
+            if let Some(discover) = self.ivars().discover.borrow_mut().as_mut() {
+                discover.remaining = services.len();
+            }
             for service in &services {
                 // SAFETY: kicks off characteristic discovery on a live
                 // discovered service; results return on this delegate.
-                unsafe { peripheral.discoverCharacteristics_forService(None, &service) };
+                unsafe {
+                    peripheral.discoverCharacteristics_forService(None, &service);
+                }
             }
         }
 
@@ -441,28 +393,26 @@ define_class!(
             &self,
             _peripheral: &CBPeripheral,
             service: &CBService,
-            _error: Option<&NSError>,
+            error: Option<&NSError>,
         ) {
-            // The previous implementation ignored the per-service error and
-            // still accumulated whatever `service.characteristics` holds;
-            // keep that behaviour.
+            if error.is_some() {
+                // The previous implementation ignored the per-service error
+                // and still counted the service's (empty) characteristic set.
+                // Keep that behaviour.
+            }
+            let service = gatt_service(service);
             let done = {
                 let mut slot = self.ivars().discover.borrow_mut();
-                let Some(state) = slot.as_mut() else {
-                    return;
-                };
-                state.services.push(gatt_service(service));
-                state.remaining = state.remaining.saturating_sub(1);
-                state.remaining == 0
+                if let Some(discover) = slot.as_mut() {
+                    discover.services.push(service);
+                    discover.remaining = discover.remaining.saturating_sub(1);
+                    discover.remaining == 0
+                } else {
+                    false
+                }
             };
-            if done {
-                let services = self
-                    .ivars()
-                    .discover
-                    .borrow_mut()
-                    .take()
-                    .map_or_else(Vec::new, |state| state.services);
-                self.finish_discover(Ok(services));
+            if done && let Some(discover) = self.ivars().discover.borrow_mut().take() {
+                let _ = discover.sender.send(Ok(discover.services));
             }
         }
 
@@ -512,127 +462,138 @@ define_class!(
 );
 
 impl PeripheralDelegate {
-    fn spawn() -> Retained<Self> {
-        let mtm = MainThreadMarker::new().expect("on main queue");
+    fn spawn(mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(PeripheralDelegateIvars {
             discover: RefCell::new(None),
             read_txs: RefCell::new(HashMap::new()),
             write_txs: RefCell::new(HashMap::new()),
             notify_txs: RefCell::new(HashMap::new()),
         });
-        // SAFETY: `init` on a plain NSObject subclass.
         unsafe { msg_send![super(this), init] }
     }
 
-    /// Complete a pending `discover_services` round trip at most once.
     fn finish_discover(&self, result: Result<Vec<GattService>, BluetoothError>) {
-        if let Some(state) = self.ivars().discover.borrow_mut().take() {
-            let _ = state.sender.send(result);
+        if let Some(discover) = self.ivars().discover.borrow_mut().take() {
+            let _ = discover.sender.send(result);
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// BLE entry points
-// ---------------------------------------------------------------------------
+// Adapter state / scanning / connections (public entry points)
 
+/// One-shot probe: spawn a temporary central delegate, ask it for the first
+/// known adapter state, then release it.
 pub async fn adapter_state() -> Result<AdapterState, BluetoothError> {
-    let (tx, rx) = oneshot::channel();
-    on_main(move || {
-        let delegate = CentralDelegate::spawn();
-        *delegate.ivars().keep_alive.borrow_mut() = Some(delegate.clone());
+    let (delegate, rx) = hop(|mtm| {
+        let delegate = CentralDelegate::spawn(mtm);
+        let (tx, rx) = oneshot::channel();
         delegate.watch_state(tx);
-    });
-    rx.await
-        .map_err(|_| BluetoothError::Platform("adapter state callback dropped".into()))
+        (MainThreadBound::new(delegate, mtm), rx)
+    })
+    .await;
+    let state = rx
+        .await
+        .map_err(|_| BluetoothError::Platform("adapter state callback dropped".into()))?;
+    // Release the delegate on the main queue where it lives.
+    dispatch_main(move || drop(delegate));
+    Ok(state)
 }
 
-/// `BleScanner` session: owns the central delegate (address in `central`)
-/// and the scan-result receiver.
 pub struct BleScannerInner {
-    central: usize,
+    delegate: Arc<MainThreadBound<Retained<CentralDelegate>>>,
     pub(crate) scan_rx: Receiver<ScanResult>,
 }
 
-impl std::fmt::Debug for BleScannerInner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for BleScannerInner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("BleScannerInner")
-            .field("central", &self.central)
+            .field("scan_rx", &self.scan_rx)
             .finish_non_exhaustive()
     }
 }
 
 impl BleScannerInner {
+    /// Fail fast unless the adapter is powered on.
     pub async fn new() -> Result<Self, BluetoothError> {
-        let state = adapter_state().await?;
+        let (delegate, state_rx) = hop(|mtm| {
+            let delegate = CentralDelegate::spawn(mtm);
+            // The delegate must outlive the adapter-state wait.
+            *delegate.ivars().keep_alive.borrow_mut() = Some(delegate.clone());
+            let (tx, rx) = oneshot::channel();
+            delegate.watch_state(tx);
+            (Arc::new(MainThreadBound::new(delegate, mtm)), rx)
+        })
+        .await;
+        let state = state_rx
+            .await
+            .map_err(|_| BluetoothError::Platform("adapter state callback dropped".into()))?;
         if state != AdapterState::PoweredOn {
+            dispatch_main(move || drop(delegate));
             return Err(BluetoothError::NotAvailable);
         }
-        let (tx, rx) = async_channel::bounded(64);
-        let central = on_main(move || {
-            let delegate = CentralDelegate::spawn();
-            *delegate.ivars().scan_tx.borrow_mut() = Some(tx);
-            // SAFETY: `into_raw` keeps the +1 retain; `Drop` reconstructs it
-            // on the main thread to release the session.
-            Retained::into_raw(delegate) as usize
-        });
-        Ok(Self {
-            central,
-            scan_rx: rx,
+        let (scan_tx, scan_rx) = async_channel::bounded(64);
+        let central = Arc::clone(&delegate);
+        hop(move |mtm| {
+            central.get(mtm).ivars().scan_tx.replace(Some(scan_tx));
         })
+        .await;
+        Ok(Self { delegate, scan_rx })
     }
 
-    #[allow(clippy::unnecessary_wraps)]
-    pub fn start_scan(
-        &self,
-        filter: &ScanFilter,
-    ) -> Result<async_channel::Receiver<ScanResult>, BluetoothError> {
-        let central = self.central;
-        let uuids: Vec<String> = filter
+    /// Begin scanning; returns the stream of deduplicated results.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "result kept for parity with fallible platform impls"
+    )]
+    pub fn start_scan(&self, filter: &ScanFilter) -> Result<Receiver<ScanResult>, BluetoothError> {
+        let delegate = Arc::clone(&self.delegate);
+        let service_uuids: Vec<String> = filter
             .service_uuids
             .iter()
             .map(|uuid| uuid.as_str().to_string())
             .collect();
-        on_main(move || {
-            let delegate = unsafe { from_addr::<CentralDelegate>(central) };
+        dispatch_main(move || {
+            let mtm = MainThreadMarker::new().expect("on the main queue");
+            let delegate = delegate.get(mtm);
             let manager = delegate.ivars().manager.borrow();
-            let manager = manager.as_ref().expect("central manager exists");
-            let service_uuids = if uuids.is_empty() {
+            let manager = manager.as_ref().expect("manager created in spawn");
+            // SAFETY: `UUIDWithString` builds a CBUUID from a known-form
+            // string (the `Uuid` newtype guarantees the format).
+            let services: Option<Retained<NSArray<CBUUID>>> = if service_uuids.is_empty() {
                 None
             } else {
-                let cb_uuids: Vec<Retained<CBUUID>> = uuids
+                let uuids: Vec<Retained<CBUUID>> = service_uuids
                     .iter()
-                    // SAFETY: `UUIDWithString` parses UUID strings.
                     .map(|uuid| unsafe { CBUUID::UUIDWithString(&NSString::from_str(uuid)) })
                     .collect();
-                Some(NSArray::from_retained_slice(&cb_uuids))
+                Some(NSArray::from_retained_slice(&uuids))
             };
-            // `CBCentralManagerScanOptionAllowDuplicatesKey = false` — the
             // Discoveries are de-duplicated by the scan options below.
+            let allow_duplicates = NSNumber::numberWithBool(false);
             let options: Retained<NSDictionary<NSString, AnyObject>> = NSDictionary::from_slices(
                 &[unsafe { CBCentralManagerScanOptionAllowDuplicatesKey }],
-                &[as_any_object::<NSNumber>(
-                    NSNumber::numberWithBool(false).as_ref(),
-                )],
+                &[&***allow_duplicates],
             );
             // SAFETY: CoreBluetooth scan entry point on a powered-on manager.
             unsafe {
-                manager.scanForPeripheralsWithServices_options(
-                    service_uuids.as_deref(),
-                    Some(&options),
-                );
-            };
+                manager.scanForPeripheralsWithServices_options(services.as_deref(), Some(&options));
+            }
         });
         Ok(self.scan_rx.clone())
     }
 
+    /// Stop scanning and release the manager (the delegate is dropped on the
+    /// main queue where it lives).
     pub fn stop_scan(&self) {
-        let central = self.central;
+        let delegate = Arc::clone(&self.delegate);
         dispatch_main(move || {
-            let delegate = unsafe { from_addr::<CentralDelegate>(central) };
+            let mtm = MainThreadMarker::new().expect("on the main queue");
+            let delegate = delegate.get(mtm);
             delegate.ivars().scan_tx.borrow_mut().take();
-            if let Some(manager) = delegate.ivars().manager.borrow().as_ref() {
-                // SAFETY: stops an in-flight scan on a live manager.
+            let manager = delegate.ivars().manager.borrow();
+            if let Some(manager) = manager.as_ref() {
+                // SAFETY: `stopScan` on a live manager.
                 unsafe { manager.stopScan() };
             }
         });
@@ -641,28 +602,19 @@ impl BleScannerInner {
 
 impl Drop for BleScannerInner {
     fn drop(&mut self) {
-        self.stop_scan();
-        let central = self.central;
-        dispatch_main(move || {
-            // SAFETY: reclaims the retain created by `into_raw` in `new`.
-            // SAFETY: reclaims the retain created by `into_raw` in `new`.
-            drop(unsafe {
-                Retained::from_raw(central as *mut CentralDelegate)
-                    .expect("scanner delegate retain held by inner")
-            });
-        });
+        let delegate = Arc::clone(&self.delegate);
+        // The delegate (and its manager) is released on the main queue.
+        dispatch_main(move || drop(delegate));
     }
 }
 
-/// `BleConnection` session: owns its central delegate plus the peripheral
-/// delegate kept inside that delegate's ivars.
 pub struct BleConnectionInner {
     device_id: DeviceId,
-    central: usize,
+    delegate: Arc<MainThreadBound<Retained<CentralDelegate>>>,
 }
 
-impl std::fmt::Debug for BleConnectionInner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for BleConnectionInner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("BleConnectionInner")
             .field("device_id", &self.device_id)
             .finish_non_exhaustive()
@@ -670,216 +622,243 @@ impl std::fmt::Debug for BleConnectionInner {
 }
 
 impl BleConnectionInner {
+    /// Look the peripheral up by identifier and drive `connectPeripheral` on
+    /// the main queue; resolves once `didConnect` fires.
     pub async fn connect(device_id: &DeviceId) -> Result<Self, BluetoothError> {
         let id = device_id.as_str().to_string();
-        let (central, state_rx) = on_main(move || {
-            let delegate = CentralDelegate::spawn();
-            // The peripheral is looked up through `retrievePeripheralsWithIdentifiers`,
-            // manager's dictionary; `retrievePeripheralsWithIdentifiers` is
-            // the CoreBluetooth equivalent for a previously discovered or
-            // connected device identifier.
-            let ns_uuid = {
-                let ns = NSString::from_str(&id);
-                // SAFETY: documented NSUUID initializer; nil on unparseable
-                // input.
-                NSUUID::initWithUUIDString(
-                    // SAFETY: `alloc` on a live class.
-                    unsafe { msg_send![NSUUID::class(), alloc] },
-                    &ns,
-                )
-            };
+        let (delegate, state_rx) = hop(move |mtm| {
+            let delegate = CentralDelegate::spawn(mtm);
+            let device_id_string = id;
+            let ns = NSString::from_str(&device_id_string);
+            let ns_uuid = NSUUID::initWithUUIDString(
+                // SAFETY: `alloc` on a live class.
+                unsafe { msg_send![NSUUID::class(), alloc] },
+                &ns,
+            );
             let Some(ns_uuid) = ns_uuid else {
-                return Err(BluetoothError::DeviceNotFound(id));
+                return Err(BluetoothError::DeviceNotFound(device_id_string));
             };
-            let identifiers = NSArray::from_retained_slice(&[ns_uuid]);
-            // SAFETY: `retrievePeripheralsWithIdentifiers` on a live manager.
-            let peripherals = unsafe {
-                delegate
-                    .ivars()
-                    .manager
-                    .borrow()
-                    .as_ref()
-                    .expect("central manager exists")
-                    .retrievePeripheralsWithIdentifiers(&identifiers)
-            };
-            let Some(peripheral) = peripherals.firstObject() else {
-                return Err(BluetoothError::DeviceNotFound(id));
-            };
-            let periph_delegate = PeripheralDelegate::spawn();
-            // SAFETY: `setDelegate` takes a `CBPeripheralDelegate`-conforming
-            // object; `delegate` is weak so the ivar keeps it alive.
-            unsafe { peripheral.setDelegate(Some(ProtocolObject::from_ref(&*periph_delegate))) };
-            *delegate.ivars().peripheral.borrow_mut() = Some(peripheral);
-            *delegate.ivars().peripheral_delegate.borrow_mut() = Some(periph_delegate);
+            {
+                let manager = delegate.ivars().manager.borrow();
+                let manager = manager.as_ref().expect("manager created in spawn");
+                let identifiers = NSArray::from_retained_slice(&[ns_uuid]);
+                // SAFETY: lookup on a live manager.
+                let peripherals =
+                    unsafe { manager.retrievePeripheralsWithIdentifiers(&identifiers) };
+                let Some(peripheral) = peripherals.firstObject() else {
+                    return Err(BluetoothError::DeviceNotFound(device_id_string));
+                };
+                *delegate.ivars().peripheral.borrow_mut() = Some(peripheral.clone());
+                let periph_delegate = PeripheralDelegate::spawn(mtm);
+                // SAFETY: `setDelegate` on a live peripheral; the delegate
+                // object is retained by the ivar below.
+                unsafe {
+                    peripheral.setDelegate(Some(ProtocolObject::from_ref(&*periph_delegate)));
+                };
+                *delegate.ivars().peripheral_delegate.borrow_mut() = Some(periph_delegate);
+            }
             let (tx, rx) = oneshot::channel();
             delegate.watch_state(tx);
-            // SAFETY: `into_raw` holds the session retain until `disconnect`.
-            Ok((Retained::into_raw(delegate) as usize, rx))
-        })?;
-        match state_rx
+            Ok((Arc::new(MainThreadBound::new(delegate, mtm)), rx))
+        })
+        .await?;
+        let state = state_rx
             .await
-            .map_err(|_| BluetoothError::Platform("adapter state callback dropped".into()))?
-        {
+            .map_err(|_| BluetoothError::Platform("adapter state callback dropped".into()))?;
+        match state {
             AdapterState::PoweredOn => {}
-            AdapterState::PoweredOff => return Err(BluetoothError::PoweredOff),
-            _ => return Err(BluetoothError::NotAvailable),
+            AdapterState::PoweredOff => {
+                dispatch_main(move || drop(delegate));
+                return Err(BluetoothError::PoweredOff);
+            }
+            _ => {
+                dispatch_main(move || drop(delegate));
+                return Err(BluetoothError::NotAvailable);
+            }
         }
-
+        let central = Arc::clone(&delegate);
+        let key = device_id.as_str().to_string();
         let (tx, rx) = oneshot::channel();
-        on_main(move || {
-            let delegate = unsafe { from_addr::<CentralDelegate>(central) };
+        hop(move |mtm| {
+            let delegate = central.get(mtm);
+            delegate.ivars().connect_txs.borrow_mut().insert(key, tx);
+            let manager = delegate.ivars().manager.borrow();
+            let manager = manager.as_ref().expect("manager created in spawn");
             let peripheral = delegate.ivars().peripheral.borrow();
             let peripheral = peripheral.as_ref().expect("peripheral stored at connect");
-            let manager = delegate.ivars().manager.borrow();
-            let manager = manager.as_ref().expect("central manager exists");
-            // SAFETY: read-only accessor used as the callback key.
-            let key = unsafe { peripheral.identifier() }.UUIDString().to_string();
-            delegate.ivars().connect_txs.borrow_mut().insert(key, tx);
-            // SAFETY: `connectPeripheral` on a powered-on manager.
+            // SAFETY: `connectPeripheral` on a live manager+peripheral pair;
+            // the delegate self-retains until `didConnect`/`didFailToConnect`
+            // fires.
+            *delegate.ivars().keep_alive.borrow_mut() = Some(delegate.clone());
             unsafe { manager.connectPeripheral_options(peripheral, None) };
-        });
+        })
+        .await;
         rx.await
             .map_err(|_| BluetoothError::ConnectionFailed("callback dropped".into()))??;
         Ok(Self {
             device_id: device_id.clone(),
-            central,
+            delegate,
         })
     }
 
+    /// Discover GATT services (and characteristics) via the peripheral
+    /// delegate's countdown — resolves when every service answered.
     pub async fn discover_services(&self) -> Result<Vec<GattService>, BluetoothError> {
-        let central = self.central;
+        let central = Arc::clone(&self.delegate);
         let (tx, rx) = oneshot::channel();
-        on_main(move || {
-            let delegate = unsafe { from_addr::<CentralDelegate>(central) };
+        let found = hop(move |mtm| {
+            let delegate = central.get(mtm);
             let peripheral = delegate.ivars().peripheral.borrow();
             let periph_delegate = delegate.ivars().peripheral_delegate.borrow();
             let (Some(peripheral), Some(periph_delegate)) =
                 (peripheral.as_ref(), periph_delegate.as_ref())
             else {
-                let _ = tx.send(Err(BluetoothError::GattError(
-                    "peripheral unavailable".into(),
-                )));
-                return;
+                return false;
             };
             *periph_delegate.ivars().discover.borrow_mut() = Some(DiscoverState {
                 remaining: 0,
                 services: Vec::new(),
                 sender: tx,
             });
-            // SAFETY: `discoverServices` on the live connected peripheral.
+            // SAFETY: `discoverServices` on a connected peripheral.
             unsafe { peripheral.discoverServices(None) };
-        });
+            true
+        })
+        .await;
+        if !found {
+            return Err(BluetoothError::GattError("peripheral unavailable".into()));
+        }
         rx.await
             .map_err(|_| BluetoothError::GattError("callback dropped".into()))?
     }
 
-    /// Shared lookup + sender registration for `read_characteristic` and
-    /// `write_characteristic`; `tx` is failed with `GattError` when the
-    /// characteristic is not found, mirroring the previous `"Characteristic not
-    /// found"` path.
+    /// Run `op` against the characteristic on the main queue; fails fast when
+    /// the peripheral or characteristic is missing.
     fn with_characteristic(
-        central: usize,
+        central: Arc<MainThreadBound<Retained<CentralDelegate>>>,
         service: &Uuid,
         characteristic: &Uuid,
         op: impl FnOnce(&PeripheralDelegate, &CBPeripheral, Retained<CBCharacteristic>) + Send + 'static,
-    ) -> Result<(), BluetoothError> {
-        let svc = service.as_str().to_string();
-        let chr = characteristic.as_str().to_string();
-        on_main(move || {
-            let delegate = unsafe { from_addr::<CentralDelegate>(central) };
-            let peripheral = delegate.ivars().peripheral.borrow();
+    ) {
+        let service = service.as_str().to_string();
+        let characteristic = characteristic.as_str().to_string();
+        dispatch_main(move || {
+            let mtm = MainThreadMarker::new().expect("on the main queue");
+            let delegate = central.get(mtm);
             let periph_delegate = delegate.ivars().peripheral_delegate.borrow();
-            let (Some(peripheral), Some(periph_delegate)) =
-                (peripheral.as_ref(), periph_delegate.as_ref())
+            let peripheral = delegate.ivars().peripheral.borrow();
+            let (Some(periph_delegate), Some(peripheral)) =
+                (periph_delegate.as_ref(), peripheral.as_ref())
             else {
-                return Err(BluetoothError::GattError("peripheral unavailable".into()));
+                return;
             };
-            let Some(characteristic) = find_characteristic(peripheral, &svc, &chr) else {
-                return Err(BluetoothError::GattError("characteristic not found".into()));
-            };
-            op(periph_delegate, peripheral, characteristic);
-            Ok(())
-        })
+            if let Some(characteristic) = find_characteristic(peripheral, &service, &characteristic)
+            {
+                op(periph_delegate, peripheral, characteristic);
+            }
+        });
     }
 
+    /// Prime the read oneshot and kick `readValueForCharacteristic`.
     pub async fn read_characteristic(
         &self,
         service: &Uuid,
         characteristic: &Uuid,
     ) -> Result<Vec<u8>, BluetoothError> {
-        let central = self.central;
-        let (tx, rx) = oneshot::channel::<Result<Vec<u8>, BluetoothError>>();
-        let mut tx = Some(tx);
-        Self::with_characteristic(
-            central,
-            service,
-            characteristic,
-            move |periph_delegate, peripheral, characteristic| {
-                let Some(tx) = tx.take() else { return };
-                periph_delegate
-                    .ivars()
-                    .read_txs
-                    .borrow_mut()
-                    .insert(characteristic_key(&characteristic), tx);
-                // SAFETY: `readValueForCharacteristic` on a live
-                // characteristic of the connected peripheral.
-                unsafe { peripheral.readValueForCharacteristic(&characteristic) };
-            },
-        )?;
+        let central = Arc::clone(&self.delegate);
+        let service_uuid = service.as_str().to_string();
+        let characteristic_uuid = characteristic.as_str().to_string();
+        let (tx, rx) = oneshot::channel();
+        hop(move |mtm| {
+            let delegate = central.get(mtm);
+            let periph_delegate = delegate.ivars().peripheral_delegate.borrow();
+            let peripheral = delegate.ivars().peripheral.borrow();
+            let (Some(periph_delegate), Some(peripheral)) =
+                (periph_delegate.as_ref(), peripheral.as_ref())
+            else {
+                return Err(BluetoothError::GattError("peripheral unavailable".into()));
+            };
+            let Some(characteristic) =
+                find_characteristic(peripheral, &service_uuid, &characteristic_uuid)
+            else {
+                return Err(BluetoothError::GattError("characteristic not found".into()));
+            };
+            periph_delegate
+                .ivars()
+                .read_txs
+                .borrow_mut()
+                .insert(characteristic_key(&characteristic), tx);
+            // SAFETY: `readValueForCharacteristic` on a live characteristic.
+            unsafe { peripheral.readValueForCharacteristic(&characteristic) };
+            Ok(())
+        })
+        .await?;
         rx.await
             .map_err(|_| BluetoothError::GattError("callback dropped".into()))?
     }
 
+    /// Queue the write oneshot and kick `writeValue:forCharacteristic:type:`.
     pub async fn write_characteristic(
         &self,
         service: &Uuid,
         characteristic: &Uuid,
         data: &[u8],
     ) -> Result<(), BluetoothError> {
-        let central = self.central;
+        let central = Arc::clone(&self.delegate);
+        let service_uuid = service.as_str().to_string();
+        let characteristic_uuid = characteristic.as_str().to_string();
         let payload = data.to_vec();
-        let (tx, rx) = oneshot::channel::<Result<(), BluetoothError>>();
-        let mut tx = Some(tx);
-        Self::with_characteristic(
-            central,
-            service,
-            characteristic,
-            move |periph_delegate, peripheral, characteristic| {
-                let Some(tx) = tx.take() else { return };
-                periph_delegate
-                    .ivars()
-                    .write_txs
-                    .borrow_mut()
-                    .insert(characteristic_key(&characteristic), tx);
-                // SAFETY: `dataWithBytes` copies `payload` into a live
-                // NSData for the duration of the call.
-                let data = unsafe {
-                    NSData::dataWithBytes_length(
-                        payload.as_ptr().cast::<c_void>().cast_mut(),
-                        payload.len(),
-                    )
-                };
-                // SAFETY: `writeValue` on a live characteristic;
-                // `WithResponse` matches the previous behaviour.
-                unsafe {
-                    peripheral.writeValue_forCharacteristic_type(
-                        &data,
-                        &characteristic,
-                        CBCharacteristicWriteType::WithResponse,
-                    );
-                };
-            },
-        )?;
+        let (tx, rx) = oneshot::channel();
+        hop(move |mtm| -> Result<(), BluetoothError> {
+            let delegate = central.get(mtm);
+            let periph_delegate = delegate.ivars().peripheral_delegate.borrow();
+            let peripheral = delegate.ivars().peripheral.borrow();
+            let (Some(periph_delegate), Some(peripheral)) =
+                (periph_delegate.as_ref(), peripheral.as_ref())
+            else {
+                return Err(BluetoothError::GattError("peripheral unavailable".into()));
+            };
+            let Some(characteristic) =
+                find_characteristic(peripheral, &service_uuid, &characteristic_uuid)
+            else {
+                return Err(BluetoothError::GattError("characteristic not found".into()));
+            };
+            periph_delegate
+                .ivars()
+                .write_txs
+                .borrow_mut()
+                .insert(characteristic_key(&characteristic), tx);
+            // SAFETY: `dataWithBytes` copies `payload` immediately.
+            let ns_data = unsafe {
+                NSData::dataWithBytes_length(payload.as_ptr().cast::<c_void>(), payload.len())
+            };
+            // `WithResponse` matches the previous behaviour.
+            unsafe {
+                peripheral.writeValue_forCharacteristic_type(
+                    &ns_data,
+                    &characteristic,
+                    CBCharacteristicWriteType::WithResponse,
+                );
+            }
+            Ok(())
+        })
+        .await?;
         rx.await
             .map_err(|_| BluetoothError::GattError("callback dropped".into()))?
     }
 
+    /// Register a notify channel and enable notifications on the
+    /// characteristic.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "fallible for parity with the other platform impls"
+    )]
     pub fn subscribe(
         &self,
         service: &Uuid,
         characteristic: &Uuid,
     ) -> Result<Receiver<Vec<u8>>, BluetoothError> {
-        let central = self.central;
+        let central = Arc::clone(&self.delegate);
         let (tx, rx) = async_channel::bounded(64);
         Self::with_characteristic(
             central,
@@ -894,106 +873,71 @@ impl BleConnectionInner {
                 // SAFETY: `setNotifyValue` on a live characteristic.
                 unsafe { peripheral.setNotifyValue_forCharacteristic(true, &characteristic) };
             },
-        )?;
+        );
         Ok(rx)
     }
 
+    /// Cancel the connection and release the central delegate on the main
+    /// queue.
     pub fn disconnect(self) {
-        let central = self.central;
+        let delegate = Arc::clone(&self.delegate);
         dispatch_main(move || {
-            // SAFETY: reclaims the retain created by `into_raw` in `connect`;
-            // dropping the delegate releases manager + peripheral delegates.
-            let delegate = unsafe {
-                Retained::from_raw(central as *mut CentralDelegate)
-                    .expect("connection delegate retain held by inner")
-            };
-            if let (Some(manager), Some(peripheral)) = (
-                delegate.ivars().manager.borrow().as_ref(),
-                delegate.ivars().peripheral.borrow().as_ref(),
-            ) {
+            let mtm = MainThreadMarker::new().expect("on the main queue");
+            let delegate = delegate.get(mtm);
+            let manager = delegate.ivars().manager.borrow();
+            let peripheral = delegate.ivars().peripheral.borrow();
+            if let (Some(manager), Some(peripheral)) = (manager.as_ref(), peripheral.as_ref()) {
                 // SAFETY: `cancelPeripheralConnection` on a live pair.
                 unsafe { manager.cancelPeripheralConnection(peripheral) };
             }
-            drop(delegate);
+            // `delegate` (Arc<MainThreadBound>) drops at the end of this
+            // closure, releasing the object on the main queue.
         });
     }
 }
 
-// ---------------------------------------------------------------------------
-// Classic Bluetooth — macOS only
-// ---------------------------------------------------------------------------
+impl Drop for BleConnectionInner {
+    fn drop(&mut self) {
+        let delegate = Arc::clone(&self.delegate);
+        dispatch_main(move || drop(delegate));
+    }
+}
 
+// ---------------------------------------------------------------------------
+// Classic Bluetooth (macOS only)
 #[cfg(target_os = "macos")]
 mod classic {
     use super::{
-        BluetoothDevice, BluetoothError, ClassType, ClassicDevice, DefinedClass, DeviceId, HashMap,
-        K_IO_RETURN_SUCCESS, MainThreadMarker, MainThreadOnly, NSObject, NSObjectProtocol,
-        PendingRead, PendingWrite, Receiver, RefCell, Retained, Sender, Uuid, WriteTx,
-        as_any_object, c_void, define_class, dispatch_main, from_addr, msg_send, on_main, oneshot,
+        BluetoothDevice, BluetoothError, ClassicDevice, DeviceId, HashMap, K_IO_RETURN_SUCCESS,
+        PendingRead, PendingWrite, ReadTx, RefCell, Retained, Sender, StreamOwner, Uuid, WriteTx,
+        oneshot,
     };
-    use objc2_foundation::{NSArray, NSData, NSString};
+    use core::ffi::c_void;
+    use dispatch2::MainThreadBound;
+    use objc2::runtime::{AnyObject, NSObject};
+    use objc2::{
+        ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
+    };
+    use objc2_foundation::{NSArray, NSData, NSObjectProtocol, NSString};
     use objc2_io_bluetooth::{
-        IOBluetoothDevice, IOBluetoothDeviceAsyncCallbacks, IOBluetoothDeviceInquiry,
-        IOBluetoothDeviceInquiryDelegate, IOBluetoothDeviceSearchTypesBits,
-        IOBluetoothRFCOMMChannel, IOBluetoothRFCOMMChannelDelegate, IOBluetoothSDPUUID,
+        BluetoothRFCOMMChannelID, IOBluetoothDevice, IOBluetoothDeviceAsyncCallbacks,
+        IOBluetoothDeviceInquiry, IOBluetoothDeviceInquiryDelegate,
+        IOBluetoothDeviceSearchTypesBits, IOBluetoothRFCOMMChannel,
+        IOBluetoothRFCOMMChannelDelegate, IOBluetoothSDPUUID,
     };
     use std::cell::Cell;
-
-    /// The discovery delegate: owns the `IOBluetoothDeviceInquiry` and the
-    /// stream sender.
-    #[derive(Debug)]
-    struct InquiryIvars {
-        inquiry: RefCell<Option<Retained<IOBluetoothDeviceInquiry>>>,
-        tx: RefCell<Option<Sender<ClassicDevice>>>,
-    }
-
-    define_class!(
-        // SAFETY:
-        // - NSObject has no subclassing requirements.
-        // - `Inquiry` does not implement `Drop`.
-        #[unsafe(super(NSObject))]
-        #[thread_kind = MainThreadOnly]
-        #[name = "WaterkitClassicInquiry"]
-        #[ivars = InquiryIvars]
-        #[derive(Debug)]
-        struct Inquiry;
-
-        unsafe impl NSObjectProtocol for Inquiry {}
-
-        unsafe impl IOBluetoothDeviceInquiryDelegate for Inquiry {
-            #[unsafe(method(deviceInquiryDeviceFound:device:))]
-            fn device_found(
-                &self,
-                _sender: Option<&IOBluetoothDeviceInquiry>,
-                device: Option<&IOBluetoothDevice>,
-            ) {
-                let tx = self.ivars().tx.borrow();
-                let (Some(device), Some(tx)) = (device, tx.as_ref()) else {
-                    return;
-                };
-                let _ = tx.try_send(classic_device(device));
-            }
-        }
-    );
-
-    impl Inquiry {
-        fn spawn(tx: Sender<ClassicDevice>) -> Retained<Self> {
-            let mtm = MainThreadMarker::new().expect("on main queue");
-            let this = Self::alloc(mtm).set_ivars(InquiryIvars {
-                inquiry: RefCell::new(None),
-                tx: RefCell::new(Some(tx)),
-            });
-            // SAFETY: `init` on a plain NSObject subclass.
-            unsafe { msg_send![super(this), init] }
-        }
-    }
+    use std::collections::VecDeque;
+    use std::sync::Arc;
 
     fn classic_device(device: &IOBluetoothDevice) -> ClassicDevice {
-        // SAFETY: read-only accessors on a live IOBluetoothDevice.
+        // SAFETY: read-only accessors on a live device object.
         let (address, name, class_of_device, connected, paired) = unsafe {
             (
-                device.addressString(),
-                device.name(),
+                device
+                    .addressString()
+                    .expect("a discovered/paired device always has an address")
+                    .to_string(),
+                Some(device.name().to_string()),
                 device.classOfDevice(),
                 device.isConnected(),
                 device.isPaired(),
@@ -1001,8 +945,8 @@ mod classic {
         };
         ClassicDevice {
             device: BluetoothDevice {
-                id: DeviceId::new(address.map_or_else(String::new, |a| a.to_string())),
-                name: Some(name.to_string()),
+                id: DeviceId::new(&address),
+                name,
                 rssi: None,
                 is_connected: connected,
             },
@@ -1011,173 +955,275 @@ mod classic {
         }
     }
 
-    /// The `connect_spp` connector: performs `performSDPQuery:` then
-    /// `openRFCOMMChannelAsync:withChannelID:delegate:` and resolves with the
-    /// address of the `SppStream` delegate it creates.
-    #[derive(Debug)]
-    struct ConnectorIvars {
-        sdp_uuid: Retained<IOBluetoothSDPUUID>,
-        tx: RefCell<Option<oneshot::Sender<Result<usize, BluetoothError>>>>,
+    pub struct InquiryIvars {
+        inquiry: RefCell<Option<Retained<IOBluetoothDeviceInquiry>>>,
+        tx: RefCell<Option<Sender<ClassicDevice>>>,
+    }
+
+    define_class!(
+        // SAFETY: main-thread-only like every other delegate here.
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[name = "WaterkitClassicInquiry"]
+        #[ivars = InquiryIvars]
+        pub struct Inquiry;
+
+        unsafe impl NSObjectProtocol for Inquiry {}
+
+        unsafe impl IOBluetoothDeviceInquiryDelegate for Inquiry {
+            #[unsafe(method(deviceInquiryDeviceFound:device:))]
+            fn device_found(&self, _sender: &IOBluetoothDeviceInquiry, device: &IOBluetoothDevice) {
+                if let Some(tx) = self.ivars().tx.borrow().as_ref() {
+                    let _ = tx.try_send(classic_device(device));
+                }
+            }
+        }
+    );
+
+    impl Inquiry {
+        fn spawn(mtm: MainThreadMarker, tx: Sender<ClassicDevice>) -> Retained<Self> {
+            let this = Self::alloc(mtm).set_ivars(InquiryIvars {
+                inquiry: RefCell::new(None),
+                tx: RefCell::new(Some(tx)),
+            });
+            unsafe { msg_send![super(this), init] }
+        }
+    }
+
+    /// Start a classic-device inquiry on the main thread.
+    ///
+    /// Returns the found-device stream; the inquiry lives in
+    /// `ClassicBluetoothInner`'s `MainThreadBound` slot until stopped.
+    pub fn start_discovery(
+        mtm: MainThreadMarker,
+        tx: Sender<ClassicDevice>,
+    ) -> Result<MainThreadBound<Retained<Inquiry>>, BluetoothError> {
+        let delegate = Inquiry::spawn(mtm, tx);
+        let inquiry = unsafe {
+            IOBluetoothDeviceInquiry::initWithDelegate(
+                msg_send![IOBluetoothDeviceInquiry::class(), alloc],
+                Some(&***delegate),
+            )
+        };
+        let Some(inquiry) = inquiry else {
+            return Err(BluetoothError::Platform(
+                "IOBluetoothDeviceInquiry init failed".into(),
+            ));
+        };
+        // SAFETY: classic-only inquiry search configuration.
+        unsafe {
+            inquiry.setSearchType(IOBluetoothDeviceSearchTypesBits::Classic.0);
+            inquiry.setUpdateNewDeviceNames(false);
+        }
+        *delegate.ivars().inquiry.borrow_mut() = Some(inquiry.clone());
+        // SAFETY: `start` begins an inquiry on a fully configured object.
+        let status = unsafe { inquiry.start() };
+        if status != K_IO_RETURN_SUCCESS {
+            return Err(BluetoothError::Platform(format!(
+                "IOBluetoothDeviceInquiry start failed ({status})"
+            )));
+        }
+        Ok(MainThreadBound::new(delegate, mtm))
+    }
+
+    /// Extract a `ClassicDevice` for each paired `IOBluetoothDevice`.
+    ///
+    /// # Safety
+    /// Calls `pairedDevices` on `IOBluetoothDevice` — run on the main thread.
+    pub fn paired_devices() -> Vec<ClassicDevice> {
+        // SAFETY: `pairedDevices` enumerates the system's paired devices.
+        let Some(devices) = (unsafe { IOBluetoothDevice::pairedDevices() }) else {
+            return Vec::new();
+        };
+        devices
+            .iter()
+            .map(|d| {
+                // SAFETY: `pairedDevices` returns `IOBluetoothDevice` objects.
+                let device = unsafe { Retained::cast_unchecked::<IOBluetoothDevice>(d) };
+                classic_device(&device)
+            })
+            .collect()
+    }
+
+    /// SPP connector: runs `performSDPQuery` to learn the RFCOMM channel, then
+    /// opens the channel; its own RFCOMM delegate methods resolve the pending
+    /// connect sender.
+    pub struct ConnectorIvars {
+        sdp_uuid: RefCell<Option<Retained<IOBluetoothSDPUUID>>>,
+        tx: RefCell<Option<oneshot::Sender<Result<StreamOwner, BluetoothError>>>>,
         channel: RefCell<Option<Retained<IOBluetoothRFCOMMChannel>>>,
         keep_alive: RefCell<Option<Retained<Connector>>>,
     }
 
     define_class!(
-        // SAFETY:
-        // - NSObject has no subclassing requirements.
-        // - `Connector` does not implement `Drop`.
+        // SAFETY: main-thread-only like every other delegate here.
         #[unsafe(super(NSObject))]
         #[thread_kind = MainThreadOnly]
         #[name = "WaterkitSppConnector"]
         #[ivars = ConnectorIvars]
-        #[derive(Debug)]
-        struct Connector;
+        pub struct Connector;
 
         unsafe impl NSObjectProtocol for Connector {}
 
         unsafe impl IOBluetoothDeviceAsyncCallbacks for Connector {
             #[unsafe(method(sdpQueryComplete:status:))]
-            fn sdp_query_complete(
-                &self,
-                device: Option<&IOBluetoothDevice>,
-                status: core::ffi::c_int,
-            ) {
+            fn sdp_query_complete(&self, _device: &IOBluetoothDevice, status: i32) {
                 if status != K_IO_RETURN_SUCCESS {
                     self.finish(Err(BluetoothError::ConnectionFailed(format!(
-                        "SDP query failed: {status}"
+                        "SDP query failed ({status})"
                     ))));
                     return;
                 }
-                let Some(device) = device else {
-                    self.finish(Err(BluetoothError::ConnectionFailed(
-                        "SDP query returned no device".into(),
-                    )));
+                let mtm = MainThreadMarker::new().expect("on the main queue");
+                let uuid = self.ivars().sdp_uuid.borrow().clone();
+                let Some(uuid) = uuid else {
+                    self.finish(Err(BluetoothError::Platform("missing SDP UUID".into())));
                     return;
                 };
-                // SAFETY: `getServiceRecordForUUID` on a device whose SDP
-                // query just completed.
-                let record =
-                    unsafe { device.getServiceRecordForUUID(Some(&self.ivars().sdp_uuid)) };
+                // SAFETY: `getServiceRecordForUUID` on a completed query.
+                let record = unsafe { _device.getServiceRecordForUUID(Some(&uuid)) };
                 let Some(record) = record else {
                     self.finish(Err(BluetoothError::ConnectionFailed(
-                        "SPP service record not found".into(),
+                        "SDP service record not found".into(),
                     )));
                     return;
                 };
-                let mut channel_id: objc2_io_bluetooth::BluetoothRFCOMMChannelID = 0;
-                // SAFETY: `getRFCOMMChannelID` writes `channel_id` on
-                // success.
+                let mut channel_id: BluetoothRFCOMMChannelID = 0;
+                // SAFETY: writes the channel id into `channel_id`.
                 let status = unsafe { record.getRFCOMMChannelID(&raw mut channel_id) };
-                if status != K_IO_RETURN_SUCCESS {
-                    self.finish(Err(BluetoothError::ConnectionFailed(format!(
-                        "RFCOMM channel id lookup failed: {status}"
-                    ))));
+                if status != K_IO_RETURN_SUCCESS || channel_id == 0 {
+                    self.finish(Err(BluetoothError::ConnectionFailed(
+                        "no RFCOMM channel in SDP record".into(),
+                    )));
                     return;
                 }
                 let mut channel: Option<Retained<IOBluetoothRFCOMMChannel>> = None;
-                // SAFETY: `openRFCOMMChannelAsync` writes the channel into
-                // `channel` and reports completion through this delegate's
-                // `rfcommChannelOpenComplete:status:`.
+                // SAFETY: opens an RFCOMM channel; `self` is the delegate for
+                // the open-complete/close callbacks below.
                 let status = unsafe {
-                    device.openRFCOMMChannelAsync_withChannelID_delegate(
+                    _device.openRFCOMMChannelAsync_withChannelID_delegate(
                         Some(&mut channel),
                         channel_id,
-                        Some(as_any_object(self)),
+                        Some(&***self),
                     )
                 };
                 if status != K_IO_RETURN_SUCCESS {
                     self.finish(Err(BluetoothError::ConnectionFailed(format!(
-                        "open RFCOMM channel failed: {status}"
+                        "openRFCOMMChannelAsync failed ({status})"
                     ))));
                     return;
                 }
-                // The sender + self-retain stay parked in the ivars until
-                // `rfcommChannelOpenComplete:status:` resolves them.
                 *self.ivars().channel.borrow_mut() = channel;
+                let _ = mtm;
             }
         }
 
         unsafe impl IOBluetoothRFCOMMChannelDelegate for Connector {
             #[unsafe(method(rfcommChannelOpenComplete:status:))]
-            fn open_complete(
-                &self,
-                channel: Option<&IOBluetoothRFCOMMChannel>,
-                status: core::ffi::c_int,
-            ) {
+            fn open_complete(&self, _channel: &IOBluetoothRFCOMMChannel, status: i32) {
                 if status != K_IO_RETURN_SUCCESS {
                     self.finish(Err(BluetoothError::ConnectionFailed(format!(
-                        "RFCOMM channel open failed: {status}"
+                        "RFCOMM channel open failed ({status})"
                     ))));
                     return;
                 }
-                let channel = self
-                    .ivars()
-                    .channel
-                    .borrow_mut()
-                    .take()
-                    .or_else(|| channel.map(Retained::from));
+                let mtm = MainThreadMarker::new().expect("on the main queue");
+                let channel = self.ivars().channel.borrow_mut().take();
                 let Some(channel) = channel else {
-                    self.finish(Err(BluetoothError::ConnectionFailed(
-                        "RFCOMM channel missing on open".into(),
+                    self.finish(Err(BluetoothError::Platform(
+                        "channel missing on open".into(),
                     )));
                     return;
                 };
-                let stream = SppStream::spawn(channel.clone());
-                // SAFETY: the channel delegate must respond to the
-                // IOBluetoothRFCOMMChannelDelegate selectors the stream
-                // implements.
-                let status = unsafe { channel.setDelegate(Some(as_any_object(&*stream))) };
+                let stream = SppStream::spawn(mtm, channel);
+                // SAFETY: `setDelegate` keeps `self` informed; the stream is
+                // handed to the owner through the oneshot.
+                let status = unsafe {
+                    stream
+                        .ivars()
+                        .channel
+                        .borrow()
+                        .as_ref()
+                        .expect("channel stored at spawn")
+                        .setDelegate(Some(&***stream))
+                };
                 if status != K_IO_RETURN_SUCCESS {
                     self.finish(Err(BluetoothError::ConnectionFailed(format!(
-                        "RFCOMM channel delegate failed: {status}"
+                        "setDelegate failed ({status})"
                     ))));
                     return;
                 }
-                // SAFETY: `into_raw` transfers the stream retain to
-                // `SppStreamInner`.
-                self.finish(Ok(Retained::into_raw(stream) as usize));
+                self.finish(Ok(Arc::new(MainThreadBound::new(stream, mtm))));
             }
 
             #[unsafe(method(rfcommChannelClosed:))]
-            fn channel_closed(&self, _channel: Option<&IOBluetoothRFCOMMChannel>) {
+            fn channel_closed(&self, _channel: &IOBluetoothRFCOMMChannel) {
                 self.finish(Err(BluetoothError::ConnectionFailed(
-                    "RFCOMM channel closed during connect".into(),
+                    "RFCOMM channel closed".into(),
                 )));
+            }
+
+            #[unsafe(method(rfcommChannelData:data:length:))]
+            fn did_receive(
+                &self,
+                _channel: &IOBluetoothRFCOMMChannel,
+                _data: *mut c_void,
+                _length: usize,
+            ) {
+            }
+
+            #[unsafe(method(rfcommChannelWriteComplete:refcon:))]
+            fn write_complete(&self, _channel: &IOBluetoothRFCOMMChannel, _refcon: *mut c_void) {}
+
+            #[unsafe(method(rfcommChannelWriteComplete:refcon:status:))]
+            fn write_complete_status(
+                &self,
+                _channel: &IOBluetoothRFCOMMChannel,
+                _refcon: *mut c_void,
+                _status: i32,
+            ) {
+            }
+
+            #[unsafe(method(rfcommChannelWriteComplete:refcon:status:bytesWritten:))]
+            fn write_complete_bytes(
+                &self,
+                _channel: &IOBluetoothRFCOMMChannel,
+                _refcon: *mut c_void,
+                _status: i32,
+                _bytes_written: usize,
+            ) {
             }
         }
     );
 
     impl Connector {
         fn spawn(
+            mtm: MainThreadMarker,
             sdp_uuid: Retained<IOBluetoothSDPUUID>,
-            tx: oneshot::Sender<Result<usize, BluetoothError>>,
+            tx: oneshot::Sender<Result<StreamOwner, BluetoothError>>,
         ) -> Retained<Self> {
-            let mtm = MainThreadMarker::new().expect("on main queue");
             let this = Self::alloc(mtm).set_ivars(ConnectorIvars {
-                sdp_uuid,
+                sdp_uuid: RefCell::new(Some(sdp_uuid)),
                 tx: RefCell::new(Some(tx)),
                 channel: RefCell::new(None),
                 keep_alive: RefCell::new(None),
             });
-            // SAFETY: `init` on a plain NSObject subclass.
             unsafe { msg_send![super(this), init] }
         }
 
-        /// Resolve the connect sender (at most once) and release the
-        /// self-retain that kept the connect session alive.
-        fn finish(&self, result: Result<usize, BluetoothError>) {
+        /// Deliver the connect result and release the self-retain that kept
+        /// the connector alive across the async callbacks.
+        fn finish(&self, result: Result<StreamOwner, BluetoothError>) {
             if let Some(tx) = self.ivars().tx.borrow_mut().take() {
                 let _ = tx.send(result);
             }
-            self.ivars().keep_alive.borrow_mut().take();
+            *self.ivars().keep_alive.borrow_mut() = None;
         }
     }
 
-    /// The SPP stream delegate: owns the channel, the read buffer, pending
-    /// reads and pending writes (the `refcon` key is a per-write token — no
-    /// global registry).
-    #[derive(Debug)]
-    struct SppStreamIvars {
+    /// Live RFCOMM stream; delegate callbacks run on the main queue where the
+    /// channel was opened.
+    pub struct SppStreamIvars {
         channel: RefCell<Option<Retained<IOBluetoothRFCOMMChannel>>>,
         buffer: RefCell<Vec<u8>>,
         pending_reads: RefCell<VecDeque<PendingRead>>,
@@ -1186,19 +1232,13 @@ mod classic {
         closed: Cell<bool>,
     }
 
-    use std::collections::VecDeque;
-
     define_class!(
-        // SAFETY:
-        // - NSObject has no subclassing requirements.
-        // - `SppStream` does not implement `Drop`; teardown goes through
-        //   `close_stream`/`rfcommChannelClosed:`.
+        // SAFETY: main-thread-only like every other delegate here.
         #[unsafe(super(NSObject))]
         #[thread_kind = MainThreadOnly]
         #[name = "WaterkitSppStream"]
         #[ivars = SppStreamIvars]
-        #[derive(Debug)]
-        struct SppStream;
+        pub struct SppStream;
 
         unsafe impl NSObjectProtocol for SppStream {}
 
@@ -1206,34 +1246,29 @@ mod classic {
             #[unsafe(method(rfcommChannelData:data:length:))]
             fn did_receive(
                 &self,
-                _channel: Option<&IOBluetoothRFCOMMChannel>,
+                _channel: &IOBluetoothRFCOMMChannel,
                 data: *mut c_void,
                 length: usize,
             ) {
-                // SAFETY: `data` points to `length` valid bytes for the
-                // duration of this callback.
+                // SAFETY: IOBluetooth guarantees `data` points at `length`
+                // valid bytes for the duration of this callback.
                 let bytes = unsafe { std::slice::from_raw_parts(data.cast::<u8>(), length) };
                 self.ivars().buffer.borrow_mut().extend_from_slice(bytes);
                 self.drain_reads();
             }
 
             #[unsafe(method(rfcommChannelOpenComplete:status:))]
-            fn open_complete(
-                &self,
-                channel: Option<&IOBluetoothRFCOMMChannel>,
-                status: core::ffi::c_int,
-            ) {
-                let _ = channel;
+            fn open_complete(&self, _channel: &IOBluetoothRFCOMMChannel, status: i32) {
                 if status != K_IO_RETURN_SUCCESS {
                     self.ivars().closed.set(true);
                     self.fail_all(&BluetoothError::ConnectionFailed(format!(
-                        "RFCOMM channel closed with status {status}"
+                        "RFCOMM channel open failed ({status})"
                     )));
                 }
             }
 
             #[unsafe(method(rfcommChannelClosed:))]
-            fn channel_closed(&self, _channel: Option<&IOBluetoothRFCOMMChannel>) {
+            fn channel_closed(&self, _channel: &IOBluetoothRFCOMMChannel) {
                 self.ivars().closed.set(true);
                 self.fail_all(&BluetoothError::ConnectionFailed(
                     "RFCOMM channel closed".into(),
@@ -1243,9 +1278,9 @@ mod classic {
             #[unsafe(method(rfcommChannelWriteComplete:refcon:status:))]
             fn write_complete(
                 &self,
-                _channel: Option<&IOBluetoothRFCOMMChannel>,
+                _channel: &IOBluetoothRFCOMMChannel,
                 refcon: *mut c_void,
-                status: core::ffi::c_int,
+                status: i32,
             ) {
                 self.finish_write(refcon, status, None);
             }
@@ -1253,9 +1288,9 @@ mod classic {
             #[unsafe(method(rfcommChannelWriteComplete:refcon:status:bytesWritten:))]
             fn write_complete_bytes(
                 &self,
-                _channel: Option<&IOBluetoothRFCOMMChannel>,
+                _channel: &IOBluetoothRFCOMMChannel,
                 refcon: *mut c_void,
-                status: core::ffi::c_int,
+                status: i32,
                 bytes_written: usize,
             ) {
                 self.finish_write(refcon, status, Some(bytes_written));
@@ -1264,63 +1299,63 @@ mod classic {
     );
 
     impl SppStream {
-        fn spawn(channel: Retained<IOBluetoothRFCOMMChannel>) -> Retained<Self> {
-            let mtm = MainThreadMarker::new().expect("on main queue");
+        fn spawn(
+            mtm: MainThreadMarker,
+            channel: Retained<IOBluetoothRFCOMMChannel>,
+        ) -> Retained<Self> {
             let this = Self::alloc(mtm).set_ivars(SppStreamIvars {
                 channel: RefCell::new(Some(channel)),
                 buffer: RefCell::new(Vec::new()),
                 pending_reads: RefCell::new(VecDeque::new()),
                 pending_writes: RefCell::new(HashMap::new()),
-                next_write: Cell::new(1),
+                next_write: Cell::new(0),
                 closed: Cell::new(false),
             });
-            // SAFETY: `init` on a plain NSObject subclass.
             unsafe { msg_send![super(this), init] }
         }
 
+        /// Serve buffered data to pending reads, in order.
         fn drain_reads(&self) {
             loop {
-                let entry = {
-                    let mut reads = self.ivars().pending_reads.borrow_mut();
-                    if self.ivars().buffer.borrow().is_empty() {
-                        None
-                    } else {
-                        reads.pop_front()
-                    }
+                let mut buffer = self.ivars().buffer.borrow_mut();
+                let mut pending = self.ivars().pending_reads.borrow_mut();
+                let Some(&(max, _)) = pending.front() else {
+                    return;
                 };
-                let Some((max, tx)) = entry else { break };
-                let chunk = {
-                    let mut buffer = self.ivars().buffer.borrow_mut();
-                    let n = buffer.len().min(max);
-                    buffer.drain(..n).collect::<Vec<u8>>()
-                };
+                if buffer.is_empty() {
+                    return;
+                }
+                let take = buffer.len().min(max);
+                let chunk: Vec<u8> = buffer.drain(..take).collect();
+                let (_, tx) = pending.pop_front().expect("front read exists");
+                drop(pending);
+                drop(buffer);
                 let _ = tx.send(Ok(chunk));
             }
         }
 
-        fn enqueue_read(&self, max: usize, tx: oneshot::Sender<Result<Vec<u8>, BluetoothError>>) {
+        /// Queue a read of up to `max` bytes; serves from the buffer first.
+        fn enqueue_read(&self, max: usize, tx: ReadTx) {
             if self.ivars().closed.get() {
                 let _ = tx.send(Err(BluetoothError::ConnectionFailed(
                     "RFCOMM channel closed".into(),
                 )));
                 return;
             }
-            let chunk = {
-                let mut buffer = self.ivars().buffer.borrow_mut();
-                (!buffer.is_empty()).then(|| {
-                    let n = buffer.len().min(max);
-                    buffer.drain(..n).collect::<Vec<u8>>()
-                })
-            };
-            match chunk {
-                Some(chunk) => {
-                    let _ = tx.send(Ok(chunk));
-                }
-                None => self.ivars().pending_reads.borrow_mut().push_back((max, tx)),
+            let mut buffer = self.ivars().buffer.borrow_mut();
+            if buffer.is_empty() {
+                drop(buffer);
+                self.ivars().pending_reads.borrow_mut().push_back((max, tx));
+            } else {
+                let take = buffer.len().min(max);
+                let chunk: Vec<u8> = buffer.drain(..take).collect();
+                drop(buffer);
+                let _ = tx.send(Ok(chunk));
             }
         }
 
-        fn enqueue_write(&self, data: &[u8], tx: oneshot::Sender<Result<usize, BluetoothError>>) {
+        /// Start an async RFCOMM write; the token key is the API's `refcon`.
+        fn enqueue_write(&self, data: &[u8], tx: WriteTx) {
             if self.ivars().closed.get() {
                 let _ = tx.send(Err(BluetoothError::ConnectionFailed(
                     "RFCOMM channel closed".into(),
@@ -1328,72 +1363,71 @@ mod classic {
                 return;
             }
             let Ok(length) = u16::try_from(data.len()) else {
-                let _ = tx.send(Err(BluetoothError::ConnectionFailed(
+                let _ = tx.send(Err(BluetoothError::GattError(
                     "write payload exceeds RFCOMM limits".into(),
                 )));
                 return;
             };
-            // SAFETY: `dataWithBytes` copies `data` into a live NSData that
-            // stays retained in `pending_writes` until the write completes.
-            let ns_data = unsafe {
-                NSData::dataWithBytes_length(data.as_ptr().cast::<c_void>().cast_mut(), data.len())
-            };
+            // SAFETY: `dataWithBytes` copies the payload immediately.
+            let ns_data =
+                unsafe { NSData::dataWithBytes_length(data.as_ptr().cast::<c_void>(), data.len()) };
             let token = self.ivars().next_write.get();
             self.ivars().next_write.set(token + 1);
             self.ivars()
                 .pending_writes
                 .borrow_mut()
-                .insert(token, (tx, ns_data.clone()));
-            let channel = self.ivars().channel.borrow();
-            let Some(channel) = channel.as_ref() else {
-                self.ivars().pending_writes.borrow_mut().remove(&token);
-                return;
-            };
-            // SAFETY: `token` is the refcon; `ns_data` is retained until the
-            // write-completion callback.
+                .insert(token, (tx, ns_data));
+            let pending = self.ivars().pending_writes.borrow();
+            let (_, ns_data) = pending.get(&token).expect("write just inserted");
             let status = unsafe {
-                channel.writeAsync_length_refcon(
-                    ns_data
-                        .as_bytes_unchecked()
-                        .as_ptr()
-                        .cast::<c_void>()
-                        .cast_mut(),
-                    length,
-                    token as *mut c_void,
-                )
+                self.ivars()
+                    .channel
+                    .borrow()
+                    .as_ref()
+                    .expect("channel stored at spawn")
+                    .writeAsync_length_refcon(
+                        // SAFETY: the NSData stays retained in
+                        // `pending_writes` until `writeComplete` fires.
+                        ns_data
+                            .as_bytes_unchecked()
+                            .as_ptr()
+                            .cast::<c_void>()
+                            .cast_mut(),
+                        length,
+                        token as *mut c_void,
+                    )
             };
-            if status != K_IO_RETURN_SUCCESS
-                && let Some((tx, _)) = self.ivars().pending_writes.borrow_mut().remove(&token)
-            {
-                let _ = tx.send(Err(BluetoothError::ConnectionFailed(format!(
-                    "RFCOMM write failed: {status}"
-                ))));
-            }
-        }
-
-        fn finish_write(
-            &self,
-            refcon: *mut c_void,
-            status: core::ffi::c_int,
-            bytes_written: Option<usize>,
-        ) {
-            let Some((tx, data)) = self
-                .ivars()
-                .pending_writes
-                .borrow_mut()
-                .remove(&(refcon as usize))
-            else {
-                return;
-            };
+            drop(pending);
             if status != K_IO_RETURN_SUCCESS {
+                let (tx, _) = self
+                    .ivars()
+                    .pending_writes
+                    .borrow_mut()
+                    .remove(&token)
+                    .expect("write just inserted");
                 let _ = tx.send(Err(BluetoothError::ConnectionFailed(format!(
-                    "RFCOMM write failed: {status}"
+                    "writeAsync failed ({status})"
                 ))));
-                return;
             }
-            let _ = tx.send(Ok(bytes_written.unwrap_or_else(|| data.length())));
         }
 
+        /// Resolve the write whose `refcon` token just completed.
+        fn finish_write(&self, refcon: *mut c_void, status: i32, bytes_written: Option<usize>) {
+            let token = refcon as usize;
+            let Some((tx, data)) = self.ivars().pending_writes.borrow_mut().remove(&token) else {
+                return;
+            };
+            let result = if status == K_IO_RETURN_SUCCESS {
+                Ok(bytes_written.unwrap_or_else(|| data.length()))
+            } else {
+                Err(BluetoothError::ConnectionFailed(format!(
+                    "RFCOMM write failed ({status})"
+                )))
+            };
+            let _ = tx.send(result);
+        }
+
+        /// Fail every pending read/write with `error`'s message.
         fn fail_all(&self, error: &BluetoothError) {
             let message = error.to_string();
             for (_, tx) in self.ivars().pending_reads.borrow_mut().drain(..) {
@@ -1411,223 +1445,130 @@ mod classic {
                     "RFCOMM channel already closed".into(),
                 ));
             }
-            let status = self.ivars().channel.borrow_mut().take().map_or(
-                K_IO_RETURN_SUCCESS,
-                // SAFETY: `closeChannel` on a live channel.
-                |channel| unsafe { channel.closeChannel() },
-            );
+            let status =
+                self.ivars()
+                    .channel
+                    .borrow_mut()
+                    .take()
+                    .map_or(K_IO_RETURN_SUCCESS, |channel| {
+                        // SAFETY: `closeChannel` on a live channel.
+                        unsafe { channel.closeChannel() }
+                    });
             self.fail_all(&BluetoothError::ConnectionFailed(
                 "RFCOMM channel closed".into(),
             ));
-            if status != K_IO_RETURN_SUCCESS {
-                return Err(BluetoothError::Platform(format!(
-                    "RFCOMM close failed: {status}"
-                )));
+            if status == K_IO_RETURN_SUCCESS {
+                Ok(())
+            } else {
+                Err(BluetoothError::Platform(format!(
+                    "closeChannel failed ({status})"
+                )))
             }
-            Ok(())
         }
     }
 
-    /// Parse `4`, `8` or `32` hex digits into an `IOBluetoothSDPUUID` —
-    /// Parses an SPP UUID string (16/32/128-bit hex) into an `IOBluetoothSDPUUID`.
-    fn parse_sdp_uuid(uuid: &str) -> Option<Retained<IOBluetoothSDPUUID>> {
-        let cleaned: String = uuid.chars().filter(char::is_ascii_hexdigit).collect();
-        let bytes = match cleaned.len() {
-            4 => u16::from_str_radix(&cleaned, 16)
-                .ok()?
-                .to_be_bytes()
-                .to_vec(),
-            8 => u32::from_str_radix(&cleaned, 16)
-                .ok()?
-                .to_be_bytes()
-                .to_vec(),
+    /// Parse a 16/32/128-bit hex SPP UUID into an `IOBluetoothSDPUUID`.
+    pub fn parse_sdp_uuid(uuid: &str) -> Option<Retained<IOBluetoothSDPUUID>> {
+        let hex: String = uuid.chars().filter(char::is_ascii_hexdigit).collect();
+        let bytes = match hex.len() {
+            4 => u16::from_str_radix(&hex, 16).ok()?.to_be_bytes().to_vec(),
+            8 => u32::from_str_radix(&hex, 16).ok()?.to_be_bytes().to_vec(),
             32 => {
-                let mut bytes = Vec::with_capacity(16);
+                let mut out = Vec::with_capacity(16);
                 for i in (0..32).step_by(2) {
-                    bytes.push(u8::from_str_radix(&cleaned[i..i + 2], 16).ok()?);
+                    out.push(u8::from_str_radix(&hex[i..i + 2], 16).ok()?);
                 }
-                bytes
+                out
             }
             _ => return None,
         };
-        // SAFETY: `uuidWithBytes:length:` reads `bytes.len()` bytes.
+        // SAFETY: `uuidWithBytes` copies `bytes` immediately.
         unsafe {
             IOBluetoothSDPUUID::uuidWithBytes_length(
-                bytes.as_ptr().cast(),
-                u32::try_from(bytes.len()).ok()?,
+                bytes.as_ptr().cast::<c_void>(),
+                u32::try_from(bytes.len()).expect("uuid length fits u32"),
             )
         }
     }
 
-    pub fn start_discovery() -> Result<(usize, Receiver<ClassicDevice>), BluetoothError> {
-        let (tx, rx) = async_channel::bounded(64);
-        let result = on_main(move || {
-            let delegate = Inquiry::spawn(tx);
-            // SAFETY: `initWithDelegate:` is the documented inquiry
-            // initializer; the delegate conforms to
-            // `IOBluetoothDeviceInquiryDelegate` and is owned via the raw
-            // retain returned below.
-            let inquiry = unsafe {
-                IOBluetoothDeviceInquiry::initWithDelegate(
-                    msg_send![IOBluetoothDeviceInquiry::class(), alloc],
-                    Some(as_any_object(&*delegate)),
-                )
-            };
-            let Some(inquiry) = inquiry else {
-                return Err(BluetoothError::Platform(
-                    "IOBluetoothDeviceInquiry unavailable".into(),
-                ));
-            };
-            // SAFETY: classic-only inquiry search configuration.
-            unsafe {
-                inquiry.setSearchType(IOBluetoothDeviceSearchTypesBits::Classic.0);
-                inquiry.setUpdateNewDeviceNames(false);
-            }
-            // SAFETY: `start` on a configured inquiry.
-            let status = unsafe { inquiry.start() };
-            if status != K_IO_RETURN_SUCCESS {
-                return Err(BluetoothError::Platform(format!(
-                    "Bluetooth inquiry failed to start: {status}"
-                )));
-            }
-            *delegate.ivars().inquiry.borrow_mut() = Some(inquiry);
-            // SAFETY: `into_raw` holds the session retain until
-            // `stop_discovery`.
-            Ok(Retained::into_raw(delegate) as usize)
-        })?;
-        Ok((result, rx))
-    }
-
-    /// Stop + release the inquiry delegate whose address is `addr`.
-    pub fn stop_discovery(addr: usize) {
-        dispatch_main(move || {
-            // SAFETY: address produced by `Retained::into_raw` in
-            // `start_discovery`.
-            let delegate = unsafe {
-                Retained::from_raw(addr as *mut Inquiry)
-                    .expect("inquiry delegate retain held by inner")
-            };
-            if let Some(inquiry) = delegate.ivars().inquiry.borrow_mut().take() {
-                // SAFETY: `stop` on a live inquiry.
-                unsafe { inquiry.stop() };
-            }
-            delegate.ivars().tx.borrow_mut().take();
-        });
-    }
-
-    pub fn paired_devices() -> Vec<ClassicDevice> {
-        on_main(|| {
-            // SAFETY: `pairedDevices` is the documented class accessor.
-            let devices = unsafe { IOBluetoothDevice::pairedDevices() };
-            let Some(devices) = devices else {
-                return Vec::new();
-            };
-            devices
-                .iter()
-                .filter_map(|object| {
-                    object
-                        .downcast_ref::<IOBluetoothDevice>()
-                        .map(classic_device)
-                })
-                .collect()
-        })
-    }
-
-    /// Look up the device, query its SDP record for `uuid`, open the RFCOMM
-    /// channel and resolve with the `SppStream` delegate's address.
+    /// Kick an SPP connect on the main queue: SDP query for the UUID, then
+    /// RFCOMM open — the connector resolves the pending oneshot.
+    ///
+    /// # Safety
+    /// Calls `deviceWithAddressString`/`performSDPQuery` — main thread only.
     pub fn connect_spp(
+        mtm: MainThreadMarker,
         device_id: &DeviceId,
         uuid: &Uuid,
-        tx: oneshot::Sender<Result<usize, BluetoothError>>,
+        tx: oneshot::Sender<Result<StreamOwner, BluetoothError>>,
     ) {
         let address = device_id.as_str().to_string();
         let uuid_string = uuid.as_str().to_string();
-        on_main(move || {
-            let mut tx = Some(tx);
-            let fail =
-                |error: BluetoothError,
-                 tx: &mut Option<oneshot::Sender<Result<usize, BluetoothError>>>| {
-                    if let Some(tx) = tx.take() {
-                        let _ = tx.send(Err(error));
-                    }
-                };
-            let ns_address = NSString::from_str(&address);
-            // SAFETY: `deviceWithAddressString` returns nil for unknown
-            // addresses.
-            let device = unsafe { IOBluetoothDevice::deviceWithAddressString(Some(&ns_address)) };
-            let Some(device) = device else {
-                fail(
-                    BluetoothError::ConnectionFailed(format!(
-                        "Classic Bluetooth device not found: {address}"
-                    )),
-                    &mut tx,
-                );
-                return;
-            };
-            let Some(sdp_uuid) = parse_sdp_uuid(&uuid_string) else {
-                fail(
-                    BluetoothError::ConnectionFailed("Invalid SPP UUID".into()),
-                    &mut tx,
-                );
-                return;
-            };
-            let Some(tx) = tx.take() else { return };
-            let connector = Connector::spawn(sdp_uuid.clone(), tx);
-            *connector.ivars().keep_alive.borrow_mut() = Some(connector.clone());
-            let uuids = NSArray::from_retained_slice(&[sdp_uuid]);
-            // SAFETY: `NSArray<IOBluetoothSDPUUID>` → `NSArray<AnyObject>`
-            // is an element-type upcast of an immutable array.
-            let uuids: &NSArray = unsafe { &*(&raw const *uuids).cast() };
-            // SAFETY: `performSDPQuery:uuids:` reports completion on the
-            // connector via `sdpQueryComplete:status:`.
-            let status = unsafe {
-                device.performSDPQuery_uuids(Some(as_any_object(&*connector)), Some(uuids))
-            };
-            if status != K_IO_RETURN_SUCCESS {
-                if let Some(tx) = connector.ivars().tx.borrow_mut().take() {
-                    let _ = tx.send(Err(BluetoothError::ConnectionFailed(format!(
-                        "SDP query failed to start: {status}"
-                    ))));
-                }
-                connector.ivars().keep_alive.borrow_mut().take();
-            }
-        });
-    }
-
-    /// `SppStream` is private to this module; the `SppStreamInner` entry
-    /// points go through these thin wrappers around the stream's methods.
-    pub fn spp_read(addr: usize, max: usize, tx: oneshot::Sender<Result<Vec<u8>, BluetoothError>>) {
-        // SAFETY: address produced by `Retained::into_raw` when the channel
-        // opened; the stream lives as long as `SppStreamInner`.
-        unsafe { from_addr::<SppStream>(addr) }.enqueue_read(max, tx);
-    }
-
-    pub fn spp_write(addr: usize, payload: &[u8], tx: WriteTx) {
-        // SAFETY: see `spp_read`.
-        unsafe { from_addr::<SppStream>(addr) }.enqueue_write(payload, tx);
-    }
-
-    /// Reclaim the stream retain, close the channel and fail pendings.
-    pub fn spp_close(addr: usize) {
-        // SAFETY: reclaims the retain created by `into_raw` on open.
-        let stream = unsafe {
-            Retained::from_raw(addr as *mut SppStream).expect("stream retain held by inner")
+        let ns_address = NSString::from_str(&address);
+        // SAFETY: `deviceWithAddressString` returns nil for unknown devices.
+        let device = unsafe { IOBluetoothDevice::deviceWithAddressString(Some(&ns_address)) };
+        let Some(device) = device else {
+            let _ = tx.send(Err(BluetoothError::ConnectionFailed(format!(
+                "Classic Bluetooth device not found ({address})"
+            ))));
+            return;
         };
-        let _ = stream.close_stream();
+        let Some(sdp_uuid) = parse_sdp_uuid(&uuid_string) else {
+            let _ = tx.send(Err(BluetoothError::Platform(format!(
+                "Invalid SPP UUID ({uuid_string})"
+            ))));
+            return;
+        };
+        let connector = Connector::spawn(mtm, sdp_uuid, tx);
+        *connector.ivars().keep_alive.borrow_mut() = Some(connector.clone());
+        // SAFETY: `Retained::cast` performs a checked-class upcast —
+        // every `IOBluetoothSDPUUID` is an `AnyObject`.
+        let uuids = NSArray::from_retained_slice(&[unsafe {
+            Retained::cast_unchecked::<AnyObject>(
+                connector
+                    .ivars()
+                    .sdp_uuid
+                    .borrow()
+                    .clone()
+                    .expect("uuid stored at spawn"),
+            )
+        }]);
+        // SAFETY: `performSDPQuery` kicks the SDP query; `self` (the
+        // connector) is the async-callback target on the main queue.
+        let status = unsafe { device.performSDPQuery_uuids(Some(&***connector), Some(&uuids)) };
+        if status != K_IO_RETURN_SUCCESS {
+            let _ = connector.ivars().keep_alive.borrow_mut().take();
+            connector.finish(Err(BluetoothError::ConnectionFailed(format!(
+                "performSDPQuery failed ({status})"
+            ))));
+        }
     }
-}
 
-/// `ClassicBluetooth` session state: the active inquiry delegate's address
-/// (macOS only).
-pub struct ClassicBluetoothInner {
-    #[cfg(target_os = "macos")]
-    inquiry: Mutex<Option<usize>>,
-}
+    /// Serve a read on a live stream (main thread).
+    pub fn spp_read(stream: &StreamOwner, max: usize, tx: ReadTx, mtm: MainThreadMarker) {
+        stream.get(mtm).enqueue_read(max, tx);
+    }
 
-impl std::fmt::Debug for ClassicBluetoothInner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ClassicBluetoothInner")
-            .finish_non_exhaustive()
+    /// Kick a write on a live stream (main thread).
+    pub fn spp_write(stream: &StreamOwner, payload: &[u8], tx: WriteTx, mtm: MainThreadMarker) {
+        stream.get(mtm).enqueue_write(payload, tx);
+    }
+
+    /// Close a live stream (main thread); drops the bound right after.
+    pub fn spp_close(stream: StreamOwner, mtm: MainThreadMarker) {
+        let _ = stream.get(mtm).close_stream();
+        drop(stream);
+    }
+
+    /// Stop a running inquiry (main thread); drops the bound right after.
+    pub fn stop_inquiry(inquiry: MainThreadBound<Retained<Inquiry>>, mtm: MainThreadMarker) {
+        let inquiry = inquiry.into_inner(mtm);
+        if let Some(object) = inquiry.ivars().inquiry.borrow_mut().take() {
+            // SAFETY: `stop` on a live inquiry.
+            unsafe { object.stop() };
+        }
+        inquiry.ivars().tx.borrow_mut().take();
+        drop(inquiry);
     }
 }
 
@@ -1636,7 +1577,20 @@ const fn ios_classic_unavailable<T>() -> Result<T, BluetoothError> {
     Err(BluetoothError::NotAvailable)
 }
 
+pub struct ClassicBluetoothInner {
+    #[cfg(target_os = "macos")]
+    inquiry: Mutex<Option<MainThreadBound<Retained<classic::Inquiry>>>>,
+}
+
+impl core::fmt::Debug for ClassicBluetoothInner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ClassicBluetoothInner")
+            .finish_non_exhaustive()
+    }
+}
+
 impl ClassicBluetoothInner {
+    /// Fail fast unless the adapter is powered on.
     #[cfg_attr(
         target_os = "ios",
         expect(clippy::unused_async, reason = "iOS stub returns immediately")
@@ -1648,21 +1602,23 @@ impl ClassicBluetoothInner {
         }
         #[cfg(target_os = "macos")]
         {
-            let state = adapter_state().await?;
-            if state != AdapterState::PoweredOn {
-                return Err(BluetoothError::NotAvailable);
+            match adapter_state().await? {
+                AdapterState::PoweredOn => Ok(Self {
+                    inquiry: Mutex::new(None),
+                }),
+                AdapterState::PoweredOff => Err(BluetoothError::PoweredOff),
+                _ => Err(BluetoothError::NotAvailable),
             }
-            Ok(Self {
-                inquiry: Mutex::new(None),
-            })
         }
     }
 
+    /// Start a classic inquiry; the stream yields found devices until
+    /// `stop_discovery`.
     #[cfg_attr(
         target_os = "ios",
-        expect(clippy::missing_const_for_fn, reason = "macOS cfg body is non-const")
+        expect(clippy::unused_async, reason = "iOS stub returns immediately")
     )]
-    pub fn start_discovery(&self) -> Result<Receiver<ClassicDevice>, BluetoothError> {
+    pub async fn start_discovery(&self) -> Result<Receiver<ClassicDevice>, BluetoothError> {
         #[cfg(target_os = "ios")]
         {
             let _ = self;
@@ -1671,12 +1627,20 @@ impl ClassicBluetoothInner {
         #[cfg(target_os = "macos")]
         {
             self.stop_discovery();
-            let (addr, rx) = classic::start_discovery()?;
-            *self.inquiry.lock().expect("inquiry mutex poisoned") = Some(addr);
+            let (tx, rx) = async_channel::unbounded();
+            *self.inquiry.lock().expect("inquiry mutex") =
+                hop(|mtm| classic::start_discovery(mtm, tx)).await.ok();
+            if self.inquiry.lock().expect("inquiry mutex").is_none() {
+                return Err(BluetoothError::Platform(
+                    "IOBluetoothDeviceInquiry start failed".into(),
+                ));
+            }
             Ok(rx)
         }
     }
 
+    /// Stop the running inquiry (if any) and release its delegate on the
+    /// main queue.
     #[cfg_attr(
         target_os = "ios",
         expect(clippy::missing_const_for_fn, reason = "macOS cfg body is non-const")
@@ -1688,29 +1652,23 @@ impl ClassicBluetoothInner {
         }
         #[cfg(target_os = "macos")]
         {
-            let addr = self.inquiry.lock().expect("inquiry mutex poisoned").take();
-            if let Some(addr) = addr {
-                classic::stop_discovery(addr);
+            let inquiry = self.inquiry.lock().expect("inquiry mutex").take();
+            if let Some(inquiry) = inquiry {
+                dispatch_main(move || {
+                    let mtm = MainThreadMarker::new().expect("on the main queue");
+                    classic::stop_inquiry(inquiry, mtm);
+                });
             }
         }
     }
 
-    #[cfg_attr(
-        target_os = "macos",
-        expect(
-            clippy::unnecessary_wraps,
-            reason = "iOS cfg always errors; kept fallible for parity"
-        )
-    )]
-    #[cfg_attr(
-        target_os = "macos",
-        expect(clippy::unused_self, reason = "method kept for API symmetry")
-    )]
+    /// List paired/bonded devices (main-queue hop since it touches
+    /// `IOBluetooth` objects).
     #[cfg_attr(
         target_os = "ios",
-        expect(clippy::missing_const_for_fn, reason = "macOS cfg body is non-const")
+        expect(clippy::unused_async, reason = "iOS stub returns immediately")
     )]
-    pub fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {
+    pub async fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {
         #[cfg(target_os = "ios")]
         {
             let _ = self;
@@ -1718,10 +1676,12 @@ impl ClassicBluetoothInner {
         }
         #[cfg(target_os = "macos")]
         {
-            Ok(classic::paired_devices())
+            Ok(hop(|_mtm| classic::paired_devices()).await)
         }
     }
 
+    /// Drive the SDP→RFCOMM-open chain on the main queue; resolves with the
+    /// live stream once `rfcommChannelOpenComplete` fires.
     #[cfg_attr(
         target_os = "ios",
         expect(clippy::unused_async, reason = "iOS stub returns immediately")
@@ -1738,12 +1698,16 @@ impl ClassicBluetoothInner {
         }
         #[cfg(target_os = "macos")]
         {
-            let _ = self;
+            let device_id = device_id.clone();
+            let uuid = uuid.clone();
             let (tx, rx) = oneshot::channel();
-            classic::connect_spp(device_id, uuid, tx);
-            let stream = rx.await.map_err(|_| {
-                BluetoothError::ConnectionFailed("classic SPP connect callback dropped".into())
-            })??;
+            hop(move |mtm| {
+                classic::connect_spp(mtm, &device_id, &uuid, tx);
+            })
+            .await;
+            let stream = rx
+                .await
+                .map_err(|_| BluetoothError::ConnectionFailed("callback dropped".into()))??;
             Ok(SppStreamInner { stream })
         }
     }
@@ -1753,27 +1717,31 @@ impl Drop for ClassicBluetoothInner {
     fn drop(&mut self) {
         #[cfg(target_os = "macos")]
         {
-            let addr = self.inquiry.lock().expect("inquiry mutex poisoned").take();
-            if let Some(addr) = addr {
-                classic::stop_discovery(addr);
+            let inquiry = self.inquiry.get_mut().expect("inquiry mutex").take();
+            if let Some(inquiry) = inquiry {
+                dispatch_main(move || {
+                    let mtm = MainThreadMarker::new().expect("on the main queue");
+                    classic::stop_inquiry(inquiry, mtm);
+                });
             }
         }
     }
 }
 
-/// `SppStream` session state: the stream delegate's address (macOS only).
+/// Live RFCOMM stream; the `SppStream` object lives on the main queue.
 pub struct SppStreamInner {
     #[cfg(target_os = "macos")]
-    stream: usize,
+    stream: StreamOwner,
 }
 
-impl std::fmt::Debug for SppStreamInner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for SppStreamInner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SppStreamInner").finish_non_exhaustive()
     }
 }
 
 impl SppStreamInner {
+    /// Read up to `buf.len()` bytes; resolves as soon as any data arrives.
     #[cfg_attr(
         target_os = "ios",
         expect(clippy::unused_async, reason = "iOS stub returns immediately")
@@ -1786,19 +1754,22 @@ impl SppStreamInner {
         }
         #[cfg(target_os = "macos")]
         {
-            let stream = self.stream;
+            let stream = Arc::clone(&self.stream);
             let max = buf.len();
             let (tx, rx) = oneshot::channel();
-            dispatch_main(move || classic::spp_read(stream, max, tx));
-            let data = rx.await.map_err(|_| {
-                BluetoothError::ConnectionFailed("classic SPP read callback dropped".into())
-            })??;
-            let n = data.len().min(buf.len());
-            buf[..n].copy_from_slice(&data[..n]);
-            Ok(n)
+            hop(move |mtm| {
+                classic::spp_read(&stream, max, tx, mtm);
+            })
+            .await;
+            let chunk = rx
+                .await
+                .map_err(|_| BluetoothError::ConnectionFailed("callback dropped".into()))??;
+            buf[..chunk.len()].copy_from_slice(&chunk);
+            Ok(chunk.len())
         }
     }
 
+    /// Write `data`; resolves when the channel reports the write complete.
     #[cfg_attr(
         target_os = "ios",
         expect(clippy::unused_async, reason = "iOS stub returns immediately")
@@ -1811,16 +1782,19 @@ impl SppStreamInner {
         }
         #[cfg(target_os = "macos")]
         {
-            let stream = self.stream;
+            let stream = Arc::clone(&self.stream);
             let payload = data.to_vec();
             let (tx, rx) = oneshot::channel();
-            dispatch_main(move || classic::spp_write(stream, &payload, tx));
-            rx.await.map_err(|_| {
-                BluetoothError::ConnectionFailed("classic SPP write callback dropped".into())
-            })?
+            hop(move |mtm| {
+                classic::spp_write(&stream, &payload, tx, mtm);
+            })
+            .await;
+            rx.await
+                .map_err(|_| BluetoothError::ConnectionFailed("callback dropped".into()))?
         }
     }
 
+    /// Close the channel on the main queue and release the stream.
     pub fn close(self) {
         #[cfg(target_os = "ios")]
         {
@@ -1828,11 +1802,12 @@ impl SppStreamInner {
         }
         #[cfg(target_os = "macos")]
         {
-            let stream = self.stream;
-            // The retain is reclaimed on the main queue; `self` must not be
-            // dropped (its `Drop` would reclaim it a second time).
-            core::mem::forget(self);
-            dispatch_main(move || classic::spp_close(stream));
+            let stream = Arc::clone(&self.stream);
+            dispatch_main(move || {
+                let mtm = MainThreadMarker::new().expect("on the main queue");
+                classic::spp_close(stream, mtm);
+            });
+            // `self` drops here without touching the stream bound again.
         }
     }
 }
@@ -1841,8 +1816,11 @@ impl Drop for SppStreamInner {
     fn drop(&mut self) {
         #[cfg(target_os = "macos")]
         {
-            let stream = self.stream;
-            dispatch_main(move || classic::spp_close(stream));
+            let stream = Arc::clone(&self.stream);
+            dispatch_main(move || {
+                let mtm = MainThreadMarker::new().expect("on the main queue");
+                classic::spp_close(stream, mtm);
+            });
         }
     }
 }

@@ -327,15 +327,11 @@ impl ClassicBluetooth {
     ///
     /// # Errors
     /// Returns error if discovery cannot be started.
-    #[expect(
-        clippy::unused_async,
-        reason = "API parity: other platform impls complete asynchronously"
-    )]
     pub async fn start_discovery(
         &self,
     ) -> Result<impl futures_core::Stream<Item = ClassicDevice> + Send + 'static, BluetoothError>
     {
-        self.inner.start_discovery()
+        self.inner.start_discovery().await
     }
 
     /// Stop device discovery.
@@ -351,12 +347,8 @@ impl ClassicBluetooth {
     ///
     /// # Errors
     /// Returns error if the list cannot be retrieved.
-    #[expect(
-        clippy::unused_async,
-        reason = "API parity: other platform impls complete asynchronously"
-    )]
     pub async fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {
-        self.inner.paired_devices()
+        self.inner.paired_devices().await
     }
 
     /// Open an SPP (Serial Port Profile) connection to a device.

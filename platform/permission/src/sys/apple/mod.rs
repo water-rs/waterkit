@@ -23,9 +23,7 @@ use objc2_av_foundation::{
 use objc2_contacts::{CNAuthorizationStatus, CNContactStore, CNEntityType};
 use objc2_core_location::{CLAuthorizationStatus, CLLocationManager, CLLocationManagerDelegate};
 use objc2_event_kit::{EKAuthorizationStatus, EKEntityType, EKEventStore};
-use objc2_foundation::{
-    NSBundle, NSError, NSObjectProtocol, NSOperatingSystemVersion, NSProcessInfo, NSString,
-};
+use objc2_foundation::{NSError, NSObjectProtocol, NSOperatingSystemVersion, NSProcessInfo};
 use objc2_photos::{PHAuthorizationStatus, PHPhotoLibrary};
 
 use crate::{Permission, PermissionError, PermissionStatus};
@@ -230,20 +228,6 @@ fn check_calendar_permission() -> PermissionStatus {
 
 // MARK: - Requests
 
-/// The `Info.plist` usage key the pending access request requires.
-///
-/// Fails fast: without the key the framework answers the request with an
-/// opaque XPC error instead of prompting.
-fn require_usage_description(key: &'static str) {
-    let present = NSBundle::mainBundle()
-        .objectForInfoDictionaryKey(&NSString::from_str(key))
-        .is_some();
-    assert!(
-        present,
-        "main bundle Info.plist is missing `{key}`; the permission request          cannot run without it — add `{key}` to the app's Info.plist"
-    );
-}
-
 /// `AVCaptureDevice.requestAccess(for:)` for `media_type`; the handler runs
 /// on an arbitrary queue chosen by `AVFoundation`.
 fn request_av_permission(media_type: &'static AVMediaType, sender: RequestSender) {
@@ -275,7 +259,10 @@ fn request_photos_permission(sender: RequestSender) {
 
 /// `CNContactStore.requestAccess(for: .contacts)`.
 fn request_contacts_permission(sender: RequestSender) {
-    require_usage_description("NSContactsUsageDescription");
+    waterkit_core::apple::require_usage_description(
+        "NSContactsUsageDescription",
+        "contacts access",
+    );
     // SAFETY: `CNContactStore` is `[[CNContactStore alloc] init]`.
     let store = unsafe { CNContactStore::new() };
     let pending = RefCell::new(Some(sender));
@@ -316,11 +303,14 @@ fn has_full_access_events() -> bool {
 fn request_calendar_permission(sender: RequestSender) {
     // The usage key this OS version's request needs, matching
     // `has_full_access_events`.
-    require_usage_description(if has_full_access_events() {
-        "NSCalendarsFullAccessUsageDescription"
-    } else {
-        "NSCalendarsUsageDescription"
-    });
+    waterkit_core::apple::require_usage_description(
+        if has_full_access_events() {
+            "NSCalendarsFullAccessUsageDescription"
+        } else {
+            "NSCalendarsUsageDescription"
+        },
+        "calendar access",
+    );
     let pending = RefCell::new(Some(sender));
     // SAFETY: `EKEventStore` is `[[EKEventStore alloc] init]`. The
     // completion block is retained by the framework until the request

@@ -8,6 +8,7 @@
 use dispatch2::DispatchQueue;
 use futures::channel::oneshot;
 use objc2::MainThreadMarker;
+use objc2_foundation::{NSBundle, NSString};
 
 /// Runs `work` on the main thread and returns its result.
 ///
@@ -38,4 +39,29 @@ where
     receiver
         .await
         .expect("the main queue runs every block dispatched to it")
+}
+
+/// Fails fast when the main bundle's `Info.plist` lacks the usage
+/// description `key` a privacy access request needs.
+///
+/// Keys such as `NSCalendarsUsageDescription` or
+/// `NSContactsUsageDescription` are mandatory: without one the framework
+/// answers the request with an opaque XPC error instead of prompting.
+/// `purpose` names what is being requested (for example `"calendar
+/// access"`) and is included in the panic message; each caller picks the
+/// key its OS version requires.
+///
+/// # Panics
+///
+/// Panics, naming `key`, when the main bundle's `Info.plist` does not
+/// contain it.
+#[track_caller]
+pub fn require_usage_description(key: &str, purpose: &str) {
+    let present = NSBundle::mainBundle()
+        .objectForInfoDictionaryKey(&NSString::from_str(key))
+        .is_some();
+    assert!(
+        present,
+        "main bundle Info.plist is missing `{key}`; {purpose} cannot be requested without it — add `{key}` to the app's Info.plist"
+    );
 }

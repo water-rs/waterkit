@@ -23,7 +23,7 @@ waterkit-fs = { workspace = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 objc2.workspace = true
-objc2-foundation = { workspace = true, features = ["NSArray", "NSBundle", "NSDate", "NSError", "NSString"] }
+objc2-foundation = { workspace = true, features = ["NSArray", "NSDate", "NSError", "NSString"] }
 objc2-core-graphics.workspace = true
 objc2-event-kit = { workspace = true, features = [
     "EKCalendar",

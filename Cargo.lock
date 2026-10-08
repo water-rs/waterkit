@@ -8255,6 +8255,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.20",
  "waterkit-build",
+ "waterkit-core",
  "waterkit-fs",
 ]
 
@@ -8271,6 +8272,7 @@ dependencies = [
  "nami",
  "objc2 0.6.4",
  "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
  "thiserror 2.0.20",
  "uuid",
 ]

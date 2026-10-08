@@ -15,7 +15,7 @@ use objc2_contacts::{
     CNKeyDescriptor, CNLabelHome, CNLabelPhoneNumberMobile, CNLabeledValue, CNMutableContact,
     CNPhoneNumber, CNSaveRequest,
 };
-use objc2_foundation::{NSArray, NSBundle, NSDateComponentUndefined, NSError, NSString};
+use objc2_foundation::{NSArray, NSDateComponentUndefined, NSError, NSString};
 
 use crate::{Contact, ContactData, ContactsError, EmailAddress, PhoneNumber};
 
@@ -27,23 +27,11 @@ pub async fn fetch_all() -> Result<Vec<Contact>, ContactsError> {
         .map_err(|_| ContactsError::Platform("contacts access callback dropped".into()))?
 }
 
-/// Fails fast when the main bundle's `Info.plist` lacks
-/// `NSContactsUsageDescription`: the framework would otherwise answer the
-/// request with an opaque XPC error instead of prompting.
-fn require_usage_description() {
-    let key = "NSContactsUsageDescription";
-    // SAFETY: `mainBundle` and the Info.plist lookup are read-only.
-    let present = NSBundle::mainBundle()
-        .objectForInfoDictionaryKey(&NSString::from_str(key))
-        .is_some();
-    assert!(
-        present,
-        "main bundle Info.plist is missing `{key}`; Contacts cannot request          access without it — add `{key}` to the app's Info.plist"
-    );
-}
-
 fn request_contacts_access() -> oneshot::Receiver<Result<Vec<Contact>, ContactsError>> {
-    require_usage_description();
+    waterkit_core::apple::require_usage_description(
+        "NSContactsUsageDescription",
+        "contacts access",
+    );
     // SAFETY: `new` is a convenience constructor with no invariants to uphold.
     let store = unsafe { CNContactStore::new() };
     let (sender, receiver) = oneshot::channel();

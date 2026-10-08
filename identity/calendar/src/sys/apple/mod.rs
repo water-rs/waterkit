@@ -13,7 +13,7 @@ use objc2_core_graphics::CGColor;
 use objc2_event_kit::{
     EKAuthorizationStatus, EKCalendar, EKEntityType, EKEvent, EKEventStore, EKSpan,
 };
-use objc2_foundation::{NSBundle, NSDate, NSError, NSString};
+use objc2_foundation::{NSDate, NSError, NSString};
 use waterkit_core::Timestamp;
 
 use crate::{Calendar, CalendarError, Event, EventData};
@@ -132,31 +132,19 @@ async fn event_store(for_write: bool) -> Result<Retained<EKEventStore>, Calendar
     Ok(unsafe { EKEventStore::new() })
 }
 
-/// The `Info.plist` usage key this OS version's access request requires.
-///
-/// Fails fast: without the key `EventKit` answers the request with an
-/// opaque `XPC error communicating with calaccessd` instead of prompting.
-fn require_usage_description() {
-    let key = if objc2::available!(ios = 17.0, macos = 14.0) {
-        "NSCalendarsFullAccessUsageDescription"
-    } else {
-        "NSCalendarsUsageDescription"
-    };
-    // SAFETY: `mainBundle` and the Info.plist lookup are read-only.
-    let present = NSBundle::mainBundle()
-        .objectForInfoDictionaryKey(&NSString::from_str(key))
-        .is_some();
-    assert!(
-        present,
-        "main bundle Info.plist is missing `{key}`; EventKit cannot request          calendar access without it — add `{key}` to the app's Info.plist"
-    );
-}
-
 /// Requests event access on a throwaway store and waits for the answer.
 /// The completion block retains a clone of the store, so `EventKit` cannot
 /// deallocate it (and possibly cancel the request) before answering.
 async fn request_access() -> Result<(), CalendarError> {
-    require_usage_description();
+    // The usage key this OS version's request requires.
+    waterkit_core::apple::require_usage_description(
+        if objc2::available!(ios = 17.0, macos = 14.0) {
+            "NSCalendarsFullAccessUsageDescription"
+        } else {
+            "NSCalendarsUsageDescription"
+        },
+        "calendar access",
+    );
     let (tx, rx) = oneshot::channel::<Result<(), CalendarError>>();
     let tx = std::sync::Mutex::new(Some(tx));
     {

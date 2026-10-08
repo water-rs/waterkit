@@ -133,7 +133,7 @@ pub fn show_notification_with_context(
 /// # Panics
 ///
 /// Panics if `ndk_context` has no `JavaVM` or Android `Context` yet.
-pub fn show_notification(
+pub async fn show_notification(
     notification: &Notification,
 ) -> Result<NotificationHandleInner, NotificationError> {
     let android_context = ndk_context::android_context();

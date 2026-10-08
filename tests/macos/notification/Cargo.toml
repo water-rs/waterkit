@@ -11,3 +11,4 @@ workspace = true
 waterkit-notification.workspace = true
 core-foundation-sys = "0.8"
 tracing.workspace = true
+tokio = { workspace = true, features = ["full"] }

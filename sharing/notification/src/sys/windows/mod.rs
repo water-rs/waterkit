@@ -31,7 +31,7 @@ const SHORT_DURATION_MS: u32 = 7_000;
 const LONG_DURATION_MS: u32 = 25_000;
 
 /// Show a notification through `Windows.UI.Notifications`.
-pub fn show_notification(
+pub async fn show_notification(
     notification: &Notification,
 ) -> Result<NotificationHandleInner, NotificationError> {
     let toast = ToastNotification::CreateToastNotification(&toast_document(notification)?)

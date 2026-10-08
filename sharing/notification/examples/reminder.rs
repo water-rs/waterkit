@@ -6,6 +6,10 @@
 use waterkit_notification::{Action, Notification, Timeout};
 
 fn main() -> Result<(), waterkit_notification::NotificationError> {
+    pollster::block_on(run())
+}
+
+async fn run() -> Result<(), waterkit_notification::NotificationError> {
     println!("Showing a reminder toast; it stays on screen until dismissed...");
 
     Notification::new()
@@ -13,7 +17,8 @@ fn main() -> Result<(), waterkit_notification::NotificationError> {
         .body("42 GB uploaded to cloud storage")
         .timeout(Timeout::Never)
         .action(Action::new("View Backup", "https://waterui.dev"))
-        .show()?;
+        .show()
+        .await?;
 
     println!("Notification sent!");
 

@@ -46,17 +46,8 @@ impl FromJava for Global<JObject<'static>> {
     }
 }
 
-/// Why a [`NativeCallback`] result or a [`NativeChannel`] item failed.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum PeerError {
-    /// The Kotlin helper reported failure through `fail`.
-    #[error("{0}")]
-    Rejected(String),
-    /// Decoding the delivered payload failed.
-    #[error(transparent)]
-    Decode(#[from] AndroidError),
-}
+pub use crate::peers::PeerError;
+use crate::peers::{CallbackDelivery, ChannelDelivery};
 
 /// What a boxed peer offers its Java owner.
 ///
@@ -85,24 +76,17 @@ struct Peer(Box<dyn PeerTarget>);
 
 /// One result through `waterkit.build.NativeCallback.complete` / `.fail`.
 struct CallbackTarget<T> {
-    sender: Option<oneshot::Sender<Result<T, PeerError>>>,
+    delivery: CallbackDelivery<T>,
 }
 
 impl<T: FromJava + Send> PeerTarget for CallbackTarget<T> {
     fn deliver(&mut self, env: &mut Env<'_>, object: &JObject<'_>, _terminal: bool) {
-        if let Some(sender) = self.sender.take() {
-            let _ = sender.send(T::from_java(env, object).map_err(PeerError::from));
-        }
+        self.delivery
+            .deliver(T::from_java(env, object).map_err(PeerError::from));
     }
 
     fn terminate(&mut self, reason: Option<String>) {
-        if let Some(reason) = reason
-            && let Some(sender) = self.sender.take()
-        {
-            let _ = sender.send(Err(PeerError::Rejected(reason)));
-        }
-        // `reason` None: close/release. The sender drops out of the box, which
-        // is the oneshot receiver's cancellation signal.
+        self.delivery.terminate(reason);
     }
 }
 
@@ -110,25 +94,17 @@ impl<T: FromJava + Send> PeerTarget for CallbackTarget<T> {
 /// `close` (clean end), `fail` (an error item, then the end), or the Cleaner's
 /// `release` (a bare end — cancellation).
 struct ChannelTarget<T> {
-    sender: mpsc::UnboundedSender<Result<T, PeerError>>,
-    closed: bool,
+    delivery: ChannelDelivery<T>,
 }
 
 impl<T: FromJava + Send> PeerTarget for ChannelTarget<T> {
     fn deliver(&mut self, env: &mut Env<'_>, object: &JObject<'_>, _terminal: bool) {
-        if self.closed {
-            return;
-        }
-        let _ = self
-            .sender
-            .unbounded_send(T::from_java(env, object).map_err(PeerError::from));
+        self.delivery
+            .deliver(T::from_java(env, object).map_err(PeerError::from));
     }
 
     fn terminate(&mut self, reason: Option<String>) {
-        self.closed = true;
-        if let Some(reason) = reason {
-            let _ = self.sender.unbounded_send(Err(PeerError::Rejected(reason)));
-        }
+        self.delivery.terminate(reason);
     }
 }
 
@@ -158,10 +134,8 @@ impl<T: FromJava + Send + 'static> NativeCallback<T> {
     pub fn new(
         env: &mut Env<'_>,
     ) -> Result<(Self, oneshot::Receiver<Result<T, PeerError>>), AndroidError> {
-        let (sender, receiver) = oneshot::channel();
-        let target: Box<dyn PeerTarget> = Box::new(CallbackTarget::<T> {
-            sender: Some(sender),
-        });
+        let (delivery, receiver) = CallbackDelivery::new();
+        let target: Box<dyn PeerTarget> = Box::new(CallbackTarget::<T> { delivery });
         let object = new_peer_object(env, &CALLBACK, Peer(target), callback_natives())?;
         Ok((
             Self {
@@ -209,11 +183,8 @@ impl<T: FromJava + Send + 'static> NativeChannel<T> {
     pub fn new(
         env: &mut Env<'_>,
     ) -> Result<(Self, mpsc::UnboundedReceiver<Result<T, PeerError>>), AndroidError> {
-        let (sender, receiver) = mpsc::unbounded();
-        let target: Box<dyn PeerTarget> = Box::new(ChannelTarget::<T> {
-            sender,
-            closed: false,
-        });
+        let (delivery, receiver) = ChannelDelivery::new();
+        let target: Box<dyn PeerTarget> = Box::new(ChannelTarget::<T> { delivery });
         let object = new_peer_object(env, &CHANNEL, Peer(target), channel_natives())?;
         Ok((
             Self {
@@ -437,82 +408,4 @@ extern "system" fn peer_release<'caller>(
         Ok(())
     })
     .resolve::<ThrowRuntimeExAndDefault>();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        AndroidError, CallbackTarget, ChannelTarget, Env, FromJava, JObject, PeerError, PeerTarget,
-    };
-
-    #[derive(Debug)]
-    struct Text;
-
-    impl FromJava for Text {
-        fn from_java(_env: &mut Env<'_>, _object: &JObject<'_>) -> Result<Self, AndroidError> {
-            unreachable!("tests never deliver a Java payload")
-        }
-    }
-
-    /// A `close`/`release` on a callback drops the sender: the receiver sees
-    /// cancellation.
-    #[test]
-    fn callback_release_cancels_the_receiver() {
-        let (sender, mut receiver) = futures_channel::oneshot::channel::<Result<Text, PeerError>>();
-        let target = CallbackTarget::<Text> {
-            sender: Some(sender),
-        };
-        drop(Box::new(target));
-        assert!(receiver.try_recv().unwrap().is_none());
-    }
-
-    /// `fail` resolves the receiver with the rejection message.
-    #[test]
-    fn callback_fail_resolves_with_rejection() {
-        let (sender, mut receiver) = futures_channel::oneshot::channel::<Result<Text, PeerError>>();
-        let mut target = CallbackTarget::<Text> {
-            sender: Some(sender),
-        };
-        target.terminate(Some("denied".into()));
-        match receiver.try_recv() {
-            Ok(Some(Err(PeerError::Rejected(message)))) => assert_eq!(message, "denied"),
-            Ok(_) => panic!("expected a rejection"),
-            Err(futures_channel::oneshot::Canceled) => {
-                panic!("receiver was cancelled instead of rejected")
-            }
-        }
-    }
-
-    /// `close` ends the stream without an item; `release` behaves the same.
-    #[test]
-    fn channel_close_ends_the_stream() {
-        let (sender, mut receiver) = futures_channel::mpsc::unbounded::<Result<Text, PeerError>>();
-        let mut target = ChannelTarget::<Text> {
-            sender,
-            closed: false,
-        };
-        target.terminate(None);
-        drop(target);
-        // The sender is dropped and the buffer is empty: `try_recv` reports
-        // the stream terminated.
-        let error = receiver.try_recv().unwrap_err();
-        assert!(error.is_closed());
-    }
-
-    /// `fail` yields exactly one error item, then the stream ends.
-    #[test]
-    fn channel_fail_yields_one_error_then_ends() {
-        let (sender, mut receiver) = futures_channel::mpsc::unbounded::<Result<Text, PeerError>>();
-        let mut target = ChannelTarget::<Text> {
-            sender,
-            closed: false,
-        };
-        target.terminate(Some("boom".into()));
-        drop(target);
-        match receiver.try_recv() {
-            Ok(Err(PeerError::Rejected(message))) => assert_eq!(message, "boom"),
-            other => panic!("expected one rejection item, got {other:?}"),
-        }
-        assert!(receiver.try_recv().unwrap_err().is_closed());
-    }
 }

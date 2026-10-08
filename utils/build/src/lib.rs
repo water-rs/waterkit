@@ -33,6 +33,10 @@
 mod android_runtime;
 #[cfg(not(target_os = "android"))]
 mod apple;
+/// JVM-independent peer state for the native callback/channel machinery,
+/// host-compiled so its tests run under `cargo nextest`.
+#[cfg(any(test, all(target_os = "android", feature = "native-callback")))]
+mod peers;
 
 #[cfg(not(target_os = "android"))]
 pub use apple::{SwiftBridge, SwiftBridges};

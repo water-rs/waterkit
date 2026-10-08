@@ -58,9 +58,9 @@ private func documentScanPageBuffer(
     return pixelBuffer
 }
 
-// The delegate the presented scanner keeps until the scan settles.
-@MainActor
-private var activeDocumentScanDelegates: Set<DocumentScanDelegate> = []
+// The presented controller owns its delegate for the presentation's life:
+// the association releases the delegate when the controller goes away.
+private var documentScanDelegateKey: UInt8 = 0
 
 @MainActor
 private func finishDocumentScan(
@@ -69,7 +69,6 @@ private func finishDocumentScan(
     pages: RustVec<UInt>,
     error: String?
 ) {
-    activeDocumentScanDelegates.remove(delegate)
     scanner.dismiss(animated: true) {
         document_scan_reply_complete(delegate.reply, pages, error)
     }
@@ -180,7 +179,8 @@ func scan_document_bridge(reply: DocumentScanReply) {
         let scanner = VNDocumentCameraViewController()
         scanner.delegate = delegate
 
-        activeDocumentScanDelegates.insert(delegate)
+        objc_setAssociatedObject(
+            scanner, &documentScanDelegateKey, delegate, .OBJC_ASSOCIATION_RETAIN)
         topVC.present(scanner, animated: true)
     }
 }

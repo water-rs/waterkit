@@ -92,9 +92,9 @@ private func getTopViewController() -> UIViewController? {
     return top
 }
 
-// The delegate the presented scanner keeps until the scan settles.
-@available(iOS 16.0, *)
-private var activeScannerDelegates: Set<ScannerDelegate> = []
+// The presented controller owns its delegate for the presentation's life:
+// the association releases the delegate when the controller goes away.
+private var scannerDelegateKey: UInt8 = 0
 
 @available(iOS 16.0, *)
 @MainActor
@@ -105,7 +105,6 @@ private func finishScan(
     symbology: String?,
     error: String?
 ) {
-    activeScannerDelegates.remove(delegate)
     scanner.stopScanning()
     scanner.dismiss(animated: true) {
         scan_reply_complete(delegate.reply, payload, symbology, error)
@@ -259,7 +258,8 @@ func scan_bridge(symbologies_csv: RustStr, reply: ScanReply) {
                 constant: -16),
         ])
 
-        activeScannerDelegates.insert(delegate)
+        objc_setAssociatedObject(
+            scanner, &scannerDelegateKey, delegate, .OBJC_ASSOCIATION_RETAIN)
         topVC.present(scanner, animated: true) {
             do {
                 try scanner.startScanning()

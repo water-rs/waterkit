@@ -17,6 +17,14 @@ use super::{Event, Request};
 /// resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.otp.OtpHelper");
 
+/// The `OtpEvent` subclasses, resolved through the same application class
+/// loader as `OtpHelper` so dispatch is by type, never by name.
+static EVENT_STARTED: DexHelper = dex_helper!("waterkit.otp.OtpEvent$Started");
+static EVENT_MESSAGE: DexHelper = dex_helper!("waterkit.otp.OtpEvent$Message");
+static EVENT_TIMEOUT: DexHelper = dex_helper!("waterkit.otp.OtpEvent$Timeout");
+static EVENT_DENIED: DexHelper = dex_helper!("waterkit.otp.OtpEvent$Denied");
+static EVENT_FAILED: DexHelper = dex_helper!("waterkit.otp.OtpEvent$Failed");
+
 /// `OtpHelper.capabilities` bit for Google Play services availability.
 const CAPABILITY_PLAY_SERVICES: i32 = 1 << 0;
 /// `OtpHelper.capabilities` bit for telephony messaging support.
@@ -28,39 +36,66 @@ impl From<AndroidError> for OtpError {
     }
 }
 
-/// Decodes the Kotlin `OtpEvent` sealed-class instance the helper sends: the
-/// event variant is the object's own type (`Started`, `Message`, `Timeout`,
-/// `Denied`, `Failed`), so dispatch reads the class's simple name and the
-/// payload field (`text` / `error`) when the variant carries one.
+/// Decodes the Kotlin `OtpEvent` sealed-class instance the helper sends. The
+/// event variant is the object's own type, so dispatch is `isInstance` checks
+/// against the subclasses resolved through the application's class loader —
+/// a renamed or obfuscated class can never silently misfire — and the payload
+/// field (`text` / `error`) when the variant carries one.
 impl FromJava for Event {
     fn from_java(env: &mut Env<'_>, object: &JObject<'_>) -> Result<Self, AndroidError> {
-        let class = env
-            .call_method(
-                object,
-                jni_str!("getClass"),
-                jni_sig!("()Ljava/lang/Class;"),
-                &[],
-            )
-            .and_then(JValueOwned::l)?;
-        let name = env
-            .call_method(
-                &class,
-                jni_str!("getSimpleName"),
-                jni_sig!("()Ljava/lang/String;"),
-                &[],
-            )
-            .and_then(JValueOwned::l)?;
-        match decode_string(env, &name)?.as_str() {
-            "Started" => Ok(Self::Started),
-            "Message" => Ok(Self::Message(read_field(env, object, jni_str!("getText"))?)),
-            "Timeout" => Ok(Self::Timeout),
-            "Denied" => Ok(Self::Denied),
-            "Failed" => Ok(Self::Failed(read_field(env, object, jni_str!("getError"))?)),
-            _ => Err(AndroidError::from(jni::errors::Error::NullPtr(
-                "OtpHelper sent an event with no matching OtpEvent class",
-            ))),
+        let (_vm, context) = waterkit_build::jvm_and_context()?;
+        let context = context.as_obj();
+        let started = EVENT_STARTED.class(env, context)?;
+        let message = EVENT_MESSAGE.class(env, context)?;
+        let timeout = EVENT_TIMEOUT.class(env, context)?;
+        let denied = EVENT_DENIED.class(env, context)?;
+        let failed = EVENT_FAILED.class(env, context)?;
+        if env.is_instance_of(object, started)? {
+            Ok(Self::Started)
+        } else if env.is_instance_of(object, message)? {
+            Ok(Self::Message(read_field(env, object, jni_str!("getText"))?))
+        } else if env.is_instance_of(object, timeout)? {
+            Ok(Self::Timeout)
+        } else if env.is_instance_of(object, denied)? {
+            Ok(Self::Denied)
+        } else if env.is_instance_of(object, failed)? {
+            Ok(Self::Failed(read_field(env, object, jni_str!("getError"))?))
+        } else {
+            Err(unexpected_event_class(env, object)?)
         }
     }
+}
+
+/// The `OtpEvent` dispatch hit no known subclass: throw
+/// `IllegalArgumentException` naming the actual class, so the helper sees a
+/// descriptive failure instead of a silent drop.
+fn unexpected_event_class(
+    env: &mut Env<'_>,
+    object: &JObject<'_>,
+) -> Result<AndroidError, AndroidError> {
+    let class = env
+        .call_method(
+            object,
+            jni_str!("getClass"),
+            jni_sig!("()Ljava/lang/Class;"),
+            &[],
+        )
+        .and_then(JValueOwned::l)?;
+    let name = env
+        .call_method(
+            &class,
+            jni_str!("getName"),
+            jni_sig!("()Ljava/lang/String;"),
+            &[],
+        )
+        .and_then(JValueOwned::l)
+        .map(|name| decode_string(env, &name).unwrap_or_else(|_| "<unreadable class>".into()))?;
+    let message = std::ffi::CString::new(format!("expected an OtpEvent subclass, got {name}"))
+        .expect("a Java class name contains no NUL");
+    let message = jni::strings::JNIStr::from_cstr(&message)
+        .expect("a Java class name is valid modified UTF-8");
+    env.throw_new(jni_str!("java/lang/IllegalArgumentException"), message)?;
+    Ok(AndroidError::from(jni::errors::Error::JavaException))
 }
 
 /// Reads a `String`-typed getter off a Kotlin `OtpEvent` data class.

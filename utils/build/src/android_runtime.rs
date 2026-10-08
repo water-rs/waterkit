@@ -19,13 +19,15 @@ mod activity_result;
 #[cfg(feature = "native-callback")]
 mod native_callback;
 
+#[cfg(feature = "native-callback")]
+pub use crate::peers::PeerError;
 #[cfg(feature = "activity-result")]
 pub use activity_result::{
     ActivityResult, ActivityResultError, PendingActivityResult, ResultCode,
     start_activity_for_result, start_intent_sender_for_result,
 };
 #[cfg(feature = "native-callback")]
-pub use native_callback::{FromJava, NativeCallback, NativeChannel, PeerError};
+pub use native_callback::{FromJava, NativeCallback, NativeChannel};
 
 /// Failure while bridging into the Android platform.
 ///

@@ -232,6 +232,8 @@ objc2-core-location = { version = "0.3", default-features = false }
 dispatch2 = "0.3"
 objc2-core-media = "0.3"
 objc2-app-kit = "0.3"
+block2 = "0.6"
+objc2-contacts = { version = "0.3", default-features = false }
 # W3C KeyboardEvent key/modifier vocabulary.
 keyboard-types = "0.8"
 objc2-core-video = "0.3"

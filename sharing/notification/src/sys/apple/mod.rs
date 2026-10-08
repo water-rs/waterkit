@@ -357,17 +357,22 @@ async fn show(notification: &Notification) -> Result<(), NotificationError> {
                 None,
             );
             // The `Rc` keeps the sender reachable on later (unexpected) calls so
-            // the block stays `Fn`.
+            // the block stays `Fn`, and the center clone keeps the request's
+            // target alive until the framework answers.
             let sender = Rc::new(RefCell::new(Some(result_sender)));
-            let deliver = RcBlock::new(move |error: *mut NSError| {
-                if let Some(sender) = sender.borrow_mut().take() {
-                    let _ = sender.send(if error.is_null() {
-                        Ok(())
-                    } else {
-                        Err(NotificationError::Platform(describe_error(error)))
-                    });
-                }
-            });
+            let deliver = {
+                let center = deliver_center.clone();
+                RcBlock::new(move |error: *mut NSError| {
+                    let _center = &center;
+                    if let Some(sender) = sender.borrow_mut().take() {
+                        let _ = sender.send(if error.is_null() {
+                            Ok(())
+                        } else {
+                            Err(NotificationError::Platform(describe_error(error)))
+                        });
+                    }
+                })
+            };
             deliver_center.addNotificationRequest_withCompletionHandler(&request, Some(&deliver));
         });
         center.requestAuthorizationWithOptions_completionHandler(

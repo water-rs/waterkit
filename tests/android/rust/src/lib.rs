@@ -1117,7 +1117,7 @@ const RECORDERS: &[Recorder] = &[
     #[cfg(feature = "secret")]
     |h| record_android_secret(&mut h.report, h.env, h.activity.as_obj()),
     #[cfg(feature = "system")]
-    |h| record_android_system(&mut h.report),
+    |h| h.runtime.block_on(record_android_system(&mut h.report)),
     #[cfg(feature = "background")]
     |h| record_android_background(&mut h.report),
     #[cfg(feature = "passkey")]
@@ -2458,10 +2458,10 @@ fn record_android_secret(report: &mut TestReport, env: &mut Env<'_>, activity: &
 }
 
 #[cfg(feature = "system")]
-fn record_android_system(report: &mut TestReport) {
+async fn record_android_system(report: &mut TestReport) {
     use waterkit_content::system;
 
-    report.push(match system::connectivity() {
+    report.push(match system::connectivity().await {
         Ok(info) => TestCase::passed_with_message(
             "system.connectivity",
             format!(

@@ -98,7 +98,7 @@ const RECORDERS: &[Recorder] = &[
     #[cfg(feature = "secret")]
     |h| h.runtime.block_on(record_secret(&mut h.report)),
     #[cfg(feature = "system")]
-    |h| record_system(&mut h.report),
+    |h| h.runtime.block_on(record_system(&mut h.report)),
     #[cfg(feature = "screen")]
     |h| record_screen(&mut h.report),
     #[cfg(feature = "background")]
@@ -439,8 +439,8 @@ async fn record_secret(report: &mut TestReport) {
 }
 
 #[cfg(feature = "system")]
-fn record_system(report: &mut TestReport) {
-    match waterkit::system::connectivity() {
+async fn record_system(report: &mut TestReport) {
+    match waterkit::system::connectivity().await {
         Ok(connectivity) => report.push(TestCase::passed_with_message(
             "system.connectivity",
             format!("connection_type={:?}", connectivity.connection_type()),

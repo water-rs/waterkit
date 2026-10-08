@@ -4,7 +4,7 @@ use waterkit_system::{SystemError, connectivity, load, thermal_state};
 fn main() -> Result<(), SystemError> {
     println!("Checking system info...");
 
-    let net = connectivity()?;
+    let net = futures::executor::block_on(connectivity())?;
     println!("Connectivity: {net:?}");
 
     match thermal_state()? {

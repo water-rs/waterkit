@@ -598,12 +598,6 @@ checksum = "298326aba91e0dd1acba62767652c7c9f4d45ada6804110278680c4f0c6e8ab7"
 
 [[package]]
 name = "base64"
-version = "0.21.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
-
-[[package]]
-name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
@@ -6964,17 +6958,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "swift-rs"
-version = "1.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e45c444e496845d3f2a351146bff59aae4975b2280238df1dfaa0c7d1846f38e"
-dependencies = [
- "base64 0.21.7",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "symphonia"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8719,10 +8702,14 @@ dependencies = [
 name = "waterkit-system"
 version = "0.1.4"
 dependencies = [
+ "block2 0.6.2",
+ "dispatch2",
+ "futures",
  "jni 0.22.4",
+ "libc",
+ "mach2 0.6.0",
  "ndk-context",
- "swift-bridge",
- "swift-rs",
+ "objc2-foundation 0.3.2",
  "sysinfo",
  "thiserror 2.0.20",
  "tracing",
@@ -8792,6 +8779,7 @@ dependencies = [
 name = "waterkit-test-linux"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "waterkit-biometric",
  "waterkit-bluetooth",
  "waterkit-deeplink",
@@ -8817,6 +8805,7 @@ dependencies = [
 name = "waterkit-test-windows"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "waterkit-biometric",
  "waterkit-bluetooth",
  "waterkit-deeplink",

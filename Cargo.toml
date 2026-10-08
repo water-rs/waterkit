@@ -228,6 +228,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 core-foundation = "0.10"
 objc2 = "0.6"
 objc2-foundation = "0.3"
+objc2-core-location = { version = "0.3", default-features = false }
+dispatch2 = "0.3"
 objc2-core-media = "0.3"
 objc2-app-kit = "0.3"
 # W3C KeyboardEvent key/modifier vocabulary.

@@ -438,9 +438,7 @@ impl Drop for AppleWatchGuard {
             return;
         };
         DispatchQueue::main().exec_async(move || {
-            // SAFETY: the closure runs on the main queue, where the tokens
-            // were created.
-            let mtm = unsafe { MainThreadMarker::new_unchecked() };
+            let mtm = MainThreadMarker::new().expect("the main queue runs on the main thread");
             let (changed, became_active) = tokens.into_inner(mtm);
             let center = NSNotificationCenter::defaultCenter();
             // SAFETY: `changed` and `became_active` are this watch's two

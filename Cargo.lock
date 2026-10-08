@@ -8511,7 +8511,6 @@ name = "waterkit-location"
 version = "0.1.4"
 dependencies = [
  "async-channel",
- "async-io",
  "dispatch2",
  "futures",
  "jiff",

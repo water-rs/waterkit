@@ -165,11 +165,14 @@ impl Location {
     /// granted; this function does not trigger the runtime prompt.
     /// Use `waterkit_permission::request(Permission::Location)` first.
     ///
+    /// The request has no deadline of its own: it resolves when the
+    /// platform's location service answers. A caller that wants a bound
+    /// applies a timeout to the awaited future.
+    ///
     /// # Errors
     ///
     /// Returns [`LocationError::PermissionDenied`] when access is denied,
     /// [`LocationError::ServiceDisabled`] when location services are off,
-    /// [`LocationError::Timeout`] when the request times out,
     /// [`LocationError::InvalidCoordinate`] when the OS returns invalid
     /// coordinates, or [`LocationError::Platform`] for other OS failures.
     #[cfg_attr(
@@ -276,9 +279,6 @@ pub enum LocationError {
     /// Location services are disabled on the device.
     #[error("location services disabled")]
     ServiceDisabled,
-    /// Location request timed out.
-    #[error("location request timed out")]
-    Timeout,
     /// Location is not available.
     #[error("location not available")]
     NotAvailable,

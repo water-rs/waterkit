@@ -110,8 +110,7 @@ fn geolocation_error(error: &JsValue) -> LocationError {
     };
     match error.code() {
         PERMISSION_DENIED => LocationError::PermissionDenied,
-        POSITION_UNAVAILABLE => LocationError::NotAvailable,
-        TIMEOUT => LocationError::Timeout,
+        POSITION_UNAVAILABLE | TIMEOUT => LocationError::NotAvailable,
         code => LocationError::Platform(format!(
             "browser geolocation error {code}: {}",
             error.message()

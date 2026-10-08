@@ -16,7 +16,6 @@ import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.google.android.gms.tasks.Task
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -29,7 +28,6 @@ object LocationHelper {
     const val STATUS_PERMISSION_DENIED = 1
     const val STATUS_SERVICE_DISABLED = 2
     const val STATUS_UNAVAILABLE = 3
-    const val STATUS_TIMEOUT = 4
 
     /** Typed result read field-by-field from Rust over JNI. */
     class Result(
@@ -90,11 +88,11 @@ object LocationHelper {
 
     /**
      * Requests a fresh fix from the Fused Location Provider of Google Play
-     * services and blocks the calling thread until it arrives or
-     * [timeoutMillis] elapses. The caller must not be the main thread.
+     * services and blocks the calling thread until Play services completes
+     * the task. The caller must not be the main thread.
      */
     @JvmStatic
-    fun getFusedLocation(context: Context, timeoutMillis: Long): Result {
+    fun getFusedLocation(context: Context): Result {
         val grant = grant(context) ?: return Result.failure(STATUS_PERMISSION_DENIED)
         val manager = context.getSystemService(LocationManager::class.java)
             ?: return Result.failure(STATUS_UNAVAILABLE)
@@ -122,10 +120,7 @@ object LocationHelper {
                 latch.countDown()
             }
 
-        if (!latch.await(timeoutMillis, TimeUnit.MILLISECONDS)) {
-            cancellation.cancel()
-            return Result.failure(STATUS_TIMEOUT)
-        }
+        latch.await()
         val task = completed.get()
             ?: throw IllegalStateException("fused location task completed without a result")
         if (task.isSuccessful) {
@@ -150,7 +145,7 @@ object LocationHelper {
 
     /**
      * Requests a fresh fix from the framework `LocationManager` and blocks the
-     * calling thread until it arrives or [timeoutMillis] elapses. Callbacks
+     * calling thread until the platform delivers it. Callbacks
      * are delivered on the main looper below API 30, so the caller must not be
      * the main thread.
      *
@@ -161,7 +156,7 @@ object LocationHelper {
      * enabled, and the network provider anything else.
      */
     @JvmStatic
-    fun getFrameworkLocation(context: Context, timeoutMillis: Long): Result {
+    fun getFrameworkLocation(context: Context): Result {
         val grant = grant(context) ?: return Result.failure(STATUS_PERMISSION_DENIED)
         val manager = context.getSystemService(LocationManager::class.java)
             ?: return Result.failure(STATUS_UNAVAILABLE)
@@ -216,9 +211,7 @@ object LocationHelper {
             return Result.failure(STATUS_PERMISSION_DENIED)
         }
 
-        if (!latch.await(timeoutMillis, TimeUnit.MILLISECONDS)) {
-            return Result.failure(STATUS_TIMEOUT)
-        }
+        latch.await()
         val location = received.get() ?: return Result.failure(STATUS_UNAVAILABLE)
         return Result.success(location)
     }

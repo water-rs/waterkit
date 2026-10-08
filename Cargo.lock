@@ -8496,7 +8496,6 @@ dependencies = [
 name = "waterkit-language"
 version = "0.1.4"
 dependencies = [
- "async-channel",
  "futures",
  "icu_locale_core",
  "jni 0.22.4",

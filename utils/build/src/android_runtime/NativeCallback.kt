@@ -8,16 +8,12 @@ import java.util.concurrent.atomic.AtomicLong
  * The object owns a boxed Rust peer as a `long`. `complete` delivers the
  * result; `fail` reports an error. Both are `synchronized`, call `external`
  * natives, and zero the peer — a call after that throws
- * [IllegalStateException]. If the object is collected unanswered, the
- * [java.lang.ref.Cleaner] releases the peer through
- * `PeerNatives.releaseNative` — Rust sees cancellation.
+ * [IllegalStateException]. If the object is collected unanswered, its
+ * finalizer releases the peer through `PeerNatives.releaseNative` — Rust sees
+ * cancellation.
  */
 class NativeCallback private constructor(peer: Long) {
     private val peer = AtomicLong(peer)
-
-    init {
-        PeerCleaner.register(this, peer)
-    }
 
     /** Delivers the result. */
     @Synchronized
@@ -33,6 +29,15 @@ class NativeCallback private constructor(peer: Long) {
         val p = peer.getAndSet(0L)
         check(p != 0L) { "NativeCallback already completed or released" }
         failNative(p, error)
+    }
+
+    /**
+     * Releases a peer that was never completed, so Rust observes the end.
+     * `java.lang.ref.Cleaner` needs API 33, above the minSdk of 26; ART runs
+     * finalizers on its own daemon, so this adds no thread.
+     */
+    protected fun finalize() {
+        PeerNatives.release(peer)
     }
 
     private external fun completeNative(peer: Long, result: Any?)

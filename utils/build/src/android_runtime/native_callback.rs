@@ -4,7 +4,7 @@
 //! `waterkit.build.NativeChannel` (a stream of values, then `close` or `fail`)
 //! argument instead of a numeric id. The Java object holds the Rust peer as a
 //! boxed `long`; `complete` / `send` / `close` / `fail` are `synchronized` and
-//! call back through `RegisterNatives`-bound natives. A `java.lang.ref.Cleaner`
+//! call back through `RegisterNatives`-bound natives. The Java object's finalizer
 //! releases a still-live peer when the Java object is collected, so the Rust
 //! side observes cancellation or stream end instead of a dangling request.
 
@@ -53,7 +53,7 @@ use crate::peers::{CallbackDelivery, ChannelDelivery};
 ///
 /// The JNI natives call [`deliver`](PeerTarget::deliver) for `complete` and
 /// `send`, and [`terminate`](PeerTarget::terminate) for `close`, `fail`, and
-/// the Cleaner's `release`. `deliver` is the only entry point that needs the
+/// the finalizer's `release`. `deliver` is the only entry point that needs the
 /// JVM; everything else is plain Rust state and is what the unit tests cover.
 trait PeerTarget: Send {
     /// A decoded-able payload arrived from Java. `terminal` is set by
@@ -91,7 +91,7 @@ impl<T: FromJava + Send> PeerTarget for CallbackTarget<T> {
 }
 
 /// A stream of values through `waterkit.build.NativeChannel.send`, ending with
-/// `close` (clean end), `fail` (an error item, then the end), or the Cleaner's
+/// `close` (clean end), `fail` (an error item, then the end), or the finalizer's
 /// `release` (a bare end — cancellation).
 struct ChannelTarget<T> {
     delivery: ChannelDelivery<T>,
@@ -162,7 +162,7 @@ impl<T: FromJava + Send + 'static> NativeCallback<T> {
 /// A Java `NativeChannel` object paired with the stream its `send` feeds.
 ///
 /// The stream yields each `send` as an item, `fail` as an error item followed
-/// by the end, and `close` or the Cleaner's `release` as the end.
+/// by the end, and `close` or the finalizer's `release` as the end.
 #[derive(Debug)]
 pub struct NativeChannel<T> {
     object: Global<JObject<'static>>,
@@ -395,7 +395,7 @@ extern "system" fn peer_fail<'caller>(
     .resolve::<ThrowRuntimeExAndDefault>();
 }
 
-/// The Cleaner's `PeerNatives.releaseNative` — a still-live peer means the
+/// The finalizer's `PeerNatives.releaseNative` — a still-live peer means the
 /// Java object was collected unanswered: Rust observes cancellation (callback)
 /// or stream end (channel).
 extern "system" fn peer_release<'caller>(

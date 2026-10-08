@@ -1,6 +1,5 @@
 package waterkit.build
 
-import java.lang.ref.Cleaner
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -11,15 +10,11 @@ import java.util.concurrent.atomic.AtomicLong
  * error. All three are `synchronized` and call `external` natives; the
  * terminal calls zero the peer and a call after that throws
  * [IllegalStateException]. If the object is collected with the peer still
- * live, the [Cleaner] releases it through `PeerNatives.releaseNative` — Rust
+ * live, its finalizer releases it through `PeerNatives.releaseNative` — Rust
  * sees the stream end.
  */
 class NativeChannel private constructor(peer: Long) {
     private val peer = AtomicLong(peer)
-
-    init {
-        PeerCleaner.register(this, peer)
-    }
 
     /** Delivers one stream item. */
     @Synchronized
@@ -45,27 +40,26 @@ class NativeChannel private constructor(peer: Long) {
         failNative(p, error)
     }
 
+    /**
+     * Releases a peer that was never completed, so Rust observes the end.
+     * `java.lang.ref.Cleaner` needs API 33, above the minSdk of 26; ART runs
+     * finalizers on its own daemon, so this adds no thread.
+     */
+    protected fun finalize() {
+        PeerNatives.release(peer)
+    }
+
     private external fun sendNative(peer: Long, value: Any?)
     private external fun closeNative(peer: Long)
     private external fun failNative(peer: Long, error: String?)
 }
 
-/** Shared `java.lang.ref.Cleaner` release for `NativeCallback`/`NativeChannel` peers. */
-internal object PeerCleaner {
-    private val cleaner = Cleaner.create()
-
-    fun register(obj: Any, peer: AtomicLong) {
-        cleaner.register(obj, Releaser(peer))
-    }
-
-    private class Releaser(private val peer: AtomicLong) : Runnable {
-        override fun run() {
-            val p = peer.getAndSet(0L)
-            if (p != 0L) PeerNatives.releaseNative(p)
-        }
-    }
-}
-
 internal object PeerNatives {
+    /** Zeroes [peer] and releases it if it was still live. */
+    fun release(peer: AtomicLong) {
+        val p = peer.getAndSet(0L)
+        if (p != 0L) releaseNative(p)
+    }
+
     @JvmStatic external fun releaseNative(peer: Long)
 }

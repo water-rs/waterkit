@@ -37,6 +37,7 @@ streaming = [
 he-aac = ["streaming", "dep:symphonia-adapter-fdk-aac"]
 media-session = [
     "dep:tracing",
+    "dep:waterkit-build",
     "dep:objc2",
     "dep:objc2-foundation",
     "dep:objc2-core-foundation",

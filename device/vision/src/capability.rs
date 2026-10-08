@@ -44,7 +44,10 @@ impl VisionCapabilities {
             ),
             any(
                 not(feature = "scanner"),
-                not(any(target_os = "ios", target_os = "android"))
+                not(any(
+                    target_os = "android",
+                    all(target_os = "ios", not(target_abi = "macabi"))
+                ))
             )
         ),
         expect(

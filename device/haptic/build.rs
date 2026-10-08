@@ -1,21 +1,18 @@
-//! Build script for waterkit-haptic.
+//! Link the Apple frameworks the implementation calls. When the crate is
+//! packaged as a static archive the directives only reach cargo-driven
+//! links; Xcode projects consuming the archive must list the frameworks
+//! themselves (as the test harness does).
 
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
-
-    if target_os == "ios" || target_os == "macos" {
-        use waterkit_build::{SwiftBridge, SwiftBridges};
-
-        let mut bridge = SwiftBridge::new("src/sys/apple/mod.rs")
-            .swift_source("src/sys/apple/Haptic.swift")
-            .framework("Foundation");
-
-        if target_os == "ios" {
-            bridge = bridge.framework("UIKit").framework("CoreHaptics");
-        } else {
-            bridge = bridge.framework("AppKit");
+    match target_os.as_str() {
+        // Covers iOS and Mac Catalyst: CoreHaptics + UIKit feedback
+        // generators.
+        "ios" => {
+            println!("cargo:rustc-link-lib=framework=CoreHaptics");
+            println!("cargo:rustc-link-lib=framework=UIKit");
         }
-
-        SwiftBridges::new().bridge(bridge).compile();
+        "macos" => println!("cargo:rustc-link-lib=framework=AppKit"),
+        _ => {}
     }
 }

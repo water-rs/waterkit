@@ -1102,7 +1102,7 @@ const RECORDERS: &[Recorder] = &[
     #[cfg(feature = "fs")]
     |h| record_android_fs(&mut h.report, h.env, h.activity.as_obj()),
     #[cfg(feature = "haptic")]
-    |h| record_android_haptic(&mut h.report),
+    |h| h.runtime.block_on(record_android_haptic(&mut h.report)),
     #[cfg(feature = "notification")]
     |h| record_android_notification(&mut h.report),
     #[cfg(feature = "secret")]
@@ -2371,8 +2371,8 @@ fn record_android_fs(report: &mut TestReport, env: &mut Env<'_>, activity: &JObj
 }
 
 #[cfg(feature = "haptic")]
-fn record_android_haptic(report: &mut TestReport) {
-    match waterkit_content::haptic::Haptic::impact(waterkit_content::haptic::Intensity::LOW) {
+async fn record_android_haptic(report: &mut TestReport) {
+    match waterkit_content::haptic::Haptic::impact(waterkit_content::haptic::Intensity::LOW).await {
         Ok(()) => report.push(TestCase::passed("haptic.impact")),
         Err(error) => report.push(TestCase::failed(
             "haptic.impact",

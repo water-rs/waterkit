@@ -36,16 +36,17 @@ mod imp {
 
     /// ivars of [`NfcSession`].
     pub struct NfcSessionIvars {
-        /// Sends discovered tags to the reader's event receiver.
-        tag_tx: async_channel::Sender<NfcTag>,
-        /// Reported once per session, like the old `errorCallback` that nil'd
-        /// itself after firing.
-        error: RefCell<Option<oneshot::Sender<String>>>,
+        /// Sends tags and errors to the reader's event receiver. Dropped on
+        /// session invalidation, which ends `events()`.
+        tag_tx: RefCell<Option<async_channel::Sender<Result<NfcTag, NfcError>>>>,
         /// The pending write taken by `didDetectTags` when a tag connects.
         pending_write: RefCell<Option<PendingWrite>>,
         /// Set when the session is invalidated; a later `write` reports "No
         /// active session" like the removed `activeSessions` lookup did.
         invalidated: Cell<bool>,
+        /// Set by `NfcReaderInner::stop` before it invalidates the session:
+        /// that invalidation closes the stream without an error item.
+        stopped: Cell<bool>,
     }
 
     define_class!(
@@ -71,7 +72,16 @@ mod imp {
             #[unsafe(method(readerSession:didInvalidateWithError:))]
             fn did_invalidate(&self, _session: &NFCNDEFReaderSession, error: &NSError) {
                 self.ivars().invalidated.set(true);
-                self.report_session_error(error);
+                // Dropping the sender ends `events()`; `stop()` closes the
+                // stream cleanly and carries no error item.
+                let tx = self.ivars().tag_tx.borrow_mut().take();
+                if let Some(tx) = tx
+                    && !self.ivars().stopped.get()
+                {
+                    let _ = tx.try_send(Err(NfcError::Platform(
+                        error.localizedDescription().to_string(),
+                    )));
+                }
             }
 
             #[unsafe(method(readerSession:didDetectNDEFs:))]
@@ -88,7 +98,9 @@ mod imp {
                         tag_type: NfcTagType::Type4,
                         ndef_message: Some(ndef_message(&message)),
                     };
-                    let _ = self.ivars().tag_tx.try_send(tag);
+                    if let Some(tx) = self.ivars().tag_tx.borrow().as_ref() {
+                        let _ = tx.try_send(Ok(tag));
+                    }
                 }
             }
 
@@ -156,25 +168,27 @@ mod imp {
 
     impl NfcSession {
         fn new(
-            tag_tx: async_channel::Sender<NfcTag>,
-            error: oneshot::Sender<String>,
+            tag_tx: async_channel::Sender<Result<NfcTag, NfcError>>,
             mtm: MainThreadMarker,
         ) -> Retained<Self> {
             let this = Self::alloc(mtm).set_ivars(NfcSessionIvars {
-                tag_tx,
-                error: RefCell::new(Some(error)),
+                tag_tx: RefCell::new(Some(tag_tx)),
                 pending_write: RefCell::new(None),
                 invalidated: Cell::new(false),
+                stopped: Cell::new(false),
             });
             // SAFETY: `this` is a freshly allocated `NfcSession` and
             // `NSObject`'s `init` has no additional requirements.
             unsafe { msg_send![super(this), init] }
         }
 
-        /// `reportSessionError`: the channel fires at most once.
+        /// A session error is an error item on the event stream; the stream
+        /// itself ends only on invalidation.
         fn report_session_error(&self, error: &NSError) {
-            if let Some(sender) = self.ivars().error.borrow_mut().take() {
-                let _ = sender.send(error.localizedDescription().to_string());
+            if let Some(tx) = self.ivars().tag_tx.borrow().as_ref() {
+                let _ = tx.try_send(Err(NfcError::Platform(
+                    error.localizedDescription().to_string(),
+                )));
             }
         }
 
@@ -207,7 +221,9 @@ mod imp {
                     tag_type: NfcTagType::Type4,
                     ndef_message,
                 };
-                let _ = this.ivars().tag_tx.try_send(tag);
+                if let Some(tx) = this.ivars().tag_tx.borrow().as_ref() {
+                    let _ = tx.try_send(Ok(tag));
+                }
             });
             // SAFETY: `tag` is live and `read` matches the documented
             // `readNDEF:` block signature.
@@ -324,15 +340,14 @@ mod imp {
     impl NfcReaderInner {
         pub async fn start_session(
             message: &str,
-        ) -> Result<(Self, async_channel::Receiver<NfcTag>), NfcError> {
+        ) -> Result<(Self, async_channel::Receiver<Result<NfcTag, NfcError>>), NfcError> {
             if !nfc_is_available() {
                 return Err(NfcError::NotAvailable);
             }
             let (tag_tx, tag_rx) = async_channel::unbounded();
-            let (error_tx, mut error_rx) = oneshot::channel::<String>();
             let message = message.to_owned();
             let (session, delegate) = on_main(move |mtm| {
-                let delegate = NfcSession::new(tag_tx, error_tx, mtm);
+                let delegate = NfcSession::new(tag_tx, mtm);
                 // SAFETY: `initWithDelegate:queue:invalidateAfterFirstRead:` is
                 // the designated initializer; `delegate` conforms to the
                 // protocol and callbacks are dispatched on the main queue,
@@ -358,15 +373,8 @@ mod imp {
                 )
             })
             .await;
-            // Same contract as before: a session-start error can only arrive
-            // synchronously (it never does on iOS), so one immediate check
-            // decides.
-            if let Ok(Some(error)) = error_rx.try_recv()
-                && !error.is_empty()
-            {
-                return Err(NfcError::Platform(error));
-            }
-            drop(error_rx);
+            // Any later failure (invalidation, tag I/O) arrives as an error
+            // item on `tag_rx`; nothing is sampled synchronously here.
             Ok((Self { session, delegate }, tag_rx))
         }
 
@@ -392,8 +400,12 @@ mod imp {
 
         pub fn stop(&self) {
             let session = Arc::clone(&self.session);
+            let delegate = Arc::clone(&self.delegate);
             DispatchQueue::main().exec_async(move || {
                 let mtm = MainThreadMarker::new().expect("exec_async runs on the main queue");
+                // `stopped` is recorded on the delegate first, so the ensuing
+                // `didInvalidate` callback closes the stream without an item.
+                delegate.get(mtm).ivars().stopped.set(true);
                 // SAFETY: the session is live; `invalidateSession` ends it and
                 // its callbacks.
                 unsafe { session.get(mtm).invalidateSession() };
@@ -430,7 +442,13 @@ impl NfcReaderInner {
     )]
     pub async fn start_session(
         _message: &str,
-    ) -> Result<(Self, async_channel::Receiver<crate::NfcTag>), crate::NfcError> {
+    ) -> Result<
+        (
+            Self,
+            async_channel::Receiver<Result<crate::NfcTag, crate::NfcError>>,
+        ),
+        crate::NfcError,
+    > {
         Err(crate::NfcError::NotAvailable)
     }
 

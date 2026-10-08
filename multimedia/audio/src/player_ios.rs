@@ -249,8 +249,8 @@ impl std::fmt::Debug for AudioPlayer {
 }
 
 impl AudioPlayer {
-    fn initialize_runtime() -> Result<RuntimeHandles, PlayerError> {
-        let player = crate::sys::NativeAudioPlayerInner::new()?;
+    fn initialize_runtime(mtm: objc2::MainThreadMarker) -> Result<RuntimeHandles, PlayerError> {
+        let player = crate::sys::NativeAudioPlayerInner::new(mtm)?;
         let media_session = Arc::new(MediaSession::new()?);
         let (shutdown_handle, shutdown_rx) = ShutdownHandle::new();
         let command_receiver = media_session.command_receiver();
@@ -396,7 +396,11 @@ impl AudioPlayer {
             return Err(PlayerError::OutputDeviceSelectionUnavailable);
         }
         let path = path.as_ref();
-        let runtime = Self::initialize_runtime()?;
+        // AVPlayer construction is main-queue work, and the sync file-path
+        // API cannot hop for an answer, so it requires the main thread.
+        let mtm = objc2::MainThreadMarker::new()
+            .expect("AudioPlayer::open_with_output must be called on the main thread");
+        let runtime = Self::initialize_runtime(mtm)?;
         let path_str = path
             .to_str()
             .expect("waterkit-audio iOS file paths must be valid UTF-8");
@@ -491,8 +495,8 @@ impl AudioPlayer {
         let url = url.to_owned();
         // AVPlayer construction and access are main-queue work; hop through
         // `on_main` so nothing blocks inside this async fn.
-        crate::sys::on_main(move |_| {
-            let runtime = Self::initialize_runtime()?;
+        crate::sys::on_main(move |mtm| {
+            let runtime = Self::initialize_runtime(mtm)?;
             runtime.player.load_url(&url)?;
 
             let mut metadata = MediaMetadata::default().with_title(Self::title_from_url(&url));

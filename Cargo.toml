@@ -239,7 +239,6 @@ objc2-event-kit = { version = "0.3", default-features = false }
 objc2-photos = { version = "0.3", default-features = false }
 dispatch2 = "0.3"
 objc2-core-media = "0.3"
-objc2-avf-audio = { version = "0.3", default-features = false }
 objc2-app-kit = "0.3"
 objc2-authentication-services = { version = "0.3", default-features = false }
 objc2-background-tasks = { version = "0.3", default-features = false }

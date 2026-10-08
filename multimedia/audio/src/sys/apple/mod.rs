@@ -283,7 +283,7 @@ impl std::fmt::Debug for MediaSessionInner {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("MediaSessionInner")
-            .field("session_id", &(Arc::as_ptr(&self.core) as usize))
+            .field("session_id", &format_args!("{:p}", Arc::as_ptr(&self.core)))
             .finish_non_exhaustive()
     }
 }
@@ -792,8 +792,9 @@ mod ios {
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use dispatch2::{DispatchQueue, MainThreadBound};
     use objc2::{
-        AnyThread, DeclaredClass, define_class, msg_send,
+        AnyThread, DeclaredClass, MainThreadMarker, define_class, msg_send,
         rc::Retained,
         runtime::{NSObject, NSObjectProtocol, ProtocolObject},
     };
@@ -802,27 +803,10 @@ mod macos {
     use std::sync::Mutex;
 
     /// `AVAudioPlayer` is not `Send`/`Sync` in `objc2-avf-audio` 0.3.x, so
-    /// the silent-pulse player is kept inside this wrapper.
-    ///
-    /// # Safety
-    ///
-    /// Apple documents `AVAudioPlayer` as thread-safe, and the delegate
-    /// touches the player only through the ivar `Mutex`.
-    struct SilentPlayer {
-        _player: Retained<AVAudioPlayer>,
-    }
-    #[expect(
-        clippy::non_send_fields_in_send_ty,
-        reason = "AVAudioPlayer is thread-safe per Apple docs; accesses go through the ivar Mutex"
-    )]
-    unsafe impl Send for SilentPlayer {}
-    /// # Safety
-    ///
-    /// See the `Send` impl.
-    unsafe impl Sync for SilentPlayer {}
-
+    /// the silent-pulse player lives behind `MainThreadBound`: it is
+    /// created and released on the main queue only.
     pub struct SilentPlayerIvars {
-        player: Mutex<Option<SilentPlayer>>,
+        player: Mutex<Option<MainThreadBound<Retained<AVAudioPlayer>>>>,
     }
 
     define_class!(
@@ -910,37 +894,41 @@ mod macos {
 
     /// Emit a short silent pulse so `MPNowPlayingInfoCenter` registers in
     /// Control Center. Returns the delegate keeping the player alive.
+    /// `AVAudioPlayer` construction is main-queue work; the caller needs
+    /// no answer, so it hops with `exec_async` and the `MainThreadBound`
+    /// is created where the marker already exists.
     pub(super) fn activate_audio_session_with_silence() -> Retained<WaterkitSilentPlayerDelegate> {
         let delegate = WaterkitSilentPlayerDelegate::new();
-        let data = NSData::from_vec(silent_wav());
-        // SAFETY: `initWithData:error:` is a documented `AVAudioPlayer`
-        // initializer; `data` is a complete WAV payload.
-        // `initWithData:error:` is sent manually because the `_error`
-        // convention does not cover `init`-family methods in
-        // `objc2::extern_methods!`.
-        // SAFETY: `initWithData:error:` is a documented `AVAudioPlayer`
-        // initializer; `data` is a complete WAV payload, and `error` is a
-        // valid `NSError **` out-pointer.
-        // SAFETY: `initWithData:error:` is a documented `AVAudioPlayer`
-        // initializer; `data` is a complete WAV payload.
-        let player =
-            match unsafe { AVAudioPlayer::initWithData_error(AVAudioPlayer::alloc(), &data) } {
-                Ok(player) => player,
-                Err(error) => {
-                    tracing::warn!(%error, "failed to create silent audio player");
-                    return delegate;
+        let delegate_on_main = Retained::clone(&delegate);
+        DispatchQueue::main().exec_async(move || {
+            let mtm =
+                MainThreadMarker::new().expect("main-queue closure must run on the main thread");
+            let delegate = delegate_on_main;
+            let data = NSData::from_vec(silent_wav());
+            // SAFETY: `initWithData:error:` is a documented `AVAudioPlayer`
+            // initializer; `data` is a complete WAV payload, and `error` is
+            // a valid `NSError **` out-pointer. It is sent manually because
+            // the `_error` convention does not cover `init`-family methods
+            // in `objc2::extern_methods!`.
+            let player =
+                match unsafe { AVAudioPlayer::initWithData_error(AVAudioPlayer::alloc(), &data) } {
+                    Ok(player) => player,
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to create silent audio player");
+                        return;
+                    }
+                };
+            unsafe {
+                player.setVolume(0.0);
+                player.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+                player.prepareToPlay();
+                if !player.play() {
+                    tracing::warn!("silent audio activation pulse did not start playback");
+                    return;
                 }
-            };
-        unsafe {
-            player.setVolume(0.0);
-            player.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-            player.prepareToPlay();
-            if !player.play() {
-                tracing::warn!("silent audio activation pulse did not start playback");
-                return delegate;
             }
-        }
-        *delegate.ivars().player.lock().unwrap() = Some(SilentPlayer { _player: player });
+            *delegate.ivars().player.lock().unwrap() = Some(MainThreadBound::new(player, mtm));
+        });
         delegate
     }
 }
@@ -1012,9 +1000,10 @@ mod player {
     }
 
     impl NativeAudioPlayerInner {
-        /// Construct the player shell; the main-thread `MainThreadBound` is
-        /// created through `waterkit_core::apple::on_main`.
-        pub fn new() -> Result<Self, PlayerError> {
+        /// Construct the player shell on the main thread: `mtm` proves the
+        /// caller is there (via `on_main` or the sync open path's
+        /// `expect`), so the `MainThreadBound` needs no hop.
+        pub fn new(mtm: MainThreadMarker) -> Result<Self, PlayerError> {
             // SAFETY: `sharedInstance` returns the process-wide session.
             let session = unsafe { AVAudioSession::sharedInstance() };
             let configured = unsafe {
@@ -1030,8 +1019,7 @@ mod player {
                     tracing::error!(%error, "failed to activate AVAudioSession");
                     PlayerError::LoadFailed("Apple audio player failed to load media".into())
                 })?;
-            let player =
-                dispatch2::run_on_main(|mtm| MainThreadBound::new(Mutex::new(None), mtm));
+            let player = MainThreadBound::new(Mutex::new(None), mtm);
             Ok(Self {
                 player,
                 requested_rate: AtomicU32::new(1.0f32.to_bits()),

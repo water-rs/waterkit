@@ -28,10 +28,33 @@ jni.workspace = true
 waterkit-build = { workspace = true, features = ["activity-result"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
-swift-bridge.workspace = true
-
-[build-dependencies]
-waterkit-build.workspace = true
+block2.workspace = true
+dispatch2.workspace = true
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSData",
+    "NSError",
+    "NSObject",
+    "NSString",
+] }
+objc2-pass-kit = { workspace = true, features = [
+    "block2",
+    "PKObject",
+    "PKPass",
+    "PKPassLibrary",
+] }
+objc2-ui-kit = { workspace = true, features = [
+    "block2",
+    "UIApplication",
+    "UIResponder",
+    "UIScene",
+    "UISceneDefinitions",
+    "UIView",
+    "UIViewController",
+    "UIWindow",
+    "UIWindowScene",
+] }
 
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/WalletHelper.kt", "src/sys/android/SavePassesActivity.kt"]

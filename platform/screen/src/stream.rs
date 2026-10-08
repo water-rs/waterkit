@@ -56,6 +56,13 @@ impl ScreenStream {
             reason = "the capturer's Objective-C objects are not Send; the caller drives this future"
         )
     )]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "wgpu's WebGPU device is not Send on wasm"
+        )
+    )]
     pub async fn start(
         display: &ScreenInfo,
         device: Arc<Device>,

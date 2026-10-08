@@ -206,6 +206,13 @@ impl ScreenStreamInner {
         clippy::unused_async,
         reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
     )]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "wgpu's WebGPU device is not Send on wasm"
+        )
+    )]
     pub async fn new(
         _display: &ScreenInfo,
         _device: std::sync::Arc<wgpu::Device>,

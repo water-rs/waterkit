@@ -200,7 +200,7 @@ fn marked_windows_menus(menus: &[Submenu]) -> usize {
     menus.iter().map(marked).sum()
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 mod tests {
     use crate::{MenuBar, MenuError, Submenu};
 

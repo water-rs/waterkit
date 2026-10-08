@@ -1,14 +1,24 @@
 use crate::Policy;
 
-/// Vision capabilities available to this build.
+/// Vision capabilities available to this build on this device.
 ///
-/// Fields arrive with the capability features (text, barcodes, scanner).
+/// Fields arrive with the capability features (barcodes, text, scanner); each
+/// reports what the device's native realization serves exactly and what the
+/// application carries portably.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisionCapabilities {
+    /// The barcode symbologies this build serves.
+    ///
+    /// On Apple `native` is `DetectBarcodesRequest.supportedSymbologies`
+    /// exactly; it is empty on platforms without a native detector.
+    #[cfg(feature = "barcode")]
+    pub barcodes: RealizationSet<enumset::EnumSet<crate::Symbology>>,
     /// Text recognition: the languages each realization serves.
     ///
-    /// On Windows `native` is `OcrEngine::AvailableRecognizerLanguages`
-    /// exactly; it is empty on platforms without a native recognizer.
+    /// On Apple `native` is the intersection of Vision's per-level
+    /// `supportedRecognitionLanguages`; on Windows it is
+    /// `OcrEngine::AvailableRecognizerLanguages` exactly; it is empty on
+    /// platforms without a native recognizer.
     #[cfg(feature = "text")]
     pub text: RealizationSet<Vec<icu_locale_core::LanguageIdentifier>>,
 
@@ -24,7 +34,14 @@ pub struct VisionCapabilities {
 impl VisionCapabilities {
     #[cfg_attr(
         all(
-            any(not(feature = "text"), not(target_os = "windows")),
+            any(
+                not(feature = "barcode"),
+                not(any(target_os = "ios", target_os = "macos"))
+            ),
+            any(
+                not(feature = "text"),
+                not(any(target_os = "windows", target_os = "ios", target_os = "macos"))
+            ),
             any(
                 not(feature = "scanner"),
                 not(any(target_os = "ios", target_os = "android"))
@@ -32,11 +49,16 @@ impl VisionCapabilities {
         ),
         expect(
             clippy::missing_const_for_fn,
-            reason = "a native text recognizer's language probe or the scanner's device-support probe is a runtime call; elsewhere the capabilities are constant"
+            reason = "a native symbology/language probe or the scanner's device-support probe is a runtime call; elsewhere the capabilities are constant"
         )
     )]
     pub(crate) fn new() -> Self {
         Self {
+            #[cfg(feature = "barcode")]
+            barcodes: RealizationSet {
+                native: crate::barcode::native_symbologies(),
+                portable: Portable::Absent,
+            },
             #[cfg(feature = "text")]
             text: RealizationSet {
                 native: crate::text::native_languages(),
@@ -80,6 +102,10 @@ pub enum Portable<T> {
 impl waterkit_core::Capabilities for VisionCapabilities {
     /// Returns whether any capability has a realization in this build.
     fn available(&self) -> bool {
+        #[cfg(feature = "barcode")]
+        if !self.barcodes.native.is_empty() || !matches!(self.barcodes.portable, Portable::Absent) {
+            return true;
+        }
         #[cfg(feature = "text")]
         if self.text.available() {
             return true;
@@ -95,6 +121,9 @@ impl waterkit_core::Capabilities for VisionCapabilities {
 /// Every request capability enabled by this build and whether its portable
 /// realization is carried by the application.
 ///
+/// Each second element becomes `cfg!(feature = "portable-*")` once the
+/// portable realizations land (#130, #132).
+///
 /// The system code scanner is not a request served by [`Vision`]: it has no
 /// portable realization to select, so it is absent here even when its feature
 /// is enabled and [`Policy::PortableOnly`] does not constrain it.
@@ -102,6 +131,8 @@ impl waterkit_core::Capabilities for VisionCapabilities {
 /// [`Vision`]: crate::Vision
 /// [`Policy::PortableOnly`]: crate::Policy::PortableOnly
 pub const ENABLED: &[(&str, bool)] = &[
+    #[cfg(feature = "barcode")]
+    ("barcode", false),
     #[cfg(feature = "text")]
     ("text", false),
 ];

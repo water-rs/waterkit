@@ -24,6 +24,24 @@ tracing.workspace = true
 icu_locale_core = { workspace = true, optional = true, features = ["alloc"] }
 waterkit-camera = { workspace = true, optional = true }
 
+# Apple platforms (iOS, macOS) - the system Vision framework.
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+serde = { workspace = true, features = ["derive"] }
+# Results cross the bridge as JSON.
+serde_json.workspace = true
+objc2.workspace = true
+objc2-core-foundation = { workspace = true, features = ["CFDictionary", "CFString"] }
+objc2-core-video = { workspace = true, features = [
+    "CVBuffer",
+    "CVImageBuffer",
+    "CVPixelBuffer",
+    "CVReturn",
+] }
+objc2-metal.workspace = true
+# The wgpu Metal backend, for recovering the `MTLTexture` an image texture is.
+wgpu-hal.workspace = true
+
 # iOS
 [target.'cfg(target_os = "ios")'.dependencies]
 swift-bridge = { workspace = true, optional = true }
@@ -49,8 +67,14 @@ windows = { workspace = true, optional = true, features = [
 waterkit-build.workspace = true
 
 [features]
-camera = ["dep:waterkit-camera"]
+# The `DetectBarcodes` request. The `Barcode`/`Payload`/`Symbology`
+# vocabulary compiles unconditionally for the system scanner.
+barcode = []
+# `RecognizeText`.
 text = ["dep:icu_locale_core", "dep:windows"]
+# Camera `Frame` images through `waterkit-camera`.
+camera = ["dep:waterkit-camera"]
+
 # The one-shot system code scanner: the Google code scanner of Google Play
 # services on Android, VisionKit's `DataScannerViewController` on iOS.
 scanner = [
@@ -70,8 +94,12 @@ maven = ["com.google.android.gms:play-services-code-scanner:16.1.0"]
 
 [dev-dependencies]
 pollster.workspace = true
-
-[target.'cfg(target_os = "windows")'.dev-dependencies]
-# Rasterizes the test-time text fixtures; no fonts are committed to the repo.
-ab_glyph = "0.2"
 image.workspace = true
+# Renders a QR code at test time; no image fixture is committed.
+qrcode = "0.14"
+# Renders 1D symbologies at test time.
+barcoders = "1"
+# Rasterizes glyphs for text recognition tests.
+ab_glyph = "0.2"
+# A bundled DejaVu font; no font binary is committed.
+dejavu = "2.37"

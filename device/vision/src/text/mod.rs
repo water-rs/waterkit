@@ -1,9 +1,11 @@
 //! The `text` capability: recognizing printed text in an image.
 //!
-//! [`RecognizeText`] is served natively by `Windows.Media.Ocr` on Windows.
-//! The OS engine's single quality mode serves both
-//! [`RecognitionLevel`] values; a requested language it lacks selects the
-//! portable realization when the application carries one.
+//! [`RecognizeText`] is served natively by `Windows.Media.Ocr` on Windows
+//! and by Apple Vision's `RecognizeTextRequest` on iOS and macOS. The OS
+//! engine's single quality mode serves both [`RecognitionLevel`] values on
+//! Windows; Vision serves its per-level language sets. A requested language
+//! a realization lacks selects the portable realization when the
+//! application carries one.
 
 mod sys;
 
@@ -35,7 +37,7 @@ pub struct TextWord {
     /// The serving realization's confidence, if it reports one.
     ///
     /// `Windows.Media.Ocr` reports no confidence, so its words carry
-    /// [`None`].
+    /// [`None`]; Apple Vision reports the line candidate's confidence.
     pub confidence: Option<f32>,
     /// Normalized corners in reading order: top-left, top-right,
     /// bottom-right, bottom-left of the upright image.
@@ -50,7 +52,7 @@ pub struct TextLine {
     /// The serving realization's confidence, if it reports one.
     ///
     /// `Windows.Media.Ocr` reports no confidence, so its lines carry
-    /// [`None`].
+    /// [`None`]; Apple Vision reports its candidate's confidence.
     pub confidence: Option<f32>,
     /// Normalized corners in reading order: top-left, top-right,
     /// bottom-right, bottom-left of the upright image.
@@ -124,7 +126,7 @@ impl Sealed for RecognizeText {
 #[doc(hidden)]
 #[derive(Debug)]
 #[cfg_attr(
-    not(target_os = "windows"),
+    not(any(target_os = "windows", target_os = "ios", target_os = "macos")),
     expect(
         dead_code,
         reason = "only a native realization reads the languages and level, and this platform has none yet"

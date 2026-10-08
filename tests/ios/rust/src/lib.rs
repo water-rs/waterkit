@@ -5,6 +5,8 @@ use waterkit_test_report::{TestCase, TestReport, to_json_pretty};
 
 #[cfg(feature = "camera")]
 mod camera;
+#[cfg(feature = "vision")]
+mod vision;
 
 #[swift_bridge::bridge]
 mod ffi {
@@ -23,6 +25,7 @@ fn run_tests_json() -> String {
     to_json_pretty(&report).expect("failed to serialize WaterKit iOS test report")
 }
 
+#[allow(clippy::too_many_lines)]
 fn build_report() -> TestReport {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -164,6 +167,8 @@ const RECORDERS: &[Recorder] = &[
     |h| h.report.push(TestCase::passed("deeplink.linked")),
     #[cfg(feature = "vision")]
     |h| h.runtime.block_on(record_vision(&mut h.report)),
+    #[cfg(feature = "vision")]
+    |h| h.runtime.block_on(vision::record(&mut h.report)),
 ];
 
 #[cfg(feature = "sensor")]

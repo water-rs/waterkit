@@ -3,7 +3,14 @@
 
 use std::time::Duration;
 
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+use objc2_core_foundation::CFRetained;
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+use objc2_core_video::CVPixelBuffer;
 use waterkit_video_core::VideoColorInfo;
+
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+use crate::sys::apple::CapturedPixelBuffer;
 
 pub use waterkit_core::Orientation;
 
@@ -122,6 +129,10 @@ pub struct Frame {
     width: u32,
     height: u32,
     timestamp: Duration,
+    /// The captured `CVPixelBuffer` the planes alias, when the camera
+    /// captured one. Frames uploaded from CPU memory carry none.
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    pub(crate) pixel_buffer: Option<CapturedPixelBuffer>,
 }
 
 impl Frame {
@@ -149,6 +160,8 @@ impl Frame {
             width,
             height,
             timestamp,
+            #[cfg(any(target_os = "ios", target_os = "macos"))]
+            pixel_buffer: None,
         }
     }
 
@@ -156,6 +169,17 @@ impl Frame {
     #[must_use]
     pub const fn planes(&self) -> &FramePlanes {
         &self.planes
+    }
+
+    /// The `CVPixelBuffer` this frame's planes alias, when the camera
+    /// captured one.
+    ///
+    /// Retaining a buffer costs no pixel copy: the plane textures already
+    /// alias its `IOSurface`.
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    #[must_use]
+    pub fn pixel_buffer(&self) -> Option<CFRetained<CVPixelBuffer>> {
+        self.pixel_buffer.as_ref().map(|buffer| buffer.0.clone())
     }
 
     /// The color description of this frame.

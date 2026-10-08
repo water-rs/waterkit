@@ -591,6 +591,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "barcoders"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "298326aba91e0dd1acba62767652c7c9f4d45ada6804110278680c4f0c6e8ab7"
+
+[[package]]
 name = "base64"
 version = "0.21.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1714,6 +1720,12 @@ checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
 dependencies = [
  "thiserror 2.0.20",
 ]
+
+[[package]]
+name = "dejavu"
+version = "2.37.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "017b75b5fbc5806d490da36acc5c4d0e4ae1b69890d02f24c268da971813fbc1"
 
 [[package]]
 name = "delegate-display"
@@ -5544,6 +5556,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+dependencies = [
+ "image",
+]
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8427,13 +8448,20 @@ dependencies = [
 name = "waterkit-test-ios"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
+ "barcoders",
+ "bytes",
+ "dejavu",
  "futures",
+ "image",
+ "qrcode",
  "swift-bridge",
  "swift-bridge-build",
  "tokio",
  "waterkit",
  "waterkit-build",
  "waterkit-test-report",
+ "wgpu",
 ]
 
 [[package]]
@@ -8591,14 +8619,23 @@ name = "waterkit-vision"
 version = "0.1.4"
 dependencies = [
  "ab_glyph",
+ "barcoders",
  "bytes",
+ "dejavu",
  "enumset",
  "futures",
  "icu_locale_core",
  "image",
  "jni 0.22.4",
  "ndk-context",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-video",
+ "objc2-metal 0.3.2",
  "pollster 1.0.1",
+ "qrcode",
+ "serde",
+ "serde_json",
  "swift-bridge",
  "thiserror 2.0.20",
  "tracing",
@@ -8606,6 +8643,7 @@ dependencies = [
  "waterkit-camera",
  "waterkit-core",
  "wgpu",
+ "wgpu-hal",
  "windows 0.62.2",
 ]
 

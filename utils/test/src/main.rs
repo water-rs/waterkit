@@ -972,6 +972,8 @@ fn get_crate_feature(package_name: &str) -> Option<&'static str> {
         Some("background")
     } else if package_name.contains("passkey") {
         Some("passkey")
+    } else if package_name.contains("vision") {
+        Some("vision")
     } else if package_name.contains("otp") {
         Some("otp")
     } else if package_name.contains("wallet") {

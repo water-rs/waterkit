@@ -117,7 +117,7 @@ clipboard = ["dep:waterkit-clipboard"]
 fs = ["dep:waterkit-fs"]
 secret = ["dep:waterkit-secret"]
 camera = ["dep:waterkit-camera", "waterkit-vision?/camera"]
-vision = ["dep:waterkit-vision", "waterkit-vision/scanner"]
+vision = ["dep:waterkit-vision", "waterkit-vision?/barcode", "waterkit-vision?/text", "waterkit-vision?/scanner"]
 sensor = ["dep:waterkit-sensor"]
 codec = ["dep:waterkit-codec"]
 # VA-API hardware video decode/encode on Linux. A still-image consumer keeps
@@ -196,7 +196,7 @@ waterkit-otp = { path = "identity/otp", version = "0.1.4" }
 waterkit-wallet = { path = "platform/wallet", version = "0.1.4" }
 
 # Cross-platform
-enumset = "1"
+enumset = "1.1"
 futures = "0.3"
 futures-channel = "0.3"
 smallvec = "1.15"

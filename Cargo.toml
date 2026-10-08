@@ -228,6 +228,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 core-foundation = "0.10"
 objc2 = "0.6"
 objc2-foundation = "0.3"
+objc2-core-graphics = { version = "0.3", default-features = false }
+objc2-core-image = { version = "0.3", default-features = false }
 objc2-core-location = { version = "0.3", default-features = false }
 dispatch2 = "0.3"
 objc2-core-media = "0.3"
@@ -237,6 +239,7 @@ keyboard-types = "0.8"
 objc2-core-video = "0.3"
 objc2-video-toolbox = "0.3"
 objc2-core-foundation = "0.3"
+objc2-image-io = { version = "0.3", default-features = false }
 objc2-io-surface = "0.3"
 objc2-metal = "0.3"
 objc = "0.2"

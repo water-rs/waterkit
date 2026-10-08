@@ -5,15 +5,15 @@ fn main() {
 
     // iOS uses Swift bridge (macOS uses clipboard-rs)
     if target_os == "ios" {
-        use waterkit_build::AppleSwiftConfig;
-
-        let config = AppleSwiftConfig::new("waterkit-clipboard", "ClipboardHelper")
-            .swift_source("src/sys/apple/clipboard.swift")
-            .framework("Foundation")
-            .framework("UIKit")
-            .framework("UniformTypeIdentifiers")
-            .framework("MobileCoreServices");
-
-        waterkit_build::compile_swift("src/sys/apple/mod.rs", &config);
+        waterkit_build::SwiftBridges::new()
+            .bridge(
+                waterkit_build::SwiftBridge::new("src/sys/apple/mod.rs")
+                    .swift_source("src/sys/apple/clipboard.swift")
+                    .framework("Foundation")
+                    .framework("UIKit")
+                    .framework("UniformTypeIdentifiers")
+                    .framework("MobileCoreServices"),
+            )
+            .compile();
     }
 }

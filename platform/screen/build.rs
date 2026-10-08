@@ -4,9 +4,7 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
 
     if target_os == "ios" || target_os == "macos" {
-        use waterkit_build::AppleSwiftConfig;
-
-        let target = std::env::var("TARGET").unwrap();
+        use waterkit_build::{SwiftBridge, SwiftBridges};
 
         let swift_source = if target_os == "macos" {
             "src/sys/apple/ScreenMacOS.swift"
@@ -14,19 +12,19 @@ fn main() {
             "src/sys/apple/Screen.swift"
         };
 
-        let mut config = AppleSwiftConfig::new("waterkit-screen", "ScreenHelper")
+        let mut bridge = SwiftBridge::new("src/sys/apple/mod.rs")
             .swift_source(swift_source)
             .framework("Foundation");
 
-        if target.contains("ios") {
-            config = config.framework("UIKit");
+        if target_os == "ios" {
+            bridge = bridge.framework("UIKit");
         } else {
-            config = config
+            bridge = bridge
                 .framework("Cocoa")
                 .framework("ScreenCaptureKit")
                 .framework("IOKit");
         }
 
-        waterkit_build::compile_swift("src/sys/apple/mod.rs", &config);
+        SwiftBridges::new().bridge(bridge).compile();
     }
 }

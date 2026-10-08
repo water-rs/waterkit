@@ -4,19 +4,18 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
 
     if target_os == "ios" || target_os == "macos" {
-        use waterkit_build::AppleSwiftConfig;
+        use waterkit_build::{SwiftBridge, SwiftBridges};
 
-        let target = std::env::var("TARGET").unwrap();
-        let mut config = AppleSwiftConfig::new("waterkit-haptic", "HapticHelper")
+        let mut bridge = SwiftBridge::new("src/sys/apple/mod.rs")
             .swift_source("src/sys/apple/Haptic.swift")
             .framework("Foundation");
 
-        if target.contains("ios") {
-            config = config.framework("UIKit").framework("CoreHaptics");
+        if target_os == "ios" {
+            bridge = bridge.framework("UIKit").framework("CoreHaptics");
         } else {
-            config = config.framework("AppKit");
+            bridge = bridge.framework("AppKit");
         }
 
-        waterkit_build::compile_swift("src/sys/apple/mod.rs", &config);
+        SwiftBridges::new().bridge(bridge).compile();
     }
 }

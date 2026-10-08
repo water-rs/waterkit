@@ -10,12 +10,12 @@ use std::sync::OnceLock;
 use icu_locale_core::LanguageIdentifier;
 
 use crate::{
-    RecognitionLevel, TextLine, TextWord, VisionError,
+    RecognitionLevel, TextLine, VisionError,
     sealed::{Offer, Pass},
     text::{RecognizeText, TextPlan},
 };
 
-use crate::sys::apple_vision::ffi;
+use crate::sys::apple_vision::{WireTextLine, ffi};
 
 /// The wire value for [`RecognitionLevel::Fast`].
 const FFI_LEVEL_FAST: u8 = 0;
@@ -128,47 +128,4 @@ pub async fn recognize(pass: &mut Pass<'_>, plan: &TextPlan) -> Result<Vec<TextL
     })
     .await?;
     Ok(lines.into_iter().map(WireTextLine::into_line).collect())
-}
-
-/// A text line as the bridge reports it.
-#[derive(Debug, serde::Deserialize)]
-struct WireTextLine {
-    /// The recognized text.
-    text: String,
-    /// Vision's confidence, 0 to 1.
-    confidence: f32,
-    /// The four upright corners in reading order, x/y interleaved.
-    corners: [f32; 8],
-    /// The line's words in reading order.
-    words: Vec<WireTextWord>,
-}
-
-impl WireTextLine {
-    fn into_line(self) -> TextLine {
-        TextLine {
-            text: self.text,
-            confidence: Some(self.confidence),
-            bounds: crate::sys::apple_vision::wire_quad(self.corners),
-            words: self
-                .words
-                .into_iter()
-                .map(|word| TextWord {
-                    text: word.text,
-                    confidence: Some(word.confidence),
-                    bounds: crate::sys::apple_vision::wire_quad(word.corners),
-                })
-                .collect(),
-        }
-    }
-}
-
-/// A recognized word as the bridge reports it.
-#[derive(Debug, serde::Deserialize)]
-struct WireTextWord {
-    /// The recognized text.
-    text: String,
-    /// The line candidate's confidence, 0 to 1.
-    confidence: f32,
-    /// The four upright corners in reading order, x/y interleaved.
-    corners: [f32; 8],
 }

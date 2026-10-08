@@ -73,6 +73,8 @@
 
 mod barcode;
 mod capability;
+#[cfg(feature = "document")]
+mod document;
 mod error;
 mod geometry;
 mod image;
@@ -93,6 +95,11 @@ mod vision;
 pub use barcode::DetectBarcodes;
 pub use barcode::{Barcode, Payload};
 pub use capability::{Portable, RealizationSet, VisionCapabilities};
+#[cfg(feature = "document")]
+pub use document::{
+    Block, DataKind, DetectedData, Document, Formula, List, ListItem, Paragraph, RecognizeDocument,
+    Table, TableCell,
+};
 pub use enumset::EnumSet;
 pub use error::VisionError;
 pub use geometry::{Point, Quad};

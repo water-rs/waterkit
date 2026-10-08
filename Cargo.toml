@@ -62,6 +62,7 @@ waterkit-deeplink = { workspace = true, optional = true }
 waterkit-background = { workspace = true, optional = true }
 waterkit-passkey = { workspace = true, optional = true }
 waterkit-otp = { workspace = true, optional = true }
+waterkit-wallet = { workspace = true, optional = true }
 
 [dev-dependencies]
 toml = { workspace = true }
@@ -98,6 +99,7 @@ full = [
     "background",
     "passkey",
     "otp",
+    "wallet",
 ]
 permission = ["dep:waterkit-permission"]
 location = ["dep:waterkit-location", "permission"]
@@ -131,6 +133,7 @@ deeplink = ["dep:waterkit-deeplink"]
 background = ["dep:waterkit-background"]
 passkey = ["dep:waterkit-passkey"]
 otp = ["dep:waterkit-otp"]
+wallet = ["dep:waterkit-wallet"]
 
 
 [workspace.dependencies]
@@ -182,6 +185,7 @@ waterkit-deeplink = { path = "platform/deeplink", version = "0.1.4" }
 waterkit-background = { path = "platform/background", version = "0.1.4" }
 waterkit-passkey = { path = "identity/passkey", version = "0.1.4" }
 waterkit-otp = { path = "identity/otp", version = "0.1.4" }
+waterkit-wallet = { path = "platform/wallet", version = "0.1.4" }
 
 # Cross-platform
 enumset = "1"

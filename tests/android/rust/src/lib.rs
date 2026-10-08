@@ -840,6 +840,8 @@ const RECORDERS: &[Recorder] = &[
     |h| record_android_avif_decode(&mut h.report),
     #[cfg(feature = "health")]
     |h| record_android_health(&mut h.report),
+    #[cfg(feature = "wallet")]
+    |h| h.runtime.block_on(record_android_wallet(&mut h.report)),
     #[cfg(feature = "screen")]
     |h| record_android_screen(&mut h.report),
     #[cfg(feature = "dialog")]
@@ -2165,6 +2167,20 @@ fn record_android_health(report: &mut TestReport) {
             waterkit_content::health::capabilities().available
         ),
     ));
+}
+
+#[cfg(feature = "wallet")]
+async fn record_android_wallet(report: &mut TestReport) {
+    match waterkit_content::wallet::capabilities().await {
+        Ok(capabilities) => report.push(TestCase::passed_with_message(
+            "wallet.availability",
+            format!("available={}", capabilities.available),
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "wallet.availability",
+            format!("wallet capability probe failed: {error}"),
+        )),
+    }
 }
 
 #[cfg(feature = "otp")]

@@ -10,7 +10,9 @@ plugins {
 // the feature set the waterkit-test driver builds the harness library with
 // (passed here as `-PwaterkitFeatures=<feature>`), so a helper only compiles
 // into the test app when its crate and gate feature are in the resolved
-// graph — dead or undeclared sources never reach the DEX.
+// graph — dead or undeclared sources never reach the DEX. A crate's base
+// table always applies; `feature.<cargo-feature>` subtables apply only when
+// that feature is enabled on the crate.
 val waterkitFeatures = providers.gradleProperty("waterkitFeatures").orNull
     ?: error(
         "missing -PwaterkitFeatures=<feature>: the waterkit-test driver passes " +
@@ -49,23 +51,36 @@ for (pkg in cargoMetadata["packages"] as List<*>) {
     pkg as Map<*, *>
     val waterui = (pkg["metadata"] as? Map<*, *>)?.get("waterui") as? Map<*, *> ?: continue
     val android = waterui["android"] as? Map<*, *> ?: continue
-    val requiredFeature = android["required-feature"] as? String
-    if (requiredFeature != null && enabledFeatures[pkg["id"]]?.contains(requiredFeature) != true) {
-        continue
+    // The base table always contributes; each `feature.<cargo-feature>`
+    // subtable contributes only while that feature is enabled on the crate.
+    val featureTables = android["feature"] as? Map<*, *> ?: emptyMap<Any, Any>()
+    val declaredFeatures = (pkg["features"] as Map<*, *>).keys
+    val enabled = enabledFeatures[pkg["id"]] ?: emptySet<Any>()
+    val tables = mutableListOf<Map<*, *>>(android)
+    for ((feature, table) in featureTables) {
+        require(feature in declaredFeatures) {
+            "crate ${pkg["name"]} declares [package.metadata.waterui.android.feature.$feature] " +
+                "but has no cargo feature `$feature`"
+        }
+        if (feature in enabled) {
+            tables += table as Map<*, *>
+        }
     }
     val crateRoot = File(pkg["manifest_path"] as String).parentFile
-    for (source in android["kotlin-sources"] as? List<*> ?: emptyList<Any>()) {
-        val file = File(crateRoot, source as String)
-        require(file.isFile) {
-            "crate ${pkg["name"]} declares Kotlin source $source that does not exist"
+    for (table in tables) {
+        for (source in table["kotlin-sources"] as? List<*> ?: emptyList<Any>()) {
+            val file = File(crateRoot, source as String)
+            require(file.isFile) {
+                "crate ${pkg["name"]} declares Kotlin source $source that does not exist"
+            }
+            val previous = kotlinSources.put(file.name, file)
+            require(previous == null || previous == file) {
+                "two crates declare a Kotlin source named ${file.name}"
+            }
         }
-        val previous = kotlinSources.put(file.name, file)
-        require(previous == null || previous == file) {
-            "two crates declare a Kotlin source named ${file.name}"
+        for (coordinate in table["maven"] as? List<*> ?: emptyList<Any>()) {
+            mavenCoordinates += coordinate as String
         }
-    }
-    for (coordinate in android["maven"] as? List<*> ?: emptyList<Any>()) {
-        mavenCoordinates += coordinate as String
     }
 }
 

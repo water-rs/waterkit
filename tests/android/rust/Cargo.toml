@@ -13,9 +13,11 @@ crate-type = ["cdylib"]
 [dependencies]
 jni.workspace = true
 futures.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tokio = { workspace = true, features = ["fs", "macros", "rt", "time"] }
 android_logger = "0.15"
 log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 waterkit_content = { path = "../../..", package = "waterkit", default-features = false }
 waterkit-test-report.workspace = true
 # Saves converted camera frames for inspection.
@@ -51,6 +53,8 @@ full = [
     "screen",
     "background",
     "passkey",
+    "otp",
+    "vision",
 ]
 sensor = ["waterkit_content/sensor"]
 biometric = ["waterkit_content/biometric"]
@@ -59,7 +63,7 @@ audio = ["waterkit_content/audio"]
 camera = ["waterkit_content/camera"]
 clipboard = ["waterkit_content/clipboard"]
 codec = ["waterkit_content/codec"]
-dialog = ["waterkit_content/dialog"]
+dialog = ["waterkit_content/dialog", "waterkit-build/activity-result"]
 fs = ["waterkit_content/fs"]
 haptic = ["waterkit_content/haptic"]
 notification = ["waterkit_content/notification"]
@@ -74,11 +78,13 @@ speech = ["waterkit_content/speech"]
 deeplink = ["waterkit_content/deeplink"]
 contacts = ["waterkit_content/contacts"]
 calendar = ["waterkit_content/calendar"]
+vision = ["waterkit_content/vision"]
 health = ["waterkit_content/health"]
 language = ["waterkit_content/language"]
 screen = ["waterkit_content/screen"]
 background = ["waterkit_content/background"]
 passkey = ["waterkit_content/passkey"]
+otp = ["waterkit_content/otp"]
 
 
 [target.'cfg(target_os = "android")'.dependencies]

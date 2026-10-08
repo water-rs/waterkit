@@ -51,6 +51,7 @@ full = [
     "deeplink",
     "background",
     "passkey",
+    "vision",
 ]
 sensor = ["waterkit/sensor"]
 biometric = ["waterkit/biometric"]
@@ -80,6 +81,7 @@ language = ["waterkit/language"]
 health = ["waterkit/health"]
 deeplink = ["waterkit/deeplink"]
 background = ["waterkit/background"]
+vision = ["waterkit/vision"]
 passkey = ["waterkit/passkey"]
 
 [build-dependencies]

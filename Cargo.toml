@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/notification", "tests/macos/passkey", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "multimedia/video/core", "multimedia/video/container", "multimedia/video/streaming", "multimedia/video/processing", "multimedia/video/player", "multimedia/video/cli", "identity/*", "sharing/*", "utils/build"]
+members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/notification", "tests/macos/passkey", "tests/macos/vision", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "multimedia/video/core", "multimedia/video/container", "multimedia/video/streaming", "multimedia/video/processing", "multimedia/video/player", "multimedia/video/cli", "identity/*", "sharing/*", "utils/build"]
 
 
 [workspace.package]
@@ -62,6 +62,7 @@ waterkit-health = { workspace = true, optional = true }
 waterkit-deeplink = { workspace = true, optional = true }
 waterkit-background = { workspace = true, optional = true }
 waterkit-passkey = { workspace = true, optional = true }
+waterkit-otp = { workspace = true, optional = true }
 
 [dev-dependencies]
 toml = { workspace = true }
@@ -98,6 +99,7 @@ full = [
     "deeplink",
     "background",
     "passkey",
+    "otp",
 ]
 permission = ["dep:waterkit-permission"]
 location = ["dep:waterkit-location", "permission"]
@@ -111,7 +113,7 @@ clipboard = ["dep:waterkit-clipboard"]
 fs = ["dep:waterkit-fs"]
 secret = ["dep:waterkit-secret"]
 camera = ["dep:waterkit-camera", "waterkit-vision?/camera"]
-vision = ["dep:waterkit-vision"]
+vision = ["dep:waterkit-vision", "waterkit-vision/scanner"]
 sensor = ["dep:waterkit-sensor"]
 codec = ["dep:waterkit-codec"]
 # VA-API hardware video decode/encode on Linux. A still-image consumer keeps
@@ -131,6 +133,7 @@ health = ["dep:waterkit-health"]
 deeplink = ["dep:waterkit-deeplink"]
 background = ["dep:waterkit-background"]
 passkey = ["dep:waterkit-passkey"]
+otp = ["dep:waterkit-otp"]
 
 
 [workspace.dependencies]
@@ -182,9 +185,12 @@ waterkit-health = { path = "device/health", version = "0.1.4" }
 waterkit-deeplink = { path = "platform/deeplink", version = "0.1.4" }
 waterkit-background = { path = "platform/background", version = "0.1.4" }
 waterkit-passkey = { path = "identity/passkey", version = "0.1.4" }
+waterkit-otp = { path = "identity/otp", version = "0.1.4" }
 
 # Cross-platform
+enumset = "1"
 futures = "0.3"
+futures-channel = "0.3"
 smallvec = "1.15"
 async-channel = "2.5"
 async-fs = "2"
@@ -193,6 +199,9 @@ num-traits = "0.2"
 blocking = "1"
 async-io = "2"
 async-process = "2"
+base64 = "0.22"
+hex = "0.4"
+sha2 = "0.10"
 wgpu = "30.0.1"
 wgpu-hal = { version = "30.0.1", features = ["metal"] }
 

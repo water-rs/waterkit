@@ -14,6 +14,15 @@ use jni::objects::{Global, JClass, JObject, JString, JValue};
 use jni::{Env, JavaVM, jni_sig, jni_str};
 use std::sync::OnceLock;
 
+#[cfg(feature = "activity-result")]
+mod activity_result;
+
+#[cfg(feature = "activity-result")]
+pub use activity_result::{
+    ActivityResult, ActivityResultError, PendingActivityResult, ResultCode,
+    start_activity_for_result, start_intent_sender_for_result,
+};
+
 /// Failure while bridging into the Android platform.
 ///
 /// Capability crates convert this into their own `Platform` variant.
@@ -55,6 +64,11 @@ fn take_pending_exception(env: &Env<'_>, error: jni::errors::Error) -> jni::erro
     // inspection can throw in turn; leave nothing pending.
     env.exception_clear();
     caught
+}
+
+#[cfg(feature = "activity-result")]
+fn android_error_with_pending_exception(env: &Env<'_>, error: jni::errors::Error) -> AndroidError {
+    AndroidError::from(take_pending_exception(env, error))
 }
 
 /// Returns the application's JVM together with a global reference to its Android

@@ -118,9 +118,8 @@ impl Screenshot {
 ///
 /// Returns [`Error::Platform`] if capture fails, or [`Error::Unsupported`]
 /// if the format is not available on this platform.
-#[allow(clippy::missing_const_for_fn)] // Not const on all platforms
-pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
-    sys::screenshot(display, format)
+pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
+    sys::screenshot(display, format).await
 }
 
 /// Capture the primary display.
@@ -132,12 +131,12 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
 /// # Errors
 ///
 /// Returns [`Error::MonitorNotFound`] if no primary display is found.
-pub fn screenshot_primary(format: ImageFormat) -> Result<Screenshot, Error> {
+pub async fn screenshot_primary(format: ImageFormat) -> Result<Screenshot, Error> {
     let displays = crate::screens()?;
     let primary = displays
         .iter()
         .find(|d| d.is_primary())
         .or_else(|| displays.first())
         .ok_or(Error::MonitorNotFound)?;
-    screenshot(primary, format)
+    screenshot(primary, format).await
 }

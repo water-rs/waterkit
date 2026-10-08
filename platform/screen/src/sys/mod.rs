@@ -138,18 +138,18 @@ pub async fn set_brightness(_val: f32) -> Result<(), Error> {
 // ============================================================================
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
-    desktop::screenshot(display, format)
+pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
+    desktop::screenshot(display, format).await
 }
 
 #[cfg(target_os = "ios")]
-pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
-    apple::screenshot(display, format)
+pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
+    apple::screenshot(display, format).await
 }
 
 #[cfg(target_os = "android")]
-pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
-    android::screenshot(display, format)
+pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
+    android::screenshot(display, format).await
 }
 
 #[cfg(not(any(
@@ -159,11 +159,8 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
     target_os = "ios",
     target_os = "android"
 )))]
-#[expect(
-    clippy::missing_const_for_fn,
-    reason = "the facade calls every platform's backend through the same non-const signature; only this unsupported-platform shim could be const"
-)]
-pub fn screenshot(_display: &ScreenInfo, _format: ImageFormat) -> Result<Screenshot, Error> {
+#[expect(clippy::unused_async, reason = "the facade is async on every platform")]
+pub async fn screenshot(_display: &ScreenInfo, _format: ImageFormat) -> Result<Screenshot, Error> {
     Err(Error::Unsupported)
 }
 

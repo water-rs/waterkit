@@ -33,13 +33,13 @@ waterkit-screen = "0.1"
 ```rust
 use waterkit_screen::{screenshot_primary, ImageFormat};
 
-fn main() {
+async fn example() {
     // Capture as PNG (no GPU device needed)
-    let shot = screenshot_primary(ImageFormat::Png).unwrap();
+    let shot = screenshot_primary(ImageFormat::Png).await.unwrap();
     shot.save("screenshot.png").unwrap();
 
     // Capture as HEIF (macOS/iOS only)
-    let shot = screenshot_primary(ImageFormat::Heif).unwrap();
+    let shot = screenshot_primary(ImageFormat::Heif).await.unwrap();
     shot.save("screenshot.heic").unwrap();
 }
 ```

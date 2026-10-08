@@ -44,7 +44,7 @@ async fn demo() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\nCapturing screenshot...");
-    match screenshot_primary(ImageFormat::Png) {
+    match screenshot_primary(ImageFormat::Png).await {
         Ok(shot) => {
             let filename = "screenshot.png";
             shot.save(filename)?;

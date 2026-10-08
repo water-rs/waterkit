@@ -49,13 +49,20 @@ impl ScreenStream {
     /// # Errors
     ///
     /// Returns [`Error::Platform`] if capture cannot be started.
-    pub fn start(
+    #[cfg_attr(
+        target_os = "macos",
+        expect(
+            clippy::future_not_send,
+            reason = "the capturer's Objective-C objects are not Send; the caller drives this future"
+        )
+    )]
+    pub async fn start(
         display: &ScreenInfo,
         device: Arc<Device>,
         queue: Arc<Queue>,
         config: &StreamConfig,
     ) -> Result<Self, Error> {
-        let inner = sys::ScreenStreamInner::new(display, device, queue, config)?;
+        let inner = sys::ScreenStreamInner::new(display, device, queue, config).await?;
         Ok(Self { inner })
     }
 

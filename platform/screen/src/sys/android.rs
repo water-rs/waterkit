@@ -168,13 +168,21 @@ pub fn max_refresh_rate_hz() -> Result<f32, Error> {
 }
 
 /// Capture a screenshot on Android using `MediaProjection`.
-pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
+pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
     if !matches!(format, ImageFormat::Png) {
         return Err(Error::Unsupported);
     }
 
+    let (width, height) = (display.width(), display.height());
+    let data = blocking::unblock(|| capture_screenshot_png()).await?;
+
+    Ok(Screenshot::new(data, width, height, format))
+}
+
+/// Runs the MediaProjection screenshot JNI calls off the executor thread.
+fn capture_screenshot_png() -> Result<Vec<u8>, Error> {
     ensure_helper_initialized()?;
-    let data = with_attached_env(|env| {
+    with_attached_env(|env| {
         let helper_class = get_helper_class(env)?;
         let has_permission = env
             .call_static_method(
@@ -218,14 +226,7 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
             ));
         }
         Ok(data)
-    })?;
-
-    Ok(Screenshot::new(
-        data,
-        display.width(),
-        display.height(),
-        format,
-    ))
+    })
 }
 
 /// Get screen brightness.

@@ -19,6 +19,7 @@ thiserror.workspace = true
 wgpu.workspace = true
 async-channel.workspace = true
 blocking.workspace = true
+futures.workspace = true
 tracing.workspace = true
 
 # Desktop screen capture

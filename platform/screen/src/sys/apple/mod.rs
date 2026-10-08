@@ -19,24 +19,33 @@ use objc2_core_foundation::{CFMutableData, CFString};
 use objc2_core_graphics::CGImage;
 use objc2_image_io::CGImageDestination;
 
-/// Encodes a `CGImage` as `format` (0 = PNG, 1 = AVIF, 2 = HEIF).
-fn encode_image(image: &CGImage, format: u8) -> Option<Vec<u8>> {
+/// Encodes a `CGImage` as `format` through `CGImageDestination`.
+fn encode_image(image: &CGImage, format: ImageFormat) -> Result<Vec<u8>, Error> {
     let uti = match format {
-        1 => "public.avif",
-        2 => "public.heic",
-        _ => "public.png",
+        ImageFormat::Png => "public.png",
+        ImageFormat::Avif => "public.avif",
+        ImageFormat::Heif => "public.heic",
     };
-    let data = CFMutableData::new(None, 0)?;
+    let data = CFMutableData::new(None, 0).ok_or_else(|| {
+        Error::Platform(format!(
+            "CFMutableData allocation failed for {uti} encoding"
+        ))
+    })?;
     // SAFETY: `data` is a valid CFMutableData and `uti` a known UTI string.
     let destination =
-        unsafe { CGImageDestination::with_data(&data, &CFString::from_str(uti), 1, None) }?;
+        unsafe { CGImageDestination::with_data(&data, &CFString::from_str(uti), 1, None) }
+            .ok_or_else(|| {
+                Error::Platform(format!("CGImageDestination failed to create for UTI {uti}"))
+            })?;
     // SAFETY: `destination` and `image` are valid objects.
     unsafe { destination.add_image(image, None) };
     // SAFETY: `destination` is valid.
     if unsafe { destination.finalize() } {
-        Some(data.to_vec())
+        Ok(data.to_vec())
     } else {
-        None
+        Err(Error::Platform(format!(
+            "CGImageDestination failed to finalize the image as {uti}"
+        )))
     }
 }
 
@@ -47,48 +56,43 @@ fn encode_image(image: &CGImage, format: u8) -> Option<Vec<u8>> {
 #[cfg(target_os = "ios")]
 mod ios {
     use core::ptr::NonNull;
-    use std::sync::mpsc;
 
     use block2::RcBlock;
-    use dispatch2::DispatchQueue;
-    use objc2::{AnyThread, MainThreadMarker};
+    use objc2::AnyThread;
     use objc2_ui_kit::{
         UIApplication, UIGraphicsImageRenderer, UIGraphicsImageRendererContext, UIScreen,
     };
+    use waterkit_core::apple::on_main;
 
-    /// Runs `work` on the main thread, dispatching through the main queue
-    /// when the caller is on another thread.
-    fn on_main_thread<R: Send>(work: impl FnOnce(MainThreadMarker) -> R + Send) -> R {
-        if let Some(mtm) = MainThreadMarker::new() {
-            return work(mtm);
-        }
-        let mut result = None;
-        DispatchQueue::main().exec_sync(|| {
-            let mtm = MainThreadMarker::new().expect("the main queue only runs on the main thread");
-            result = Some(work(mtm));
-        });
-        result.expect("a synchronous block on the main queue ran to completion")
-    }
+    use crate::Error;
+    use crate::screenshot::ImageFormat;
 
-    /// Encodes a rendered `UIImage` per `format` (0 = PNG, 1 = AVIF, 2 = HEIF).
-    fn encode_ui_image(image: &objc2_ui_kit::UIImage, format: u8) -> Option<Vec<u8>> {
+    /// Encodes a rendered `UIImage` per `format`.
+    fn encode_ui_image(
+        image: &objc2_ui_kit::UIImage,
+        format: ImageFormat,
+    ) -> Result<Vec<u8>, Error> {
         match format {
-            1 | 2 => {
+            ImageFormat::Png => image
+                .png_representation()
+                .map(|data| data.to_vec())
+                .ok_or_else(|| {
+                    Error::Platform("UIImage.pngRepresentation failed to encode".into())
+                }),
+            ImageFormat::Avif | ImageFormat::Heif => {
                 // SAFETY: `image` is a valid UIImage; `CGImage` borrows its
                 // backing store.
-                let cg_image = unsafe { image.CGImage() }?;
+                let cg_image = unsafe { image.CGImage() }.ok_or_else(|| {
+                    Error::Platform("UIImage has no CGImage backing store".into())
+                })?;
                 super::encode_image(&cg_image, format)
             }
-            _ => image.png_representation().map(|data| data.to_vec()),
         }
     }
 
     /// Capture the key window and return encoded image data.
-    pub fn capture_screenshot(format: u8) -> Vec<u8> {
-        let (sender, receiver) = mpsc::channel();
-        DispatchQueue::main().exec_sync(move || {
-            let mtm =
-                MainThreadMarker::new().expect("the main queue only runs on the main thread");
+    pub async fn capture_screenshot(format: ImageFormat) -> Result<Vec<u8>, Error> {
+        on_main(move |mtm| {
             let application = UIApplication::sharedApplication(mtm);
             #[expect(
                 deprecated,
@@ -97,10 +101,8 @@ mod ios {
             let window = application
                 .windows()
                 .iter()
-                .find(|window| window.isKeyWindow());
-            let Some(window) = window else {
-                return;
-            };
+                .find(|window| window.isKeyWindow())
+                .ok_or_else(|| Error::Platform("no key window to capture".into()))?;
             let bounds = window.bounds();
             let renderer = UIGraphicsImageRenderer::initWithBounds(
                 UIGraphicsImageRenderer::alloc(),
@@ -114,14 +116,12 @@ mod ios {
             // SAFETY: `block` is a valid drawing-actions block; the call is
             // synchronous on the main thread.
             let image = unsafe { renderer.imageWithActions(RcBlock::as_ptr(&block)) };
-            if let Some(data) = encode_ui_image(&image, format) {
-                let _ = sender.send(data);
-            }
-        });
-        receiver.recv().unwrap_or_default()
+            encode_ui_image(&image, format)
+        })
+        .await
     }
 
-    pub fn get_screen_brightness() -> f32 {
+    pub async fn get_screen_brightness() -> Result<f32, Error> {
         #[expect(
             deprecated,
             reason = "UIScreen.mainScreen is the API the previous implementation used for brightness"
@@ -130,18 +130,20 @@ mod ios {
             clippy::cast_possible_truncation,
             reason = "UIScreen.brightness is a 0-1 CGFloat; a c_float copy loses no meaning"
         )]
-        on_main_thread(|mtm| UIScreen::mainScreen(mtm).brightness() as f32)
+        let value = on_main(|mtm| UIScreen::mainScreen(mtm).brightness() as f32).await;
+        Ok(value)
     }
 
-    pub fn set_screen_brightness(value: f32) -> bool {
+    pub async fn set_screen_brightness(value: f32) -> Result<(), Error> {
         #[expect(
             deprecated,
             reason = "UIScreen.mainScreen is the API the previous implementation used for brightness"
         )]
-        on_main_thread(|mtm| {
+        on_main(move |mtm| {
             UIScreen::mainScreen(mtm).setBrightness(f64::from(value));
-        });
-        true
+        })
+        .await;
+        Ok(())
     }
 }
 
@@ -152,17 +154,16 @@ mod ios {
 #[cfg(target_os = "macos")]
 mod macos {
     use core::ptr::NonNull;
-    use std::sync::mpsc::{self, Sender};
     use std::sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     };
-    use std::time::Duration;
 
     use core::ffi::CStr;
 
     use block2::RcBlock;
     use dispatch2::{DispatchQoS, DispatchQueue, GlobalQueueIdentifier};
+    use futures::channel::oneshot;
     use objc2::rc::{Retained, Weak};
     use objc2::runtime::{NSObject, ProtocolObject};
     use objc2::{AnyThread, DefinedClass, available, define_class, msg_send};
@@ -177,6 +178,9 @@ mod macos {
         kCVPixelFormatType_32BGRA,
     };
     use objc2_foundation::{NSArray, NSError, NSObjectProtocol};
+
+    use crate::{Error, ImageFormat};
+
     #[expect(
         deprecated,
         reason = "kIOMasterPortDefault is the documented entry point on macOS < 12"
@@ -206,19 +210,52 @@ mod macos {
     // Screenshot
     // ------------------------------------------------------------------
 
-    /// Waits on `sender`, used like the dispatch semaphores in the previous
-    /// implementation: returns `None` when the producer never answers.
-    fn wait<T>(receiver: &mpsc::Receiver<T>, timeout: Duration) -> Option<T> {
-        receiver.recv_timeout(timeout).ok()
+    /// Shared result slot for the screenshot oneshot: whichever completion
+    /// fires first takes and resolves it.
+    type ScreenshotSender = Arc<Mutex<Option<oneshot::Sender<Result<Vec<u8>, Error>>>>>;
+
+    /// Takes the shared slot's sender once and delivers `result` through it.
+    fn answer(sender: &ScreenshotSender, result: Result<Vec<u8>, Error>) {
+        let sender = sender.lock().unwrap().take();
+        if let Some(sender) = sender {
+            let _ = sender.send(result);
+        }
+    }
+
+    /// Builds the display filter + stream configuration shared by the
+    /// screenshot and streaming paths.
+    fn filter_and_config(
+        display: &objc2_screen_capture_kit::SCDisplay,
+    ) -> (Retained<SCContentFilter>, Retained<SCStreamConfiguration>) {
+        let empty: Retained<NSArray<objc2_screen_capture_kit::SCWindow>> = NSArray::new();
+        // SAFETY: `display` and the (empty) exclusion list are valid objects.
+        let filter = unsafe {
+            SCContentFilter::initWithDisplay_excludingWindows(
+                SCContentFilter::alloc(),
+                display,
+                &empty,
+            )
+        };
+        // SAFETY: `SCStreamConfiguration` is a plain data object.
+        let config = unsafe { SCStreamConfiguration::new() };
+        // SAFETY: setters on a live configuration object.
+        unsafe {
+            config.setWidth(usize::try_from(display.width()).expect("width >= 0"));
+            config.setHeight(usize::try_from(display.height()).expect("height >= 0"));
+            config.setPixelFormat(kCVPixelFormatType_32BGRA);
+        }
+        (filter, config)
     }
 
     /// Encodes the first `.screen` frame an `SCStream` produces, then resolves
-    /// its sender; also resolves on `didStopWithError`. Used for the pre-14.0
-    /// screenshot fallback.
+    /// the oneshot; `didStopWithError` resolves it with the `NSError`. Used
+    /// for the pre-14.0 screenshot fallback. The handler owns its stream so
+    /// the pair stays alive until a callback clears it.
     #[derive(Debug)]
     pub struct SingleFrameIvars {
-        format: u8,
-        sender: Mutex<Option<Sender<Option<Vec<u8>>>>>,
+        format: ImageFormat,
+        sender: ScreenshotSender,
+        stream: Mutex<Option<Retained<SCStream>>>,
     }
 
     define_class!(
@@ -273,32 +310,46 @@ mod macos {
                                 CGSize::new(width as f64, height as f64),
                             ),
                         )
-                    }?;
+                    }
+                    .ok_or_else(|| {
+                        Error::Platform("CIContext failed to create a CGImage".into())
+                    })?;
                     super::encode_image(&cg_image, self.ivars().format)
                 })();
                 let sender = self.ivars().sender.lock().unwrap().take();
                 if let Some(sender) = sender {
                     let _ = sender.send(result);
                 }
+                let stream = self.ivars().stream.lock().unwrap().take();
+                if let Some(stream) = stream {
+                    // SAFETY: stopping a delivered-frame stream with no
+                    // completion is always valid.
+                    unsafe { stream.stopCaptureWithCompletionHandler(None) };
+                }
             }
         }
 
         unsafe impl SCStreamDelegate for SingleFrameHandler {
             #[unsafe(method(stream:didStopWithError:))]
-            fn did_stop_with_error(&self, _stream: &SCStream, _error: &NSError) {
+            fn did_stop_with_error(&self, _stream: &SCStream, error: &NSError) {
                 let sender = self.ivars().sender.lock().unwrap().take();
                 if let Some(sender) = sender {
-                    let _ = sender.send(None);
+                    let _ = sender.send(Err(Error::Platform(format!(
+                        "SCStream didStopWithError: {}",
+                        error.localizedDescription()
+                    ))));
                 }
+                self.ivars().stream.lock().unwrap().take();
             }
         }
     );
 
     impl SingleFrameHandler {
-        fn alloc_with(format: u8, sender: Sender<Option<Vec<u8>>>) -> Retained<Self> {
+        fn alloc_with(format: ImageFormat, sender: ScreenshotSender) -> Retained<Self> {
             let this = Self::alloc().set_ivars(SingleFrameIvars {
                 format,
-                sender: Mutex::new(Some(sender)),
+                sender,
+                stream: Mutex::new(None),
             });
             // SAFETY: `this` is a freshly allocated handler and `NSObject`'s
             // `init` has no additional requirements.
@@ -306,13 +357,15 @@ mod macos {
         }
     }
 
-    /// Single-frame capture through an `SCStream` (the pre-macOS 14 path).
-    fn capture_with_stream(
+    /// Starts a single-frame `SCStream` capture (the pre-macOS 14 path).
+    /// The frame or stop error resolves `sender` through the handler, which
+    /// the stream keeps alive through its output registration.
+    fn start_single_frame_stream(
         filter: &SCContentFilter,
         config: &SCStreamConfiguration,
-        format: u8,
-    ) -> Option<Vec<u8>> {
-        let (sender, receiver) = mpsc::channel();
+        format: ImageFormat,
+        sender: ScreenshotSender,
+    ) -> Result<(), Error> {
         let handler = SingleFrameHandler::alloc_with(format, sender);
         // SAFETY: `filter`/`config`/`handler` are valid objects; the stream
         // owns its configuration copy.
@@ -333,96 +386,152 @@ mod macos {
                 Some(DispatchQueue::main()),
             )
         }
-        .ok()?;
-        // SAFETY: the completion block ignores its error argument.
-        let empty = RcBlock::new(|_error: *mut NSError| {});
-        unsafe { stream.startCaptureWithCompletionHandler(Some(&empty)) };
-        let data = wait(&receiver, Duration::from_secs(2)).flatten();
-        // SAFETY: stopping an idle or running stream with no completion is
-        // always valid.
-        unsafe { stream.stopCaptureWithCompletionHandler(None) };
-        data
+        .map_err(|error| {
+            Error::Platform(format!(
+                "SCStream addStreamOutput: {}",
+                error.localizedDescription()
+            ))
+        })?;
+        // The handler owns the stream so both live until a callback fires.
+        *handler.ivars().stream.lock().unwrap() = Some(stream.clone());
+        let started = {
+            let handler = Weak::from_retained(&handler);
+            RcBlock::new(move |error: *mut NSError| {
+                if error.is_null() {
+                    return;
+                }
+                let Some(handler) = handler.load() else {
+                    return;
+                };
+                // SAFETY: `error` is non-null and valid for the callback.
+                let message = unsafe { &*error }.localizedDescription().to_string();
+                let sender = handler.ivars().sender.lock().unwrap().take();
+                if let Some(sender) = sender {
+                    let _ = sender.send(Err(Error::Platform(format!(
+                        "SCStream startCapture: {message}"
+                    ))));
+                }
+            })
+        };
+        // SAFETY: `started` is a well-typed completion block.
+        unsafe { stream.startCaptureWithCompletionHandler(Some(&started)) };
+        Ok(())
+    }
+
+    /// Resolves the shareable-content completion into the filter/config pair.
+    fn shareable_pair(
+        content: *mut SCShareableContent,
+        error: *mut NSError,
+    ) -> Result<(Retained<SCContentFilter>, Retained<SCStreamConfiguration>), Error> {
+        if !error.is_null() {
+            // SAFETY: `error` is non-null and valid for the callback duration.
+            let message = unsafe { &*error }.localizedDescription().to_string();
+            return Err(Error::Platform(format!("SCShareableContent: {message}")));
+        }
+        // SAFETY: `content` is an autoreleased object valid for the callback.
+        let Some(content) = (unsafe { content.as_ref() }) else {
+            return Err(Error::Platform(
+                "SCShareableContent returned no content".into(),
+            ));
+        };
+        // SAFETY: `content` is a live SCShareableContent.
+        let displays = unsafe { content.displays() };
+        let Some(display) = displays.iter().next() else {
+            return Err(Error::Platform(
+                "SCShareableContent reported no displays".into(),
+            ));
+        };
+        let (filter, config) = filter_and_config(&display);
+        // SAFETY: setter on a live configuration object.
+        unsafe { config.setShowsCursor(true) };
+        Ok((filter, config))
     }
 
     /// Capture the primary screen and return encoded image data.
-    pub fn capture_screenshot(format: u8) -> Vec<u8> {
+    pub async fn capture_screenshot(format: ImageFormat) -> Result<Vec<u8>, Error> {
         if !available!(macos = 12.3, ..) {
             // ScreenCaptureKit is required; CGWindowListCreateImage was
             // obsoleted in macOS 15 and no longer compiles.
-            return Vec::new();
+            return Err(Error::Unsupported);
         }
-        let (sender, receiver) = mpsc::channel::<Vec<u8>>();
-        let block = RcBlock::new(
-            move |content: *mut SCShareableContent, _error: *mut NSError| {
-                // Dropping `sender` without sending resolves the wait as an
-                // empty result, like the semaphore's nil-result path.
-                // SAFETY: `content` is an autoreleased object valid for the
-                // duration of the callback.
-                let Some(content) = (unsafe { content.as_ref() }) else {
-                    return;
-                };
-                // SAFETY: `content` is a live SCShareableContent.
-                let displays = unsafe { content.displays() };
-                let Some(display) = displays.iter().next() else {
-                    return;
-                };
-                let empty: Retained<NSArray<objc2_screen_capture_kit::SCWindow>> = NSArray::new();
-                // SAFETY: `display` and the (empty) exclusion list are valid.
-                let filter = unsafe {
-                    SCContentFilter::initWithDisplay_excludingWindows(
-                        SCContentFilter::alloc(),
-                        &display,
-                        &empty,
-                    )
-                };
-                // SAFETY: `SCStreamConfiguration` is a plain data object.
-                let config = unsafe { SCStreamConfiguration::new() };
-                // SAFETY: setters on a live configuration object.
-                unsafe {
-                    config.setWidth(usize::try_from(display.width()).expect("width >= 0"));
-                    config.setHeight(usize::try_from(display.height()).expect("height >= 0"));
-                    config.setPixelFormat(kCVPixelFormatType_32BGRA);
-                    config.setShowsCursor(true);
-                }
-                if available!(macos = 14.0, ..) {
-                    let captured = {
-                        let sender = sender.clone();
-                        RcBlock::new(
-                            move |image: *mut objc2_core_graphics::CGImage,
-                                  _error: *mut NSError| {
-                                // SAFETY: `image` is valid for the duration of
-                                // the callback.
-                                if let Some(data) = unsafe { image.as_ref() }
-                                    .and_then(|image| super::encode_image(image, format))
-                                {
-                                    let _ = sender.send(data);
+        let (tx, rx) = oneshot::channel::<Result<Vec<u8>, Error>>();
+        let sender: ScreenshotSender = Arc::new(Mutex::new(Some(tx)));
+        {
+            let sender = Arc::clone(&sender);
+            let block = {
+                RcBlock::new(
+                    move |content: *mut SCShareableContent, error: *mut NSError| {
+                        match shareable_pair(content, error) {
+                            Ok((filter, config)) => {
+                                if available!(macos = 14.0, ..) {
+                                    let captured = {
+                                        let sender = Arc::clone(&sender);
+                                        RcBlock::new(
+                                    move |image: *mut objc2_core_graphics::CGImage,
+                                          error: *mut NSError| {
+                                        let result = if error.is_null() {
+                                            // SAFETY: `image` is valid for the
+                                            // callback duration.
+                                            unsafe { image.as_ref() }
+                                                .ok_or_else(|| {
+                                                    Error::Platform(
+                                                        "SCScreenshotManager returned no image"
+                                                            .into(),
+                                                    )
+                                                })
+                                                .and_then(|image| {
+                                                    super::encode_image(image, format)
+                                                })
+                                        } else {
+                                            // SAFETY: `error` is non-null and
+                                            // valid for the callback.
+                                            let message = unsafe { &*error }
+                                                .localizedDescription()
+                                                .to_string();
+                                            Err(Error::Platform(format!(
+                                                "SCScreenshotManager: {message}"
+                                            )))
+                                        };
+                                        answer(&sender, result);
+                                    },
+                                )
+                                    };
+                                    // SAFETY: `filter`/`config` are valid; `captured`
+                                    // is a well-typed completion block.
+                                    unsafe {
+                                        SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
+                                    &filter,
+                                    &config,
+                                    Some(&captured),
+                                );
+                                    }
+                                } else if let Err(error) = start_single_frame_stream(
+                                    &filter,
+                                    &config,
+                                    format,
+                                    Arc::clone(&sender),
+                                ) {
+                                    answer(&sender, Err(error));
                                 }
-                            },
-                        )
-                    };
-                    // SAFETY: `filter`/`config` are valid; `captured` is a
-                    // well-typed completion block.
-                    unsafe {
-                        SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
-                            &filter,
-                            &config,
-                            Some(&captured),
-                        );
-                    };
-                } else if let Some(data) = capture_with_stream(&filter, &config, format) {
-                    let _ = sender.send(data);
-                }
-            },
-        );
-        // SAFETY: `block` is a well-typed completion block.
-        unsafe {
-            SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(
-                false,
-                true,
-                &block,
-            );
-        };
-        wait(&receiver, Duration::from_secs(5)).unwrap_or_default()
+                            }
+                            Err(error) => answer(&sender, Err(error)),
+                        }
+                    },
+                )
+            };
+            // SAFETY: `block` is a well-typed completion block.
+            unsafe {
+                SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(
+                    false,
+                    true,
+                    &block,
+                );
+            };
+            // The API retains its copy of the block; the local dies here.
+        }
+        rx.await.map_err(|_| {
+            Error::Platform("SCShareableContent completion was dropped before replying".into())
+        })?
     }
 
     // ------------------------------------------------------------------
@@ -450,7 +559,7 @@ mod macos {
     }
 
     /// Finds the `IODisplayConnect` service matching the main display.
-    fn main_display_service() -> Option<IoObject> {
+    fn main_display_service() -> Result<IoObject, Error> {
         // SAFETY: CGMainDisplayID and the vendor/model/serial queries are
         // pure reads on CoreGraphics' display registry.
         let (vendor_id, product_id, serial) = unsafe {
@@ -475,7 +584,10 @@ mod macos {
             }
         };
         // SAFETY: a nul-terminated class-name literal.
-        let matching = unsafe { IOServiceMatching(c"IODisplayConnect".as_ptr()) }?;
+        let matching =
+            unsafe { IOServiceMatching(c"IODisplayConnect".as_ptr()) }.ok_or_else(|| {
+                Error::Platform("IOServiceMatching(IODisplayConnect) returned nothing".into())
+            })?;
         let matching: CFRetained<CFDictionary> =
             // SAFETY: CFMutableDictionary is-a CFDictionary; ownership of the
             // +1 object is preserved through the cast.
@@ -486,13 +598,18 @@ mod macos {
         let status =
             unsafe { IOServiceGetMatchingServices(main_port, Some(matching), &raw mut iterator) };
         if status != libc::KERN_SUCCESS {
-            return None;
+            return Err(Error::Platform(format!(
+                "IOServiceGetMatchingServices failed: kern_return_t {status}"
+            )));
         }
         let iterator = IoObject(iterator);
         loop {
             let service = IOIteratorNext(iterator.0);
             if service == 0 {
-                return None;
+                return Err(Error::Platform(format!(
+                    "no IODisplayConnect service matched the main display \
+                     (vendor {vendor_id:#x}, product {product_id:#x})"
+                )));
             }
             let info = IODisplayCreateInfoDictionary(service, kIODisplayOnlyPreferredName);
             let info = info.as_deref();
@@ -504,16 +621,16 @@ mod macos {
                 service_vendor == vendor_id && service_product == product_id && serial_matches
             });
             if matches {
-                return Some(IoObject(service));
+                return Ok(IoObject(service));
             }
             IOObjectRelease(service);
         }
     }
 
-    pub fn get_screen_brightness() -> f32 {
-        let Some(service) = main_display_service() else {
-            return -1.0;
-        };
+    /// Reads the main display's brightness; the `IOKit` calls are fast
+    /// synchronous reads, so they stay inline.
+    pub fn get_screen_brightness() -> Result<f32, Error> {
+        let service = main_display_service()?;
         let mut brightness: f32 = -1.0;
         // SAFETY: `service` is a live IODisplay service; `brightness` is a
         // valid out pointer.
@@ -526,15 +643,17 @@ mod macos {
             )
         };
         if result != libc::KERN_SUCCESS {
-            return -1.0;
+            return Err(Error::Platform(format!(
+                "IODisplayGetFloatParameter failed: IOReturn {result}"
+            )));
         }
-        brightness.clamp(0.0, 1.0)
+        Ok(brightness.clamp(0.0, 1.0))
     }
 
-    pub fn set_screen_brightness(value: f32) -> bool {
-        let Some(service) = main_display_service() else {
-            return false;
-        };
+    /// Sets the main display's brightness; the `IOKit` calls are fast
+    /// synchronous writes, so they stay inline.
+    pub fn set_screen_brightness(value: f32) -> Result<(), Error> {
+        let service = main_display_service()?;
         let clamped = value.clamp(0.0, 1.0);
         // SAFETY: `service` is a live IODisplay service.
         let result = unsafe {
@@ -545,7 +664,12 @@ mod macos {
                 clamped,
             )
         };
-        result == libc::KERN_SUCCESS
+        if result != libc::KERN_SUCCESS {
+            return Err(Error::Platform(format!(
+                "IODisplaySetFloatParameter failed: IOReturn {result}"
+            )));
+        }
+        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -647,11 +771,106 @@ mod macos {
             unsafe { msg_send![super(this), init] }
         }
 
-        /// Asks `SCShareableContent` for displays, builds the stream and kicks
-        /// capture off; the result is delivered through `sender`.
-        fn start(&self, display_id: u32, fps: u32, show_cursor: bool, sender: Sender<bool>) {
+        /// Builds the stream from a shareable-content callback's payload and
+        /// kicks capture off; the result is delivered through `sender`.
+        fn open_stream(
+            &self,
+            content: &SCShareableContent,
+            display_id: u32,
+            fps: u32,
+            show_cursor: bool,
+            sender: &StartSender,
+        ) {
+            // SAFETY: `content` is a live SCShareableContent.
+            let displays = unsafe { content.displays() };
+            let display = displays
+                .iter()
+                .find(|display| unsafe { display.displayID() } == display_id)
+                .or_else(|| displays.iter().next());
+            let Some(display) = display else {
+                reply_start(
+                    sender,
+                    Err(Error::Platform(
+                        "SCShareableContent reported no displays".into(),
+                    )),
+                );
+                return;
+            };
+            let (filter, config) = filter_and_config(&display);
+            // SAFETY: setters on a live configuration object; `fps` fits a
+            // CMTimeScale (Int32) like the previous code's `CMTimeScale(fps)`.
+            unsafe {
+                config.setMinimumFrameInterval(CMTime::new(
+                    1,
+                    i32::try_from(fps).expect("fps fits CMTimeScale"),
+                ));
+                config.setQueueDepth(8);
+                config.setShowsCursor(show_cursor);
+                if available!(macos = 13.0, ..) {
+                    config.setCapturesAudio(false);
+                }
+            }
+            // SAFETY: `filter`/`config`/`self` are valid; the stream retains
+            // its configuration.
+            let stream = unsafe {
+                SCStream::initWithFilter_configuration_delegate(
+                    SCStream::alloc(),
+                    &filter,
+                    &config,
+                    Some(ProtocolObject::from_ref(self)),
+                )
+            };
+            *self.ivars().stream.lock().unwrap() = Some(stream.clone());
+            let queue = DispatchQueue::global_queue(GlobalQueueIdentifier::QualityOfService(
+                DispatchQoS::UserInteractive,
+            ));
+            // SAFETY: `self` conforms to SCStreamOutput; the queue is a valid
+            // sample handler queue.
+            if let Err(error) = unsafe {
+                stream.addStreamOutput_type_sampleHandlerQueue_error(
+                    ProtocolObject::from_ref(self),
+                    SCStreamOutputType::Screen,
+                    Some(&queue),
+                )
+            } {
+                reply_start(
+                    sender,
+                    Err(Error::Platform(format!(
+                        "SCStream addStreamOutput: {}",
+                        error.localizedDescription()
+                    ))),
+                );
+                return;
+            }
+            let started = {
+                let capturer = Weak::new(self);
+                let sender = Arc::clone(sender);
+                RcBlock::new(move |error: *mut NSError| {
+                    let result = if error.is_null() {
+                        Ok(())
+                    } else {
+                        // SAFETY: `error` is non-null and valid for the
+                        // duration of the callback.
+                        let message = unsafe { &*error }.localizedDescription().to_string();
+                        Err(Error::Platform(format!("SCStream startCapture: {message}")))
+                    };
+                    if result.is_ok()
+                        && let Some(capturer) = capturer.load()
+                    {
+                        capturer.ivars().running.store(true, Ordering::Relaxed);
+                    }
+                    reply_start(&sender, result);
+                })
+            };
+            // SAFETY: `started` is a well-typed completion block.
+            unsafe { stream.startCaptureWithCompletionHandler(Some(&started)) };
+        }
+
+        /// Asks `SCShareableContent` for displays, then hands the payload to
+        /// `open_stream`.
+        fn start(&self, display_id: u32, fps: u32, show_cursor: bool, sender: StartSender) {
             if self.ivars().running.load(Ordering::Relaxed) {
-                let _ = sender.send(true);
+                reply_start(&sender, Ok(()));
                 return;
             }
             // The shareable-content callback holds the capturer weakly; the
@@ -659,99 +878,30 @@ mod macos {
             let capturer = Weak::new(self);
             let block = RcBlock::new(
                 move |content: *mut SCShareableContent, error: *mut NSError| {
-                    let (Some(capturer), Some(content)) = (
-                        capturer.load(),
-                        if error.is_null() {
-                            // SAFETY: `content` is an autoreleased object
-                            // valid for the duration of the callback.
-                            unsafe { content.as_ref() }
-                        } else {
-                            None
-                        },
-                    ) else {
-                        let _ = sender.send(false);
-                        return;
-                    };
-                    // SAFETY: `content` is a live SCShareableContent.
-                    let displays = unsafe { content.displays() };
-                    let display = displays
-                        .iter()
-                        .find(|display| unsafe { display.displayID() } == display_id)
-                        .or_else(|| displays.iter().next());
-                    let Some(display) = display else {
-                        let _ = sender.send(false);
-                        return;
-                    };
-                    let empty: Retained<NSArray<objc2_screen_capture_kit::SCWindow>> =
-                        NSArray::new();
-                    // SAFETY: `display` and `empty` are valid objects.
-                    let filter = unsafe {
-                        SCContentFilter::initWithDisplay_excludingWindows(
-                            SCContentFilter::alloc(),
-                            &display,
-                            &empty,
-                        )
-                    };
-                    // SAFETY: `SCStreamConfiguration` is a plain data object.
-                    let config = unsafe { SCStreamConfiguration::new() };
-                    // SAFETY: setters on a live configuration object; `fps`
-                    // fits a CMTimeScale (Int32) like the previous code's
-                    // `CMTimeScale(fps)`.
-                    unsafe {
-                        config.setWidth(usize::try_from(display.width()).expect("width >= 0"));
-                        config.setHeight(usize::try_from(display.height()).expect("height >= 0"));
-                        config.setMinimumFrameInterval(CMTime::new(
-                            1,
-                            i32::try_from(fps).expect("fps fits CMTimeScale"),
-                        ));
-                        config.setQueueDepth(8);
-                        config.setPixelFormat(kCVPixelFormatType_32BGRA);
-                        config.setShowsCursor(show_cursor);
-                        if available!(macos = 13.0, ..) {
-                            config.setCapturesAudio(false);
-                        }
-                    }
-                    // SAFETY: `filter`/`config`/`capturer` are valid; the
-                    // stream retains its configuration.
-                    let stream = unsafe {
-                        SCStream::initWithFilter_configuration_delegate(
-                            SCStream::alloc(),
-                            &filter,
-                            &config,
-                            Some(ProtocolObject::from_ref(&*capturer)),
-                        )
-                    };
-                    *capturer.ivars().stream.lock().unwrap() = Some(stream.clone());
-                    let queue = DispatchQueue::global_queue(
-                        GlobalQueueIdentifier::QualityOfService(DispatchQoS::UserInteractive),
-                    );
-                    // SAFETY: `capturer` conforms to SCStreamOutput; the queue
-                    // is a valid sample handler queue.
-                    if unsafe {
-                        stream.addStreamOutput_type_sampleHandlerQueue_error(
-                            ProtocolObject::from_ref(&*capturer),
-                            SCStreamOutputType::Screen,
-                            Some(&queue),
-                        )
-                    }
-                    .is_err()
-                    {
-                        let _ = sender.send(false);
+                    if !error.is_null() {
+                        // SAFETY: `error` is non-null and valid for the
+                        // duration of the callback.
+                        let message = unsafe { &*error }.localizedDescription().to_string();
+                        reply_start(
+                            &sender,
+                            Err(Error::Platform(format!("SCShareableContent: {message}"))),
+                        );
                         return;
                     }
-                    let started = {
-                        let capturer = Weak::from_retained(&capturer);
-                        let sender = sender.clone();
-                        RcBlock::new(move |error: *mut NSError| {
-                            let ok = error.is_null();
-                            if ok && let Some(capturer) = capturer.load() {
-                                capturer.ivars().running.store(true, Ordering::Relaxed);
-                            }
-                            let _ = sender.send(ok);
-                        })
+                    // SAFETY: `content` is an autoreleased object valid for
+                    // the duration of the callback.
+                    let (Some(capturer), Some(content)) =
+                        (capturer.load(), unsafe { content.as_ref() })
+                    else {
+                        reply_start(
+                            &sender,
+                            Err(Error::Platform(
+                                "SCShareableContent returned no content".into(),
+                            )),
+                        );
+                        return;
                     };
-                    // SAFETY: `started` is a well-typed completion block.
-                    unsafe { stream.startCaptureWithCompletionHandler(Some(&started)) };
+                    capturer.open_stream(content, display_id, fps, show_cursor, &sender);
                 },
             );
             // SAFETY: `block` is a well-typed completion block.
@@ -784,20 +934,43 @@ mod macos {
         }
     }
 
+    /// Shared slot for the stream-start oneshot: the first completion to
+    /// resolve takes and answers it.
+    type StartSender = Arc<Mutex<Option<oneshot::Sender<Result<(), Error>>>>>;
+
+    /// Takes the shared slot's sender once and delivers `result` through it.
+    fn reply_start(sender: &StartSender, result: Result<(), Error>) {
+        let sender = sender.lock().unwrap().take();
+        if let Some(sender) = sender {
+            let _ = sender.send(result);
+        }
+    }
+
     /// Initialize the screen stream and return the capturer on success.
-    pub fn init_screen_stream(
+    #[expect(
+        clippy::future_not_send,
+        reason = "the capturer's Objective-C objects are not Send; the caller drives this future"
+    )]
+    pub async fn init_screen_stream(
         display_id: u32,
         target_fps: u32,
         show_cursor: bool,
-    ) -> Option<Retained<ScreenStreamCapturer>> {
+    ) -> Result<Retained<ScreenStreamCapturer>, Error> {
         if !available!(macos = 12.3, ..) {
-            return None;
+            return Err(Error::Unsupported);
         }
         let capturer = ScreenStreamCapturer::alloc_new();
-        let (sender, receiver) = mpsc::channel();
-        capturer.start(display_id, target_fps, show_cursor, sender);
-        let success = wait(&receiver, Duration::from_secs(3)).unwrap_or(false);
-        success.then_some(capturer)
+        let (tx, rx) = oneshot::channel::<Result<(), Error>>();
+        capturer.start(
+            display_id,
+            target_fps,
+            show_cursor,
+            Arc::new(Mutex::new(Some(tx))),
+        );
+        rx.await.map_err(|_| {
+            Error::Platform("screen stream start completion was dropped before replying".into())
+        })??;
+        Ok(capturer)
     }
 }
 
@@ -806,21 +979,11 @@ mod macos {
 // ============================================================================
 
 /// Capture a screenshot with the specified format.
-pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
-    let format_code = match format {
-        ImageFormat::Png => 0,
-        ImageFormat::Avif => 1,
-        ImageFormat::Heif => 2,
-    };
-
+pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
     #[cfg(target_os = "ios")]
-    let data = ios::capture_screenshot(format_code);
+    let data = ios::capture_screenshot(format).await?;
     #[cfg(target_os = "macos")]
-    let data = macos::capture_screenshot(format_code);
-
-    if data.is_empty() {
-        return Err(Error::Platform("Screenshot capture failed".into()));
-    }
+    let data = macos::capture_screenshot(format).await?;
 
     Ok(Screenshot::new(
         data,
@@ -856,12 +1019,8 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
 // ============================================================================
 
 #[cfg(target_os = "ios")]
-#[expect(
-    clippy::unused_async,
-    reason = "the public API is async on every platform"
-)]
 pub async fn get_brightness() -> Result<f32, Error> {
-    let value = ios::get_screen_brightness();
+    let value = ios::get_screen_brightness().await?;
     if !(0.0..=1.0).contains(&value) {
         return Err(Error::Platform(format!(
             "invalid iOS brightness value from platform bridge: {value}"
@@ -872,23 +1031,13 @@ pub async fn get_brightness() -> Result<f32, Error> {
 }
 
 #[cfg(target_os = "ios")]
-#[expect(
-    clippy::unused_async,
-    reason = "the public API is async on every platform"
-)]
 pub async fn set_brightness(val: f32) -> Result<(), Error> {
-    if ios::set_screen_brightness(val.clamp(0.0, 1.0)) {
-        Ok(())
-    } else {
-        Err(Error::Platform(
-            "failed to set iOS screen brightness".into(),
-        ))
-    }
+    ios::set_screen_brightness(val.clamp(0.0, 1.0)).await
 }
 
 #[cfg(target_os = "macos")]
 pub fn get_macos_brightness() -> Result<f32, Error> {
-    let value = macos::get_screen_brightness();
+    let value = macos::get_screen_brightness()?;
     if !(0.0..=1.0).contains(&value) {
         return Err(Error::Platform(format!(
             "invalid macOS brightness value from platform bridge: {value}"
@@ -900,13 +1049,7 @@ pub fn get_macos_brightness() -> Result<f32, Error> {
 
 #[cfg(target_os = "macos")]
 pub fn set_macos_brightness(value: f32) -> Result<(), Error> {
-    if macos::set_screen_brightness(value.clamp(0.0, 1.0)) {
-        Ok(())
-    } else {
-        Err(Error::Platform(
-            "failed to set macOS screen brightness".into(),
-        ))
-    }
+    macos::set_screen_brightness(value.clamp(0.0, 1.0))
 }
 
 // ============================================================================
@@ -930,17 +1073,18 @@ pub struct ScreenStreamInner {
 impl ScreenStreamInner {
     /// Create a new screen stream.
     #[cfg(target_os = "macos")]
-    pub fn new(
+    #[expect(
+        clippy::future_not_send,
+        reason = "the capturer's Objective-C objects are not Send; the caller drives this future"
+    )]
+    pub async fn new(
         display: &ScreenInfo,
         device: Arc<Device>,
         queue: Arc<Queue>,
         config: &StreamConfig,
     ) -> Result<Self, Error> {
-        let Some(capturer) =
-            macos::init_screen_stream(display.id(), config.target_fps, config.show_cursor)
-        else {
-            return Err(Error::Platform("Failed to initialize screen stream".into()));
-        };
+        let capturer =
+            macos::init_screen_stream(display.id(), config.target_fps, config.show_cursor).await?;
 
         Ok(Self {
             width: display.width(),
@@ -955,10 +1099,10 @@ impl ScreenStreamInner {
     /// Create a new screen stream (iOS - unsupported).
     #[cfg(target_os = "ios")]
     #[expect(
-        clippy::unnecessary_wraps,
-        reason = "the public API returns a Result on every platform"
+        clippy::unused_async,
+        reason = "macOS awaits stream initialization; iOS has no stream"
     )]
-    pub fn new(
+    pub async fn new(
         display: &ScreenInfo,
         _device: Arc<Device>,
         _queue: Arc<Queue>,

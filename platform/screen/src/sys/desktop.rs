@@ -129,7 +129,7 @@ pub async fn set_brightness(val: f32) -> Result<(), Error> {
 }
 
 /// Capture a screenshot of the specified display.
-pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
+pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
     // HEIF/AVIF not supported on desktop (Windows/Linux)
     // macOS uses the Apple module for these formats
     #[cfg(not(target_os = "macos"))]
@@ -140,23 +140,27 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
     // On macOS, delegate HEIF/AVIF to Apple native APIs
     #[cfg(target_os = "macos")]
     if matches!(format, ImageFormat::Heif | ImageFormat::Avif) {
-        return super::apple::screenshot(display, format);
+        return super::apple::screenshot(display, format).await;
     }
 
-    let monitor = monitor_by_id(display.id())?;
-    let image = monitor.capture_image().map_err(map_xcap_error)?;
+    let display_id = display.id();
+    blocking::unblock(move || {
+        let monitor = monitor_by_id(display_id)?;
+        let image = monitor.capture_image().map_err(map_xcap_error)?;
 
-    let width = image.width();
-    let height = image.height();
+        let width = image.width();
+        let height = image.height();
 
-    // Encode as PNG
-    let mut buffer = Vec::new();
-    let mut cursor = Cursor::new(&mut buffer);
-    image
-        .write_to(&mut cursor, xcap::image::ImageFormat::Png)
-        .map_err(|e| Error::Encoding(e.to_string()))?;
+        // Encode as PNG
+        let mut buffer = Vec::new();
+        let mut cursor = Cursor::new(&mut buffer);
+        image
+            .write_to(&mut cursor, xcap::image::ImageFormat::Png)
+            .map_err(|e| Error::Encoding(e.to_string()))?;
 
-    Ok(Screenshot::new(buffer, width, height, ImageFormat::Png))
+        Ok(Screenshot::new(buffer, width, height, ImageFormat::Png))
+    })
+    .await
 }
 
 // ============================================================================

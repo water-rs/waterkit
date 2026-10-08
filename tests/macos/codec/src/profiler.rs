@@ -53,7 +53,7 @@ fn measure_screenshots(primary: &ScreenInfo) -> Result<(), BoxError> {
     println!("=== Test 1: Screenshot Capture (PNG) ===");
     let start = Instant::now();
     for _ in 0..ITERATIONS {
-        let _ = screenshot(primary, ImageFormat::Png)?;
+        let _ = pollster::block_on(screenshot(primary, ImageFormat::Png))?;
     }
     let total = start.elapsed();
     println!(
@@ -72,7 +72,7 @@ fn measure_gpu_streaming(primary: &ScreenInfo) -> Result<(), BoxError> {
         target_fps: 120,
         show_cursor: false,
     };
-    let stream = ScreenStream::start(primary, device, queue, &config)?;
+    let stream = pollster::block_on(ScreenStream::start(primary, device, queue, &config))?;
 
     // Wait for stream to warm up
     std::thread::sleep(Duration::from_millis(500));
@@ -104,7 +104,7 @@ fn measure_streaming_encode(primary: &ScreenInfo) -> Result<(), BoxError> {
         target_fps: 60,
         show_cursor: false,
     };
-    let stream = ScreenStream::start(primary, device, queue, &config)?;
+    let stream = pollster::block_on(ScreenStream::start(primary, device, queue, &config))?;
     let (width, height) = stream.dimensions();
 
     let mut encoder = Encoder::new(

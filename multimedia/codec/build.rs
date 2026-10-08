@@ -54,15 +54,17 @@ fn main() {
     }
 
     if target_os == "ios" || target_os == "macos" {
-        let config = waterkit_build::AppleSwiftConfig::new("waterkit-codec", "CodecImageHelper")
-            .swift_source("src/sys/apple/ImageDecoder.swift")
-            .framework("Foundation")
-            .framework("CoreGraphics")
-            .framework("ImageIO")
-            .framework("CoreImage")
-            .framework("VideoToolbox");
-
-        waterkit_build::compile_swift("src/image_apple.rs", &config);
+        waterkit_build::SwiftBridges::new()
+            .bridge(
+                waterkit_build::SwiftBridge::new("src/image_apple.rs")
+                    .swift_source("src/sys/apple/ImageDecoder.swift")
+                    .framework("Foundation")
+                    .framework("CoreGraphics")
+                    .framework("ImageIO")
+                    .framework("CoreImage")
+                    .framework("VideoToolbox"),
+            )
+            .compile();
     }
 }
 

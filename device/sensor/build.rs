@@ -4,9 +4,16 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
 
     if target_os == "ios" || target_os == "macos" {
-        waterkit_build::build_apple_bridge(["src/sys/apple/mod.rs"]);
-        if target_os == "macos" {
-            println!("cargo:rustc-link-lib=framework=IOKit");
+        let mut bridge = waterkit_build::SwiftBridge::new("src/sys/apple/mod.rs")
+            .swift_source("src/sys/apple/sensor.swift")
+            .framework("Foundation");
+
+        if target_os == "ios" {
+            bridge = bridge.framework("CoreMotion");
+        } else {
+            bridge = bridge.framework("IOKit");
         }
+
+        waterkit_build::SwiftBridges::new().bridge(bridge).compile();
     }
 }

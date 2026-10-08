@@ -105,5 +105,4 @@ vision = [
 wallet = ["waterkit/wallet"]
 
 [build-dependencies]
-swift-bridge-build.workspace = true
 waterkit-build.workspace = true

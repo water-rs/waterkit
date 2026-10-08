@@ -5,22 +5,21 @@ fn main() {
     let media_session_enabled = std::env::var_os("CARGO_FEATURE_MEDIA_SESSION").is_some();
 
     if media_session_enabled && (target_os == "ios" || target_os == "macos") {
-        use waterkit_build::AppleSwiftConfig;
+        use waterkit_build::{SwiftBridge, SwiftBridges};
 
-        let target = std::env::var("TARGET").unwrap();
-        let mut config = AppleSwiftConfig::new("waterkit-audio", "MediaHelper")
+        let mut bridge = SwiftBridge::new("src/sys/apple/mod.rs")
             .swift_source("src/sys/apple/MediaHelper.swift")
             .swift_source("src/sys/apple/AudioPlayerHelper.swift")
             .framework("Foundation")
             .framework("MediaPlayer")
             .framework("AVFoundation");
 
-        if target.contains("ios") {
-            config = config.framework("UIKit");
+        if target_os == "ios" {
+            bridge = bridge.framework("UIKit");
         } else {
-            config = config.framework("AppKit");
+            bridge = bridge.framework("AppKit");
         }
 
-        waterkit_build::compile_swift("src/sys/apple/mod.rs", &config);
+        SwiftBridges::new().bridge(bridge).compile();
     }
 }

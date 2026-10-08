@@ -8459,7 +8459,6 @@ dependencies = [
  "image",
  "qrcode",
  "swift-bridge",
- "swift-bridge-build",
  "tokio",
  "waterkit",
  "waterkit-build",

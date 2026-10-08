@@ -58,7 +58,7 @@ src/
 
 ### Platform Bridges
 
-- **Apple (iOS/macOS)**: `swift-bridge` for Swift interop, compiled via `waterkit-build::build_apple_bridge()`
+- **Apple (iOS/macOS)**: `swift-bridge` for Swift interop, compiled via `waterkit-build::SwiftBridges`
 - **Android**: JNI with Kotlin helpers declared in `[package.metadata.waterui.android]` and compiled into the app by the packager
 - **Windows**: `windows-rs` crate for Win32 APIs
 - **Linux**: `zbus` for D-Bus communication

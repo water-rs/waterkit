@@ -16,14 +16,15 @@ fn main() {
         return;
     }
 
-    // Both enabled Apple bridges compile into one static library: separate
-    // `compile_swift`/`build_apple_bridge` calls would each emit the Swift
-    // runtime's `clang_rt` link modifiers, and rustc rejects the override.
-    let mut crates = Vec::new();
+    // Both enabled Apple bridges compile into one static library: a separate
+    // compilation per bridge would emit the Swift runtime's `clang_rt` link
+    // modifiers twice, and rustc rejects the override.
+    let mut bridges = waterkit_build::SwiftBridges::new();
     if vision {
-        crates.push(
-            waterkit_build::SwiftBridgeCrate::new("src/sys/apple_vision/mod.rs")
+        bridges = bridges.bridge(
+            waterkit_build::SwiftBridge::new("src/sys/apple_vision/mod.rs")
                 .swift_source("src/sys/apple_vision/Vision.swift")
+                .framework("Foundation")
                 .framework("CoreVideo")
                 .framework("CoreImage")
                 .framework("ImageIO")
@@ -32,13 +33,13 @@ fn main() {
         );
     }
     if scanner {
-        crates.push(
-            waterkit_build::SwiftBridgeCrate::new("src/sys/apple/mod.rs")
+        bridges = bridges.bridge(
+            waterkit_build::SwiftBridge::new("src/sys/apple/mod.rs")
                 .swift_source("src/sys/apple/Scanner.swift")
                 .framework("UIKit")
                 .framework("Vision")
                 .framework("VisionKit"),
         );
     }
-    waterkit_build::compile_multi_swift("waterkit_vision_swift_bridge", crates);
+    bridges.compile();
 }

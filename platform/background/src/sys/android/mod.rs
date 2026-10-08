@@ -28,7 +28,10 @@ pub struct BackgroundRuntimeInner {
 }
 
 impl BackgroundRuntimeInner {
-    pub fn initialize(_event_ctx: u64, config: &BootstrapConfig) -> Result<Self, BackgroundError> {
+    pub fn initialize(
+        _events_tx: async_channel::Sender<crate::BackgroundEvent>,
+        config: &BootstrapConfig,
+    ) -> Result<Self, BackgroundError> {
         let android_config = config.android_config_ref().ok_or_else(|| {
             BackgroundError::ConfigurationMissing(
                 "android_config must be provided with a JobService class when running on Android"
@@ -147,14 +150,17 @@ pub const fn capabilities() -> BackgroundCapabilities {
     }
 }
 
+/// The Android task handle: this backend never emits launch events.
+#[derive(Debug, Clone)]
+pub struct TaskHandle;
+
 pub fn complete_task(
-    _runtime_handle: u64,
-    _task_token: u64,
+    _handle: &TaskHandle,
     _success: bool,
-) -> Result<(), BackgroundError> {
-    unreachable!(
+) -> impl core::future::Future<Output = Result<(), BackgroundError>> {
+    core::future::ready(unreachable!(
         "waterkit-background: Android backend does not emit launch events and cannot complete tasks"
-    )
+    ))
 }
 
 #[derive(Debug)]

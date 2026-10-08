@@ -31,19 +31,7 @@ pub enum TaskKind {
 }
 
 impl TaskKind {
-    #[cfg(target_os = "ios")]
-    pub(crate) fn from_raw(value: u8) -> Result<Self, BackgroundError> {
-        match value {
-            1 => Ok(Self::AppRefresh),
-            2 => Ok(Self::Processing),
-            3 => Ok(Self::ContinuedProcessing),
-            other => Err(BackgroundError::Platform(format!(
-                "unknown task kind value: {other}"
-            ))),
-        }
-    }
-
-    #[cfg(any(target_os = "ios", target_os = "android"))]
+    #[cfg(target_os = "android")]
     pub(crate) const fn as_raw(self) -> u8 {
         self as u8
     }
@@ -456,8 +444,7 @@ pub enum BackgroundEvent {
 pub struct BackgroundTask {
     identifier: TaskIdentifier,
     kind: TaskKind,
-    runtime_handle: u64,
-    token: u64,
+    handle: sys::TaskHandle,
 }
 
 impl BackgroundTask {
@@ -479,8 +466,8 @@ impl BackgroundTask {
     ///
     /// # Errors
     /// Returns an error if the completion callback fails.
-    pub fn complete(self, success: bool) -> Result<(), BackgroundError> {
-        sys::complete_task(self.runtime_handle, self.token, success)
+    pub async fn complete(self, success: bool) -> Result<(), BackgroundError> {
+        sys::complete_task(&self.handle, success).await
     }
 
     /// Update the user-visible title and subtitle for a continued processing task.
@@ -488,7 +475,7 @@ impl BackgroundTask {
     /// # Errors
     /// Returns an error if this is not a continued processing task or if the backend rejects it.
     #[cfg(target_os = "ios")]
-    pub fn update_status(
+    pub async fn update_status(
         &self,
         title: impl Into<String>,
         subtitle: impl Into<String>,
@@ -503,7 +490,7 @@ impl BackgroundTask {
                 "continued task title/subtitle cannot be empty".into(),
             ));
         }
-        sys::update_continued_processing_status(self.runtime_handle, self.token, &title, &subtitle)
+        sys::update_continued_processing_status(&self.handle, &title, &subtitle).await
     }
 
     /// Update progress for a continued processing task.
@@ -511,7 +498,7 @@ impl BackgroundTask {
     /// # Errors
     /// Returns an error if this is not a continued processing task or if progress values are invalid.
     #[cfg(target_os = "ios")]
-    pub fn update_progress(&self, completed: u64, total: u64) -> Result<(), BackgroundError> {
+    pub async fn update_progress(&self, completed: u64, total: u64) -> Result<(), BackgroundError> {
         if self.kind != TaskKind::ContinuedProcessing {
             return Err(BackgroundError::InvalidTaskKind(self.kind.as_str()));
         }
@@ -525,23 +512,20 @@ impl BackgroundTask {
                 "continued task progress completed cannot exceed total".into(),
             ));
         }
-        sys::update_continued_processing_progress(self.runtime_handle, self.token, completed, total)
+        sys::update_continued_processing_progress(&self.handle, completed, total).await
     }
 
     #[cfg(target_os = "ios")]
-    pub(crate) fn from_raw(
-        runtime_handle: u64,
-        token: u64,
+    pub(crate) fn new(
+        handle: sys::TaskHandle,
         identifier: &str,
-        kind_raw: u8,
+        kind: TaskKind,
     ) -> Result<Self, BackgroundError> {
-        let kind = TaskKind::from_raw(kind_raw)?;
         let identifier = TaskIdentifier::new(identifier.to_owned())?;
         Ok(Self {
             identifier,
             kind,
-            runtime_handle,
-            token,
+            handle,
         })
     }
 }
@@ -567,8 +551,7 @@ impl BackgroundTaskExpiration {
     }
 
     #[cfg(target_os = "ios")]
-    pub(crate) fn from_raw(identifier: &str, kind_raw: u8) -> Result<Self, BackgroundError> {
-        let kind = TaskKind::from_raw(kind_raw)?;
+    pub(crate) fn new(identifier: &str, kind: TaskKind) -> Result<Self, BackgroundError> {
         let identifier = TaskIdentifier::new(identifier.to_owned())?;
         Ok(Self { identifier, kind })
     }
@@ -580,7 +563,6 @@ pub struct BackgroundRuntime {
     inner: sys::BackgroundRuntimeInner,
     registrations: BootstrapConfig,
     events: async_channel::Receiver<BackgroundEvent>,
-    _events_tx_guard: Box<async_channel::Sender<BackgroundEvent>>,
 }
 
 impl BackgroundRuntime {
@@ -678,17 +660,13 @@ pub fn initialize(config: BootstrapConfig) -> Result<BackgroundRuntime, Backgrou
     config.validate()?;
 
     let (events_tx, events_rx) = async_channel::bounded(128);
-    let events_tx = Box::new(events_tx);
-    #[allow(clippy::cast_possible_truncation)]
-    let event_ctx = (&raw const *events_tx) as usize as u64;
 
-    let inner = sys::BackgroundRuntimeInner::initialize(event_ctx, &config)?;
+    let inner = sys::BackgroundRuntimeInner::initialize(events_tx, &config)?;
 
     Ok(BackgroundRuntime {
         inner,
         registrations: config,
         events: events_rx,
-        _events_tx_guard: events_tx,
     })
 }
 
@@ -746,28 +724,27 @@ fn validate_identifier(identifier: &str) -> Result<(), BackgroundError> {
 
 #[cfg(target_os = "ios")]
 pub(crate) fn dispatch_launched_event(
-    event_ctx: u64,
-    runtime_handle: u64,
-    task_token: u64,
+    events_tx: &async_channel::Sender<BackgroundEvent>,
+    handle: sys::TaskHandle,
     identifier: &str,
-    kind_raw: u8,
+    kind: TaskKind,
 ) {
-    let task = BackgroundTask::from_raw(runtime_handle, task_token, identifier, kind_raw)
+    let task = BackgroundTask::new(handle, identifier, kind)
         .unwrap_or_else(|error| panic!("invalid launched task callback payload: {error}"));
 
-    #[allow(clippy::cast_possible_truncation)]
-    let sender = unsafe { &*(event_ctx as usize as *const async_channel::Sender<BackgroundEvent>) };
-    let _ = sender.try_send(BackgroundEvent::Launched(task));
+    let _ = events_tx.try_send(BackgroundEvent::Launched(task));
 }
 
 #[cfg(target_os = "ios")]
-pub(crate) fn dispatch_expired_event(event_ctx: u64, identifier: &str, kind_raw: u8) {
-    let expiration = BackgroundTaskExpiration::from_raw(identifier, kind_raw)
+pub(crate) fn dispatch_expired_event(
+    events_tx: &async_channel::Sender<BackgroundEvent>,
+    identifier: &str,
+    kind: TaskKind,
+) {
+    let expiration = BackgroundTaskExpiration::new(identifier, kind)
         .unwrap_or_else(|error| panic!("invalid expired task callback payload: {error}"));
 
-    #[allow(clippy::cast_possible_truncation)]
-    let sender = unsafe { &*(event_ctx as usize as *const async_channel::Sender<BackgroundEvent>) };
-    let _ = sender.try_send(BackgroundEvent::Expired(expiration));
+    let _ = events_tx.try_send(BackgroundEvent::Expired(expiration));
 }
 
 #[cfg(test)]

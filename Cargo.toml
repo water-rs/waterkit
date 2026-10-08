@@ -304,6 +304,9 @@ percent-encoding = "2.3"
 
 # BCP-47 language identifiers shared by capability APIs.
 icu_locale_core = { version = "2.3", features = ["alloc"] }
+# Likely-subtags expansion (`LocaleExpander`), for routing languages to the
+# scripts a recognizer serves.
+icu_locale = "2.3"
 url = "2.5"
 zenwave = { version = "0.6.1", default-features = false, features = ["hyper-backend"] }
 

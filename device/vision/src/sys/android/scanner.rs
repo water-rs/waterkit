@@ -1,4 +1,4 @@
-//! Android realization: the Google code scanner of Google Play services.
+//! The Google code scanner of Google Play services.
 //!
 //! `waterkit.vision.ScannerHelper` is compiled into the application's
 //! classpath by the packager together with the thin
@@ -8,12 +8,13 @@
 //! Kotlin listener hands the outcome back over JNI and this side completes
 //! the awaiting [`crate::CodeScanner::scan`] through a oneshot.
 
+use crate::sys::android::{format_of, served_symbologies, symbology_of};
 use crate::{Payload, ScannedCode, Symbology, VisionError};
 use bytes::Bytes;
 use enumset::EnumSet;
 use futures::channel::oneshot;
 use jni::errors::ThrowRuntimeExAndDefault;
-use jni::objects::{JByteArray, JClass, JObject, JValue, JValueOwned};
+use jni::objects::{JByteArray, JClass, JObject, JValue};
 use jni::sys::{jint, jlong};
 use jni::{Env, EnvUnowned, jni_sig, jni_str};
 use std::collections::HashMap;
@@ -27,65 +28,16 @@ use waterkit_build::{
 /// packager and resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.vision.ScannerHelper");
 
-/// The symbologies `GmsBarcodeScanning` can restrict a scan to — the
-/// constants `com.google.mlkit.vision.barcode.common.Barcode#FORMAT_*`
-/// defines. `Itf14` is absent: the scanner's ITF format accepts any
-/// interleaved-2-of-5 length, so it cannot restrict to the 14-digit
-/// symbology.
-const SUPPORTED_SYMBOLOGIES: EnumSet<Symbology> = enumset::enum_set!(
-    Symbology::Aztec
-        | Symbology::Codabar
-        | Symbology::Code39
-        | Symbology::Code93
-        | Symbology::Code128
-        | Symbology::DataMatrix
-        | Symbology::Ean8
-        | Symbology::Ean13
-        | Symbology::Itf
-        | Symbology::Pdf417
-        | Symbology::Qr
-        | Symbology::UpcA
-        | Symbology::UpcE
-);
-
-/// The Google code scanner's format constants
-/// (`com.google.mlkit.vision.barcode.common.Barcode#FORMAT_*`).
-const fn gms_format(symbology: Symbology) -> i32 {
-    match symbology {
-        Symbology::Aztec => 4096,
-        Symbology::Codabar => 8,
-        Symbology::Code39 => 2,
-        Symbology::Code93 => 4,
-        Symbology::Code128 => 1,
-        Symbology::DataMatrix => 16,
-        Symbology::Ean8 => 64,
-        Symbology::Ean13 => 32,
-        Symbology::Itf => 128,
-        Symbology::Pdf417 => 2048,
-        Symbology::Qr => 256,
-        Symbology::UpcA => 512,
-        Symbology::UpcE => 1024,
-        _ => panic!("waterkit-vision: the Google code scanner cannot express this symbology"),
-    }
+/// The Google code scanner's format constant for `symbology`.
+fn gms_format(symbology: Symbology) -> i32 {
+    format_of(symbology)
+        .expect("waterkit-vision: the Google code scanner cannot express this symbology")
 }
 
 fn symbology_from_gms_format(format: i32) -> Symbology {
-    match format {
-        4096 => Symbology::Aztec,
-        8 => Symbology::Codabar,
-        2 => Symbology::Code39,
-        4 => Symbology::Code93,
-        1 => Symbology::Code128,
-        16 => Symbology::DataMatrix,
-        64 => Symbology::Ean8,
-        32 => Symbology::Ean13,
-        128 => Symbology::Itf,
-        2048 => Symbology::Pdf417,
-        256 => Symbology::Qr,
-        512 => Symbology::UpcA,
-        1024 => Symbology::UpcE,
-        other => panic!("waterkit-vision: the scanner returned an unknown format {other}"),
-    }
+    symbology_of(format).unwrap_or_else(|| {
+        panic!("waterkit-vision: the scanner returned an unknown format {format}")
+    })
 }
 
 type ScanCallback = oneshot::Sender<Result<Option<ScannedCode>, VisionError>>;
@@ -98,8 +50,8 @@ fn scan_callbacks() -> &'static Mutex<HashMap<u64, ScanCallback>> {
 }
 
 /// The symbologies the Google code scanner can restrict a scan to.
-pub const fn scanner_symbologies() -> EnumSet<Symbology> {
-    SUPPORTED_SYMBOLOGIES
+pub fn scanner_symbologies() -> EnumSet<Symbology> {
+    served_symbologies()
 }
 
 /// Whether Google Play services is usable on this device — the device's own
@@ -110,23 +62,7 @@ pub const fn scanner_symbologies() -> EnumSet<Symbology> {
 /// Panics if `ndk_context` has no `JavaVM` or Android `Context` yet, or the
 /// JNI probe fails.
 pub fn scanner_available() -> bool {
-    with_android_context(|env, context| {
-        let helper_class = HELPER.class(env, context)?;
-        env.call_static_method(
-            helper_class,
-            jni_str!("hasGooglePlayServices"),
-            jni_sig!("(Landroid/content/Context;)Z"),
-            &[JValue::Object(context)],
-        )
-        .and_then(JValueOwned::z)
-        .map_err(|error| {
-            VisionError::Platform(format!(
-                "probe Google Play services failed: {}",
-                describe_jni_error(env, error)
-            ))
-        })
-    })
-    .unwrap_or_else(|error| panic!("waterkit-vision: {error}"))
+    crate::sys::android::play_services().unwrap_or_else(|error| panic!("waterkit-vision: {error}"))
 }
 
 fn launch_scan_with_context(

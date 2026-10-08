@@ -43,13 +43,17 @@ unsafe impl Send for PixelBuffer {}
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 unsafe impl Sync for PixelBuffer {}
 
-// A platform has a scanner bridge when either one-shot scanner feature is
-// enabled.
+// The Android module hosts the one-shot scanners and the ML Kit requests.
 #[cfg(all(
-    any(feature = "scanner", feature = "document-scanner"),
-    target_os = "android"
+    target_os = "android",
+    any(
+        feature = "scanner",
+        feature = "document-scanner",
+        feature = "barcode",
+        feature = "text"
+    )
 ))]
-mod android;
+pub mod android;
 #[cfg(all(
     any(feature = "scanner", feature = "document-scanner"),
     target_os = "ios",
@@ -97,7 +101,12 @@ pub use unsupported::{scan, scanner_available, scanner_symbologies};
 #[cfg(all(any(target_os = "ios", target_os = "macos"), feature = "barcode"))]
 pub use apple_vision as native;
 
-#[cfg(not(any(target_os = "ios", target_os = "macos")))]
+/// On Android the native barcode realization is ML Kit's barcode engine,
+/// delivered by Play services' modules.
+#[cfg(all(target_os = "android", feature = "barcode"))]
+pub use android::barcode as native;
+
+#[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
 pub mod native {
     //! Stub offers for platforms without a native realization: selection
     //! falls to portable or `Unsupported`, and the run functions are never

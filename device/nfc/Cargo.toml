@@ -19,8 +19,19 @@ futures = { workspace = true }
 futures-core = "0.3"
 async-channel = { workspace = true }
 
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
+[target.'cfg(target_os = "ios")'.dependencies]
+waterkit-core.workspace = true
+block2.workspace = true
+dispatch2.workspace = true
+objc2.workspace = true
+objc2-core-nfc = { workspace = true, features = ["block2", "dispatch2"] }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSData",
+    "NSError",
+    "NSObject",
+    "NSString",
+] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 waterkit-build.workspace = true
@@ -36,9 +47,6 @@ windows = { workspace = true, features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
-
-[build-dependencies]
-waterkit-build.workspace = true
 
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).

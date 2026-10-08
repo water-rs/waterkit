@@ -238,7 +238,10 @@ objc2-event-kit = { version = "0.3", default-features = false }
 objc2-photos = { version = "0.3", default-features = false }
 dispatch2 = "0.3"
 objc2-core-media = "0.3"
+objc2-avf-audio = { version = "0.3", default-features = false }
 objc2-app-kit = "0.3"
+objc2-authentication-services = { version = "0.3", default-features = false }
+objc2-background-tasks = { version = "0.3", default-features = false }
 # W3C KeyboardEvent key/modifier vocabulary.
 keyboard-types = "0.8"
 mach2 = "0.6"
@@ -246,13 +249,18 @@ objc2-core-video = "0.3"
 objc2-video-toolbox = "0.3"
 objc2-core-foundation = "0.3"
 objc2-image-io = { version = "0.3", default-features = false }
+objc2-core-haptics = { version = "0.3", default-features = false }
 objc2-io-surface = "0.3"
 objc2-local-authentication = { version = "0.3", default-features = false }
 objc2-metal = "0.3"
 objc2-core-motion = { version = "0.3", default-features = false }
+objc2-core-nfc = { version = "0.3", default-features = false }
 objc2-io-kit = { version = "0.3", default-features = false }
 objc2-pass-kit = { version = "0.3", default-features = false }
+objc2-speech = { version = "0.3", default-features = false }
+objc2-photos-ui = { version = "0.3", default-features = false }
 objc2-ui-kit = { version = "0.3", default-features = false }
+objc2-uniform-type-identifiers = { version = "0.3", default-features = false }
 objc = "0.2"
 # Zero-copy import of platform frame buffers into wgpu textures.
 wgpu-external-frame = "0.3.0"

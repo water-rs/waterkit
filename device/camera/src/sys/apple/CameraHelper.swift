@@ -30,7 +30,9 @@ private var rawVideoInitialMatrix: UInt8?
 private let rawVideoLock = NSLock()
 
 // Frame callback - set from Rust: context, retained pixel buffer, timestamp
-// (ns), clockwise rotation to upright (degrees), mirrored.
+// (ns), clockwise rotation to upright (degrees), mirrored. The drop callback
+// carries only the context: a dropped frame means every capture buffer is
+// checked out, and Rust polls its GPU device so the buffers come back.
 public typealias CameraFrameCallback = @convention(c) (
     UnsafeMutableRawPointer?,
     UInt64,
@@ -38,7 +40,9 @@ public typealias CameraFrameCallback = @convention(c) (
     UInt32,
     Bool
 ) -> Void
+public typealias CameraDropCallback = @convention(c) (UnsafeMutableRawPointer?) -> Void
 private var frameCallback: CameraFrameCallback?
+private var dropCallback: CameraDropCallback?
 private var frameCallbackContext: UnsafeMutableRawPointer?
 private let frameQueue = DispatchQueue(label: "waterkit.camera.frame", qos: .userInteractive)
 private let frameLock = NSLock()
@@ -229,7 +233,13 @@ class CameraFrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
     }
 
     func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        // Frame dropped - backpressure from consumer
+        // Frame dropped - every capture buffer is checked out. Rust polls
+        // its GPU device so the checked-out buffers come back.
+        frameLock.lock()
+        let callback = dropCallback
+        let callbackContext = frameCallbackContext
+        frameLock.unlock()
+        callback?(callbackContext)
     }
 }
 
@@ -613,11 +623,13 @@ func camera_is_streaming() -> Bool {
 @_cdecl("camera_set_frame_callback")
 public func camera_set_frame_callback(
     context: UnsafeMutableRawPointer?,
-    callback: @escaping CameraFrameCallback
+    callback: @escaping CameraFrameCallback,
+    onDrop: @escaping CameraDropCallback
 ) {
     frameLock.lock()
     frameCallbackContext = context
     frameCallback = callback
+    dropCallback = onDrop
     frameLock.unlock()
 }
 
@@ -625,6 +637,7 @@ public func camera_set_frame_callback(
 public func camera_clear_frame_callback() {
     frameLock.lock()
     frameCallback = nil
+    dropCallback = nil
     frameCallbackContext = nil
     frameLock.unlock()
     frameQueue.sync {}

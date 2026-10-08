@@ -135,14 +135,17 @@ impl TtsInner {
         Ok(Self { vm, context })
     }
 
-    pub fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
-        self.vm
-            .attach_current_thread(
-                |env| -> Result<Result<Vec<Voice>, SpeechError>, jni::errors::Error> {
-                    Ok(read_available_voices(env, self.context.as_obj()))
-                },
-            )
-            .map_err(|e| SpeechError::Platform(format!("attach_current_thread: {e}")))?
+    pub async fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
+        futures::future::ready(
+            self.vm
+                .attach_current_thread(
+                    |env| -> Result<Result<Vec<Voice>, SpeechError>, jni::errors::Error> {
+                        Ok(read_available_voices(env, self.context.as_obj()))
+                    },
+                )
+                .map_err(|e| SpeechError::Platform(format!("attach_current_thread: {e}")))?,
+        )
+        .await
     }
 
     pub async fn speak(&self, text: &str, config: &TtsConfig) -> Result<(), SpeechError> {
@@ -177,28 +180,31 @@ impl TtsInner {
             });
     }
 
-    pub fn is_speaking(&self) -> bool {
-        self.vm
-            .attach_current_thread(|env| -> jni::errors::Result<bool> {
-                let helper = HELPER.class(env, self.context.as_obj()).unwrap_or_else(|e| {
-                    panic!("Android speech bridge invariant violated: HELPER.class failed in TtsInner::is_speaking: {e}")
-                });
-                let result = env
-                    .call_static_method(helper, jni_str!("isSpeaking"), jni_sig!("()Z"), &[])
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "Android speech bridge invariant violated: SpeechHelper.isSpeaking call failed in TtsInner::is_speaking: {e}"
-                        )
+    pub async fn is_speaking(&self) -> bool {
+        futures::future::ready(
+            self.vm
+                .attach_current_thread(|env| -> jni::errors::Result<bool> {
+                    let helper = HELPER.class(env, self.context.as_obj()).unwrap_or_else(|e| {
+                        panic!("Android speech bridge invariant violated: HELPER.class failed in TtsInner::is_speaking: {e}")
                     });
-                Ok(result.z().unwrap_or_else(|e| {
-                    panic!(
-                        "Android speech bridge invariant violated: SpeechHelper.isSpeaking return decode failed in TtsInner::is_speaking: {e}"
-                    )
-                }))
-            })
-            .unwrap_or_else(|e| {
-                panic!("Android speech bridge invariant violated: attach_current_thread failed in TtsInner::is_speaking: {e}")
-            })
+                    let result = env
+                        .call_static_method(helper, jni_str!("isSpeaking"), jni_sig!("()Z"), &[])
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "Android speech bridge invariant violated: SpeechHelper.isSpeaking call failed in TtsInner::is_speaking: {e}"
+                            )
+                        });
+                    Ok(result.z().unwrap_or_else(|e| {
+                        panic!(
+                            "Android speech bridge invariant violated: SpeechHelper.isSpeaking return decode failed in TtsInner::is_speaking: {e}"
+                        )
+                    }))
+                })
+                .unwrap_or_else(|e| {
+                    panic!("Android speech bridge invariant violated: attach_current_thread failed in TtsInner::is_speaking: {e}")
+                }),
+        )
+        .await
     }
 }
 

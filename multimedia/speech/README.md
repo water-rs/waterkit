@@ -14,8 +14,8 @@ Part of the [Waterkit](https://github.com/water-rs/waterkit) ecosystem.
 
 | Platform | Status |
 |----------|--------|
-| iOS      | Native (AVSpeechSynthesizer / SFSpeechRecognizer via Swift bridge) |
-| macOS    | Native (NSSpeechSynthesizer / SFSpeechRecognizer via Swift bridge) |
+| iOS      | Native (AVSpeechSynthesizer / SFSpeechRecognizer via objc2) |
+| macOS    | Native (AVSpeechSynthesizer via objc2; speech recognition is iOS-only) |
 | Android  | Native (TextToSpeech / SpeechRecognizer via JNI/Kotlin) |
 | Windows  | Native TTS; speech recognition pending |
 | Linux    | Native TTS (espeak); speech recognition pending |

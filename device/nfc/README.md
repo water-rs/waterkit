@@ -15,7 +15,7 @@ Part of the [Waterkit](https://github.com/water-rs/waterkit) ecosystem.
 
 | Platform | Status |
 |----------|--------|
-| iOS      | Native (CoreNFC via Swift bridge) |
+| iOS      | Native (CoreNFC via objc2) |
 | macOS    | Not available (no NFC hardware) |
 | Android  | Native (NfcAdapter via JNI/Kotlin) |
 | Windows  | Native (Windows Proximity API) |

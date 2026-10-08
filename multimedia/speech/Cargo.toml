@@ -22,7 +22,34 @@ async-channel = { workspace = true }
 futures-timer = { workspace = true }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
+dispatch2.workspace = true
+objc2.workspace = true
+objc2-avf-audio = { workspace = true, features = ["AVSpeechSynthesis"] }
+objc2-foundation = { workspace = true, features = ["NSObject", "NSString"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+block2.workspace = true
+objc2-avf-audio = { workspace = true, features = [
+    "AVAudioBuffer",
+    "AVAudioEngine",
+    "AVAudioFormat",
+    "AVAudioIONode",
+    "AVAudioNode",
+    "AVAudioTime",
+    "AVAudioTypes",
+    "block2",
+] }
+objc2-foundation = { workspace = true, features = ["NSArray", "NSError", "NSLocale"] }
+objc2-speech = { workspace = true, features = [
+    "block2",
+    "objc2-avf-audio",
+    "SFSpeechRecognitionRequest",
+    "SFSpeechRecognitionResult",
+    "SFSpeechRecognitionTask",
+    "SFSpeechRecognizer",
+    "SFTranscription",
+    "SFTranscriptionSegment",
+] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 waterkit-build.workspace = true
@@ -44,9 +71,6 @@ windows = { workspace = true, features = [
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
 async-process.workspace = true
-
-[build-dependencies]
-waterkit-build.workspace = true
 
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).

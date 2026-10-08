@@ -1,0 +1,39 @@
+[package]
+name = "waterkit-menu"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Native application menu bar for macOS and Windows"
+keywords = ["menu", "menubar", "appkit", "win32"]
+categories = ["os", "gui"]
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+futures.workspace = true
+async-channel.workspace = true
+keyboard-types.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = ["NSString"] }
+objc2-app-kit.workspace = true
+
+[dev-dependencies]
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

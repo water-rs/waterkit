@@ -70,11 +70,22 @@ class CameraHelper(private val appContext: Context) {
         private const val PREVIEW_IMAGES = PREVIEW_MAX_IN_FLIGHT + 1
 
         /**
-         * Analysis images out at once: one queued in `analysisQueue` plus the
-         * slot `acquireLatestImage` needs while it drains. The listener keeps
-         * only the newest image; images nobody takes are closed.
+         * Analysis images the consumer may hold at once: the newest waiting
+         * in `analysisQueue`, the one parked in the Rust reader's channel,
+         * and the frames an application still holds while it analyzes them.
+         * The analysis listener acquires only while fewer are out, so a
+         * consumer that falls behind makes the camera drop frames instead of
+         * running the reader dry.
          */
-        private const val ANALYSIS_IMAGES = 2
+        private const val ANALYSIS_MAX_IN_FLIGHT = 4
+
+        /**
+         * `acquireLatestImage` acquires the next image before closing the
+         * stale ones it drains, so while it runs the reader hands out one
+         * more than were out at entry: the pool needs a spare slot above
+         * `ANALYSIS_MAX_IN_FLIGHT`.
+         */
+        private const val ANALYSIS_IMAGES = ANALYSIS_MAX_IN_FLIGHT + 1
 
         private const val OPEN_TIMEOUT_SECONDS = 5L
         private const val SESSION_TIMEOUT_SECONDS = 5L
@@ -185,8 +196,11 @@ class CameraHelper(private val appContext: Context) {
     /**
      * One analysis image acquired from `analysisImageReader`: the
      * `YUV_420_888` `Image`, the display rotation in degrees when it
-     * arrived, its data space, and its sensor timestamp. The consumer owns
-     * the image and closes it once read; the queue closes one a consumer
+     * arrived, its data space, and its sensor timestamp.
+     *
+     * The receiver owns the frame and must call [close] once it has read
+     * the image: it returns the image to the reader, freeing one of the
+     * `ANALYSIS_MAX_IN_FLIGHT` slots. The queue closes one a consumer
      * never takes.
      */
     class AnalysisFrame(
@@ -195,7 +209,22 @@ class CameraHelper(private val appContext: Context) {
         val dataSpace: Int,
         /** The image's sensor timestamp, the start of exposure. */
         val captureTimeNs: Long,
-    )
+        /**
+         * Runs after the image is closed, on whichever thread called
+         * [close]; the reader bookkeeping lives behind it.
+         */
+        private val onClosed: () -> Unit,
+    ) {
+        private val closed = AtomicBoolean(false)
+
+        /** Returns the image and its in-flight slot to the reader, once. */
+        fun close() {
+            if (closed.compareAndSet(false, true)) {
+                image.close()
+                onClosed()
+            }
+        }
+    }
 
     /**
      * The newest pending analysis frame; a second frame evicts — and closes
@@ -223,6 +252,27 @@ class CameraHelper(private val appContext: Context) {
      * close posts back must not re-enter it.
      */
     private var previewDrainActive = false
+
+    /**
+     * Analysis images acquired from `analysisImageReader` and not yet
+     * closed: the one waiting in `analysisQueue` plus every frame leased to
+     * the consumer. Read and written only on the camera background thread,
+     * except that `closeCamera` resets it once that thread has stopped.
+     */
+    private var analysisImagesInFlight = 0
+
+    /**
+     * Frames the producer wrote while `analysisImagesInFlight` was at
+     * `ANALYSIS_MAX_IN_FLIGHT`; they stay with the producer and are dropped.
+     * Counted and logged on the camera background thread.
+     */
+    private var analysisFramesDropped = 0
+
+    /**
+     * True while [drainAnalysisReader] runs; the release a stale frame's
+     * close posts back must not re-enter it.
+     */
+    private var analysisDrainActive = false
     private val displayManager: DisplayManager =
         appContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
     private var latestPhotoData: ByteArray? = null
@@ -410,18 +460,7 @@ class CameraHelper(private val appContext: Context) {
             }, handler)
 
             analysisImageReader?.setOnImageAvailableListener({ reader ->
-                val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-                // Newest wins: the queued image nobody took goes back to the
-                // reader, so the queue never holds a stale frame.
-                analysisQueue.pollLast()?.let { stale -> stale.image.close() }
-                analysisQueue.offerLast(
-                    AnalysisFrame(
-                        image,
-                        displayRotationDegrees(),
-                        imageDataSpace(image),
-                        image.timestamp,
-                    ),
-                )
+                drainAnalysisReader(reader, handler)
             }, handler)
 
             rawImageReader?.setOnImageAvailableListener({ reader ->
@@ -918,21 +957,13 @@ class CameraHelper(private val appContext: Context) {
     }
 
     /**
-     * Takes the newest pending preview image while a slot is free, evicting
-     * the queued frame nobody took — newest wins. Runs only on the camera
-     * background thread; the counter it reads is mutated there alone.
-     *
-     * When `PREVIEW_MAX_IN_FLIGHT` images are already out this acquires
-     * nothing, so `acquireLatestImage` always has a spare `PREVIEW_IMAGES`
-     * slot: the pending frame stays with the producer and is dropped once a
-     * leased image's close re-arms the drain through [releasePreviewImage].
-     */
-    /**
      * Wait for the next analysis frame and consume it.
      * Returns null on timeout or when the camera was opened without an
      * analysis output, whose queue never fills.
      *
-     * The receiver owns the returned frame's image and closes it once read.
+     * The receiver owns the returned frame: [AnalysisFrame.close] returns
+     * its image to the reader and frees one of the `ANALYSIS_MAX_IN_FLIGHT`
+     * slots, re-arming acquisition.
      */
     fun waitForNextAnalysisFrame(timeoutMs: Int): AnalysisFrame? {
         return try {
@@ -947,6 +978,16 @@ class CameraHelper(private val appContext: Context) {
         }
     }
 
+    /**
+     * Takes the newest pending preview image while a slot is free, evicting
+     * the queued frame nobody took — newest wins. Runs only on the camera
+     * background thread; the counter it reads is mutated there alone.
+     *
+     * When `PREVIEW_MAX_IN_FLIGHT` images are already out this acquires
+     * nothing, so `acquireLatestImage` always has a spare `PREVIEW_IMAGES`
+     * slot: the pending frame stays with the producer and is dropped once a
+     * leased image's close re-arms the drain through [releasePreviewImage].
+     */
     private fun drainPreviewReader(reader: ImageReader, handler: Handler) {
         if (reader !== previewImageReader || previewDrainActive) {
             return
@@ -1013,6 +1054,80 @@ class CameraHelper(private val appContext: Context) {
             if (reader === previewImageReader) {
                 previewImagesInFlight -= 1
                 drainPreviewReader(reader, handler)
+            }
+        }
+        if (handler.looper.isCurrentThread) {
+            released.run()
+        } else if (handler.looper.thread.isAlive) {
+            handler.post(released)
+        }
+    }
+
+    /**
+     * Takes the newest pending analysis image while a slot is free,
+     * evicting the queued frame nobody took — newest wins. Runs only on
+     * the camera background thread; the counter it reads is mutated there
+     * alone.
+     *
+     * When `ANALYSIS_MAX_IN_FLIGHT` images are already out this acquires
+     * nothing, so `acquireLatestImage` always has a spare `ANALYSIS_IMAGES`
+     * slot: the pending frame stays with the producer and is dropped once a
+     * leased image's close re-arms the drain through [releaseAnalysisImage].
+     */
+    private fun drainAnalysisReader(reader: ImageReader, handler: Handler) {
+        if (reader !== analysisImageReader || analysisDrainActive) {
+            return
+        }
+        analysisDrainActive = true
+        try {
+            while (true) {
+                if (analysisImagesInFlight >= ANALYSIS_MAX_IN_FLIGHT) {
+                    analysisFramesDropped += 1
+                    if (analysisFramesDropped == 1) {
+                        Log.i(
+                            TAG,
+                            "analysis consumer holds $ANALYSIS_MAX_IN_FLIGHT frames; " +
+                                "dropping until one returns",
+                        )
+                    }
+                    return
+                }
+                val image = reader.acquireLatestImage() ?: return
+                analysisImagesInFlight += 1
+                if (analysisFramesDropped != 0) {
+                    Log.i(TAG, "analysis resumed after dropping $analysisFramesDropped frames")
+                    analysisFramesDropped = 0
+                }
+                // Newest wins: a frame nobody took yet goes back to the reader.
+                analysisQueue.pollLast()?.let { stale -> stale.close() }
+                analysisQueue.offerLast(
+                    AnalysisFrame(
+                        image,
+                        displayRotationDegrees(),
+                        imageDataSpace(image),
+                        image.timestamp,
+                    ) {
+                        releaseAnalysisImage(reader, handler)
+                    },
+                )
+            }
+        } finally {
+            analysisDrainActive = false
+        }
+    }
+
+    /**
+     * A leased analysis image was closed on some thread: free one in-flight
+     * slot, then re-check the reader for the newest image that waited for
+     * it. Runs on the camera background thread — [AnalysisFrame.close] on
+     * another thread posts here; once the session's looper is gone the slot
+     * count has been reset anyway, so a close during teardown is dropped.
+     */
+    private fun releaseAnalysisImage(reader: ImageReader, handler: Handler) {
+        val released = Runnable {
+            if (reader === analysisImageReader) {
+                analysisImagesInFlight -= 1
+                drainAnalysisReader(reader, handler)
             }
         }
         if (handler.looper.isCurrentThread) {
@@ -1098,11 +1213,14 @@ class CameraHelper(private val appContext: Context) {
         }
         while (true) {
             val stale = analysisQueue.pollFirst() ?: break
-            stale.image.close()
+            stale.close()
         }
         previewImagesInFlight = 0
         previewFramesDropped = 0
         previewDrainActive = false
+        analysisImagesInFlight = 0
+        analysisFramesDropped = 0
+        analysisDrainActive = false
         synchronized(photoLock) {
             latestPhotoData = null
             pendingPhotoLatch?.countDown()

@@ -34,11 +34,11 @@ import kotlin.math.roundToInt
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import waterkit.build.NativeCallback
 
 /**
  * Camera helper for waterkit-camera crate.
@@ -86,10 +86,6 @@ class CameraHelper(private val appContext: Context) {
          * `ANALYSIS_MAX_IN_FLIGHT`.
          */
         private const val ANALYSIS_IMAGES = ANALYSIS_MAX_IN_FLIGHT + 1
-
-        private const val OPEN_TIMEOUT_SECONDS = 5L
-        private const val SESSION_TIMEOUT_SECONDS = 5L
-        private const val PHOTO_TIMEOUT_SECONDS = 5L
 
         private const val DYNAMIC_RANGE_SDR = 0
         private const val DYNAMIC_RANGE_HDR10 = 1
@@ -275,14 +271,89 @@ class CameraHelper(private val appContext: Context) {
     private var analysisDrainActive = false
     private val displayManager: DisplayManager =
         appContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-    private var latestPhotoData: ByteArray? = null
-    private var latestRawPhotoData: ByteArray? = null
-    private var latestRawImage: Image? = null
-    private var pendingPhotoLatch: CountDownLatch? = null
-    private var pendingRawImageLatch: CountDownLatch? = null
+    /**
+     * Delivers one operation's peer result exactly once: the device, session
+     * and capture callbacks race each other and `closeCamera`, and only the
+     * first answer may reach the `NativeCallback`.
+     */
+    private class PendingResult(private val callback: NativeCallback?) {
+        private val answered = AtomicBoolean(false)
 
-    private val photoLock = Any()
-    private val rawPhotoLock = Any()
+        fun complete(result: Any?) {
+            if (answered.compareAndSet(false, true)) {
+                callback?.complete(result)
+            }
+        }
+
+        fun fail(message: String) {
+            if (answered.compareAndSet(false, true)) {
+                callback?.fail(message)
+            }
+        }
+    }
+
+    /**
+     * One RAW still request: its newest `RAW_SENSOR` image and its capture
+     * result build the DNG together, so both halves race to answer it.
+     */
+    private class RawPhotoResult(
+        callback: NativeCallback,
+        private val characteristics: CameraCharacteristics,
+    ) {
+        private val result = PendingResult(callback)
+        private var image: Image? = null
+        private var captureResult: TotalCaptureResult? = null
+
+        @Synchronized
+        fun onImage(image: Image) {
+            this.image?.close()
+            this.image = image
+            maybeFinish()
+        }
+
+        @Synchronized
+        fun onResult(result: TotalCaptureResult) {
+            captureResult = result
+            maybeFinish()
+        }
+
+        fun fail(message: String) {
+            synchronized(this) {
+                image?.close()
+                image = null
+            }
+            result.fail(message)
+        }
+
+        private fun maybeFinish() {
+            val image = image ?: return
+            val result = captureResult ?: return
+            try {
+                val output = ByteArrayOutputStream()
+                DngCreator(characteristics, result).use { creator ->
+                    creator.writeImage(output, image)
+                }
+                image.close()
+                this.image = null
+                this.result.complete(output.toByteArray())
+            } catch (error: Exception) {
+                image.close()
+                this.image = null
+                fail("DNG write failed: ${error.message ?: error.javaClass.name}")
+            }
+        }
+    }
+
+    /**
+     * In-flight peer operations, so `closeCamera` can answer them: the
+     * single lock guards every slot — writes are rare and short.
+     */
+    private val requestLock = Any()
+    private var pendingOpen: PendingResult? = null
+    private var pendingSession: PendingResult? = null
+    private var pendingPhoto: PendingResult? = null
+    private var pendingRawPhoto: RawPhotoResult? = null
+
     private val rawVideoLock = Any()
 
     private var frameWidth: Int = 1280
@@ -362,7 +433,9 @@ class CameraHelper(private val appContext: Context) {
     }
 
     /**
-     * Open a camera by ID with requested configuration.
+     * Open a camera by ID with requested configuration; [callback] answers
+     * once `CameraDevice.StateCallback` reports the open, a disconnect, or
+     * an error.
      */
     fun openCamera(
         cameraId: String,
@@ -371,16 +444,22 @@ class CameraHelper(private val appContext: Context) {
         requestedFrameRate: Int,
         analysisWidth: Int,
         analysisHeight: Int,
-    ): Boolean {
+        callback: NativeCallback,
+    ) {
+        val pending = PendingResult(callback)
         closeCamera()
+        synchronized(requestLock) {
+            pendingOpen = pending
+        }
 
         startBackgroundThread()
         val handler = backgroundHandler ?: run {
             Log.e(TAG, "background handler is not initialized")
-            return false
+            pending.fail("background handler is not initialized")
+            return
         }
 
-        return try {
+        try {
             val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val characteristics = manager.getCameraCharacteristics(cameraId)
             val snapshot = queryCapabilitySnapshot(manager, cameraId, characteristics)
@@ -465,58 +544,54 @@ class CameraHelper(private val appContext: Context) {
 
             rawImageReader?.setOnImageAvailableListener({ reader ->
                 val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-                synchronized(rawPhotoLock) {
-                    latestRawImage?.close()
-                    latestRawImage = image
-                    pendingRawImageLatch?.countDown()
+                val pending = synchronized(requestLock) { pendingRawPhoto }
+                if (pending == null) {
+                    image.close()
+                } else {
+                    pending.onImage(image)
                 }
             }, handler)
 
             stillImageReader?.setOnImageAvailableListener({ reader ->
                 val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+                val pending = synchronized(requestLock) {
+                    val current = pendingPhoto
+                    if (current == null) {
+                        image.close()
+                        return@setOnImageAvailableListener
+                    }
+                    pendingPhoto = null
+                    current
+                }
                 try {
                     if (image.format != ImageFormat.JPEG) {
-                        Log.e(TAG, "Unexpected still image format: ${image.format}")
-                        synchronized(photoLock) {
-                            pendingPhotoLatch?.countDown()
-                            pendingPhotoLatch = null
-                        }
+                        pending.fail("unexpected still image format ${image.format}")
                         return@setOnImageAvailableListener
                     }
                     val plane = image.planes.firstOrNull() ?: run {
-                        synchronized(photoLock) {
-                            pendingPhotoLatch?.countDown()
-                            pendingPhotoLatch = null
-                        }
+                        pending.fail("still image carries no plane")
                         return@setOnImageAvailableListener
                     }
                     val buffer = plane.buffer
                     val bytes = ByteArray(buffer.remaining())
                     buffer.get(bytes)
-                    synchronized(photoLock) {
-                        latestPhotoData = bytes
-                        pendingPhotoLatch?.countDown()
-                        pendingPhotoLatch = null
-                    }
+                    pending.complete(bytes)
                 } catch (error: Exception) {
-                    Log.e(TAG, "Failed to process still image", error)
-                    synchronized(photoLock) {
-                        pendingPhotoLatch?.countDown()
-                        pendingPhotoLatch = null
-                    }
+                    pending.fail("failed to process still image: ${error.message ?: error.javaClass.name}")
                 } finally {
                     image.close()
                 }
             }, handler)
 
-            val openLatch = CountDownLatch(1)
-            var opened = false
-
             manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     cameraDevice = camera
-                    opened = true
-                    openLatch.countDown()
+                    synchronized(requestLock) {
+                        if (pendingOpen === pending) {
+                            pendingOpen = null
+                        }
+                    }
+                    pending.complete(null)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
@@ -525,7 +600,12 @@ class CameraHelper(private val appContext: Context) {
                     if (cameraDevice === camera) {
                         cameraDevice = null
                     }
-                    openLatch.countDown()
+                    synchronized(requestLock) {
+                        if (pendingOpen === pending) {
+                            pendingOpen = null
+                        }
+                    }
+                    pending.fail("camera $cameraId disconnected")
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
@@ -534,34 +614,33 @@ class CameraHelper(private val appContext: Context) {
                     if (cameraDevice === camera) {
                         cameraDevice = null
                     }
-                    openLatch.countDown()
+                    synchronized(requestLock) {
+                        if (pendingOpen === pending) {
+                            pendingOpen = null
+                        }
+                    }
+                    pending.fail("camera $cameraId open failed with error $error")
                 }
             }, handler)
-
-            val completed = openLatch.await(OPEN_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            if (!completed || !opened) {
-                Log.e(TAG, "Timed out opening camera: $cameraId")
-                closeCamera()
-                return false
-            }
-
-            true
         } catch (error: SecurityException) {
             Log.e(TAG, "Missing camera permission", error)
             closeCamera()
-            false
+            pending.fail("missing camera permission")
         } catch (error: Exception) {
             Log.e(TAG, "Failed to open camera", error)
             closeCamera()
-            false
+            pending.fail("failed to open camera: ${error.message ?: error.javaClass.name}")
         }
     }
 
     /**
-     * Start frame capture.
+     * Start frame capture; [callback] answers once the capture session is
+     * configured and the repeating request is running.
      */
-    fun startCapture(): Boolean {
-        return createCaptureSession(includeRecorderSurface = false)
+    fun startCapture(callback: NativeCallback) {
+        createCaptureSession(includeRecorderSurface = false, callback) {
+            callback.complete(null)
+        }
     }
 
     /**
@@ -574,32 +653,38 @@ class CameraHelper(private val appContext: Context) {
     }
 
     /**
-     * Capture a high-quality still image using Camera2 still-capture pipeline.
+     * Capture a high-quality still image using Camera2 still-capture
+     * pipeline; [callback] answers with the JPEG bytes.
      */
-    fun capturePhoto(): Boolean {
+    fun capturePhoto(callback: NativeCallback) {
+        val pending = PendingResult(callback)
         val session = captureSession ?: run {
             Log.e(TAG, "capturePhoto called before capture session start")
-            return false
+            pending.fail("capturePhoto called before capture session start")
+            return
         }
         val device = cameraDevice ?: run {
             Log.e(TAG, "capturePhoto called before camera open")
-            return false
+            pending.fail("capturePhoto called before camera open")
+            return
         }
         val stillReader = stillImageReader ?: run {
             Log.e(TAG, "capturePhoto called before still image reader init")
-            return false
+            pending.fail("capturePhoto called before still image reader init")
+            return
         }
         val handler = backgroundHandler ?: run {
             Log.e(TAG, "capturePhoto called without background handler")
-            return false
+            pending.fail("capturePhoto called without background handler")
+            return
         }
 
-        synchronized(photoLock) {
-            latestPhotoData = null
-            pendingPhotoLatch = CountDownLatch(1)
+        synchronized(requestLock) {
+            pendingPhoto?.fail("superseded by a newer photo capture")
+            pendingPhoto = pending
         }
 
-        return try {
+        try {
             val stillBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
             stillBuilder.addTarget(stillReader.surface)
             applyRequestControls(stillBuilder, forStillCapture = true)
@@ -613,84 +698,65 @@ class CameraHelper(private val appContext: Context) {
                         failure: android.hardware.camera2.CaptureFailure,
                     ) {
                         Log.e(TAG, "Still capture failed: $failure")
-                        synchronized(photoLock) {
-                            pendingPhotoLatch?.countDown()
-                            pendingPhotoLatch = null
-                        }
+                        photoFailed(pending, "still capture failed: $failure")
                     }
                 },
                 handler,
             )
-
-            val latch = synchronized(photoLock) { pendingPhotoLatch } ?: return false
-            val completed = latch.await(PHOTO_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            if (!completed) {
-                Log.e(TAG, "Timed out waiting for still image")
-                synchronized(photoLock) {
-                    pendingPhotoLatch = null
-                }
-                return false
-            }
-
-            synchronized(photoLock) { latestPhotoData != null }
         } catch (error: Exception) {
             Log.e(TAG, "Failed to capture still image", error)
-            synchronized(photoLock) {
-                pendingPhotoLatch?.countDown()
-                pendingPhotoLatch = null
+            photoFailed(pending, "failed to capture still image: ${error.message ?: error.javaClass.name}")
+        }
+    }
+
+    private fun photoFailed(pending: PendingResult, message: String) {
+        synchronized(requestLock) {
+            if (pendingPhoto === pending) {
+                pendingPhoto = null
             }
-            false
         }
+        pending.fail(message)
     }
 
     /**
-     * Consume captured still image bytes (JPEG).
+     * Capture RAW photo using RAW_SENSOR + DNG container; [callback]
+     * answers with the DNG bytes once the newest RAW image and the capture
+     * result have both arrived.
      */
-    fun consumePhotoData(): ByteArray? {
-        synchronized(photoLock) {
-            val data = latestPhotoData
-            latestPhotoData = null
-            return data
-        }
-    }
-
-    /**
-     * Capture RAW photo using RAW_SENSOR + DNG container.
-     */
-    fun captureRawPhoto(): Boolean {
+    fun captureRawPhoto(callback: NativeCallback) {
         val session = captureSession ?: run {
             Log.e(TAG, "captureRawPhoto called before capture session start")
-            return false
+            callback.fail("captureRawPhoto called before capture session start")
+            return
         }
         val device = cameraDevice ?: run {
             Log.e(TAG, "captureRawPhoto called before camera open")
-            return false
+            callback.fail("captureRawPhoto called before camera open")
+            return
         }
         val reader = rawImageReader ?: run {
             Log.e(TAG, "captureRawPhoto called on camera without RAW_SENSOR support")
-            return false
+            callback.fail("captureRawPhoto called on camera without RAW_SENSOR support")
+            return
         }
         val characteristics = currentCharacteristics ?: run {
             Log.e(TAG, "captureRawPhoto called without camera characteristics")
-            return false
+            callback.fail("captureRawPhoto called without camera characteristics")
+            return
         }
         val handler = backgroundHandler ?: run {
             Log.e(TAG, "captureRawPhoto called without background handler")
-            return false
+            callback.fail("captureRawPhoto called without background handler")
+            return
         }
 
-        val imageLatch = CountDownLatch(1)
-        val resultLatch = CountDownLatch(1)
-        var captureResult: TotalCaptureResult? = null
-
-        synchronized(rawPhotoLock) {
-            latestRawPhotoData = null
-            latestRawImage?.close()
-            latestRawImage = null
-            pendingRawImageLatch = imageLatch
+        val pending = RawPhotoResult(callback, characteristics)
+        synchronized(requestLock) {
+            pendingRawPhoto?.fail("superseded by a newer RAW photo capture")
+            pendingRawPhoto = pending
         }
 
-        return try {
+        try {
             val request = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
             request.addTarget(reader.surface)
             applyRequestControls(request, forStillCapture = true)
@@ -703,8 +769,7 @@ class CameraHelper(private val appContext: Context) {
                         request: CaptureRequest,
                         result: TotalCaptureResult,
                     ) {
-                        captureResult = result
-                        resultLatch.countDown()
+                        pending.onResult(result)
                     }
 
                     override fun onCaptureFailed(
@@ -713,153 +778,126 @@ class CameraHelper(private val appContext: Context) {
                         failure: android.hardware.camera2.CaptureFailure,
                     ) {
                         Log.e(TAG, "RAW still capture failed: $failure")
-                        resultLatch.countDown()
+                        rawPhotoFailed(pending, "RAW still capture failed: $failure")
                     }
                 },
                 handler,
             )
-
-            val imageReady = imageLatch.await(PHOTO_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            val resultReady = resultLatch.await(PHOTO_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            if (!imageReady || !resultReady) {
-                Log.e(TAG, "Timed out waiting for RAW still capture")
-                synchronized(rawPhotoLock) {
-                    pendingRawImageLatch = null
-                }
-                return false
-            }
-
-            val image = synchronized(rawPhotoLock) {
-                pendingRawImageLatch = null
-                val current = latestRawImage
-                latestRawImage = null
-                current
-            } ?: run {
-                Log.e(TAG, "RAW image was not available after capture")
-                return false
-            }
-
-            val result = captureResult ?: run {
-                image.close()
-                Log.e(TAG, "RAW capture result was unavailable")
-                return false
-            }
-
-            val dngBytes = try {
-                val output = ByteArrayOutputStream()
-                DngCreator(characteristics, result).use { creator ->
-                    creator.writeImage(output, image)
-                }
-                output.toByteArray()
-            } finally {
-                image.close()
-            }
-
-            synchronized(rawPhotoLock) {
-                latestRawPhotoData = dngBytes
-            }
-
-            true
         } catch (error: Exception) {
             Log.e(TAG, "Failed to capture RAW photo", error)
-            synchronized(rawPhotoLock) {
-                pendingRawImageLatch = null
-                latestRawImage?.close()
-                latestRawImage = null
+            rawPhotoFailed(pending, "failed to capture RAW photo: ${error.message ?: error.javaClass.name}")
+        }
+    }
+
+    private fun rawPhotoFailed(pending: RawPhotoResult, message: String) {
+        synchronized(requestLock) {
+            if (pendingRawPhoto === pending) {
+                pendingRawPhoto = null
             }
-            false
         }
+        pending.fail(message)
     }
 
     /**
-     * Consume captured RAW photo bytes (DNG).
+     * Start video recording via MediaRecorder; [callback] answers once the
+     * recorder is running, or once a failure leaves the preview session
+     * restored.
      */
-    fun consumeRawPhotoData(): ByteArray? {
-        synchronized(rawPhotoLock) {
-            val data = latestRawPhotoData
-            latestRawPhotoData = null
-            return data
-        }
-    }
-
-    /**
-     * Start video recording via MediaRecorder.
-     */
-    fun startRecording(path: String): Boolean {
+    fun startRecording(path: String, callback: NativeCallback) {
         if (isRecording) {
             Log.e(TAG, "startRecording called while already recording")
-            return false
+            callback.fail("startRecording called while already recording")
+            return
         }
         if (isRawVideoRecording) {
             Log.e(TAG, "startRecording called while RAW recording is active")
-            return false
+            callback.fail("startRecording called while RAW recording is active")
+            return
         }
 
         if (!prepareRecorder(path)) {
-            return false
+            callback.fail("failed to prepare the recorder for $path")
+            return
         }
 
-        if (!createCaptureSession(includeRecorderSurface = true)) {
-            releaseRecorder()
-            return false
-        }
-
-        return try {
-            mediaRecorder?.start()
-            recordingStartElapsedRealtimeMs = SystemClock.elapsedRealtime()
-            isRecording = true
-            true
-        } catch (error: Exception) {
-            Log.e(TAG, "Failed to start MediaRecorder", error)
-            releaseRecorder()
-            stopCapture()
-            createCaptureSession(includeRecorderSurface = false)
-            false
+        createCaptureSession(includeRecorderSurface = true, callback) {
+            try {
+                mediaRecorder?.start()
+                recordingStartElapsedRealtimeMs = SystemClock.elapsedRealtime()
+                isRecording = true
+                callback.complete(null)
+            } catch (error: Exception) {
+                Log.e(TAG, "Failed to start MediaRecorder", error)
+                releaseRecorder()
+                stopCapture()
+                // Restore the preview session before reporting the failure.
+                createCaptureSession(includeRecorderSurface = false, callback) {
+                    callback.fail(
+                        "failed to start MediaRecorder: ${error.message ?: error.javaClass.name}",
+                    )
+                }
+            }
         }
     }
 
     /**
-     * Stop video recording.
+     * Stop video recording; [callback] answers once the recorder has
+     * stopped and the preview session is restored.
      */
-    fun stopRecording(): Boolean {
-        return stopRecordingInternal(restorePreviewSession = true)
-    }
-
-    private fun stopRecordingInternal(restorePreviewSession: Boolean): Boolean {
+    fun stopRecording(callback: NativeCallback) {
         if (!isRecording) {
-            return true
+            callback.complete(null)
+            return
         }
 
         val recorder = mediaRecorder ?: run {
             Log.e(TAG, "stopRecording called with missing MediaRecorder")
             isRecording = false
             recordingStartElapsedRealtimeMs = 0
-            return false
+            callback.fail("stopRecording called with missing MediaRecorder")
+            return
         }
 
-        var stopped = true
+        var stopError: String? = null
         try {
             recorder.stop()
         } catch (error: RuntimeException) {
             Log.e(TAG, "Failed to stop MediaRecorder cleanly", error)
-            stopped = false
+            stopError = error.message ?: "MediaRecorder.stop failed"
         } catch (error: Exception) {
             Log.e(TAG, "Failed to stop MediaRecorder", error)
-            stopped = false
+            stopError = error.message ?: "MediaRecorder.stop failed"
         }
 
         isRecording = false
         recordingStartElapsedRealtimeMs = 0
         releaseRecorder()
 
-        if (!restorePreviewSession) {
-            stopCapture()
-            return stopped
-        }
-
         stopCapture()
-        val previewRestored = createCaptureSession(includeRecorderSurface = false)
-        return stopped && previewRestored
+        createCaptureSession(includeRecorderSurface = false, callback) {
+            when (val error = stopError) {
+                null -> callback.complete(null)
+                else -> callback.fail(error)
+            }
+        }
+    }
+
+    /**
+     * Synchronously stops an active recording for teardown, where no
+     * session restore is wanted because the camera is closing anyway.
+     */
+    private fun stopRecordingNow() {
+        if (!isRecording) {
+            return
+        }
+        try {
+            mediaRecorder?.stop()
+        } catch (error: Exception) {
+            Log.e(TAG, "Failed to stop MediaRecorder during teardown", error)
+        }
+        isRecording = false
+        recordingStartElapsedRealtimeMs = 0
+        releaseRecorder()
     }
     fun getRecordingDurationMs(): Long {
         if (!isRecording || recordingStartElapsedRealtimeMs == 0L) {
@@ -869,28 +907,32 @@ class CameraHelper(private val appContext: Context) {
     }
 
     /**
-     * Start RAW video frame stream recording.
+     * Start RAW video frame stream recording; [callback] answers once the
+     * session carries the RAW output.
      */
-    fun startRawRecording(path: String): Boolean {
+    fun startRawRecording(path: String, callback: NativeCallback) {
         val outputPath = path.trim()
         if (outputPath.isEmpty()) {
             Log.e(TAG, "RAW recording path must not be empty")
-            return false
+            callback.fail("RAW recording path must not be empty")
+            return
         }
         if (isRawVideoRecording) {
             Log.e(TAG, "startRawRecording called while already recording RAW")
-            return false
+            callback.fail("startRawRecording called while already recording RAW")
+            return
         }
         if (isRecording) {
             Log.e(TAG, "startRawRecording called while standard recording is active")
-            return false
+            callback.fail("startRawRecording called while standard recording is active")
+            return
         }
 
-        return try {
+        try {
             val file = File(outputPath)
             if (file.exists() && !file.delete()) {
-                Log.e(TAG, "Failed to remove existing RAW output file: $outputPath")
-                return false
+                callback.fail("failed to remove existing RAW output file: $outputPath")
+                return
             }
             file.parentFile?.mkdirs()
             val stream = FileOutputStream(file)
@@ -912,22 +954,82 @@ class CameraHelper(private val appContext: Context) {
                 }
             }, backgroundHandler)
             rawVideoImageReader = reader
-            if (!createCaptureSession(includeRecorderSurface = false)) {
-                throw IllegalStateException("the capture session rejected the RAW video stream")
-            }
-            true
         } catch (error: Exception) {
             Log.e(TAG, "Failed to start RAW recording", error)
-            stopRawVideoRecordingInternal()
-            false
+            stopRawVideoRecordingNow()
+            callback.fail("failed to start RAW recording: ${error.message ?: error.javaClass.name}")
+            return
+        }
+
+        createCaptureSession(includeRecorderSurface = false, callback) {
+            callback.complete(null)
         }
     }
 
     /**
-     * Stop RAW video frame stream recording.
+     * Stop RAW video frame stream recording; [callback] answers once the
+     * reader is off the session and the output file is closed.
      */
-    fun stopRawRecording(): Boolean {
-        return stopRawVideoRecordingInternal()
+    fun stopRawRecording(callback: NativeCallback) {
+        val reader = rawVideoImageReader
+        rawVideoImageReader = null
+
+        if (reader != null && cameraDevice != null) {
+            // Reconfigure the session without the reader before closing it.
+            createCaptureSession(includeRecorderSurface = false, callback) {
+                reader.close()
+                closeRawVideoOutput(callback)
+            }
+        } else {
+            reader?.close()
+            closeRawVideoOutput(callback)
+        }
+    }
+
+    /**
+     * Closes the RAW output stream and answers [callback] when one is set
+     * (an internal teardown passes none).
+     */
+    private fun closeRawVideoOutput(callback: NativeCallback?) {
+        val output = synchronized(rawVideoLock) {
+            val stream = rawVideoOutput
+            rawVideoOutput = null
+            rawVideoDataSpace = null
+            isRawVideoRecording = false
+            rawVideoRecordingStartElapsedRealtimeMs = 0L
+            stream
+        }
+        try {
+            output?.flush()
+            output?.close()
+            callback?.complete(null)
+        } catch (error: Exception) {
+            Log.e(TAG, "Failed to stop RAW recording stream", error)
+            callback?.fail("failed to stop RAW recording stream: ${error.message ?: error.javaClass.name}")
+        }
+    }
+
+    /**
+     * Synchronous teardown of RAW video recording for closeCamera, where
+     * the session is being torn down anyway.
+     */
+    private fun stopRawVideoRecordingNow() {
+        rawVideoImageReader?.close()
+        rawVideoImageReader = null
+        val output = synchronized(rawVideoLock) {
+            val stream = rawVideoOutput
+            rawVideoOutput = null
+            rawVideoDataSpace = null
+            isRawVideoRecording = false
+            rawVideoRecordingStartElapsedRealtimeMs = 0L
+            stream
+        }
+        try {
+            output?.flush()
+            output?.close()
+        } catch (error: Exception) {
+            Log.e(TAG, "Failed to stop RAW recording stream", error)
+        }
     }
     fun getRawRecordingDurationMs(): Long {
         if (!isRawVideoRecording || rawVideoRecordingStartElapsedRealtimeMs == 0L) {
@@ -1181,8 +1283,19 @@ class CameraHelper(private val appContext: Context) {
      * Close camera resources.
      */
     fun closeCamera() {
-        stopRecordingInternal(restorePreviewSession = false)
+        stopRecordingNow()
         stopCapture()
+
+        synchronized(requestLock) {
+            pendingOpen?.fail("camera closed")
+            pendingOpen = null
+            pendingSession?.fail("camera closed")
+            pendingSession = null
+            pendingPhoto?.fail("camera closed")
+            pendingPhoto = null
+            pendingRawPhoto?.fail("camera closed")
+            pendingRawPhoto = null
+        }
 
         cameraDevice?.close()
         cameraDevice = null
@@ -1202,7 +1315,7 @@ class CameraHelper(private val appContext: Context) {
         rawImageReader = null
 
         releaseRecorder()
-        stopRawVideoRecordingInternal()
+        stopRawVideoRecordingNow()
 
         // The background thread is dead by now, so the frames' closes could
         // not post their bookkeeping anyway; the count resets below.
@@ -1221,18 +1334,6 @@ class CameraHelper(private val appContext: Context) {
         analysisImagesInFlight = 0
         analysisFramesDropped = 0
         analysisDrainActive = false
-        synchronized(photoLock) {
-            latestPhotoData = null
-            pendingPhotoLatch?.countDown()
-            pendingPhotoLatch = null
-        }
-        synchronized(rawPhotoLock) {
-            latestRawPhotoData = null
-            latestRawImage?.close()
-            latestRawImage = null
-            pendingRawImageLatch?.countDown()
-            pendingRawImageLatch = null
-        }
 
         currentCameraId = null
         currentCharacteristics = null
@@ -1665,22 +1766,42 @@ class CameraHelper(private val appContext: Context) {
         return supported.minBy { fps -> kotlin.math.abs(fps - requestedFps) }
     }
 
-    private fun createCaptureSession(includeRecorderSurface: Boolean): Boolean {
+    /**
+     * Rebuilds the capture session; [callback] fails on a configure error,
+     * and on success [onReady] runs before it, answering the operation's
+     * caller. There is no timeout — a session that never answers surfaces
+     * through the caller's own deadline.
+     */
+    private fun createCaptureSession(
+        includeRecorderSurface: Boolean,
+        callback: NativeCallback?,
+        onReady: () -> Unit,
+    ) {
+        val pending = PendingResult(callback)
+        synchronized(requestLock) {
+            pendingSession?.fail("superseded by a newer session request")
+            pendingSession = pending
+        }
+
         val device = cameraDevice ?: run {
             Log.e(TAG, "createCaptureSession called before camera open")
-            return false
+            sessionFailed(pending, "createCaptureSession called before camera open")
+            return
         }
         val previewReader = previewImageReader ?: run {
             Log.e(TAG, "createCaptureSession called before preview reader init")
-            return false
+            sessionFailed(pending, "createCaptureSession called before preview reader init")
+            return
         }
         val stillReader = stillImageReader ?: run {
             Log.e(TAG, "createCaptureSession called before still reader init")
-            return false
+            sessionFailed(pending, "createCaptureSession called before still reader init")
+            return
         }
         val handler = backgroundHandler ?: run {
             Log.e(TAG, "createCaptureSession called without background handler")
-            return false
+            sessionFailed(pending, "createCaptureSession called without background handler")
+            return
         }
 
         val rawVideoSurface = rawVideoImageReader?.surface
@@ -1696,16 +1817,15 @@ class CameraHelper(private val appContext: Context) {
         if (includeRecorderSurface) {
             val surface = recorderSurface ?: run {
                 Log.e(TAG, "Recorder surface is missing while starting recording session")
-                return false
+                sessionFailed(pending, "recorder surface is missing while starting recording session")
+                return
             }
             surfaces.add(surface)
         }
 
         stopCapture()
 
-        val sessionLatch = CountDownLatch(1)
-        var configured = false
-        val callback = object : CameraCaptureSession.StateCallback() {
+        val sessionCallback = object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(session: CameraCaptureSession) {
                 captureSession = session
                 try {
@@ -1726,18 +1846,32 @@ class CameraHelper(private val appContext: Context) {
                     applyRequestControls(builder, forStillCapture = false)
                     session.setRepeatingRequest(builder.build(), null, handler)
                     previewRequestBuilder = builder
-                    configured = true
                 } catch (error: Exception) {
                     Log.e(TAG, "Failed to configure repeating request", error)
                     previewRequestBuilder = null
-                    configured = false
+                    sessionFailed(
+                        pending,
+                        "failed to configure repeating request: ${error.message ?: error.javaClass.name}",
+                    )
+                    return
                 }
-                sessionLatch.countDown()
+                synchronized(requestLock) {
+                    if (pendingSession === pending) {
+                        pendingSession = null
+                    }
+                }
+                try {
+                    onReady()
+                } catch (error: Exception) {
+                    pending.fail(
+                        "session-ready step failed: ${error.message ?: error.javaClass.name}",
+                    )
+                }
             }
 
             override fun onConfigureFailed(session: CameraCaptureSession) {
                 Log.e(TAG, "Camera capture session configuration failed")
-                sessionLatch.countDown()
+                sessionFailed(pending, "camera capture session configuration failed")
             }
         }
 
@@ -1760,25 +1894,26 @@ class CameraHelper(private val appContext: Context) {
                         SessionConfiguration.SESSION_REGULAR,
                         outputs,
                         executor,
-                        callback,
+                        sessionCallback,
                     ),
                 )
             } else {
-                device.createCaptureSession(surfaces, callback, handler)
+                @Suppress("DEPRECATION") // the only session API on API < 33
+                device.createCaptureSession(surfaces, sessionCallback, handler)
             }
         } catch (error: Exception) {
             Log.e(TAG, "Failed to create capture session", error)
-            return false
+            sessionFailed(pending, "failed to create capture session: ${error.message ?: error.javaClass.name}")
         }
+    }
 
-        val completed = sessionLatch.await(SESSION_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        if (!completed || !configured) {
-            Log.e(TAG, "Timed out configuring camera capture session")
-            stopCapture()
-            return false
+    private fun sessionFailed(pending: PendingResult, message: String) {
+        synchronized(requestLock) {
+            if (pendingSession === pending) {
+                pendingSession = null
+            }
         }
-
-        return true
+        pending.fail(message)
     }
 
     private fun updateRepeatingRequest(): Boolean {
@@ -1932,7 +2067,13 @@ class CameraHelper(private val appContext: Context) {
         releaseRecorder()
 
         return try {
-            val recorder = MediaRecorder()
+            val recorder =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    MediaRecorder(appContext)
+                } else {
+                    @Suppress("DEPRECATION") // `MediaRecorder(context)` needs API 31
+                    MediaRecorder()
+                }
             recorder.setVideoSource(MediaRecorder.VideoSource.SURFACE)
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
 
@@ -1970,32 +2111,7 @@ class CameraHelper(private val appContext: Context) {
         return bitrate.coerceIn(2_000_000L, 60_000_000L).toInt()
     }
 
-    private fun stopRawVideoRecordingInternal(): Boolean {
-        rawVideoImageReader?.let { reader ->
-            rawVideoImageReader = null
-            if (cameraDevice != null) {
-                createCaptureSession(includeRecorderSurface = false)
-            }
-            reader.close()
-        }
-        val output = synchronized(rawVideoLock) {
-            val stream = rawVideoOutput
-            rawVideoOutput = null
-            rawVideoDataSpace = null
-            isRawVideoRecording = false
-            rawVideoRecordingStartElapsedRealtimeMs = 0L
-            stream
-        }
 
-        return try {
-            output?.flush()
-            output?.close()
-            true
-        } catch (error: Exception) {
-            Log.e(TAG, "Failed to stop RAW recording stream", error)
-            false
-        }
-    }
 
     /**
      * Appends one YUV_420_888 image as NV12: the luma rows, then the
@@ -2105,7 +2221,18 @@ class CameraHelper(private val appContext: Context) {
         } else {
             Log.e(TAG, message, error)
         }
-        stopRawVideoRecordingInternal()
+        // Torn down internally, so no caller is waiting: detach the reader's
+        // surface from the session, then close the reader and the output.
+        val reader = rawVideoImageReader
+        rawVideoImageReader = null
+        if (reader != null && cameraDevice != null) {
+            createCaptureSession(includeRecorderSurface = false, callback = null) {
+                reader.close()
+            }
+        } else {
+            reader?.close()
+        }
+        closeRawVideoOutput(callback = null)
     }
 
     private fun writeRawVideoHeader(

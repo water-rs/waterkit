@@ -20,10 +20,23 @@ thiserror = { workspace = true }
 jiff = { workspace = true }
 uuid = { version = "1", default-features = false, features = ["std"] }
 
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2.workspace = true
+dispatch2.workspace = true
+futures.workspace = true
+
 [dev-dependencies]
 futures = { workspace = true }
+libtest-mimic = "0.8"
+
+[target.'cfg(target_vendor = "apple")'.dev-dependencies]
+objc2-core-foundation = { workspace = true, features = ["CFRunLoop"] }
 async-channel = { workspace = true }
 
 [features]
 default = []
 serde = ["uuid/serde", "jiff/serde"]
+
+[[test]]
+name = "apple_on_main"
+harness = false

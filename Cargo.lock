@@ -8450,6 +8450,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "waterkit-build",
+ "waterkit-core",
  "windows 0.62.2",
  "zbus",
 ]

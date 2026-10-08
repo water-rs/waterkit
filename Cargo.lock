@@ -4935,6 +4935,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-health-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "041e206d91990fa08bb987e10eaac19c300399cfbf06be6da93345edd323a029"
+dependencies = [
+ "bitflags 2.13.1",
+ "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-image-io"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8236,12 +8248,15 @@ dependencies = [
 name = "waterkit-health"
 version = "0.1.4"
 dependencies = [
+ "block2 0.6.2",
  "blocking",
  "futures",
  "jni 0.22.4",
  "ndk-context",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "objc2-health-kit",
  "serde",
- "swift-bridge",
  "thiserror 2.0.20",
  "waterkit-build",
  "waterkit-core",

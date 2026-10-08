@@ -25,7 +25,13 @@ tempfile = "3"
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge = { workspace = true, features = ["async"] }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSFileManager",
+    "NSPathUtilities",
+    "NSString",
+    "NSURL",
+] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
@@ -36,9 +42,6 @@ waterkit-build.workspace = true
 # JS `Uint8Array` rather than an array of numbers.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 indexed_db_futures = { version = "0.6.4", features = ["typed-arrays"] }
-
-[build-dependencies]
-waterkit-build.workspace = true
 
 # Desktop (Windows, macOS, Linux)
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]

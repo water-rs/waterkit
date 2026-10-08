@@ -121,13 +121,9 @@ impl MenuBarInner {
             sender: sender.clone(),
             attachment: Cell::new(None),
         };
-        if let Err(error) = inner.build(menus).and_then(|()| inner.build_accel_table()) {
-            // A bar that failed to build must not leak its menu tree.
-            unsafe {
-                DestroyMenu(inner.menu).expect("waterkit-menu: DestroyMenu failed");
-            }
-            return Err(error);
-        }
+        // A bar that failed to build is dropped here, and its `Drop` destroys
+        // the partial menu tree.
+        inner.build(menus).and_then(|()| inner.build_accel_table())?;
         Ok(inner)
     }
 

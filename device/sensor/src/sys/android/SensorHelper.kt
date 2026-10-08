@@ -8,6 +8,7 @@ import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
 import waterkit.build.NativeCallback
+import waterkit.build.NativeChannel
 
 /**
  * Helper class for accessing sensors on Android.
@@ -22,7 +23,7 @@ object SensorHelper {
     const val TYPE_PRESSURE = 6
     const val TYPE_LIGHT = 5
 
-    private val mainHandler = Handler(Looper.getMainLooper())
+    internal val mainHandler = Handler(Looper.getMainLooper())
 
     /**
      * Check if a sensor type is available on this device.
@@ -85,6 +86,27 @@ object SensorHelper {
      * event carrying at least [minimumValues] values is shaped by [transform]
      * and completes [callback], then the listener unregisters itself.
      */
+    /**
+     * Register a [SensorWatch] for [sensorType] at [samplingPeriodUs]
+     * microseconds and return it. Throws `IllegalStateException` when the
+     * sensor is absent or registration is refused.
+     */
+    @JvmStatic
+    fun watchSensor(
+        context: Context,
+        sensorType: Int,
+        samplingPeriodUs: Int,
+        channel: NativeChannel,
+    ): SensorWatch {
+        val manager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+            ?: throw IllegalStateException("sensor service is unavailable")
+        val sensor = manager.getDefaultSensor(sensorType)
+            ?: throw IllegalStateException("sensor type $sensorType is not available")
+        val watch = SensorWatch(manager, channel)
+        watch.start(sensor, samplingPeriodUs)
+        return watch
+    }
+
     private fun readFirstEvent(
         context: Context,
         sensorType: Int,
@@ -115,5 +137,42 @@ object SensorHelper {
         if (!manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME, mainHandler)) {
             callback.fail("sensor type $sensorType refused registration")
         }
+    }
+}
+
+/**
+ * One sensor watch: a `SensorEventListener` registered at the requested
+ * sampling period, streaming `[values..., epoch_ms]` payloads into its
+ * [NativeChannel]. The Rust stream handle owns it as a global reference;
+ * [stop] unregisters the listener and ends the stream.
+ */
+class SensorWatch internal constructor(
+    private val manager: SensorManager,
+    private val channel: NativeChannel,
+) {
+    private val listener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            channel.send(
+                DoubleArray(event.values.size + 1) { i ->
+                    if (i < event.values.size) event.values[i].toDouble()
+                    else event.timestamp.toDouble() / 1_000_000.0
+                }
+            )
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
+    }
+
+    /** Registers the listener at [samplingPeriodUs] on the main looper. */
+    internal fun start(sensor: Sensor, samplingPeriodUs: Int) {
+        check(manager.registerListener(listener, sensor, samplingPeriodUs, SensorHelper.mainHandler)) {
+            "sensor type ${sensor.type} refused registration"
+        }
+    }
+
+    /** Unregisters the listener and ends the stream. Called again is a no-op. */
+    fun stop() {
+        manager.unregisterListener(listener)
+        channel.close()
     }
 }

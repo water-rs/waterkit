@@ -154,8 +154,10 @@ pub const fn capabilities() -> BackgroundCapabilities {
 #[derive(Debug, Clone)]
 pub struct TaskHandle;
 
-// The per-platform sys contract is async; this body only diverges.
-#[allow(clippy::unused_async)]
+#[expect(
+    clippy::unused_async,
+    reason = "the per-platform sys contract is async; this body only diverges"
+)]
 pub async fn complete_task(_handle: &TaskHandle, _success: bool) -> Result<(), BackgroundError> {
     unreachable!(
         "waterkit-background: Android backend does not emit launch events and cannot complete tasks"

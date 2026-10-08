@@ -125,7 +125,6 @@ tempfile = { version = "3", optional = true }
 url = { version = "2", optional = true }
 
 # Android helper classes the packager compiles into the application's
-# classpath (see water-rs/cli's android backend).
-[package.metadata.waterui.android]
+# classpath when `media-session` is enabled.
+[package.metadata.waterui.android.feature.media-session]
 kotlin-sources = ["src/sys/android/MediaSessionHelper.kt"]
-required-feature = "media-session"

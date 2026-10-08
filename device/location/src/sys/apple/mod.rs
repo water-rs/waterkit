@@ -1,17 +1,18 @@
 //! Apple platform (iOS/macOS) location implementation backed by Core Location.
 //!
 //! The whole request runs on the main run loop: the `CLLocationManager` and
-//! its delegate are created, configured and driven on the main queue, and a
-//! ten-second timer bounds
-//! the wait. The delegate is a small `define_class!` object whose ivars own
+//! its delegate are created, configured and driven on the main queue. Core
+//! Location ends every `requestLocation` itself, with
+//! `locationManager:didUpdateLocations:` or
+//! `locationManager:didFailWithError:` — the request carries no deadline of
+//! its own. The delegate is a small `define_class!` object whose ivars own
 //! the manager, the oneshot sender that resolves the future, and a strong
 //! self-retain that keeps the request alive until `finish` — the manager's
 //! `delegate` property is weak.
 
 use core::cell::RefCell;
-use core::time::Duration;
 
-use dispatch2::{DispatchQoS, DispatchQueue, DispatchTime, GlobalQueueIdentifier, MainThreadBound};
+use dispatch2::{DispatchQoS, DispatchQueue, GlobalQueueIdentifier, MainThreadBound};
 use futures::channel::oneshot;
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{NSObject, ProtocolObject};
@@ -23,9 +24,6 @@ use objc2_core_location::{
 use objc2_foundation::{NSArray, NSError, NSObjectProtocol};
 
 use crate::{Location, LocationCapabilities, LocationError, LocationProvider, Timestamp};
-
-/// Bounds a single `requestLocation` round trip.
-const LOCATION_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Request state consumed by `finish`, which resolves at most once.
 #[derive(Debug)]
@@ -177,13 +175,13 @@ impl LocationRequest {
                 let mtm =
                     MainThreadMarker::new().expect("the main queue only runs on the main thread");
                 if let Some(request) = request.get(mtm).load() {
-                    request.start_on_main(mtm, services_enabled);
+                    request.start_on_main(services_enabled);
                 }
             });
         });
     }
 
-    fn start_on_main(&self, mtm: MainThreadMarker, services_enabled: bool) {
+    fn start_on_main(&self, services_enabled: bool) {
         if !services_enabled {
             self.finish(Err(LocationError::ServiceDisabled));
             return;
@@ -197,37 +195,19 @@ impl LocationRequest {
             return;
         }
         // SAFETY: `delegate` is a weak property; the request stays alive
-        // through `keep_alive` and the timeout capture, so it cannot dangle.
+        // through `keep_alive`, so it cannot dangle.
         // `kCLLocationAccuracyBest` is a constant double read once.
         unsafe {
             manager.setDelegate(Some(ProtocolObject::from_ref(self)));
             manager.setDesiredAccuracy(kCLLocationAccuracyBest);
         }
-        // The timeout holds the request weakly, so a resolved request is
-        // released at once instead of when the timer fires; a timer firing
-        // after resolution finds nothing to finish.
-        let request = MainThreadBound::new(Weak::new(self), mtm);
-        DispatchQueue::main()
-            .after(
-                DispatchTime::try_from(LOCATION_REQUEST_TIMEOUT)
-                    .expect("ten seconds encodes as a dispatch_time delta"),
-                move || {
-                    let mtm = MainThreadMarker::new()
-                        .expect("the main queue only runs on the main thread");
-                    if let Some(request) = request.get(mtm).load() {
-                        request.finish(Err(LocationError::Timeout));
-                    }
-                },
-            )
-            .expect("the main queue accepts delayed work");
         // SAFETY: `requestLocation` arms the one-shot delivery on the main
         // run loop this request is pinned to.
         unsafe { manager.requestLocation() };
     }
 
     /// Resolves the request exactly once: the first call sends the result and
-    /// releases the self-retain; later calls (e.g. the uncancellable timeout
-    /// firing after success) return early.
+    /// releases the self-retain; later delegate callbacks return early.
     fn finish(&self, result: Result<Location, LocationError>) {
         let (sender, keep_alive) = {
             let mut state = self.ivars().state.borrow_mut();

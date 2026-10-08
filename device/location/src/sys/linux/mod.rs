@@ -1,18 +1,10 @@
 //! Linux location implementation using `GeoClue2` D-Bus service.
 
-use core::time::Duration;
-
 use crate::{Location, LocationCapabilities, LocationError, LocationProvider, Timestamp};
 use futures::StreamExt;
-use futures::future::{Either, select};
 use zbus::Connection;
 use zbus::names::WellKnownName;
 use zbus::zvariant::OwnedObjectPath;
-
-/// How long `GeoClue2` may take to produce the first fix before the request
-/// fails with [`LocationError::Timeout`]. Matches the Apple implementation's
-/// `locationRequestTimeout`.
-const LOCATION_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 const GEOCLUE_SERVICE: &str = "org.freedesktop.GeoClue2";
 const CLIENT_INTERFACE: &str = "org.freedesktop.GeoClue2.Client";
@@ -197,31 +189,21 @@ pub async fn get_location() -> Result<Location, LocationError> {
     // The property is only valid once GeoClue has a fix; until then it reads
     // `/` and the fix arrives through LocationUpdated.
     let outcome = async {
-        let location_path = match current_location_path(&connection, client_path.as_str()).await? {
-            Some(path) => path,
-            None => {
-                match select(
-                    updates.next(),
-                    Box::pin(async_io::Timer::after(LOCATION_REQUEST_TIMEOUT)),
-                )
-                .await
-                {
-                    Either::Left((Some(signal), _)) => {
-                        let (_old, new): (OwnedObjectPath, OwnedObjectPath) =
-                            signal.body().deserialize().map_err(|e| {
-                                LocationError::Platform(format!("Failed to parse update: {e}"))
-                            })?;
-                        new
-                    }
-                    Either::Left((None, _)) => {
-                        return Err(LocationError::Platform(String::from(
-                            "GeoClue2 signal stream ended before a fix arrived",
-                        )));
-                    }
-                    Either::Right(_) => return Err(LocationError::Timeout),
-                }
-            }
-        };
+        let location_path =
+            if let Some(path) = current_location_path(&connection, client_path.as_str()).await? {
+                path
+            } else {
+                let signal = updates.next().await.ok_or_else(|| {
+                    LocationError::Platform(String::from(
+                        "GeoClue2 signal stream ended before a fix arrived",
+                    ))
+                })?;
+                let (_old, new): (OwnedObjectPath, OwnedObjectPath) =
+                    signal.body().deserialize().map_err(|e| {
+                        LocationError::Platform(format!("Failed to parse update: {e}"))
+                    })?;
+                new
+            };
         read_location(&connection, location_path.as_str()).await
     }
     .await;

@@ -15,11 +15,6 @@ use waterkit_build::{
 /// script and loaded on first use.
 static HELPER: DexHelper = dex_helper!("waterkit.location.LocationHelper");
 
-/// How long the platform may take to produce a fix before the request fails
-/// with [`LocationError::Timeout`]. Matches the Apple implementation's
-/// `locationRequestTimeout`.
-const LOCATION_REQUEST_TIMEOUT_MS: i64 = 10_000;
-
 /// The realization serving location on this device, chosen once per process
 /// from whether Google Play services is usable.
 #[derive(Debug, Clone, Copy)]
@@ -56,7 +51,6 @@ const STATUS_SUCCESS: i32 = 0;
 const STATUS_PERMISSION_DENIED: i32 = 1;
 const STATUS_SERVICE_DISABLED: i32 = 2;
 const STATUS_UNAVAILABLE: i32 = 3;
-const STATUS_TIMEOUT: i32 = 4;
 
 impl From<AndroidError> for LocationError {
     fn from(error: AndroidError) -> Self {
@@ -147,18 +141,17 @@ fn flag_field(
 /// Requests a fresh location fix using an Android `Context`, through the
 /// provider [`provider_with_context`] reports.
 ///
-/// Blocks the calling thread until the platform delivers a fix or the request
-/// times out, so this must not run on the Android main thread — the helper
-/// waits for callbacks the main looper may deliver.
+/// Blocks the calling thread until the platform delivers a fix, so this must
+/// not run on the Android main thread — the helper waits for callbacks the
+/// main looper may deliver.
 ///
 /// # Errors
 ///
 /// Returns [`LocationError::PermissionDenied`] when neither fine nor coarse
 /// location permission is granted, [`LocationError::ServiceDisabled`] when no
-/// location provider is enabled, [`LocationError::Timeout`] when no fix
-/// arrives in time, [`LocationError::NotAvailable`] when the platform reports
-/// no location, or [`LocationError::Platform`] when JNI or Google Play
-/// services fails.
+/// location provider is enabled, [`LocationError::NotAvailable`] when the
+/// platform reports no location, or [`LocationError::Platform`] when JNI or
+/// Google Play services fails.
 pub fn get_location_with_context(
     env: &mut Env<'_>,
     context: &JObject<'_>,
@@ -169,11 +162,8 @@ pub fn get_location_with_context(
         .call_static_method(
             helper_class,
             realization.request_method(),
-            jni_sig!("(Landroid/content/Context;J)Lwaterkit/location/LocationHelper$Result;"),
-            &[
-                JValue::Object(context),
-                JValue::Long(LOCATION_REQUEST_TIMEOUT_MS),
-            ],
+            jni_sig!("(Landroid/content/Context;)Lwaterkit/location/LocationHelper$Result;"),
+            &[JValue::Object(context)],
         )
         .and_then(jni::objects::JValueOwned::l)
         .map_err(|error| {
@@ -194,7 +184,6 @@ pub fn get_location_with_context(
         STATUS_PERMISSION_DENIED => return Err(LocationError::PermissionDenied),
         STATUS_SERVICE_DISABLED => return Err(LocationError::ServiceDisabled),
         STATUS_UNAVAILABLE => return Err(LocationError::NotAvailable),
-        STATUS_TIMEOUT => return Err(LocationError::Timeout),
         other => {
             return Err(LocationError::Platform(format!(
                 "Android location helper returned unknown status {other}"

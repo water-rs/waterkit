@@ -54,7 +54,6 @@ windows.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
 futures.workspace = true
-async-io.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 async-channel.workspace = true

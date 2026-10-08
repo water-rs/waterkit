@@ -1,58 +1,62 @@
-//! iOS clipboard implementation using swift-bridge.
+//! iOS clipboard implementation through `UIPasteboard`.
+//!
+//! macOS uses `clipboard-rs` instead; this module compiles for iOS only.
 
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
 use crate::sys::file_path::unicode_paths;
+use std::ffi::CString;
 use std::path::{Path, PathBuf};
+use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-#[swift_bridge::bridge]
-mod ffi {
-    // The pasteboard's image as RGBA pixels. `is_valid` is false when the
-    // pasteboard holds no image; `error` says why an image it holds could not
-    // be converted. (swift-bridge rejects doc attributes on bridged structs.)
-    #[swift_bridge(swift_repr = "struct")]
-    struct SwiftImageData {
-        width: usize,
-        height: usize,
-        bytes: Vec<u8>,
-        is_valid: bool,
-        error: Option<String>,
+use objc2::AllocAnyThread as _;
+use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, Bool};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use objc2_core_graphics::{
+    CGBitmapContextCreate, CGColorSpace, CGContext, CGImage, CGImageAlphaInfo,
+};
+use objc2_foundation::{
+    NSArray, NSData, NSDictionary, NSFileManager, NSItemProvider, NSString, NSURL,
+};
+use objc2_ui_kit::{UIImage, UIPasteboard};
+
+/// Reinterprets an object as a plain [`AnyObject`] for the untyped
+/// pasteboard-item dictionaries.
+///
+/// # Safety
+/// `AnyObject` assumes no specific class; every `'static` Objective-C object
+/// can be reinterpreted as one.
+fn as_any_object<T: objc2::Message>(obj: Retained<T>) -> Retained<AnyObject> {
+    // SAFETY: documented on the function.
+    unsafe { Retained::cast_unchecked(obj) }
+}
+
+/// The pasteboard type identifiers the queries and writes use.
+mod types {
+    use objc2::rc::Retained;
+    use objc2_foundation::NSString;
+    use objc2_uniform_type_identifiers::{UTTypeFileURL, UTTypeHTML, UTTypePlainText};
+
+    /// `public.html`.
+    pub fn html() -> Retained<NSString> {
+        // SAFETY: `UTTypeHTML` is an immutable framework-exported static.
+        unsafe { UTTypeHTML }.identifier()
     }
-
-    #[swift_bridge(swift_repr = "struct")]
-    struct SwiftBinaryData {
-        bytes: Vec<u8>,
-        is_valid: bool,
+    /// `public.plain-text`.
+    pub fn plain_text() -> Retained<NSString> {
+        // SAFETY: `UTTypePlainText` is an immutable framework-exported
+        // static.
+        unsafe { UTTypePlainText }.identifier()
     }
-
-    extern "Swift" {
-        // Query
-        fn clipboard_has_text() -> bool;
-        fn clipboard_has_html() -> bool;
-        fn clipboard_has_image() -> bool;
-        fn clipboard_has_files() -> bool;
-
-        // Read
-        fn clipboard_get_text() -> Option<String>;
-        fn clipboard_get_html() -> SwiftBinaryData;
-        fn clipboard_get_image() -> SwiftImageData;
-        fn clipboard_get_file_paths() -> Vec<String>;
-        fn clipboard_get_binary(mime: String) -> SwiftBinaryData;
-
-        // Write
-        fn clipboard_set_text(text: String);
-        fn clipboard_set_html(html: String, alt_text: String);
-        fn clipboard_set_image_from_path(path: String) -> bool;
-        fn clipboard_set_file_paths(paths: Vec<String>) -> Option<String>;
-        fn clipboard_set_binary(data: Vec<u8>, mime: String);
-
-        // Control
-        fn clipboard_clear();
-        fn clipboard_get_change_count() -> i64;
+    /// `public.file-url`.
+    pub fn file_url() -> Retained<NSString> {
+        // SAFETY: `UTTypeFileURL` is an immutable framework-exported static.
+        unsafe { UTTypeFileURL }.identifier()
     }
 }
 
@@ -62,7 +66,7 @@ pub struct ClipboardInner;
 
 impl ClipboardInner {
     /// Create a new clipboard handle.
-    #[allow(
+    #[expect(
         clippy::unnecessary_wraps,
         reason = "the cross-platform clipboard constructor can fail on other backends"
     )]
@@ -73,148 +77,212 @@ impl ClipboardInner {
     // ========== Query (sync) ==========
     //
     // `UIPasteboard`'s presence queries (`hasStrings`, `hasImages`,
-    // `contains(pasteboardTypes:)`, `url`) cannot fail. The queries keep the
+    // `contains(pasteboardTypes:)`) cannot fail. The queries keep the
     // cross-platform `Result` signature, which fails on other backends.
 
     /// Check if text is available.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         clippy::unnecessary_wraps,
         reason = "the cross-platform clipboard query is fallible and instance-based"
     )]
     pub fn has_text(&self) -> Result<bool, ClipboardError> {
-        Ok(ffi::clipboard_has_text())
+        // SAFETY: `hasStrings` is a read-only query.
+        Ok(unsafe { UIPasteboard::generalPasteboard().hasStrings() })
     }
 
     /// Check if HTML is available.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         clippy::unnecessary_wraps,
         reason = "the cross-platform clipboard query is fallible and instance-based"
     )]
     pub fn has_html(&self) -> Result<bool, ClipboardError> {
-        Ok(ffi::clipboard_has_html())
+        let types = NSArray::from_retained_slice(&[types::html()]);
+        Ok(UIPasteboard::generalPasteboard().containsPasteboardTypes(&types))
     }
 
     /// Check if files are available.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         clippy::unnecessary_wraps,
         reason = "the cross-platform clipboard query is fallible and instance-based"
     )]
     pub fn has_files(&self) -> Result<bool, ClipboardError> {
-        Ok(ffi::clipboard_has_files())
+        let types = NSArray::from_retained_slice(&[types::file_url()]);
+        Ok(UIPasteboard::generalPasteboard().containsPasteboardTypes(&types))
     }
 
     /// Check if image is available.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         clippy::unnecessary_wraps,
         reason = "the cross-platform clipboard query is fallible and instance-based"
     )]
     pub fn has_image(&self) -> Result<bool, ClipboardError> {
-        Ok(ffi::clipboard_has_image())
+        // SAFETY: `hasImages` is a read-only query.
+        Ok(unsafe { UIPasteboard::generalPasteboard().hasImages() })
     }
 
     // ========== Read (sync, called from blocking::unblock) ==========
 
     /// Get text content.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         clippy::unnecessary_wraps,
         reason = "the cross-platform clipboard backend API is fallible and instance-based"
     )]
     pub fn get_text(&self) -> Result<Option<String>, ClipboardError> {
-        Ok(ffi::clipboard_get_text())
+        // SAFETY: `string` is a plain property read.
+        Ok(unsafe { UIPasteboard::generalPasteboard().string() }.map(|text| text.to_string()))
     }
 
     /// Get HTML content.
-    #[allow(
+    #[expect(
         clippy::unused_self,
-        clippy::unnecessary_wraps,
-        reason = "the cross-platform clipboard backend API is fallible and instance-based"
+        reason = "the cross-platform clipboard backend API is instance-based"
     )]
     pub fn get_html(&self) -> Result<Option<String>, ClipboardError> {
-        let html = ffi::clipboard_get_html();
-        if !html.is_valid {
+        let Some(data) = UIPasteboard::generalPasteboard().dataForPasteboardType(&types::html())
+        else {
             return Ok(None);
-        }
-        String::from_utf8(html.bytes)
+        };
+        String::from_utf8(data.to_vec())
             .map(Some)
             .map_err(|error| ClipboardError::Decode(format!("the HTML is not UTF-8: {error}")))
     }
 
     /// Get the paths of the file URLs on the pasteboard, decoded by
-    /// `URL.path`.
-    #[allow(
+    /// `NSURL.path`.
+    #[expect(
         clippy::unused_self,
         clippy::unnecessary_wraps,
         reason = "the cross-platform clipboard backend API is fallible and instance-based"
     )]
     pub fn get_files(&self) -> Result<Vec<PathBuf>, ClipboardError> {
-        Ok(ffi::clipboard_get_file_paths()
-            .into_iter()
-            .map(PathBuf::from)
+        // SAFETY: `URLs` is a plain property read.
+        let Some(urls) = (unsafe { UIPasteboard::generalPasteboard().URLs() }) else {
+            return Ok(Vec::new());
+        };
+        Ok(urls
+            .iter()
+            .filter(|url| url.isFileURL())
+            .filter_map(|url| url.path().map(|path| PathBuf::from(path.to_string())))
             .collect())
     }
 
     /// Get image as RGBA.
-    #[allow(clippy::cast_possible_truncation)] // Image dimensions from Swift are always valid u32
-    #[allow(
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "pasteboard image dimensions are always valid u32"
+    )]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the bitmap rect uses f64 points; pasteboard images are far below 2^52 pixels"
+    )]
+    #[expect(
         clippy::unused_self,
-        clippy::unnecessary_wraps,
-        reason = "the cross-platform clipboard backend API is fallible and instance-based"
+        reason = "the cross-platform clipboard backend API is instance-based"
     )]
     pub fn get_image(&self) -> Result<Option<Image>, ClipboardError> {
-        let image = ffi::clipboard_get_image();
-        if let Some(error) = image.error {
-            return Err(ClipboardError::InvalidImage(error));
-        }
-        if !image.is_valid {
+        // SAFETY: `image` is a plain property read.
+        let Some(image) = (unsafe { UIPasteboard::generalPasteboard().image() }) else {
             return Ok(None);
-        }
-        Ok(Some(Image::new(
-            image.width as u32,
-            image.height as u32,
-            image.bytes,
-        )))
+        };
+        // SAFETY: `CGImage` is a plain property read; it is `None` when the
+        // image has no bitmap representation (e.g. a CIImage).
+        let Some(cg_image) = (unsafe { image.CGImage() }) else {
+            return Err(ClipboardError::InvalidImage(
+                "the pasteboard image has no bitmap (CGImage) representation".into(),
+            ));
+        };
+
+        let width = CGImage::width(Some(&cg_image));
+        let height = CGImage::height(Some(&cg_image));
+        let bytes_per_row = 4 * width;
+        let mut data = vec![0u8; bytes_per_row * height];
+
+        let color_space =
+            CGColorSpace::new_device_rgb().expect("the device RGB color space always exists");
+        // SAFETY: `data` points to `bytes_per_row * height` writable bytes,
+        // matching the premultiplied-RGBA layout declared by the bitmap info.
+        let Some(context) = (unsafe {
+            CGBitmapContextCreate(
+                data.as_mut_ptr().cast(),
+                width,
+                height,
+                8,
+                bytes_per_row,
+                Some(&color_space),
+                CGImageAlphaInfo::PremultipliedLast.0,
+            )
+        }) else {
+            return Err(ClipboardError::InvalidImage(format!(
+                "failed to create a {width}x{height} RGBA bitmap context for the pasteboard image"
+            )));
+        };
+
+        CGContext::draw_image(
+            Some(&context),
+            CGRect::new(
+                CGPoint::new(0.0, 0.0),
+                CGSize::new(width as f64, height as f64),
+            ),
+            Some(&cg_image),
+        );
+
+        Ok(Some(Image::new(width as u32, height as u32, data)))
     }
 
     /// Get binary data by MIME type.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         clippy::unnecessary_wraps,
         reason = "the cross-platform clipboard backend API is fallible and instance-based"
     )]
     pub fn get_binary(&self, mime: &str) -> Result<Option<Vec<u8>>, ClipboardError> {
-        let data = ffi::clipboard_get_binary(mime.to_string());
-        if !data.is_valid {
-            return Ok(None);
-        }
-        Ok(Some(data.bytes))
+        Ok(UIPasteboard::generalPasteboard()
+            .dataForPasteboardType(&NSString::from_str(mime))
+            .map(|data| data.to_vec()))
     }
 
     // ========== Write (sync) ==========
 
     /// Set text content.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         clippy::unnecessary_wraps,
         reason = "the cross-platform clipboard backend API is fallible and instance-based"
     )]
     pub fn set_text(&self, text: &str) -> Result<(), ClipboardError> {
-        ffi::clipboard_set_text(text.to_string());
+        // SAFETY: `setString:` accepts any `NSString`.
+        unsafe { UIPasteboard::generalPasteboard().setString(Some(&NSString::from_str(text))) };
         Ok(())
     }
 
     /// Set HTML content.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         clippy::unnecessary_wraps,
         reason = "the cross-platform clipboard backend API is fallible and instance-based"
     )]
     pub fn set_html(&self, html: &str, alt_text: Option<&str>) -> Result<(), ClipboardError> {
-        ffi::clipboard_set_html(html.to_string(), alt_text.unwrap_or("").to_string());
+        let html_data = as_any_object(NSData::with_bytes(html.as_bytes()));
+        let html_id = types::html();
+        let html_item =
+            NSDictionary::<NSString, AnyObject>::from_slices(&[&*html_id], &[&*html_data]);
+
+        let mut items = vec![html_item];
+        if let Some(alt_text) = alt_text.filter(|alt| !alt.is_empty()) {
+            let alt = as_any_object(NSString::from_str(alt_text));
+            let alt_id = types::plain_text();
+            let alt_item = NSDictionary::<NSString, AnyObject>::from_slices(&[&*alt_id], &[&*alt]);
+            items.push(alt_item);
+        }
+
+        let items = NSArray::from_retained_slice(&items);
+        // SAFETY: every item is a `{pasteboard-type: data}` dictionary.
+        unsafe { UIPasteboard::generalPasteboard().setItems(&items) };
         Ok(())
     }
 
@@ -223,7 +291,7 @@ impl ClipboardInner {
     /// Each item is an `NSItemProvider` for the file: other apps paste the
     /// file's contents, which they cannot read through a URL into this app's
     /// sandbox, and its file URL, which encodes the path's bytes as they are.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         reason = "the cross-platform clipboard backend API is instance-based"
     )]
@@ -231,33 +299,52 @@ impl ClipboardInner {
         if files.is_empty() {
             return Ok(());
         }
-        ffi::clipboard_set_file_paths(unicode_paths(files)?)
-            .map_or(Ok(()), |error| Err(ClipboardError::Platform(error)))
+        let mut providers = Vec::with_capacity(files.len());
+        for path in unicode_paths(files)? {
+            let url = file_url(&path)?;
+            // SAFETY: `url` is a file URL.
+            let Some(provider) = (unsafe {
+                NSItemProvider::initWithContentsOfURL(NSItemProvider::alloc(), Some(&url))
+            }) else {
+                return Err(ClipboardError::Platform(format!(
+                    "NSItemProvider cannot carry the file {}",
+                    url.path().map_or_else(String::new, |p| p.to_string())
+                )));
+            };
+            providers.push(provider);
+        }
+        let providers = NSArray::from_retained_slice(&providers);
+        UIPasteboard::generalPasteboard()
+            .setItemProviders_localOnly_expirationDate(&providers, false, None);
+        Ok(())
     }
 
     /// Set image from a file path.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         reason = "the cross-platform clipboard backend API is instance-based"
     )]
     pub fn set_image_from_path(&self, path: &Path) -> Result<(), ClipboardError> {
         let path_str = path.to_string_lossy().to_string();
-        if !ffi::clipboard_set_image_from_path(path_str) {
+        let Some(image) = UIImage::imageWithContentsOfFile(&NSString::from_str(&path_str)) else {
             return Err(ClipboardError::InvalidImage(
                 "failed to load image from path".into(),
             ));
-        }
+        };
+        // SAFETY: `setImage:` accepts any `UIImage`.
+        unsafe { UIPasteboard::generalPasteboard().setImage(Some(&image)) };
         Ok(())
     }
 
     /// Set binary data with MIME type.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         clippy::unnecessary_wraps,
         reason = "the cross-platform clipboard backend API is fallible and instance-based"
     )]
     pub fn set_binary(&self, data: &[u8], mime: &str) -> Result<(), ClipboardError> {
-        ffi::clipboard_set_binary(data.to_vec(), mime.to_string());
+        UIPasteboard::generalPasteboard()
+            .setData_forPasteboardType(&NSData::with_bytes(data), &NSString::from_str(mime));
         Ok(())
     }
 
@@ -274,22 +361,57 @@ impl ClipboardInner {
     }
 
     /// Clear clipboard.
-    #[allow(
+    #[expect(
         clippy::unused_self,
         clippy::unnecessary_wraps,
         reason = "the cross-platform clipboard backend API is fallible and instance-based"
     )]
     pub fn clear(&self) -> Result<(), ClipboardError> {
-        ffi::clipboard_clear();
+        // SAFETY: an empty item array clears the pasteboard.
+        unsafe { UIPasteboard::generalPasteboard().setItems(&NSArray::new()) };
         Ok(())
     }
+}
+
+/// The file URL of `path`, whose bytes it encodes as they are.
+///
+/// `fileURLWithFileSystemRepresentation:isDirectory:relativeToURL:` keeps
+/// the path's bytes verbatim — unlike `fileURLWithPath:`, which converts to
+/// the decomposed (NFD) form Darwin's file-system representation uses — so a
+/// name written precomposed reads back as the same bytes. Like
+/// `fileURLWithPath:`, the URL ends in a slash when `path` is a directory.
+///
+/// # Errors
+///
+/// Returns [`ClipboardError::Platform`] when `path` contains an interior NUL
+/// byte, which a C file-system representation cannot carry.
+fn file_url(path: &str) -> Result<Retained<NSURL>, ClipboardError> {
+    let mut is_directory = Bool::new(false);
+    // SAFETY: `is_directory` points at a live `Bool` for the call's duration.
+    let exists = unsafe {
+        NSFileManager::defaultManager()
+            .fileExistsAtPath_isDirectory(&NSString::from_str(path), &raw mut is_directory)
+    };
+    let c_path = CString::new(path)
+        .map_err(|_| ClipboardError::Platform("path contains an interior NUL".into()))?;
+    let c_ptr =
+        NonNull::new(c_path.as_ptr().cast_mut()).expect("a CString's pointer is never null");
+    // SAFETY: `c_ptr` is a NUL-terminated UTF-8 file-system representation
+    // valid for the call's duration.
+    Ok(unsafe {
+        NSURL::fileURLWithFileSystemRepresentation_isDirectory_relativeToURL(
+            c_ptr,
+            exists && is_directory.as_bool(),
+            None,
+        )
+    })
 }
 
 /// Start watching clipboard changes.
 ///
 /// Uses polling with `UIPasteboard.changeCount`.
 /// Returns a receiver and a stop flag.
-#[allow(
+#[expect(
     clippy::unnecessary_wraps,
     reason = "the cross-platform clipboard watch API is fallible on other backends"
 )]
@@ -300,20 +422,29 @@ pub fn start_watch()
     let stop_clone = Arc::clone(&stop);
 
     thread::spawn(move || {
-        let mut last_count = ffi::clipboard_get_change_count();
+        // SAFETY: the read-only queries below match the calls every other
+        // pasteboard consumer makes; the poller is the only thread driving
+        // them, as before.
+        let mut last_count = unsafe { UIPasteboard::generalPasteboard().changeCount() };
 
         while !stop_clone.load(Ordering::SeqCst) {
             thread::sleep(Duration::from_millis(500));
 
-            let current_count = ffi::clipboard_get_change_count();
+            let pasteboard = UIPasteboard::generalPasteboard();
+            // SAFETY: same read-only polling as before.
+            let current_count = unsafe { pasteboard.changeCount() };
             if current_count != last_count {
                 last_count = current_count;
 
                 let event = ClipboardEvent::new(
-                    ffi::clipboard_has_text(),
-                    ffi::clipboard_has_html(),
-                    ffi::clipboard_has_files(),
-                    ffi::clipboard_has_image(),
+                    // SAFETY: read-only queries.
+                    unsafe { pasteboard.hasStrings() },
+                    pasteboard
+                        .containsPasteboardTypes(&NSArray::from_retained_slice(&[types::html()])),
+                    pasteboard.containsPasteboardTypes(&NSArray::from_retained_slice(&[
+                        types::file_url(),
+                    ])),
+                    unsafe { pasteboard.hasImages() },
                 );
                 if sender.try_send(event).is_err() {
                     break;

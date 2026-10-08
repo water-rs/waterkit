@@ -26,7 +26,7 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::{ClipboardInner, PrimaryInner};
 
-// iOS uses Swift bridge
+// iOS uses UIPasteboard through objc2
 #[cfg(target_os = "ios")]
 mod apple;
 #[cfg(target_os = "ios")]

@@ -257,6 +257,7 @@ objc2-io-kit = { version = "0.3", default-features = false }
 objc2-pass-kit = { version = "0.3", default-features = false }
 objc2-speech = { version = "0.3", default-features = false }
 objc2-ui-kit = { version = "0.3", default-features = false }
+objc2-uniform-type-identifiers = { version = "0.3", default-features = false }
 objc = "0.2"
 # Zero-copy import of platform frame buffers into wgpu textures.
 wgpu-external-frame = "0.3.0"

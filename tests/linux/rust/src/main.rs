@@ -16,7 +16,7 @@ fn main() {
     let _ = waterkit_sensor::Accelerometer::capabilities().available;
     let _ = futures::executor::block_on(waterkit_system::connectivity());
     let _ = waterkit_system::thermal_state();
-    let _ = waterkit_system::load();
+    let _ = futures::executor::block_on(waterkit_system::load());
     std::mem::drop(waterkit_passkey::is_available());
 }
 

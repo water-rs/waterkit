@@ -170,6 +170,6 @@ pub fn thermal_state() -> Result<Option<ThermalState>, SystemError> {
 ///
 /// Returns [`SystemError::Platform`] if the platform's CPU or memory statistics
 /// cannot be read.
-pub fn load() -> Result<SystemLoad, SystemError> {
-    sys::load()
+pub async fn load() -> Result<SystemLoad, SystemError> {
+    sys::load().await
 }

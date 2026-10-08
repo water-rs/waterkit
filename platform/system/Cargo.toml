@@ -16,6 +16,7 @@ workspace = true
 [dependencies]
 thiserror.workspace = true
 futures.workspace = true
+futures-timer.workspace = true
 
 # Desktop (System Info & Thermal)
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]

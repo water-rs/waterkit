@@ -13,7 +13,7 @@ fn main() -> Result<(), SystemError> {
     }
 
     println!("Measuring system load...");
-    let load = load()?;
+    let load = futures::executor::block_on(load())?;
     println!("System Load: {load:?}");
     match load.cpu_usage() {
         Some(cpu) => println!("CPU: {cpu:.1}%"),

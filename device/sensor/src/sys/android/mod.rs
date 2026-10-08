@@ -2,7 +2,7 @@
 
 use crate::{ScalarData, SensorData, SensorError};
 use futures::channel::oneshot;
-use futures::{StreamExt, stream};
+use futures::stream;
 use jni::objects::{JDoubleArray, JObject, JValue};
 use jni::signature::MethodSignature;
 use jni::strings::JNIStr;
@@ -106,20 +106,22 @@ pub fn is_sensor_available_with_context(
 /// Returns [`SensorError`] when the sensor is unavailable, DEX initialization,
 /// helper loading, JNI access, or payload decoding fails, or the read reports
 /// failure.
-pub async fn read_sensor_with_context(
+pub fn read_sensor_with_context(
     env: &mut Env<'_>,
     context: &JObject<'_>,
     sensor_type: i32,
-) -> Result<SensorData, SensorError> {
+) -> impl Future<Output = Result<SensorData, SensorError>> + Send + use<> {
     let receiver = begin_read(
         env,
         context,
         jni_str!("readSensor"),
         jni_sig!("(Landroid/content/Context;ILwaterkit/build/NativeCallback;)V"),
         &[JValue::Int(sensor_type)],
-    )?;
-    let reading = finish_read(receiver).await?;
-    parse_sensor_reading(&reading.0)
+    );
+    async move {
+        let reading = finish_read(receiver?).await?;
+        parse_sensor_reading(&reading.0)
+    }
 }
 
 /// Read pressure data with an explicit Android `Context`.
@@ -128,19 +130,21 @@ pub async fn read_sensor_with_context(
 /// Returns [`SensorError`] when the sensor is unavailable, DEX initialization,
 /// helper loading, JNI access, or payload decoding fails, or the read reports
 /// failure.
-pub async fn read_pressure_with_context(
+pub fn read_pressure_with_context(
     env: &mut Env<'_>,
     context: &JObject<'_>,
-) -> Result<ScalarData, SensorError> {
+) -> impl Future<Output = Result<ScalarData, SensorError>> + Send + use<> {
     let receiver = begin_read(
         env,
         context,
         jni_str!("readPressure"),
         jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeCallback;)V"),
         &[],
-    )?;
-    let reading = finish_read(receiver).await?;
-    parse_scalar_reading(&reading.0)
+    );
+    async move {
+        let reading = finish_read(receiver?).await?;
+        parse_scalar_reading(&reading.0)
+    }
 }
 
 /// Read ambient light data with an explicit Android `Context`.
@@ -149,19 +153,21 @@ pub async fn read_pressure_with_context(
 /// Returns [`SensorError`] when the sensor is unavailable, DEX initialization,
 /// helper loading, JNI access, or payload decoding fails, or the read reports
 /// failure.
-pub async fn read_light_with_context(
+pub fn read_light_with_context(
     env: &mut Env<'_>,
     context: &JObject<'_>,
-) -> Result<ScalarData, SensorError> {
+) -> impl Future<Output = Result<ScalarData, SensorError>> + Send + use<> {
     let receiver = begin_read(
         env,
         context,
         jni_str!("readLight"),
         jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeCallback;)V"),
         &[],
-    )?;
-    let reading = finish_read(receiver).await?;
-    parse_scalar_reading(&reading.0)
+    );
+    async move {
+        let reading = finish_read(receiver?).await?;
+        parse_scalar_reading(&reading.0)
+    }
 }
 
 /// Creates a `NativeCallback<RawReading>` and hands it to the helper's `method`
@@ -203,45 +209,24 @@ fn is_sensor_available_internal(sensor_type: i32) -> bool {
 }
 
 async fn read_sensor_internal(sensor_type: i32) -> Result<SensorData, SensorError> {
-    let receiver = with_android_context(|env, context| {
-        begin_read(
-            env,
-            context,
-            jni_str!("readSensor"),
-            jni_sig!("(Landroid/content/Context;ILwaterkit/build/NativeCallback;)V"),
-            &[JValue::Int(sensor_type)],
-        )
-    })?;
-    let reading = finish_read(receiver).await?;
-    parse_sensor_reading(&reading.0)
+    with_android_context(|env, context| {
+        Ok::<_, SensorError>(read_sensor_with_context(env, context, sensor_type))
+    })?
+    .await
 }
 
 async fn read_pressure_internal() -> Result<ScalarData, SensorError> {
-    let receiver = with_android_context(|env, context| {
-        begin_read(
-            env,
-            context,
-            jni_str!("readPressure"),
-            jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeCallback;)V"),
-            &[],
-        )
-    })?;
-    let reading = finish_read(receiver).await?;
-    parse_scalar_reading(&reading.0)
+    with_android_context(|env, context| {
+        Ok::<_, SensorError>(read_pressure_with_context(env, context))
+    })?
+    .await
 }
 
 async fn read_light_internal() -> Result<ScalarData, SensorError> {
-    let receiver = with_android_context(|env, context| {
-        begin_read(
-            env,
-            context,
-            jni_str!("readLight"),
-            jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeCallback;)V"),
-            &[],
-        )
-    })?;
-    let reading = finish_read(receiver).await?;
-    parse_scalar_reading(&reading.0)
+    with_android_context(|env, context| {
+        Ok::<_, SensorError>(read_light_with_context(env, context))
+    })?
+    .await
 }
 
 pub fn accelerometer_available() -> bool {

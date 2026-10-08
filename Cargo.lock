@@ -8640,6 +8640,7 @@ version = "0.1.4"
 dependencies = [
  "async-channel",
  "block2 0.6.2",
+ "dispatch2",
  "futures",
  "futures-core",
  "futures-timer",

@@ -1,7 +1,6 @@
 //! Apple platform (iOS/macOS) sensor implementation using objc2.
 
 use crate::{ScalarData, SensorData, SensorError};
-use futures::stream;
 use waterkit_core::Timestamp;
 
 #[cfg(target_os = "ios")]
@@ -9,11 +8,19 @@ mod imp {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use block2::RcBlock;
+    use dispatch2::{DispatchQueue, MainThreadBound};
+    use objc2::MainThreadMarker;
+    use objc2::rc::Retained;
     use objc2_core_motion::{
         CMAccelerometerData, CMAltimeter, CMAltitudeData, CMGyroData, CMMagnetometerData,
         CMMotionManager,
     };
     use objc2_foundation::{NSError, NSNumber, NSOperationQueue};
+    use waterkit_core::apple::on_main;
+
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
+    use futures::stream;
 
     use super::{ScalarData, SensorData, SensorError, Timestamp};
 
@@ -213,6 +220,202 @@ mod imp {
     pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
         Err(SensorError::NotAvailable)
     }
+
+    /// The `!Send` Objective-C object a running watch stops on the main
+    /// queue. Held as `MainThreadBound` inside the stream.
+    enum WatchTarget {
+        Accelerometer(Retained<CMMotionManager>),
+        Gyroscope(Retained<CMMotionManager>),
+        Magnetometer(Retained<CMMotionManager>),
+        Barometer(Retained<CMAltimeter>),
+    }
+
+    impl WatchTarget {
+        /// Stops updates; call on the main thread while holding a
+        /// `MainThreadMarker`.
+        fn stop(&self) {
+            // SAFETY: the object is live; `stop*Updates` ends delivery to the
+            // handler and releases it.
+            unsafe {
+                match self {
+                    Self::Accelerometer(manager) => manager.stopAccelerometerUpdates(),
+                    Self::Gyroscope(manager) => manager.stopGyroUpdates(),
+                    Self::Magnetometer(manager) => manager.stopMagnetometerUpdates(),
+                    Self::Barometer(altimeter) => altimeter.stopRelativeAltitudeUpdates(),
+                }
+            }
+        }
+    }
+
+    /// One running `CoreMotion` watch: the manager and its `NSOperationQueue`
+    /// are created on the main thread, the handler feeds an unbounded channel,
+    /// and dropping the stream hops back to the main queue to stop updates.
+    /// Nothing blocks: no worker thread, no join, no wait.
+    pub struct WatchStream<T> {
+        receiver: Pin<Box<async_channel::Receiver<Result<T, SensorError>>>>,
+        target: Option<MainThreadBound<WatchTarget>>,
+    }
+
+    impl<T> Drop for WatchStream<T> {
+        fn drop(&mut self) {
+            let Some(target) = self.target.take() else {
+                return;
+            };
+            DispatchQueue::main().exec_async(move || {
+                let mtm = MainThreadMarker::new()
+                    .expect("a main-queue `exec_async` closure runs on the main thread");
+                target.get(mtm).stop();
+                // `target` is released here, still on the main queue.
+            });
+        }
+    }
+
+    impl<T> futures_core::Stream for WatchStream<T> {
+        type Item = Result<T, SensorError>;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            self.receiver.as_mut().poll_next(cx)
+        }
+    }
+
+    /// Starts one `CMMotionManager` at the requested interval on the main
+    /// thread via `on_main` and streams every handler result. The handler
+    /// (retained by Core Motion until updates stop) keeps the queue alive.
+    macro_rules! watch_motion {
+        ($variant:ident, $interval:expr, $set_interval:ident, $start:ident, $data:ty, $map:expr) => {{
+            let (sender, receiver) = async_channel::unbounded();
+            let interval = $interval;
+            let target = on_main(move |mtm| {
+                let manager = unsafe { CMMotionManager::new() };
+                unsafe { manager.$set_interval(interval) };
+                let queue = NSOperationQueue::new();
+                let queue_in_block = queue.clone();
+                let map = $map;
+                let handler = RcBlock::new(move |data: *mut $data, error: *mut NSError| {
+                    let _keep_queue_alive = &queue_in_block;
+                    // SAFETY: Core Motion passes a valid data pointer or NULL.
+                    let result = unsafe { data.as_ref() }
+                        .map(|data| {
+                            let (x, y, z) = map(data);
+                            SensorData::new(x, y, z, Timestamp::now())
+                        })
+                        // SAFETY: `error` is a valid NSError pointer or NULL.
+                        .ok_or_else(|| unsafe { callback_error(error) });
+                    // Unbounded: never blocks; a closed receiver drops the send.
+                    drop(sender.try_send(result));
+                });
+                unsafe { manager.$start(&queue, RcBlock::as_ptr(&handler).cast()) };
+                MainThreadBound::new(WatchTarget::$variant(manager), mtm)
+            })
+            .await;
+            WatchStream {
+                receiver: Box::pin(receiver),
+                target: Some(target),
+            }
+        }};
+    }
+
+    /// Requested update interval in seconds (`watch` takes milliseconds).
+    fn interval_seconds(interval_ms: u32) -> f64 {
+        f64::from(interval_ms) / 1000.0
+    }
+
+    pub async fn accelerometer_watch(
+        interval_ms: u32,
+    ) -> impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send + 'static {
+        watch_motion!(
+            Accelerometer,
+            interval_seconds(interval_ms),
+            setAccelerometerUpdateInterval,
+            startAccelerometerUpdatesToQueue_withHandler,
+            CMAccelerometerData,
+            |data: &CMAccelerometerData| {
+                let acceleration = unsafe { data.acceleration() };
+                (acceleration.x, acceleration.y, acceleration.z)
+            }
+        )
+    }
+
+    pub async fn gyroscope_watch(
+        interval_ms: u32,
+    ) -> impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send + 'static {
+        watch_motion!(
+            Gyroscope,
+            interval_seconds(interval_ms),
+            setGyroUpdateInterval,
+            startGyroUpdatesToQueue_withHandler,
+            CMGyroData,
+            |data: &CMGyroData| {
+                let rate = unsafe { data.rotationRate() };
+                (rate.x, rate.y, rate.z)
+            }
+        )
+    }
+
+    pub async fn magnetometer_watch(
+        interval_ms: u32,
+    ) -> impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send + 'static {
+        watch_motion!(
+            Magnetometer,
+            interval_seconds(interval_ms),
+            setMagnetometerUpdateInterval,
+            startMagnetometerUpdatesToQueue_withHandler,
+            CMMagnetometerData,
+            |data: &CMMagnetometerData| {
+                let field = unsafe { data.magneticField() };
+                (field.x, field.y, field.z)
+            }
+        )
+    }
+
+    /// `CMAltimeter` has no update-interval knob; `CoreMotion` picks the rate.
+    pub async fn barometer_watch(
+        _interval_ms: u32,
+    ) -> impl futures_core::Stream<Item = Result<ScalarData, SensorError>> + Send + 'static {
+        let (sender, receiver) = async_channel::unbounded();
+        let target = on_main(move |mtm| {
+            let altimeter = unsafe { CMAltimeter::new() };
+            let queue = NSOperationQueue::new();
+            let queue_in_block = queue.clone();
+            let handler = RcBlock::new(move |data: *mut CMAltitudeData, error: *mut NSError| {
+                let _keep_queue_alive = &queue_in_block;
+                // SAFETY: Core Motion passes a valid data pointer or NULL.
+                let result = unsafe { data.as_ref() }
+                    .map(|data| {
+                        // SAFETY: `data` is valid; `pressure` is a retained NSNumber.
+                        let pressure: objc2::rc::Retained<NSNumber> = unsafe { data.pressure() };
+                        // CoreMotion reports kPa; the API exposes hPa.
+                        ScalarData::new(pressure.doubleValue() * 10.0, Timestamp::now())
+                    })
+                    // SAFETY: `error` is a valid NSError pointer or NULL.
+                    .ok_or_else(|| unsafe { callback_error(error) });
+                drop(sender.try_send(result));
+            });
+            unsafe {
+                altimeter.startRelativeAltitudeUpdatesToQueue_withHandler(
+                    &queue,
+                    RcBlock::as_ptr(&handler).cast(),
+                );
+            }
+            MainThreadBound::new(WatchTarget::Barometer(altimeter), mtm)
+        })
+        .await;
+        WatchStream {
+            receiver: Box::pin(receiver),
+            target: Some(target),
+        }
+    }
+
+    // Ambient light is not exposed via public API on iOS: no watch stream.
+    #[expect(
+        clippy::unused_async,
+        reason = "keeps the sys-impl signature uniform across platforms"
+    )]
+    pub async fn ambient_light_watch(
+        _interval_ms: u32,
+    ) -> stream::Empty<Result<ScalarData, SensorError>> {
+        stream::empty()
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -222,6 +425,8 @@ mod imp {
         IOConnectCallScalarMethod, IOObjectRelease, IOServiceClose, IOServiceGetMatchingService,
         IOServiceMatching, IOServiceOpen, io_connect_t, io_service_t, kIOMainPortDefault,
     };
+
+    use futures::stream;
 
     use super::{ScalarData, SensorData, SensorError, Timestamp};
 
@@ -361,6 +566,64 @@ mod imp {
         let average = (outputs[0] + outputs[1]) as f64 / 2.0;
         Ok(ScalarData::new(average, Timestamp::now()))
     }
+
+    // Accelerometer, gyroscope, magnetometer and barometer are not exposed via
+    // public API on macOS: no watch streams.
+    #[expect(
+        clippy::unused_async,
+        reason = "keeps the sys-impl signature uniform across platforms"
+    )]
+    pub async fn accelerometer_watch(
+        _interval_ms: u32,
+    ) -> stream::Empty<Result<SensorData, SensorError>> {
+        stream::empty()
+    }
+
+    #[expect(
+        clippy::unused_async,
+        reason = "keeps the sys-impl signature uniform across platforms"
+    )]
+    pub async fn gyroscope_watch(
+        _interval_ms: u32,
+    ) -> stream::Empty<Result<SensorData, SensorError>> {
+        stream::empty()
+    }
+
+    #[expect(
+        clippy::unused_async,
+        reason = "keeps the sys-impl signature uniform across platforms"
+    )]
+    pub async fn magnetometer_watch(
+        _interval_ms: u32,
+    ) -> stream::Empty<Result<SensorData, SensorError>> {
+        stream::empty()
+    }
+
+    #[expect(
+        clippy::unused_async,
+        reason = "keeps the sys-impl signature uniform across platforms"
+    )]
+    pub async fn barometer_watch(
+        _interval_ms: u32,
+    ) -> stream::Empty<Result<ScalarData, SensorError>> {
+        stream::empty()
+    }
+
+    /// The LMU has no push primitive, so ambient light keeps polling — the
+    /// item type matches every other platform's watch contract.
+    #[expect(
+        clippy::unused_async,
+        reason = "the polling lives in the returned stream, not this function"
+    )]
+    pub async fn ambient_light_watch(
+        interval_ms: u32,
+    ) -> impl futures_core::Stream<Item = Result<ScalarData, SensorError>> + Send + 'static {
+        let interval = std::time::Duration::from_millis(u64::from(interval_ms));
+        stream::unfold((), move |()| async move {
+            futures_timer::Delay::new(interval).await;
+            Some((ambient_light_read().await, ()))
+        })
+    }
 }
 
 // Accelerometer
@@ -372,17 +635,13 @@ pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
     imp::accelerometer_read().await
 }
 
-pub fn accelerometer_watch(
+pub async fn accelerometer_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
+) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
     if !accelerometer_available() {
         return Err(SensorError::NotAvailable);
     }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        imp::accelerometer_read().await.ok().map(|data| (data, ()))
-    }))
+    Ok(imp::accelerometer_watch(interval_ms).await)
 }
 
 // Gyroscope
@@ -394,17 +653,13 @@ pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
     imp::gyroscope_read().await
 }
 
-pub fn gyroscope_watch(
+pub async fn gyroscope_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
+) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
     if !gyroscope_available() {
         return Err(SensorError::NotAvailable);
     }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        imp::gyroscope_read().await.ok().map(|data| (data, ()))
-    }))
+    Ok(imp::gyroscope_watch(interval_ms).await)
 }
 
 // Magnetometer
@@ -416,17 +671,13 @@ pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
     imp::magnetometer_read().await
 }
 
-pub fn magnetometer_watch(
+pub async fn magnetometer_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
+) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
     if !magnetometer_available() {
         return Err(SensorError::NotAvailable);
     }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        imp::magnetometer_read().await.ok().map(|data| (data, ()))
-    }))
+    Ok(imp::magnetometer_watch(interval_ms).await)
 }
 
 // Barometer
@@ -438,17 +689,13 @@ pub async fn barometer_read() -> Result<ScalarData, SensorError> {
     imp::barometer_read().await
 }
 
-pub fn barometer_watch(
+pub async fn barometer_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = ScalarData> + Send, SensorError> {
+) -> Result<impl futures_core::Stream<Item = Result<ScalarData, SensorError>> + Send, SensorError> {
     if !barometer_available() {
         return Err(SensorError::NotAvailable);
     }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        imp::barometer_read().await.ok().map(|data| (data, ()))
-    }))
+    Ok(imp::barometer_watch(interval_ms).await)
 }
 
 // Ambient Light
@@ -460,15 +707,11 @@ pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
     imp::ambient_light_read().await
 }
 
-pub fn ambient_light_watch(
+pub async fn ambient_light_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = ScalarData> + Send, SensorError> {
+) -> Result<impl futures_core::Stream<Item = Result<ScalarData, SensorError>> + Send, SensorError> {
     if !ambient_light_available() {
         return Err(SensorError::NotAvailable);
     }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        imp::ambient_light_read().await.ok().map(|data| (data, ()))
-    }))
+    Ok(imp::ambient_light_watch(interval_ms).await)
 }

@@ -56,7 +56,7 @@ pub async fn show_notification(
     }
 
     // Use notify-rust for unbundled apps (basic notifications only)
-    let handle = super::desktop::show_notification(notification)?;
+    let handle = super::desktop::show_notification(notification).await?;
     Ok(NotificationHandleInner {
         desktop_handle: Some(handle),
     })

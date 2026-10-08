@@ -39,7 +39,9 @@ mod id_tracker {
 }
 
 /// Show a notification using notify-rust.
-pub fn show_notification(
+// The per-platform sys contract is async; notify-rust posts synchronously.
+#[allow(clippy::unused_async)]
+pub async fn show_notification(
     notification: &Notification,
 ) -> Result<NotificationHandleInner, NotificationError> {
     let mut n = NrNotification::new();

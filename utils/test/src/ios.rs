@@ -213,7 +213,7 @@ fn build_library(root: &Path, rust_target: &str, feature: &str) -> Result<RustLi
             }
             Message::CompilerMessage(message) => {
                 if let Some(flags) = message.message.message.strip_prefix("native-static-libs: ") {
-                    link_flags = Some(flags.to_owned());
+                    link_flags = Some(app_link_flags(flags));
                 } else if let Some(rendered) = message.message.rendered {
                     warn!("{}", rendered.trim_end());
                 }
@@ -239,6 +239,31 @@ fn build_library(root: &Path, rust_target: &str, feature: &str) -> Result<RustLi
         archive,
         link_flags,
     })
+}
+
+/// The app link's share of rustc's `native-static-libs` flags, each library
+/// once in first-seen order. `clang_rt.*` is left out: rustc names it without
+/// the toolchain directory that holds it, and the clang driver `xcodebuild`
+/// links the app with adds the platform's compiler runtime itself.
+fn app_link_flags(flags: &str) -> String {
+    let mut words = flags.split_whitespace();
+    let mut kept: Vec<String> = Vec::new();
+    while let Some(word) = words.next() {
+        let flag = if word == "-framework" {
+            let name = words
+                .next()
+                .expect("rustc names a framework after every -framework");
+            format!("-framework {name}")
+        } else if word.starts_with("-lclang_rt.") {
+            continue;
+        } else {
+            word.to_owned()
+        };
+        if !kept.contains(&flag) {
+            kept.push(flag);
+        }
+    }
+    kept.join(" ")
 }
 
 /// Builds the app around `library` with `xcodebuild`, signed for
@@ -724,7 +749,7 @@ fn remote_word(word: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::remote_word;
+    use super::{app_link_flags, remote_word};
 
     #[test]
     fn quotes_remote_words() {
@@ -738,5 +763,16 @@ mod tests {
     fn rejects_words_shells_quote_differently() {
         assert!(remote_word("it's").is_err());
         assert!(remote_word(r"a\b").is_err());
+    }
+
+    #[test]
+    fn app_link_flags_drop_the_compiler_runtime_and_repeats() {
+        assert_eq!(
+            app_link_flags(
+                "-lclang_rt.iossim -framework Foundation -lSystem -framework UIKit \
+                 -lclang_rt.iossim -framework Foundation -lSystem -lobjc"
+            ),
+            "-framework Foundation -lSystem -framework UIKit -lobjc"
+        );
     }
 }

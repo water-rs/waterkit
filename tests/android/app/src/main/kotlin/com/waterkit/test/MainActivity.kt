@@ -49,7 +49,7 @@ class MainActivity : AppCompatActivity() {
     private external fun testCheckPermission(activity: AppCompatActivity, permissionType: Int): Int
     
     // Location crate  
-    private external fun testGetLocation(context: android.content.Context): DoubleArray?
+    private external fun testGetLocation(context: android.content.Context, result: LocationResult)
     
     // Generic runner
     private external fun runTest(activity: AppCompatActivity)
@@ -118,12 +118,18 @@ class MainActivity : AppCompatActivity() {
                 return@testButton
             }
             
-            val result = testGetLocation(this)
-            if (result != null && result.isNotEmpty() && result[0] > 0.5) {
-                log("✓ Location: ${result[1]}, ${result[2]}")
-                log("  Altitude: ${result[3]}m, Accuracy: ${result[4]}m")
-            } else {
-                log("✗ Location not available")
+            log("Requesting location...")
+            testGetLocation(this) { values ->
+                // `deliver` arrives on the request's native worker thread;
+                // only the UI thread may touch the log.
+                runOnUiThread {
+                    if (values != null && values.isNotEmpty() && values[0] > 0.5) {
+                        log("✓ Location: ${values[1]}, ${values[2]}")
+                        log("  Altitude: ${values[3]}m, Accuracy: ${values[4]}m")
+                    } else {
+                        log("✗ Location not available")
+                    }
+                }
             }
         })
         
@@ -377,4 +383,13 @@ class MainActivity : AppCompatActivity() {
         3 -> "Granted"
         else -> "Error($status)"
     }
+}
+
+/**
+ * Completion handed to `testGetLocation`. `deliver` is invoked on the
+ * request's native worker thread, never the UI thread — implementations post
+ * their UI work through `runOnUiThread`.
+ */
+fun interface LocationResult {
+    fun deliver(values: DoubleArray?)
 }

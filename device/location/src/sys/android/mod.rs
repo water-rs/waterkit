@@ -1,6 +1,7 @@
 //! Android location implementation using JNI.
 
 use crate::{Location, LocationCapabilities, LocationError, LocationProvider, Timestamp};
+use futures::channel::oneshot;
 use jni::{
     Env, jni_sig, jni_str,
     objects::{JObject, JValue},
@@ -8,7 +9,8 @@ use jni::{
 };
 use std::sync::OnceLock;
 use waterkit_build::{
-    AndroidError, DexHelper, describe_jni_error, dex_helper, with_android_context,
+    AndroidError, DexHelper, FromJava, NativeCallback, PeerError, describe_jni_error, dex_helper,
+    with_android_context,
 };
 
 /// `waterkit.location.LocationHelper`, embedded as a DEX by this crate's build
@@ -114,148 +116,165 @@ fn double_field(
     env: &mut Env<'_>,
     result: &JObject<'_>,
     name: &JNIStr,
-) -> Result<f64, LocationError> {
+) -> Result<f64, jni::errors::Error> {
     env.get_field(result, name, jni_sig!("D"))
         .and_then(jni::objects::JValueOwned::d)
-        .map_err(|error| {
-            LocationError::Platform(format!(
-                "read Android location field {name} failed: {error}"
-            ))
-        })
 }
 
 fn flag_field(
     env: &mut Env<'_>,
     result: &JObject<'_>,
     name: &JNIStr,
-) -> Result<bool, LocationError> {
+) -> Result<bool, jni::errors::Error> {
     env.get_field(result, name, jni_sig!("Z"))
         .and_then(jni::objects::JValueOwned::z)
-        .map_err(|error| {
-            LocationError::Platform(format!(
-                "read Android location field {name} failed: {error}"
-            ))
+}
+
+/// What the Kotlin helper completes the request's `NativeCallback` with:
+/// the `LocationHelper.Result` read field-by-field.
+struct LocationOutcome {
+    status: i32,
+    latitude: f64,
+    longitude: f64,
+    has_altitude: bool,
+    altitude: f64,
+    has_horizontal_accuracy: bool,
+    horizontal_accuracy: f64,
+    has_vertical_accuracy: bool,
+    vertical_accuracy: f64,
+    time_millis: i64,
+}
+
+impl FromJava for LocationOutcome {
+    fn from_java(env: &mut Env<'_>, result: &JObject<'_>) -> Result<Self, AndroidError> {
+        Ok(Self {
+            status: env
+                .get_field(result, jni_str!("status"), jni_sig!("I"))
+                .and_then(jni::objects::JValueOwned::i)?,
+            latitude: double_field(env, result, jni_str!("latitude"))?,
+            longitude: double_field(env, result, jni_str!("longitude"))?,
+            has_altitude: flag_field(env, result, jni_str!("hasAltitude"))?,
+            altitude: double_field(env, result, jni_str!("altitude"))?,
+            has_horizontal_accuracy: flag_field(env, result, jni_str!("hasHorizontalAccuracy"))?,
+            horizontal_accuracy: double_field(env, result, jni_str!("horizontalAccuracy"))?,
+            has_vertical_accuracy: flag_field(env, result, jni_str!("hasVerticalAccuracy"))?,
+            vertical_accuracy: double_field(env, result, jni_str!("verticalAccuracy"))?,
+            time_millis: env
+                .get_field(result, jni_str!("timeMillis"), jni_sig!("J"))
+                .and_then(jni::objects::JValueOwned::j)?,
         })
+    }
+}
+
+impl LocationOutcome {
+    /// The outcome's typed `Location`, or the status's [`LocationError`].
+    fn into_location(self) -> Result<Location, LocationError> {
+        match self.status {
+            STATUS_SUCCESS => {}
+            STATUS_PERMISSION_DENIED => return Err(LocationError::PermissionDenied),
+            STATUS_SERVICE_DISABLED => return Err(LocationError::ServiceDisabled),
+            STATUS_UNAVAILABLE => return Err(LocationError::NotAvailable),
+            other => {
+                return Err(LocationError::Platform(format!(
+                    "Android location helper returned unknown status {other}"
+                )));
+            }
+        }
+
+        let timestamp = Timestamp::from_millisecond(self.time_millis)
+            .map_err(|error| LocationError::Platform(error.to_string()))?;
+
+        let mut location = Location::from_degrees(self.latitude, self.longitude, timestamp)?;
+        if self.has_altitude {
+            location = location.with_altitude(self.altitude);
+        }
+        if self.has_horizontal_accuracy {
+            location = location.with_horizontal_accuracy(self.horizontal_accuracy);
+        }
+        if self.has_vertical_accuracy {
+            location = location.with_vertical_accuracy(self.vertical_accuracy);
+        }
+        Ok(location)
+    }
+}
+
+/// Starts the provider's fix and returns the receiver the `NativeCallback`
+/// answers. The Kotlin listener completes the callback on the platform's
+/// delivery thread; nothing is parked waiting.
+fn request_fix(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+) -> Result<oneshot::Receiver<Result<LocationOutcome, PeerError>>, LocationError> {
+    let realization = realization_with_context(env, context)?;
+    let helper_class = HELPER.class(env, context)?;
+    let (callback, rx) = NativeCallback::<LocationOutcome>::new(env)?;
+    env.call_static_method(
+        helper_class,
+        realization.request_method(),
+        jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeCallback;)V"),
+        &[JValue::Object(context), JValue::Object(callback.as_obj())],
+    )
+    .map_err(|error| {
+        LocationError::Platform(format!(
+            "request Android location failed: {}",
+            describe_jni_error(env, error)
+        ))
+    })?;
+    Ok(rx)
+}
+
+/// Awaits the fix's `NativeCallback` answer and decodes it into the
+/// request's [`Location`].
+async fn await_fix(
+    rx: oneshot::Receiver<Result<LocationOutcome, PeerError>>,
+) -> Result<Location, LocationError> {
+    rx.await
+        .map_err(|_| {
+            LocationError::Platform(String::from(
+                "the location callback was collected unanswered",
+            ))
+        })?
+        .map_err(|error| LocationError::Platform(error.to_string()))?
+        .into_location()
 }
 
 /// Requests a fresh location fix using an Android `Context`, through the
 /// provider [`provider_with_context`] reports.
 ///
-/// Blocks the calling thread until the platform delivers a fix, so this must
-/// not run on the Android main thread — the helper waits for callbacks the
-/// main looper may deliver.
+/// Every JNI call runs before this returns; the future it hands back only
+/// awaits the request's `NativeCallback` receiver, so it is `Send` and the
+/// caller bounds its wait itself.
 ///
 /// # Errors
 ///
-/// Returns [`LocationError::PermissionDenied`] when neither fine nor coarse
-/// location permission is granted, [`LocationError::ServiceDisabled`] when no
-/// location provider is enabled, [`LocationError::NotAvailable`] when the
-/// platform reports no location, or [`LocationError::Platform`] when JNI or
-/// Google Play services fails.
+/// Returns [`LocationError::Platform`] when the JNI calls fail. The
+/// returned future yields [`LocationError::PermissionDenied`] when neither
+/// fine nor coarse location permission is granted,
+/// [`LocationError::ServiceDisabled`] when no location provider is enabled,
+/// [`LocationError::NotAvailable`] when the platform reports no location,
+/// or [`LocationError::Platform`] when the callback's answer fails to
+/// decode.
 pub fn get_location_with_context(
     env: &mut Env<'_>,
     context: &JObject<'_>,
-) -> Result<Location, LocationError> {
-    let realization = realization_with_context(env, context)?;
-    let helper_class = HELPER.class(env, context)?;
-    let result = env
-        .call_static_method(
-            helper_class,
-            realization.request_method(),
-            jni_sig!("(Landroid/content/Context;)Lwaterkit/location/LocationHelper$Result;"),
-            &[JValue::Object(context)],
-        )
-        .and_then(jni::objects::JValueOwned::l)
-        .map_err(|error| {
-            LocationError::Platform(format!(
-                "request Android location failed: {}",
-                describe_jni_error(env, error)
-            ))
-        })?;
-
-    let status = env
-        .get_field(&result, jni_str!("status"), jni_sig!("I"))
-        .and_then(jni::objects::JValueOwned::i)
-        .map_err(|error| {
-            LocationError::Platform(format!("read Android location status failed: {error}"))
-        })?;
-    match status {
-        STATUS_SUCCESS => {}
-        STATUS_PERMISSION_DENIED => return Err(LocationError::PermissionDenied),
-        STATUS_SERVICE_DISABLED => return Err(LocationError::ServiceDisabled),
-        STATUS_UNAVAILABLE => return Err(LocationError::NotAvailable),
-        other => {
-            return Err(LocationError::Platform(format!(
-                "Android location helper returned unknown status {other}"
-            )));
-        }
-    }
-
-    let latitude = double_field(env, &result, jni_str!("latitude"))?;
-    let longitude = double_field(env, &result, jni_str!("longitude"))?;
-    let time_millis = env
-        .get_field(&result, jni_str!("timeMillis"), jni_sig!("J"))
-        .and_then(jni::objects::JValueOwned::j)
-        .map_err(|error| {
-            LocationError::Platform(format!("read Android location timestamp failed: {error}"))
-        })?;
-    let timestamp = Timestamp::from_millisecond(time_millis)
-        .map_err(|error| LocationError::Platform(error.to_string()))?;
-
-    let mut location = Location::from_degrees(latitude, longitude, timestamp)?;
-    if flag_field(env, &result, jni_str!("hasAltitude"))? {
-        location = location.with_altitude(double_field(env, &result, jni_str!("altitude"))?);
-    }
-    if flag_field(env, &result, jni_str!("hasHorizontalAccuracy"))? {
-        location = location.with_horizontal_accuracy(double_field(
-            env,
-            &result,
-            jni_str!("horizontalAccuracy"),
-        )?);
-    }
-    if flag_field(env, &result, jni_str!("hasVerticalAccuracy"))? {
-        location = location.with_vertical_accuracy(double_field(
-            env,
-            &result,
-            jni_str!("verticalAccuracy"),
-        )?);
-    }
-    Ok(location)
-}
-
-/// Runs `work` with the Android context on a dedicated thread, so neither the
-/// JNI calls nor the helper's wait for a fix block the awaiting task.
-async fn on_location_thread<T: Send + 'static>(
-    work: fn(&mut Env<'_>, &JObject<'_>) -> Result<T, LocationError>,
-) -> Result<T, LocationError> {
-    let (sender, receiver) = futures::channel::oneshot::channel();
-    std::thread::Builder::new()
-        .name(String::from("waterkit-location"))
-        .spawn(move || {
-            let _ = sender.send(with_android_context(work));
-        })
-        .map_err(|error| {
-            LocationError::Platform(format!("spawn Android location thread failed: {error}"))
-        })?;
-    receiver
-        .await
-        .map_err(|_| LocationError::Platform(String::from("Android location thread died")))?
+) -> Result<
+    impl std::future::Future<Output = Result<Location, LocationError>> + Send + use<>,
+    LocationError,
+> {
+    request_fix(env, context).map(await_fix)
 }
 
 pub async fn capabilities() -> LocationCapabilities {
-    let realization = match REALIZATION.get() {
-        Some(realization) => *realization,
-        None => on_location_thread(realization_with_context)
-            .await
-            .unwrap_or_else(|error| {
-                panic!("waterkit-location: failed to choose the Android location provider: {error}")
-            }),
-    };
+    let realization = REALIZATION.get().copied().unwrap_or_else(|| {
+        with_android_context(realization_with_context).unwrap_or_else(|error| {
+            panic!("waterkit-location: failed to choose the Android location provider: {error}")
+        })
+    });
     LocationCapabilities {
         provider: Some(realization.into()),
     }
 }
 
 pub async fn get_location() -> Result<Location, LocationError> {
-    on_location_thread(get_location_with_context).await
+    await_fix(with_android_context(request_fix)?).await
 }

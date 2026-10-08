@@ -45,7 +45,7 @@ objc2-core-location = { workspace = true, features = [
 jni.workspace = true
 futures.workspace = true
 tracing.workspace = true
-waterkit-build.workspace = true
+waterkit-build = { workspace = true, features = ["native-callback"] }
 
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]

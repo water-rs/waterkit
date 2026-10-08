@@ -7,14 +7,19 @@ use jni::JavaVM;
 use jni::errors::ThrowRuntimeExAndDefault;
 #[cfg(feature = "location")]
 use jni::objects::JDoubleArray;
-#[cfg(any(feature = "clipboard", feature = "dialog", feature = "otp"))]
+#[cfg(any(
+    feature = "clipboard",
+    feature = "dialog",
+    feature = "location",
+    feature = "otp"
+))]
 use jni::objects::JValue;
 #[cfg(feature = "otp")]
 use jni::objects::JValueOwned;
 use jni::objects::{Global, JObject};
-use jni::sys::{jboolean, jdoubleArray, jstring};
+use jni::sys::{jboolean, jstring};
 use jni::{Env, EnvUnowned};
-#[cfg(feature = "otp")]
+#[cfg(any(feature = "location", feature = "otp"))]
 use jni::{jni_sig, jni_str};
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "otp")]
@@ -1078,7 +1083,7 @@ const RECORDERS: &[Recorder] = &[
     #[cfg(feature = "sensor")]
     |h| record_android_sensor(&mut h.report, h.env, h.activity.as_obj()),
     #[cfg(feature = "location")]
-    |h| record_android_location(&mut h.report, h.env, h.activity.as_obj()),
+    |h| record_android_location(&mut h.report, h.env, h.activity.as_obj(), h.runtime),
     #[cfg(feature = "permission")]
     |h| record_android_permission(&mut h.report, h.env, h.activity.as_obj()),
     #[cfg(feature = "camera")]
@@ -1277,7 +1282,12 @@ fn record_android_sensor(report: &mut TestReport, env: &mut Env<'_>, activity: &
 }
 
 #[cfg(feature = "location")]
-fn record_android_location(report: &mut TestReport, env: &mut Env<'_>, activity: &JObject<'_>) {
+fn record_android_location(
+    report: &mut TestReport,
+    env: &mut Env<'_>,
+    activity: &JObject<'_>,
+    runtime: &tokio::runtime::Runtime,
+) {
     match waterkit_content::location::android::provider_with_context(env, activity) {
         Ok(provider) => report.push(TestCase::passed_with_message(
             "location.provider",
@@ -1288,7 +1298,13 @@ fn record_android_location(report: &mut TestReport, env: &mut Env<'_>, activity:
             format!("provider probe failed: {error}"),
         )),
     }
-    match waterkit_content::location::android::get_location_with_context(env, activity) {
+    // The request issues its JNI calls here; the runtime only awaits the reply.
+    let outcome =
+        match waterkit_content::location::android::get_location_with_context(env, activity) {
+            Ok(request) => runtime.block_on(request),
+            Err(error) => Err(error),
+        };
+    match outcome {
         Ok(location) => {
             let latitude = location.latitude().get();
             let longitude = location.longitude().get();
@@ -2796,61 +2812,146 @@ fn check_permission(env: &mut Env<'_>, activity: &JObject<'_>, permission_type: 
     }
 }
 
-/// Reads the location as `[ok, latitude, longitude, altitude, accuracy]`.
+/// Issues a location fix reported to `result.deliver`.
+///
+/// The delivered payload is `[ok, latitude, longitude, altitude, accuracy]`,
+/// or null on failure. `deliver` is invoked on the request's worker thread;
+/// the Kotlin side posts its log lines to the UI thread.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_waterkit_test_MainActivity_testGetLocation<'local>(
     mut unownedenv: EnvUnowned<'local>,
     _this: JObject<'local>,
     activity: JObject<'local>,
-) -> jdoubleArray {
+    result: JObject<'local>,
+) {
     unownedenv
-        .with_env(|env| -> jni::errors::Result<jdoubleArray> { Ok(get_location(env, &activity)) })
-        .resolve::<ThrowRuntimeExAndDefault>()
+        .with_env(|env| -> jni::errors::Result<()> {
+            request_location(env, &activity, &result);
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>();
 }
 
-fn get_location(env: &mut Env<'_>, activity: &JObject<'_>) -> jdoubleArray {
+fn request_location(env: &mut Env<'_>, activity: &JObject<'_>, result: &JObject<'_>) {
     #[cfg(feature = "location")]
     {
-        match waterkit_content::location::android::get_location_with_context(env, activity) {
-            Ok(location) => {
-                let altitude = location.altitude().unwrap_or(0.0);
-                let accuracy = location.horizontal_accuracy().unwrap_or(0.0);
-                let payload = [
-                    1.0,
-                    location.latitude().get(),
-                    location.longitude().get(),
-                    altitude,
-                    accuracy,
-                ];
-
-                let array = match JDoubleArray::new(env, payload.len()) {
-                    Ok(arr) => arr,
-                    Err(error) => {
-                        log::error!("JDoubleArray::new failed: {error}");
-                        return std::ptr::null_mut();
-                    }
-                };
-
-                if let Err(error) = array.set_region(env, 0, &payload) {
-                    log::error!("set_region failed: {error}");
-                    return std::ptr::null_mut();
+        // The completion runs after this export returns and attaches through
+        // `with_android_context`, which needs `ndk_context` initialized.
+        // Owning the context for the request's lifetime also keeps this
+        // button from racing a `runTestReport` or manual OTP request.
+        let owner = match AndroidContextOwner::new(env, activity) {
+            Ok(owner) => owner,
+            Err(AndroidContextOwnerError::AlreadyActive) => {
+                let outcome = Err(waterkit_content::location::LocationError::Platform(
+                    "another native request is active".to_owned(),
+                ));
+                if let Err(error) = deliver_location(env, result, outcome) {
+                    log::error!("failed to deliver the location outcome: {error}");
                 }
-
-                array.into_raw()
+                return;
             }
+            Err(AndroidContextOwnerError::Jni(error)) => {
+                log::error!("failed to acquire the Android context: {error}");
+                return;
+            }
+        };
+        let request =
+            match waterkit_content::location::android::get_location_with_context(env, activity) {
+                Ok(request) => request,
+                Err(error) => {
+                    // A failed request can leave a Java exception pending on this
+                    // thread; it is already captured in `error`, so clear it or
+                    // the delivery call misreports.
+                    if env.exception_check() {
+                        env.exception_clear();
+                    }
+                    if let Err(error) = deliver_location(env, result, Err(error)) {
+                        log::error!("failed to deliver the location outcome: {error}");
+                    }
+                    return;
+                }
+            };
+        let result = match env.new_global_ref(result) {
+            Ok(result) => result,
             Err(error) => {
-                log::error!("Location test failed: {error}");
-                std::ptr::null_mut()
+                log::error!("failed to retain the location completion: {error}");
+                return;
             }
+        };
+        // `request` is `Send` and only awaits the request's `NativeCallback`
+        // receiver. The harness owns no executor for a button-driven request,
+        // so one dedicated thread per request drives the future with
+        // `block_on` — the documented bounded exception: this thread is
+        // neither the UI thread nor the looper the fix is delivered on, so
+        // parking it deadlocks nothing.
+        if let Err(error) = std::thread::Builder::new()
+            .name("waterkit-location-request".to_owned())
+            .spawn(move || {
+                let outcome = futures::executor::block_on(request);
+                let delivered = waterkit_build::with_android_context(|env, _| {
+                    deliver_location(env, result.as_obj(), outcome)
+                        .map_err(waterkit_build::AndroidError::from)
+                });
+                if let Err(error) = delivered {
+                    log::error!("failed to deliver the location outcome: {error}");
+                }
+                drop(owner);
+            })
+        {
+            log::error!("failed to start the location request thread: {error}");
         }
     }
 
     #[cfg(not(feature = "location"))]
     {
-        let _ = (env, activity);
+        let _ = (env, activity, result);
         log::error!("testGetLocation called without enabling location feature");
-        std::ptr::null_mut()
     }
+}
+
+/// Hands `outcome` to `result.deliver` as the `[ok, latitude, longitude,
+/// altitude, accuracy]` payload, or null when the request failed.
+#[cfg(feature = "location")]
+fn deliver_location(
+    env: &mut Env<'_>,
+    result: &JObject<'_>,
+    outcome: Result<
+        waterkit_content::location::Location,
+        waterkit_content::location::LocationError,
+    >,
+) -> jni::errors::Result<()> {
+    let payload = match outcome {
+        Ok(location) => Some([
+            1.0,
+            location.latitude().get(),
+            location.longitude().get(),
+            location.altitude().unwrap_or(0.0),
+            location.horizontal_accuracy().unwrap_or(0.0),
+        ]),
+        Err(error) => {
+            log::error!("Location request failed: {error}");
+            None
+        }
+    };
+    match payload {
+        Some(payload) => {
+            let array = JDoubleArray::new(env, payload.len())?;
+            array.set_region(env, 0, &payload)?;
+            env.call_method(
+                result,
+                jni_str!("deliver"),
+                jni_sig!("([D)V"),
+                &[JValue::Object(&array)],
+            )
+        }
+        None => env.call_method(
+            result,
+            jni_str!("deliver"),
+            jni_sig!("([D)V"),
+            &[JValue::Object(&JObject::null())],
+        ),
+    }
+    .map(|_| ())
 }
 
 #[cfg(feature = "codec")]

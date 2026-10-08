@@ -7974,6 +7974,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "thiserror 2.0.20",
  "waterkit-build",
+ "waterkit-core",
 ]
 
 [[package]]

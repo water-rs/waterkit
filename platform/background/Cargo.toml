@@ -20,6 +20,7 @@ thiserror.workspace = true
 
 # iOS (and Mac Catalyst) - native BackgroundTasks through objc2
 [target.'cfg(target_os = "ios")'.dependencies]
+waterkit-core.workspace = true
 block2 = "0.6"
 dispatch2.workspace = true
 futures-channel = "0.3"

@@ -6,8 +6,7 @@
 //! Tasks are registered on the main dispatch queue, so every `BGTask`
 //! arrives on the main thread and lives there as a
 //! [`MainThreadBound`]-wrapped `Retained` — callers that are not on the
-//! main thread hop over with `DispatchQueue::main().exec_async` and await
-//! a `futures` oneshot for the result.
+//! main thread hop over with [`waterkit_core::apple::on_main`].
 
 use std::sync::{Arc, Mutex};
 
@@ -162,7 +161,7 @@ impl RuntimeState {
         // alive or dangle.
         unsafe {
             task.get(mtm)
-                .setExpirationHandler(Some(&expiration_handler))
+                .setExpirationHandler(Some(&expiration_handler));
         };
     }
 
@@ -193,27 +192,6 @@ pub struct TaskHandle {
     task: Arc<MainThreadBound<Retained<BGTask>>>,
     /// The runtime that delivered it.
     runtime: std::sync::Weak<RuntimeState>,
-}
-
-/// Runs `work` on the main queue: inline when already there, otherwise via
-/// `exec_async` with a oneshot carrying the result back to the awaiting
-/// caller.
-async fn run_on_main_queue<T, F>(work: F) -> T
-where
-    T: Send + 'static,
-    F: FnOnce(MainThreadMarker) -> T + Send + 'static,
-{
-    if let Some(mtm) = MainThreadMarker::new() {
-        return work(mtm);
-    }
-    let (sender, receiver) = futures_channel::oneshot::channel();
-    DispatchQueue::main().exec_async(move || {
-        let mtm = MainThreadMarker::new().expect("the main queue only runs on the main thread");
-        let _ = sender.send(work(mtm));
-    });
-    receiver
-        .await
-        .expect("the main queue dropped the work item before it ran")
 }
 
 /// `mapSchedulerError` — `BGTaskScheduler` errors carry their raw code.
@@ -472,7 +450,7 @@ pub async fn complete_task(handle: &TaskHandle, success: bool) -> Result<(), Bac
         ));
     };
     let task = Arc::clone(&handle.task);
-    run_on_main_queue(move |mtm| {
+    waterkit_core::apple::on_main(move |mtm| {
         let task = {
             let mut pending = runtime
                 .pending
@@ -541,7 +519,7 @@ pub async fn update_continued_processing_status(
     let title = title.to_owned();
     let subtitle = subtitle.to_owned();
     let task = Arc::clone(&handle.task);
-    run_on_main_queue(move |mtm| {
+    waterkit_core::apple::on_main(move |mtm| {
         let task = pending_continued_task(
             &runtime,
             &TaskHandle {
@@ -575,7 +553,7 @@ pub async fn update_continued_processing_progress(
         ));
     };
     let task = Arc::clone(&handle.task);
-    run_on_main_queue(move |mtm| {
+    waterkit_core::apple::on_main(move |mtm| {
         let task = pending_continued_task(
             &runtime,
             &TaskHandle {

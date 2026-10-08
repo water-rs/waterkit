@@ -38,6 +38,7 @@ Waterkit is organized into focused, independent crates. You can use the main `wa
 | **[System](system)** | System information, connectivity status, and thermal info. |
 | **[Video](video)** | High-level video playback and processing. |
 | **[Vision](vision)** | Hardware-accelerated on-device vision requests over camera frames and still images. |
+| **[Wallet](wallet)** | Add server-signed passes to Google Wallet / Apple Wallet. |
 
 ## Advanced Modern Capabilities
 

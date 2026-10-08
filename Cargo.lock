@@ -248,6 +248,9 @@ name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+dependencies = [
+ "derive_arbitrary",
+]
 
 [[package]]
 name = "arc-swap"
@@ -1733,6 +1736,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "derive_arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -7676,6 +7690,7 @@ dependencies = [
  "waterkit-system",
  "waterkit-video",
  "waterkit-vision",
+ "waterkit-wallet",
 ]
 
 [[package]]
@@ -8563,6 +8578,23 @@ dependencies = [
  "tokio",
  "waterkit-test-report",
  "waterkit-vision",
+]
+
+[[package]]
+name = "waterkit-wallet"
+version = "0.1.4"
+dependencies = [
+ "base64 0.22.1",
+ "futures",
+ "jni 0.22.4",
+ "serde",
+ "serde_json",
+ "swift-bridge",
+ "thiserror 2.0.20",
+ "tracing",
+ "waterkit-build",
+ "waterkit-core",
+ "zip",
 ]
 
 [[package]]
@@ -9988,6 +10020,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.5",
+]
+
+[[package]]
+name = "zip"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb2a05c7c36fde6c09b08576c9f7fb4cda705990f73b58fe011abf7dfb24168b"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "flate2",
+ "indexmap 2.14.2",
+ "memchr",
 ]
 
 [[package]]

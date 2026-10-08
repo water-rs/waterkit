@@ -162,7 +162,7 @@ jobs:
         run: >
           cargo clippy --locked -p waterkit --target wasm32-unknown-unknown --all-targets
           --no-default-features
-          --features audio,background,bluetooth,calendar,camera,clipboard,codec,contacts,deeplink,dialog,fs,haptic,health,language,location,nfc,otp,permission,regional,screen,secret,sensor,share,speech,vaapi,video,vision
+          --features audio,background,bluetooth,calendar,camera,clipboard,codec,contacts,deeplink,dialog,fs,haptic,health,language,location,nfc,otp,permission,regional,screen,secret,sensor,share,speech,vaapi,video,vision,wallet
           -- -D warnings
 
   coverage:

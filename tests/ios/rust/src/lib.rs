@@ -104,6 +104,8 @@ const RECORDERS: &[Recorder] = &[
     |h| h.runtime.block_on(record_passkey(&mut h.report)),
     #[cfg(feature = "language")]
     |h| h.runtime.block_on(record_language(&mut h.report)),
+    #[cfg(feature = "wallet")]
+    |h| h.runtime.block_on(record_wallet(&mut h.report)),
     #[cfg(feature = "biometric")]
     |h| {
         h.report.push(TestCase::skipped(
@@ -692,5 +694,19 @@ async fn record_language_not_installed(
             "language.not_installed",
             "no pair needs downloading",
         ));
+    }
+}
+
+#[cfg(feature = "wallet")]
+async fn record_wallet(report: &mut TestReport) {
+    match waterkit::wallet::capabilities().await {
+        Ok(capabilities) => report.push(TestCase::passed_with_message(
+            "wallet.availability",
+            format!("available={}", capabilities.available),
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "wallet.availability",
+            format!("wallet capability probe failed: {error}"),
+        )),
     }
 }

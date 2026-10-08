@@ -36,6 +36,15 @@
             android:name=".ActivityResultEchoActivity"
             android:exported="false" />
 
+        <!-- waterkit-wallet's save flow runs in this library-owned trampoline
+             activity. Crate metadata cannot declare activities yet
+             (water-rs/waterui#2163), so the harness declares it by hand. -->
+        <activity
+            android:name="waterkit.wallet.SavePassesActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true" />
+
         <!-- waterkit-clipboard serves copied files through this provider.
              Crate metadata cannot declare manifest components yet
              (water-rs/waterui#1873), so the harness declares it by hand,

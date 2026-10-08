@@ -143,3 +143,7 @@ pub use waterkit_passkey as passkey;
 #[cfg(feature = "otp")]
 #[doc(inline)]
 pub use waterkit_otp as otp;
+
+#[cfg(feature = "wallet")]
+#[doc(inline)]
+pub use waterkit_wallet as wallet;

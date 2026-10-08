@@ -21,8 +21,52 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 
+# Apple platforms (iOS, macOS) - native AuthenticationServices through objc2
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
+dispatch2.workspace = true
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSData",
+    "NSError",
+    "NSObject",
+    "NSProcessInfo",
+    "NSString",
+] }
+objc2-authentication-services = { workspace = true, features = [
+    "ASAuthorization",
+    "ASAuthorizationController",
+    "ASAuthorizationCredential",
+    "ASAuthorizationRequest",
+    "ASFoundation",
+    "ASAuthorizationPlatformPublicKeyCredentialAssertion",
+    "ASAuthorizationPlatformPublicKeyCredentialAssertionRequest",
+    "ASAuthorizationPlatformPublicKeyCredentialDescriptor",
+    "ASAuthorizationPlatformPublicKeyCredentialProvider",
+    "ASAuthorizationPlatformPublicKeyCredentialRegistration",
+    "ASAuthorizationPlatformPublicKeyCredentialRegistrationRequest",
+    "ASAuthorizationPublicKeyCredentialAssertion",
+    "ASAuthorizationPublicKeyCredentialAssertionRequest",
+    "ASAuthorizationPublicKeyCredentialConstants",
+    "ASAuthorizationPublicKeyCredentialRegistration",
+    "ASAuthorizationPublicKeyCredentialRegistrationRequest",
+    "ASPublicKeyCredential",
+] }
+
+# iOS - presentation anchors resolve through UIApplication scenes
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = { workspace = true, features = [
+    "UIApplication",
+    "UIResponder",
+    "UIScene",
+    "UIView",
+    "UIWindow",
+    "UIWindowScene",
+] }
+
+# macOS - presentation anchors resolve through NSApplication
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { workspace = true, features = ["NSApplication", "NSWindow"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 waterkit-build.workspace = true
@@ -34,9 +78,6 @@ windows = { workspace = true, features = ["Win32_Foundation", "Win32_Networking_
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
-
-[build-dependencies]
-waterkit-build.workspace = true
 
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).

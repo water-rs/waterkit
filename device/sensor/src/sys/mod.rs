@@ -56,10 +56,10 @@ mod fallback {
         Err(SensorError::NotAvailable)
     }
     #[expect(
-        clippy::missing_const_for_fn,
-        reason = "the facade calls every platform's backend through the same non-const signature; only this unsupported-platform shim could be const"
+        clippy::unused_async,
+        reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
     )]
-    pub fn accelerometer_watch(
+    pub async fn accelerometer_watch(
         _interval_ms: u32,
     ) -> Result<stream::Empty<Result<SensorData, SensorError>>, SensorError> {
         Err(SensorError::NotAvailable)
@@ -80,10 +80,10 @@ mod fallback {
         Err(SensorError::NotAvailable)
     }
     #[expect(
-        clippy::missing_const_for_fn,
-        reason = "the facade calls every platform's backend through the same non-const signature; only this unsupported-platform shim could be const"
+        clippy::unused_async,
+        reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
     )]
-    pub fn gyroscope_watch(
+    pub async fn gyroscope_watch(
         _interval_ms: u32,
     ) -> Result<stream::Empty<Result<SensorData, SensorError>>, SensorError> {
         Err(SensorError::NotAvailable)
@@ -104,10 +104,10 @@ mod fallback {
         Err(SensorError::NotAvailable)
     }
     #[expect(
-        clippy::missing_const_for_fn,
-        reason = "the facade calls every platform's backend through the same non-const signature; only this unsupported-platform shim could be const"
+        clippy::unused_async,
+        reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
     )]
-    pub fn magnetometer_watch(
+    pub async fn magnetometer_watch(
         _interval_ms: u32,
     ) -> Result<stream::Empty<Result<SensorData, SensorError>>, SensorError> {
         Err(SensorError::NotAvailable)
@@ -128,10 +128,10 @@ mod fallback {
         Err(SensorError::NotAvailable)
     }
     #[expect(
-        clippy::missing_const_for_fn,
-        reason = "the facade calls every platform's backend through the same non-const signature; only this unsupported-platform shim could be const"
+        clippy::unused_async,
+        reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
     )]
-    pub fn barometer_watch(
+    pub async fn barometer_watch(
         _interval_ms: u32,
     ) -> Result<stream::Empty<Result<ScalarData, SensorError>>, SensorError> {
         Err(SensorError::NotAvailable)
@@ -152,10 +152,10 @@ mod fallback {
         Err(SensorError::NotAvailable)
     }
     #[expect(
-        clippy::missing_const_for_fn,
-        reason = "the facade calls every platform's backend through the same non-const signature; only this unsupported-platform shim could be const"
+        clippy::unused_async,
+        reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
     )]
-    pub fn ambient_light_watch(
+    pub async fn ambient_light_watch(
         _interval_ms: u32,
     ) -> Result<stream::Empty<Result<ScalarData, SensorError>>, SensorError> {
         Err(SensorError::NotAvailable)

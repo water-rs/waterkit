@@ -36,7 +36,11 @@ pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
     ))
 }
 
-pub fn accelerometer_watch(
+#[expect(
+    clippy::unused_async,
+    reason = "keeps the sys-impl signature uniform across platforms"
+)]
+pub async fn accelerometer_watch(
     interval_ms: u32,
 ) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
     if !accelerometer_available() {
@@ -70,7 +74,11 @@ pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
     ))
 }
 
-pub fn gyroscope_watch(
+#[expect(
+    clippy::unused_async,
+    reason = "keeps the sys-impl signature uniform across platforms"
+)]
+pub async fn gyroscope_watch(
     interval_ms: u32,
 ) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
     if !gyroscope_available() {
@@ -104,7 +112,11 @@ pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
     ))
 }
 
-pub fn magnetometer_watch(
+#[expect(
+    clippy::unused_async,
+    reason = "keeps the sys-impl signature uniform across platforms"
+)]
+pub async fn magnetometer_watch(
     interval_ms: u32,
 ) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
     if !magnetometer_available() {
@@ -136,7 +148,11 @@ pub async fn barometer_read() -> Result<ScalarData, SensorError> {
     ))
 }
 
-pub fn barometer_watch(
+#[expect(
+    clippy::unused_async,
+    reason = "keeps the sys-impl signature uniform across platforms"
+)]
+pub async fn barometer_watch(
     interval_ms: u32,
 ) -> Result<impl futures_core::Stream<Item = Result<ScalarData, SensorError>> + Send, SensorError> {
     if !barometer_available() {
@@ -168,7 +184,11 @@ pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
     ))
 }
 
-pub fn ambient_light_watch(
+#[expect(
+    clippy::unused_async,
+    reason = "keeps the sys-impl signature uniform across platforms"
+)]
+pub async fn ambient_light_watch(
     interval_ms: u32,
 ) -> Result<impl futures_core::Stream<Item = Result<ScalarData, SensorError>> + Send, SensorError> {
     if !ambient_light_available() {

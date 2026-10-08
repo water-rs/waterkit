@@ -14,8 +14,8 @@
 //!     let data = Accelerometer::read().await?;
 //!     println!("x={}, y={}, z={}", data.x(), data.y(), data.z());
 //!
-//!     let mut stream = Accelerometer::watch(100)?;
-//!     while let Some(data) = stream.next().await {
+//!     let mut stream = Accelerometer::watch(100).await?;
+//!     while let Some(Ok(data)) = stream.next().await {
 //!         println!("x={}, y={}, z={}", data.x(), data.y(), data.z());
 //!     }
 //! }
@@ -192,11 +192,11 @@ impl Accelerometer {
     /// # Errors
     ///
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
-    pub fn watch(
+    pub async fn watch(
         interval_ms: u32,
     ) -> Result<impl Stream<Item = Result<SensorData, SensorError>> + Send + 'static, SensorError>
     {
-        sys::accelerometer_watch(interval_ms)
+        sys::accelerometer_watch(interval_ms).await
     }
 }
 
@@ -228,11 +228,11 @@ impl Gyroscope {
     /// # Errors
     ///
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
-    pub fn watch(
+    pub async fn watch(
         interval_ms: u32,
     ) -> Result<impl Stream<Item = Result<SensorData, SensorError>> + Send + 'static, SensorError>
     {
-        sys::gyroscope_watch(interval_ms)
+        sys::gyroscope_watch(interval_ms).await
     }
 }
 
@@ -263,11 +263,11 @@ impl Magnetometer {
     /// # Errors
     ///
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
-    pub fn watch(
+    pub async fn watch(
         interval_ms: u32,
     ) -> Result<impl Stream<Item = Result<SensorData, SensorError>> + Send + 'static, SensorError>
     {
-        sys::magnetometer_watch(interval_ms)
+        sys::magnetometer_watch(interval_ms).await
     }
 }
 
@@ -299,11 +299,11 @@ impl Barometer {
     /// # Errors
     ///
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
-    pub fn watch(
+    pub async fn watch(
         interval_ms: u32,
     ) -> Result<impl Stream<Item = Result<ScalarData, SensorError>> + Send + 'static, SensorError>
     {
-        sys::barometer_watch(interval_ms)
+        sys::barometer_watch(interval_ms).await
     }
 }
 
@@ -336,10 +336,10 @@ impl AmbientLight {
     /// # Errors
     ///
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
-    pub fn watch(
+    pub async fn watch(
         interval_ms: u32,
     ) -> Result<impl Stream<Item = Result<ScalarData, SensorError>> + Send + 'static, SensorError>
     {
-        sys::ambient_light_watch(interval_ms)
+        sys::ambient_light_watch(interval_ms).await
     }
 }

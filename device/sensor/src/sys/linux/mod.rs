@@ -77,7 +77,11 @@ pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
     Ok(SensorData::new(x, y, z, timestamp_now()))
 }
 
-pub fn accelerometer_watch(
+#[expect(
+    clippy::unused_async,
+    reason = "keeps the sys-impl signature uniform across platforms"
+)]
+pub async fn accelerometer_watch(
     interval_ms: u32,
 ) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
     if !accelerometer_available() {
@@ -100,7 +104,11 @@ pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
     Err(SensorError::NotAvailable)
 }
 
-pub const fn gyroscope_watch(
+#[expect(
+    clippy::unused_async,
+    reason = "keeps the sys-impl signature uniform across platforms"
+)]
+pub async fn gyroscope_watch(
     _interval_ms: u32,
 ) -> Result<stream::Empty<Result<SensorData, SensorError>>, SensorError> {
     Err(SensorError::NotAvailable)
@@ -133,7 +141,11 @@ pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
     Ok(SensorData::new(rad.sin(), rad.cos(), 0.0, timestamp_now()))
 }
 
-pub fn magnetometer_watch(
+#[expect(
+    clippy::unused_async,
+    reason = "keeps the sys-impl signature uniform across platforms"
+)]
+pub async fn magnetometer_watch(
     interval_ms: u32,
 ) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
     if !magnetometer_available() {
@@ -156,7 +168,11 @@ pub async fn barometer_read() -> Result<ScalarData, SensorError> {
     Err(SensorError::NotAvailable)
 }
 
-pub const fn barometer_watch(
+#[expect(
+    clippy::unused_async,
+    reason = "keeps the sys-impl signature uniform across platforms"
+)]
+pub async fn barometer_watch(
     _interval_ms: u32,
 ) -> Result<stream::Empty<Result<ScalarData, SensorError>>, SensorError> {
     Err(SensorError::NotAvailable)
@@ -186,7 +202,11 @@ pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
     Ok(ScalarData::new(level, timestamp_now()))
 }
 
-pub fn ambient_light_watch(
+#[expect(
+    clippy::unused_async,
+    reason = "keeps the sys-impl signature uniform across platforms"
+)]
+pub async fn ambient_light_watch(
     interval_ms: u32,
 ) -> Result<impl futures_core::Stream<Item = Result<ScalarData, SensorError>> + Send, SensorError> {
     if !ambient_light_available() {

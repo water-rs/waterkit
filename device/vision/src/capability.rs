@@ -10,14 +10,20 @@ pub struct VisionCapabilities {
     /// The barcode symbologies this build serves.
     ///
     /// On Apple `native` is `DetectBarcodesRequest.supportedSymbologies`
-    /// exactly; it is empty on platforms without a native detector.
+    /// exactly; on Android it is the `Barcode.FORMAT_*` set ML Kit's barcode
+    /// engine expresses when Google Play services is usable — its module is
+    /// delivered on demand at request time; it is empty on platforms without
+    /// a native detector.
     #[cfg(feature = "barcode")]
     pub barcodes: RealizationSet<enumset::EnumSet<crate::Symbology>>,
     /// Text recognition: the languages each realization serves.
     ///
     /// On Apple `native` is the intersection of Vision's per-level
     /// `supportedRecognitionLanguages`; on Windows it is
-    /// `OcrEngine::AvailableRecognizerLanguages` exactly; it is empty on
+    /// `OcrEngine::AvailableRecognizerLanguages` exactly; on Android it is
+    /// the script identifiers ML Kit's recognizers serve (`und-Latn`,
+    /// `und-Hani`, `und-Deva`, `und-Jpan`, `und-Kore`) when Google Play
+    /// services is usable; it is empty on
     /// platforms without a native recognizer.
     #[cfg(feature = "text")]
     pub text: RealizationSet<Vec<icu_locale_core::LanguageIdentifier>>,
@@ -51,11 +57,16 @@ impl VisionCapabilities {
         all(
             any(
                 not(feature = "barcode"),
-                not(any(target_os = "ios", target_os = "macos"))
+                not(any(target_os = "ios", target_os = "macos", target_os = "android"))
             ),
             any(
                 not(feature = "text"),
-                not(any(target_os = "windows", target_os = "ios", target_os = "macos"))
+                not(any(
+                    target_os = "windows",
+                    target_os = "ios",
+                    target_os = "macos",
+                    target_os = "android"
+                ))
             ),
             any(
                 not(feature = "document"),

@@ -985,7 +985,8 @@ fn android_api_level() -> Result<i32, String> {
         feature = "secret",
         feature = "clipboard",
         feature = "otp",
-        feature = "dialog"
+        feature = "dialog",
+        feature = "vision"
     )),
     expect(
         dead_code,
@@ -1075,6 +1076,19 @@ const RECORDERS: &[Recorder] = &[
     |h| {
         h.runtime
             .block_on(record_android_camera(&mut h.report, &h.files_dir));
+    },
+    #[cfg(feature = "vision")]
+    |h| {
+        // The text still renders through the platform's rasterizer, which
+        // needs the JNIEnv; keeping the call synchronous keeps every case
+        // future Send.
+        let text_still = text_png(h.env, "WATERKIT 137").map_err(|error| error.to_string());
+        let files_dir = h.files_dir.clone();
+        h.runtime.block_on(record_android_vision_requests(
+            &mut h.report,
+            &files_dir,
+            text_still,
+        ));
     },
     #[cfg(feature = "clipboard")]
     |h| h.runtime.block_on(record_android_clipboard(&mut h.report)),
@@ -2890,6 +2904,432 @@ fn record_android_avif_decode(report: &mut TestReport) {
             format!("decode_image failed: {error}"),
         )),
     }
+}
+
+/// The payload the generated QR still carries.
+#[cfg(feature = "vision")]
+const VISION_QR_TEXT: &str = "waterkit vision #137";
+
+/// Exercises the Android vision realization over ML Kit: a generated QR
+/// still, a text still drawn by the device's rasterizer, a request for a
+/// symbology ML Kit cannot express, one live camera frame through the
+/// frame-plane `NV21` path, and the capabilities the device reports.
+#[cfg(feature = "vision")]
+async fn record_android_vision_requests(
+    report: &mut TestReport,
+    files_dir: &std::path::Path,
+    text_still: Result<Vec<u8>, String>,
+) {
+    use std::sync::Arc;
+    use waterkit_content::vision::Vision;
+
+    let (device, queue) = match camera_gpu().await {
+        Ok(gpu) => gpu,
+        Err(error) => {
+            report.push(TestCase::failed("vision.gpu", error));
+            return;
+        }
+    };
+    let vision = Vision::new(Arc::clone(&device), Arc::clone(&queue));
+    // ML Kit is Play services' realization: a device without Play services
+    // has none, and every request must say so instead of answering.
+    if !waterkit_content::vision::CodeScanner::capabilities().available {
+        record_vision_without_play_services(report, &vision).await;
+        return;
+    }
+    match qr_png(VISION_QR_TEXT) {
+        Ok(png) => {
+            let _ = std::fs::write(files_dir.join("vision-qr.png"), &png);
+            record_vision_barcodes(report, &vision, png).await;
+        }
+        Err(error) => report.push(TestCase::failed("vision.barcode.still", error)),
+    }
+    record_vision_text(report, &vision, text_still, files_dir).await;
+    record_vision_frame(report, &vision, &device, &queue).await;
+    record_vision_capabilities(report, &vision);
+}
+
+/// Barcode requests over the generated QR still: one served read, then a
+/// symbology the serving realization cannot express, which must fail at
+/// plan time naming it.
+#[cfg(feature = "vision")]
+async fn record_vision_barcodes(
+    report: &mut TestReport,
+    vision: &waterkit_content::vision::Vision,
+    qr_png: Vec<u8>,
+) {
+    use waterkit_content::vision::{DetectBarcodes, EnumSet, Image, Symbology, VisionError};
+
+    let image = Image::from_encoded(qr_png.into());
+    match vision
+        .perform(&image, &DetectBarcodes::new(EnumSet::only(Symbology::Qr)))
+        .await
+    {
+        Ok(barcodes)
+            if barcodes.len() == 1
+                && barcodes[0].symbology() == Symbology::Qr
+                && barcodes[0].payload().text() == Some(VISION_QR_TEXT) =>
+        {
+            report.push(TestCase::passed_with_message(
+                "vision.barcode.still",
+                format!("{barcodes:?}"),
+            ));
+        }
+        Ok(barcodes) => report.push(TestCase::failed(
+            "vision.barcode.still",
+            format!("expected one QR reading '{VISION_QR_TEXT}': {barcodes:?}"),
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "vision.barcode.still",
+            format!("detect failed: {error}"),
+        )),
+    }
+
+    match vision
+        .perform(
+            &image,
+            &DetectBarcodes::new(EnumSet::only(Symbology::MicroQr)),
+        )
+        .await
+    {
+        Err(VisionError::Unsupported(message)) if message.contains("MicroQr") => {
+            report.push(TestCase::passed_with_message(
+                "vision.barcode.unsupported",
+                message,
+            ));
+        }
+        outcome => report.push(TestCase::failed(
+            "vision.barcode.unsupported",
+            format!("expected Unsupported naming MicroQr: {outcome:?}"),
+        )),
+    }
+}
+
+/// Latin text over `text_still`, which the platform's own rasterizer drew.
+#[cfg(feature = "vision")]
+async fn record_vision_text(
+    report: &mut TestReport,
+    vision: &waterkit_content::vision::Vision,
+    text_still: Result<Vec<u8>, String>,
+    files_dir: &std::path::Path,
+) {
+    use waterkit_content::vision::{Image, RecognizeText};
+
+    let png = match text_still {
+        Ok(png) => png,
+        Err(error) => {
+            report.push(TestCase::failed(
+                "vision.text.still",
+                format!("rendering text still: {error}"),
+            ));
+            return;
+        }
+    };
+    let _ = std::fs::write(files_dir.join("vision-text.png"), &png);
+    let image = Image::from_encoded(png.into());
+    match vision.perform(&image, &RecognizeText::new()).await {
+        Ok(lines) if lines.iter().any(|line| line.text.contains("WATERKIT")) => {
+            let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+            report.push(TestCase::passed_with_message(
+                "vision.text.still",
+                format!("{texts:?}"),
+            ));
+        }
+        Ok(lines) => report.push(TestCase::failed(
+            "vision.text.still",
+            format!("no line reads WATERKIT: {lines:?}"),
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "vision.text.still",
+            format!("recognize failed: {error}"),
+        )),
+    }
+}
+
+/// The camera path: an analysis frame's `android.media.Image` reaches ML
+/// Kit through `InputImage.fromMediaImage`, with no pixel copy. The
+/// emulator's virtual scene may hold nothing, so an empty result still
+/// passes.
+#[cfg(feature = "vision")]
+async fn record_vision_frame(
+    report: &mut TestReport,
+    vision: &waterkit_content::vision::Vision,
+    device: &std::sync::Arc<waterkit_content::camera::wgpu::Device>,
+    queue: &std::sync::Arc<waterkit_content::camera::wgpu::Queue>,
+) {
+    match camera_vision_frame(vision, device, queue).await {
+        Ok((barcodes, lines)) => report.push(TestCase::passed_with_message(
+            "vision.analysis_frame",
+            format!("analysis frame served: barcodes={barcodes} lines={lines}"),
+        )),
+        Err(case) => report.push(case),
+    }
+}
+
+/// What the device serves natively: ML Kit's symbology set and script
+/// recognizers when Play services is present.
+#[cfg(feature = "vision")]
+/// On a device without Play services, barcode and text requests report that
+/// no realization exists and the capabilities list no native realization.
+async fn record_vision_without_play_services(
+    report: &mut TestReport,
+    vision: &waterkit_content::vision::Vision,
+) {
+    use waterkit_content::vision::{
+        DetectBarcodes, EnumSet, Image, RecognizeText, Symbology, VisionError,
+    };
+
+    let png = match qr_png(VISION_QR_TEXT) {
+        Ok(png) => png,
+        Err(error) => {
+            report.push(TestCase::failed("vision.barcode.still", error));
+            return;
+        }
+    };
+    let image = Image::from_encoded(png.into());
+    match vision
+        .perform(&image, &DetectBarcodes::new(EnumSet::only(Symbology::Qr)))
+        .await
+    {
+        Err(VisionError::Unsupported(message)) => report.push(TestCase::passed_with_message(
+            "vision.barcode.still",
+            format!("unsupported without Play services: {message}"),
+        )),
+        outcome => report.push(TestCase::failed(
+            "vision.barcode.still",
+            format!("barcode detection without Play services returned {outcome:?}"),
+        )),
+    }
+    match vision.perform(&image, &RecognizeText::new()).await {
+        Err(VisionError::Unsupported(message)) => report.push(TestCase::passed_with_message(
+            "vision.text.still",
+            format!("unsupported without Play services: {message}"),
+        )),
+        outcome => report.push(TestCase::failed(
+            "vision.text.still",
+            format!("text recognition without Play services returned {outcome:?}"),
+        )),
+    }
+    let capabilities = vision.capabilities();
+    if capabilities.barcodes.native.is_empty() && capabilities.text.native.is_empty() {
+        report.push(TestCase::passed_with_message(
+            "vision.capabilities",
+            "no native realization without Play services",
+        ));
+    } else {
+        report.push(TestCase::failed(
+            "vision.capabilities",
+            format!(
+                "without Play services: native barcodes={} scripts={}",
+                capabilities.barcodes.native.len(),
+                capabilities.text.native.len()
+            ),
+        ));
+    }
+}
+
+fn record_vision_capabilities(report: &mut TestReport, vision: &waterkit_content::vision::Vision) {
+    let capabilities = vision.capabilities();
+    let symbologies = capabilities.barcodes.native.len();
+    let scripts = capabilities.text.native.len();
+    let script_names = capabilities
+        .text
+        .native
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    if symbologies == 13 && scripts == 5 {
+        report.push(TestCase::passed_with_message(
+            "vision.capabilities",
+            format!("barcodes={symbologies} scripts=[{script_names}]"),
+        ));
+    } else {
+        report.push(TestCase::failed(
+            "vision.capabilities",
+            format!("native barcodes={symbologies} (want 13) scripts=[{script_names}] (want 5)"),
+        ));
+    }
+}
+
+/// One live analysis frame served to `vision`: barcode and text requests
+/// together prove the frame's `android.media.Image` reaches ML Kit with no
+/// pixel copy.
+#[cfg(feature = "vision")]
+async fn camera_vision_frame(
+    vision: &waterkit_content::vision::Vision,
+    device: &std::sync::Arc<waterkit_content::camera::wgpu::Device>,
+    queue: &std::sync::Arc<waterkit_content::camera::wgpu::Queue>,
+) -> Result<(usize, usize), TestCase> {
+    use futures::StreamExt;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use waterkit_content::camera::{AnalysisConfig, Camera, CameraConfig};
+    use waterkit_content::vision::{DetectBarcodes, EnumSet, Image, RecognizeText, Symbology};
+
+    const CASE: &str = "vision.analysis_frame";
+    let cameras = Camera::list()
+        .map_err(|error| TestCase::failed(CASE, format!("camera list failed: {error}")))?;
+    let Some(camera) = cameras.into_iter().next() else {
+        return Err(TestCase::skipped(CASE, "no camera on this device"));
+    };
+    let handle = Camera::open(
+        &camera.id,
+        CameraConfig {
+            analysis: Some(AnalysisConfig::default()),
+            ..CameraConfig::default()
+        },
+        Arc::clone(device),
+        Arc::clone(queue),
+    )
+    .await
+    .map_err(|error| TestCase::failed(CASE, format!("open failed: {error}")))?;
+    let mut frames = std::pin::pin!(handle.analysis_frames());
+    let next = tokio::time::timeout(Duration::from_secs(10), frames.next()).await;
+    let frame = next_analysis_frame(CASE, 0, next)?;
+    let image = Image::from(&frame);
+    vision
+        .perform(
+            &image,
+            &(
+                DetectBarcodes::new(EnumSet::only(Symbology::Qr)),
+                RecognizeText::new(),
+            ),
+        )
+        .await
+        .map(|(barcodes, lines)| (barcodes.len(), lines.len()))
+        .map_err(|error| TestCase::failed(CASE, format!("perform failed: {error}")))
+}
+
+/// Draws `payload` as a QR code and encodes it as PNG, so the harness ships
+/// no barcode fixtures.
+#[cfg(feature = "vision")]
+fn qr_png(payload: &str) -> Result<Vec<u8>, String> {
+    const QUIET: usize = 4;
+    const SCALE: usize = 8;
+    let qr = qrcodegen::QrCode::encode_text(payload, qrcodegen::QrCodeEcc::Medium)
+        .map_err(|error| format!("encoding QR: {error}"))?;
+    let side = (usize::try_from(qr.size()).map_err(|error| format!("QR size: {error}"))?
+        + QUIET * 2)
+        * SCALE;
+    let mut rgba = vec![255_u8; side * side * 4];
+    for module_y in 0..qr.size() {
+        for module_x in 0..qr.size() {
+            if !qr.get_module(module_x, module_y) {
+                continue;
+            }
+            let base_x =
+                (usize::try_from(module_x).expect("module coords are nonnegative") + QUIET) * SCALE;
+            let base_y =
+                (usize::try_from(module_y).expect("module coords are nonnegative") + QUIET) * SCALE;
+            for dy in 0..SCALE {
+                for dx in 0..SCALE {
+                    let start = ((base_y + dy) * side + base_x + dx) * 4;
+                    rgba[start..start + 4].copy_from_slice(&[0, 0, 0, 255]);
+                }
+            }
+        }
+    }
+    let dimension = u32::try_from(side).map_err(|error| format!("QR image size: {error}"))?;
+    let image = image::RgbaImage::from_raw(dimension, dimension, rgba)
+        .ok_or_else(|| "QR buffer size mismatch".to_owned())?;
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|error| format!("encoding QR PNG: {error}"))?;
+    Ok(png.into_inner())
+}
+
+/// Renders `text` onto an Android `Bitmap` with the platform's own
+/// rasterizer and returns it as PNG bytes.
+#[cfg(feature = "vision")]
+fn text_png(env: &mut Env<'_>, text: &str) -> jni::errors::Result<Vec<u8>> {
+    use jni::objects::{JByteArray, JValue};
+    use jni::{jni_sig, jni_str};
+
+    let argb = env
+        .get_static_field(
+            jni_str!("android/graphics/Bitmap$Config"),
+            jni_str!("ARGB_8888"),
+            jni_sig!("Landroid/graphics/Bitmap$Config;"),
+        )?
+        .l()?;
+    let bitmap = env
+        .call_static_method(
+            jni_str!("android/graphics/Bitmap"),
+            jni_str!("createBitmap"),
+            jni_sig!("(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;"),
+            &[JValue::Int(640), JValue::Int(120), JValue::Object(&argb)],
+        )?
+        .l()?;
+    let canvas = env.new_object(
+        jni_str!("android/graphics/Canvas"),
+        jni_sig!("(Landroid/graphics/Bitmap;)V"),
+        &[JValue::Object(&bitmap)],
+    )?;
+    env.call_method(
+        &canvas,
+        jni_str!("drawColor"),
+        jni_sig!("(I)V"),
+        &[JValue::Int(-1)],
+    )?;
+    let paint = env.new_object(jni_str!("android/graphics/Paint"), jni_sig!("()V"), &[])?;
+    env.call_method(
+        &paint,
+        jni_str!("setColor"),
+        jni_sig!("(I)V"),
+        &[JValue::Int(-0x0100_0000)],
+    )?;
+    env.call_method(
+        &paint,
+        jni_str!("setTextSize"),
+        jni_sig!("(F)V"),
+        &[JValue::Float(56.0)],
+    )?;
+    env.call_method(
+        &paint,
+        jni_str!("setAntiAlias"),
+        jni_sig!("(Z)V"),
+        &[JValue::Bool(true)],
+    )?;
+    let text = env.new_string(text)?;
+    env.call_method(
+        &canvas,
+        jni_str!("drawText"),
+        jni_sig!("(Ljava/lang/String;FFLandroid/graphics/Paint;)V"),
+        &[
+            JValue::Object(&text),
+            JValue::Float(20.0),
+            JValue::Float(84.0),
+            JValue::Object(&paint),
+        ],
+    )?;
+    let stream = env.new_object(
+        jni_str!("java/io/ByteArrayOutputStream"),
+        jni_sig!("()V"),
+        &[],
+    )?;
+    let format = env
+        .get_static_field(
+            jni_str!("android/graphics/Bitmap$CompressFormat"),
+            jni_str!("PNG"),
+            jni_sig!("Landroid/graphics/Bitmap$CompressFormat;"),
+        )?
+        .l()?;
+    env.call_method(
+        &bitmap,
+        jni_str!("compress"),
+        jni_sig!("(Landroid/graphics/Bitmap$CompressFormat;ILjava/io/OutputStream;)Z"),
+        &[
+            JValue::Object(&format),
+            JValue::Int(100),
+            JValue::Object(&stream),
+        ],
+    )?;
+    let bytes = env
+        .call_method(&stream, jni_str!("toByteArray"), jni_sig!("()[B"), &[])?
+        .l()?;
+    env.convert_byte_array(env.cast_local::<JByteArray>(bytes)?)
 }
 
 /// The Google code scanner and the ML Kit document scanner need Play

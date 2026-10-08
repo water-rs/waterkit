@@ -51,6 +51,9 @@ swift-bridge = { workspace = true, optional = true }
 jni = { workspace = true, optional = true }
 ndk-context = { workspace = true, optional = true }
 waterkit-build = { workspace = true, optional = true }
+# Likely-subtags expansion routes a text request's languages to the script
+# its ML Kit recognizer serves.
+icu_locale = { workspace = true, optional = true }
 # Reading the scanned pages out of the result intent is content-resolver
 # I/O, offloaded from the async executor's thread.
 blocking = { workspace = true, optional = true }
@@ -70,15 +73,25 @@ windows = { workspace = true, optional = true, features = [
 waterkit-build.workspace = true
 
 [features]
-# The `DetectBarcodes` request. The `Barcode`/`Payload`/`Symbology`
-# vocabulary compiles unconditionally for the system scanner.
-barcode = []
-# `RecognizeText`.
-text = ["dep:icu_locale_core", "dep:windows"]
+# The `DetectBarcodes` request: Apple Vision's `DetectBarcodesRequest` on
+# iOS/macOS, ML Kit's barcode engine on Android. The `Barcode`/`Payload`/
+# `Symbology` vocabulary compiles unconditionally for the system scanner.
+barcode = ["dep:jni", "dep:ndk-context", "dep:waterkit-build"]
+# `RecognizeText`: Windows.Media.Ocr on Windows, Apple Vision's
+# `RecognizeTextRequest` on iOS/macOS, ML Kit's script recognizers on
+# Android.
+text = [
+    "dep:icu_locale_core",
+    "dep:icu_locale",
+    "dep:windows",
+    "dep:jni",
+    "dep:ndk-context",
+    "dep:waterkit-build",
+]
 # `RecognizeDocument`: a document's paragraphs, tables, lists and barcodes.
 # A paragraph reports [`TextLine`]s, so the capability builds on `text`.
 document = ["text"]
-# Camera `Frame` images through `waterkit-camera`.
+# Camera `Frame` and `AnalysisFrame` images through `waterkit-camera`.
 camera = ["dep:waterkit-camera"]
 
 # The one-shot system code scanner: the Google code scanner of Google Play
@@ -103,16 +116,54 @@ document-scanner = [
     "dep:blocking",
 ]
 
-# Android helper the packager compiles into the application's classpath.
+# Android helpers the packager compiles into the application's classpath:
+# `feature.<name>` tables join the app only while the cargo feature is on.
+
 [package.metadata.waterui.android.feature.scanner]
-kotlin-sources = ["src/sys/android/ScannerHelper.kt"]
+# `PlayServices.kt` hosts the shared Play services probe; every feature
+# stages it, and the packager deduplicates it by filename.
+kotlin-sources = [
+    "src/sys/android/PlayServices.kt",
+    "src/sys/android/ScannerHelper.kt",
+]
 # The thin client of the Google code scanner; the scanner itself is Google
 # Play services' module, downloaded to the device on first use.
 maven = ["com.google.android.gms:play-services-code-scanner:16.1.0"]
 
+# ML Kit's unbundled barcode client. `MlKitInput.kt` builds the `InputImage`
+# both helpers take; it is deduplicated by filename when both features are
+# enabled. The engine lives in Play services' modules, downloaded on demand.
+[package.metadata.waterui.android.feature.barcode]
+kotlin-sources = [
+    "src/sys/android/MlKitInput.kt",
+    "src/sys/android/PlayServices.kt",
+    "src/sys/android/VisionBarcodeHelper.kt",
+]
+maven = ["com.google.android.gms:play-services-mlkit-barcode-scanning:18.3.1"]
+
+# ML Kit's unbundled script recognizers, same shape: `MlKitInput.kt` is the
+# shared `InputImage` builder, and each recognizer module is delivered by
+# Play services on demand.
+[package.metadata.waterui.android.feature.text]
+kotlin-sources = [
+    "src/sys/android/MlKitInput.kt",
+    "src/sys/android/PlayServices.kt",
+    "src/sys/android/VisionTextHelper.kt",
+]
+maven = [
+    "com.google.android.gms:play-services-mlkit-text-recognition:19.0.1",
+    "com.google.android.gms:play-services-mlkit-text-recognition-chinese:16.0.1",
+    "com.google.android.gms:play-services-mlkit-text-recognition-devanagari:16.0.1",
+    "com.google.android.gms:play-services-mlkit-text-recognition-japanese:16.0.1",
+    "com.google.android.gms:play-services-mlkit-text-recognition-korean:16.0.1",
+]
+
 # Android helper the packager compiles into the application's classpath.
 [package.metadata.waterui.android.feature.document-scanner]
-kotlin-sources = ["src/sys/android/DocumentScannerHelper.kt"]
+kotlin-sources = [
+    "src/sys/android/DocumentScannerHelper.kt",
+    "src/sys/android/PlayServices.kt",
+]
 # The thin client of the ML Kit document scanner; the scanner itself is
 # Google Play services' module, downloaded to the device on first use.
 maven = ["com.google.android.gms:play-services-mlkit-document-scanner:16.0.0"]

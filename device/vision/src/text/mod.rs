@@ -1,10 +1,13 @@
 //! The `text` capability: recognizing printed text in an image.
 //!
-//! [`RecognizeText`] is served natively by `Windows.Media.Ocr` on Windows
-//! and by Apple Vision's `RecognizeTextRequest` on iOS and macOS. The OS
-//! engine's single quality mode serves both [`RecognitionLevel`] values on
-//! Windows; Vision serves its per-level language sets. A requested language
-//! a realization lacks selects the portable realization when the
+//! [`RecognizeText`] is served natively by `Windows.Media.Ocr` on Windows,
+//! by Apple Vision's `RecognizeTextRequest` on iOS and macOS, and by Play
+//! services ML Kit's script recognizers on Android. `Windows.Media.Ocr`'s
+//! single quality mode serves both [`RecognitionLevel`] values; Vision
+//! serves its per-level language sets; ML Kit serves writing systems —
+//! Latin, Chinese, Devanagari, Japanese, Korean — so an Android request's
+//! languages must resolve to one script to be served natively. A requested
+//! language a realization lacks selects the portable realization when the
 //! application carries one.
 
 mod sys;
@@ -126,7 +129,12 @@ impl Sealed for RecognizeText {
 #[doc(hidden)]
 #[derive(Debug)]
 #[cfg_attr(
-    not(any(target_os = "windows", target_os = "ios", target_os = "macos")),
+    not(any(
+        target_os = "windows",
+        target_os = "ios",
+        target_os = "macos",
+        target_os = "android"
+    )),
     expect(
         dead_code,
         reason = "only a native realization reads the languages and level, and this platform has none yet"

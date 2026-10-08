@@ -13,29 +13,9 @@ use objc2_avf_audio::{
     AVSpeechUtterance, AVSpeechUtteranceDefaultSpeechRate,
 };
 use objc2_foundation::{NSObjectProtocol, NSString};
+use waterkit_core::apple::on_main;
 
 use crate::{SpeechError, TtsConfig, Voice};
-
-/// Runs `work` on the main queue: inline when the caller is already on the
-/// main thread, otherwise by `exec_async` with the result carried back
-/// through a oneshot. Never blocks the caller.
-async fn on_main<R, F>(work: F) -> R
-where
-    R: Send + 'static,
-    F: FnOnce(MainThreadMarker) -> R + Send + 'static,
-{
-    if let Some(mtm) = MainThreadMarker::new() {
-        work(mtm)
-    } else {
-        let (tx, rx) = oneshot::channel();
-        DispatchQueue::main().exec_async(move || {
-            let mtm = MainThreadMarker::new().expect("exec_async runs on the main queue");
-            drop(tx.send(work(mtm)));
-        });
-        rx.await
-            .expect("the exec_async worker sends before it exits")
-    }
-}
 
 /// ivars of [`SpeechUtteranceDelegate`].
 pub struct SpeechUtteranceDelegateIvars {
@@ -45,6 +25,14 @@ pub struct SpeechUtteranceDelegateIvars {
     /// Strong self-retain: `AVSpeechSynthesizer.delegate` is a weak property,
     /// so the delegate keeps itself alive until a terminal callback arrives.
     keep_alive: Mutex<Option<Retained<SpeechUtteranceDelegate>>>,
+    /// Keeps the synthesizer alive while `speakUtterance` is in flight: the
+    /// delegate is its completion. `MainThreadBound` keeps the `AnyThread`
+    /// class `Send + Sync`.
+    #[expect(
+        dead_code,
+        reason = "held only so the synthesizer outlives the asynchronous speakUtterance call"
+    )]
+    synthesizer: MainThreadBound<Retained<AVSpeechSynthesizer>>,
 }
 
 define_class!(
@@ -76,10 +64,15 @@ define_class!(
 );
 
 impl SpeechUtteranceDelegate {
-    fn new(sender: oneshot::Sender<Result<(), SpeechError>>) -> Retained<Self> {
+    fn new(
+        sender: oneshot::Sender<Result<(), SpeechError>>,
+        synthesizer: Retained<AVSpeechSynthesizer>,
+        mtm: MainThreadMarker,
+    ) -> Retained<Self> {
         let this = Self::alloc().set_ivars(SpeechUtteranceDelegateIvars {
             sender: Mutex::new(Some(sender)),
             keep_alive: Mutex::new(None),
+            synthesizer: MainThreadBound::new(synthesizer, mtm),
         });
         // SAFETY: `this` is a freshly allocated `SpeechUtteranceDelegate` and
         // `NSObject`'s `init` has no additional requirements.
@@ -173,7 +166,7 @@ impl TtsInner {
             }
 
             let (sender, receiver) = oneshot::channel();
-            let delegate = SpeechUtteranceDelegate::new(sender);
+            let delegate = SpeechUtteranceDelegate::new(sender, synthesizer.clone(), mtm);
             // SAFETY: `synthesizer` is live; `delegate` conforms to the
             // protocol and stays alive through its `keep_alive` ivar (the
             // property is weak).
@@ -335,9 +328,13 @@ mod recognition {
                 let (result_tx, result_rx) = async_channel::bounded(64);
                 let engine_in_block = engine.clone();
                 let input_in_block = input.clone();
+                // The block is the task's completion: it owns the recognizer
+                // so the object lives until the framework answers.
+                let recognizer_in_block = recognizer.clone();
                 let result_block = RcBlock::new(
                     move |result: *mut objc2_speech::SFSpeechRecognitionResult,
                           error: *mut NSError| {
+                        let _keep_recognizer_alive = &recognizer_in_block;
                         let mut is_final = false;
                         if !result.is_null() {
                             // SAFETY: `result` is non-null and valid for the

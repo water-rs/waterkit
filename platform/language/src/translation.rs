@@ -242,10 +242,10 @@ pub mod android {
 
     /// A stream of Android translation capability changes.
     ///
-    /// Dropping it removes the system listener behind the `NativeChannel` it
-    /// carries.
+    /// Dropping it removes the system listener behind the registration
+    /// handle it carries.
     pub struct CapabilityUpdates {
-        channel: waterkit_build::NativeChannel<String>,
+        registration: jni::objects::Global<jni::objects::JObject<'static>>,
         updates: Pin<Box<dyn Stream<Item = Result<CapabilityUpdate, TranslationError>> + Send>>,
     }
 
@@ -257,11 +257,11 @@ pub mod android {
 
     impl CapabilityUpdates {
         pub(crate) fn new(
-            channel: waterkit_build::NativeChannel<String>,
+            registration: jni::objects::Global<jni::objects::JObject<'static>>,
             updates: impl Stream<Item = Result<CapabilityUpdate, TranslationError>> + Send + 'static,
         ) -> Self {
             Self {
-                channel,
+                registration,
                 updates: Box::pin(updates),
             }
         }
@@ -278,7 +278,7 @@ pub mod android {
 
     impl Drop for CapabilityUpdates {
         fn drop(&mut self) {
-            sys::android::remove_capability_listener(self.channel.as_obj());
+            sys::android::remove_capability_listener(self.registration.as_obj());
         }
     }
 

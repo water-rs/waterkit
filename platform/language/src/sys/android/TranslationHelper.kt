@@ -21,19 +21,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 import waterkit.build.NativeCallback
 import waterkit.build.NativeChannel
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.Consumer
 
 object TranslationHelper {
     private const val STATE_REMOVED_AND_AVAILABLE = 1000
-    private const val TRANSLATOR_CREATION_TIMEOUT_SECONDS = 60L
 
-    private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
-    private val listeners = ConcurrentHashMap<NativeChannel, Consumer<TranslationCapability>>()
+    internal val executor: ExecutorService = Executors.newSingleThreadExecutor()
 
     @JvmStatic
     fun isApiSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
@@ -104,49 +99,22 @@ object TranslationHelper {
                     "system translation service is unavailable for $source to $target")
             return
         }
-        val delivered = AtomicBoolean(false)
-        // Match frameworks/base/core/java/android/view/translation/TranslationManager.java
-        // SYNC_CALLS_TIMEOUT_MS, which bounds synchronous translator creation.
-        val timeout = executor.schedule(
-            {
-                if (delivered.compareAndSet(false, true)) {
-                    callback.fail(
-                    "the system translation service did not create a translator for $source to $target within 60 s"
-                    )
-                }
-            },
-            TRANSLATOR_CREATION_TIMEOUT_SECONDS,
-            TimeUnit.SECONDS
-        )
         try {
             val translationContext = TranslationContext.Builder(
                 TranslationSpec(ULocale.forLanguageTag(source), TranslationSpec.DATA_FORMAT_TEXT),
                 TranslationSpec(ULocale.forLanguageTag(target), TranslationSpec.DATA_FORMAT_TEXT)
             ).build()
             manager.createOnDeviceTranslator(translationContext, executor) { translator ->
-                if (delivered.compareAndSet(false, true)) {
-                    timeout.cancel(false)
-                    if (translator == null) {
-                        callback.fail(
-                    "system translation service could not create a translator for $source to $target"
-                        )
-                    } else {
-                        callback.complete(translator)
-                    }
+                if (translator == null) {
+                    callback.fail(
+                        "system translation service could not create a translator for $source to $target"
+                    )
                 } else {
-                    try {
-                        translator?.destroy()
-                    } catch (exception: Exception) {
-                        Log.e("TranslationHelper", "Failed to destroy late translator", exception)
-                    }
+                    callback.complete(translator)
                 }
             }
         } catch (exception: Exception) {
-            if (delivered.compareAndSet(false, true)) {
-                timeout.cancel(false)
-                callback.fail(
-                    describe(exception))
-            }
+            callback.fail(describe(exception))
         }
     }
 
@@ -240,71 +208,23 @@ object TranslationHelper {
         return ok(JSONObject())
     }
 
+    /**
+     * One capability-update registration, owned by the Rust handle as a global
+     * reference; [CapabilityUpdates.close] removes the platform listener and
+     * ends the stream. Returns null when the device has no system translation
+     * service (below API 31, or no `TranslationManager`); throws when
+     * registration itself fails.
+     */
     @JvmStatic
-    fun registerCapabilityUpdates(context: Context, channel: NativeChannel): String {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            return error("unavailable", "Android API 31 is required")
+    fun registerCapabilityUpdates(context: Context, channel: NativeChannel): CapabilityUpdates? {
+        if (!isApiSupported()) {
+            return null
         }
-        return try {
-            registerCapabilityUpdatesApi31(context, channel)
-        } catch (exception: Exception) {
-            error("platform", describe(exception))
-        }
+        val manager = context.getSystemService(TranslationManager::class.java) ?: return null
+        return CapabilityUpdates(manager, channel).also { it.start() }
     }
 
-    @RequiresApi(Build.VERSION_CODES.S)
-    private fun registerCapabilityUpdatesApi31(context: Context, channel: NativeChannel): String {
-        val manager = context.getSystemService(TranslationManager::class.java)
-            ?: return error("unavailable", "system translation service is unavailable")
-        val listener = Consumer<TranslationCapability> { capability ->
-            try {
-                val status = statusForState(capability.state)
-                val update = JSONObject()
-                    .put("source", capability.sourceSpec.locale.toLanguageTag())
-                    .put("target", capability.targetSpec.locale.toLanguageTag())
-                    .put("status", status ?: JSONObject.NULL)
-                channel.send( ok(update))
-            } catch (exception: Exception) {
-                channel.send(
-                    error("platform", describe(exception))
-                )
-            }
-        }
-        listeners[channel] = listener
-        try {
-            manager.addOnDeviceTranslationCapabilityUpdateListener(executor, listener)
-        } catch (exception: Exception) {
-            listeners.remove(channel, listener)
-            throw exception
-        }
-        return ok(JSONObject())
-    }
-
-    @JvmStatic
-    fun removeCapabilityUpdates(context: Context, channel: NativeChannel): String {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            listeners.remove(channel)
-            return error("unavailable", "Android API 31 is required")
-        }
-        return try {
-            removeCapabilityUpdatesApi31(context, channel)
-        } catch (exception: Exception) {
-            error("platform", describe(exception))
-        }
-    }
-
-    @RequiresApi(Build.VERSION_CODES.S)
-    private fun removeCapabilityUpdatesApi31(context: Context, channel: NativeChannel): String {
-        val listener = listeners.remove(channel)
-            ?: return ok(JSONObject())
-        val manager = context.getSystemService(TranslationManager::class.java)
-            ?: return error("unavailable", "system translation service is unavailable")
-        manager.removeOnDeviceTranslationCapabilityUpdateListener(listener)
-        channel.close()
-        return ok(JSONObject())
-    }
-
-    private fun statusForState(state: Int): String? = when (state) {
+    internal fun statusForState(state: Int): String? = when (state) {
         TranslationCapability.STATE_ON_DEVICE -> "installed"
         TranslationCapability.STATE_AVAILABLE_TO_DOWNLOAD -> "needs_download"
         TranslationCapability.STATE_DOWNLOADING -> "downloading"
@@ -314,14 +234,54 @@ object TranslationHelper {
         else -> throw IllegalArgumentException("unknown translation capability state: $state")
     }
 
-    private fun describe(exception: Exception) =
+    internal fun describe(exception: Exception) =
         exception.message ?: exception.javaClass.name
 
-    private fun ok(value: Any): String = JSONObject().put("ok", value).toString()
+    internal fun ok(value: Any): String = JSONObject().put("ok", value).toString()
 
-    private fun error(kind: String, message: String): String {
+    internal fun error(kind: String, message: String): String {
         return JSONObject()
             .put("error", JSONObject().put("kind", kind).put("message", message))
             .toString()
+    }
+}
+
+/**
+ * One capability-update registration. Lives on the Rust
+ * `CapabilityUpdates` handle as a global reference; [close] removes the
+ * platform listener and ends the [channel] stream.
+ */
+@RequiresApi(Build.VERSION_CODES.S)
+class CapabilityUpdates internal constructor(
+    private val manager: TranslationManager,
+    private val channel: NativeChannel,
+) {
+    private val listener = Consumer<TranslationCapability> { capability ->
+        try {
+            val status = TranslationHelper.statusForState(capability.state)
+            val update = JSONObject()
+                .put("source", capability.sourceSpec.locale.toLanguageTag())
+                .put("target", capability.targetSpec.locale.toLanguageTag())
+                .put("status", status ?: JSONObject.NULL)
+            channel.send(TranslationHelper.ok(update))
+        } catch (exception: Exception) {
+            channel.send(
+                TranslationHelper.error("platform", TranslationHelper.describe(exception))
+            )
+        }
+    }
+
+    /** Installs the platform listener. Throws when registration fails. */
+    internal fun start() {
+        manager.addOnDeviceTranslationCapabilityUpdateListener(
+            TranslationHelper.executor,
+            listener,
+        )
+    }
+
+    /** Removes the listener and ends the stream. Called again is a no-op. */
+    fun close() {
+        manager.removeOnDeviceTranslationCapabilityUpdateListener(listener)
+        channel.close()
     }
 }

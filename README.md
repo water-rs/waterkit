@@ -25,6 +25,7 @@ Waterkit is organized into focused, independent crates. You can use the main `wa
 | **[Location](location)** | GPS and location services (CoreLocation, Android location APIs, etc.). |
 | **[NFC](nfc)** | NFC read/write and tag interaction workflows. |
 | **[Notification](notification)** | Local system notifications. |
+| **[OTP](otp)** | One-time-code retrieval from addressed SMS and user-consented SMS. |
 | **[Permission](permission)** | Unified API for requesting system permissions (Camera, Mic, Location, etc.). |
 | **[Regional](regional)** | Locale, preferred languages, region, and timezone context helpers. |
 | **[Passkey](passkey)** | Native passkey registration/authentication ceremonies with ergonomic WebAuthn helpers. |
@@ -36,6 +37,7 @@ Waterkit is organized into focused, independent crates. You can use the main `wa
 | **[System](system)** | System information, connectivity status, and thermal info. |
 | **[Video](video)** | High-level video playback and processing. |
 | **[Vision](vision)** | Hardware-accelerated on-device vision requests over camera frames and still images. |
+| **[Wallet](wallet)** | Add server-signed passes to Google Wallet / Apple Wallet. |
 
 ## Advanced Modern Capabilities
 

@@ -1,20 +1,24 @@
-//! Platform realization dispatch.
-//!
-//! Every platform module defines the same surface: `capabilities()` plus a
-//! `plan_*` function and plan type per request feature.
+//! Platform implementations of vision capabilities.
 
-#[cfg(all(target_os = "android", any(feature = "barcode", feature = "text")))]
-mod android;
-#[cfg(any(
-    not(target_os = "android"),
-    not(any(feature = "barcode", feature = "text"))
+#[cfg(all(
+    target_os = "android",
+    any(feature = "scanner", feature = "barcode", feature = "text")
+))]
+pub mod android;
+#[cfg(all(feature = "scanner", target_os = "ios"))]
+mod apple;
+#[cfg(all(
+    feature = "scanner",
+    not(any(target_os = "android", target_os = "ios"))
 ))]
 mod unsupported;
 
-#[cfg(all(target_os = "android", any(feature = "barcode", feature = "text")))]
-pub use android::*;
-#[cfg(any(
-    not(target_os = "android"),
-    not(any(feature = "barcode", feature = "text"))
+#[cfg(all(feature = "scanner", target_os = "android"))]
+pub use android::{scan, scanner_available, scanner_symbologies};
+#[cfg(all(feature = "scanner", target_os = "ios"))]
+pub use apple::{scan, scanner_available, scanner_symbologies};
+#[cfg(all(
+    feature = "scanner",
+    not(any(target_os = "android", target_os = "ios"))
 ))]
-pub use unsupported::*;
+pub use unsupported::{scan, scanner_available, scanner_symbologies};

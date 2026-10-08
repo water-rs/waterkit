@@ -1,36 +1,41 @@
 //! Zero-copy frames from the camera's GPU-sampled `AHardwareBuffer`s.
 //!
 //! Each preview image's buffer is handed to `wgpu-external-frame`'s importer
-//! with a lease on the image. The importer either aliases the buffer or, for a
-//! driver-private (external) YCbCr format, converts it into two plane textures
-//! on the GPU; either way it releases the lease, closing the image and
-//! returning the buffer to the `ImageReader`, as soon as the GPU no longer
-//! reads it. No pixel is read on the CPU.
+//! with a lease on the captured frame. The importer either aliases the buffer
+//! or, for a driver-private (external) YCbCr format, converts it into two
+//! plane textures on the GPU; either way it releases the lease, closing the
+//! image and returning its slot to the `ImageReader`, as soon as the GPU no
+//! longer reads it. No pixel is read on the CPU.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use jni::objects::{Global, JObject};
+use ndk::data_space::{DataSpace, DataSpaceRange, DataSpaceStandard, DataSpaceTransfer};
+use wgpu_external_frame::YcbcrEncoding;
 use wgpu_external_frame::ahardware_buffer::{
-    CONVERSION_DEVICE_EXTENSIONS, DEVICE_EXTENSIONS, HardwareBuffer, HardwareBufferFrame,
-    HardwareBufferImportError, HardwareBufferImporter, HardwareBufferLease, ImportedHardwareBuffer,
+    DEVICE_EXTENSIONS, HardwareBuffer, HardwareBufferFrame, HardwareBufferImporter,
+    HardwareBufferLease, ImportedHardwareBuffer,
 };
 
 use super::{AndroidBridge, SensorMounting};
-use crate::CameraError;
+use crate::color::from_ycbcr_encoding;
 use crate::frame::{Frame, FramePlanes, orientation_from_camera2};
+use crate::{
+    CameraError, ColorPrimaries, ColorRange, DynamicRangeProfile, MatrixCoefficients,
+    TransferFunction, VideoColorInfo,
+};
 
 /// Fails unless `device` was opened with the extensions every
 /// `AHardwareBuffer` import needs, which `wgpu` never enables on its own, as
-/// the importer itself checks.
+/// the importer itself checks, and with `TEXTURE_FORMAT_NV12`.
 ///
-/// Whether the camera's buffers also need the conversion, and with it the
-/// [`CONVERSION_DEVICE_EXTENSIONS`], is not knowable here: the reader's
-/// `PRIVATE` format is the camera HAL's choice, and only the driver's reading
-/// of the first buffer says whether it maps to a Vulkan format. A device
-/// without those extensions is therefore accepted, with a warning, and a
-/// buffer that needs the conversion ends the stream with the importer's error
-/// naming the missing extension.
+/// Whether the driver aliases the camera's buffers or converts them from an
+/// external format shows only on the first buffer, since the reader's
+/// `PRIVATE` format is the camera HAL's choice; the conversion needs nothing
+/// of the device beyond what [`DeviceRequirements`] enables for every import.
+///
+/// [`DeviceRequirements`]: wgpu_external_frame::ahardware_buffer::DeviceRequirements
 pub fn check_device(device: &wgpu::Device) -> Result<(), CameraError> {
     // SAFETY: the guard names the device's real backend or yields `None`, and
     // is only read for its enabled extensions.
@@ -50,15 +55,6 @@ pub fn check_device(device: &wgpu::Device) -> Result<(), CameraError> {
         ));
     }
     let enabled = hal_device.enabled_device_extensions();
-    if let Some(missing) = CONVERSION_DEVICE_EXTENSIONS
-        .into_iter()
-        .find(|extension| !enabled.contains(extension))
-    {
-        tracing::warn!(
-            "the wgpu device does not enable {missing:?}; camera buffers the driver describes \
-             only through an external format cannot be imported on it"
-        );
-    }
     DEVICE_EXTENSIONS
         .into_iter()
         .find(|extension| !enabled.contains(extension))
@@ -71,50 +67,38 @@ pub fn check_device(device: &wgpu::Device) -> Result<(), CameraError> {
         })
 }
 
-/// A preview image the camera handed out.
-///
-/// The handle is shared between the frame's imported planes and a consumer
-/// that reads the `Image` itself, such as a native vision realization fed
-/// through `InputImage.fromMediaImage`. The last handle's drop closes the
-/// image and returns its buffer to the `ImageReader`.
+/// A preview frame the camera handed out; closing it returns the image to
+/// the `ImageReader` and frees one of the reader's in-flight slots, which
+/// re-arms acquisition on the camera thread. Dropping the lease closes it
+/// too, as the importer requires of an abandoned import.
 #[derive(Debug)]
-pub struct MediaImage {
+pub struct FrameLease {
     bridge: Arc<AndroidBridge>,
-    image: Global<JObject<'static>>,
+    frame: Option<Global<JObject<'static>>>,
 }
 
-impl MediaImage {
-    /// Shares `image` under a handle whose last drop closes it through the
-    /// app's Kotlin bridge. Only `sys::android` builds these, on the
-    /// frame-producing thread.
-    pub(super) const fn new(bridge: Arc<AndroidBridge>, image: Global<JObject<'static>>) -> Self {
-        Self { bridge, image }
-    }
-
-    /// The `android.media.Image`, still open while any `MediaImage` or the
-    /// importer's lease on it lives.
-    #[must_use]
-    pub const fn image(&self) -> &Global<JObject<'static>> {
-        &self.image
+impl FrameLease {
+    pub const fn new(bridge: Arc<AndroidBridge>, frame: Global<JObject<'static>>) -> Self {
+        Self {
+            bridge,
+            frame: Some(frame),
+        }
     }
 }
 
-impl Drop for MediaImage {
-    fn drop(&mut self) {
-        self.bridge.close_image(&self.image);
-    }
-}
-
-/// The importer's share of a [`MediaImage`]. Releasing it drops one handle;
-/// the image closes only once every handle is gone.
-#[derive(Debug)]
-struct MediaImageLease(Arc<MediaImage>);
-
-impl HardwareBufferLease for MediaImageLease {
+impl HardwareBufferLease for FrameLease {
     fn presented(&mut self) {}
 
     fn release(self: Box<Self>) {
-        drop(self.0); // hand this share of the image back
+        // Dropping closes the frame.
+    }
+}
+
+impl Drop for FrameLease {
+    fn drop(&mut self) {
+        if let Some(frame) = self.frame.take() {
+            self.bridge.release_frame(&frame);
+        }
     }
 }
 
@@ -122,27 +106,29 @@ impl HardwareBufferLease for MediaImageLease {
 #[derive(Debug)]
 pub struct RawFrame {
     frame: HardwareBufferFrame,
-    /// The `Image` behind `frame`, kept open for the built `Frame`.
-    media: Arc<MediaImage>,
     /// Display rotation in degrees when the frame arrived.
     display_rotation: u32,
     timestamp: Duration,
+    data_space: i32,
+    dynamic_range_profile: DynamicRangeProfile,
 }
 
 impl RawFrame {
-    /// Takes a reference on `buffer`, leased from the image `media` closes.
+    /// Takes a reference on `buffer`, leased from the frame `lease` closes.
     pub fn new(
         buffer: &HardwareBuffer,
-        media: Arc<MediaImage>,
+        lease: FrameLease,
         display_rotation: u32,
+        data_space: i32,
+        dynamic_range_profile: DynamicRangeProfile,
         timestamp: Duration,
     ) -> Self {
         Self {
-            frame: HardwareBufferFrame::new(buffer, None)
-                .with_lease(Box::new(MediaImageLease(Arc::clone(&media)))),
-            media,
+            frame: HardwareBufferFrame::new(buffer, None).with_lease(Box::new(lease)),
             display_rotation,
             timestamp,
+            data_space,
+            dynamic_range_profile,
         }
     }
 
@@ -150,25 +136,32 @@ impl RawFrame {
     ///
     /// # Errors
     ///
-    /// Returns the importer's error when the device cannot import the
-    /// buffer, such as an external-format buffer on a device opened without
-    /// the [`CONVERSION_DEVICE_EXTENSIONS`] its conversion needs.
+    /// Returns the importer's error when the buffer cannot be imported, such
+    /// as an external format other than 8-bit 4:2:0 YCbCr, or a driver that
+    /// cannot allocate the conversion's descriptor set, and a color-description
+    /// error when the buffer's color description is unsupported.
     pub fn import(
         self,
         importer: &mut HardwareBufferImporter,
         mounting: SensorMounting,
-    ) -> Result<Frame, HardwareBufferImportError> {
-        let buffer = importer.import(self.frame)?;
-        let (planes, size) = match buffer {
+    ) -> Result<Frame, CameraError> {
+        let data_space = self.data_space;
+        let dynamic_range_profile = self.dynamic_range_profile;
+        let display_rotation = self.display_rotation;
+        let timestamp = self.timestamp;
+        let buffer = importer
+            .import(self.frame)
+            .map_err(|error| CameraError::FrameImport(Arc::new(error)))?;
+        let (planes, size, ycbcr) = match buffer {
             ImportedHardwareBuffer::Ycbcr420(ycbcr) => {
                 let size = ycbcr.luma.texture().size();
                 (
                     FramePlanes::YCbCr420 {
                         luma: ycbcr.luma,
                         chroma: ycbcr.chroma,
-                        encoding: ycbcr.encoding,
                     },
                     size,
+                    Some(ycbcr.encoding),
                 )
             }
             ImportedHardwareBuffer::Rgba(texture) => {
@@ -176,20 +169,326 @@ impl RawFrame {
                 (
                     FramePlanes::Rgb(texture.create_view(&wgpu::TextureViewDescriptor::default())),
                     size,
+                    None,
                 )
             }
         };
+        let color = frame_color(data_space, dynamic_range_profile, ycbcr)?;
         Ok(Frame::new(
             planes,
+            color,
             size.width,
             size.height,
             orientation_from_camera2(
                 mounting.sensor_orientation,
                 mounting.lens_faces_back,
-                self.display_rotation,
+                display_rotation,
             ),
-            self.timestamp,
-            self.media,
+            timestamp,
         ))
+    }
+}
+
+/// Dataspace components take precedence when specified; unspecified
+/// components use the dynamic-range profile captured with this image. Below
+/// API 33, the Kotlin bridge reports `DATASPACE_UNKNOWN` (zero), so each
+/// unspecified data-space component uses that profile's default.
+fn frame_color(
+    data_space: i32,
+    profile: DynamicRangeProfile,
+    ycbcr: Option<YcbcrEncoding>,
+) -> Result<VideoColorInfo, CameraError> {
+    let data_space = DataSpace::from(data_space);
+    let (default_primaries, default_transfer, profile_matrix, dolby_vision) = match profile {
+        DynamicRangeProfile::Sdr => (
+            ColorPrimaries::Bt709,
+            TransferFunction::Sdr,
+            MatrixCoefficients::Bt709,
+            false,
+        ),
+        DynamicRangeProfile::Hlg10 => (
+            ColorPrimaries::Bt2020,
+            TransferFunction::Hlg,
+            MatrixCoefficients::Bt2020NonConstantLuminance,
+            false,
+        ),
+        DynamicRangeProfile::Hdr10 => (
+            ColorPrimaries::Bt2020,
+            TransferFunction::Pq,
+            MatrixCoefficients::Bt2020NonConstantLuminance,
+            false,
+        ),
+        DynamicRangeProfile::DolbyVision => (
+            ColorPrimaries::Bt2020,
+            TransferFunction::Pq,
+            MatrixCoefficients::Bt2020NonConstantLuminance,
+            true,
+        ),
+    };
+    let standard = data_space.standard();
+    let primaries = match standard {
+        DataSpaceStandard::Bt709 => ColorPrimaries::Bt709,
+        DataSpaceStandard::Bt601_625
+        | DataSpaceStandard::Bt601_625Unadjusted
+        | DataSpaceStandard::Bt601_525
+        | DataSpaceStandard::Bt601_525Unadjusted => ColorPrimaries::Bt601,
+        DataSpaceStandard::Bt2020 | DataSpaceStandard::Bt2020ConstantLuminance => {
+            ColorPrimaries::Bt2020
+        }
+        DataSpaceStandard::DciP3 => ColorPrimaries::DisplayP3,
+        DataSpaceStandard::Unspecified => default_primaries,
+        _ => return Err(unsupported_data_space("standard", data_space, profile)),
+    };
+    let transfer = match data_space.transfer() {
+        DataSpaceTransfer::Smpte170M
+        | DataSpaceTransfer::Srgb
+        | DataSpaceTransfer::Gamma2_2
+        | DataSpaceTransfer::Gamma2_6
+        | DataSpaceTransfer::Gamma2_8 => TransferFunction::Sdr,
+        DataSpaceTransfer::St2084 => TransferFunction::Pq,
+        DataSpaceTransfer::HLG => TransferFunction::Hlg,
+        DataSpaceTransfer::Unspecified => default_transfer,
+        _ => return Err(unsupported_data_space("transfer", data_space, profile)),
+    };
+    let (matrix, range) = if let Some(ycbcr) = ycbcr {
+        from_ycbcr_encoding(ycbcr)
+    } else {
+        let matrix = match standard {
+            DataSpaceStandard::Bt601_625
+            | DataSpaceStandard::Bt601_625Unadjusted
+            | DataSpaceStandard::Bt601_525
+            | DataSpaceStandard::Bt601_525Unadjusted => MatrixCoefficients::Bt601,
+            DataSpaceStandard::Bt709 | DataSpaceStandard::DciP3 => MatrixCoefficients::Bt709,
+            DataSpaceStandard::Bt2020 => MatrixCoefficients::Bt2020NonConstantLuminance,
+            DataSpaceStandard::Bt2020ConstantLuminance => {
+                MatrixCoefficients::Bt2020ConstantLuminance
+            }
+            DataSpaceStandard::Unspecified => profile_matrix,
+            _ => return Err(unsupported_data_space("standard", data_space, profile)),
+        };
+        let range = match data_space.range() {
+            DataSpaceRange::Full | DataSpaceRange::Unspecified => ColorRange::Full,
+            DataSpaceRange::Limited => ColorRange::Limited,
+            _ => return Err(unsupported_data_space("range", data_space, profile)),
+        };
+        (matrix, range)
+    };
+    Ok(VideoColorInfo {
+        matrix,
+        primaries,
+        transfer,
+        range,
+        content_light_level: None,
+        dolby_vision,
+    })
+}
+
+fn unsupported_data_space(
+    field: &str,
+    data_space: DataSpace,
+    profile: DynamicRangeProfile,
+) -> CameraError {
+    CameraError::UnsupportedColor(format!(
+        "unsupported data space {field} in {data_space:?} for dynamic-range profile {profile:?}"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use ndk::data_space::{DataSpace, DataSpaceRange, DataSpaceStandard, DataSpaceTransfer};
+
+    use super::frame_color;
+    use crate::{
+        ColorPrimaries, ColorRange, DynamicRangeProfile, MatrixCoefficients, TransferFunction,
+        VideoColorInfo,
+    };
+
+    fn data_space(
+        standard: DataSpaceStandard,
+        transfer: DataSpaceTransfer,
+        range: DataSpaceRange,
+    ) -> i32 {
+        i32::from(DataSpace::from_parts(standard, transfer, range))
+    }
+
+    #[test]
+    fn specified_dataspace_components_override_profile_defaults() {
+        let color = frame_color(
+            data_space(
+                DataSpaceStandard::DciP3,
+                DataSpaceTransfer::Srgb,
+                DataSpaceRange::Full,
+            ),
+            DynamicRangeProfile::Hdr10,
+            None,
+        )
+        .expect("supported dataspace");
+        assert_eq!(
+            color,
+            VideoColorInfo {
+                matrix: MatrixCoefficients::Bt709,
+                primaries: ColorPrimaries::DisplayP3,
+                transfer: TransferFunction::Sdr,
+                range: ColorRange::Full,
+                content_light_level: None,
+                dolby_vision: false,
+            }
+        );
+    }
+
+    #[test]
+    fn unspecified_dataspace_components_use_profile_defaults() {
+        for (profile, primaries, transfer, matrix, dolby_vision) in [
+            (
+                DynamicRangeProfile::Sdr,
+                ColorPrimaries::Bt709,
+                TransferFunction::Sdr,
+                MatrixCoefficients::Bt709,
+                false,
+            ),
+            (
+                DynamicRangeProfile::Hlg10,
+                ColorPrimaries::Bt2020,
+                TransferFunction::Hlg,
+                MatrixCoefficients::Bt2020NonConstantLuminance,
+                false,
+            ),
+            (
+                DynamicRangeProfile::Hdr10,
+                ColorPrimaries::Bt2020,
+                TransferFunction::Pq,
+                MatrixCoefficients::Bt2020NonConstantLuminance,
+                false,
+            ),
+            (
+                DynamicRangeProfile::DolbyVision,
+                ColorPrimaries::Bt2020,
+                TransferFunction::Pq,
+                MatrixCoefficients::Bt2020NonConstantLuminance,
+                true,
+            ),
+        ] {
+            let color = frame_color(
+                data_space(
+                    DataSpaceStandard::Unspecified,
+                    DataSpaceTransfer::Unspecified,
+                    DataSpaceRange::Unspecified,
+                ),
+                profile,
+                None,
+            )
+            .expect("unspecified components use the active profile");
+            assert_eq!(
+                color,
+                VideoColorInfo {
+                    matrix,
+                    primaries,
+                    transfer,
+                    range: ColorRange::Full,
+                    content_light_level: None,
+                    dolby_vision,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn imported_ycbcr_encoding_sets_matrix_and_range() {
+        let encoding = wgpu_external_frame::YcbcrEncoding {
+            matrix: wgpu_external_frame::YcbcrMatrix::Bt2020,
+            range: wgpu_external_frame::YcbcrRange::Video,
+        };
+        let color = frame_color(
+            data_space(
+                DataSpaceStandard::Bt709,
+                DataSpaceTransfer::Smpte170M,
+                DataSpaceRange::Full,
+            ),
+            DynamicRangeProfile::Sdr,
+            Some(encoding),
+        )
+        .expect("supported YCbCr color");
+        assert_eq!(color.matrix, MatrixCoefficients::Bt2020NonConstantLuminance);
+        assert_eq!(color.range, ColorRange::Limited);
+        assert_eq!(color.primaries, ColorPrimaries::Bt709);
+        assert_eq!(color.transfer, TransferFunction::Sdr);
+    }
+
+    #[test]
+    fn rgba_dataspace_maps_primaries_transfer_matrix_and_range() {
+        for (standard, transfer, range, primaries, function, matrix, color_range) in [
+            (
+                DataSpaceStandard::Bt601_525Unadjusted,
+                DataSpaceTransfer::Gamma2_8,
+                DataSpaceRange::Limited,
+                ColorPrimaries::Bt601,
+                TransferFunction::Sdr,
+                MatrixCoefficients::Bt601,
+                ColorRange::Limited,
+            ),
+            (
+                DataSpaceStandard::Bt2020,
+                DataSpaceTransfer::St2084,
+                DataSpaceRange::Limited,
+                ColorPrimaries::Bt2020,
+                TransferFunction::Pq,
+                MatrixCoefficients::Bt2020NonConstantLuminance,
+                ColorRange::Limited,
+            ),
+            (
+                DataSpaceStandard::Bt2020ConstantLuminance,
+                DataSpaceTransfer::HLG,
+                DataSpaceRange::Full,
+                ColorPrimaries::Bt2020,
+                TransferFunction::Hlg,
+                MatrixCoefficients::Bt2020ConstantLuminance,
+                ColorRange::Full,
+            ),
+        ] {
+            let color = frame_color(
+                data_space(standard, transfer, range),
+                DynamicRangeProfile::Sdr,
+                None,
+            )
+            .expect("supported RGB dataspace");
+            assert_eq!(color.primaries, primaries);
+            assert_eq!(color.transfer, function);
+            assert_eq!(color.matrix, matrix);
+            assert_eq!(color.range, color_range);
+        }
+    }
+
+    #[test]
+    fn unsupported_standard_transfer_and_range_are_errors() {
+        for (data_space, field) in [
+            (
+                data_space(
+                    DataSpaceStandard::AdobeRgb,
+                    DataSpaceTransfer::Srgb,
+                    DataSpaceRange::Full,
+                ),
+                "standard",
+            ),
+            (
+                data_space(
+                    DataSpaceStandard::Bt709,
+                    DataSpaceTransfer::Linear,
+                    DataSpaceRange::Full,
+                ),
+                "transfer",
+            ),
+            (
+                data_space(
+                    DataSpaceStandard::Bt709,
+                    DataSpaceTransfer::Srgb,
+                    DataSpaceRange::Extended,
+                ),
+                "range",
+            ),
+        ] {
+            let error = frame_color(data_space, DynamicRangeProfile::Sdr, None)
+                .expect_err("unsupported dataspace component");
+            assert!(error.to_string().contains(field), "{error}");
+        }
     }
 }

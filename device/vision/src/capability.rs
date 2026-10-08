@@ -1,31 +1,71 @@
 use crate::Policy;
 
-#[cfg(feature = "barcode")]
-use crate::Symbology;
-#[cfg(feature = "barcode")]
-use enumset::EnumSet;
-#[cfg(feature = "text")]
-use icu_locale::LanguageIdentifier;
-
 /// Vision capabilities available to this build.
 ///
-/// Fields arrive with the capability features (barcodes, text, scanner).
-/// A `native` set is empty when the platform's realization is unavailable on
-/// this device - for Android, when Play services or the ML Kit modules are
-/// absent. A `portable` field is [`Portable::Absent`] unless a `portable-*`
-/// feature carries the realization.
+/// Fields arrive with the capability features (barcode, text, scanner).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisionCapabilities {
-    /// The symbologies each realization serves. An empty `native` set means
-    /// no native barcode realization is available.
+    /// Barcode detection: the symbologies each realization serves.
+    ///
+    /// On Android `native` is the `Barcode.FORMAT_*` set ML Kit's barcode
+    /// engine expresses when Google Play services is usable — its module is
+    /// delivered on demand at request time — and the empty set elsewhere.
     #[cfg(feature = "barcode")]
-    pub barcodes: RealizationSet<EnumSet<Symbology>>,
-    /// The scripts each realization serves, as `und-<Script>` language
-    /// identifiers (`und-Latn`, `und-Hani`, `und-Deva`, `und-Jpan`,
-    /// `und-Kore`). An empty `native` list means no native text realization
-    /// is available.
+    pub barcodes: RealizationSet<enumset::EnumSet<crate::Symbology>>,
+
+    /// Text recognition: the languages each realization serves.
+    ///
+    /// On Windows `native` is `OcrEngine::AvailableRecognizerLanguages`
+    /// exactly; on Android it is the script identifiers ML Kit's
+    /// recognizers serve (`und-Latn`, `und-Hani`, `und-Deva`, `und-Jpan`,
+    /// `und-Kore`) when Google Play services is usable; it is empty on
+    /// platforms without a native recognizer.
     #[cfg(feature = "text")]
-    pub text: RealizationSet<Vec<LanguageIdentifier>>,
+    pub text: RealizationSet<Vec<icu_locale_core::LanguageIdentifier>>,
+
+    /// Whether this device can present the system code scanner, as
+    /// [`CodeScanner::capabilities`] reports it. Present when the `scanner`
+    /// feature is enabled.
+    ///
+    /// [`CodeScanner::capabilities`]: crate::CodeScanner::capabilities
+    #[cfg(feature = "scanner")]
+    pub scanner: bool,
+}
+
+impl VisionCapabilities {
+    #[cfg_attr(
+        all(
+            any(
+                not(feature = "text"),
+                not(any(target_os = "windows", target_os = "android"))
+            ),
+            any(not(feature = "barcode"), not(target_os = "android")),
+            any(
+                not(feature = "scanner"),
+                not(any(target_os = "ios", target_os = "android"))
+            )
+        ),
+        expect(
+            clippy::missing_const_for_fn,
+            reason = "a native text recognizer's language probe, the barcode engine's symbology probe or the scanner's device-support probe is a runtime call; elsewhere the capabilities are constant"
+        )
+    )]
+    pub(crate) fn new() -> Self {
+        Self {
+            #[cfg(feature = "barcode")]
+            barcodes: RealizationSet {
+                native: crate::barcode::native_symbologies(),
+                portable: Portable::Absent,
+            },
+            #[cfg(feature = "text")]
+            text: RealizationSet {
+                native: crate::text::native_languages(),
+                portable: Portable::Absent,
+            },
+            #[cfg(feature = "scanner")]
+            scanner: crate::sys::scanner_available(),
+        }
+    }
 }
 
 /// Native and portable realizations of a capability.
@@ -35,6 +75,22 @@ pub struct RealizationSet<T> {
     pub native: T,
     /// The portable realization carried by the application.
     pub portable: Portable<T>,
+}
+
+#[cfg(feature = "text")]
+impl<T> RealizationSet<Vec<T>> {
+    /// Whether either realization serves anything.
+    const fn available(&self) -> bool {
+        !self.native.is_empty() || !matches!(self.portable, Portable::Absent)
+    }
+}
+
+#[cfg(feature = "barcode")]
+impl RealizationSet<enumset::EnumSet<crate::Symbology>> {
+    /// Whether either realization serves anything.
+    fn available(&self) -> bool {
+        !self.native.is_empty() || !matches!(self.portable, Portable::Absent)
+    }
 }
 
 /// Availability of a portable realization.
@@ -50,35 +106,33 @@ pub enum Portable<T> {
 }
 
 impl waterkit_core::Capabilities for VisionCapabilities {
-    /// Returns whether any capability has a realization on this device.
+    /// Returns whether any capability has a realization in this build.
     fn available(&self) -> bool {
-        let barcodes = {
-            #[cfg(feature = "barcode")]
-            {
-                !self.barcodes.native.is_empty() || self.barcodes.portable != Portable::Absent
-            }
-            #[cfg(not(feature = "barcode"))]
-            {
-                false
-            }
-        };
-        let text = {
-            #[cfg(feature = "text")]
-            {
-                !self.text.native.is_empty() || self.text.portable != Portable::Absent
-            }
-            #[cfg(not(feature = "text"))]
-            {
-                false
-            }
-        };
-        barcodes || text
+        #[cfg(feature = "barcode")]
+        if self.barcodes.available() {
+            return true;
+        }
+        #[cfg(feature = "text")]
+        if self.text.available() {
+            return true;
+        }
+        #[cfg(feature = "scanner")]
+        if self.scanner {
+            return true;
+        }
+        false
     }
 }
 
-/// Every capability enabled by this build and whether its portable
-/// realization is carried by the application. No `portable-*` feature exists
-/// yet, so every entry reports `false`.
+/// Every request capability enabled by this build and whether its portable
+/// realization is carried by the application.
+///
+/// The system code scanner is not a request served by [`Vision`]: it has no
+/// portable realization to select, so it is absent here even when its feature
+/// is enabled and [`Policy::PortableOnly`] does not constrain it.
+///
+/// [`Vision`]: crate::Vision
+/// [`Policy::PortableOnly`]: crate::Policy::PortableOnly
 pub const ENABLED: &[(&str, bool)] = &[
     #[cfg(feature = "barcode")]
     ("barcode", false),

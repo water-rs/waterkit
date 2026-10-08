@@ -30,7 +30,6 @@ mod sys;
 pub mod android {
     pub use crate::sys::android::{
         Selection, load_media_with_context, show_alert_with_context, show_confirm_with_context,
-        show_photo_picker_with_context,
     };
 }
 
@@ -39,10 +38,10 @@ pub use error::*;
 
 use std::path::{Path, PathBuf};
 
-#[cfg(any(target_os = "android", target_os = "ios", test))]
+#[cfg(any(target_os = "ios", test))]
 pub(crate) const PATH_LIST_SEPARATOR: char = '\0';
 
-#[cfg(any(target_os = "android", target_os = "ios", test))]
+#[cfg(any(target_os = "ios", test))]
 pub(crate) fn decode_string_list(encoded: Option<String>) -> Option<Vec<String>> {
     let encoded = encoded?;
     Some(

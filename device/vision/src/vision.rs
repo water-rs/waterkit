@@ -22,6 +22,7 @@ pub struct Vision {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
     pub(crate) policy: Policy,
+    capabilities: VisionCapabilities,
 }
 
 impl Vision {
@@ -38,6 +39,10 @@ impl Vision {
     /// Under [`Policy::PortableOnly`], panics when the application carries no
     /// portable realization for an enabled capability. This packaging error
     /// is fixed in `Water.toml`; the message names each capability.
+    ///
+    /// On Android with `feature = "scanner"`, panics if the application
+    /// `Context` has not been published to `ndk_context` yet or the Google
+    /// Play services probe fails, like `CodeScanner::capabilities`.
     #[must_use]
     pub fn with_policy(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>, policy: Policy) -> Self {
         let missing = uncarried(policy, ENABLED);
@@ -51,18 +56,19 @@ impl Vision {
             device,
             queue,
             policy,
+            capabilities: VisionCapabilities::new(),
         }
     }
 
-    /// Capabilities on this device, among those compiled into this build.
+    /// Capabilities compiled into this build, as observed at construction.
     ///
-    /// A capability's `native` set is empty when the platform's realization
-    /// is unavailable here - on Android, when Play services or the ML Kit
-    /// modules are absent; its `portable` field is
-    /// [`Portable::Absent`](crate::Portable::Absent) unless a `portable-*`
-    /// feature carries the realization.
-    pub fn capabilities(&self) -> impl Future<Output = VisionCapabilities> + wgpu::WasmNotSend {
-        crate::sys::capabilities()
+    /// `text.native` is `OcrEngine::AvailableRecognizerLanguages` exactly on
+    /// Windows; a language absent from it is served by the portable
+    /// realization when the application carries one. `scanner` reports the
+    /// device-support probe `CodeScanner::capabilities` performs.
+    #[must_use]
+    pub fn capabilities(&self) -> VisionCapabilities {
+        self.capabilities.clone()
     }
 
     /// Prepares the selected realization's requirements without processing an
@@ -126,10 +132,8 @@ mod tests {
         task::{Context as TaskContext, Poll, Waker},
     };
 
-    #[cfg(not(any(feature = "barcode", feature = "text")))]
-    use crate::Policy;
     use crate::{
-        Image, Orientation, Request, Vision, VisionError,
+        Image, Orientation, Policy, Request, Vision, VisionError,
         sealed::{Context, Offer, Plan, Preparation, Realization, Sealed},
         test_support::gpu,
     };
@@ -328,8 +332,31 @@ mod tests {
         assert_eq!(PORTABLE_RUNS[2].load(Ordering::SeqCst), 0);
     }
 
-    // With a capability feature enabled, `PortableOnly` correctly panics at
-    // construction: the build carries no portable realization to serve it.
+    #[cfg(any(feature = "barcode", feature = "text"))]
+    #[test]
+    fn portable_only_requires_each_enabled_portable_realization() {
+        let (device, queue) = gpu();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = Vision::with_policy(device, queue, Policy::PortableOnly);
+        }))
+        .expect_err("PortableOnly without carried realizations panics");
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&'static str>().copied())
+            .expect("the policy panic carries a message");
+        assert!(
+            message.starts_with("PortableOnly requires portable realizations for: "),
+            "unexpected panic: {message}"
+        );
+        for (name, _) in crate::capability::ENABLED {
+            assert!(
+                message.contains(name),
+                "panic message {message:?} does not name {name}"
+            );
+        }
+    }
+
     #[cfg(not(any(feature = "barcode", feature = "text")))]
     #[test]
     fn portable_only_selects_portable_and_can_be_constructed_without_enabled_capabilities() {

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/notification", "tests/macos/passkey", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "multimedia/video/core", "multimedia/video/container", "multimedia/video/streaming", "multimedia/video/processing", "multimedia/video/player", "multimedia/video/cli", "identity/*", "sharing/*", "utils/build"]
+members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/notification", "tests/macos/passkey", "tests/macos/vision", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "multimedia/video/core", "multimedia/video/container", "multimedia/video/streaming", "multimedia/video/processing", "multimedia/video/player", "multimedia/video/cli", "identity/*", "sharing/*", "utils/build"]
 
 
 [workspace.package]
@@ -61,6 +61,8 @@ waterkit-health = { workspace = true, optional = true }
 waterkit-deeplink = { workspace = true, optional = true }
 waterkit-background = { workspace = true, optional = true }
 waterkit-passkey = { workspace = true, optional = true }
+waterkit-otp = { workspace = true, optional = true }
+waterkit-wallet = { workspace = true, optional = true }
 
 [dev-dependencies]
 toml = { workspace = true }
@@ -96,6 +98,8 @@ full = [
     "deeplink",
     "background",
     "passkey",
+    "otp",
+    "wallet",
 ]
 permission = ["dep:waterkit-permission"]
 location = ["dep:waterkit-location", "permission"]
@@ -110,7 +114,12 @@ secret = ["dep:waterkit-secret"]
 camera = ["dep:waterkit-camera", "waterkit-vision?/camera"]
 # `vision` is the whole crate, request kinds included, so `full` stays
 # complete. Finer-grained builds use `waterkit-vision`'s own features.
-vision = ["dep:waterkit-vision", "waterkit-vision/barcode", "waterkit-vision/text"]
+vision = [
+    "dep:waterkit-vision",
+    "waterkit-vision/barcode",
+    "waterkit-vision/text",
+    "waterkit-vision/scanner",
+]
 sensor = ["dep:waterkit-sensor"]
 codec = ["dep:waterkit-codec"]
 # VA-API hardware video decode/encode on Linux. A still-image consumer keeps
@@ -130,6 +139,8 @@ health = ["dep:waterkit-health"]
 deeplink = ["dep:waterkit-deeplink"]
 background = ["dep:waterkit-background"]
 passkey = ["dep:waterkit-passkey"]
+otp = ["dep:waterkit-otp"]
+wallet = ["dep:waterkit-wallet"]
 
 
 [workspace.dependencies]
@@ -180,9 +191,13 @@ waterkit-health = { path = "device/health", version = "0.1.4" }
 waterkit-deeplink = { path = "platform/deeplink", version = "0.1.4" }
 waterkit-background = { path = "platform/background", version = "0.1.4" }
 waterkit-passkey = { path = "identity/passkey", version = "0.1.4" }
+waterkit-otp = { path = "identity/otp", version = "0.1.4" }
+waterkit-wallet = { path = "platform/wallet", version = "0.1.4" }
 
 # Cross-platform
+enumset = "1"
 futures = "0.3"
+futures-channel = "0.3"
 smallvec = "1.15"
 async-channel = "2.5"
 async-fs = "2"
@@ -191,6 +206,9 @@ num-traits = "0.2"
 blocking = "1"
 async-io = "2"
 async-process = "2"
+base64 = "0.22"
+hex = "0.4"
+sha2 = "0.10"
 wgpu = "30.0.1"
 wgpu-hal = { version = "30.0.1", features = ["metal"] }
 
@@ -204,8 +222,6 @@ toml = "1.1"
 # (ravif -> rav1e); the one place that encodes AVIF is a `waterkit-codec` test,
 # which asks for that feature itself as a dev-dependency.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
-enumset = "1.1"
-icu_locale = "2.3"
 
 # Apple
 core-foundation = "0.10"
@@ -219,7 +235,7 @@ objc2-io-surface = "0.3"
 objc2-metal = "0.3"
 objc = "0.2"
 # Zero-copy import of platform frame buffers into wgpu textures.
-wgpu-external-frame = "0.2.0"
+wgpu-external-frame = "0.3.0"
 
 # Security
 keyring = "4"
@@ -273,6 +289,12 @@ jiff = "0.2"
 
 # URL encoding
 percent-encoding = "2.3"
+
+# BCP-47 language identifiers shared by capability APIs.
+icu_locale_core = "2.3"
+# Likely-subtags expansion (`LocaleExpander`), for routing languages to the
+# scripts a recognizer serves.
+icu_locale = "2.3"
 url = "2.5"
 zenwave = { version = "0.6.1", default-features = false, features = ["hyper-backend"] }
 

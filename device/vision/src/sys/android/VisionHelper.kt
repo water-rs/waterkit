@@ -7,7 +7,6 @@ import android.graphics.Matrix
 import android.graphics.Point
 import android.graphics.Rect
 import android.media.ExifInterface
-import android.media.Image
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
 import com.google.android.gms.common.api.OptionalModuleApi
@@ -32,23 +31,22 @@ import java.util.concurrent.TimeUnit
 /**
  * Kotlin half of `waterkit-vision` on Android: thin wrappers over the
  * unbundled ML Kit clients plus the platform bits they need (module
- * availability, image decode, bitmap construction). Compiled by the
- * packager onto the application's classpath; the crate declares the
- * unbundled `play-services-mlkit-*` clients in its `maven` metadata.
+ * install, image decode, bitmap construction). Compiled by the packager
+ * onto the application's classpath; the crate declares the unbundled
+ * `play-services-mlkit-*` clients in its `maven` metadata.
  *
  * Every method that touches a Play services `Task` blocks on `Tasks.await`
  * and must run on the dedicated threads the Rust side spawns for it.
  */
 object VisionHelper {
-    // Module codes mirrored in `sys/android/mod.rs`: the index
-    // `moduleAvailability` reports and `prepareModule`/`recognizeText` take.
+    // Module codes mirrored in `sys/android/mlkit.rs`: what `prepareModule`
+    // and `recognizeText` take.
     private const val MODULE_BARCODE = 0
     private const val MODULE_LATIN = 1
     private const val MODULE_CHINESE = 2
     private const val MODULE_DEVANAGARI = 3
     private const val MODULE_JAPANESE = 4
     private const val MODULE_KOREAN = 5
-    private const val MODULE_COUNT = 6
 
     private const val DETECTION_TIMEOUT_MS = 30_000L
     private const val INSTALL_TIMEOUT_MS = 120_000L
@@ -60,11 +58,19 @@ object VisionHelper {
         @JvmField val points: IntArray,
     )
 
-    /** A recognized line of text, flattened for field-by-field reads over JNI. */
+    /**
+     * A recognized line of text, flattened for field-by-field reads over
+     * JNI. `wordTexts`, `wordConfidences` and `wordPoints` are parallel:
+     * entry `i` is the line's `i`th element, whose corner points are the
+     * flat `x,y × 4` array `wordPoints[i]`.
+     */
     class TextRow(
         @JvmField val text: String,
         @JvmField val confidence: Float,
         @JvmField val points: IntArray,
+        @JvmField val wordTexts: Array<String>,
+        @JvmField val wordConfidences: FloatArray,
+        @JvmField val wordPoints: Array<IntArray>,
     )
 
     // One scanner per requested format set, and one recognizer per script;
@@ -91,26 +97,6 @@ object VisionHelper {
             JapaneseTextRecognizerOptions.Builder().build(),
         )
         else -> TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
-    }
-
-    /**
-     * Whether each module is installed, as bits indexed by the module codes.
-     * A probe failure reports that module absent, the same answer a device
-     * without Play services gives.
-     */
-    @JvmStatic
-    fun moduleAvailability(context: Context): IntArray {
-        if (!hasGooglePlayServices(context)) return IntArray(MODULE_COUNT)
-        val client = ModuleInstall.getClient(context)
-        return IntArray(MODULE_COUNT) { module ->
-            runCatching {
-                Tasks.await(
-                    client.areModulesAvailable(moduleApi(module)),
-                    DETECTION_TIMEOUT_MS,
-                    TimeUnit.MILLISECONDS,
-                ).areModulesAvailable()
-            }.getOrDefault(false).let { if (it) 1 else 0 }
-        }
     }
 
     /**
@@ -197,7 +183,7 @@ object VisionHelper {
         }.toTypedArray()
     }
 
-    /** Every line of text in `input`, in the image's stored orientation. */
+    /** Every line of text in `input`, with its elements, in the image's stored orientation. */
     @JvmStatic
     fun recognizeText(input: InputImage, script: Int): Array<TextRow> {
         val text = Tasks.await(
@@ -206,14 +192,21 @@ object VisionHelper {
             TimeUnit.MILLISECONDS,
         )
         return text.textBlocks.flatMap { block -> block.lines }.map { line ->
-            TextRow(line.text, line.confidence, corners(line.cornerPoints, line.boundingBox))
+            TextRow(
+                line.text,
+                line.confidence,
+                corners(line.cornerPoints, line.boundingBox),
+                line.elements.map { it.text }.toTypedArray(),
+                FloatArray(line.elements.size) { line.elements[it].confidence },
+                line.elements.map { corners(it.cornerPoints, it.boundingBox) }.toTypedArray(),
+            )
         }.toTypedArray()
     }
 
-    /** Wraps a camera frame's `Image` for ML Kit without copying pixels. */
+    /** Wraps an `NV21` luma buffer for ML Kit; chroma may be neutral. */
     @JvmStatic
-    fun mediaInput(image: Image, rotationDegrees: Int): InputImage =
-        InputImage.fromMediaImage(image, rotationDegrees)
+    fun nv21Input(bytes: ByteArray, width: Int, height: Int, rotationDegrees: Int): InputImage =
+        InputImage.fromByteArray(bytes, width, height, rotationDegrees, InputImage.IMAGE_FORMAT_NV21)
 
     /** Wraps an already-upright `Bitmap` for ML Kit. */
     @JvmStatic

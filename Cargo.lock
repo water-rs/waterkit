@@ -8922,6 +8922,7 @@ dependencies = [
  "waterkit-audio",
  "waterkit-build",
  "waterkit-codec",
+ "waterkit-core",
  "waterkit-video-container",
  "waterkit-video-core",
  "waterkit-video-streaming",

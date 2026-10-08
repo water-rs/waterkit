@@ -17,6 +17,7 @@ workspace = true
 
 [dependencies]
 waterkit-build.workspace = true
+waterkit-core.workspace = true
 waterkit-video-core.workspace = true
 waterkit-video-container.workspace = true
 waterkit-video-streaming = { workspace = true, optional = true }

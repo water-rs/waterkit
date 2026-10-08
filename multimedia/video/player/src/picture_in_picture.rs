@@ -179,7 +179,14 @@ impl PictureInPictureController {
     ///
     /// Returns an error when the platform does not support picture in picture
     /// or the host is not registered/configured for it.
-    pub fn enter(&mut self, aspect_ratio: Option<(u32, u32)>) -> Result<(), VideoError> {
+    #[cfg_attr(
+        not(any(target_os = "ios", target_os = "macos")),
+        expect(
+            clippy::unused_async,
+            reason = "the Apple path awaits a main-thread hop; other backends run synchronously"
+        )
+    )]
+    pub async fn enter(&mut self, aspect_ratio: Option<(u32, u32)>) -> Result<(), VideoError> {
         #[cfg(target_os = "android")]
         {
             android::enter(aspect_ratio)
@@ -187,7 +194,7 @@ impl PictureInPictureController {
 
         #[cfg(any(target_os = "ios", target_os = "macos"))]
         {
-            apple::enter_picture_in_picture(self.host_id, aspect_ratio)
+            apple::enter_picture_in_picture(self.host_id, aspect_ratio).await
         }
 
         #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "macos")))]
@@ -226,7 +233,9 @@ impl PictureInPictureController {
 
         #[cfg(any(target_os = "ios", target_os = "macos"))]
         {
-            apple::sync_picture_in_picture_controller(state);
+            let mtm = objc2::MainThreadMarker::new()
+                .expect("PictureInPictureController::sync must be called on the main thread");
+            apple::sync_picture_in_picture_controller(state, mtm);
             Ok(())
         }
 
@@ -292,7 +301,15 @@ pub unsafe extern "C" fn waterkit_video_apple_register_gpu_surface_host(
     let host_id = PictureInPictureHostId::new(
         NonZeroU64::new(host_id).expect("waterkit-video apple host id must be non-zero"),
     );
-    apple::register_gpu_surface_host(host_id, user_data, render_frame, set_external_rendering);
+    let mtm = objc2::MainThreadMarker::new()
+        .expect("waterkit_video_apple_register_gpu_surface_host must be called on the main thread");
+    apple::register_gpu_surface_host(
+        host_id,
+        user_data,
+        render_frame,
+        set_external_rendering,
+        mtm,
+    );
 }
 
 /// Unregister an Apple `GpuSurface` host previously registered for picture in picture.
@@ -304,7 +321,10 @@ pub unsafe extern "C" fn waterkit_video_apple_unregister_gpu_surface_host(host_i
     let host_id = PictureInPictureHostId::new(
         NonZeroU64::new(host_id).expect("waterkit-video apple host id must be non-zero"),
     );
-    apple::unregister_gpu_surface_host(host_id);
+    let mtm = objc2::MainThreadMarker::new().expect(
+        "waterkit_video_apple_unregister_gpu_surface_host must be called on the main thread",
+    );
+    apple::unregister_gpu_surface_host(host_id, mtm);
 }
 
 #[cfg(target_os = "android")]
@@ -487,12 +507,13 @@ mod apple {
     use core::ptr::NonNull;
 
     use std::collections::{HashMap, VecDeque};
+    use std::rc::Rc;
     use std::sync::{Arc, Condvar, LazyLock, Mutex, OnceLock};
     use std::time::Duration;
     use waterkit_video_core::Error as VideoError;
 
     use block2::{Block, RcBlock};
-    use dispatch2::{DispatchQueue, MainThreadBound};
+    use dispatch2::MainThreadBound;
     use objc2::available;
     use objc2::rc::{Retained, Weak};
     use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
@@ -663,16 +684,9 @@ mod apple {
 
     const unsafe extern "C" fn noop_set_external_rendering(_: *mut c_void, _: bool) {}
 
-    // SAFETY: `user_data` is the opaque context pointer the registering
-    // backend passes through `register_gpu_surface_host`; it is only ever
-    // handed back to that backend's own callbacks, on whichever thread the
-    // session's main-thread hops run.
-    unsafe impl Send for HostRegistration {}
-    unsafe impl Sync for HostRegistration {}
-
     /// The shared manager; every use happens on the main thread.
     struct PictureInPictureManager {
-        hosts: HashMap<u64, Arc<HostRegistration>>,
+        hosts: HashMap<u64, Rc<HostRegistration>>,
         active_session: Option<Retained<PictureInPictureSession>>,
     }
 
@@ -694,21 +708,6 @@ mod apple {
             .get(mtm)
     }
 
-    /// Fire-and-forget main-queue hop for state pushes: nothing waits on the
-    /// answer, so a synchronous hop is a deadlock hazard (the worker drops a
-    /// `PiP` clear while the test harness parks the main thread).
-    fn on_main_async(work: impl FnOnce(MainThreadMarker) + Send + 'static) {
-        if let Some(mtm) = MainThreadMarker::new() {
-            work(mtm);
-        } else {
-            DispatchQueue::main().exec_async(move || {
-                let mtm =
-                    MainThreadMarker::new().expect("the main queue only runs on the main thread");
-                work(mtm);
-            });
-        }
-    }
-
     fn pip_available() -> bool {
         available!(ios = 15.0, macos = 12.0, ..)
     }
@@ -722,7 +721,7 @@ mod apple {
     }
 
     pub struct PictureInPictureSessionIvars {
-        host: Arc<HostRegistration>,
+        host: Rc<HostRegistration>,
         _device: Retained<ProtocolObject<dyn MTLDevice>>,
         texture_cache: CFRetained<CVMetalTextureCache>,
         display_layer: Retained<AVSampleBufferDisplayLayer>,
@@ -888,7 +887,7 @@ mod apple {
     impl PictureInPictureSession {
         /// Builds a session on the main thread: device + texture cache +
         /// display layer + controller, matching the bridge `init`.
-        fn new(host: Arc<HostRegistration>, mtm: MainThreadMarker) -> Option<Retained<Self>> {
+        fn new(host: Rc<HostRegistration>, mtm: MainThreadMarker) -> Option<Retained<Self>> {
             // SAFETY: `MTLCreateSystemDefaultDevice` returns the default GPU
             // device or nil when Metal is unavailable.
             let device = MTLCreateSystemDefaultDevice()?;
@@ -1420,7 +1419,7 @@ mod apple {
             }
             self.hosts.insert(
                 host_id,
-                Arc::new(HostRegistration {
+                Rc::new(HostRegistration {
                     host_id,
                     user_data,
                     render_frame: Cell::new(render_frame),
@@ -1451,7 +1450,7 @@ mod apple {
             aspect_ratio: Option<(u32, u32)>,
         ) {
             let host = self.hosts.entry(host_id).or_insert_with(|| {
-                Arc::new(HostRegistration {
+                Rc::new(HostRegistration {
                     host_id,
                     user_data: std::ptr::null_mut(),
                     render_frame: Cell::new(noop_render_frame),
@@ -1527,56 +1526,55 @@ mod apple {
         user_data: *mut c_void,
         render_frame: ApplePictureInPictureRenderFrame,
         set_external_rendering: ApplePictureInPictureSetExternalRendering,
+        mtm: MainThreadMarker,
     ) {
-        // The opaque context pointer is plain ABI data owned by the
-        // registering backend; crossing as usize keeps the closure `Send`.
-        let user_data = user_data as usize;
-        on_main_async(move |mtm| {
-            if !pip_available() {
-                return;
-            }
-            manager(mtm).borrow_mut().register_host(
-                host_id.get(),
-                user_data as *mut c_void,
-                render_frame,
-                set_external_rendering,
-            );
-        });
+        if !pip_available() {
+            return;
+        }
+        manager(mtm).borrow_mut().register_host(
+            host_id.get(),
+            user_data,
+            render_frame,
+            set_external_rendering,
+        );
     }
 
-    pub(super) fn unregister_gpu_surface_host(host_id: PictureInPictureHostId) {
-        on_main_async(move |mtm| {
-            if !pip_available() {
-                return;
-            }
-            manager(mtm).borrow_mut().unregister_host(host_id.get());
-        });
+    pub(super) fn unregister_gpu_surface_host(
+        host_id: PictureInPictureHostId,
+        mtm: MainThreadMarker,
+    ) {
+        if !pip_available() {
+            return;
+        }
+        manager(mtm).borrow_mut().unregister_host(host_id.get());
     }
 
-    pub(super) fn sync_picture_in_picture_controller(state: PictureInPictureControllerState) {
-        on_main_async(move |mtm| {
-            if !pip_available() {
-                return;
-            }
-            manager(mtm).borrow_mut().sync_host_state(
-                state.host_id.get(),
-                state.active,
-                state.playing,
-                state.aspect_ratio,
-            );
-        });
+    pub(super) fn sync_picture_in_picture_controller(
+        state: PictureInPictureControllerState,
+        mtm: MainThreadMarker,
+    ) {
+        if !pip_available() {
+            return;
+        }
+        manager(mtm).borrow_mut().sync_host_state(
+            state.host_id.get(),
+            state.active,
+            state.playing,
+            state.aspect_ratio,
+        );
     }
 
-    pub(super) fn enter_picture_in_picture(
+    pub(super) async fn enter_picture_in_picture(
         host_id: PictureInPictureHostId,
         _aspect_ratio: Option<(u32, u32)>,
     ) -> Result<(), VideoError> {
-        let result = dispatch2::run_on_main(|mtm| {
+        let result = waterkit_core::apple::on_main(move |mtm| {
             if !pip_available() {
                 return EnterResult::Unsupported;
             }
             manager(mtm).borrow_mut().enter(host_id.get(), mtm)
-        });
+        })
+        .await;
         match result {
             EnterResult::Success => Ok(()),
             EnterResult::Unsupported => Err(VideoError::Unsupported(

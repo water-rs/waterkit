@@ -481,8 +481,9 @@ fn record_background(report: &mut TestReport) {
     ));
 }
 
-/// `VisionKit`'s `DataScannerViewController` reports unsupported on the
-/// simulator, so `capabilities()` must say so and `scan()` must fail with
+/// `VisionKit`'s `DataScannerViewController` and
+/// `VNDocumentCameraViewController` report unsupported on the simulator, so
+/// `capabilities()` must say so and `scan()` must fail with
 /// [`waterkit::vision::VisionError::Unsupported`] instead of presenting a
 /// UI or falling back to another realization.
 #[cfg(feature = "vision")]
@@ -493,33 +494,67 @@ async fn record_vision(report: &mut TestReport) {
             "vision.scanner_capabilities",
             "DataScannerViewController reports supported on a simulator with no camera",
         ));
-        return;
-    }
-    report.push(TestCase::passed_with_message(
-        "vision.scanner_capabilities",
-        format!("available={available}"),
-    ));
-    if available {
-        report.push(TestCase::skipped(
-            "vision.scanner_scan",
-            "presenting the code scanner requires an interactive session",
+    } else {
+        report.push(TestCase::passed_with_message(
+            "vision.scanner_capabilities",
+            format!("available={available}"),
         ));
-        return;
-    }
-    match waterkit::vision::CodeScanner::new(waterkit::vision::Symbology::Qr)
-        .scan()
-        .await
-    {
-        Err(waterkit::vision::VisionError::Unsupported(message)) => {
-            report.push(TestCase::passed_with_message(
+        if available {
+            report.push(TestCase::skipped(
                 "vision.scanner_scan",
-                format!("unsupported: {message}"),
+                "presenting the code scanner requires an interactive session",
             ));
+        } else {
+            match waterkit::vision::CodeScanner::new(waterkit::vision::Symbology::Qr)
+                .scan()
+                .await
+            {
+                Err(waterkit::vision::VisionError::Unsupported(message)) => {
+                    report.push(TestCase::passed_with_message(
+                        "vision.scanner_scan",
+                        format!("unsupported: {message}"),
+                    ));
+                }
+                other => report.push(TestCase::failed(
+                    "vision.scanner_scan",
+                    format!("scan() on an unsupported device returned {other:?}"),
+                )),
+            }
         }
-        other => report.push(TestCase::failed(
-            "vision.scanner_scan",
-            format!("scan() on an unsupported device returned {other:?}"),
-        )),
+    }
+
+    // `VNDocumentCameraViewController.isSupported` reports false where no
+    // camera can scan, like the simulator.
+    let document_available = waterkit::vision::DocumentScanner::capabilities().available;
+    if cfg!(target_abi = "sim") && document_available {
+        report.push(TestCase::failed(
+            "vision.document_scanner_capabilities",
+            "VNDocumentCameraViewController reports supported on a simulator with no camera",
+        ));
+    } else {
+        report.push(TestCase::passed_with_message(
+            "vision.document_scanner_capabilities",
+            format!("available={document_available}"),
+        ));
+        if document_available {
+            report.push(TestCase::skipped(
+                "vision.document_scanner_scan",
+                "presenting the document scanner requires an interactive session",
+            ));
+        } else {
+            match waterkit::vision::DocumentScanner::new().scan().await {
+                Err(waterkit::vision::VisionError::Unsupported(message)) => {
+                    report.push(TestCase::passed_with_message(
+                        "vision.document_scanner_scan",
+                        format!("unsupported: {message}"),
+                    ));
+                }
+                other => report.push(TestCase::failed(
+                    "vision.document_scanner_scan",
+                    format!("scan() on an unsupported device returned {other:?}"),
+                )),
+            }
+        }
     }
 }
 

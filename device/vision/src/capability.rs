@@ -37,6 +37,13 @@ pub struct VisionCapabilities {
     /// [`CodeScanner::capabilities`]: crate::CodeScanner::capabilities
     #[cfg(feature = "scanner")]
     pub scanner: bool,
+    /// Whether this device can present the system document scanner, as
+    /// [`DocumentScanner::capabilities`] reports it. Present when the
+    /// `document-scanner` feature is enabled.
+    ///
+    /// [`DocumentScanner::capabilities`]: crate::DocumentScanner::capabilities
+    #[cfg(feature = "document-scanner")]
+    pub document_scanner: bool,
 }
 
 impl VisionCapabilities {
@@ -56,6 +63,13 @@ impl VisionCapabilities {
             ),
             any(
                 not(feature = "scanner"),
+                not(any(
+                    target_os = "android",
+                    all(target_os = "ios", not(target_abi = "macabi"))
+                ))
+            ),
+            any(
+                not(feature = "document-scanner"),
                 not(any(
                     target_os = "android",
                     all(target_os = "ios", not(target_abi = "macabi"))
@@ -86,6 +100,8 @@ impl VisionCapabilities {
             },
             #[cfg(feature = "scanner")]
             scanner: crate::sys::scanner_available(),
+            #[cfg(feature = "document-scanner")]
+            document_scanner: crate::sys::document_scanner_available(),
         }
     }
 }
@@ -138,6 +154,10 @@ impl waterkit_core::Capabilities for VisionCapabilities {
         if self.scanner {
             return true;
         }
+        #[cfg(feature = "document-scanner")]
+        if self.document_scanner {
+            return true;
+        }
         false
     }
 }
@@ -148,9 +168,10 @@ impl waterkit_core::Capabilities for VisionCapabilities {
 /// Each second element becomes `cfg!(feature = "portable-*")` once the
 /// portable realizations land (#130, #132).
 ///
-/// The system code scanner is not a request served by [`Vision`]: it has no
-/// portable realization to select, so it is absent here even when its feature
-/// is enabled and [`Policy::PortableOnly`] does not constrain it.
+/// The system code and document scanners are not requests served by
+/// [`Vision`]: they have no portable realization to select, so they are
+/// absent here even when their features are enabled and
+/// [`Policy::PortableOnly`] does not constrain them.
 ///
 /// [`Vision`]: crate::Vision
 /// [`Policy::PortableOnly`]: crate::Policy::PortableOnly

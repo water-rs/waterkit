@@ -5,11 +5,13 @@
 //! selected by the `portable-*` features (#130, #132); none exists yet, so
 //! every portable offer is [`Offer::Absent`].
 //!
-//! The `scanner` capability has its own per-platform modules: the Google
-//! code scanner on Android and `VisionKit`'s `DataScannerViewController` on
-//! iOS — Mac Catalyst excluded, where `DataScannerViewController` is
-//! unavailable — with no system scanner elsewhere. The `barcode`, `text` and
-//! `document` capabilities' Apple realization lives in [`apple_vision`].
+//! The `scanner` and `document-scanner` capabilities have their own
+//! per-platform modules: the Google code scanner and ML Kit document scanner
+//! on Android, `VisionKit`'s `DataScannerViewController` and
+//! `VNDocumentCameraViewController` on iOS — Mac Catalyst excluded, where
+//! both are unavailable — with no system scanner elsewhere. The `barcode`,
+//! `text` and `document` capabilities' Apple realization lives in
+//! [`apple_vision`].
 
 #[cfg(all(
     any(target_os = "ios", target_os = "macos"),
@@ -40,12 +42,21 @@ unsafe impl Send for PixelBuffer {}
 #[cfg(all(any(target_os = "ios", target_os = "macos"), feature = "camera"))]
 unsafe impl Sync for PixelBuffer {}
 
-#[cfg(all(feature = "scanner", target_os = "android"))]
+// A platform has a scanner bridge when either one-shot scanner feature is
+// enabled.
+#[cfg(all(
+    any(feature = "scanner", feature = "document-scanner"),
+    target_os = "android"
+))]
 mod android;
-#[cfg(all(feature = "scanner", target_os = "ios", not(target_abi = "macabi")))]
+#[cfg(all(
+    any(feature = "scanner", feature = "document-scanner"),
+    target_os = "ios",
+    not(target_abi = "macabi")
+))]
 mod apple;
 #[cfg(all(
-    feature = "scanner",
+    any(feature = "scanner", feature = "document-scanner"),
     not(any(
         target_os = "android",
         all(target_os = "ios", not(target_abi = "macabi"))
@@ -55,8 +66,16 @@ mod unsupported;
 
 #[cfg(all(feature = "scanner", target_os = "android"))]
 pub use android::{scan, scanner_available, scanner_symbologies};
+#[cfg(all(feature = "document-scanner", target_os = "android"))]
+pub use android::{document_scanner_available, document_scanner_options, scan_document};
 #[cfg(all(feature = "scanner", target_os = "ios", not(target_abi = "macabi")))]
 pub use apple::{scan, scanner_available, scanner_symbologies};
+#[cfg(all(
+    feature = "document-scanner",
+    target_os = "ios",
+    not(target_abi = "macabi")
+))]
+pub use apple::{document_scanner_available, document_scanner_options, scan_document};
 #[cfg(all(
     feature = "scanner",
     not(any(
@@ -65,6 +84,14 @@ pub use apple::{scan, scanner_available, scanner_symbologies};
     ))
 ))]
 pub use unsupported::{scan, scanner_available, scanner_symbologies};
+#[cfg(all(
+    feature = "document-scanner",
+    not(any(
+        target_os = "android",
+        all(target_os = "ios", not(target_abi = "macabi"))
+    ))
+))]
+pub use unsupported::{document_scanner_available, document_scanner_options, scan_document};
 
 #[cfg(all(any(target_os = "ios", target_os = "macos"), feature = "barcode"))]
 pub use apple_vision as native;

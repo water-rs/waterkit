@@ -7,7 +7,8 @@
 //!
 //! The `scanner` capability has its own per-platform modules: the Google
 //! code scanner on Android and `VisionKit`'s `DataScannerViewController` on
-//! iOS, with no system scanner elsewhere. The `barcode`, `text` and
+//! iOS — Mac Catalyst excluded, where `DataScannerViewController` is
+//! unavailable — with no system scanner elsewhere. The `barcode`, `text` and
 //! `document` capabilities' Apple realization lives in [`apple_vision`].
 
 #[cfg(all(
@@ -41,21 +42,27 @@ unsafe impl Sync for PixelBuffer {}
 
 #[cfg(all(feature = "scanner", target_os = "android"))]
 mod android;
-#[cfg(all(feature = "scanner", target_os = "ios"))]
+#[cfg(all(feature = "scanner", target_os = "ios", not(target_abi = "macabi")))]
 mod apple;
 #[cfg(all(
     feature = "scanner",
-    not(any(target_os = "android", target_os = "ios"))
+    not(any(
+        target_os = "android",
+        all(target_os = "ios", not(target_abi = "macabi"))
+    ))
 ))]
 mod unsupported;
 
 #[cfg(all(feature = "scanner", target_os = "android"))]
 pub use android::{scan, scanner_available, scanner_symbologies};
-#[cfg(all(feature = "scanner", target_os = "ios"))]
+#[cfg(all(feature = "scanner", target_os = "ios", not(target_abi = "macabi")))]
 pub use apple::{scan, scanner_available, scanner_symbologies};
 #[cfg(all(
     feature = "scanner",
-    not(any(target_os = "android", target_os = "ios"))
+    not(any(
+        target_os = "android",
+        all(target_os = "ios", not(target_abi = "macabi"))
+    ))
 ))]
 pub use unsupported::{scan, scanner_available, scanner_symbologies};
 

@@ -10,13 +10,19 @@
 //! In your `build.rs`:
 //!
 //! ```ignore
-//! use waterkit_build::build_apple_bridge;
+//! use waterkit_build::{SwiftBridge, SwiftBridges};
 //!
 //! fn main() {
 //!     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
 //!
 //!     if target_os == "ios" || target_os == "macos" {
-//!         build_apple_bridge(&["src/sys/apple/mod.rs"]);
+//!         SwiftBridges::new()
+//!             .bridge(
+//!                 SwiftBridge::new("src/sys/apple/mod.rs")
+//!                     .swift_source("src/sys/apple/Feature.swift")
+//!                     .framework("Foundation"),
+//!             )
+//!             .compile();
 //!     }
 //! }
 //! ```
@@ -29,9 +35,7 @@ mod android_runtime;
 mod apple;
 
 #[cfg(not(target_os = "android"))]
-pub use apple::{
-    AppleSwiftConfig, SwiftBridgeCrate, build_apple_bridge, compile_multi_swift, compile_swift,
-};
+pub use apple::{SwiftBridge, SwiftBridges};
 
 #[cfg(target_os = "android")]
 pub use android_runtime::{

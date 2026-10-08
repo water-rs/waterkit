@@ -27,6 +27,7 @@ use objc2_core_video::{
 use wgpu_external_frame::YcbcrMatrix;
 use wgpu_external_frame::io_surface::{Ycbcr420IoSurfaceFrame, Ycbcr420Plane};
 
+use crate::analysis::AnalysisFrame;
 use crate::color::{from_ycbcr_matrix, from_ycbcr_range};
 use crate::frame::{Frame, FramePlanes, orientation_from_rotation};
 use crate::{ColorPrimaries, MatrixCoefficients, TransferFunction, VideoColorInfo};
@@ -81,9 +82,7 @@ pub struct RawFrame {
 /// capture output is configured for `420f` or `420v`, so each is a platform
 /// defect.
 pub fn build_frame(device: &wgpu::Device, raw: RawFrame) -> Frame {
-    let matrix = ycbcr_matrix(&raw.pixel_buffer.0);
-    let primaries = color_primaries(&raw.pixel_buffer.0);
-    let transfer = transfer_function(&raw.pixel_buffer.0);
+    let color = buffer_color(&raw.pixel_buffer.0);
     let surface = CVPixelBufferGetIOSurface(Some(&raw.pixel_buffer.0))
         .expect("capture pixel buffers are IOSurface-backed");
     // SAFETY: `surface` is a live IOSurface retained for this call, and the
@@ -93,14 +92,6 @@ pub fn build_frame(device: &wgpu::Device, raw: RawFrame) -> Frame {
             .with_owner(raw.pixel_buffer.clone());
     let luma = surface.import(device, Ycbcr420Plane::Luma);
     let chroma = surface.import(device, Ycbcr420Plane::Chroma);
-    let color = VideoColorInfo {
-        matrix,
-        primaries,
-        transfer,
-        range: from_ycbcr_range(surface.format().range),
-        content_light_level: None,
-        dolby_vision: false,
-    };
     let (width, height) = (
         surface.width(Ycbcr420Plane::Luma),
         surface.height(Ycbcr420Plane::Luma),
@@ -119,6 +110,53 @@ pub fn build_frame(device: &wgpu::Device, raw: RawFrame) -> Frame {
     );
     frame.pixel_buffer = Some(raw.pixel_buffer);
     frame
+}
+
+/// Builds an analysis frame over `raw`'s pixel buffer: no capture output of
+/// its own, no pixel copy — the buffer's `IOSurface` reads on the CPU, and
+/// the frame locks it read-only for its life.
+///
+/// # Panics
+///
+/// Panics under the same conditions as [`build_frame`]: the buffer lacks an
+/// `IOSurface`, or carries no supported color attachments — all platform
+/// defects for a `420f`/`420v` capture output.
+pub fn build_analysis_frame(raw: RawFrame) -> AnalysisFrame {
+    let color = buffer_color(&raw.pixel_buffer.0);
+    let width = objc2_core_video::CVPixelBufferGetWidth(&raw.pixel_buffer.0);
+    let height = objc2_core_video::CVPixelBufferGetHeight(&raw.pixel_buffer.0);
+    AnalysisFrame::apple(
+        raw.pixel_buffer,
+        u32::try_from(width).expect("a capture buffer's width fits u32"),
+        u32::try_from(height).expect("a capture buffer's height fits u32"),
+        orientation_from_rotation(raw.rotation_degrees, raw.mirrored),
+        color,
+        raw.timestamp,
+    )
+}
+
+/// The buffer's color description: matrix, primaries and transfer from its
+/// attachments, and range from its `IOSurface`'s pixel format.
+///
+/// # Panics
+///
+/// Panics when the buffer has no `IOSurface` or carries unsupported
+/// attachments — a platform defect for the capture output's `420f`/`420v`.
+fn buffer_color(pixel_buffer: &CVPixelBuffer) -> VideoColorInfo {
+    let surface = CVPixelBufferGetIOSurface(Some(pixel_buffer))
+        .expect("capture pixel buffers are IOSurface-backed");
+    // SAFETY: `surface` is a live IOSurface retained for this call; the
+    // frame is only queried for its format.
+    let surface =
+        unsafe { Ycbcr420IoSurfaceFrame::retain(NonNull::from(&*surface).cast::<c_void>()) };
+    VideoColorInfo {
+        matrix: ycbcr_matrix(pixel_buffer),
+        primaries: color_primaries(pixel_buffer),
+        transfer: transfer_function(pixel_buffer),
+        range: from_ycbcr_range(surface.format().range),
+        content_light_level: None,
+        dolby_vision: false,
+    }
 }
 
 /// The matrix named by the buffer's `kCVImageBufferYCbCrMatrixKey`

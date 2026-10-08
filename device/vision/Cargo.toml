@@ -88,9 +88,8 @@ scanner = [
 ]
 
 # Android helper the packager compiles into the application's classpath.
-[package.metadata.waterui.android]
+[package.metadata.waterui.android.feature.scanner]
 kotlin-sources = ["src/sys/android/ScannerHelper.kt"]
-required-feature = "scanner"
 # The thin client of the Google code scanner; the scanner itself is Google
 # Play services' module, downloaded to the device on first use.
 maven = ["com.google.android.gms:play-services-code-scanner:16.1.0"]

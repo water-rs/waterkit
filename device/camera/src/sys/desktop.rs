@@ -16,9 +16,10 @@ mod recording;
 
 use crate::upload::{CpuPlanes, FrameUploader, nv12_len};
 use crate::{
-    CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, ColorPrimaries,
-    ColorRange, DynamicRangeProfile, Frame, FrameConverter, MatrixCoefficients, Orientation, Photo,
-    RawPhoto, RawVideoFormat, Resolution, StabilizationMode, TransferFunction, VideoColorInfo,
+    AnalysisFrame, CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo,
+    ColorPrimaries, ColorRange, DynamicRangeProfile, Frame, FrameConverter, MatrixCoefficients,
+    Orientation, Photo, RawPhoto, RawVideoFormat, Resolution, StabilizationMode, TransferFunction,
+    VideoColorInfo,
 };
 use nokhwa::Camera as NokhwaCamera;
 use nokhwa::pixel_format::RgbAFormat;
@@ -155,6 +156,56 @@ impl RawFrame {
             self.timestamp,
         )
     }
+
+    /// The captured pixels as an analysis frame: NV12 passes through, YUYV
+    /// is re-subsampled to 4:2:0, and decoded MJPEG RGBA is converted — all
+    /// on the CPU, keeping the samples' matrix and range.
+    fn analysis_frame(&self) -> Result<AnalysisFrame, CameraError> {
+        let pixels = match &self.pixels {
+            CapturedPixels::Nv12(data) => data.clone(),
+            CapturedPixels::Yuyv(data) => recording::yuyv_to_nv12(data, self.width, self.height)
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("YUYV to Y'CbCr 4:2:0 re-sampling: {error}"))
+                })?,
+            CapturedPixels::Rgba(data) => {
+                let (range, matrix) =
+                    crate::raw_video::yuv_encoding(self.color.matrix, self.color.range)
+                        .ok_or_else(|| {
+                            CameraError::CaptureFailed(format!(
+                                "the camera's color description {:?} cannot encode Y'CbCr",
+                                self.color
+                            ))
+                        })?;
+                let mut image = yuv::YuvBiPlanarImageMut::alloc(
+                    self.width,
+                    self.height,
+                    yuv::YuvChromaSubsampling::Yuv420,
+                );
+                yuv::rgba_to_yuv_nv12(
+                    &mut image,
+                    data,
+                    self.width * 4,
+                    range,
+                    matrix,
+                    yuv::YuvConversionMode::Balanced,
+                )
+                .map_err(|error| {
+                    CameraError::CaptureFailed(format!("RGBA to Y'CbCr 4:2:0 conversion: {error}"))
+                })?;
+                let mut nv12 = Vec::with_capacity(nv12_len(self.width, self.height));
+                nv12.extend_from_slice(image.y_plane.borrow());
+                nv12.extend_from_slice(image.uv_plane.borrow());
+                nv12
+            }
+        };
+        Ok(AnalysisFrame::nv12(
+            pixels,
+            self.width,
+            self.height,
+            self.color,
+            self.timestamp,
+        ))
+    }
 }
 
 impl CapturedPixels {
@@ -231,6 +282,12 @@ pub struct CameraInner {
     subscriber_tx: async_channel::Sender<Subscriber>,
     streaming: Arc<AtomicBool>,
     frame_rate: u32,
+    /// Whether the camera was opened with an analysis output. The captured
+    /// CPU pixels are already what an analysis frame carries, so no second
+    /// stream is opened; the flag gates [`Camera::analysis_frames`].
+    ///
+    /// [`Camera::analysis_frames`]: crate::Camera::analysis_frames
+    analysis_enabled: bool,
     recording: Option<RecordingSession>,
     /// Converts the frame a photo is taken from upright.
     photo_converter: FrameConverter,
@@ -435,6 +492,7 @@ impl CameraInner {
             subscriber_tx,
             streaming,
             frame_rate: config.frame_rate.max(1),
+            analysis_enabled: config.analysis.is_some(),
             recording: None,
             photo_converter,
         })
@@ -503,6 +561,19 @@ impl CameraInner {
             let captured = receiver.recv().await.ok()?;
             let frame = captured.map(|raw| raw.upload(&uploader));
             Some((frame, (uploader, receiver)))
+        })
+    }
+
+    /// The analysis stream reads the same captured CPU pixels, before
+    /// upload, newest-wins like the preview's.
+    pub fn analysis_frames(
+        &self,
+    ) -> impl futures::Stream<Item = Result<AnalysisFrame, CameraError>> + '_ {
+        let receiver = self
+            .analysis_enabled
+            .then(|| self.subscribe_frames(PREVIEW_QUEUE).receiver);
+        crate::analysis::stream(receiver, |captured| {
+            captured.and_then(|raw| raw.analysis_frame())
         })
     }
 

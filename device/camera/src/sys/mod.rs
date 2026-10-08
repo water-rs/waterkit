@@ -36,8 +36,8 @@ pub use desktop::CameraInner;
 )))]
 mod fallback {
     use crate::{
-        CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, Frame, Photo,
-        RawPhoto, Resolution,
+        AnalysisFrame, CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo,
+        Frame, Photo, RawPhoto, Resolution,
     };
     use std::num::NonZeroU8;
     use std::path::Path;
@@ -121,6 +121,14 @@ mod fallback {
 
         pub fn frames(&self) -> impl futures::Stream<Item = Result<Frame, CameraError>> + '_ {
             futures::stream::empty()
+        }
+
+        pub fn analysis_frames(
+            &self,
+        ) -> impl futures::Stream<Item = Result<AnalysisFrame, CameraError>> + '_ {
+            crate::analysis::stream::<(), _>(None, |()| {
+                unreachable!("the fallback camera never opens, so its stream never maps")
+            })
         }
 
         pub async fn capture_photo(&self) -> Result<Photo, CameraError> {

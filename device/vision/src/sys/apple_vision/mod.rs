@@ -122,6 +122,16 @@ impl Preparation for AppleImage {
                     }
                 },
             },
+            #[cfg(feature = "camera")]
+            Pixels::Analysis { frame } => {
+                // The frame's capture buffer serves Vision directly; the
+                // handler holds its own reference on the Swift side.
+                let buffer = frame.pixel_buffer();
+                ffi::vision_handler_pixel_buffer(
+                    objc2_core_foundation::CFRetained::as_ptr(&buffer).as_ptr() as usize,
+                    frame.orientation().exif(),
+                )
+            }
             Pixels::Encoded(bytes) => ffi::vision_handler_data(Vec::from(bytes.as_ref()), 0),
         };
         if handler == 0 {

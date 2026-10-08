@@ -4,10 +4,9 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
 
     if target_os == "ios" || target_os == "macos" {
-        use waterkit_build::AppleSwiftConfig;
+        use waterkit_build::{SwiftBridge, SwiftBridges};
 
-        let target = std::env::var("TARGET").unwrap();
-        let mut config = AppleSwiftConfig::new("waterkit-video-player", "PictureInPictureHelper")
+        let mut bridge = SwiftBridge::new("src/sys/apple/bridge.rs")
             .swift_source("src/sys/apple/PictureInPictureHelper.swift")
             .framework("Foundation")
             .framework("AVFoundation")
@@ -16,12 +15,12 @@ fn main() {
             .framework("CoreVideo")
             .framework("Metal");
 
-        if target.contains("ios") {
-            config = config.framework("UIKit");
+        if target_os == "ios" {
+            bridge = bridge.framework("UIKit");
         } else {
-            config = config.framework("AppKit");
+            bridge = bridge.framework("AppKit");
         }
 
-        waterkit_build::compile_swift("src/sys/apple/bridge.rs", &config);
+        SwiftBridges::new().bridge(bridge).compile();
     }
 }

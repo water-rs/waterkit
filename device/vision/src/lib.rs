@@ -51,8 +51,8 @@
 //! feature: [`CodeScanner`] presents the platform's own scanning UI — the
 //! Google code scanner of Google Play services on Android (no camera
 //! permission required) and `VisionKit`'s `DataScannerViewController` on iOS —
-//! and resolves to the decoded [`Barcode`]. macOS, Windows and Linux have no
-//! system scanner; [`CodeScanner::capabilities`] reports it unavailable there
+//! and resolves to the decoded [`Barcode`]. macOS, Mac Catalyst, Windows and
+//! Linux have no system scanner; [`CodeScanner::capabilities`] reports it unavailable there
 //! and [`CodeScanner::scan`] is an error, never a fallback: `WaterUI` owns
 //! the fallback scanning view.
 

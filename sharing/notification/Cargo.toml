@@ -17,9 +17,14 @@ workspace = true
 thiserror.workspace = true
 uuid = { version = "1", features = ["v4"] }
 
-# Desktop platforms (Linux, Windows, macOS unbundled)
-[target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dependencies]
+# Desktop platforms where notify-rust does not pull in tauri-winrt-notification
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 notify-rust = { workspace = true }
+
+# Windows - direct WinRT toasts through windows-rs
+[target.'cfg(target_os = "windows")'.dependencies]
+url = { workspace = true }
+windows = { workspace = true, features = ["Data_Xml_Dom", "UI_Notifications"] }
 
 # Linux - for opening URLs when action buttons are clicked
 [target.'cfg(target_os = "linux")'.dependencies]

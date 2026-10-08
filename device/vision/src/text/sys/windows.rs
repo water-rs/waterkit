@@ -305,6 +305,12 @@ impl Preparation for PreparedBitmap {
                     }
                 }
             }
+            #[cfg(feature = "camera")]
+            Pixels::Analysis { .. } => {
+                return Err(VisionError::Unsupported(
+                    "camera analysis frames cannot be served by Windows.Media.Ocr yet".to_owned(),
+                ));
+            }
             Pixels::Encoded(bytes) => decode_encoded(bytes).await?,
         };
         Self::within_limits(bitmap)

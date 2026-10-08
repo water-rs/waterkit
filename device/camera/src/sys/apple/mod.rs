@@ -12,10 +12,10 @@ pub use capture::CapturedPixelBuffer;
 use capture::RawFrame;
 
 use crate::{
-    CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,
-    ExposureControl, ExposureMode, FlashMode, FocusControl, FocusMode, Frame, Photo, RawPhoto,
-    RawPhotoFormat, RawVideoFormat, Resolution, StabilizationMode, WhiteBalanceControl,
-    WhiteBalanceMode,
+    AnalysisFrame, CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo,
+    DynamicRangeProfile, ExposureControl, ExposureMode, FlashMode, FocusControl, FocusMode, Frame,
+    Photo, RawPhoto, RawPhotoFormat, RawVideoFormat, Resolution, StabilizationMode,
+    WhiteBalanceControl, WhiteBalanceMode,
 };
 use std::num::NonZeroU8;
 use std::path::Path;
@@ -161,6 +161,17 @@ struct FrameCallbackContext {
     /// Turns the sample buffers' presentation times into frame timestamps
     /// measured from the first captured frame.
     clock: crate::clock::StreamClock<Duration>,
+    /// The analysis stream's channel and its own clock, present only when
+    /// the camera was opened with `CameraConfig::analysis`. The analysis
+    /// clock measures from the first analysis frame, like the preview
+    /// stream's does.
+    analysis: Option<AnalysisOutput>,
+}
+
+/// The analysis stream's half of the callback context.
+struct AnalysisOutput {
+    sender: async_channel::Sender<RawFrame>,
+    clock: crate::clock::StreamClock<Duration>,
 }
 
 struct OpenCameraGuard {
@@ -197,10 +208,24 @@ extern "C" fn frame_callback(
     let context = unsafe { &*context.cast::<FrameCallbackContext>() };
     let buffer = NonNull::new(pixelbuffer_handle as *mut objc2_core_video::CVPixelBuffer)
         .expect("Swift hands over a retained, non-null CVPixelBuffer");
+    // SAFETY: Swift passes the buffer with `Unmanaged.passRetained`,
+    // transferring that reference here.
+    let pixel_buffer = unsafe { CapturedPixelBuffer::from_owned(buffer) };
+    // The same buffer serves the analysis stream: retaining it costs no
+    // copy, and the analysis channel keeps only the newest frame like the
+    // preview's does.
+    if let Some(analysis) = &context.analysis {
+        let _ = analysis.sender.force_send(RawFrame {
+            pixel_buffer: pixel_buffer.clone(),
+            timestamp: analysis
+                .clock
+                .timestamp(Duration::from_nanos(capture_time_ns)),
+            rotation_degrees,
+            mirrored,
+        });
+    }
     let frame = RawFrame {
-        // SAFETY: Swift passes the buffer with `Unmanaged.passRetained`,
-        // transferring that reference here.
-        pixel_buffer: unsafe { CapturedPixelBuffer::from_owned(buffer) },
+        pixel_buffer,
         timestamp: context
             .clock
             .timestamp(Duration::from_nanos(capture_time_ns)),
@@ -221,6 +246,9 @@ pub struct CameraInner {
     controls: CameraControls,
     resolution: Resolution,
     frame_receiver: async_channel::Receiver<RawFrame>,
+    /// The analysis stream's channel: `Some` only when the camera was opened
+    /// with `CameraConfig::analysis`.
+    analysis_receiver: Option<async_channel::Receiver<RawFrame>>,
     _frame_callback_context: Box<FrameCallbackContext>,
     recording_mode: Option<RecordingMode>,
 }
@@ -291,9 +319,21 @@ impl CameraInner {
 
         // Create frame channel (bounded to prevent unbounded memory growth)
         let (sender, receiver) = async_channel::bounded(1);
+        // The analysis channel exists only when analysis was configured; the
+        // callback then also hands each buffer to it, newest-wins.
+        let (analysis_sender, analysis_receiver) = if config.analysis.is_some() {
+            let (sender, receiver) = async_channel::bounded(1);
+            (Some(sender), Some(receiver))
+        } else {
+            (None, None)
+        };
         let mut frame_callback_context = Box::new(FrameCallbackContext {
             sender,
             clock: crate::clock::StreamClock::new(),
+            analysis: analysis_sender.map(|sender| AnalysisOutput {
+                sender,
+                clock: crate::clock::StreamClock::new(),
+            }),
         });
 
         // Set up frame callback
@@ -323,6 +363,7 @@ impl CameraInner {
                 height: h,
             },
             frame_receiver: receiver,
+            analysis_receiver,
             _frame_callback_context: frame_callback_context,
             recording_mode: None,
         })
@@ -646,6 +687,17 @@ impl CameraInner {
             let raw = receiver.recv().await.ok()?;
             let frame = capture::build_frame(&device, raw);
             Some((Ok(frame), (device, receiver)))
+        })
+    }
+
+    /// The capture output's buffers also carry the analysis stream: each
+    /// analysis frame retains the `CVPixelBuffer` a preview frame's planes
+    /// alias.
+    pub fn analysis_frames(
+        &self,
+    ) -> impl futures::Stream<Item = Result<AnalysisFrame, CameraError>> + '_ {
+        crate::analysis::stream(self.analysis_receiver.clone(), |raw| {
+            Ok(capture::build_analysis_frame(raw))
         })
     }
 

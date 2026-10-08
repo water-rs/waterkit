@@ -2933,6 +2933,12 @@ async fn record_android_vision_requests(
         }
     };
     let vision = Vision::new(Arc::clone(&device), Arc::clone(&queue));
+    // ML Kit is Play services' realization: a device without Play services
+    // has none, and every request must say so instead of answering.
+    if !waterkit_content::vision::CodeScanner::capabilities().available {
+        record_vision_without_play_services(report, &vision).await;
+        return;
+    }
     match qr_png(VISION_QR_TEXT) {
         Ok(png) => {
             let _ = std::fs::write(files_dir.join("vision-qr.png"), &png);
@@ -3065,6 +3071,65 @@ async fn record_vision_frame(
 /// What the device serves natively: ML Kit's symbology set and script
 /// recognizers when Play services is present.
 #[cfg(feature = "vision")]
+/// On a device without Play services, barcode and text requests report that
+/// no realization exists and the capabilities list no native realization.
+async fn record_vision_without_play_services(
+    report: &mut TestReport,
+    vision: &waterkit_content::vision::Vision,
+) {
+    use waterkit_content::vision::{
+        DetectBarcodes, EnumSet, Image, RecognizeText, Symbology, VisionError,
+    };
+
+    let png = match qr_png(VISION_QR_TEXT) {
+        Ok(png) => png,
+        Err(error) => {
+            report.push(TestCase::failed("vision.barcode.still", error));
+            return;
+        }
+    };
+    let image = Image::from_encoded(png.into());
+    match vision
+        .perform(&image, &DetectBarcodes::new(EnumSet::only(Symbology::Qr)))
+        .await
+    {
+        Err(VisionError::Unsupported(message)) => report.push(TestCase::passed_with_message(
+            "vision.barcode.still",
+            format!("unsupported without Play services: {message}"),
+        )),
+        outcome => report.push(TestCase::failed(
+            "vision.barcode.still",
+            format!("barcode detection without Play services returned {outcome:?}"),
+        )),
+    }
+    match vision.perform(&image, &RecognizeText::new()).await {
+        Err(VisionError::Unsupported(message)) => report.push(TestCase::passed_with_message(
+            "vision.text.still",
+            format!("unsupported without Play services: {message}"),
+        )),
+        outcome => report.push(TestCase::failed(
+            "vision.text.still",
+            format!("text recognition without Play services returned {outcome:?}"),
+        )),
+    }
+    let capabilities = vision.capabilities();
+    if capabilities.barcodes.native.is_empty() && capabilities.text.native.is_empty() {
+        report.push(TestCase::passed_with_message(
+            "vision.capabilities",
+            "no native realization without Play services",
+        ));
+    } else {
+        report.push(TestCase::failed(
+            "vision.capabilities",
+            format!(
+                "without Play services: native barcodes={} scripts={}",
+                capabilities.barcodes.native.len(),
+                capabilities.text.native.len()
+            ),
+        ));
+    }
+}
+
 fn record_vision_capabilities(report: &mut TestReport, vision: &waterkit_content::vision::Vision) {
     let capabilities = vision.capabilities();
     let symbologies = capabilities.barcodes.native.len();

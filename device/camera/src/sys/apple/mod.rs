@@ -8,7 +8,8 @@
 
 mod capture;
 
-use capture::{CapturedPixelBuffer, RawFrame};
+pub use capture::CapturedPixelBuffer;
+use capture::RawFrame;
 
 use crate::{
     CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, DynamicRangeProfile,

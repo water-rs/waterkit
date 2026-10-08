@@ -60,12 +60,16 @@ impl Vision {
         }
     }
 
-    /// Capabilities compiled into this build, as observed at construction.
+    /// Capabilities compiled into this build and served on this device, as
+    /// observed at construction.
     ///
-    /// `text.native` is `OcrEngine::AvailableRecognizerLanguages` exactly on
-    /// Windows; a language absent from it is served by the portable
-    /// realization when the application carries one. `scanner` reports the
-    /// device-support probe `CodeScanner::capabilities` performs.
+    /// `barcodes.native` is `DetectBarcodesRequest.supportedSymbologies` and
+    /// `text.native` the per-level `supportedRecognitionLanguages`
+    /// intersection on Apple; `text.native` is
+    /// `OcrEngine::AvailableRecognizerLanguages` on Windows. What they lack
+    /// is served by the portable realization when the application carries
+    /// one. `scanner` reports the device-support probe
+    /// `CodeScanner::capabilities` performs.
     #[must_use]
     pub fn capabilities(&self) -> VisionCapabilities {
         self.capabilities.clone()
@@ -332,7 +336,7 @@ mod tests {
         assert_eq!(PORTABLE_RUNS[2].load(Ordering::SeqCst), 0);
     }
 
-    #[cfg(feature = "text")]
+    #[cfg(all(feature = "text", not(feature = "barcode")))]
     #[test]
     #[should_panic(expected = "PortableOnly requires portable realizations for: text")]
     fn portable_only_requires_a_carried_portable_text() {
@@ -340,7 +344,7 @@ mod tests {
         let _ = Vision::with_policy(device, queue, Policy::PortableOnly);
     }
 
-    #[cfg(not(feature = "text"))]
+    #[cfg(not(any(feature = "barcode", feature = "text")))]
     #[test]
     fn portable_only_selects_portable_and_can_be_constructed_without_enabled_capabilities() {
         let (device, queue) = gpu();
@@ -360,6 +364,14 @@ mod tests {
         );
         assert_eq!(PORTABLE_RUNS[3].load(Ordering::SeqCst), 1);
         assert_eq!(PORTABLE_RUNS[4].load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    #[cfg(any(feature = "barcode", feature = "text"))]
+    #[should_panic(expected = "PortableOnly requires portable realizations")]
+    fn portable_only_panics_while_an_enabled_capability_is_not_carried() {
+        let (device, queue) = gpu();
+        let _vision = Vision::with_policy(device, queue, Policy::PortableOnly);
     }
 
     #[test]

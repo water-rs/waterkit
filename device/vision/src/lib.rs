@@ -58,7 +58,18 @@
 
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
-#![deny(unsafe_code)]
+// Apple bridges reach `wgpu`'s hal handles and mark `CVPixelBuffer`
+// thread-boundaries; Android's scanner JNI export is the one unsafe
+// attribute a `no_mangle` bridge cannot avoid. Every other target stays
+// forbidding unsafe code.
+#![cfg_attr(
+    not(any(
+        target_os = "ios",
+        target_os = "macos",
+        all(target_os = "android", feature = "scanner")
+    )),
+    forbid(unsafe_code)
+)]
 
 mod barcode;
 mod capability;
@@ -78,6 +89,8 @@ mod test_support;
 mod text;
 mod vision;
 
+#[cfg(feature = "barcode")]
+pub use barcode::DetectBarcodes;
 pub use barcode::{Barcode, Payload};
 pub use capability::{Portable, RealizationSet, VisionCapabilities};
 pub use enumset::EnumSet;

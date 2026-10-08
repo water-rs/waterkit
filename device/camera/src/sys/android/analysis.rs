@@ -3,9 +3,10 @@
 //! The capture session runs a second `ImageReader` at the analysis size next
 //! to the GPU preview reader. Each acquired `android.media.Image` is held as
 //! a JNI global with its planes' direct-buffer addresses and strides
-//! resolved at acquisition; dropping the image calls `Image.close`,
-//! returning it to the reader — the same lease shape as [`super::frames`]
-//! uses for preview frames.
+//! resolved at acquisition; dropping the frame calls the helper
+//! `AnalysisFrame`'s `close`, returning the image to the reader and freeing
+//! its in-flight slot — the same lease shape as [`super::frames`] uses for
+//! preview frames.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,11 +22,16 @@ use crate::{CameraError, DynamicRangeProfile};
 /// An acquired `android.media.Image` and its three `YUV_420_888` planes'
 /// direct-buffer addresses and strides.
 ///
-/// The image is held through a JNI global for the frame's life and closed on
-/// drop, returning it to the `ImageReader`.
+/// The image is held through a JNI global for the frame's life; the helper's
+/// `AnalysisFrame` is held beside it and closed on drop, returning the image
+/// to the `ImageReader` and freeing one of its in-flight slots, which
+/// re-arms acquisition on the camera thread.
 #[derive(Debug)]
 pub struct AnalysisImage {
     bridge: Arc<AndroidBridge>,
+    /// The helper's `AnalysisFrame` lease; closing it closes the image and
+    /// returns the reader slot.
+    frame: Global<JObject<'static>>,
     image: Global<JObject<'static>>,
     planes: [ImagePlane; 3],
     width: u32,
@@ -58,6 +64,7 @@ impl ImagePlane {
 impl AnalysisImage {
     pub(super) const fn new(
         bridge: Arc<AndroidBridge>,
+        frame: Global<JObject<'static>>,
         image: Global<JObject<'static>>,
         planes: [ImagePlane; 3],
         width: u32,
@@ -65,6 +72,7 @@ impl AnalysisImage {
     ) -> Self {
         Self {
             bridge,
+            frame,
             image,
             planes,
             width,
@@ -101,7 +109,7 @@ impl AnalysisImage {
 
 impl Drop for AnalysisImage {
     fn drop(&mut self) {
-        self.bridge.release_image(&self.image);
+        self.bridge.release_image(&self.frame);
     }
 }
 

@@ -592,8 +592,8 @@ impl AndroidBridge {
         self.with_env(|env| self.frame_size_internal(env))
     }
 
-    /// Closes a captured image — a preview `CapturedFrame` or an analysis
-    /// `android.media.Image` — returning it to its reader so acquisition
+    /// Closes a captured frame — a preview `CapturedFrame` or an analysis
+    /// `AnalysisFrame` — returning its image to the reader so acquisition
     /// resumes.
     fn release_image(&self, frame: &Global<JObject<'static>>) {
         let released = self.with_env(|env| {
@@ -1107,7 +1107,8 @@ impl CameraHelper for Arc<AndroidBridge> {
     /// Takes the next analysis image, if one arrives within `timeout_ms`, as
     /// a frame holding the `android.media.Image` globally: its planes'
     /// direct-buffer addresses and strides are resolved now, while an env is
-    /// attached, and dropping the frame closes the image.
+    /// attached, and dropping the frame closes the helper's `AnalysisFrame`
+    /// lease, returning the image to its reader.
     #[expect(
         clippy::too_many_lines,
         reason = "one linear JNI fetch of an image and its three planes; splitting it would share the same locals across helpers that mean nothing alone"
@@ -1186,6 +1187,9 @@ impl CameraHelper for Arc<AndroidBridge> {
             })?;
             let image = env.new_global_ref(&image_obj).map_err(|error| {
                 CameraError::CaptureFailed(format!("new_global_ref(image): {error}"))
+            })?;
+            let frame = env.new_global_ref(&frame_obj).map_err(|error| {
+                CameraError::CaptureFailed(format!("new_global_ref(frame): {error}"))
             })?;
 
             let width = env
@@ -1290,7 +1294,14 @@ impl CameraHelper for Arc<AndroidBridge> {
             }
 
             Ok(Some(RawAnalysisFrame {
-                image: AnalysisImage::new(Self::clone(self), image, image_planes, width, height),
+                image: AnalysisImage::new(
+                    Self::clone(self),
+                    frame,
+                    image,
+                    image_planes,
+                    width,
+                    height,
+                ),
                 display_rotation,
                 data_space,
                 timestamp: clock.timestamp(Duration::from_nanos(capture_time_ns)),

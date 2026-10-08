@@ -54,14 +54,13 @@ impl SensorData {
     #[cfg_attr(
         not(any(
             target_os = "ios",
-            target_os = "macos",
             target_os = "android",
             target_os = "windows",
             target_os = "linux"
         )),
         expect(
             dead_code,
-            reason = "only the platform backends produce samples; the unsupported-platform shim produces none"
+            reason = "only the platform backends produce 3-axis samples; macOS and unsupported platforms produce none"
         )
     )]
     pub(crate) const fn new(x: f64, y: f64, z: f64, timestamp: Timestamp) -> Self {

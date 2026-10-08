@@ -4656,6 +4656,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-contacts"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b034b578389f89a85c055eacc8d8b368be5f04a6c1b07f672bf3aec21d0ef621"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-core-audio"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4749,6 +4760,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5d563b38d2b97209f8e861173de434bd0214cf020e3423a52624cd1d989f006"
 dependencies = [
  "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation 0.3.2",
 ]
 
@@ -4760,7 +4773,7 @@ checksum = "000cfee34e683244f284252ee206a27953279d370e309649dc3ee317b37e5781"
 dependencies = [
  "block2 0.5.1",
  "objc2 0.5.2",
- "objc2-contacts",
+ "objc2-contacts 0.2.2",
  "objc2-foundation 0.2.2",
 ]
 
@@ -4893,6 +4906,17 @@ dependencies = [
  "objc2 0.5.2",
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "objc2-local-authentication"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e48e0b8b339e0d9d2ed4416b7f93f9d4daadff7d4dd797f89867cde11aeac607"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -6690,10 +6714,8 @@ version = "0.1.59"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384ed39ea10f1cefabb197b7d8e67f0034b15a94ccbb1038b8e020da59bfb0be"
 dependencies = [
- "once_cell",
  "swift-bridge-build",
  "swift-bridge-macro",
- "tokio",
 ]
 
 [[package]]
@@ -7802,10 +7824,13 @@ dependencies = [
 name = "waterkit-biometric"
 version = "0.1.4"
 dependencies = [
+ "block2 0.6.2",
  "futures",
  "jni 0.22.4",
  "ndk-context",
- "swift-bridge",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "objc2-local-authentication",
  "thiserror 2.0.20",
  "tokio",
  "waterkit-build",
@@ -7955,9 +7980,12 @@ dependencies = [
  "num-traits",
  "objc2 0.6.4",
  "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-image 0.3.2",
  "objc2-core-media",
  "objc2-core-video",
  "objc2-foundation 0.3.2",
+ "objc2-image-io",
  "objc2-io-surface",
  "objc2-metal 0.3.2",
  "objc2-video-toolbox",
@@ -7965,7 +7993,6 @@ dependencies = [
  "rav1d",
  "rav1e",
  "shaderloom",
- "swift-bridge",
  "thiserror 2.0.20",
  "tracing",
  "waterkit-build",
@@ -7992,13 +8019,16 @@ dependencies = [
 name = "waterkit-contacts"
 version = "0.1.4"
 dependencies = [
+ "block2 0.6.2",
  "blocking",
  "futures",
  "jiff",
  "jni 0.22.4",
  "ndk-context",
+ "objc2 0.6.4",
+ "objc2-contacts 0.3.2",
+ "objc2-foundation 0.3.2",
  "serde",
- "swift-bridge",
  "thiserror 2.0.20",
  "waterkit-build",
  "waterkit-fs",
@@ -8071,9 +8101,9 @@ dependencies = [
  "dirs",
  "indexed_db_futures",
  "jni 0.22.4",
+ "objc2-foundation 0.3.2",
  "serde",
  "serde_json",
- "swift-bridge",
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
@@ -8642,6 +8672,7 @@ version = "0.1.4"
 dependencies = [
  "ab_glyph",
  "barcoders",
+ "blocking",
  "bytes",
  "dejavu",
  "enumset",

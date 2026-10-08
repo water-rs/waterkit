@@ -20,16 +20,25 @@ tokio = { workspace = true, features = ["sync", "rt", "macros"] }
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
+block2.workspace = true
+futures.workspace = true
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSError",
+    "NSObject",
+    "NSString",
+] }
+objc2-local-authentication = { workspace = true, features = [
+    "block2",
+    "LABiometryType",
+    "LAContext",
+] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 waterkit-build.workspace = true
 jni.workspace = true
 ndk-context.workspace = true
-
-[build-dependencies]
-waterkit-build.workspace = true
 
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]

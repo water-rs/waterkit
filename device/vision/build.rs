@@ -7,13 +7,15 @@ fn main() {
         && (std::env::var("CARGO_FEATURE_BARCODE").is_ok()
             || std::env::var("CARGO_FEATURE_TEXT").is_ok()
             || std::env::var("CARGO_FEATURE_DOCUMENT").is_ok());
-    // `DataScannerViewController` is unavailable on Mac Catalyst, so the
-    // scanner bridge only compiles for iOS without the `macabi` ABI.
-    let scanner = target_os == "ios"
-        && std::env::var("CARGO_CFG_TARGET_ABI").as_deref() != Ok("macabi")
-        && std::env::var("CARGO_FEATURE_SCANNER").is_ok();
+    // `DataScannerViewController` and `VNDocumentCameraViewController` are
+    // both unavailable on Mac Catalyst, so the scanner bridges only compile
+    // for iOS without the `macabi` ABI.
+    let ios_scanner =
+        target_os == "ios" && std::env::var("CARGO_CFG_TARGET_ABI").as_deref() != Ok("macabi");
+    let scanner = ios_scanner && std::env::var("CARGO_FEATURE_SCANNER").is_ok();
+    let document_scanner = ios_scanner && std::env::var("CARGO_FEATURE_DOCUMENT_SCANNER").is_ok();
 
-    if !(vision || scanner) {
+    if !(vision || scanner || document_scanner) {
         return;
     }
 
@@ -36,10 +38,20 @@ fn main() {
     }
     if scanner {
         bridges = bridges.bridge(
-            waterkit_build::SwiftBridge::new("src/sys/apple/mod.rs")
+            waterkit_build::SwiftBridge::new("src/sys/apple/scanner.rs")
                 .swift_source("src/sys/apple/Scanner.swift")
                 .framework("UIKit")
                 .framework("Vision")
+                .framework("VisionKit"),
+        );
+    }
+    if document_scanner {
+        bridges = bridges.bridge(
+            waterkit_build::SwiftBridge::new("src/sys/apple/document_scanner.rs")
+                .swift_source("src/sys/apple/DocumentScanner.swift")
+                .framework("CoreImage")
+                .framework("CoreVideo")
+                .framework("UIKit")
                 .framework("VisionKit"),
         );
     }

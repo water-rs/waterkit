@@ -117,7 +117,7 @@ clipboard = ["dep:waterkit-clipboard"]
 fs = ["dep:waterkit-fs"]
 secret = ["dep:waterkit-secret"]
 camera = ["dep:waterkit-camera", "waterkit-vision?/camera"]
-vision = ["dep:waterkit-vision", "waterkit-vision?/barcode", "waterkit-vision?/text", "waterkit-vision?/document", "waterkit-vision?/scanner"]
+vision = ["dep:waterkit-vision", "waterkit-vision?/barcode", "waterkit-vision?/text", "waterkit-vision?/document", "waterkit-vision?/scanner", "waterkit-vision?/document-scanner"]
 sensor = ["dep:waterkit-sensor"]
 codec = ["dep:waterkit-codec"]
 # VA-API hardware video decode/encode on Linux. A still-image consumer keeps
@@ -225,20 +225,26 @@ toml = "1.1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
 
 # Apple
+block2 = "0.6"
 core-foundation = "0.10"
 objc2 = "0.6"
 objc2-foundation = "0.3"
+objc2-core-graphics = { version = "0.3", default-features = false }
+objc2-core-image = { version = "0.3", default-features = false }
 objc2-core-location = { version = "0.3", default-features = false }
 dispatch2 = "0.3"
 objc2-core-media = "0.3"
 objc2-app-kit = "0.3"
 objc2-authentication-services = { version = "0.3", default-features = false }
+objc2-contacts = { version = "0.3", default-features = false }
 # W3C KeyboardEvent key/modifier vocabulary.
 keyboard-types = "0.8"
 objc2-core-video = "0.3"
 objc2-video-toolbox = "0.3"
 objc2-core-foundation = "0.3"
+objc2-image-io = { version = "0.3", default-features = false }
 objc2-io-surface = "0.3"
+objc2-local-authentication = { version = "0.3", default-features = false }
 objc2-metal = "0.3"
 objc2-ui-kit = { version = "0.3", default-features = false }
 objc = "0.2"

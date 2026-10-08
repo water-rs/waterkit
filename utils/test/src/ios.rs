@@ -177,10 +177,15 @@ fn build_library(root: &Path, rust_target: &str, feature: &str) -> Result<RustLi
     let manifest = root.join(HARNESS_MANIFEST);
     // `cargo rustc` passes `--print=native-static-libs` to the harness crate
     // alone, and Cargo replays the resulting note on a fresh unit as well as
-    // on a rebuilt one.
+    // on a rebuilt one. Diagnostics stay JSON on stdout, where the note can be
+    // read; every other diagnostic is logged as rustc rendered it.
     let mut child = Command::new("cargo")
         .current_dir(root)
-        .args(["rustc", "--lib", "--message-format=json-render-diagnostics"])
+        .args([
+            "rustc",
+            "--lib",
+            "--message-format=json-diagnostic-rendered-ansi",
+        ])
         .arg("--manifest-path")
         .arg(&manifest)
         .args(["--target", rust_target, "--features", feature])
@@ -209,6 +214,8 @@ fn build_library(root: &Path, rust_target: &str, feature: &str) -> Result<RustLi
             Message::CompilerMessage(message) => {
                 if let Some(flags) = message.message.message.strip_prefix("native-static-libs: ") {
                     link_flags = Some(flags.to_owned());
+                } else if let Some(rendered) = message.message.rendered {
+                    warn!("{}", rendered.trim_end());
                 }
             }
             _ => {}

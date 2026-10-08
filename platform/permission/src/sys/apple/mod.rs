@@ -259,16 +259,22 @@ fn request_photos_permission(sender: RequestSender) {
 
 /// `CNContactStore.requestAccess(for: .contacts)`.
 fn request_contacts_permission(sender: RequestSender) {
+    // SAFETY: `CNContactStore` is `[[CNContactStore alloc] init]`.
+    let store = unsafe { CNContactStore::new() };
     let pending = RefCell::new(Some(sender));
-    let block = RcBlock::new(move |granted: Bool, _error: *mut NSError| {
-        resolve(&pending, granted_status(granted));
-    });
-    // SAFETY: `CNContactStore` is `[[CNContactStore alloc] init]`. The
-    // completion block is retained by the framework until the request
-    // resolves; its NSError argument is never dereferenced.
+    // The block owns a clone of the store so the request's target lives
+    // until the framework answers.
+    let block = {
+        let store = store.clone();
+        RcBlock::new(move |granted: Bool, _error: *mut NSError| {
+            let _store = &store;
+            resolve(&pending, granted_status(granted));
+        })
+    };
+    // SAFETY: the completion block is retained by the framework until the
+    // request resolves; its NSError argument is never dereferenced.
     unsafe {
-        CNContactStore::new()
-            .requestAccessForEntityType_completionHandler(CNEntityType::Contacts, &block);
+        store.requestAccessForEntityType_completionHandler(CNEntityType::Contacts, &block);
     }
 }
 
@@ -292,13 +298,18 @@ fn has_full_access_events() -> bool {
 /// or the older `requestAccess(to: .event)` below that boundary.
 fn request_calendar_permission(sender: RequestSender) {
     let pending = RefCell::new(Some(sender));
-    let block = RcBlock::new(move |granted: Bool, _error: *mut NSError| {
-        resolve(&pending, granted_status(granted));
-    });
     // SAFETY: `EKEventStore` is `[[EKEventStore alloc] init]`. The
     // completion block is retained by the framework until the request
-    // resolves; its NSError argument is never dereferenced.
+    // resolves; its NSError argument is never dereferenced, and the block
+    // owns a clone of the store so the request's target lives until then.
     let store = unsafe { EKEventStore::new() };
+    let block = {
+        let store = store.clone();
+        RcBlock::new(move |granted: Bool, _error: *mut NSError| {
+            let _store = &store;
+            resolve(&pending, granted_status(granted));
+        })
+    };
     let completion = NonNull::from(&*block).as_ptr();
     if has_full_access_events() {
         // SAFETY: `completion` is a valid block pointer; the framework

@@ -20,7 +20,7 @@ use std::task::{Context, Poll};
 ///
 /// # async fn example() -> Result<(), waterkit_clipboard::ClipboardError> {
 /// let clipboard = Clipboard::new()?;
-/// let mut stream = clipboard.watch()?;
+/// let mut stream = clipboard.watch().await?;
 ///
 /// while let Some(event) = stream.next().await {
 ///     println!("Clipboard changed! has_text={}", event.has_text());

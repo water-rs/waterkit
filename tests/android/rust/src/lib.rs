@@ -337,27 +337,14 @@ fn run_native_report(
     sms_delivery: bool,
     interactive: bool,
 ) -> TestReport {
-    #[cfg(not(feature = "otp"))]
-    let _ = sms_delivery;
-    #[cfg(not(feature = "dialog"))]
-    let _ = interactive;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("failed to build tokio runtime for Android test harness");
     let report = TestReport::new("android", "waterkit-test-android");
-    let mut report = match Harness::new(env, activity, &runtime, report) {
-        Ok(mut harness) => {
-            #[cfg(feature = "otp")]
-            {
-                harness.sms_delivery = sms_delivery;
-            }
-            #[cfg(feature = "dialog")]
-            {
-                harness.interactive = interactive;
-            }
-            harness.run()
-        }
+    let mut report = match Harness::new(env, activity, sms_delivery, interactive, &runtime, report)
+    {
+        Ok(harness) => harness.run(),
         Err(report) => report,
     };
 
@@ -976,25 +963,41 @@ fn android_api_level() -> Result<i32, String> {
 /// What every capability's recorder shares: the JNI environment, a global
 /// reference to the activity, the files directory, the runtime its
 /// asynchronous calls run on, and the report its cases go into.
-#[cfg_attr(
-    not(any(
-        feature = "sensor",
-        feature = "location",
-        feature = "permission",
-        feature = "fs",
-        feature = "secret",
-        feature = "clipboard",
-        feature = "otp",
-        feature = "dialog",
-        feature = "vision"
-    )),
-    expect(
-        dead_code,
-        reason = "only the recorders that call into the activity read the environment and the activity"
-    )
-)]
 struct Harness<'h, 'local> {
+    #[cfg_attr(
+        not(any(
+            feature = "sensor",
+            feature = "location",
+            feature = "permission",
+            feature = "fs",
+            feature = "secret",
+            feature = "clipboard",
+            feature = "otp",
+            feature = "dialog",
+            feature = "vision"
+        )),
+        expect(
+            dead_code,
+            reason = "only the recorders that call into JNI read the environment"
+        )
+    )]
     env: &'h mut Env<'local>,
+    #[cfg_attr(
+        not(any(
+            feature = "sensor",
+            feature = "location",
+            feature = "permission",
+            feature = "fs",
+            feature = "secret",
+            feature = "clipboard",
+            feature = "otp",
+            feature = "dialog"
+        )),
+        expect(
+            dead_code,
+            reason = "only the recorders that call into the activity read it"
+        )
+    )]
     activity: Global<JObject<'static>>,
     #[cfg(feature = "camera")]
     files_dir: std::path::PathBuf,
@@ -1012,9 +1015,15 @@ impl<'h, 'local> Harness<'h, 'local> {
     fn new(
         env: &'h mut Env<'local>,
         activity: &JObject<'_>,
+        sms_delivery: bool,
+        interactive: bool,
         runtime: &'h tokio::runtime::Runtime,
         mut report: TestReport,
     ) -> Result<Self, TestReport> {
+        #[cfg(not(feature = "otp"))]
+        let _ = sms_delivery;
+        #[cfg(not(feature = "dialog"))]
+        let _ = interactive;
         let global_activity = match env.new_global_ref(activity) {
             Ok(value) => value,
             Err(error) => {
@@ -1039,9 +1048,9 @@ impl<'h, 'local> Harness<'h, 'local> {
             #[cfg(feature = "camera")]
             files_dir,
             #[cfg(feature = "otp")]
-            sms_delivery: false,
+            sms_delivery,
             #[cfg(feature = "dialog")]
-            interactive: false,
+            interactive,
             runtime,
             report,
         })
@@ -1102,7 +1111,7 @@ const RECORDERS: &[Recorder] = &[
     #[cfg(feature = "fs")]
     |h| record_android_fs(&mut h.report, h.env, h.activity.as_obj()),
     #[cfg(feature = "haptic")]
-    |h| record_android_haptic(&mut h.report),
+    |h| h.runtime.block_on(record_android_haptic(&mut h.report)),
     #[cfg(feature = "notification")]
     |h| {
         h.runtime
@@ -1111,7 +1120,7 @@ const RECORDERS: &[Recorder] = &[
     #[cfg(feature = "secret")]
     |h| record_android_secret(&mut h.report, h.env, h.activity.as_obj()),
     #[cfg(feature = "system")]
-    |h| record_android_system(&mut h.report),
+    |h| h.runtime.block_on(record_android_system(&mut h.report)),
     #[cfg(feature = "background")]
     |h| record_android_background(&mut h.report),
     #[cfg(feature = "passkey")]
@@ -2202,7 +2211,7 @@ async fn record_android_clipboard_watch(
     const FIRST: &str = "WaterKit Watch First";
     const SECOND: &str = "WaterKit Watch Second";
 
-    let mut primary_stream = match clipboard.watch() {
+    let mut primary_stream = match clipboard.watch().await {
         Ok(stream) => stream,
         Err(error) => {
             report.push(TestCase::failed(
@@ -2214,7 +2223,7 @@ async fn record_android_clipboard_watch(
     };
     // A second subscriber on the same clipboard: watchers must be
     // independent, each registering its own listener.
-    let mut second_stream = match clipboard.watch() {
+    let mut second_stream = match clipboard.watch().await {
         Ok(stream) => stream,
         Err(error) => {
             primary_stream.stop();
@@ -2272,7 +2281,7 @@ async fn record_android_clipboard_watch(
     // clip event proves the clipboard stays observable through the same
     // callback path afterwards.
     drop(second_stream);
-    match clipboard.watch() {
+    match clipboard.watch().await {
         Ok(mut fresh_stream) => {
             if let Err(error) = clipboard.set_text(FIRST) {
                 report.push(TestCase::failed(
@@ -2374,8 +2383,8 @@ fn record_android_fs(report: &mut TestReport, env: &mut Env<'_>, activity: &JObj
 }
 
 #[cfg(feature = "haptic")]
-fn record_android_haptic(report: &mut TestReport) {
-    match waterkit_content::haptic::Haptic::impact(waterkit_content::haptic::Intensity::LOW) {
+async fn record_android_haptic(report: &mut TestReport) {
+    match waterkit_content::haptic::Haptic::impact(waterkit_content::haptic::Intensity::LOW).await {
         Ok(()) => report.push(TestCase::passed("haptic.impact")),
         Err(error) => report.push(TestCase::failed(
             "haptic.impact",
@@ -2453,10 +2462,10 @@ fn record_android_secret(report: &mut TestReport, env: &mut Env<'_>, activity: &
 }
 
 #[cfg(feature = "system")]
-fn record_android_system(report: &mut TestReport) {
+async fn record_android_system(report: &mut TestReport) {
     use waterkit_content::system;
 
-    report.push(match system::connectivity() {
+    report.push(match system::connectivity().await {
         Ok(info) => TestCase::passed_with_message(
             "system.connectivity",
             format!(
@@ -3132,6 +3141,7 @@ async fn record_vision_without_play_services(
     }
 }
 
+#[cfg(feature = "vision")]
 fn record_vision_capabilities(report: &mut TestReport, vision: &waterkit_content::vision::Vision) {
     let capabilities = vision.capabilities();
     let symbologies = capabilities.barcodes.native.len();

@@ -27,6 +27,7 @@ objc2-foundation = { workspace = true, features = ["NSError", "NSOperation", "NS
 
 [target.'cfg(target_os = "ios")'.dependencies]
 block2.workspace = true
+dispatch2.workspace = true
 objc2.workspace = true
 objc2-core-motion = { workspace = true, features = [
     "block2",

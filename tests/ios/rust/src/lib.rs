@@ -87,7 +87,7 @@ const RECORDERS: &[Recorder] = &[
     #[cfg(feature = "fs")]
     |h| record_fs(&mut h.report),
     #[cfg(feature = "haptic")]
-    |h| record_haptic(&mut h.report),
+    |h| h.runtime.block_on(record_haptic(&mut h.report)),
     #[cfg(feature = "notification")]
     |h| {
         h.report.push(TestCase::skipped(
@@ -98,7 +98,7 @@ const RECORDERS: &[Recorder] = &[
     #[cfg(feature = "secret")]
     |h| h.runtime.block_on(record_secret(&mut h.report)),
     #[cfg(feature = "system")]
-    |h| record_system(&mut h.report),
+    |h| h.runtime.block_on(record_system(&mut h.report)),
     #[cfg(feature = "screen")]
     |h| record_screen(&mut h.report),
     #[cfg(feature = "background")]
@@ -158,9 +158,10 @@ const RECORDERS: &[Recorder] = &[
     },
     #[cfg(feature = "health")]
     |h| {
-        h.report.push(TestCase::skipped(
+        let capabilities = waterkit::health::capabilities();
+        h.report.push(TestCase::passed_with_message(
             "health.availability",
-            "waterkit-health declares extern Swift symbols but ships no Apple implementation",
+            format!("available={}", capabilities.available),
         ));
     },
     #[cfg(feature = "deeplink")]
@@ -390,8 +391,8 @@ fn record_fs(report: &mut TestReport) {
 }
 
 #[cfg(feature = "haptic")]
-fn record_haptic(report: &mut TestReport) {
-    match waterkit::haptic::Haptic::notification_success() {
+async fn record_haptic(report: &mut TestReport) {
+    match waterkit::haptic::Haptic::notification_success().await {
         Ok(()) => report.push(TestCase::passed("haptic.notification_success")),
         Err(waterkit::haptic::HapticError::Unsupported) => report.push(TestCase::skipped(
             "haptic.notification_success",
@@ -439,8 +440,8 @@ async fn record_secret(report: &mut TestReport) {
 }
 
 #[cfg(feature = "system")]
-fn record_system(report: &mut TestReport) {
-    match waterkit::system::connectivity() {
+async fn record_system(report: &mut TestReport) {
+    match waterkit::system::connectivity().await {
         Ok(connectivity) => report.push(TestCase::passed_with_message(
             "system.connectivity",
             format!("connection_type={:?}", connectivity.connection_type()),

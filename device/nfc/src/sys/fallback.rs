@@ -20,7 +20,7 @@ impl NfcReaderInner {
     #[allow(clippy::unused_async)]
     pub async fn start_session(
         _message: &str,
-    ) -> Result<(Self, async_channel::Receiver<NfcTag>), NfcError> {
+    ) -> Result<(Self, async_channel::Receiver<Result<NfcTag, NfcError>>), NfcError> {
         Err(NfcError::Unsupported)
     }
 

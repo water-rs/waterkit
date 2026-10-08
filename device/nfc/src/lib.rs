@@ -120,7 +120,7 @@ pub fn is_available() -> bool {
 #[derive(Debug)]
 pub struct NfcReader {
     inner: sys::NfcReaderInner,
-    events: async_channel::Receiver<NfcTag>,
+    events: async_channel::Receiver<Result<NfcTag, NfcError>>,
 }
 
 impl NfcReader {
@@ -135,8 +135,10 @@ impl NfcReader {
         Ok(Self { inner, events })
     }
 
-    /// Returns a `Stream<Item = NfcTag>` of discovered tags.
-    pub fn events(&self) -> impl Stream<Item = NfcTag> + Send + 'static {
+    /// Returns a `Stream<Item = Result<NfcTag, NfcError>>`: tag errors and
+    /// session invalidation arrive as items; the stream ends when the
+    /// session is invalidated or `stop` was called.
+    pub fn events(&self) -> impl Stream<Item = Result<NfcTag, NfcError>> + Send + 'static {
         self.events.clone()
     }
 

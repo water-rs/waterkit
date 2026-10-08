@@ -4,11 +4,10 @@
 //! the oneshot sender, the `ASAuthorizationController` (the controller's
 //! `delegate`/`presentationContextProvider` properties are weak, so the
 //! delegate self-retains until the ceremony finishes). Requests run on the
-//! main thread; callers hop through [`run_on_main`].
+//! main thread; callers hop through [`waterkit_core::apple::on_main`].
 
 use async_trait::async_trait;
 use core::cell::RefCell;
-use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, ProtocolObject};
 use objc2::{
@@ -61,16 +60,6 @@ fn has_availability(ios_major: isize, macos_major: isize) -> bool {
         minorVersion: 0,
         patchVersion: 0,
     })
-}
-
-/// Runs `block` inline when already on the main thread, otherwise hops to
-/// the main queue asynchronously.
-fn run_on_main(block: impl FnOnce() + Send + 'static) {
-    if MainThreadMarker::new().is_some() {
-        block();
-    } else {
-        DispatchQueue::main().exec_async(block);
-    }
 }
 
 /// `userVerificationPreference(from:)` — the extern string constants
@@ -423,12 +412,11 @@ pub fn passkey_is_available() -> bool {
 
 /// `passkey_register`'s typed port: build the platform registration request
 /// on the main thread and resolve it through the delegate's oneshot.
-fn start_registration(
+async fn start_registration(
     options: RegisterOptions,
     sender: oneshot::Sender<Result<RegistrationResult, PasskeyError>>,
 ) {
-    run_on_main(move || {
-        let mtm = MainThreadMarker::new().expect("the main queue only runs on the main thread");
+    waterkit_core::apple::on_main(move |mtm| {
         // SAFETY: `initWithRelyingPartyIdentifier:` constructs the request's
         // provider; the identifier is a validated non-empty string.
         let provider = unsafe {
@@ -463,17 +451,17 @@ fn start_registration(
             unsafe { Retained::cast_unchecked::<ASAuthorizationRequest>(request) },
             &delegate,
         );
-    });
+    })
+    .await;
 }
 
 /// `passkey_authenticate`'s typed port: build the platform assertion request
 /// on the main thread and resolve it through the delegate's oneshot.
-fn start_authentication(
+async fn start_authentication(
     options: AuthenticateOptions,
     sender: oneshot::Sender<Result<AuthenticationResult, PasskeyError>>,
 ) {
-    run_on_main(move || {
-        let mtm = MainThreadMarker::new().expect("the main queue only runs on the main thread");
+    waterkit_core::apple::on_main(move |mtm| {
         // SAFETY: `initWithRelyingPartyIdentifier:` constructs the request's
         // provider; the identifier is a validated non-empty string.
         let provider = unsafe {
@@ -523,7 +511,8 @@ fn start_authentication(
             unsafe { Retained::cast_unchecked::<ASAuthorizationRequest>(request) },
             &delegate,
         );
-    });
+    })
+    .await;
 }
 
 pub struct PlatformBackend;
@@ -548,7 +537,7 @@ impl PasskeyBackend for PlatformBackend {
             ));
         }
         let (tx, rx) = oneshot::channel();
-        start_registration(options.clone(), tx);
+        start_registration(options.clone(), tx).await;
         rx.await.unwrap_or_else(|_| {
             Err(PasskeyError::Platform(
                 "apple passkey register callback channel closed".into(),
@@ -566,7 +555,7 @@ impl PasskeyBackend for PlatformBackend {
             ));
         }
         let (tx, rx) = oneshot::channel();
-        start_authentication(options.clone(), tx);
+        start_authentication(options.clone(), tx).await;
         rx.await.unwrap_or_else(|_| {
             Err(PasskeyError::Platform(
                 "apple passkey authenticate callback channel closed".into(),

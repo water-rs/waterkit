@@ -14,7 +14,7 @@ fn main() {
     let _ = waterkit_speech::SpeechRecognizer::capabilities();
     let _ = waterkit_deeplink::DeepLink::parse("https://example.com");
     let _ = waterkit_sensor::Accelerometer::capabilities().available;
-    let _ = waterkit_system::connectivity();
+    let _ = futures::executor::block_on(waterkit_system::connectivity());
     let _ = waterkit_system::thermal_state();
     let _ = waterkit_system::load();
     std::mem::drop(waterkit_passkey::is_available());

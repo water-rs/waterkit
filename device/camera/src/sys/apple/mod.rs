@@ -134,6 +134,7 @@ unsafe extern "C" {
     fn camera_set_frame_callback(
         context: *mut std::ffi::c_void,
         callback: extern "C" fn(*mut std::ffi::c_void, u64, u64, u32, bool),
+        drop_callback: extern "C" fn(*mut std::ffi::c_void),
     );
     fn camera_clear_frame_callback();
     fn camera_copy_photo_data(buffer: *mut u8, size: u64);
@@ -157,10 +158,13 @@ fn convert_result(result: ffi::CameraResultFFI, context: &str) -> Result<(), Cam
 }
 
 struct FrameCallbackContext {
-    sender: async_channel::Sender<RawFrame>,
+    sender: async_channel::Sender<Result<RawFrame, CameraError>>,
     /// Turns the sample buffers' presentation times into frame timestamps
     /// measured from the first captured frame.
     clock: crate::clock::StreamClock<Duration>,
+    /// The device the camera was opened with: the drop callback polls it so
+    /// a starved stream's buffers come back.
+    device: Arc<wgpu::Device>,
     /// The analysis stream's channel and its own clock, present only when
     /// the camera was opened with `CameraConfig::analysis`. The analysis
     /// clock measures from the first analysis frame, like the preview
@@ -170,7 +174,7 @@ struct FrameCallbackContext {
 
 /// The analysis stream's half of the callback context.
 struct AnalysisOutput {
-    sender: async_channel::Sender<RawFrame>,
+    sender: async_channel::Sender<Result<RawFrame, CameraError>>,
     clock: crate::clock::StreamClock<Duration>,
 }
 
@@ -205,6 +209,9 @@ extern "C" fn frame_callback(
     rotation_degrees: u32,
     mirrored: bool,
 ) {
+    // SAFETY: `context` is the boxed `FrameCallbackContext` registered with
+    // `camera_set_frame_callback`; the box outlives the registration, and
+    // `camera_clear_frame_callback` drains the delegate queue before it drops.
     let context = unsafe { &*context.cast::<FrameCallbackContext>() };
     let buffer = NonNull::new(pixelbuffer_handle as *mut objc2_core_video::CVPixelBuffer)
         .expect("Swift hands over a retained, non-null CVPixelBuffer");
@@ -215,14 +222,14 @@ extern "C" fn frame_callback(
     // copy, and the analysis channel keeps only the newest frame like the
     // preview's does.
     if let Some(analysis) = &context.analysis {
-        let _ = analysis.sender.force_send(RawFrame {
+        let _ = analysis.sender.force_send(Ok(RawFrame {
             pixel_buffer: pixel_buffer.clone(),
             timestamp: analysis
                 .clock
                 .timestamp(Duration::from_nanos(capture_time_ns)),
             rotation_degrees,
             mirrored,
-        });
+        }));
     }
     let frame = RawFrame {
         pixel_buffer,
@@ -235,7 +242,32 @@ extern "C" fn frame_callback(
     // Newest wins: a frame the consumer has not taken yet is displaced, and
     // dropping it returns its buffer to the capture pool at once, so the
     // channel never holds more than one buffer.
-    let _ = context.sender.force_send(frame);
+    let _ = context.sender.force_send(Ok(frame));
+}
+
+/// Callback invoked from Swift for each frame the capture output drops for
+/// lack of buffers: a dropped frame means every capture buffer is checked
+/// out, and they return only through wgpu's device maintenance, which runs
+/// inside `queue.submit` and `device.poll`. A consumer awaiting the stream
+/// submits nothing, so the camera runs one non-blocking poll itself per
+/// drop. A poll failure is a reader failure: it is each stream's last item.
+extern "C" fn drop_callback(context: *mut std::ffi::c_void) {
+    // SAFETY: `context` is the boxed `FrameCallbackContext` registered with
+    // `camera_set_frame_callback`; the box outlives the registration, and
+    // `camera_clear_frame_callback` drains the delegate queue before it drops.
+    let context = unsafe { &*context.cast::<FrameCallbackContext>() };
+    if let Err(error) = context.device.poll(wgpu::PollType::Poll) {
+        if let Some(analysis) = &context.analysis {
+            let _ = analysis
+                .sender
+                .force_send(Err(CameraError::GpuError(format!("device poll: {error}"))));
+            analysis.sender.close();
+        }
+        let _ = context
+            .sender
+            .force_send(Err(CameraError::GpuError(format!("device poll: {error}"))));
+        context.sender.close();
+    }
 }
 
 /// Internal camera backend for Apple platforms.
@@ -245,10 +277,10 @@ pub struct CameraInner {
     capabilities: CameraCapabilities,
     controls: CameraControls,
     resolution: Resolution,
-    frame_receiver: async_channel::Receiver<RawFrame>,
+    frame_receiver: async_channel::Receiver<Result<RawFrame, CameraError>>,
     /// The analysis stream's channel: `Some` only when the camera was opened
     /// with `CameraConfig::analysis`.
-    analysis_receiver: Option<async_channel::Receiver<RawFrame>>,
+    analysis_receiver: Option<async_channel::Receiver<Result<RawFrame, CameraError>>>,
     _frame_callback_context: Box<FrameCallbackContext>,
     recording_mode: Option<RecordingMode>,
 }
@@ -330,6 +362,7 @@ impl CameraInner {
         let mut frame_callback_context = Box::new(FrameCallbackContext {
             sender,
             clock: crate::clock::StreamClock::new(),
+            device: Arc::clone(&device),
             analysis: analysis_sender.map(|sender| AnalysisOutput {
                 sender,
                 clock: crate::clock::StreamClock::new(),
@@ -341,6 +374,7 @@ impl CameraInner {
             camera_set_frame_callback(
                 (&raw mut *frame_callback_context).cast::<std::ffi::c_void>(),
                 frame_callback,
+                drop_callback,
             );
         }
 
@@ -685,8 +719,8 @@ impl CameraInner {
 
         futures::stream::unfold((device, receiver), |(device, receiver)| async move {
             let raw = receiver.recv().await.ok()?;
-            let frame = capture::build_frame(&device, raw);
-            Some((Ok(frame), (device, receiver)))
+            let frame = raw.map(|raw| capture::build_frame(&device, raw));
+            Some((frame, (device, receiver)))
         })
     }
 
@@ -697,7 +731,7 @@ impl CameraInner {
         &self,
     ) -> impl futures::Stream<Item = Result<AnalysisFrame, CameraError>> + '_ {
         crate::analysis::stream(self.analysis_receiver.clone(), |raw| {
-            Ok(capture::build_analysis_frame(raw))
+            raw.map(capture::build_analysis_frame)
         })
     }
 

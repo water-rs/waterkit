@@ -32,7 +32,11 @@ compile_error!("waterkit-system supports only macOS, iOS, Android, Windows, and 
     target_os = "windows",
     target_os = "linux"
 )))]
-pub(crate) fn connectivity() -> Result<crate::ConnectivityInfo, crate::SystemError> {
+#[expect(
+    clippy::unused_async,
+    reason = "the public signature is async on every platform; this one resolves synchronously"
+)]
+pub(crate) async fn connectivity() -> Result<crate::ConnectivityInfo, crate::SystemError> {
     panic!("waterkit-system supports only macOS, iOS, Android, Windows, and Linux.")
 }
 

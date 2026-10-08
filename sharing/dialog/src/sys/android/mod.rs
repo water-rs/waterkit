@@ -5,11 +5,13 @@
 //! delivery, so host applications do not forward activity results.
 
 use crate::{Dialog, DialogError, FileDialog};
-use jni::objects::{JObject, JObjectArray, JString, JValue};
+use futures::channel::oneshot;
+use jni::objects::{JObject, JObjectArray, JString, JValue, JValueOwned};
 use jni::{Env, jni_sig, jni_str};
 use waterkit_build::{
-    AndroidError, DexHelper, ResultCode, decode_optional_string, decode_string, dex_helper,
-    start_activity_for_result, with_android_context,
+    AndroidError, DexHelper, FromJava, NativeCallback, PeerError, ResultCode,
+    decode_optional_string, decode_string, dex_helper, start_activity_for_result,
+    with_android_context,
 };
 
 /// `waterkit.dialog.DialogHelper`, compiled into the app's DEX by the packager
@@ -20,6 +22,54 @@ impl From<AndroidError> for DialogError {
     fn from(error: AndroidError) -> Self {
         Self::PlatformError(error.to_string())
     }
+}
+
+impl From<PeerError> for DialogError {
+    fn from(error: PeerError) -> Self {
+        Self::PlatformError(error.to_string())
+    }
+}
+
+/// The alert carries no answer: the helper completes it with `null` once the
+/// user dismisses the dialog.
+struct Dismissed;
+
+impl FromJava for Dismissed {
+    fn from_java(_env: &mut Env<'_>, object: &JObject<'_>) -> Result<Self, AndroidError> {
+        if object.is_null() {
+            Ok(Self)
+        } else {
+            Err(AndroidError::from(jni::errors::Error::ParseFailed(
+                "expected the alert dialog's null payload".into(),
+            )))
+        }
+    }
+}
+
+/// The confirm dialog's answer: the helper completes it with a
+/// `java.lang.Boolean`.
+struct Confirmed(bool);
+
+impl FromJava for Confirmed {
+    fn from_java(env: &mut Env<'_>, object: &JObject<'_>) -> Result<Self, AndroidError> {
+        let value = env
+            .call_method(object, jni_str!("booleanValue"), jni_sig!("()Z"), &[])
+            .and_then(JValueOwned::z)?;
+        Ok(Self(value))
+    }
+}
+
+/// Awaits a dialog's `NativeCallback` answer.
+async fn answer<T>(
+    receiver: oneshot::Receiver<Result<T, PeerError>>,
+    dialog: &str,
+) -> Result<T, DialogError> {
+    receiver
+        .await
+        .map_err(|_| {
+            DialogError::PlatformError(format!("the {dialog} callback was collected unanswered"))
+        })?
+        .map_err(DialogError::from)
 }
 
 /// Opaque handle to a selected media item (URI string).
@@ -141,58 +191,62 @@ fn no_selection_error(kind: &str) -> DialogError {
     ))
 }
 
-/// Show an alert dialog with JNI context.
-///
-/// # Errors
-/// Returns an error if JNI operations fail.
-pub fn show_alert_with_context(
+/// Posts the alert dialog to the main looper; the returned receiver resolves
+/// when the user dismisses it.
+fn post_alert_with_context(
     env: &mut Env<'_>,
-    context: &JObject,
+    context: &JObject<'_>,
     dialog: &Dialog,
-) -> Result<(), DialogError> {
+) -> Result<oneshot::Receiver<Result<Dismissed, PeerError>>, DialogError> {
     let helper_class = HELPER.class(env, context)?;
     let title = env.new_string(&dialog.title).map_err(DialogError::from)?;
     let message = env.new_string(&dialog.message).map_err(DialogError::from)?;
+    let (callback, receiver) = NativeCallback::<Dismissed>::new(env)?;
 
     env.call_static_method(
         helper_class,
         jni_str!("showDialog"),
-        jni_sig!("(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V"),
+        jni_sig!(
+            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Lwaterkit/build/NativeCallback;)V"
+        ),
         &[
             JValue::Object(context),
             JValue::Object(&title),
             JValue::Object(&message),
+            JValue::Object(callback.as_obj()),
         ],
     )
     .map_err(DialogError::from)?;
-    Ok(())
+    Ok(receiver)
 }
 
-/// Show a confirmation dialog with JNI context.
-///
-/// # Errors
-/// Returns an error if JNI operations fail.
-pub fn show_confirm_with_context(
+/// Posts the confirmation dialog to the main looper; the returned receiver
+/// resolves to the user's answer.
+fn post_confirm_with_context(
     env: &mut Env<'_>,
-    context: &JObject,
+    context: &JObject<'_>,
     dialog: &Dialog,
-) -> Result<bool, DialogError> {
+) -> Result<oneshot::Receiver<Result<Confirmed, PeerError>>, DialogError> {
     let helper_class = HELPER.class(env, context)?;
     let title = env.new_string(&dialog.title).map_err(DialogError::from)?;
     let message = env.new_string(&dialog.message).map_err(DialogError::from)?;
+    let (callback, receiver) = NativeCallback::<Confirmed>::new(env)?;
+
     env.call_static_method(
         helper_class,
         jni_str!("showConfirm"),
-        jni_sig!("(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)Z"),
+        jni_sig!(
+            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Lwaterkit/build/NativeCallback;)V"
+        ),
         &[
             JValue::Object(context),
             JValue::Object(&title),
             JValue::Object(&message),
+            JValue::Object(callback.as_obj()),
         ],
     )
-    .map_err(DialogError::from)?
-    .z()
-    .map_err(DialogError::from)
+    .map_err(DialogError::from)?;
+    Ok(receiver)
 }
 
 /// Load media from a selection handle with JNI context.
@@ -230,7 +284,9 @@ pub fn load_media_with_context(
 /// # Errors
 /// Returns an error if `ndk-context` is unavailable or JNI operations fail.
 pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
-    with_android_context(|env, context| show_alert_with_context(env, context, &dialog))
+    let receiver =
+        with_android_context(|env, context| post_alert_with_context(env, context, &dialog))?;
+    answer(receiver, "alert dialog").await.map(|_| ())
 }
 
 /// Show a confirmation dialog.
@@ -238,7 +294,9 @@ pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
 /// # Errors
 /// Returns an error if `ndk-context` is unavailable or JNI operations fail.
 pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
-    with_android_context(|env, context| show_confirm_with_context(env, context, &dialog))
+    let receiver =
+        with_android_context(|env, context| post_confirm_with_context(env, context, &dialog))?;
+    Ok(answer(receiver, "confirm dialog").await?.0)
 }
 
 /// Show a photo picker.

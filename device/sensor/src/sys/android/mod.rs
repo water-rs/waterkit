@@ -212,14 +212,14 @@ pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
 
 pub fn accelerometer_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
+) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
     if !accelerometer_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
     Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
-        (accelerometer_read().await).map_or(None, |data| Some((data, ())))
+        Some((accelerometer_read().await, ()))
     }))
 }
 
@@ -234,14 +234,14 @@ pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
 
 pub fn gyroscope_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
+) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
     if !gyroscope_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
     Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
-        (gyroscope_read().await).map_or(None, |data| Some((data, ())))
+        Some((gyroscope_read().await, ()))
     }))
 }
 
@@ -256,14 +256,14 @@ pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
 
 pub fn magnetometer_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
+) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
     if !magnetometer_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
     Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
-        (magnetometer_read().await).map_or(None, |data| Some((data, ())))
+        Some((magnetometer_read().await, ()))
     }))
 }
 
@@ -278,14 +278,14 @@ pub async fn barometer_read() -> Result<ScalarData, SensorError> {
 
 pub fn barometer_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = ScalarData> + Send, SensorError> {
+) -> Result<impl futures_core::Stream<Item = Result<ScalarData, SensorError>> + Send, SensorError> {
     if !barometer_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
     Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
-        (barometer_read().await).map_or(None, |data| Some((data, ())))
+        Some((barometer_read().await, ()))
     }))
 }
 
@@ -300,13 +300,13 @@ pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
 
 pub fn ambient_light_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = ScalarData> + Send, SensorError> {
+) -> Result<impl futures_core::Stream<Item = Result<ScalarData, SensorError>> + Send, SensorError> {
     if !ambient_light_available() {
         return Err(SensorError::NotAvailable);
     }
     let interval = std::time::Duration::from_millis(u64::from(interval_ms));
     Ok(stream::unfold((), move |()| async move {
         futures_timer::Delay::new(interval).await;
-        (ambient_light_read().await).map_or(None, |data| Some((data, ())))
+        Some((ambient_light_read().await, ()))
     }))
 }

@@ -61,7 +61,7 @@ mod fallback {
     )]
     pub fn accelerometer_watch(
         _interval_ms: u32,
-    ) -> Result<stream::Empty<SensorData>, SensorError> {
+    ) -> Result<stream::Empty<Result<SensorData, SensorError>>, SensorError> {
         Err(SensorError::NotAvailable)
     }
 
@@ -83,7 +83,9 @@ mod fallback {
         clippy::missing_const_for_fn,
         reason = "the facade calls every platform's backend through the same non-const signature; only this unsupported-platform shim could be const"
     )]
-    pub fn gyroscope_watch(_interval_ms: u32) -> Result<stream::Empty<SensorData>, SensorError> {
+    pub fn gyroscope_watch(
+        _interval_ms: u32,
+    ) -> Result<stream::Empty<Result<SensorData, SensorError>>, SensorError> {
         Err(SensorError::NotAvailable)
     }
 
@@ -105,7 +107,9 @@ mod fallback {
         clippy::missing_const_for_fn,
         reason = "the facade calls every platform's backend through the same non-const signature; only this unsupported-platform shim could be const"
     )]
-    pub fn magnetometer_watch(_interval_ms: u32) -> Result<stream::Empty<SensorData>, SensorError> {
+    pub fn magnetometer_watch(
+        _interval_ms: u32,
+    ) -> Result<stream::Empty<Result<SensorData, SensorError>>, SensorError> {
         Err(SensorError::NotAvailable)
     }
 
@@ -127,7 +131,9 @@ mod fallback {
         clippy::missing_const_for_fn,
         reason = "the facade calls every platform's backend through the same non-const signature; only this unsupported-platform shim could be const"
     )]
-    pub fn barometer_watch(_interval_ms: u32) -> Result<stream::Empty<ScalarData>, SensorError> {
+    pub fn barometer_watch(
+        _interval_ms: u32,
+    ) -> Result<stream::Empty<Result<ScalarData, SensorError>>, SensorError> {
         Err(SensorError::NotAvailable)
     }
 
@@ -151,7 +157,7 @@ mod fallback {
     )]
     pub fn ambient_light_watch(
         _interval_ms: u32,
-    ) -> Result<stream::Empty<ScalarData>, SensorError> {
+    ) -> Result<stream::Empty<Result<ScalarData, SensorError>>, SensorError> {
         Err(SensorError::NotAvailable)
     }
 }

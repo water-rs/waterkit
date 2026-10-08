@@ -194,7 +194,8 @@ impl Accelerometer {
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
     pub fn watch(
         interval_ms: u32,
-    ) -> Result<impl Stream<Item = SensorData> + Send + 'static, SensorError> {
+    ) -> Result<impl Stream<Item = Result<SensorData, SensorError>> + Send + 'static, SensorError>
+    {
         sys::accelerometer_watch(interval_ms)
     }
 }
@@ -229,7 +230,8 @@ impl Gyroscope {
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
     pub fn watch(
         interval_ms: u32,
-    ) -> Result<impl Stream<Item = SensorData> + Send + 'static, SensorError> {
+    ) -> Result<impl Stream<Item = Result<SensorData, SensorError>> + Send + 'static, SensorError>
+    {
         sys::gyroscope_watch(interval_ms)
     }
 }
@@ -263,7 +265,8 @@ impl Magnetometer {
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
     pub fn watch(
         interval_ms: u32,
-    ) -> Result<impl Stream<Item = SensorData> + Send + 'static, SensorError> {
+    ) -> Result<impl Stream<Item = Result<SensorData, SensorError>> + Send + 'static, SensorError>
+    {
         sys::magnetometer_watch(interval_ms)
     }
 }
@@ -298,7 +301,8 @@ impl Barometer {
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
     pub fn watch(
         interval_ms: u32,
-    ) -> Result<impl Stream<Item = ScalarData> + Send + 'static, SensorError> {
+    ) -> Result<impl Stream<Item = Result<ScalarData, SensorError>> + Send + 'static, SensorError>
+    {
         sys::barometer_watch(interval_ms)
     }
 }
@@ -334,7 +338,8 @@ impl AmbientLight {
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
     pub fn watch(
         interval_ms: u32,
-    ) -> Result<impl Stream<Item = ScalarData> + Send + 'static, SensorError> {
+    ) -> Result<impl Stream<Item = Result<ScalarData, SensorError>> + Send + 'static, SensorError>
+    {
         sys::ambient_light_watch(interval_ms)
     }
 }

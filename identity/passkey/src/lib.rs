@@ -272,7 +272,7 @@ pub enum PublicKeyAlgorithm {
 }
 
 impl PublicKeyAlgorithm {
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
     pub(crate) const fn cose_id(self) -> i32 {
         match self {
             Self::Es256 => -7,
@@ -297,7 +297,7 @@ pub enum AttestationPreference {
 }
 
 impl AttestationPreference {
-#[cfg(target_os = "android")]
+    #[cfg(target_os = "android")]
     pub(crate) const fn as_wire(self) -> &'static str {
         match self {
             Self::None => "none",
@@ -321,7 +321,7 @@ pub enum UserVerificationRequirement {
 }
 
 impl UserVerificationRequirement {
-#[cfg(target_os = "android")]
+    #[cfg(target_os = "android")]
     pub(crate) const fn as_wire(self) -> &'static str {
         match self {
             Self::Required => "required",
@@ -455,7 +455,7 @@ impl RegisterOptions {
         &self.challenge
     }
 
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
     pub(crate) const fn timeout_ms_value(&self) -> Option<u32> {
         self.timeout_ms
     }
@@ -464,12 +464,12 @@ impl RegisterOptions {
         self.attestation
     }
 
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
     pub(crate) fn pub_key_algorithms_ref(&self) -> &[PublicKeyAlgorithm] {
         &self.pub_key_algorithms
     }
 
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
     pub(crate) fn exclude_credentials_ref(&self) -> &[CredentialDescriptor] {
         &self.exclude_credentials
     }
@@ -478,7 +478,7 @@ impl RegisterOptions {
         self.user_verification
     }
 
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
     pub(crate) const fn discoverable_value(&self) -> bool {
         self.discoverable
     }
@@ -536,7 +536,7 @@ impl AuthenticateOptions {
         &self.challenge
     }
 
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
     pub(crate) const fn timeout_ms_value(&self) -> Option<u32> {
         self.timeout_ms
     }

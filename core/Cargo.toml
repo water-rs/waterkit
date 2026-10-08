@@ -23,7 +23,7 @@ uuid = { version = "1", default-features = false, features = ["std"] }
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2.workspace = true
 dispatch2.workspace = true
-futures = { workspace = true, default-features = false, features = ["std"] }
+futures.workspace = true
 
 [dev-dependencies]
 futures = { workspace = true }

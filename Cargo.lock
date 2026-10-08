@@ -8783,6 +8783,7 @@ dependencies = [
  "objc2-io-kit",
  "serde",
  "thiserror 2.0.20",
+ "tracing",
  "waterkit-build",
  "waterkit-core",
  "windows 0.62.2",

@@ -1,14 +1,15 @@
 //! Android sensor implementation using JNI.
 
 use crate::{ScalarData, SensorData, SensorError};
+use futures::StreamExt;
 use futures::channel::oneshot;
-use futures::stream;
 use jni::objects::{JDoubleArray, JObject, JValue};
 use jni::signature::MethodSignature;
 use jni::strings::JNIStr;
 use jni::{Env, jni_sig, jni_str};
 use waterkit_build::{
-    AndroidError, DexHelper, FromJava, NativeCallback, PeerError, dex_helper, with_android_context,
+    AndroidError, DexHelper, FromJava, NativeCallback, NativeChannel, PeerError, dex_helper,
+    with_android_context,
 };
 use waterkit_core::Timestamp;
 
@@ -200,6 +201,96 @@ async fn finish_read(
         .map_err(|_| SensorError::Platform("sensor read was abandoned".into()))?
         .map_err(SensorError::from)
 }
+/// An Android sensor watch: the Kotlin `SensorWatch` object owns the
+/// registered `SensorEventListener`; dropping this stream calls its `stop()`,
+/// which unregisters the listener and closes the channel.
+struct WatchStream<T> {
+    handle: jni::objects::Global<JObject<'static>>,
+    inner: std::pin::Pin<Box<dyn futures_core::Stream<Item = Result<T, SensorError>> + Send>>,
+}
+
+impl<T> futures_core::Stream for WatchStream<T> {
+    type Item = Result<T, SensorError>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+impl<T> Drop for WatchStream<T> {
+    fn drop(&mut self) {
+        if let Err(error) = with_android_context(|env, _context| {
+            env.call_method(self.handle.as_obj(), jni_str!("stop"), jni_sig!("()V"), &[])
+                .map(|_| ())
+                .map_err(AndroidError::from)
+        }) {
+            tracing::warn!(%error, "failed to stop Android sensor watch");
+        }
+    }
+}
+
+/// Registers one `SensorEventListener` at `interval_ms` and returns the stream
+/// of decoded events.
+fn watch_sensor<T: Send + 'static>(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+    sensor_type: i32,
+    interval_ms: u32,
+    decode: fn(&[f64]) -> Result<T, SensorError>,
+) -> Result<WatchStream<T>, SensorError> {
+    if !is_sensor_available_with_context(env, context, sensor_type)? {
+        return Err(SensorError::NotAvailable);
+    }
+    let helper = HELPER.class(env, context)?;
+    let (channel, receiver) = NativeChannel::<RawReading>::new(env)?;
+    let sampling_us = i32::try_from(u64::from(interval_ms) * 1000).unwrap_or(i32::MAX);
+    let watch = env
+        .call_static_method(
+            helper,
+            jni_str!("watchSensor"),
+            jni_sig!(
+                "(Landroid/content/Context;IILwaterkit/build/NativeChannel;)Lwaterkit/sensor/SensorWatch;"
+            ),
+            &[
+                JValue::Object(context),
+                JValue::Int(sensor_type),
+                JValue::Int(sampling_us),
+                JValue::Object(channel.as_obj()),
+            ],
+        )
+        .map_err(|e| SensorError::Platform(format!("watchSensor: {e}")))?
+        .l()
+        .map_err(|e| SensorError::Platform(format!("watchSensor result: {e}")))?;
+    let handle = env
+        .new_global_ref(watch)
+        .map_err(|e| SensorError::Platform(format!("retain sensor watch: {e}")))?;
+
+    let inner = receiver.map(move |item| {
+        item.map_err(SensorError::from)
+            .and_then(|reading| decode(&reading.0))
+    });
+    Ok(WatchStream {
+        handle,
+        inner: Box::pin(inner),
+    })
+}
+
+#[expect(
+    clippy::unused_async,
+    reason = "keeps the sys-impl signature uniform across platforms"
+)]
+async fn watch_internal<T: Send + 'static>(
+    sensor_type: i32,
+    interval_ms: u32,
+    decode: fn(&[f64]) -> Result<T, SensorError>,
+) -> Result<WatchStream<T>, SensorError> {
+    with_android_context(|env, context| {
+        watch_sensor(env, context, sensor_type, interval_ms, decode)
+    })
+}
 
 // --- Parameter-less API Implementation using ndk-context ---
 
@@ -237,21 +328,10 @@ pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
     read_sensor_internal(1).await
 }
 
-#[expect(
-    clippy::unused_async,
-    reason = "keeps the sys-impl signature uniform across platforms"
-)]
 pub async fn accelerometer_watch(
     interval_ms: u32,
 ) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
-    if !accelerometer_available() {
-        return Err(SensorError::NotAvailable);
-    }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        Some((accelerometer_read().await, ()))
-    }))
+    watch_internal(1, interval_ms, parse_sensor_reading).await
 }
 
 pub fn gyroscope_available() -> bool {
@@ -262,21 +342,10 @@ pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
     read_sensor_internal(4).await
 }
 
-#[expect(
-    clippy::unused_async,
-    reason = "keeps the sys-impl signature uniform across platforms"
-)]
 pub async fn gyroscope_watch(
     interval_ms: u32,
 ) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
-    if !gyroscope_available() {
-        return Err(SensorError::NotAvailable);
-    }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        Some((gyroscope_read().await, ()))
-    }))
+    watch_internal(4, interval_ms, parse_sensor_reading).await
 }
 
 pub fn magnetometer_available() -> bool {
@@ -287,21 +356,10 @@ pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
     read_sensor_internal(2).await
 }
 
-#[expect(
-    clippy::unused_async,
-    reason = "keeps the sys-impl signature uniform across platforms"
-)]
 pub async fn magnetometer_watch(
     interval_ms: u32,
 ) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
-    if !magnetometer_available() {
-        return Err(SensorError::NotAvailable);
-    }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        Some((magnetometer_read().await, ()))
-    }))
+    watch_internal(2, interval_ms, parse_sensor_reading).await
 }
 
 pub fn barometer_available() -> bool {
@@ -312,21 +370,10 @@ pub async fn barometer_read() -> Result<ScalarData, SensorError> {
     read_pressure_internal().await
 }
 
-#[expect(
-    clippy::unused_async,
-    reason = "keeps the sys-impl signature uniform across platforms"
-)]
 pub async fn barometer_watch(
     interval_ms: u32,
 ) -> Result<impl futures_core::Stream<Item = Result<ScalarData, SensorError>> + Send, SensorError> {
-    if !barometer_available() {
-        return Err(SensorError::NotAvailable);
-    }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        Some((barometer_read().await, ()))
-    }))
+    watch_internal(6, interval_ms, parse_scalar_reading).await
 }
 
 pub fn ambient_light_available() -> bool {
@@ -337,19 +384,8 @@ pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
     read_light_internal().await
 }
 
-#[expect(
-    clippy::unused_async,
-    reason = "keeps the sys-impl signature uniform across platforms"
-)]
 pub async fn ambient_light_watch(
     interval_ms: u32,
 ) -> Result<impl futures_core::Stream<Item = Result<ScalarData, SensorError>> + Send, SensorError> {
-    if !ambient_light_available() {
-        return Err(SensorError::NotAvailable);
-    }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        Some((ambient_light_read().await, ()))
-    }))
+    watch_internal(5, interval_ms, parse_scalar_reading).await
 }

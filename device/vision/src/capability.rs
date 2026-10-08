@@ -11,14 +11,28 @@ pub struct VisionCapabilities {
     /// exactly; it is empty on platforms without a native recognizer.
     #[cfg(feature = "text")]
     pub text: RealizationSet<Vec<icu_locale_core::LanguageIdentifier>>,
+
+    /// Whether this device can present the system code scanner, as
+    /// [`CodeScanner::capabilities`] reports it. Present when the `scanner`
+    /// feature is enabled.
+    ///
+    /// [`CodeScanner::capabilities`]: crate::CodeScanner::capabilities
+    #[cfg(feature = "scanner")]
+    pub scanner: bool,
 }
 
 impl VisionCapabilities {
     #[cfg_attr(
-        any(not(feature = "text"), not(target_os = "windows")),
+        all(
+            any(not(feature = "text"), not(target_os = "windows")),
+            any(
+                not(feature = "scanner"),
+                not(any(target_os = "ios", target_os = "android"))
+            )
+        ),
         expect(
             clippy::missing_const_for_fn,
-            reason = "only a native text recognizer's language probe allocates; elsewhere the capabilities are constant"
+            reason = "a native text recognizer's language probe or the scanner's device-support probe is a runtime call; elsewhere the capabilities are constant"
         )
     )]
     pub(crate) fn new() -> Self {
@@ -28,6 +42,8 @@ impl VisionCapabilities {
                 native: crate::text::native_languages(),
                 portable: Portable::Absent,
             },
+            #[cfg(feature = "scanner")]
+            scanner: crate::sys::scanner_available(),
         }
     }
 }
@@ -65,15 +81,26 @@ impl waterkit_core::Capabilities for VisionCapabilities {
     /// Returns whether any capability has a realization in this build.
     fn available(&self) -> bool {
         #[cfg(feature = "text")]
-        let any = self.text.available();
-        #[cfg(not(feature = "text"))]
-        let any = false;
-        any
+        if self.text.available() {
+            return true;
+        }
+        #[cfg(feature = "scanner")]
+        if self.scanner {
+            return true;
+        }
+        false
     }
 }
 
-/// Every capability enabled by this build and whether its portable
+/// Every request capability enabled by this build and whether its portable
 /// realization is carried by the application.
+///
+/// The system code scanner is not a request served by [`Vision`]: it has no
+/// portable realization to select, so it is absent here even when its feature
+/// is enabled and [`Policy::PortableOnly`] does not constrain it.
+///
+/// [`Vision`]: crate::Vision
+/// [`Policy::PortableOnly`]: crate::Policy::PortableOnly
 pub const ENABLED: &[(&str, bool)] = &[
     #[cfg(feature = "text")]
     ("text", false),

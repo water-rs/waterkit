@@ -38,3 +38,9 @@ pub use android_runtime::{
     AndroidError, DexHelper, decode_optional_string, decode_string, describe_jni_error,
     jvm_and_context, with_android_context,
 };
+
+#[cfg(all(target_os = "android", feature = "activity-result"))]
+pub use android_runtime::{
+    ActivityResult, ActivityResultError, PendingActivityResult, ResultCode,
+    start_activity_for_result, start_intent_sender_for_result,
+};

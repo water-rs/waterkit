@@ -1,18 +1,16 @@
 //! Android dialog implementation using JNI.
 //!
-//! The async APIs use `ndk-context` to obtain the Android `Context` automatically.
-//! For advanced JNI integration, `*_with_context` APIs are also available.
+//! The async APIs use `ndk-context` to obtain the Android `Context`
+//! automatically. The activity-result bridge owns picker lifecycle and result
+//! delivery, so host applications do not forward activity results.
 
 use crate::{Dialog, DialogError, FileDialog};
-use futures::channel::oneshot;
-use jni::errors::ThrowRuntimeExAndDefault;
-use jni::objects::{Global, JClass, JObject, JString, JValue};
-use jni::sys::jlong;
-use jni::{Env, EnvUnowned, JavaVM, jni_sig, jni_str};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
-use waterkit_build::{AndroidError, DexHelper, dex_helper};
+use jni::objects::{JObject, JObjectArray, JString, JValue};
+use jni::{Env, jni_sig, jni_str};
+use waterkit_build::{
+    AndroidError, DexHelper, ResultCode, decode_optional_string, decode_string, dex_helper,
+    start_activity_for_result, with_android_context,
+};
 
 /// `waterkit.dialog.DialogHelper`, compiled into the app's DEX by the packager
 /// and resolved through the application's `ClassLoader`.
@@ -28,285 +26,119 @@ impl From<AndroidError> for DialogError {
 #[derive(Debug, Clone)]
 pub struct Selection(pub String);
 
-type PickerCallback = oneshot::Sender<Option<String>>;
-type MultiPickerCallback = oneshot::Sender<Option<Vec<String>>>;
-
-static NEXT_PICKER_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
-
-fn photo_picker_callbacks() -> &'static Mutex<HashMap<u64, PickerCallback>> {
-    static LOCK: OnceLock<Mutex<HashMap<u64, PickerCallback>>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn file_picker_callbacks() -> &'static Mutex<HashMap<u64, PickerCallback>> {
-    static LOCK: OnceLock<Mutex<HashMap<u64, PickerCallback>>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn multiple_file_picker_callbacks() -> &'static Mutex<HashMap<u64, MultiPickerCallback>> {
-    static LOCK: OnceLock<Mutex<HashMap<u64, MultiPickerCallback>>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn decode_optional_string(env: &Env<'_>, uri: &JObject<'_>) -> jni::errors::Result<Option<String>> {
-    if uri.is_null() {
-        return Ok(None);
-    }
-    let uri_jstring = env.as_cast::<JString>(uri)?;
-    uri_jstring.try_to_string(env).map(Some)
-}
-
-fn request_id_from_jlong(request_id: jlong) -> u64 {
-    u64::try_from(request_id).unwrap_or_else(|_| {
-        panic!("waterkit-dialog: request id conversion from jlong failed: {request_id}")
-    })
-}
-
-fn jlong_from_request_id(request_id: u64) -> Result<jlong, DialogError> {
-    jlong::try_from(request_id).map_err(|_| {
-        DialogError::PlatformError(format!(
-            "picker request id exceeds jlong range: {request_id}"
-        ))
-    })
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_dialog_DialogHelper_onPhotoPickerResult<'caller>(
-    mut env: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    request_id: jlong,
-    uri: JObject<'caller>,
-) {
-    env.with_env(|env| -> jni::errors::Result<()> {
-        assert!(
-            request_id > 0,
-            "waterkit-dialog: invalid photo picker request id: {request_id}"
-        );
-        let uri = decode_optional_string(env, &uri)?;
-        let tx = photo_picker_callbacks()
-            .lock()
-            .unwrap_or_else(|error| {
-                panic!("waterkit-dialog: photo picker callback map lock poisoned: {error}")
-            })
-            .remove(&request_id_from_jlong(request_id))
-            .unwrap_or_else(|| {
-                panic!("waterkit-dialog: unknown photo picker request id in callback: {request_id}")
-            });
-        let _ = tx.send(uri);
-        Ok(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_dialog_DialogHelper_onFilePickerResult<'caller>(
-    mut env: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    request_id: jlong,
-    uri: JObject<'caller>,
-) {
-    env.with_env(|env| -> jni::errors::Result<()> {
-        assert!(
-            request_id > 0,
-            "waterkit-dialog: invalid file picker request id: {request_id}"
-        );
-        let uri = decode_optional_string(env, &uri)?;
-        let tx = file_picker_callbacks()
-            .lock()
-            .unwrap_or_else(|error| {
-                panic!("waterkit-dialog: file picker callback map lock poisoned: {error}")
-            })
-            .remove(&request_id_from_jlong(request_id))
-            .unwrap_or_else(|| {
-                panic!("waterkit-dialog: unknown file picker request id in callback: {request_id}")
-            });
-        let _ = tx.send(uri);
-        Ok(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_waterkit_dialog_DialogHelper_onFilePickerMultipleResult<'caller>(
-    mut env: EnvUnowned<'caller>,
-    _class: JClass<'caller>,
-    request_id: jlong,
-    uris: JObject<'caller>,
-) {
-    env.with_env(|env| -> jni::errors::Result<()> {
-        assert!(
-            request_id > 0,
-            "waterkit-dialog: invalid multiple file picker request id: {request_id}"
-        );
-        let encoded = decode_optional_string(env, &uris)?;
-        let uris = crate::decode_string_list(encoded);
-        let tx = multiple_file_picker_callbacks()
-            .lock()
-            .unwrap_or_else(|error| {
-                panic!("waterkit-dialog: multiple file picker callback map lock poisoned: {error}")
-            })
-            .remove(&request_id_from_jlong(request_id))
-            .unwrap_or_else(|| {
-                panic!(
-                    "waterkit-dialog: unknown multiple file picker request id in callback: {request_id}"
-                )
-            });
-        let _ = tx.send(uris);
-        Ok(())
-    })
-    .resolve::<ThrowRuntimeExAndDefault>();
-}
-
-fn ensure_context_global() -> Result<(JavaVM, Global<JObject<'static>>), DialogError> {
-    let android_context = ndk_context::android_context();
-    let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
-    let raw_context: jni::sys::jobject = android_context.context().cast();
-    if raw_vm.is_null() {
-        return Err(DialogError::PlatformError(
-            "ndk_context returned null JavaVM".into(),
-        ));
-    }
-    if raw_context.is_null() {
-        return Err(DialogError::PlatformError(
-            "ndk_context returned null Context".into(),
-        ));
-    }
-
-    let vm = unsafe { JavaVM::from_raw(raw_vm) };
-    let global = vm.attach_current_thread(|env| {
-        let context = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-        env.new_global_ref(&*context).map_err(DialogError::from)
-    })?;
-    Ok((vm, global))
-}
-
-fn launch_photo_picker_with_context(
-    env: &mut Env<'_>,
-    context: &JObject,
+fn build_photo_intent<'local>(
+    env: &mut Env<'local>,
+    context: &JObject<'_>,
     media_type: crate::MediaType,
-) -> Result<oneshot::Receiver<Option<String>>, DialogError> {
-    let helper_class = HELPER.class(env, context)?;
-
-    let type_int = match media_type {
+) -> Result<JObject<'local>, DialogError> {
+    let media_type = match media_type {
         crate::MediaType::Image | crate::MediaType::LivePhoto => 0,
         crate::MediaType::Video => 1,
     };
-    let request_id = NEXT_PICKER_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    let request_id_jlong = jlong_from_request_id(request_id)?;
-    let (tx, rx) = oneshot::channel();
-    photo_picker_callbacks()
-        .lock()
-        .map_err(|e| DialogError::PlatformError(format!("photo picker callback map lock: {e}")))?
-        .insert(request_id, tx);
-
-    let launch_result = env.call_static_method(
+    let helper_class = HELPER.class(env, context)?;
+    env.call_static_method(
         helper_class,
-        jni_str!("pickPhoto"),
-        jni_sig!("(Landroid/content/Context;IJ)V"),
-        &[
-            JValue::Object(context),
-            JValue::Int(type_int),
-            JValue::Long(request_id_jlong),
-        ],
-    );
-    if let Err(error) = launch_result {
-        photo_picker_callbacks()
-            .lock()
-            .map_err(|e| {
-                DialogError::PlatformError(format!("photo picker callback map lock cleanup: {e}"))
-            })?
-            .remove(&request_id);
-        return Err(DialogError::PlatformError(format!("pickPhoto: {error}")));
-    }
-    Ok(rx)
+        jni_str!("photoPickIntent"),
+        jni_sig!("(I)Landroid/content/Intent;"),
+        &[JValue::Int(media_type)],
+    )
+    .map_err(DialogError::from)?
+    .l()
+    .map_err(DialogError::from)
 }
 
-fn launch_file_picker_with_context(
-    env: &mut Env<'_>,
-    context: &JObject,
-    dialog: &FileDialog,
-) -> Result<oneshot::Receiver<Option<String>>, DialogError> {
-    let helper_class = HELPER.class(env, context)?;
-
-    let request_id = NEXT_PICKER_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    let request_id_jlong = jlong_from_request_id(request_id)?;
-    let (tx, rx) = oneshot::channel();
-    file_picker_callbacks()
-        .lock()
-        .map_err(|e| DialogError::PlatformError(format!("file picker callback map lock: {e}")))?
-        .insert(request_id, tx);
-
-    let filters_csv = crate::collect_filter_extensions(dialog).join(",");
-    let filters_jstr = env
-        .new_string(filters_csv)
-        .map_err(|e| DialogError::PlatformError(format!("new_string filters: {e}")))?;
-    let launch_result = env.call_static_method(
-        helper_class,
-        jni_str!("pickFile"),
-        jni_sig!("(Landroid/content/Context;Ljava/lang/String;J)V"),
-        &[
-            JValue::Object(context),
-            JValue::Object(&filters_jstr),
-            JValue::Long(request_id_jlong),
-        ],
-    );
-    if let Err(error) = launch_result {
-        file_picker_callbacks()
-            .lock()
-            .map_err(|e| {
-                DialogError::PlatformError(format!("file picker callback map lock cleanup: {e}"))
-            })?
-            .remove(&request_id);
-        return Err(DialogError::PlatformError(format!("pickFile: {error}")));
+fn build_string_array<'local>(
+    env: &mut Env<'local>,
+    extensions: &[String],
+) -> Result<JObjectArray<'local, JString<'local>>, DialogError> {
+    let array = JObjectArray::<JString>::new(env, extensions.len(), JString::null())
+        .map_err(DialogError::from)?;
+    for (index, extension) in extensions.iter().enumerate() {
+        let extension = env.new_string(extension).map_err(DialogError::from)?;
+        array
+            .set_element(env, index, &extension)
+            .map_err(DialogError::from)?;
     }
-    Ok(rx)
+    Ok(array)
 }
 
-fn launch_multiple_file_picker_with_context(
-    env: &mut Env<'_>,
-    context: &JObject,
+fn build_file_intent<'local>(
+    env: &mut Env<'local>,
+    context: &JObject<'_>,
     dialog: &FileDialog,
-) -> Result<oneshot::Receiver<Option<Vec<String>>>, DialogError> {
+    allow_multiple: bool,
+) -> Result<JObject<'local>, DialogError> {
     let helper_class = HELPER.class(env, context)?;
-
-    let request_id = NEXT_PICKER_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    let request_id_jlong = jlong_from_request_id(request_id)?;
-    let (tx, rx) = oneshot::channel();
-    multiple_file_picker_callbacks()
-        .lock()
-        .map_err(|e| {
-            DialogError::PlatformError(format!("multiple file picker callback map lock: {e}"))
-        })?
-        .insert(request_id, tx);
-
-    let filters_csv = crate::collect_filter_extensions(dialog).join(",");
-    let filters_jstr = env
-        .new_string(filters_csv)
-        .map_err(|e| DialogError::PlatformError(format!("new_string filters: {e}")))?;
-    let launch_result = env.call_static_method(
+    let extensions = crate::collect_filter_extensions(dialog);
+    let extensions = build_string_array(env, &extensions)?;
+    env.call_static_method(
         helper_class,
-        jni_str!("pickMultipleFiles"),
-        jni_sig!("(Landroid/content/Context;Ljava/lang/String;J)V"),
-        &[
-            JValue::Object(context),
-            JValue::Object(&filters_jstr),
-            JValue::Long(request_id_jlong),
-        ],
-    );
-    if let Err(error) = launch_result {
-        multiple_file_picker_callbacks()
-            .lock()
-            .map_err(|e| {
-                DialogError::PlatformError(format!(
-                    "multiple file picker callback map lock cleanup: {e}"
-                ))
-            })?
-            .remove(&request_id);
-        return Err(DialogError::PlatformError(format!(
-            "pickMultipleFiles: {error}"
-        )));
+        jni_str!("openDocumentIntent"),
+        jni_sig!("([Ljava/lang/String;Z)Landroid/content/Intent;"),
+        &[JValue::Object(&extensions), JValue::Bool(allow_multiple)],
+    )
+    .map_err(DialogError::from)?
+    .l()
+    .map_err(DialogError::from)
+}
+
+fn selected_uri(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+    data: &JObject<'_>,
+) -> Result<Option<String>, DialogError> {
+    let helper_class = HELPER.class(env, context)?;
+    let result = env
+        .call_static_method(
+            helper_class,
+            jni_str!("selectedUri"),
+            jni_sig!("(Landroid/content/Intent;)Ljava/lang/String;"),
+            &[JValue::Object(data)],
+        )
+        .map_err(DialogError::from)?
+        .l()
+        .map_err(DialogError::from)?;
+    Ok(decode_optional_string(env, &result)?)
+}
+
+fn selected_uris(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+    data: &JObject<'_>,
+) -> Result<Vec<String>, DialogError> {
+    let helper_class = HELPER.class(env, context)?;
+    let result = env
+        .call_static_method(
+            helper_class,
+            jni_str!("selectedUris"),
+            jni_sig!("(Landroid/content/Intent;)[Ljava/lang/String;"),
+            &[JValue::Object(data)],
+        )
+        .map_err(DialogError::from)?
+        .l()
+        .map_err(DialogError::from)?;
+    let result = env
+        .cast_local::<JObjectArray<JString>>(result)
+        .map_err(DialogError::from)?;
+    let count = result.len(env).map_err(DialogError::from)?;
+    let mut uris = Vec::with_capacity(count);
+    for index in 0..count {
+        let uri = result.get_element(env, index).map_err(DialogError::from)?;
+        uris.push(decode_string(env, &uri)?);
     }
-    Ok(rx)
+    Ok(uris)
+}
+
+fn result_code_error(code: ResultCode) -> DialogError {
+    DialogError::PlatformError(format!(
+        "activity result returned unexpected code: {code:?}"
+    ))
+}
+
+fn no_selection_error(kind: &str) -> DialogError {
+    DialogError::PlatformError(format!(
+        "activity result returned RESULT_OK without a {kind} selection"
+    ))
 }
 
 /// Show an alert dialog with JNI context.
@@ -319,13 +151,8 @@ pub fn show_alert_with_context(
     dialog: &Dialog,
 ) -> Result<(), DialogError> {
     let helper_class = HELPER.class(env, context)?;
-
-    let title = env
-        .new_string(&dialog.title)
-        .map_err(|e| DialogError::PlatformError(e.to_string()))?;
-    let message = env
-        .new_string(&dialog.message)
-        .map_err(|e| DialogError::PlatformError(e.to_string()))?;
+    let title = env.new_string(&dialog.title).map_err(DialogError::from)?;
+    let message = env.new_string(&dialog.message).map_err(DialogError::from)?;
 
     env.call_static_method(
         helper_class,
@@ -337,8 +164,7 @@ pub fn show_alert_with_context(
             JValue::Object(&message),
         ],
     )
-    .map_err(|e| DialogError::PlatformError(format!("showDialog: {e}")))?;
-
+    .map_err(DialogError::from)?;
     Ok(())
 }
 
@@ -352,48 +178,21 @@ pub fn show_confirm_with_context(
     dialog: &Dialog,
 ) -> Result<bool, DialogError> {
     let helper_class = HELPER.class(env, context)?;
-
-    let title = env
-        .new_string(&dialog.title)
-        .map_err(|e| DialogError::PlatformError(e.to_string()))?;
-    let message = env
-        .new_string(&dialog.message)
-        .map_err(|e| DialogError::PlatformError(e.to_string()))?;
-
-    let result = env
-        .call_static_method(
-            helper_class,
-            jni_str!("showConfirm"),
-            jni_sig!("(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)Z"),
-            &[
-                JValue::Object(context),
-                JValue::Object(&title),
-                JValue::Object(&message),
-            ],
-        )
-        .map_err(|e| DialogError::PlatformError(format!("showConfirm: {e}")))?
-        .z()
-        .map_err(|e| DialogError::PlatformError(format!("return value: {e}")))?;
-
-    Ok(result)
-}
-
-/// Show a photo picker with JNI context.
-///
-/// This context-bound API cannot return a result without blocking. Use
-/// [`show_photo_picker`] which is async and non-blocking.
-///
-/// # Errors
-/// Always returns an error to preserve non-blocking API semantics.
-pub fn show_photo_picker_with_context(
-    _env: &mut Env<'_>,
-    _context: &JObject,
-    _media_type: crate::MediaType,
-) -> Result<Option<Selection>, DialogError> {
-    Err(DialogError::PlatformError(
-        "show_photo_picker_with_context is unavailable in non-blocking mode; use show_photo_picker()"
-            .into(),
-    ))
+    let title = env.new_string(&dialog.title).map_err(DialogError::from)?;
+    let message = env.new_string(&dialog.message).map_err(DialogError::from)?;
+    env.call_static_method(
+        helper_class,
+        jni_str!("showConfirm"),
+        jni_sig!("(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)Z"),
+        &[
+            JValue::Object(context),
+            JValue::Object(&title),
+            JValue::Object(&message),
+        ],
+    )
+    .map_err(DialogError::from)?
+    .z()
+    .map_err(DialogError::from)
 }
 
 /// Load media from a selection handle with JNI context.
@@ -406,47 +205,32 @@ pub fn load_media_with_context(
     handle: &Selection,
 ) -> Result<std::path::PathBuf, DialogError> {
     let helper_class = HELPER.class(env, context)?;
-
-    let uri_jstr = env
-        .new_string(&handle.0)
-        .map_err(|e| DialogError::PlatformError(format!("new_string: {e}")))?;
-
+    let uri = env.new_string(&handle.0).map_err(DialogError::from)?;
     let result = env
         .call_static_method(
             helper_class,
             jni_str!("loadMedia"),
             jni_sig!("(Landroid/content/Context;Ljava/lang/String;)Ljava/lang/String;"),
-            &[JValue::Object(context), JValue::Object(&uri_jstr)],
+            &[JValue::Object(context), JValue::Object(&uri)],
         )
-        .map_err(|e| DialogError::PlatformError(format!("loadMedia: {e}")))?
+        .map_err(DialogError::from)?
         .l()
-        .map_err(|e| DialogError::PlatformError(format!("loadMedia return: {e}")))?;
+        .map_err(DialogError::from)?;
 
     if result.is_null() {
-        Err(DialogError::PlatformError(
-            "Failed to load media (returned null)".into(),
-        ))
-    } else {
-        let path = env
-            .as_cast::<JString>(&result)
-            .and_then(|path| path.try_to_string(env))
-            .map_err(|e| DialogError::PlatformError(format!("decode media path: {e}")))?;
-        Ok(std::path::PathBuf::from(path))
+        return Err(DialogError::PlatformError(
+            "failed to load media (returned null)".into(),
+        ));
     }
+    Ok(std::path::PathBuf::from(decode_string(env, &result)?))
 }
-
-// Public async API with implicit Android context.
 
 /// Show an alert dialog.
 ///
 /// # Errors
 /// Returns an error if `ndk-context` is unavailable or JNI operations fail.
 pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
-    futures::future::ready({
-        let (vm, context) = ensure_context_global()?;
-        vm.attach_current_thread(|env| show_alert_with_context(env, context.as_obj(), &dialog))
-    })
-    .await
+    with_android_context(|env, context| show_alert_with_context(env, context, &dialog))
 }
 
 /// Show a confirmation dialog.
@@ -454,90 +238,111 @@ pub async fn show_alert(dialog: Dialog) -> Result<(), DialogError> {
 /// # Errors
 /// Returns an error if `ndk-context` is unavailable or JNI operations fail.
 pub async fn show_confirm(dialog: Dialog) -> Result<bool, DialogError> {
-    futures::future::ready({
-        let (vm, context) = ensure_context_global()?;
-        vm.attach_current_thread(|env| show_confirm_with_context(env, context.as_obj(), &dialog))
-    })
-    .await
+    with_android_context(|env, context| show_confirm_with_context(env, context, &dialog))
 }
 
 /// Show a photo picker.
 ///
 /// # Errors
-/// Returns an error if `ndk-context` is unavailable or JNI operations fail.
+/// Returns an error if the picker fails to launch or returns invalid data.
 pub async fn show_photo_picker(
     media_type: crate::MediaType,
 ) -> Result<Option<Selection>, DialogError> {
-    let (vm, context) = ensure_context_global()?;
-    let rx = vm.attach_current_thread(|env| {
-        launch_photo_picker_with_context(env, context.as_obj(), media_type)
+    let pending = with_android_context(|env, context| {
+        let intent = build_photo_intent(env, context, media_type)?;
+        start_activity_for_result(env, &intent).map_err(DialogError::from)
     })?;
-    let picked_uri = rx.await.map_err(|_| DialogError::Cancelled)?;
-    Ok(picked_uri.map(Selection))
+    let result = pending.await.map_err(DialogError::from)?;
+    match result.code() {
+        ResultCode::Ok => {
+            let data = result
+                .into_data()
+                .ok_or_else(|| no_selection_error("photo"))?;
+            let uri =
+                with_android_context(|env, context| selected_uri(env, context, data.as_obj()))?
+                    .ok_or_else(|| no_selection_error("photo"))?;
+            Ok(Some(Selection(uri)))
+        }
+        ResultCode::Canceled => Ok(None),
+        code @ ResultCode::Custom(_) => Err(result_code_error(code)),
+    }
 }
 
 /// Show a file picker and copy the selected file into app cache.
 ///
 /// # Errors
-/// Returns an error if `ndk-context` is unavailable or JNI operations fail.
+/// Returns an error if the picker fails to launch or media loading fails.
 pub async fn show_open_single_file(
     dialog: FileDialog,
 ) -> Result<Option<std::path::PathBuf>, DialogError> {
-    let (vm, context) = ensure_context_global()?;
-    let rx = vm.attach_current_thread(|env| {
-        launch_file_picker_with_context(env, context.as_obj(), &dialog)
+    let pending = with_android_context(|env, context| {
+        let intent = build_file_intent(env, context, &dialog, false)?;
+        start_activity_for_result(env, &intent).map_err(DialogError::from)
     })?;
-    let picked_uri = rx.await.map_err(|_| DialogError::Cancelled)?;
-    match picked_uri {
-        Some(uri) => {
-            let path = load_media(Selection(uri)).await?;
+    let result = pending.await.map_err(DialogError::from)?;
+    match result.code() {
+        ResultCode::Ok => {
+            let data = result
+                .into_data()
+                .ok_or_else(|| no_selection_error("file"))?;
+            let uri =
+                with_android_context(|env, context| selected_uri(env, context, data.as_obj()))?
+                    .ok_or_else(|| no_selection_error("file"))?;
+            let selection = Selection(uri);
+            let path = load_media(&selection)?;
             crate::finalize_selected_file(&dialog, path).map(Some)
         }
-        None => Ok(None),
+        ResultCode::Canceled => Ok(None),
+        code @ ResultCode::Custom(_) => Err(result_code_error(code)),
     }
 }
 
 /// Show a file picker and copy the selected files into app cache.
 ///
 /// # Errors
-/// Returns an error if `ndk-context` is unavailable or JNI operations fail.
+/// Returns an error if the picker fails to launch or media loading fails.
 pub async fn show_open_multiple_files(
     dialog: FileDialog,
 ) -> Result<Option<Vec<std::path::PathBuf>>, DialogError> {
-    let (vm, context) = ensure_context_global()?;
-    let rx = vm.attach_current_thread(|env| {
-        launch_multiple_file_picker_with_context(env, context.as_obj(), &dialog)
+    let pending = with_android_context(|env, context| {
+        let intent = build_file_intent(env, context, &dialog, true)?;
+        start_activity_for_result(env, &intent).map_err(DialogError::from)
     })?;
-    let picked_uris = rx.await.map_err(|_| DialogError::Cancelled)?;
-    match picked_uris {
-        Some(uris) => {
+    let result = pending.await.map_err(DialogError::from)?;
+    match result.code() {
+        ResultCode::Ok => {
+            let data = result
+                .into_data()
+                .ok_or_else(|| no_selection_error("file"))?;
+            let uris =
+                with_android_context(|env, context| selected_uris(env, context, data.as_obj()))?;
+            if uris.is_empty() {
+                return Err(no_selection_error("file"));
+            }
             let mut paths = Vec::with_capacity(uris.len());
             for uri in uris {
-                paths.push(load_media(Selection(uri)).await?);
+                paths.push(load_media(&Selection(uri))?);
             }
             crate::finalize_selected_files(&dialog, paths).map(Some)
         }
-        None => Ok(None),
+        ResultCode::Canceled => Ok(None),
+        code @ ResultCode::Custom(_) => Err(result_code_error(code)),
     }
 }
 
 /// Load media from a selection handle.
 ///
 /// # Errors
-/// Returns an error if `ndk-context` is unavailable or JNI operations fail.
-pub async fn load_media(handle: Selection) -> Result<std::path::PathBuf, DialogError> {
-    futures::future::ready({
-        let (vm, context) = ensure_context_global()?;
-        vm.attach_current_thread(|env| load_media_with_context(env, context.as_obj(), &handle))
-    })
-    .await
+/// Returns an error if `ndk-context` is unavailable or media loading fails.
+pub fn load_media(handle: &Selection) -> Result<std::path::PathBuf, DialogError> {
+    with_android_context(|env, context| load_media_with_context(env, context, handle))
 }
 
 pub async fn load_photo_media(
     handle: Selection,
     requested_media_type: crate::MediaType,
 ) -> Result<crate::LoadedMedia, DialogError> {
-    let path = load_media(handle).await?;
+    let path = load_media(&handle)?;
     if let Some(live_photo) = crate::motion_photo::load_live_photo_from_motion_photo(&path)? {
         return Ok(crate::LoadedMedia::LivePhoto(live_photo));
     }

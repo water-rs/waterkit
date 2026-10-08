@@ -14,9 +14,11 @@ use bytes::Bytes;
 use enumset::EnumSet;
 use jni::objects::{JByteArray, JIntArray, JObject, JObjectArray, JValue, JValueOwned};
 use jni::{Env, jni_sig, jni_str};
-use waterkit_build::describe_jni_error;
+use waterkit_build::{
+    AndroidError, FromJava, NativeCallback, describe_jni_error, with_android_context,
+};
 
-use super::mlkit::{BARCODE_HELPER, MlInput, SharedInput, on_vision_thread, prepare_module, quad};
+use super::mlkit::{BARCODE_HELPER, MlInput, SharedInput, prepare_module, quad};
 use super::{format_of, play_services, served_symbologies, symbology_of};
 use crate::{
     Barcode, Payload, Symbology, VisionError,
@@ -61,54 +63,73 @@ pub fn barcodes_offer(requested: EnumSet<Symbology>) -> Offer {
     }
 }
 
-/// Reads one `BarcodeRow` into a [`Barcode`].
-fn barcode_row(
-    env: &mut Env<'_>,
-    row: &JObject<'_>,
-    input: &MlInput,
-) -> Result<Barcode, VisionError> {
-    let format = env
-        .get_field(row, jni_str!("format"), jni_sig!("I"))
-        .and_then(JValueOwned::i)
-        .map_err(|error| VisionError::Platform(format!("barcode format: {error}")))?;
-    let symbology = symbology_of(format).ok_or_else(|| {
-        VisionError::Platform(format!("barcode reported unknown format {format}"))
-    })?;
-    let bytes = env
-        .get_field(row, jni_str!("bytes"), jni_sig!("[B"))
-        .and_then(JValueOwned::l)
-        .map_err(|error| VisionError::Platform(format!("barcode bytes: {error}")))?;
-    let bytes = env
-        .cast_local::<JByteArray>(bytes)
-        .map_err(|error| VisionError::Platform(format!("barcode bytes cast: {error}")))?;
-    let bytes = env
-        .convert_byte_array(&bytes)
-        .map_err(|error| VisionError::Platform(format!("barcode bytes read: {error}")))?;
-    let points = env
-        .get_field(row, jni_str!("points"), jni_sig!("[I"))
-        .and_then(JValueOwned::l)
-        .map_err(|error| VisionError::Platform(format!("barcode points: {error}")))?;
-    let points = env
-        .cast_local::<JIntArray>(points)
-        .map_err(|error| VisionError::Platform(format!("barcode points cast: {error}")))?;
-    let length = points
-        .len(env)
-        .map_err(|error| VisionError::Platform(format!("barcode points len: {error}")))?;
-    let mut flat = vec![0i32; length];
-    points
-        .get_region(env, 0, &mut flat)
-        .map_err(|error| VisionError::Platform(format!("barcode points read: {error}")))?;
-    Ok(Barcode {
-        symbology,
-        payload: Payload {
-            bytes: Bytes::from(bytes),
-        },
-        bounds: quad(input.rotation_degrees, input.width, input.height, &flat),
-    })
+/// One `BarcodeRow` element, decoded into owned data.
+struct BarcodeRow {
+    format: i32,
+    bytes: Vec<u8>,
+    points: Vec<i32>,
+}
+
+impl BarcodeRow {
+    /// The row's typed [`Barcode`]: format to symbology, points to a
+    /// normalized upright quad.
+    fn into_barcode(self, input: &MlInput) -> Result<Barcode, VisionError> {
+        let symbology = symbology_of(self.format).ok_or_else(|| {
+            VisionError::Platform(format!("barcode reported unknown format {}", self.format))
+        })?;
+        Ok(Barcode {
+            symbology,
+            payload: Payload {
+                bytes: Bytes::from(self.bytes),
+            },
+            bounds: quad(
+                input.rotation_degrees,
+                input.width,
+                input.height,
+                &self.points,
+            ),
+        })
+    }
+}
+
+/// What the Kotlin helper completes the request's `NativeCallback` with:
+/// the `BarcodeRow[]` read field-by-field.
+struct BarcodeRows(Vec<BarcodeRow>);
+
+impl FromJava for BarcodeRows {
+    fn from_java(env: &mut Env<'_>, object: &JObject<'_>) -> Result<Self, AndroidError> {
+        let rows = env.as_cast::<JObjectArray<JObject>>(object)?;
+        let count = rows.len(env)?;
+        let mut barcodes = Vec::with_capacity(count);
+        for index in 0..count {
+            let row = rows.get_element(env, index)?;
+            let format = env
+                .get_field(&row, jni_str!("format"), jni_sig!("I"))
+                .and_then(JValueOwned::i)?;
+            let bytes = env
+                .get_field(&row, jni_str!("bytes"), jni_sig!("[B"))
+                .and_then(JValueOwned::l)?;
+            let bytes = env.convert_byte_array(&env.cast_local::<JByteArray>(bytes)?)?;
+            let points = env
+                .get_field(&row, jni_str!("points"), jni_sig!("[I"))
+                .and_then(JValueOwned::l)?;
+            let points = env.cast_local::<JIntArray>(points)?;
+            let mut flat = vec![0i32; points.len(env)?];
+            points.get_region(env, 0, &mut flat)?;
+            barcodes.push(BarcodeRow {
+                format,
+                bytes,
+                points: flat,
+            });
+        }
+        Ok(Self(barcodes))
+    }
 }
 
 /// Runs `symbologies` over the pass's shared [`MlInput`], installing the
-/// barcode module on the worker thread when Play services lacks it.
+/// barcode module first when Play services lacks it. The module install
+/// and the detection both answer through `NativeCallback`s the helper
+/// completes from its task listeners, so nothing is parked waiting.
 pub async fn detect_barcodes(
     pass: &mut Pass<'_>,
     symbologies: EnumSet<Symbology>,
@@ -120,47 +141,47 @@ pub async fn detect_barcodes(
             format_of(symbology).expect("the offer rejected symbologies ML Kit cannot serve")
         })
         .collect();
-    on_vision_thread("waterkit-vision-barcode", move |env, context| {
-        prepare_module(env, context, &BARCODE_HELPER, 0)?;
+    prepare_module(&BARCODE_HELPER, 0).await?;
+    let rx = with_android_context(|env, context| -> Result<_, VisionError> {
         let class = BARCODE_HELPER.class(env, context)?;
         let formats_array = JIntArray::new(env, formats.len())
             .map_err(|error| VisionError::Platform(format!("formats array: {error}")))?;
         formats_array
             .set_region(env, 0, &formats)
             .map_err(|error| VisionError::Platform(format!("formats array: {error}")))?;
-        let rows = env
-            .call_static_method(
-                class,
-                jni_str!("detectBarcodes"),
-                jni_sig!(
-                    "(Lcom/google/mlkit/vision/common/InputImage;[I)[Lwaterkit/vision/BarcodeHelper$BarcodeRow;"
-                ),
-                &[
-                    JValue::Object(input.input.as_obj()),
-                    JValue::Object(&formats_array),
-                ],
-            )
-            .and_then(JValueOwned::l)
-            .map_err(|error| {
-                VisionError::Platform(format!(
-                    "detect barcodes: {}",
-                    describe_jni_error(env, error)
-                ))
-            })?;
-        let rows = env
-            .cast_local::<JObjectArray<JObject>>(rows)
-            .map_err(|error| VisionError::Platform(format!("barcode rows cast: {error}")))?;
-        let count = rows
-            .len(env)
-            .map_err(|error| VisionError::Platform(format!("barcode rows len: {error}")))?;
-        let mut barcodes = Vec::with_capacity(count);
-        for index in 0..count {
-            let row = rows.get_element(env, index).map_err(|error| {
-                VisionError::Platform(format!("barcode row {index}: {error}"))
-            })?;
-            barcodes.push(barcode_row(env, &row, &input)?);
-        }
-        Ok(barcodes)
-    })
-    .await
+        let (callback, rx) = NativeCallback::<BarcodeRows>::new(env).map_err(|error| {
+            VisionError::Platform(format!("create the barcode callback failed: {error}"))
+        })?;
+        env.call_static_method(
+            class,
+            jni_str!("detectBarcodes"),
+            jni_sig!(
+                "(Lcom/google/mlkit/vision/common/InputImage;Lwaterkit/build/NativeCallback;[I)V"
+            ),
+            &[
+                JValue::Object(input.input.as_obj()),
+                JValue::Object(callback.as_obj()),
+                JValue::Object(&formats_array),
+            ],
+        )
+        .map_err(|error| {
+            VisionError::Platform(format!(
+                "detect barcodes: {}",
+                describe_jni_error(env, error)
+            ))
+        })?;
+        Ok(rx)
+    })?;
+    let rows = rx
+        .await
+        .map_err(|_| {
+            VisionError::Platform(String::from(
+                "the barcode detection callback was collected unanswered",
+            ))
+        })?
+        .map_err(|error| VisionError::Platform(error.to_string()))?;
+    rows.0
+        .into_iter()
+        .map(|row| row.into_barcode(&input))
+        .collect()
 }

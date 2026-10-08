@@ -12,16 +12,16 @@ use std::sync::Arc;
 
 use icu_locale::LocaleExpander;
 use icu_locale_core::LanguageIdentifier;
-use jni::objects::{JIntArray, JObject, JObjectArray, JString, JValue, JValueOwned};
+use jni::objects::{JFloatArray, JIntArray, JObject, JObjectArray, JString, JValue, JValueOwned};
 use jni::{Env, jni_sig, jni_str};
-use waterkit_build::{decode_string, describe_jni_error};
+use waterkit_build::{
+    AndroidError, FromJava, NativeCallback, decode_string, describe_jni_error, with_android_context,
+};
 
 use crate::sys::android::mlkit::{
     MODULE_CHINESE, MODULE_DEVANAGARI, MODULE_JAPANESE, MODULE_KOREAN, MODULE_LATIN,
 };
-use crate::sys::android::mlkit::{
-    MlInput, SharedInput, TEXT_HELPER, on_vision_thread, prepare_module, quad,
-};
+use crate::sys::android::mlkit::{MlInput, SharedInput, TEXT_HELPER, prepare_module, quad};
 use crate::sys::android::play_services;
 use crate::{
     TextLine, TextWord, VisionError,
@@ -178,131 +178,140 @@ fn script(plan: &TextPlan) -> Script {
     route(&plan.languages).expect("the offer declined unservable languages")
 }
 
-/// One element of a `TextRow`: the word's text, confidence and stored-space
-/// corner points.
-fn text_word(
-    env: &Env<'_>,
-    text: &JObject<'_>,
+/// One element of a `TextRow`, decoded into owned data: the word's text,
+/// confidence and stored-space corner points.
+struct TextWordRow {
+    text: String,
     confidence: f32,
-    points: JObject<'_>,
-    input: &MlInput,
-) -> Result<TextWord, VisionError> {
-    let word = decode_string(env, text)
-        .map_err(|error| VisionError::Platform(format!("word text: {error}")))?;
-    let points = env
-        .cast_local::<JIntArray>(points)
-        .map_err(|error| VisionError::Platform(format!("word points cast: {error}")))?;
-    let length = points
-        .len(env)
-        .map_err(|error| VisionError::Platform(format!("word points len: {error}")))?;
-    let mut flat = vec![0i32; length];
-    points
-        .get_region(env, 0, &mut flat)
-        .map_err(|error| VisionError::Platform(format!("word points read: {error}")))?;
-    Ok(TextWord {
-        text: word,
-        confidence: Some(confidence),
-        bounds: quad(input.rotation_degrees, input.width, input.height, &flat),
-    })
+    points: Vec<i32>,
 }
 
-/// Reads one `TextRow` into a [`TextLine`].
-fn text_line(
+/// One `TextRow` element, decoded into owned data.
+struct TextRowData {
+    text: String,
+    confidence: f32,
+    points: Vec<i32>,
+    words: Vec<TextWordRow>,
+}
+
+impl TextRowData {
+    /// The row's typed [`TextLine`]: the flat corner points normalized into
+    /// the upright image.
+    fn into_line(self, input: &MlInput) -> TextLine {
+        TextLine {
+            text: self.text,
+            confidence: Some(self.confidence),
+            bounds: quad(
+                input.rotation_degrees,
+                input.width,
+                input.height,
+                &self.points,
+            ),
+            words: self
+                .words
+                .into_iter()
+                .map(|word| TextWord {
+                    text: word.text,
+                    confidence: Some(word.confidence),
+                    bounds: quad(
+                        input.rotation_degrees,
+                        input.width,
+                        input.height,
+                        &word.points,
+                    ),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// What the Kotlin helper completes the request's `NativeCallback` with:
+/// the `TextRow[]` read field-by-field.
+struct TextRows(Vec<TextRowData>);
+
+impl FromJava for TextRows {
+    fn from_java(env: &mut Env<'_>, object: &JObject<'_>) -> Result<Self, AndroidError> {
+        let rows = env.as_cast::<JObjectArray<JObject>>(object)?;
+        let count = rows.len(env)?;
+        let mut lines = Vec::with_capacity(count);
+        for index in 0..count {
+            let row = rows.get_element(env, index)?;
+            let text = env
+                .get_field(&row, jni_str!("text"), jni_sig!("Ljava/lang/String;"))
+                .and_then(JValueOwned::l)?;
+            let text = decode_string(env, &text)?;
+            let confidence = env
+                .get_field(&row, jni_str!("confidence"), jni_sig!("F"))
+                .and_then(JValueOwned::f)?;
+            let points = int_array(env, &row, jni_str!("points"))?;
+
+            let texts = env
+                .get_field(&row, jni_str!("wordTexts"), jni_sig!("[Ljava/lang/String;"))
+                .and_then(JValueOwned::l)?;
+            let texts = env.cast_local::<JObjectArray<JString>>(texts)?;
+            let confidences = env
+                .get_field(&row, jni_str!("wordConfidences"), jni_sig!("[F"))
+                .and_then(JValueOwned::l)?;
+            let confidences = env.cast_local::<JFloatArray>(confidences)?;
+            let mut confidence_values = vec![0f32; confidences.len(env)?];
+            confidences.get_region(env, 0, &mut confidence_values)?;
+            let word_points = env
+                .get_field(&row, jni_str!("wordPoints"), jni_sig!("[[I"))
+                .and_then(JValueOwned::l)?;
+            let word_points = env.cast_local::<JObjectArray<JIntArray>>(word_points)?;
+
+            // `wordTexts`, `wordConfidences` and `wordPoints` are parallel:
+            // indexing them together keeps a disagreeing helper a bounds
+            // error instead of a silent truncation.
+            let word_count = texts.len(env)?;
+            let mut words = Vec::with_capacity(word_count);
+            for index in 0..word_count {
+                let word_text = texts.get_element(env, index)?;
+                let word_text = decode_string(env, word_text.as_ref())?;
+                let confidence = confidence_values
+                    .get(index)
+                    .copied()
+                    .ok_or(jni::errors::Error::IndexOutOfBounds)?;
+                let word_points_row = word_points.get_element(env, index)?;
+                let mut flat = vec![0i32; word_points_row.len(env)?];
+                word_points_row.get_region(env, 0, &mut flat)?;
+                words.push(TextWordRow {
+                    text: word_text,
+                    confidence,
+                    points: flat,
+                });
+            }
+            lines.push(TextRowData {
+                text,
+                confidence,
+                points,
+                words,
+            });
+        }
+        Ok(Self(lines))
+    }
+}
+
+/// Reads an `[I` field off a `TextRow` into an owned `Vec<i32>`.
+fn int_array(
     env: &mut Env<'_>,
     row: &JObject<'_>,
-    input: &MlInput,
-) -> Result<TextLine, VisionError> {
-    let text = env
-        .get_field(row, jni_str!("text"), jni_sig!("Ljava/lang/String;"))
-        .and_then(JValueOwned::l)
-        .map_err(|error| VisionError::Platform(format!("line text: {error}")))?;
-    let text = decode_string(env, &text)
-        .map_err(|error| VisionError::Platform(format!("line text: {error}")))?;
-    let confidence = env
-        .get_field(row, jni_str!("confidence"), jni_sig!("F"))
-        .and_then(JValueOwned::f)
-        .map_err(|error| VisionError::Platform(format!("line confidence: {error}")))?;
+    name: &'static jni::strings::JNIStr,
+) -> Result<Vec<i32>, AndroidError> {
     let points = env
-        .get_field(row, jni_str!("points"), jni_sig!("[I"))
-        .and_then(JValueOwned::l)
-        .map_err(|error| VisionError::Platform(format!("line points: {error}")))?;
-    let points = env
-        .cast_local::<JIntArray>(points)
-        .map_err(|error| VisionError::Platform(format!("line points cast: {error}")))?;
-    let length = points
-        .len(env)
-        .map_err(|error| VisionError::Platform(format!("line points len: {error}")))?;
-    let mut flat = vec![0i32; length];
-    points
-        .get_region(env, 0, &mut flat)
-        .map_err(|error| VisionError::Platform(format!("line points read: {error}")))?;
-
-    let texts = env
-        .get_field(row, jni_str!("wordTexts"), jni_sig!("[Ljava/lang/String;"))
-        .and_then(JValueOwned::l)
-        .map_err(|error| VisionError::Platform(format!("word texts: {error}")))?;
-    let texts = env
-        .cast_local::<JObjectArray<JString>>(texts)
-        .map_err(|error| VisionError::Platform(format!("word texts cast: {error}")))?;
-    let confidences = env
-        .get_field(row, jni_str!("wordConfidences"), jni_sig!("[F"))
-        .and_then(JValueOwned::l)
-        .map_err(|error| VisionError::Platform(format!("word confidences: {error}")))?;
-    let confidences = env
-        .cast_local::<jni::objects::JFloatArray>(confidences)
-        .map_err(|error| VisionError::Platform(format!("word confidences cast: {error}")))?;
-    let confidence_count = confidences
-        .len(env)
-        .map_err(|error| VisionError::Platform(format!("word confidences len: {error}")))?;
-    let mut confidence_values = vec![0f32; confidence_count];
-    confidences
-        .get_region(env, 0, &mut confidence_values)
-        .map_err(|error| VisionError::Platform(format!("word confidences read: {error}")))?;
-    let word_points = env
-        .get_field(row, jni_str!("wordPoints"), jni_sig!("[[I"))
-        .and_then(JValueOwned::l)
-        .map_err(|error| VisionError::Platform(format!("word points: {error}")))?;
-    let word_points = env
-        .cast_local::<JObjectArray<JObject>>(word_points)
-        .map_err(|error| VisionError::Platform(format!("word points cast: {error}")))?;
-
-    let count = texts
-        .len(env)
-        .map_err(|error| VisionError::Platform(format!("word texts len: {error}")))?;
-    let points_count = word_points
-        .len(env)
-        .map_err(|error| VisionError::Platform(format!("word points len: {error}")))?;
-    if confidence_values.len() != count || points_count != count {
-        return Err(VisionError::Platform(format!(
-            "word rows disagree: {count} texts, {} confidences, {points_count} point sets",
-            confidence_values.len()
-        )));
-    }
-    let mut words = Vec::with_capacity(count);
-    for (index, &confidence) in confidence_values.iter().enumerate() {
-        let word_text = texts
-            .get_element(env, index)
-            .map_err(|error| VisionError::Platform(format!("word text {index}: {error}")))?;
-        let points = word_points
-            .get_element(env, index)
-            .map_err(|error| VisionError::Platform(format!("word points {index}: {error}")))?;
-        words.push(text_word(
-            env,
-            word_text.as_ref(),
-            confidence,
-            points,
-            input,
-        )?);
-    }
-    Ok(TextLine {
-        text,
-        confidence: Some(confidence),
-        bounds: quad(input.rotation_degrees, input.width, input.height, &flat),
-        words,
-    })
+        .get_field(row, name, jni_sig!("[I"))
+        .and_then(JValueOwned::l)?;
+    let points = env.cast_local::<JIntArray>(points)?;
+    let mut flat = vec![0i32; points.len(env)?];
+    points.get_region(env, 0, &mut flat)?;
+    Ok(flat)
 }
 
-/// Runs the script's recognizer over the pass's shared [`MlInput`].
+/// Runs the script's recognizer over the pass's shared [`MlInput`],
+/// installing the script's module first when Play services lacks it. The
+/// module install and the recognition both answer through `NativeCallback`s
+/// the helper completes from its task listeners, so nothing is parked
+/// waiting.
 pub async fn recognize(pass: &mut Pass<'_>, plan: &TextPlan) -> Result<Vec<TextLine>, VisionError> {
     tracing::debug!(
         level = ?plan.level,
@@ -310,39 +319,43 @@ pub async fn recognize(pass: &mut Pass<'_>, plan: &TextPlan) -> Result<Vec<TextL
     );
     let input = Arc::clone(&pass.prepared::<SharedInput>().await?.0);
     let script = script(plan).module();
-    on_vision_thread("waterkit-vision-text", move |env, context| {
-        prepare_module(env, context, &TEXT_HELPER, script)?;
+    prepare_module(&TEXT_HELPER, script).await?;
+    let rx = with_android_context(|env, context| -> Result<_, VisionError> {
         let class = TEXT_HELPER.class(env, context)?;
-        let rows = env
-            .call_static_method(
-                class,
-                jni_str!("recognizeText"),
-                jni_sig!(
-                    "(Lcom/google/mlkit/vision/common/InputImage;I)[Lwaterkit/vision/VisionTextHelper$TextRow;"
-                ),
-                &[JValue::Object(input.input.as_obj()), JValue::Int(script)],
-            )
-            .and_then(JValueOwned::l)
-            .map_err(|error| {
-                VisionError::Platform(format!(
-                    "recognize text: {}",
-                    describe_jni_error(env, error)
-                ))
-            })?;
-        let rows = env
-            .cast_local::<JObjectArray<JObject>>(rows)
-            .map_err(|error| VisionError::Platform(format!("text rows cast: {error}")))?;
-        let count = rows
-            .len(env)
-            .map_err(|error| VisionError::Platform(format!("text rows len: {error}")))?;
-        let mut lines = Vec::with_capacity(count);
-        for index in 0..count {
-            let row = rows.get_element(env, index).map_err(|error| {
-                VisionError::Platform(format!("text row {index}: {error}"))
-            })?;
-            lines.push(text_line(env, &row, &input)?);
-        }
-        Ok(lines)
-    })
-    .await
+        let (callback, rx) = NativeCallback::<TextRows>::new(env).map_err(|error| {
+            VisionError::Platform(format!("create the text callback failed: {error}"))
+        })?;
+        env.call_static_method(
+            class,
+            jni_str!("recognizeText"),
+            jni_sig!(
+                "(Lcom/google/mlkit/vision/common/InputImage;Lwaterkit/build/NativeCallback;I)V"
+            ),
+            &[
+                JValue::Object(input.input.as_obj()),
+                JValue::Object(callback.as_obj()),
+                JValue::Int(script),
+            ],
+        )
+        .map_err(|error| {
+            VisionError::Platform(format!(
+                "recognize text: {}",
+                describe_jni_error(env, error)
+            ))
+        })?;
+        Ok(rx)
+    })?;
+    let rows = rx
+        .await
+        .map_err(|_| {
+            VisionError::Platform(String::from(
+                "the text recognition callback was collected unanswered",
+            ))
+        })?
+        .map_err(|error| VisionError::Platform(error.to_string()))?;
+    Ok(rows
+        .0
+        .into_iter()
+        .map(|row| row.into_line(&input))
+        .collect())
 }

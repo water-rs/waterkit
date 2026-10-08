@@ -4,7 +4,6 @@ import android.content.Context
 import com.google.android.gms.common.api.OptionalModuleApi
 import com.google.android.gms.common.moduleinstall.ModuleInstall
 import com.google.android.gms.common.moduleinstall.ModuleInstallRequest
-import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
@@ -14,7 +13,7 @@ import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
-import java.util.concurrent.TimeUnit
+import waterkit.build.NativeCallback
 
 /**
  * Kotlin half of `waterkit-vision`'s `text` feature on Android: thin
@@ -22,8 +21,8 @@ import java.util.concurrent.TimeUnit
  * engine lives in a Play services module `prepareModule` installs on
  * demand.
  *
- * Every method that touches a Play services `Task` blocks on `Tasks.await`
- * and must run on the dedicated threads the Rust side spawns for it.
+ * Every method that touches a Play services `Task` answers through the
+ * `NativeCallback` it is handed, from the task's listeners; nothing blocks.
  */
 object VisionTextHelper {
     // Module codes mirrored in `sys/android/mlkit.rs`: what `prepareModule`
@@ -72,25 +71,37 @@ object VisionTextHelper {
     }
 
     /**
-     * Downloads `script`'s recognizer module when it is not installed,
-     * returning once it is. Any failure throws, which the Rust side reports
-     * as model-unavailable.
+     * Downloads `script`'s recognizer module when it is not installed.
+     * [callback] completes with `null` once the module is available, and
+     * fails with the probe's or the install's error.
      */
     @JvmStatic
-    fun prepareModule(context: Context, module: Int) {
+    fun prepareModule(context: Context, callback: NativeCallback, module: Int) {
         val client = ModuleInstall.getClient(context)
         val api = moduleApi(module)
-        val installed = Tasks.await(
-            client.areModulesAvailable(api),
-            MlKitInput.DETECTION_TIMEOUT_MS,
-            TimeUnit.MILLISECONDS,
-        ).areModulesAvailable()
-        if (installed) return
-        Tasks.await(
-            client.installModules(ModuleInstallRequest.newBuilder().addApi(api).build()),
-            MlKitInput.INSTALL_TIMEOUT_MS,
-            TimeUnit.MILLISECONDS,
-        )
+        client.areModulesAvailable(api)
+            .addOnSuccessListener { availability ->
+                if (availability.areModulesAvailable()) {
+                    callback.complete(null)
+                } else {
+                    client.installModules(
+                        ModuleInstallRequest.newBuilder().addApi(api).build(),
+                    )
+                        .addOnSuccessListener { callback.complete(null) }
+                        .addOnCanceledListener {
+                            callback.fail("the text module install was cancelled")
+                        }
+                        .addOnFailureListener { error ->
+                            callback.fail(error.message ?: error.javaClass.name)
+                        }
+                }
+            }
+            .addOnCanceledListener {
+                callback.fail("the text module probe was cancelled")
+            }
+            .addOnFailureListener { error ->
+                callback.fail(error.message ?: error.javaClass.name)
+            }
     }
 
     private fun recognizerFor(script: Int): TextRecognizer =
@@ -108,25 +119,32 @@ object VisionTextHelper {
             }
         }
 
-    /** Every line of text in `input`, with its elements, in the image's stored orientation. */
+    /**
+     * Completes [callback] with every line of text in [input], with its
+     * elements, in the image's stored orientation.
+     */
     @JvmStatic
-    fun recognizeText(input: InputImage, script: Int): Array<TextRow> {
-        val text = Tasks.await(
-            recognizerFor(script).process(input),
-            MlKitInput.DETECTION_TIMEOUT_MS,
-            TimeUnit.MILLISECONDS,
-        )
-        return text.textBlocks.flatMap { block -> block.lines }.map { line ->
-            TextRow(
-                line.text,
-                line.confidence,
-                MlKitInput.corners(line.cornerPoints, line.boundingBox),
-                line.elements.map { it.text }.toTypedArray(),
-                FloatArray(line.elements.size) { line.elements[it].confidence },
-                line.elements.map {
-                    MlKitInput.corners(it.cornerPoints, it.boundingBox)
-                }.toTypedArray(),
-            )
-        }.toTypedArray()
+    fun recognizeText(input: InputImage, callback: NativeCallback, script: Int) {
+        recognizerFor(script).process(input)
+            .addOnSuccessListener { text ->
+                callback.complete(
+                    text.textBlocks.flatMap { block -> block.lines }.map { line ->
+                        TextRow(
+                            line.text,
+                            line.confidence,
+                            MlKitInput.corners(line.cornerPoints, line.boundingBox),
+                            line.elements.map { it.text }.toTypedArray(),
+                            FloatArray(line.elements.size) { line.elements[it].confidence },
+                            line.elements.map {
+                                MlKitInput.corners(it.cornerPoints, it.boundingBox)
+                            }.toTypedArray(),
+                        )
+                    }.toTypedArray(),
+                )
+            }
+            .addOnCanceledListener { callback.fail("text recognition was cancelled") }
+            .addOnFailureListener { error ->
+                callback.fail(error.message ?: error.javaClass.name)
+            }
     }
 }

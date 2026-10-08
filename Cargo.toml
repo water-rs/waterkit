@@ -239,6 +239,9 @@ objc2-video-toolbox = "0.3"
 objc2-core-foundation = "0.3"
 objc2-io-surface = "0.3"
 objc2-metal = "0.3"
+objc2-core-motion = { version = "0.3", default-features = false }
+objc2-io-kit = { version = "0.3", default-features = false }
+block2 = "0.6"
 objc = "0.2"
 # Zero-copy import of platform frame buffers into wgpu textures.
 wgpu-external-frame = "0.3.0"

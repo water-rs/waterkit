@@ -19,13 +19,30 @@ futures.workspace = true
 futures-core = "0.3"
 thiserror = { workspace = true }
 futures-timer = { workspace = true }
-
-[build-dependencies]
-waterkit-build.workspace = true
+async-channel = { workspace = true }
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
+objc2-foundation = { workspace = true, features = ["NSError", "NSOperation", "NSValue"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+block2.workspace = true
+objc2.workspace = true
+objc2-core-motion = { workspace = true, features = [
+    "block2",
+    "CMAccelerometer",
+    "CMAltimeter",
+    "CMAltitude",
+    "CMGyro",
+    "CMLogItem",
+    "CMMagnetometer",
+    "CMMotionManager",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+mach2 = "0.6"
+objc2-core-foundation = { workspace = true, features = ["CFDictionary"] }
+objc2-io-kit = { workspace = true, features = ["libc"] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]

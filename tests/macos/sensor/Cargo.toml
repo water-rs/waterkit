@@ -17,9 +17,3 @@ waterkit-sensor.workspace = true
 waterkit-test-report.workspace = true
 tokio.workspace = true
 
-# Apple platforms (iOS, macOS)
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
-
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
-swift-bridge-build.workspace = true

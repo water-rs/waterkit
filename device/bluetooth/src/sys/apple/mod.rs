@@ -36,6 +36,7 @@ use objc2_core_bluetooth::{
 use objc2_foundation::{
     NSArray, NSData, NSDictionary, NSError, NSNumber, NSObjectProtocol, NSString, NSUUID,
 };
+use waterkit_core::apple::on_main;
 
 use crate::{
     AdapterState, BluetoothDevice, BluetoothError, CharacteristicProperties, ClassicDevice,
@@ -60,31 +61,6 @@ type PendingWrite = (
 );
 #[cfg(target_os = "macos")]
 type StreamOwner = Arc<MainThreadBound<Retained<classic::SppStream>>>;
-
-/// Run `work` on the main queue and await its result. When already on the
-/// main thread it runs inline; otherwise it hops through `exec_async` — the
-/// caller is suspended on a oneshot, never blocked.
-async fn hop<R: Send + 'static>(work: impl FnOnce(MainThreadMarker) -> R + Send + 'static) -> R {
-    if let Some(mtm) = MainThreadMarker::new() {
-        return work(mtm);
-    }
-    let (tx, rx) = oneshot::channel();
-    DispatchQueue::main().exec_async(move || {
-        let mtm = MainThreadMarker::new().expect("on the main queue");
-        let _ = tx.send(work(mtm));
-    });
-    rx.await.expect("the main queue ran the task")
-}
-
-/// Submit `work` for execution on the main queue without awaiting it (used
-/// by `Drop`/`stop` paths where fire-and-forget release is correct).
-fn dispatch_main(work: impl FnOnce() + Send + 'static) {
-    if MainThreadMarker::new().is_some() {
-        work();
-    } else {
-        DispatchQueue::main().exec_async(work);
-    }
-}
 
 fn ns_error(error: Option<&NSError>, fallback: &str) -> String {
     error.map_or_else(
@@ -485,7 +461,7 @@ impl PeripheralDelegate {
 /// One-shot probe: spawn a temporary central delegate, ask it for the first
 /// known adapter state, then release it.
 pub async fn adapter_state() -> Result<AdapterState, BluetoothError> {
-    let (delegate, rx) = hop(|mtm| {
+    let (delegate, rx) = on_main(|mtm| {
         let delegate = CentralDelegate::spawn(mtm);
         let (tx, rx) = oneshot::channel();
         delegate.watch_state(tx);
@@ -496,7 +472,7 @@ pub async fn adapter_state() -> Result<AdapterState, BluetoothError> {
         .await
         .map_err(|_| BluetoothError::Platform("adapter state callback dropped".into()))?;
     // Release the delegate on the main queue where it lives.
-    dispatch_main(move || drop(delegate));
+    DispatchQueue::main().exec_async(move || drop(delegate));
     Ok(state)
 }
 
@@ -516,7 +492,7 @@ impl core::fmt::Debug for BleScannerInner {
 impl BleScannerInner {
     /// Fail fast unless the adapter is powered on.
     pub async fn new() -> Result<Self, BluetoothError> {
-        let (delegate, state_rx) = hop(|mtm| {
+        let (delegate, state_rx) = on_main(|mtm| {
             let delegate = CentralDelegate::spawn(mtm);
             // The delegate must outlive the adapter-state wait.
             *delegate.ivars().keep_alive.borrow_mut() = Some(delegate.clone());
@@ -529,12 +505,12 @@ impl BleScannerInner {
             .await
             .map_err(|_| BluetoothError::Platform("adapter state callback dropped".into()))?;
         if state != AdapterState::PoweredOn {
-            dispatch_main(move || drop(delegate));
+            DispatchQueue::main().exec_async(move || drop(delegate));
             return Err(BluetoothError::NotAvailable);
         }
         let (scan_tx, scan_rx) = async_channel::bounded(64);
         let central = Arc::clone(&delegate);
-        hop(move |mtm| {
+        on_main(move |mtm| {
             central.get(mtm).ivars().scan_tx.replace(Some(scan_tx));
         })
         .await;
@@ -553,7 +529,7 @@ impl BleScannerInner {
             .iter()
             .map(|uuid| uuid.as_str().to_string())
             .collect();
-        dispatch_main(move || {
+        DispatchQueue::main().exec_async(move || {
             let mtm = MainThreadMarker::new().expect("on the main queue");
             let delegate = delegate.get(mtm);
             let manager = delegate.ivars().manager.borrow();
@@ -587,7 +563,7 @@ impl BleScannerInner {
     /// main queue where it lives).
     pub fn stop_scan(&self) {
         let delegate = Arc::clone(&self.delegate);
-        dispatch_main(move || {
+        DispatchQueue::main().exec_async(move || {
             let mtm = MainThreadMarker::new().expect("on the main queue");
             let delegate = delegate.get(mtm);
             delegate.ivars().scan_tx.borrow_mut().take();
@@ -604,7 +580,7 @@ impl Drop for BleScannerInner {
     fn drop(&mut self) {
         let delegate = Arc::clone(&self.delegate);
         // The delegate (and its manager) is released on the main queue.
-        dispatch_main(move || drop(delegate));
+        DispatchQueue::main().exec_async(move || drop(delegate));
     }
 }
 
@@ -626,7 +602,7 @@ impl BleConnectionInner {
     /// the main queue; resolves once `didConnect` fires.
     pub async fn connect(device_id: &DeviceId) -> Result<Self, BluetoothError> {
         let id = device_id.as_str().to_string();
-        let (delegate, state_rx) = hop(move |mtm| {
+        let (delegate, state_rx) = on_main(move |mtm| {
             let delegate = CentralDelegate::spawn(mtm);
             let device_id_string = id;
             let ns = NSString::from_str(&device_id_string);
@@ -668,18 +644,18 @@ impl BleConnectionInner {
         match state {
             AdapterState::PoweredOn => {}
             AdapterState::PoweredOff => {
-                dispatch_main(move || drop(delegate));
+                DispatchQueue::main().exec_async(move || drop(delegate));
                 return Err(BluetoothError::PoweredOff);
             }
             _ => {
-                dispatch_main(move || drop(delegate));
+                DispatchQueue::main().exec_async(move || drop(delegate));
                 return Err(BluetoothError::NotAvailable);
             }
         }
         let central = Arc::clone(&delegate);
         let key = device_id.as_str().to_string();
         let (tx, rx) = oneshot::channel();
-        hop(move |mtm| {
+        on_main(move |mtm| {
             let delegate = central.get(mtm);
             delegate.ivars().connect_txs.borrow_mut().insert(key, tx);
             let manager = delegate.ivars().manager.borrow();
@@ -706,7 +682,7 @@ impl BleConnectionInner {
     pub async fn discover_services(&self) -> Result<Vec<GattService>, BluetoothError> {
         let central = Arc::clone(&self.delegate);
         let (tx, rx) = oneshot::channel();
-        let found = hop(move |mtm| {
+        let found = on_main(move |mtm| {
             let delegate = central.get(mtm);
             let peripheral = delegate.ivars().peripheral.borrow();
             let periph_delegate = delegate.ivars().peripheral_delegate.borrow();
@@ -742,7 +718,7 @@ impl BleConnectionInner {
     ) {
         let service = service.as_str().to_string();
         let characteristic = characteristic.as_str().to_string();
-        dispatch_main(move || {
+        DispatchQueue::main().exec_async(move || {
             let mtm = MainThreadMarker::new().expect("on the main queue");
             let delegate = central.get(mtm);
             let periph_delegate = delegate.ivars().peripheral_delegate.borrow();
@@ -769,7 +745,7 @@ impl BleConnectionInner {
         let service_uuid = service.as_str().to_string();
         let characteristic_uuid = characteristic.as_str().to_string();
         let (tx, rx) = oneshot::channel();
-        hop(move |mtm| {
+        on_main(move |mtm| {
             let delegate = central.get(mtm);
             let periph_delegate = delegate.ivars().peripheral_delegate.borrow();
             let peripheral = delegate.ivars().peripheral.borrow();
@@ -809,7 +785,7 @@ impl BleConnectionInner {
         let characteristic_uuid = characteristic.as_str().to_string();
         let payload = data.to_vec();
         let (tx, rx) = oneshot::channel();
-        hop(move |mtm| -> Result<(), BluetoothError> {
+        on_main(move |mtm| -> Result<(), BluetoothError> {
             let delegate = central.get(mtm);
             let periph_delegate = delegate.ivars().peripheral_delegate.borrow();
             let peripheral = delegate.ivars().peripheral.borrow();
@@ -881,7 +857,7 @@ impl BleConnectionInner {
     /// queue.
     pub fn disconnect(self) {
         let delegate = Arc::clone(&self.delegate);
-        dispatch_main(move || {
+        DispatchQueue::main().exec_async(move || {
             let mtm = MainThreadMarker::new().expect("on the main queue");
             let delegate = delegate.get(mtm);
             let manager = delegate.ivars().manager.borrow();
@@ -899,7 +875,7 @@ impl BleConnectionInner {
 impl Drop for BleConnectionInner {
     fn drop(&mut self) {
         let delegate = Arc::clone(&self.delegate);
-        dispatch_main(move || drop(delegate));
+        DispatchQueue::main().exec_async(move || drop(delegate));
     }
 }
 
@@ -1629,7 +1605,7 @@ impl ClassicBluetoothInner {
             self.stop_discovery();
             let (tx, rx) = async_channel::unbounded();
             *self.inquiry.lock().expect("inquiry mutex") =
-                hop(|mtm| classic::start_discovery(mtm, tx)).await.ok();
+                on_main(|mtm| classic::start_discovery(mtm, tx)).await.ok();
             if self.inquiry.lock().expect("inquiry mutex").is_none() {
                 return Err(BluetoothError::Platform(
                     "IOBluetoothDeviceInquiry start failed".into(),
@@ -1654,7 +1630,7 @@ impl ClassicBluetoothInner {
         {
             let inquiry = self.inquiry.lock().expect("inquiry mutex").take();
             if let Some(inquiry) = inquiry {
-                dispatch_main(move || {
+                DispatchQueue::main().exec_async(move || {
                     let mtm = MainThreadMarker::new().expect("on the main queue");
                     classic::stop_inquiry(inquiry, mtm);
                 });
@@ -1676,7 +1652,7 @@ impl ClassicBluetoothInner {
         }
         #[cfg(target_os = "macos")]
         {
-            Ok(hop(|_mtm| classic::paired_devices()).await)
+            Ok(on_main(|_mtm| classic::paired_devices()).await)
         }
     }
 
@@ -1701,7 +1677,7 @@ impl ClassicBluetoothInner {
             let device_id = device_id.clone();
             let uuid = uuid.clone();
             let (tx, rx) = oneshot::channel();
-            hop(move |mtm| {
+            on_main(move |mtm| {
                 classic::connect_spp(mtm, &device_id, &uuid, tx);
             })
             .await;
@@ -1719,7 +1695,7 @@ impl Drop for ClassicBluetoothInner {
         {
             let inquiry = self.inquiry.get_mut().expect("inquiry mutex").take();
             if let Some(inquiry) = inquiry {
-                dispatch_main(move || {
+                DispatchQueue::main().exec_async(move || {
                     let mtm = MainThreadMarker::new().expect("on the main queue");
                     classic::stop_inquiry(inquiry, mtm);
                 });
@@ -1757,7 +1733,7 @@ impl SppStreamInner {
             let stream = Arc::clone(&self.stream);
             let max = buf.len();
             let (tx, rx) = oneshot::channel();
-            hop(move |mtm| {
+            on_main(move |mtm| {
                 classic::spp_read(&stream, max, tx, mtm);
             })
             .await;
@@ -1785,7 +1761,7 @@ impl SppStreamInner {
             let stream = Arc::clone(&self.stream);
             let payload = data.to_vec();
             let (tx, rx) = oneshot::channel();
-            hop(move |mtm| {
+            on_main(move |mtm| {
                 classic::spp_write(&stream, &payload, tx, mtm);
             })
             .await;
@@ -1803,7 +1779,7 @@ impl SppStreamInner {
         #[cfg(target_os = "macos")]
         {
             let stream = Arc::clone(&self.stream);
-            dispatch_main(move || {
+            DispatchQueue::main().exec_async(move || {
                 let mtm = MainThreadMarker::new().expect("on the main queue");
                 classic::spp_close(stream, mtm);
             });
@@ -1817,7 +1793,7 @@ impl Drop for SppStreamInner {
         #[cfg(target_os = "macos")]
         {
             let stream = Arc::clone(&self.stream);
-            dispatch_main(move || {
+            DispatchQueue::main().exec_async(move || {
                 let mtm = MainThreadMarker::new().expect("on the main queue");
                 classic::spp_close(stream, mtm);
             });

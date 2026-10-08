@@ -5096,6 +5096,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-media-player"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85f2a98483f6e76313cb85a5a185eaa3cda86a177b13a8852d56cbd0085bf635"
+dependencies = [
+ "bitflags 2.13.1",
+ "block2 0.6.2",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-media-toolbox"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8007,7 +8021,9 @@ name = "waterkit-audio"
 version = "0.1.4"
 dependencies = [
  "async-channel",
+ "block2 0.6.2",
  "cpal 0.18.2",
+ "dispatch2",
  "futures",
  "hex",
  "jni 0.22.4",
@@ -8018,10 +8034,18 @@ dependencies = [
  "ndk-context",
  "ndk-sys",
  "num-traits",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-av-foundation",
+ "objc2-avf-audio",
+ "objc2-core-foundation",
+ "objc2-core-media",
+ "objc2-foundation 0.3.2",
+ "objc2-media-player",
+ "objc2-ui-kit 0.3.2",
  "rodio",
  "smallvec",
  "smol",
- "swift-bridge",
  "symphonia-adapter-fdk-aac",
  "symphonia-codec-aac",
  "symphonia-core 0.6.1",
@@ -8032,6 +8056,7 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "waterkit-build",
+ "waterkit-core",
  "web-sys",
  "windows 0.62.2",
  "zbus",

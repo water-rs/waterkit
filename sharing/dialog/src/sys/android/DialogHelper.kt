@@ -7,85 +7,62 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.atomic.AtomicBoolean
+import waterkit.build.NativeCallback
 
 /**
  * Dialog utilities for Android.
  */
 class DialogHelper {
     companion object {
+        private val mainHandler = Handler(Looper.getMainLooper())
+
+        /**
+         * Posts the alert to the main looper and completes [callback] with
+         * `null` when the user dismisses it; [NativeCallback.fail] reports a
+         * dialog that could not be shown.
+         */
         @JvmStatic
-        fun showDialog(context: Context, title: String, message: String) {
-            if (Looper.myLooper() == Looper.getMainLooper()) {
-                 // Called on main thread, cannot block.
-                 // Show async as best effort.
-                 AlertDialog.Builder(context)
-                     .setTitle(title)
-                     .setMessage(message)
-                     .setPositiveButton("OK", null)
-                     .show()
-                 return
-            }
-
-            val latch = CountDownLatch(1)
-
-            Handler(Looper.getMainLooper()).post {
+        fun showDialog(context: Context, title: String, message: String, callback: NativeCallback) {
+            mainHandler.post {
                 try {
                     AlertDialog.Builder(context)
                         .setTitle(title)
                         .setMessage(message)
                         .setPositiveButton("OK", null)
-                        .setOnDismissListener { latch.countDown() }
+                        .setOnDismissListener { callback.complete(null) }
                         .show()
                 } catch (e: Exception) {
-                    e.printStackTrace()
-                    latch.countDown()
+                    callback.fail(e.message ?: e.javaClass.name)
                 }
-            }
-
-            try {
-                latch.await()
-            } catch (e: InterruptedException) {
-                e.printStackTrace()
             }
         }
 
-
+        /**
+         * Posts the confirmation to the main looper and completes [callback]
+         * with the user's answer when the dialog is dismissed — OK answers
+         * `true`, Cancel or any other dismissal `false`.
+         * [NativeCallback.fail] reports a dialog that could not be shown.
+         */
         @JvmStatic
-        fun showConfirm(context: Context, title: String, message: String): Boolean {
-            if (Looper.myLooper() == Looper.getMainLooper()) {
-                 return false
-            }
-
-            val latch = CountDownLatch(1)
-            val result = AtomicBoolean(false)
-
-            Handler(Looper.getMainLooper()).post {
+        fun showConfirm(context: Context, title: String, message: String, callback: NativeCallback) {
+            mainHandler.post {
                 try {
+                    var answer = false
                     AlertDialog.Builder(context)
                         .setTitle(title)
                         .setMessage(message)
                         .setPositiveButton("OK") { _, _ ->
-                            result.set(true)
+                            answer = true
                         }
                         .setNegativeButton("Cancel") { _, _ ->
-                            result.set(false)
+                            answer = false
                         }
-                        .setOnDismissListener { latch.countDown() }
+                        .setOnDismissListener { callback.complete(answer) }
                         .show()
                 } catch (e: Exception) {
-                    e.printStackTrace()
-                    latch.countDown()
+                    callback.fail(e.message ?: e.javaClass.name)
                 }
             }
-
-            try {
-                latch.await()
-            } catch (e: InterruptedException) {
-                e.printStackTrace()
-            }
-            return result.get()
         }
 
         @JvmStatic

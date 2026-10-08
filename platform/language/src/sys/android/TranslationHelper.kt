@@ -210,15 +210,18 @@ object TranslationHelper {
 
     /**
      * One capability-update registration, owned by the Rust handle as a global
-     * reference. [start] installs the platform listener; [close] removes it and
-     * ends the stream. Throws when registration itself fails.
+     * reference; [CapabilityUpdates.close] removes the platform listener and
+     * ends the stream. Returns null when the device has no system translation
+     * service (below API 31, or no `TranslationManager`); throws when
+     * registration itself fails.
      */
     @JvmStatic
-    fun registerCapabilityUpdates(context: Context, channel: NativeChannel): CapabilityUpdates {
-        require(isApiSupported()) { "Android API 31 is required" }
-        val updates = CapabilityUpdates(context, channel)
-        updates.start()
-        return updates
+    fun registerCapabilityUpdates(context: Context, channel: NativeChannel): CapabilityUpdates? {
+        if (!isApiSupported()) {
+            return null
+        }
+        val manager = context.getSystemService(TranslationManager::class.java) ?: return null
+        return CapabilityUpdates(manager, channel).also { it.start() }
     }
 
     internal fun statusForState(state: Int): String? = when (state) {
@@ -250,7 +253,7 @@ object TranslationHelper {
  */
 @RequiresApi(Build.VERSION_CODES.S)
 class CapabilityUpdates internal constructor(
-    private val context: Context,
+    private val manager: TranslationManager,
     private val channel: NativeChannel,
 ) {
     private val listener = Consumer<TranslationCapability> { capability ->
@@ -270,8 +273,6 @@ class CapabilityUpdates internal constructor(
 
     /** Installs the platform listener. Throws when registration fails. */
     internal fun start() {
-        val manager = context.getSystemService(TranslationManager::class.java)
-            ?: throw IllegalStateException("system translation service is unavailable")
         manager.addOnDeviceTranslationCapabilityUpdateListener(
             TranslationHelper.executor,
             listener,
@@ -280,8 +281,7 @@ class CapabilityUpdates internal constructor(
 
     /** Removes the listener and ends the stream. Called again is a no-op. */
     fun close() {
-        context.getSystemService(TranslationManager::class.java)
-            ?.removeOnDeviceTranslationCapabilityUpdateListener(listener)
+        manager.removeOnDeviceTranslationCapabilityUpdateListener(listener)
         channel.close()
     }
 }

@@ -297,8 +297,9 @@ pub fn open_download_settings() -> Result<(), TranslationError> {
 }
 
 /// Starts listening for changes to Android translation capabilities. The
-/// helper returns a `CapabilityUpdates` object owning the platform listener;
-/// the returned handle drops it through `close()`.
+/// helper returns a `CapabilityUpdates` object owning the platform listener,
+/// or null when the device has no system translation service; the returned
+/// handle drops it through `close()`.
 pub fn capability_updates()
 -> Result<crate::translation::android::CapabilityUpdates, TranslationError> {
     with_android_context(|env, context| {
@@ -322,6 +323,9 @@ pub fn capability_updates()
                     error,
                 )
             })?;
+        if registration.is_null() {
+            return Err(TranslationError::Unavailable);
+        }
         let registration = env
             .new_global_ref(registration)
             .map_err(|error| jni_error(env, "retain capability registration", error))?;

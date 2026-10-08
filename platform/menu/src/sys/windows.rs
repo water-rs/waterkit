@@ -148,6 +148,9 @@ impl MenuBarInner {
 
     fn build(&mut self, menus: impl IntoIterator<Item = Submenu>) -> Result<(), MenuError> {
         for submenu in menus {
+            if submenu.windows_menu {
+                return Err(MenuError::StandardItemUnsupported);
+            }
             let popup = unsafe { CreatePopupMenu() }
                 .map_err(|error| MenuError::Platform(format!("CreatePopupMenu: {error}")))?;
             if let Err(error) = self.fill(popup, &submenu.entries) {
@@ -168,6 +171,9 @@ impl MenuBarInner {
             match entry {
                 Entry::Command(command) => self.append_command(parent, command)?,
                 Entry::Submenu(submenu) => {
+                    if submenu.windows_menu {
+                        return Err(MenuError::StandardItemUnsupported);
+                    }
                     let popup = unsafe { CreatePopupMenu() }.map_err(|error| {
                         MenuError::Platform(format!("CreatePopupMenu: {error}"))
                     })?;
@@ -828,6 +834,26 @@ mod tests {
         let flags = accel_flags(Modifiers::COMMAND | Modifiers::CONTROL | Modifiers::SHIFT);
         assert!(flags.contains(FCONTROL | FSHIFT));
         assert!(!flags.contains(FALT));
+    }
+
+    /// The `windows_menu` mark and the macOS-only standard items exist only
+    /// on macOS: building a bar with any of them fails `MenuBar::new` here.
+    #[test]
+    fn macos_only_items_and_marks_are_rejected() {
+        use crate::StandardItem;
+        let (sender, _events) = async_channel::unbounded();
+        for submenu in [
+            Submenu::new("App").entry(StandardItem::Minimize),
+            Submenu::new("App").entry(StandardItem::Zoom),
+            Submenu::new("App").entry(StandardItem::BringAllToFront),
+            Submenu::new("Window").windows_menu(),
+            Submenu::new("Outer").entry(Submenu::new("Nested").windows_menu()),
+        ] {
+            assert!(matches!(
+                MenuBarInner::new([submenu], &sender),
+                Err(MenuError::StandardItemUnsupported)
+            ));
+        }
     }
 
     /// A `WM_COMMAND` sent to the attached window delivers the item's

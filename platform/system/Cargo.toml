@@ -47,6 +47,7 @@ tracing.workspace = true
 block2 = { git = "https://github.com/madsmtm/objc2", rev = "e45c53301628aec4ead5c086dde282942ca972db" }
 dispatch2 = { git = "https://github.com/madsmtm/objc2", rev = "e45c53301628aec4ead5c086dde282942ca972db" }
 libc = "0.2"
+mach2.workspace = true
 objc2-foundation = { workspace = true, features = ["NSProcessInfo"] }
 objc2-network = { workspace = true, features = ["std", "dispatch2"] }
 

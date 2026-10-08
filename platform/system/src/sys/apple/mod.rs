@@ -21,18 +21,6 @@ unsafe extern "C-unwind" {
     );
 }
 
-// Kernel page size; `libc` only exposes the user-space `vm_page_size`, which
-// can differ from the kernel's under translation layers.
-unsafe extern "C" {
-    static vm_kernel_page_size: usize;
-}
-
-// `libc` marks `mach_host_self` deprecated in favour of the `mach2` crate; it
-// is a stable libSystem export.
-unsafe extern "C" {
-    fn mach_host_self() -> libc::mach_port_t;
-}
-
 /// How long `connectivity` waits for `NWPathMonitor` to report the current
 /// path. The monitor reports it as soon as it starts, so running out of this
 /// is a failure, not a slow network.
@@ -162,7 +150,7 @@ fn host_statistics_call<T>(
     // exactly the layout the Mach call fills.
     let code = unsafe {
         let info = (&raw mut stats).cast::<libc::integer_t>();
-        let host = mach_host_self();
+        let host = mach2::mach_init::mach_host_self();
         if wide {
             libc::host_statistics64(host, flavor, info, &raw mut count)
         } else {
@@ -225,7 +213,8 @@ fn used_memory() -> Result<u64, SystemError> {
     )?;
     // SAFETY: `vm_kernel_page_size` is a read-only export of the kernel's
     // fixed page size.
-    let page_size = unsafe { vm_kernel_page_size } as u64;
+    let page_size = u64::try_from(unsafe { mach2::vm_page_size::vm_kernel_page_size })
+        .expect("kernel page size fits u64");
     Ok((u64::from(stats.active_count)
         + u64::from(stats.wire_count)
         + u64::from(stats.compressor_page_count))

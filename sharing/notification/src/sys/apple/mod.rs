@@ -2,18 +2,19 @@
 //! `UserNotifications` framework through `objc2`.
 //!
 //! Authorization and delivery resolve through `block2` completion handlers
-//! answering an `mpsc` channel that the synchronous [`show_notification`]
-//! waits on with a five-second deadline. Action responses are handled by a
+//! answering a `futures` oneshot that [`show_notification`] awaits: the
+//! delivery callback's own signal carries the `Result`, so there is no
+//! deadline. Action responses are handled by a
 //! `define_class!` `UNUserNotificationCenterDelegate` that opens action
 //! URLs; installing it deliberately retains it for the process lifetime —
 //! the center's `delegate` property is weak and responses keep being
 //! handled after the caller's handle drops.
 
 use core::cell::RefCell;
-use core::time::Duration;
-use std::sync::mpsc;
+use std::rc::Rc;
 
 use block2::{DynBlock, RcBlock};
+use futures::channel::oneshot;
 use objc2::rc::Retained;
 use objc2::runtime::{Bool, NSObject, ProtocolObject};
 use objc2::{AnyThread, ClassType, define_class, msg_send};
@@ -32,11 +33,19 @@ use objc2_user_notifications::{
 
 use crate::{Action, InterruptionLevel, Notification, NotificationError, TextInputAction};
 
-/// The deadline put on the whole show flow
-/// (`DispatchSemaphore.wait(timeout: .now() + 5.0)`): a slower answer — for
-/// example a first-run authorization prompt nobody dismisses — reports
-/// failure.
-const SHOW_TIMEOUT: Duration = Duration::from_secs(5);
+/// Reads an `NSError`'s `localizedDescription` from a completion handler's
+/// raw pointer. `None` describes the error when the description is empty.
+///
+/// SAFETY: `error` must be null or point to a valid `NSError` owned by the
+/// invoking completion handler; the description is copied out before the
+/// block returns.
+fn describe_error(error: *mut NSError) -> String {
+    if error.is_null() {
+        return "unknown error".into();
+    }
+    // SAFETY: the pointer is non-null and valid for the block's duration.
+    unsafe { (*error).localizedDescription().to_string() }
+}
 
 /// The `#available(iOS major, macOS major)`-style OS gates used, as one `NSProcessInfo` version probe: `ios_major` applies on iOS
 /// proper, `macos_major` on macOS and Mac Catalyst (where `NSProcessInfo`
@@ -293,9 +302,10 @@ fn notification_content(
     content
 }
 
-/// `showNotificationAsync`'s synchronous port: the work rides the same
-/// completion-handler chain, bounded by [`SHOW_TIMEOUT`].
-fn show(notification: &Notification) -> Result<(), NotificationError> {
+/// `showNotificationAsync`'s port: the work rides the same
+/// completion-handler chain, and the delivery callback's send on the
+/// oneshot is the only signal the caller waits on.
+async fn show(notification: &Notification) -> Result<(), NotificationError> {
     // On macOS, `UNUserNotificationCenter` requires a valid app bundle.
     #[cfg(target_os = "macos")]
     if objc2_foundation::NSBundle::mainBundle()
@@ -307,9 +317,6 @@ fn show(notification: &Notification) -> Result<(), NotificationError> {
         ));
     }
 
-    let center = UNUserNotificationCenter::currentNotificationCenter();
-    install_delegate(&center)?;
-
     let notification = NotificationParams {
         id: notification.id.clone().unwrap_or_default(),
         title: notification.title.clone(),
@@ -320,45 +327,66 @@ fn show(notification: &Notification) -> Result<(), NotificationError> {
         text_input_actions: notification.text_input_actions.clone(),
     };
 
-    let (sender, receiver) = mpsc::channel();
-    // A completion handler can fire the authorization callback at most
-    // once, but the `RefCell` is what lets the send move into the delivery
-    // block that runs after it.
-    let sender = RefCell::new(Some(sender));
-    let deliver_center = center.clone();
-    let authorize = RcBlock::new(move |granted: Bool, error: *mut NSError| {
-        let Some(sender) = sender.borrow_mut().take() else {
-            return;
-        };
-        if !(granted.as_bool() && error.is_null()) {
-            let _ = sender.send(false);
-            return;
-        }
-        let content = notification_content(&deliver_center, &notification);
-        // The request reuses the notification's id: posting the same
-        // identifier replaces the delivered notification.
-        let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
-            &NSString::from_str(&notification.id),
-            &Retained::into_super(content),
-            None,
-        );
-        let deliver = RcBlock::new(move |error: *mut NSError| {
-            let _ = sender.send(error.is_null());
+    let receiver = {
+        let center = UNUserNotificationCenter::currentNotificationCenter();
+        install_delegate(&center)?;
+        let (sender, receiver) = oneshot::channel();
+        // A completion handler can fire the authorization callback at most
+        // once, but the `RefCell` is what lets the send move into the
+        // delivery block that runs after it.
+        let sender = Rc::new(RefCell::new(Some(sender)));
+        let deliver_center = center.clone();
+        let authorize = RcBlock::new(move |granted: Bool, error: *mut NSError| {
+            let Some(result_sender) = sender.borrow_mut().take() else {
+                return;
+            };
+            if !(granted.as_bool() && error.is_null()) {
+                let _ = result_sender.send(Err(if granted.as_bool() {
+                    NotificationError::Platform(describe_error(error))
+                } else {
+                    NotificationError::PermissionDenied
+                }));
+                return;
+            }
+            let content = notification_content(&deliver_center, &notification);
+            // The request reuses the notification's id: posting the same
+            // identifier replaces the delivered notification.
+            let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
+                &NSString::from_str(&notification.id),
+                &Retained::into_super(content),
+                None,
+            );
+            // The `Rc` keeps the sender reachable on later (unexpected) calls so
+            // the block stays `Fn`.
+            let sender = Rc::new(RefCell::new(Some(result_sender)));
+            let deliver = RcBlock::new(move |error: *mut NSError| {
+                if let Some(sender) = sender.borrow_mut().take() {
+                    let _ = sender.send(if error.is_null() {
+                        Ok(())
+                    } else {
+                        Err(NotificationError::Platform(describe_error(error)))
+                    });
+                }
+            });
+            deliver_center.addNotificationRequest_withCompletionHandler(&request, Some(&deliver));
         });
-        deliver_center.addNotificationRequest_withCompletionHandler(&request, Some(&deliver));
-    });
-    center.requestAuthorizationWithOptions_completionHandler(
-        UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
-        &authorize,
-    );
+        center.requestAuthorizationWithOptions_completionHandler(
+            UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
+            &authorize,
+        );
+        // `requestAuthorizationWithOptions:completionHandler:` copies the
+        // block, so the `RcBlock`s can drop here — before the future is
+        // awaited — keeping `show`'s future `Send`.
+        receiver
+    };
 
-    if receiver.recv_timeout(SHOW_TIMEOUT).unwrap_or(false) {
-        Ok(())
-    } else {
-        Err(NotificationError::Platform(
-            "failed to show notification".into(),
-        ))
-    }
+    // The receiver resolves when the delivery handler fires; the sender
+    // only drops early if the center never invokes its completion blocks.
+    receiver.await.map_err(|_| {
+        NotificationError::Platform(
+            "the notification delivery completion handler was never invoked".into(),
+        )
+    })?
 }
 
 /// Handle to a shown notification (iOS/macOS).
@@ -366,9 +394,9 @@ fn show(notification: &Notification) -> Result<(), NotificationError> {
 pub struct NotificationHandleInner;
 
 /// Show a notification using `UserNotifications`.
-pub fn show_notification(
+pub async fn show_notification(
     notification: &Notification,
 ) -> Result<NotificationHandleInner, NotificationError> {
-    show(notification)?;
+    show(notification).await?;
     Ok(NotificationHandleInner)
 }

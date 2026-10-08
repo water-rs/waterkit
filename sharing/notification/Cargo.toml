@@ -14,6 +14,7 @@ categories = ["os", "gui"]
 workspace = true
 
 [dependencies]
+futures.workspace = true
 thiserror.workspace = true
 uuid = { version = "1", features = ["v4"] }
 
@@ -83,3 +84,6 @@ serde_json.workspace = true
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/NotificationHelper.kt"]
+
+[dev-dependencies]
+pollster = "1.0"

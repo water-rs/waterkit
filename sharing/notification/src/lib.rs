@@ -467,7 +467,7 @@ impl Notification {
     /// # Errors
     ///
     /// Returns an error if the notification cannot be shown.
-    pub fn show(mut self) -> Result<NotificationHandle, NotificationError> {
+    pub async fn show(mut self) -> Result<NotificationHandle, NotificationError> {
         // Generate ID if not provided
         let id = self
             .id
@@ -475,13 +475,16 @@ impl Notification {
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         self.id = Some(id.clone());
 
-        #[cfg(any(
-            target_os = "linux",
-            target_os = "windows",
-            target_os = "macos",
-            target_os = "android",
-            target_os = "ios"
-        ))]
+        // Apple waits on the notification center's completion handlers, so
+        // its sys call is async; the other platforms resolve synchronously
+        // inside the same `show` signature.
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            let inner = sys::show_notification(&self).await?;
+            Ok(NotificationHandle { inner, id })
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
         {
             let inner = sys::show_notification(&self)?;
             Ok(NotificationHandle { inner, id })

@@ -1104,7 +1104,10 @@ const RECORDERS: &[Recorder] = &[
     #[cfg(feature = "haptic")]
     |h| record_android_haptic(&mut h.report),
     #[cfg(feature = "notification")]
-    |h| record_android_notification(&mut h.report),
+    |h| {
+        h.runtime
+            .block_on(record_android_notification(&mut h.report));
+    },
     #[cfg(feature = "secret")]
     |h| record_android_secret(&mut h.report, h.env, h.activity.as_obj()),
     #[cfg(feature = "system")]
@@ -2382,11 +2385,12 @@ fn record_android_haptic(report: &mut TestReport) {
 }
 
 #[cfg(feature = "notification")]
-fn record_android_notification(report: &mut TestReport) {
+async fn record_android_notification(report: &mut TestReport) {
     let result = waterkit_content::notification::Notification::new()
         .title("WaterKit Android Harness")
         .body("notification test")
-        .show();
+        .show()
+        .await;
     match result {
         Ok(_) => report.push(TestCase::passed("notification.show")),
         Err(error) => report.push(TestCase::failed(

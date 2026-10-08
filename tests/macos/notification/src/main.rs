@@ -51,7 +51,8 @@ fn run_loop_for(duration: Duration) {
 }
 
 #[cfg(target_os = "macos")]
-fn main() {
+#[tokio::main]
+async fn main() {
     // Test 1: Notification with quick reply
     log("=== Test 1: Quick Reply ===");
     log("Sending notification with quick reply...");
@@ -67,6 +68,7 @@ fn main() {
         )
         .action(Action::new("View", "https://waterui.dev"))
         .show()
+        .await
     {
         Ok(_handle) => {
             log("Notification sent!");
@@ -90,6 +92,7 @@ fn main() {
         .body("0% complete")
         .subtitle("Update test")
         .show()
+        .await
     {
         Ok(h) => {
             log("Initial notification sent (0%)");
@@ -111,6 +114,7 @@ fn main() {
             .body(format!("{progress}% complete"))
             .subtitle("Update test")
             .show()
+            .await
         {
             Ok(_) => log(&format!("Updated to {progress}%")),
             Err(e) => {
@@ -129,6 +133,7 @@ fn main() {
         .subtitle("Update test")
         .action(Action::new("Open", "https://waterui.dev"))
         .show()
+        .await
     {
         Ok(_) => log("Download complete notification sent!"),
         Err(e) => log(&format!("Failed to send final notification: {e}")),

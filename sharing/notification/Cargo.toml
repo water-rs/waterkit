@@ -30,9 +30,46 @@ windows = { workspace = true, features = ["Data_Xml_Dom", "UI_Notifications"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 open = "5"
 
-# Apple platforms (iOS, macOS) - use native UserNotifications
+# Apple platforms (iOS, macOS) - native UserNotifications through objc2
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
+block2.workspace = true
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSError",
+    "NSBundle",
+    "NSObject",
+    "NSProcessInfo",
+    "NSSet",
+    "NSString",
+    "NSURL",
+] }
+objc2-user-notifications = { workspace = true, features = [
+    "UNNotificationContent",
+    "UNNotification",
+    "UNNotificationAction",
+    "UNNotificationCategory",
+    "UNNotificationRequest",
+    "UNNotificationResponse",
+    "UNNotificationSound",
+    "UNNotificationTrigger",
+    "UNUserNotificationCenter",
+    "block2",
+] }
+tracing.workspace = true
+
+# iOS - action URLs open through UIApplication
+[target.'cfg(target_os = "ios")'.dependencies]
+dispatch2.workspace = true
+objc2-ui-kit = { workspace = true, features = [
+    "UIApplication",
+    "UIResponder",
+    "block2",
+] }
+
+# macOS - action URLs open through NSWorkspace
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { workspace = true, features = ["NSWorkspace"] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
@@ -42,10 +79,6 @@ jni.workspace = true
 ndk-context.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-
-[build-dependencies]
-waterkit-build.workspace = true
-
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]

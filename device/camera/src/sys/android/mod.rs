@@ -1420,16 +1420,16 @@ impl CameraInner {
             .unwrap_or(i32::MAX);
 
         Ok(Self {
-            device,
+            device: Arc::clone(&device),
             queue,
             capabilities,
             controls: CameraControls::default(),
             resolution,
             mounting,
-            analysis_thread: config
-                .analysis
-                .map(|_| FrameThread::spawn_analysis(Arc::clone(&bridge), frame_wait_ms)),
-            frames_thread: FrameThread::spawn(capture, frame_wait_ms),
+            analysis_thread: config.analysis.map(|_| {
+                FrameThread::spawn_analysis(Arc::clone(&bridge), Arc::clone(&device), frame_wait_ms)
+            }),
+            frames_thread: FrameThread::spawn(capture, device, frame_wait_ms),
             bridge,
             recording_mode: None,
         })

@@ -119,8 +119,10 @@ pub fn orientation_from_camera2(
 /// goes back to the camera once those textures are released. Every frame a
 /// consumer holds keeps one of those buffers out of the pool, and so does a
 /// plane texture or view kept past its frame; when none is left the camera
-/// drops new frames until one comes back. Drop each frame as soon as its
-/// work is submitted, and convert or copy the pixels to keep them longer.
+/// drops new frames until one comes back, which it drives itself by polling
+/// its GPU device while starved — a consumer awaiting the stream does not
+/// have to. Drop each frame as soon as its work is submitted, and convert
+/// or copy the pixels to keep them longer.
 #[derive(Debug)]
 pub struct Frame {
     planes: FramePlanes,

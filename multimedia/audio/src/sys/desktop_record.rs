@@ -111,7 +111,7 @@ impl AudioRecorderInner {
         let stream = self
             .device
             .build_input_stream(
-                config,
+                &config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     if recording.load(Ordering::Relaxed) {
                         let samples = data.to_vec();

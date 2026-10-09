@@ -1408,40 +1408,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cpal"
-version = "0.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f02e8d0327b42d3e2e4ab2119af397344eb9fc54a34bf0ddeaa1277af8681f1"
-dependencies = [
- "alsa",
- "block2 0.6.2",
- "coreaudio-rs",
- "dasp_sample",
- "futures-channel",
- "futures-util",
- "jni 0.22.4",
- "js-sys",
- "libc",
- "mach2 0.6.0",
- "ndk",
- "ndk-context",
- "num-derive",
- "num-traits",
- "objc2 0.6.4",
- "objc2-audio-toolbox",
- "objc2-avf-audio",
- "objc2-core-audio",
- "objc2-core-audio-types",
- "objc2-core-foundation",
- "objc2-foundation 0.3.2",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "windows 0.62.2",
- "windows-core 0.62.2",
-]
-
-[[package]]
 name = "cpubits"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6261,7 +6227,7 @@ version = "0.22.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a536bb79db59098ef71a4dd4246c02eb87b316deceb1b68e0cde7167ec01eb"
 dependencies = [
- "cpal 0.17.3",
+ "cpal",
  "dasp_sample",
  "num-rational",
  "symphonia",
@@ -8052,7 +8018,7 @@ version = "0.1.4"
 dependencies = [
  "async-channel",
  "block2 0.6.2",
- "cpal 0.18.2",
+ "cpal",
  "dispatch2",
  "futures",
  "hex",

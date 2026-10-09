@@ -156,6 +156,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ios-device-e2e
+      # Xcode 27 ships the Metal toolchain as a separate component; the
+      # harness's Rust crates compile Metal shaders.
+      - name: Install the Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
       # StoreKit Test cannot load a configuration outside an Xcode debug
       # session on the iOS 26.3-26.5 simulator runtimes (FB22237318), so
       # the harness runs on an iPhone of the newest installed iOS runtime.

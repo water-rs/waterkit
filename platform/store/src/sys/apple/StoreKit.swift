@@ -302,19 +302,40 @@ private func unverifiedReply(
 /// Buffers `Transaction.updates` replies for the event stream: the
 /// listener enqueues them, each `store_next_event` call dequeues exactly
 /// one.
+///
+/// The stream carries only transactions completed outside a purchase call,
+/// yet StoreKit may also post a purchase's own transaction on `updates`, in
+/// either order relative to `purchase()` returning. While any purchase is in
+/// flight, updates are therefore held rather than handed to a waiting
+/// reader; when the purchase resolves, the copy of its transaction is
+/// dropped and the rest are released. Copies arriving later are dropped on
+/// enqueue.
 private actor EventQueue {
-    private var buffer: [String] = []
+    private var buffer: [(id: UInt64, json: String)] = []
     private var waiters: [CheckedContinuation<String, Never>] = []
+    private var returned: Set<UInt64> = []
+    private var inFlight = 0
     private var ended = false
 
-    func enqueue(_ json: String) {
-        guard !ended else { return }
-        if let waiter = waiters.first {
-            waiters.removeFirst()
-            waiter.resume(returning: json)
-        } else {
-            buffer.append(json)
+    func purchaseBegan() {
+        inFlight += 1
+    }
+
+    /// Ends one in-flight purchase; `id` is the transaction it returned to
+    /// its caller, if any.
+    func purchaseEnded(returning id: UInt64?) {
+        inFlight -= 1
+        if let id {
+            returned.insert(id)
+            buffer.removeAll { $0.id == id }
         }
+        release()
+    }
+
+    func enqueue(_ id: UInt64, json: String) {
+        guard !ended, !returned.contains(id) else { return }
+        buffer.append((id, json))
+        release()
     }
 
     func end() {
@@ -329,15 +350,21 @@ private actor EventQueue {
     /// The next out-of-band transaction reply: a purchase envelope, an
     /// `unverified` error, or `{"ok":{"end":true}}` when updates finish.
     func next() async -> String {
-        if let json = buffer.first {
-            buffer.removeFirst()
-            return json
+        if inFlight == 0, !buffer.isEmpty {
+            return buffer.removeFirst().json
         }
         if ended {
             return endReply()
         }
         return await withCheckedContinuation { continuation in
             waiters.append(continuation)
+        }
+    }
+
+    private func release() {
+        guard inFlight == 0 else { return }
+        while !waiters.isEmpty, !buffer.isEmpty {
+            waiters.removeFirst().resume(returning: buffer.removeFirst().json)
         }
     }
 
@@ -365,7 +392,8 @@ final class AppleStore: @unchecked Sendable {
                 return
             }
             for await result in StoreKit.Transaction.updates {
-                await queue.enqueue(AppleStore.encodeUpdate(result))
+                await queue.enqueue(
+                    result.unsafePayloadValue.id, json: AppleStore.encodeUpdate(result))
             }
             await queue.end()
         }
@@ -467,7 +495,19 @@ final class AppleStore: @unchecked Sendable {
                         declared: declared
                     ))
             }
-            let result = try await product.purchase()
+            await queue.purchaseBegan()
+            let result: Product.PurchaseResult
+            do {
+                result = try await product.purchase()
+            } catch {
+                await queue.purchaseEnded(returning: nil)
+                throw error
+            }
+            var returnedId: UInt64?
+            if case .success(let verification) = result {
+                returnedId = verification.unsafePayloadValue.id
+            }
+            await queue.purchaseEnded(returning: returnedId)
             switch result {
             case .success(let verification):
                 switch verification {

@@ -5,7 +5,7 @@
 //! (`GetCustomerPurchaseIdAsync` yields a user-level collections token, not
 //! a transaction signature), no pending-purchase state, and no transaction
 //! update stream — `OfflineLicensesChanged` is a license invalidation, not a
-//! purchase feed. The public API's `Purchase::proof` and `Store::events`
+//! purchase feed. The public API's `Purchase::proof` and `StoreEvents`
 //! cannot be honored there.
 
 #![expect(
@@ -13,8 +13,7 @@
     reason = "the sys contract is async on every platform"
 )]
 
-use futures::{Stream, stream};
-
+use crate::sys::EventStream;
 use crate::{
     Catalog, Entitlement, OfferToken, Product, ProductId, ProductKind, PurchaseOutcome,
     StoreCapabilities, StoreError,
@@ -37,7 +36,7 @@ pub struct Purchase {
 }
 
 impl Store {
-    pub async fn connect(_catalog: &Catalog) -> Result<Self, StoreError> {
+    pub async fn connect(_catalog: &Catalog) -> Result<(Self, EventStream), StoreError> {
         Err(StoreError::Unavailable)
     }
 
@@ -52,17 +51,6 @@ impl Store {
         _catalog: &Catalog,
     ) -> Result<PurchaseOutcome, StoreError> {
         Err(StoreError::Unavailable)
-    }
-
-    #[expect(
-        clippy::unused_self,
-        reason = "the sys contract keeps &self on every platform"
-    )]
-    pub fn events(
-        &self,
-        _catalog: &Catalog,
-    ) -> impl Stream<Item = Result<crate::Purchase, StoreError>> + Send + use<> {
-        stream::empty()
     }
 
     pub async fn entitlements(&self, _catalog: &Catalog) -> Result<Vec<Entitlement>, StoreError> {

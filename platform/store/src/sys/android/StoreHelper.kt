@@ -541,7 +541,7 @@ class StoreConnection(
     }
 
     private fun errorReply(result: BillingResult, product: String? = null): String {
-        val kind =
+        var kind =
             when (result.responseCode) {
                 BillingResponseCode.SERVICE_UNAVAILABLE,
                 BillingResponseCode.SERVICE_DISCONNECTED,
@@ -553,6 +553,12 @@ class StoreConnection(
                 BillingResponseCode.ITEM_ALREADY_OWNED -> "already_owned"
                 else -> "platform"
             }
+        // `product_not_found` and `already_owned` carry the product id; a
+        // billing result without one can only be reported as a platform
+        // error.
+        if (product == null && (kind == "product_not_found" || kind == "already_owned")) {
+            kind = "platform"
+        }
         return errorReply(kind, result.debugMessage.ifEmpty { "billing error" }, product)
     }
 

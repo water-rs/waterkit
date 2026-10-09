@@ -60,13 +60,16 @@ fn decode_reply_reads_ok_payload() {
 }
 
 #[test]
-fn decode_reply_maps_error_kinds() {
+fn decode_reply_maps_unavailable() {
     let error = wire::decode_reply::<serde_json::Value>(
         r#"{"error":{"kind":"unavailable","message":"no store"}}"#,
     )
     .unwrap_err();
     assert!(matches!(error, StoreError::Unavailable));
+}
 
+#[test]
+fn decode_reply_maps_product_not_found() {
     let error = wire::decode_reply::<serde_json::Value>(
         r#"{"error":{"kind":"product_not_found","product":"app.gone"}}"#,
     )
@@ -75,19 +78,25 @@ fn decode_reply_maps_error_kinds() {
         error,
         StoreError::ProductNotFound(ref id) if id.as_str() == "app.gone"
     ));
+}
 
+#[test]
+fn decode_reply_maps_kind_mismatch() {
     let error = wire::decode_reply::<serde_json::Value>(
-        r#"{"error":{"kind":"already_owned","product":"app.pro"}}"#,
+        r#"{"error":{"kind":"kind_mismatch","product":"app.sub","declared":"subscription"}}"#,
     )
     .unwrap_err();
-    assert!(matches!(error, StoreError::AlreadyOwned(_)));
+    assert!(matches!(
+        error,
+        StoreError::KindMismatch {
+            ref product,
+            declared: ProductKind::Subscription
+        } if product.as_str() == "app.sub"
+    ));
+}
 
-    let error = wire::decode_reply::<serde_json::Value>(
-        r#"{"error":{"kind":"network","message":"offline"}}"#,
-    )
-    .unwrap_err();
-    assert!(matches!(error, StoreError::Network(ref m) if m == "offline"));
-
+#[test]
+fn decode_reply_maps_unverified() {
     let error = wire::decode_reply::<serde_json::Value>(
         r#"{"error":{"kind":"unverified","proof":{"kind":"app_store_jws","value":"abc"}}}"#,
     )
@@ -97,6 +106,60 @@ fn decode_reply_maps_error_kinds() {
         StoreError::Unverified(ref proof)
             if proof.kind() == ProofKind::AppStoreJws && proof.value() == "abc"
     ));
+}
+
+#[test]
+fn decode_reply_maps_already_owned() {
+    let error = wire::decode_reply::<serde_json::Value>(
+        r#"{"error":{"kind":"already_owned","product":"app.pro"}}"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::AlreadyOwned(ref id) if id.as_str() == "app.pro"
+    ));
+}
+
+#[test]
+fn decode_reply_maps_network() {
+    let error = wire::decode_reply::<serde_json::Value>(
+        r#"{"error":{"kind":"network","message":"offline"}}"#,
+    )
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Network(ref m) if m == "offline"));
+}
+
+#[test]
+fn decode_reply_maps_platform() {
+    let error = wire::decode_reply::<serde_json::Value>(
+        r#"{"error":{"kind":"platform","message":"billing error"}}"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::Platform(ref m) if m == "billing error"
+    ));
+}
+
+#[test]
+fn decode_reply_rejects_malformed_errors() {
+    let malformed = |json: &str| {
+        let error = wire::decode_reply::<serde_json::Value>(json).unwrap_err();
+        assert!(
+            matches!(error, StoreError::Platform(ref m) if m.starts_with("malformed store reply")),
+            "{json} decoded to {error:?}"
+        );
+    };
+
+    // An unknown kind is not a store error.
+    malformed(r#"{"error":{"kind":"bogus","message":"x"}}"#);
+    // A missing required field fails the decode.
+    malformed(r#"{"error":{"kind":"product_not_found"}}"#);
+    malformed(r#"{"error":{"kind":"kind_mismatch","product":"app.sub"}}"#);
+    malformed(r#"{"error":{"kind":"unverified"}}"#);
+    malformed(r#"{"error":{"kind":"network"}}"#);
+    // An unknown proof kind fails the decode.
+    malformed(r#"{"error":{"kind":"unverified","proof":{"kind":"bogus","value":"x"}}}"#);
 }
 
 fn product_json(kind: &str, id: &str) -> String {

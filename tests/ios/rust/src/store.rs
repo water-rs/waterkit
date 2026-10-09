@@ -4,7 +4,7 @@
 
 use futures::StreamExt;
 use waterkit::store::{
-    Catalog, Entitlement, Product, ProductId, ProductKind, PurchaseOutcome, Store,
+    Catalog, Entitlement, Product, ProductId, ProductKind, PurchaseOutcome, Store, StoreEvents,
 };
 use waterkit_test_report::{TestCase, TestReport};
 
@@ -37,21 +37,32 @@ pub async fn record(report: &mut TestReport) {
     }
     report.push(TestCase::passed("store.session"));
 
-    if waterkit::store::capabilities().await.purchases {
-        report.push(TestCase::passed("store.capabilities"));
-    } else {
-        report.push(TestCase::failed(
-            "store.capabilities",
-            "the StoreKit Test session reports purchases unavailable",
-        ));
-        ffi::store_test_end();
-        return;
+    match waterkit::store::capabilities().await {
+        Ok(capabilities) if capabilities.purchases => {
+            report.push(TestCase::passed("store.capabilities"));
+        }
+        Ok(_) => {
+            report.push(TestCase::failed(
+                "store.capabilities",
+                "the StoreKit Test session reports purchases unavailable",
+            ));
+            ffi::store_test_end();
+            return;
+        }
+        Err(error) => {
+            report.push(TestCase::failed(
+                "store.capabilities",
+                format!("capabilities probe failed: {error}"),
+            ));
+            ffi::store_test_end();
+            return;
+        }
     }
 
-    let store = match Store::connect(catalog()).await {
-        Ok(store) => {
+    let (store, events) = match Store::connect(catalog()).await {
+        Ok(connected) => {
             report.push(TestCase::passed("store.connect"));
-            store
+            connected
         }
         Err(error) => {
             report.push(TestCase::failed(
@@ -81,7 +92,7 @@ pub async fn record(report: &mut TestReport) {
     purchases(&store, &products, report).await;
     subscribe(&store, &products, report).await;
     entitlements(&store, report).await;
-    renewal(&store, report).await;
+    renewal(events, report).await;
 
     ffi::store_test_end();
 }
@@ -167,11 +178,9 @@ async fn entitlements(store: &Store, report: &mut TestReport) {
     }
 }
 
-async fn renewal(store: &Store, report: &mut TestReport) {
-    // A renewal is an out-of-band transaction: it must arrive through
-    // `events()`. StoreKit Test renews the subscription on demand.
-    let events = store.events();
-    futures::pin_mut!(events);
+async fn renewal(mut events: StoreEvents, report: &mut TestReport) {
+    // A renewal is an out-of-band transaction: it must arrive through the
+    // `StoreEvents` stream. StoreKit Test renews the subscription on demand.
     ffi::store_test_force_renewal(SUB);
     match tokio::time::timeout(std::time::Duration::from_secs(30), events.next()).await {
         Ok(Some(Ok(purchase))) if purchase.product_id().as_str() == SUB => {

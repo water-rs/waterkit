@@ -16,9 +16,9 @@
 //!     .with(ProductId::new("app.pro"), ProductKind::NonConsumable)
 //!     .with(ProductId::new("app.sub.monthly"), ProductKind::Subscription);
 //!
-//! let store = Store::connect(catalog).await?;
+//! let (store, _events) = Store::connect(catalog).await?;
 //! for product in store.products().await? {
-//!     println!("{}: {}", product.id().as_str(), product.price().formatted);
+//!     tracing::info!("{}: {}", product.id().as_str(), product.price().formatted);
 //! }
 //! # Ok(())
 //! # }
@@ -64,7 +64,8 @@ impl std::fmt::Display for ProductId {
 ///
 /// Declared by the app, because Play does not distinguish consumables from
 /// non-consumables: the app consumes or acknowledges at finish time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ProductKind {
     /// Consumed on use — coins, lives, fuel.
@@ -130,12 +131,15 @@ impl Capabilities for StoreCapabilities {
 /// Whether store purchases are available on this device.
 ///
 /// Does not connect to the store; a device that reports available can still
-/// fail [`Store::connect`] when the store itself is unreachable.
-pub async fn capabilities() -> StoreCapabilities {
-    sys::capabilities().await.unwrap_or_else(|error| {
-        tracing::warn!("store capabilities probe failed: {error}");
-        StoreCapabilities { purchases: false }
-    })
+/// fail [`Store::connect`] when the store itself is unreachable. A device
+/// without a store — no Play Store app, an OS below the `StoreKit` 2 floor —
+/// answers `Ok` with [`StoreCapabilities::purchases`] unset: that is a real
+/// answer, not a failure.
+///
+/// # Errors
+/// The platform's probe error (`platform`).
+pub async fn capabilities() -> Result<StoreCapabilities, StoreError> {
+    sys::capabilities().await
 }
 
 /// A connection to the platform store.
@@ -151,6 +155,9 @@ pub struct Store {
 impl Store {
     /// Connects to the platform store.
     ///
+    /// Returns the store and its [`StoreEvents`] transaction feed — the feed
+    /// exists from connect, so a failure to set it up is a `connect` error.
+    ///
     /// Fails with [`StoreError::Unavailable`] when the platform reports no
     /// store: no Play Store app on Android, an OS below the `StoreKit` 2
     /// floor, or an unsupported platform.
@@ -158,10 +165,13 @@ impl Store {
     /// # Errors
     /// [`StoreError::Unavailable`] when the device cannot purchase, or the
     /// store's own error (`network`, `platform`).
-    pub async fn connect(catalog: Catalog) -> Result<Self, StoreError> {
+    pub async fn connect(catalog: Catalog) -> Result<(Self, StoreEvents), StoreError> {
         let catalog = std::sync::Arc::new(catalog);
-        let sys = sys::Store::connect(&catalog).await?;
-        Ok(Self { catalog, sys })
+        let (sys, events) = sys::Store::connect(&catalog).await?;
+        Ok((
+            Self { catalog, sys },
+            StoreEvents { inner: events },
+        ))
     }
 
     /// Queries every product in the catalog.
@@ -226,25 +236,6 @@ impl Store {
         &self.catalog
     }
 
-    /// Transactions completed outside a purchase call: pending purchases that
-    /// settle, Ask to Buy, purchases from another device, and renewals where
-    /// the platform delivers them to the client.
-    ///
-    /// On Android, Play delivers subscription renewals only to the app's
-    /// backend through Real-time Developer Notifications — never to
-    /// `PurchasesUpdatedListener` — so renewals do not appear in this stream
-    /// there.
-    ///
-    /// The stream ends when the [`Store`] drops. Only the first call receives
-    /// the transaction feed; calling `events` again panics.
-    ///
-    /// # Panics
-    ///
-    /// When called a second time on the same store.
-    pub fn events(&self) -> impl Stream<Item = Result<Purchase, StoreError>> + Send + use<> {
-        self.sys.events(&self.catalog)
-    }
-
     /// What the user currently owns: non-consumables and active
     /// subscriptions, each either still unfinished or already finished.
     ///
@@ -255,6 +246,39 @@ impl Store {
     /// `unverified`).
     pub async fn entitlements(&self) -> Result<Vec<Entitlement>, StoreError> {
         self.sys.entitlements(self.catalog()).await
+    }
+}
+
+/// The transaction feed [`Store::connect`] returns with the store.
+///
+/// It carries transactions completed outside a purchase call — pending
+/// purchases that settle, Ask to Buy, purchases from another device, and
+/// renewals where the platform delivers them to the client.
+///
+/// On Android, Play delivers subscription renewals only to the app's
+/// backend through Real-time Developer Notifications — never to
+/// `PurchasesUpdatedListener` — so renewals do not appear in this stream
+/// there.
+///
+/// The stream ends when the [`Store`] drops.
+pub struct StoreEvents {
+    inner: futures::stream::BoxStream<'static, Result<Purchase, StoreError>>,
+}
+
+impl Stream for StoreEvents {
+    type Item = Result<Purchase, StoreError>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+impl std::fmt::Debug for StoreEvents {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoreEvents").finish_non_exhaustive()
     }
 }
 
@@ -470,7 +494,7 @@ pub enum PurchaseOutcome {
     /// Paid; the purchase is unfinished until [`Purchase::finish`] runs.
     Purchased(Purchase),
     /// Waiting on external action (e.g. Ask to Buy); the purchase completes
-    /// or fails through [`Store::events`].
+    /// or fails through [`StoreEvents`].
     Pending,
     /// The user cancelled the flow.
     Cancelled,
@@ -678,7 +702,8 @@ impl PurchaseProof {
 }
 
 /// Which platform signature a [`PurchaseProof`] carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ProofKind {
     /// A Play purchase token; verify through the Play Developer API.

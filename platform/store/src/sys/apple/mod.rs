@@ -2,14 +2,14 @@
 //!
 //! `StoreKit` 2 has no Objective-C API, so the platform side is Swift:
 //! `WaterkitStore`, an actor created at connect, owns the
-//! `Transaction.updates` listener task that feeds `events()`. Every call
-//! replies as one JSON document decoded by `crate::sys::wire`.
+//! `Transaction.updates` listener task that feeds the [`EventStream`]. Every
+//! call replies as one JSON document decoded by `crate::sys::wire`.
 
 use std::sync::Arc;
 
-use futures::{Stream, channel::oneshot, stream};
+use futures::{StreamExt, channel::oneshot, stream};
 
-use crate::sys::wire;
+use crate::sys::{EventStream, wire};
 use crate::{
     Catalog, Entitlement, OfferToken, Product, ProductId, ProductKind, PurchaseOutcome,
     StoreCapabilities, StoreError, Transaction,
@@ -58,16 +58,16 @@ pub struct Purchase {
 }
 
 impl Store {
-    pub async fn connect(catalog: &Catalog) -> Result<Self, StoreError> {
+    pub async fn connect(catalog: &Arc<Catalog>) -> Result<(Self, EventStream), StoreError> {
         // `canMakePayments` and the OS floor are the platform's own answers —
         // the same probe `capabilities()` reports, checked again so a device
         // that cannot pay fails connect with `Unavailable`.
         if !capabilities().await?.purchases {
             return Err(StoreError::Unavailable);
         }
-        Ok(Self {
-            handle: ffi::store_connect(&wire::encode_catalog(catalog)),
-        })
+        let handle = ffi::store_connect(&wire::encode_catalog(catalog));
+        let events = event_stream(handle.store_retain(), catalog);
+        Ok((Self { handle }, events))
     }
 
     pub async fn products(&self, catalog: &Catalog) -> Result<Vec<Product>, StoreError> {
@@ -91,35 +91,6 @@ impl Store {
         outcome.into_outcome(|purchase| build_purchase(purchase, catalog))
     }
 
-    pub fn events(
-        &self,
-        catalog: &Arc<Catalog>,
-    ) -> impl Stream<Item = Result<crate::Purchase, StoreError>> + Send + use<> {
-        let handle = self.handle.store_retain();
-        let catalog = Arc::clone(catalog);
-        stream::unfold(
-            (handle, catalog, false),
-            |(handle, catalog, done)| async move {
-                if done {
-                    return None;
-                }
-                let next = reply(|callback| handle.store_next_event(callback)).await;
-                let event = next.and_then(|json| wire::decode_reply::<wire::EventJson>(&json));
-                match event {
-                    Ok(wire::EventJson::Purchase(purchase)) => Some((
-                        build_purchase(*purchase, &catalog),
-                        (handle, catalog, false),
-                    )),
-                    Ok(wire::EventJson::End(ended)) => {
-                        debug_assert!(ended, "store event stream end marker must be true");
-                        None
-                    }
-                    Err(error) => Some((Err(error), (handle, catalog, true))),
-                }
-            },
-        )
-    }
-
     pub async fn entitlements(&self, catalog: &Catalog) -> Result<Vec<Entitlement>, StoreError> {
         let json = reply(|callback| self.handle.store_entitlements(callback)).await?;
         let entitlements: Vec<wire::EntitlementJson> = wire::decode_reply(&json)?;
@@ -133,6 +104,34 @@ impl Store {
             })
             .collect()
     }
+}
+
+/// The transaction feed: dequeues one `Transaction.updates` reply per poll
+/// from the session's event queue. Ends when the updates stream finishes.
+fn event_stream(handle: ffi::AppleStore, catalog: &Arc<Catalog>) -> EventStream {
+    let catalog = Arc::clone(catalog);
+    stream::unfold(
+        (handle, catalog, false),
+        |(handle, catalog, done)| async move {
+            if done {
+                return None;
+            }
+            let next = reply(|callback| handle.store_next_event(callback)).await;
+            let event = next.and_then(|json| wire::decode_reply::<wire::EventJson>(&json));
+            match event {
+                Ok(wire::EventJson::Purchase(purchase)) => Some((
+                    build_purchase(*purchase, &catalog),
+                    (handle, catalog, false),
+                )),
+                Ok(wire::EventJson::End(ended)) => {
+                    debug_assert!(ended, "store event stream end marker must be true");
+                    None
+                }
+                Err(error) => Some((Err(error), (handle, catalog, true))),
+            }
+        },
+    )
+    .boxed()
 }
 
 pub async fn finish(purchase: Purchase, _kind: ProductKind) -> Result<(), StoreError> {

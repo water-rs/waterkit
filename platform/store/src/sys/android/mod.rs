@@ -2,14 +2,14 @@
 //!
 //! `StoreConnection` (in `StoreHelper.kt`) owns the `BillingClient`; the Rust
 //! `Store` keeps it as a JNI global reference and ends the connection on
-//! drop. Its `PurchasesUpdatedListener` feeds one `NativeChannel` backing
-//! `events()`, except results belonging to an in-flight `launchBillingFlow`,
-//! which complete that call's `NativeCallback`. All replies are JSON decoded
-//! by `crate::sys::wire`.
+//! drop. Its `PurchasesUpdatedListener` feeds one `NativeChannel` backing the
+//! [`EventStream`], except results belonging to an in-flight
+//! `launchBillingFlow`, which complete that call's `NativeCallback`. All
+//! replies are JSON decoded by `crate::sys::wire`.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use futures::{Stream, StreamExt, channel::mpsc};
+use futures::{StreamExt, channel::mpsc};
 use jni::objects::{Global, JObject, JString, JValue, JValueOwned};
 use jni::{Env, jni_sig, jni_str};
 use waterkit_build::{
@@ -17,7 +17,7 @@ use waterkit_build::{
     describe_jni_error, dex_helper, with_android_context,
 };
 
-use crate::sys::wire;
+use crate::sys::{EventStream, wire};
 use crate::{
     Catalog, Entitlement, OfferToken, Product, ProductId, ProductKind, PurchaseOutcome,
     StoreCapabilities, StoreError, Transaction,
@@ -80,10 +80,9 @@ pub async fn capabilities() -> Result<StoreCapabilities, StoreError> {
 }
 
 /// The Play Billing connection: the Kotlin `StoreConnection` global
-/// reference plus the receiver of its events channel.
+/// reference.
 pub struct Store {
     connection: Global<JObject<'static>>,
-    events: Mutex<Option<mpsc::UnboundedReceiver<Result<String, PeerError>>>>,
 }
 
 impl std::fmt::Debug for Store {
@@ -107,7 +106,7 @@ impl std::fmt::Debug for Purchase {
 }
 
 impl Store {
-    pub async fn connect(catalog: &Catalog) -> Result<Self, StoreError> {
+    pub async fn connect(catalog: &Arc<Catalog>) -> Result<(Self, EventStream), StoreError> {
         let catalog_json = wire::encode_catalog(catalog);
         let (connection, events_receiver) = with_android_context(|env, context| {
             let (channel, receiver) = NativeChannel::<String>::new(env)?;
@@ -133,7 +132,6 @@ impl Store {
                 .map_err(|error| jni_error(env, "retain StoreConnection", error))?;
             Ok::<_, StoreError>((connection, receiver))
         })?;
-        let _ = &events_receiver;
 
         let receiver = with_android_context(|env, _context| {
             let (callback, receiver) = NativeCallback::<String>::new(env)?;
@@ -149,10 +147,15 @@ impl Store {
         let json = await_reply(receiver).await?;
         wire::decode_reply::<serde::de::IgnoredAny>(&json)?;
 
-        Ok(Self {
-            connection,
-            events: Mutex::new(Some(events_receiver)),
-        })
+        // The events feed needs its own global reference on the connection;
+        // a JNI failure here is a connect error.
+        let events_connection = with_android_context(|env, _context| {
+            env.new_global_ref(&connection)
+                .map_err(|error| jni_error(env, "retain StoreConnection", error))
+        })?;
+        let events = event_stream(events_receiver, events_connection, catalog);
+
+        Ok((Self { connection }, events))
     }
 
     pub async fn products(&self, catalog: &Catalog) -> Result<Vec<Product>, StoreError> {
@@ -208,41 +211,6 @@ impl Store {
         let json = await_reply(receiver).await?;
         let outcome: wire::OutcomeJson = wire::decode_reply(&json)?;
         outcome.into_outcome(|purchase| self.build_purchase(purchase, catalog))
-    }
-
-    pub fn events(
-        &self,
-        catalog: &Arc<Catalog>,
-    ) -> impl Stream<Item = Result<crate::Purchase, StoreError>> + Send + use<> {
-        let receiver = self
-            .events
-            .lock()
-            .expect("store events lock poisoned")
-            .take()
-            .expect("Store::events may be called only once per connection");
-        let connection = with_android_context(|env, _context| {
-            env.new_global_ref(&self.connection)
-                .map_err(|error| jni_error(env, "retain StoreConnection", error))
-        })
-        .expect("retaining the store connection for events failed");
-        let catalog = Arc::clone(catalog);
-        receiver.filter_map(move |item| {
-            let catalog = Arc::clone(&catalog);
-            let connection = &connection;
-            std::future::ready(match item {
-                Err(error) => Some(Err(StoreError::from(error))),
-                Ok(json) => match wire::decode_reply::<wire::EventJson>(&json) {
-                    Ok(wire::EventJson::Purchase(purchase)) => {
-                        Some(build_purchase(*purchase, &catalog, connection))
-                    }
-                    Ok(wire::EventJson::End(ended)) => {
-                        debug_assert!(ended, "store event stream end marker must be true");
-                        None
-                    }
-                    Err(error) => Some(Err(error)),
-                },
-            })
-        })
     }
 
     pub async fn entitlements(&self, catalog: &Catalog) -> Result<Vec<Entitlement>, StoreError> {
@@ -325,6 +293,36 @@ pub async fn finish(purchase: Purchase, kind: ProductKind) -> Result<(), StoreEr
     })?;
     let json = await_reply(receiver).await?;
     wire::decode_reply::<serde::de::IgnoredAny>(&json).map(|_| ())
+}
+
+/// The transaction feed the connection's `NativeChannel` carries, decoded
+/// into purchases. Ends when the channel closes — when the [`Store`] drops
+/// and `disconnect` runs.
+fn event_stream(
+    receiver: mpsc::UnboundedReceiver<Result<String, PeerError>>,
+    connection: Global<JObject<'static>>,
+    catalog: &Arc<Catalog>,
+) -> EventStream {
+    let catalog = Arc::clone(catalog);
+    receiver
+        .filter_map(move |item| {
+            let catalog = Arc::clone(&catalog);
+            let connection = &connection;
+            std::future::ready(match item {
+                Err(error) => Some(Err(StoreError::from(error))),
+                Ok(json) => match wire::decode_reply::<wire::EventJson>(&json) {
+                    Ok(wire::EventJson::Purchase(purchase)) => {
+                        Some(build_purchase(*purchase, &catalog, connection))
+                    }
+                    Ok(wire::EventJson::End(ended)) => {
+                        debug_assert!(ended, "store event stream end marker must be true");
+                        None
+                    }
+                    Err(error) => Some(Err(error)),
+                },
+            })
+        })
+        .boxed()
 }
 
 fn build_purchase(

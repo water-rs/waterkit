@@ -2691,11 +2691,20 @@ async fn record_android_wallet(report: &mut TestReport) {
 /// same shape the API promises, exercised end to end.
 #[cfg(feature = "store")]
 async fn record_android_store(report: &mut TestReport) {
-    let capabilities = waterkit_content::store::capabilities().await;
+    let capabilities = match waterkit_content::store::capabilities().await {
+        Ok(capabilities) => capabilities,
+        Err(error) => {
+            report.push(TestCase::failed(
+                "store.capabilities",
+                format!("capabilities probe failed: {error}"),
+            ));
+            return;
+        }
+    };
     if capabilities.purchases {
         match waterkit_content::store::Store::connect(waterkit_content::store::Catalog::new()).await
         {
-            Ok(_store) => report.push(TestCase::passed_with_message(
+            Ok((_store, _events)) => report.push(TestCase::passed_with_message(
                 "store.connect",
                 "the emulator reports a Play Store and billing connected",
             )),

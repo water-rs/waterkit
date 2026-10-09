@@ -21,14 +21,16 @@ let catalog = Catalog::new()
     .with(ProductId::new("app.pro"), ProductKind::NonConsumable)
     .with(ProductId::new("app.sub.monthly"), ProductKind::Subscription);
 
-let store = Store::connect(catalog).await?;
+let (store, mut events) = Store::connect(catalog).await?;
 let products = store.products().await?;
-
-// Discrete transactions that complete outside a purchase call:
-// Ask to Buy settlements, purchases made on another device, and —
-// where the platform delivers them to the client — renewals.
-let mut events = store.events();
 ```
+
+`events` is a [`StoreEvents`] stream of discrete transactions that complete
+outside a purchase call: Ask to Buy settlements, purchases made on another
+device, and — where the platform delivers them to the client — renewals. It
+ends when the `Store` drops. [`capabilities()`] reports whether the device
+can purchase at all, without connecting; a device with no store answers
+`Ok` with `purchases` unset, and only a probe failure is a `StoreError`.
 
 Every paid purchase is a [`Purchase`] and stays *unfinished* until the app
 calls [`Purchase::finish`]: finishing consumes a consumable or acknowledges a
@@ -50,7 +52,7 @@ active subscriptions — split into `Unfinished` and `Finished` records.
 - **Renewals on Android are not delivered to the app.** Play Billing only
   pushes subscription renewals to a backend via Real-time Developer
   Notifications; `PurchasesUpdatedListener` does not fire for them, so
-  `Store::events` cannot report renewals on Android. It does report pending
+  `StoreEvents` cannot report renewals on Android. It does report pending
   purchases that settle and purchases initiated outside an in-flight
   `launchBillingFlow` the listener sees.
 - **`launchBillingFlow` needs an `Activity`.** The published Android context

@@ -47,16 +47,6 @@ const fn kind_wire(kind: ProductKind) -> &'static str {
     }
 }
 
-/// Parses a wire kind string back into a [`ProductKind`].
-fn kind_from_wire(kind: &str) -> Option<ProductKind> {
-    match kind {
-        "consumable" => Some(ProductKind::Consumable),
-        "non_consumable" => Some(ProductKind::NonConsumable),
-        "subscription" => Some(ProductKind::Subscription),
-        _ => None,
-    }
-}
-
 /// A reply envelope: `{"ok": ...}` or `{"error": {...}}`.
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,25 +55,56 @@ enum Envelope<T> {
     Error(ErrorJson),
 }
 
-/// The platform's side of a failed call.
+/// The platform's side of a failed call: one variant per [`StoreError`]
+/// case, each carrying exactly the fields that error needs. An unknown kind
+/// or a missing field is a decode error and surfaces as
+/// `StoreError::Platform("malformed store reply: …")`.
 #[derive(Debug, Deserialize)]
-pub struct ErrorJson {
-    kind: String,
-    #[serde(default)]
-    message: Option<String>,
-    #[serde(default)]
-    product: Option<String>,
-    #[serde(default)]
-    declared: Option<String>,
-    #[serde(default)]
-    proof: Option<ProofJson>,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ErrorJson {
+    /// No store on this device.
+    Unavailable,
+    /// The store does not know the product.
+    ProductNotFound {
+        /// The product id.
+        product: String,
+    },
+    /// The store's product type contradicts the declared kind.
+    KindMismatch {
+        /// The product id.
+        product: String,
+        /// The kind the app's catalog declared.
+        declared: ProductKind,
+    },
+    /// Transaction verification failed; the proof is kept for inspection.
+    Unverified {
+        /// The transaction's signed proof.
+        proof: ProofJson,
+    },
+    /// The product is already owned.
+    AlreadyOwned {
+        /// The product id.
+        product: String,
+    },
+    /// The store was unreachable or its backend errored.
+    Network {
+        /// The platform's message.
+        message: String,
+    },
+    /// Any other platform-side failure.
+    Platform {
+        /// The platform's message.
+        message: String,
+    },
 }
 
 /// A proof as the platform reports it.
 #[derive(Debug, Deserialize)]
 pub struct ProofJson {
-    kind: String,
-    value: String,
+    /// Which platform signature the proof carries.
+    pub kind: ProofKind,
+    /// The signed payload.
+    pub value: String,
 }
 
 /// Decodes a reply envelope into a payload or a [`StoreError`].
@@ -98,29 +119,19 @@ pub fn decode_reply<T: for<'de> Deserialize<'de>>(json: &str) -> Result<T, Store
 
 impl From<ErrorJson> for StoreError {
     fn from(error: ErrorJson) -> Self {
-        let message = || error.message.clone().unwrap_or_else(|| error.kind.clone());
-        let product = || ProductId::new(error.product.clone().unwrap_or_default());
-        match error.kind.as_str() {
-            "unavailable" => Self::Unavailable,
-            "product_not_found" => Self::ProductNotFound(product()),
-            "kind_mismatch" => Self::KindMismatch {
-                product: product(),
-                declared: error
-                    .declared
-                    .as_deref()
-                    .and_then(kind_from_wire)
-                    // The wire kind_mismatch should always carry the declared
-                    // kind; a reply that omits it is still a mismatch, just
-                    // one whose declared side only the catalog knows.
-                    .unwrap_or(ProductKind::Consumable),
+        match error {
+            ErrorJson::Unavailable => Self::Unavailable,
+            ErrorJson::ProductNotFound { product } => {
+                Self::ProductNotFound(ProductId::new(product))
+            }
+            ErrorJson::KindMismatch { product, declared } => Self::KindMismatch {
+                product: ProductId::new(product),
+                declared,
             },
-            "unverified" => Self::Unverified(error.proof.map_or_else(
-                || PurchaseProof::new(ProofKind::AppStoreJws, String::new()),
-                ProofJson::into_proof,
-            )),
-            "already_owned" => Self::AlreadyOwned(product()),
-            "network" => Self::Network(message()),
-            _ => Self::Platform(message()),
+            ErrorJson::Unverified { proof } => Self::Unverified(proof.into_proof()),
+            ErrorJson::AlreadyOwned { product } => Self::AlreadyOwned(ProductId::new(product)),
+            ErrorJson::Network { message } => Self::Network(message),
+            ErrorJson::Platform { message } => Self::Platform(message),
         }
     }
 }
@@ -376,11 +387,7 @@ pub enum EventJson {
 
 impl ProofJson {
     fn into_proof(self) -> PurchaseProof {
-        let kind = match self.kind.as_str() {
-            "play_purchase_token" => ProofKind::PlayPurchaseToken,
-            _ => ProofKind::AppStoreJws,
-        };
-        PurchaseProof::new(kind, self.value)
+        PurchaseProof::new(self.kind, self.value)
     }
 }
 

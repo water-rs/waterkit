@@ -67,11 +67,13 @@ use objc2_foundation::{NSArray, NSDictionary, NSError, NSNumber, NSString, NSURL
 use std::io::Write as _;
 
 // `AVCaptureDevice`'s "keep the current value" sentinels for custom
-// exposure; `objc2-av-foundation` 0.3.2 has no binding for them.
+// exposure; `objc2-av-foundation` 0.3.2 has no binding for them. The SDK
+// renamed the exports to `AVCaptureISOCurrent` and
+// `AVCaptureExposureDurationCurrent`.
 #[cfg(target_os = "ios")]
 unsafe extern "C" {
-    static AVCaptureDeviceCurrentISO: f32;
-    static AVCaptureDeviceCurrentExposureDuration: objc2_core_media::CMTime;
+    static AVCaptureISOCurrent: f32;
+    static AVCaptureExposureDurationCurrent: objc2_core_media::CMTime;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1120,7 +1122,7 @@ impl Session {
             self.configure_device(|device| {
                 unsafe {
                     device.setExposureModeCustomWithDuration_ISO_completionHandler(
-                        AVCaptureDeviceCurrentExposureDuration,
+                        AVCaptureExposureDurationCurrent,
                         clamped,
                         None,
                     );
@@ -1165,7 +1167,7 @@ impl Session {
                 unsafe {
                     device.setExposureModeCustomWithDuration_ISO_completionHandler(
                         clamped,
-                        AVCaptureDeviceCurrentISO,
+                        AVCaptureISOCurrent,
                         None,
                     );
                 };

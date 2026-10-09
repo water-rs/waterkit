@@ -159,9 +159,11 @@ jobs:
       # newest on macos-latest. Under Xcode 27 the iOS 27.0 runtime routes
       # Product.purchase() out of the test session to the real sandbox, so
       # the harness runs Xcode 26.6 against an installed iOS 27.0 runtime.
+      # The release build, 24A434: `xcodes` resolves "iOS 27.0" to a beta.
       - name: Install the iOS 27.0 simulator runtime
         run: |
-          xcodes runtimes install "iOS 27.0" --architecture arm64
+          xcodebuild -downloadPlatform iOS -buildVersion 24A434
+          xcrun simctl list runtimes iOS
           xcrun simctl create waterkit-e2e "iPhone 17" com.apple.CoreSimulator.SimRuntime.iOS-27-0
       - name: Boot an iPhone simulator on the newest iOS runtime
         run: |

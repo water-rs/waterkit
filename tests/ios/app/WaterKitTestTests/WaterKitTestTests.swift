@@ -29,3 +29,21 @@ final class WaterKitTestTests: XCTestCase {
         try ReportWriter.persist(report)
     }
 }
+
+/// The StoreKit Test environment registration, in its own app launch.
+///
+/// storekitd binds an app's payment environment when the app's StoreKit
+/// client first registers at launch, and does not re-evaluate it when an
+/// `SKTestSession` is created later in the same process. On a fresh
+/// simulator the persisted Octane environment does not exist at the
+/// suite's launch, so the suite's `Product.purchase()` calls route to the
+/// real sandbox and hang on an interactive Apple-ID sign-in. Running this
+/// test first gives `store_test_begin` a dedicated launch whose session
+/// persists the configuration; the suite's later launch then binds to the
+/// test environment.
+final class StoreKitEnvironmentTests: XCTestCase {
+    func testRegisterStoreKitTestEnvironment() {
+        let error = store_test_begin().toString()
+        XCTAssertEqual(error, "", "SKTestSession could not be created: \(error)")
+    }
+}

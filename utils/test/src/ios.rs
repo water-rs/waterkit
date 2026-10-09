@@ -134,7 +134,7 @@ fn run_on(root: &Path, feature: &str, destination: &impl Destination) -> Result<
     destination.prepare(feature, &products)?;
 
     info!("{}", "Running the harness suite...".green().bold());
-    destination.run_tests(&products)?;
+    destination.run_tests(feature, &products)?;
 
     let report_json = destination.report()?;
     let report = from_json(&report_json).context("Failed to parse the iOS test report")?;
@@ -405,8 +405,8 @@ trait Destination {
     /// Prepares, before the test run, what its cases need.
     fn prepare(&self, feature: &str, products: &TestProducts) -> Result<()>;
 
-    /// Runs the test bundle on the destination.
-    fn run_tests(&self, products: &TestProducts) -> Result<()>;
+    /// Runs the test bundle on the destination for `feature`.
+    fn run_tests(&self, feature: &str, products: &TestProducts) -> Result<()>;
 
     /// Reads the report the test wrote into the app's data container.
     fn report(&self) -> Result<String>;
@@ -551,7 +551,7 @@ impl Destination for Simulator {
         Ok(())
     }
 
-    fn run_tests(&self, products: &TestProducts) -> Result<()> {
+    fn run_tests(&self, feature: &str, products: &TestProducts) -> Result<()> {
         let specifier = self.specifier()?;
         let xctestrun = products.xctestrun.to_str().ok_or_else(|| {
             eyre::eyre!(
@@ -559,8 +559,27 @@ impl Destination for Simulator {
                 products.xctestrun.display()
             )
         })?;
+
+        // An app's payments are bound to the StoreKit Test environment only
+        // when its StoreKit client first registers at launch, and creating an
+        // `SKTestSession` later in the same process does not rebind them — so
+        // the persisted Octane configuration must exist before the suite's
+        // app process starts. On a fresh simulator it does not: the
+        // registration test runs first in its own launch, where
+        // `store_test_begin`'s session writes the configuration, and the
+        // suite's later launch then binds to it.
+        if matches!(feature, "full" | "store") {
+            let mut args = test_without_building_args(xctestrun, &specifier);
+            args.push("-only-testing:WaterKitTestTests/StoreKitEnvironmentTests");
+            let mut command = Command::new("xcodebuild");
+            command.args(args);
+            run_xcodebuild_test(command, "register the StoreKit Test environment")?;
+        }
+
+        let mut args = test_without_building_args(xctestrun, &specifier);
+        args.push("-only-testing:WaterKitTestTests/WaterKitTestTests");
         let mut command = Command::new("xcodebuild");
-        command.args(test_without_building_args(xctestrun, &specifier));
+        command.args(args);
         run_xcodebuild_test(command, "run the harness suite on the simulator")
     }
 
@@ -652,7 +671,7 @@ impl<H: DeviceHost> Destination for Device<H> {
         Ok(())
     }
 
-    fn run_tests(&self, products: &TestProducts) -> Result<()> {
+    fn run_tests(&self, _feature: &str, products: &TestProducts) -> Result<()> {
         self.host
             .test_without_building(products, &self.specifier()?)
     }
@@ -701,10 +720,12 @@ trait DeviceHost {
     /// `xcodebuild test-without-building` on that Mac.
     fn test_without_building(&self, products: &TestProducts, specifier: &str) -> Result<()> {
         let xctestrun = self.stage(products)?;
-        let command = self.command(
-            "xcodebuild",
-            &test_without_building_args(&xctestrun, specifier),
-        )?;
+        let mut args = test_without_building_args(&xctestrun, specifier);
+        // Keep the environment-registration test out of the suite's launch:
+        // it exists to seed the StoreKit Test environment in its own process
+        // on the simulator, and must never run inside the suite itself.
+        args.push("-only-testing:WaterKitTestTests/WaterKitTestTests");
+        let command = self.command("xcodebuild", &args)?;
         run_xcodebuild_test(command, "run the harness suite on the device")
     }
 }

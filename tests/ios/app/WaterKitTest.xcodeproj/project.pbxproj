@@ -20,6 +20,8 @@
 		C0FFEE000000000000000903 /* ReportWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000906 /* ReportWriter.swift */; };
 		C0FFEE000000000000000904 /* SwiftBridgeCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000203 /* SwiftBridgeCore.swift */; };
 		C0FFEE000000000000000908 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0FFEE00000000000000020B /* XCTest.framework */; };
+		C0FFEE000000000000000914 /* StoreHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000208 /* StoreHarness.swift */; };
+		C0FFEE000000000000000915 /* StoreKitTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0FFEE00000000000000020A /* StoreKitTest.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -53,6 +55,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C0FFEE000000000000000908 /* XCTest.framework in Frameworks */,
+				C0FFEE000000000000000915 /* StoreKitTest.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -222,6 +225,7 @@
 				C0FFEE000000000000000902 /* WaterKitTestTests.swift in Sources */,
 				C0FFEE000000000000000903 /* ReportWriter.swift in Sources */,
 				C0FFEE000000000000000904 /* SwiftBridgeCore.swift in Sources */,
+				C0FFEE000000000000000914 /* StoreHarness.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

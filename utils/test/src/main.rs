@@ -45,6 +45,18 @@ const ANDROID_INTERACTIVE_REPORT_TIMEOUT: Duration = Duration::from_secs(600);
 const ANDROID_REPORT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const ANDROID_SMS_DELIVERY_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// How long the guest may take to stage an injected SMS after the emulator
+/// console accepts it.
+///
+/// `adb emu sms send` returning OK only means the virtual modem queued the
+/// message; it can still be lost between the modem and the guest's telephony
+/// stack. Inbound SMS — including the app-token SMS the OTP test uses, which
+/// never lands in the inbox — is staged in `content://sms/raw` before
+/// dispatch, so a new row there is the delivery signal the OTP case's wait
+/// depends on. The hop is normally sub-second; the bound only keeps an
+/// emulator that dropped the injection from reporting as a test timeout.
+const ANDROID_SMS_SURFACE_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Deserialize)]
 struct SmsRequest {
     sender: String,
@@ -734,6 +746,15 @@ fn poll_sms_request(toolchain: &AndroidToolchain) -> Result<Option<SmsRequest>> 
 }
 
 fn deliver_sms_request(toolchain: &AndroidToolchain, request: &SmsRequest) -> Result<()> {
+    // The SMS Retriever token is derived from the signing key, so its body is
+    // the same on every run and a leftover raw row cannot be told from a fresh
+    // one by text alone; the row ids staged before the injection are the
+    // baseline the surface wait compares against.
+    let staged: std::collections::HashSet<i64> = staged_sms_rows(toolchain)?
+        .into_iter()
+        .map(|(id, _body)| id)
+        .collect();
+
     let args = [
         "emu",
         "sms",
@@ -756,8 +777,82 @@ fn deliver_sms_request(toolchain: &AndroidToolchain, request: &SmsRequest) -> Re
             stderr.trim()
         );
     }
-    info!("Delivered a test OTP SMS to sender {}", request.sender);
-    Ok(())
+
+    // Wait for the guest to actually stage the SMS rather than trusting the
+    // console's acceptance. An emulator that drops the injection surfaces here
+    // as an environment failure, and a stage that does arrive leaves the
+    // app's own `request.message()` as the delivery signal for the case.
+    let deadline = Instant::now() + ANDROID_SMS_SURFACE_TIMEOUT;
+    loop {
+        let rows = staged_sms_rows(toolchain)?;
+        if rows
+            .iter()
+            .any(|(id, body)| !staged.contains(id) && *body == request.body)
+        {
+            info!(
+                "Delivered a test OTP SMS to sender {} (staged by the guest's telephony stack)",
+                request.sender
+            );
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            eyre::bail!(
+                "The emulator accepted the test OTP SMS but the guest never surfaced it: no \
+                 new row in content://sms/raw within {ANDROID_SMS_SURFACE_TIMEOUT:?}. The \
+                 emulator dropped the injection before it reached the telephony stack."
+            );
+        }
+        thread::sleep(ANDROID_REPORT_POLL_INTERVAL);
+    }
+}
+
+/// Reads the SMS provider's raw staging table as `(row id, message body)`
+/// pairs.
+///
+/// `InboundSmsHandler` stages every inbound SMS in `content://sms/raw` before
+/// dispatching it, and marks the row deleted rather than removing it once
+/// dispatch completes, so the table keeps a durable record of what the radio
+/// delivered.
+fn staged_sms_rows(toolchain: &AndroidToolchain) -> Result<Vec<(i64, String)>> {
+    let output = run_adb_with_timeout(
+        toolchain,
+        &[
+            "exec-out",
+            "content",
+            "query",
+            "--uri",
+            "content://sms/raw",
+            "--projection",
+            "_id,message_body",
+        ],
+        Duration::from_secs(10),
+        "query the SMS staging table",
+    )?;
+    if !output.status.success() {
+        eyre::bail!(
+            "Could not query the SMS staging table: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let stdout = String::from_utf8(output.stdout)
+        .context("SMS staging table query output was not valid UTF-8")?;
+    Ok(parse_staged_sms(&stdout))
+}
+
+/// Parses `content query` rows (`Row: N _id=<id>, message_body=<body>`) into
+/// `(id, body)` pairs. `message_body` is the last projected column, so its
+/// value is the remainder of the line.
+fn parse_staged_sms(stdout: &str) -> Vec<(i64, String)> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let row = line.trim().strip_prefix("Row: ")?;
+            let (first, rest) = row.split_once(", ")?;
+            let id = first.rsplit('=').next()?.trim().parse().ok()?;
+            let body = rest.strip_prefix("message_body=")?;
+            Some((id, body.to_owned()))
+        })
+        .collect()
 }
 
 fn run_adb<const N: usize>(toolchain: &AndroidToolchain, args: [&str; N]) -> Result<()> {
@@ -985,7 +1080,10 @@ fn get_crate_feature(package_name: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{am_start_field, get_crate_feature, parse_android_min_sdk, sdk_root_from_adb};
+    use super::{
+        am_start_field, get_crate_feature, parse_android_min_sdk, parse_staged_sms,
+        sdk_root_from_adb,
+    };
     use std::path::{Path, PathBuf};
 
     /// A real `am start -W` reply, captured from a Pixel 9 Pro.
@@ -1030,5 +1128,29 @@ mod tests {
     fn parses_android_min_sdk_from_default_config() {
         let build_gradle = include_str!("../tests/fixtures/android-build.gradle.kts");
         assert_eq!(parse_android_min_sdk(build_gradle).as_deref(), Some("26"));
+    }
+
+    /// `content query --uri content://sms/raw --projection _id,message_body`
+    /// on an API 35 emulator that has received three injected SMS.
+    const RAW_QUERY: &str = "\
+Row: 0 _id=1, message_body=probe test message
+Row: 1 _id=2, message_body=airplane probe msg
+Row: 2 _id=3, message_body=Your waterkit code is 123456 J5ENdFmR_P8
+";
+
+    #[test]
+    fn parses_staged_sms_rows() {
+        let rows = parse_staged_sms(RAW_QUERY);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], (1, "probe test message".to_owned()));
+        assert_eq!(rows[2].0, 3);
+        assert_eq!(rows[2].1, "Your waterkit code is 123456 J5ENdFmR_P8");
+    }
+
+    #[test]
+    fn ignores_query_output_without_rows() {
+        let empty: Vec<(i64, String)> = Vec::new();
+        assert_eq!(parse_staged_sms(""), empty);
+        assert_eq!(parse_staged_sms("No result found.\n"), empty);
     }
 }

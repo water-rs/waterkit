@@ -1144,6 +1144,8 @@ const RECORDERS: &[Recorder] = &[
     |h| h.runtime.block_on(record_android_language(&mut h.report)),
     #[cfg(feature = "wallet")]
     |h| h.runtime.block_on(record_android_wallet(&mut h.report)),
+    #[cfg(feature = "store")]
+    |h| h.runtime.block_on(record_android_store(&mut h.report)),
     #[cfg(feature = "screen")]
     |h| record_android_screen(&mut h.report),
     #[cfg(feature = "dialog")]
@@ -2681,6 +2683,53 @@ async fn record_android_wallet(report: &mut TestReport) {
             "wallet.availability",
             format!("wallet capability probe failed: {error}"),
         )),
+    }
+}
+
+/// The `store` case: the CI emulator has no Play Store, so `capabilities()`
+/// must report unavailable and `connect` must fail with `Unavailable` — the
+/// same shape the API promises, exercised end to end.
+#[cfg(feature = "store")]
+async fn record_android_store(report: &mut TestReport) {
+    let capabilities = match waterkit_content::store::capabilities().await {
+        Ok(capabilities) => capabilities,
+        Err(error) => {
+            report.push(TestCase::failed(
+                "store.capabilities",
+                format!("capabilities probe failed: {error}"),
+            ));
+            return;
+        }
+    };
+    if capabilities.purchases {
+        match waterkit_content::store::Store::connect(waterkit_content::store::Catalog::new()).await
+        {
+            Ok((_store, _events)) => report.push(TestCase::passed_with_message(
+                "store.connect",
+                "the emulator reports a Play Store and billing connected",
+            )),
+            Err(waterkit_content::store::StoreError::Unavailable) => {
+                report.push(TestCase::passed_with_message(
+                    "store.connect",
+                    "billing reported unavailable despite an installed Play Store",
+                ));
+            }
+            Err(error) => report.push(TestCase::failed(
+                "store.connect",
+                format!("connect failed: {error}"),
+            )),
+        }
+    } else {
+        match waterkit_content::store::Store::connect(waterkit_content::store::Catalog::new()).await
+        {
+            Err(waterkit_content::store::StoreError::Unavailable) => {
+                report.push(TestCase::passed("store.connect"));
+            }
+            other => report.push(TestCase::failed(
+                "store.connect",
+                format!("connect must fail with Unavailable without a Play Store: {other:?}"),
+            )),
+        }
     }
 }
 

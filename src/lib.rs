@@ -150,3 +150,7 @@ pub use waterkit_otp as otp;
 #[cfg(feature = "wallet")]
 #[doc(inline)]
 pub use waterkit_wallet as wallet;
+
+#[cfg(feature = "store")]
+#[doc(inline)]
+pub use waterkit_store as store;

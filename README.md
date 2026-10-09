@@ -36,6 +36,7 @@ Waterkit is organized into focused, independent crates. You can use the main `wa
 | **[Sensor](sensor)** | Access to device sensors (Accelerometer, Gyroscope, Magnetometer, etc.). |
 | **[Share](share)** | Native share sheet and cross-app content sharing. |
 | **[Speech](speech)** | Speech recognition and text-to-speech integrations. |
+| **[Store](store)** | In-app purchases and subscriptions (Play Billing, StoreKit 2). |
 | **[System](system)** | System information, connectivity status, and thermal info. |
 | **[Video](video)** | High-level video playback and processing. |
 | **[Vision](vision)** | Hardware-accelerated on-device vision requests over camera frames and still images. |

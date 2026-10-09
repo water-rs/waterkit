@@ -1,10 +1,17 @@
 //! The Rust half of the iOS test harness: runs the enabled `WaterKit` cases
 //! and returns their structured report to the Swift app.
+//
+// The crate only makes sense on Apple targets: its `extern "Swift"` blocks
+// are satisfied by the hosting iOS app, so anywhere else they would be
+// unresolved symbols at link time.
+#![cfg(target_vendor = "apple")]
 
 use waterkit_test_report::{TestCase, TestReport, to_json_pretty};
 
 #[cfg(feature = "camera")]
 mod camera;
+#[cfg(feature = "store")]
+mod store;
 #[cfg(feature = "vision")]
 mod vision;
 
@@ -13,6 +20,15 @@ mod ffi {
     extern "Rust" {
         fn run_tests();
         fn run_tests_json() -> String;
+    }
+
+    extern "Swift" {
+        // StoreKit Test session helpers; implemented by the app's
+        // StoreHarness.swift. Always declared so the bridge glue compiles
+        // whether or not the store feature is enabled.
+        fn store_test_begin() -> String;
+        fn store_test_force_renewal(product_id: &str);
+        fn store_test_end();
     }
 }
 
@@ -118,6 +134,8 @@ const RECORDERS: &[Recorder] = &[
     |h| h.runtime.block_on(record_language(&mut h.report)),
     #[cfg(feature = "wallet")]
     |h| h.runtime.block_on(record_wallet(&mut h.report)),
+    #[cfg(feature = "store")]
+    |h| h.runtime.block_on(store::record(&mut h.report)),
     #[cfg(feature = "biometric")]
     |h| {
         h.report.push(TestCase::skipped(

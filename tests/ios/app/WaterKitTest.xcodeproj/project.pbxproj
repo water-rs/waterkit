@@ -11,6 +11,17 @@
 		C0FFEE000000000000000102 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000202 /* ContentView.swift */; };
 		C0FFEE000000000000000103 /* SwiftBridgeCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000203 /* SwiftBridgeCore.swift */; };
 		C0FFEE000000000000000104 /* waterkit-test-ios.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000204 /* waterkit-test-ios.swift */; };
+		C0FFEE000000000000000105 /* StoreHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000208 /* StoreHarness.swift */; };
+		C0FFEE000000000000000106 /* WaterKitTest.storekit in Resources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000209 /* WaterKitTest.storekit */; };
+		C0FFEE000000000000000107 /* StoreKitTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0FFEE00000000000000020A /* StoreKitTest.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
+		C0FFEE000000000000000108 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0FFEE00000000000000020B /* XCTest.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
+		C0FFEE000000000000000901 /* ReportWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000906 /* ReportWriter.swift */; };
+		C0FFEE000000000000000902 /* WaterKitTestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000905 /* WaterKitTestTests.swift */; };
+		C0FFEE000000000000000903 /* ReportWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000906 /* ReportWriter.swift */; };
+		C0FFEE000000000000000904 /* SwiftBridgeCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000203 /* SwiftBridgeCore.swift */; };
+		C0FFEE000000000000000908 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0FFEE00000000000000020B /* XCTest.framework */; };
+		C0FFEE000000000000000914 /* StoreHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE000000000000000208 /* StoreHarness.swift */; };
+		C0FFEE000000000000000915 /* StoreKitTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0FFEE00000000000000020A /* StoreKitTest.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -20,6 +31,13 @@
 		C0FFEE000000000000000203 /* SwiftBridgeCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Generated/SwiftBridgeCore.swift; sourceTree = "<group>"; };
 		C0FFEE000000000000000204 /* waterkit-test-ios.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Generated/waterkit-test-ios/waterkit-test-ios.swift"; sourceTree = "<group>"; };
 		C0FFEE000000000000000205 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		C0FFEE000000000000000208 /* StoreHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreHarness.swift; sourceTree = "<group>"; };
+		C0FFEE000000000000000209 /* WaterKitTest.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; name = WaterKitTest.storekit; path = WaterKitTest.storekit; sourceTree = "<group>"; };
+		C0FFEE00000000000000020A /* StoreKitTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = StoreKitTest.framework; path = "Developer/Library/Frameworks/StoreKitTest.framework"; sourceTree = SDKROOT; };
+		C0FFEE00000000000000020B /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = "Platforms/iPhoneSimulator.platform/Developer/Library/Frameworks/XCTest.framework"; sourceTree = DEVELOPER_DIR; };
+		C0FFEE000000000000000905 /* WaterKitTestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaterKitTestTests.swift; sourceTree = "<group>"; };
+		C0FFEE000000000000000906 /* ReportWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportWriter.swift; sourceTree = "<group>"; };
+		C0FFEE000000000000000907 /* WaterKitTestTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WaterKitTestTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -27,6 +45,17 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0FFEE000000000000000107 /* StoreKitTest.framework in Frameworks */,
+				C0FFEE000000000000000108 /* XCTest.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0FFEE00000000000000090D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C0FFEE000000000000000908 /* XCTest.framework in Frameworks */,
+				C0FFEE000000000000000915 /* StoreKitTest.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -37,6 +66,7 @@
 			isa = PBXGroup;
 			children = (
 				C0FFEE000000000000000402 /* WaterKitTest */,
+				C0FFEE000000000000000911 /* WaterKitTestTests */,
 				C0FFEE000000000000000205 /* Info.plist */,
 				C0FFEE000000000000000403 /* Products */,
 			);
@@ -47,8 +77,13 @@
 			children = (
 				C0FFEE000000000000000201 /* WaterKitTestApp.swift */,
 				C0FFEE000000000000000202 /* ContentView.swift */,
+				C0FFEE000000000000000906 /* ReportWriter.swift */,
 				C0FFEE000000000000000203 /* SwiftBridgeCore.swift */,
 				C0FFEE000000000000000204 /* waterkit-test-ios.swift */,
+				C0FFEE000000000000000208 /* StoreHarness.swift */,
+				C0FFEE000000000000000209 /* WaterKitTest.storekit */,
+				C0FFEE00000000000000020A /* StoreKitTest.framework */,
+				C0FFEE00000000000000020B /* XCTest.framework */,
 			);
 			path = WaterKitTest;
 			sourceTree = "<group>";
@@ -57,8 +92,17 @@
 			isa = PBXGroup;
 			children = (
 				C0FFEE000000000000000200 /* WaterKitTest.app */,
+				C0FFEE000000000000000907 /* WaterKitTestTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		C0FFEE000000000000000911 /* WaterKitTestTests */ = {
+			isa = PBXGroup;
+			children = (
+				C0FFEE000000000000000905 /* WaterKitTestTests.swift */,
+			);
+			path = WaterKitTestTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -81,7 +125,35 @@
 			productReference = C0FFEE000000000000000200 /* WaterKitTest.app */;
 			productType = "com.apple.product-type.application";
 		};
+		C0FFEE000000000000000909 /* WaterKitTestTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0FFEE000000000000000910 /* Build configuration list for PBXNativeTarget "WaterKitTestTests" */;
+			buildPhases = (
+				C0FFEE00000000000000090C /* Sources */,
+				C0FFEE00000000000000090D /* Frameworks */,
+				C0FFEE00000000000000090E /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C0FFEE000000000000000912 /* PBXTargetDependency */,
+			);
+			name = WaterKitTestTests;
+			productName = WaterKitTestTests;
+			productReference = C0FFEE000000000000000907 /* WaterKitTestTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXContainerItemProxy section */
+		C0FFEE000000000000000913 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C0FFEE000000000000000601 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C0FFEE000000000000000501;
+			remoteInfo = WaterKitTest;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXProject section */
 		C0FFEE000000000000000601 /* Project object */ = {
@@ -109,12 +181,21 @@
 			projectRoot = "";
 			targets = (
 				C0FFEE000000000000000501 /* WaterKitTest */,
+				C0FFEE000000000000000909 /* WaterKitTestTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		C0FFEE000000000000000503 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C0FFEE000000000000000106 /* WaterKitTest.storekit in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0FFEE00000000000000090E /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -132,10 +213,31 @@
 				C0FFEE000000000000000102 /* ContentView.swift in Sources */,
 				C0FFEE000000000000000103 /* SwiftBridgeCore.swift in Sources */,
 				C0FFEE000000000000000104 /* waterkit-test-ios.swift in Sources */,
+				C0FFEE000000000000000105 /* StoreHarness.swift in Sources */,
+				C0FFEE000000000000000901 /* ReportWriter.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0FFEE00000000000000090C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C0FFEE000000000000000902 /* WaterKitTestTests.swift in Sources */,
+				C0FFEE000000000000000903 /* ReportWriter.swift in Sources */,
+				C0FFEE000000000000000904 /* SwiftBridgeCore.swift in Sources */,
+				C0FFEE000000000000000914 /* StoreHarness.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C0FFEE000000000000000912 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C0FFEE000000000000000501 /* WaterKitTest */;
+			targetProxy = C0FFEE000000000000000913 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		C0FFEE000000000000000801 /* Debug */ = {
@@ -153,7 +255,13 @@
 		C0FFEE000000000000000802 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = WaterKitTest/WaterKitTest.entitlements;
 				CODE_SIGN_STYLE = Automatic;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SDKROOT)/Developer/Library/Frameworks",
+					"$(PLATFORM_DIR)/Developer/Library/Frameworks",
+				);
 				CURRENT_PROJECT_VERSION = 1;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/WaterKitTest/Generated";
 				INFOPLIST_FILE = Info.plist;
@@ -161,12 +269,47 @@
 				OTHER_LDFLAGS = (
 					"$(WATERKIT_RUST_LIBRARY)",
 					"$(WATERKIT_RUST_LINK_FLAGS)",
+					"-Wl,-rpath,$(PLATFORM_DIR)/Developer/Library/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.waterkit.test;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "WaterKitTest/Generated/Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		C0FFEE00000000000000090F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SDKROOT)/Developer/Library/Frameworks",
+					"$(PLATFORM_DIR)/Developer/Library/Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/WaterKitTest/Generated";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+					"$(PLATFORM_DIR)/Developer/Library/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-Wl,-rpath,$(PLATFORM_DIR)/Developer/Library/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.waterkit.test.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OBJC_BRIDGING_HEADER = "WaterKitTest/Generated/Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WaterKitTest.app/WaterKitTest";
+				TEST_TARGET_NAME = WaterKitTest;
 			};
 			name = Debug;
 		};
@@ -185,6 +328,14 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C0FFEE000000000000000801 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C0FFEE000000000000000910 /* Build configuration list for PBXNativeTarget "WaterKitTestTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0FFEE00000000000000090F /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

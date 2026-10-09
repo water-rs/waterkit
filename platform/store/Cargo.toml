@@ -1,0 +1,40 @@
+[package]
+name = "waterkit-store"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "In-app purchases and subscriptions through the platform store"
+keywords = ["store", "iap", "in-app-purchase", "subscription", "billing"]
+categories = ["os"]
+
+[lints]
+workspace = true
+
+[dependencies]
+waterkit-core = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+futures.workspace = true
+tracing.workspace = true
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+swift-bridge.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+waterkit-build = { workspace = true, features = ["native-callback"] }
+jni.workspace = true
+ndk-context.workspace = true
+
+[build-dependencies]
+waterkit-build = { workspace = true, features = ["native-callback"] }
+
+[dev-dependencies]
+futures.workspace = true
+
+[package.metadata.waterui.android]
+kotlin-sources = ["src/sys/android/StoreHelper.kt"]
+maven = ["com.android.billingclient:billing:9.1.0"]

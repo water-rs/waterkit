@@ -59,6 +59,7 @@ full = [
     "passkey",
     "vision",
     "wallet",
+    "store",
 ]
 sensor = ["waterkit/sensor"]
 biometric = ["waterkit/biometric"]
@@ -105,6 +106,7 @@ vision = [
     "waterkit/vision",
 ]
 wallet = ["waterkit/wallet"]
+store = ["dep:futures", "waterkit/store"]
 
 [build-dependencies]
 waterkit-build.workspace = true

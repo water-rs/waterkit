@@ -1,24 +1,24 @@
 //! The iOS runner.
 //!
-//! It builds the harness's Rust library for the destination, builds and signs
-//! the `SwiftUI` app around it with `xcodebuild`, installs and launches the app,
-//! and reads back the structured report the app writes into its data
-//! container.
+//! It builds the harness's Rust library for the destination, builds the app
+//! and its hosted `XCTest` bundle around it with `xcodebuild`, and runs the
+//! suite through `xcodebuild test`. Running through testmanagerd is what
+//! installs the app for development — `SKTestSession` rejects any install
+//! that is not one, so a `simctl` or `devicectl` app launch could never run
+//! the `store` cases.
 //!
-//! The report travels as a file, not over the console. The app writes it
-//! atomically to `Documents/waterkit-test-reports/<run-id>.json`, under a run
-//! ID the runner chose for this launch. A file that comes back is therefore
-//! complete and belongs to this run. Console output has neither property: it
-//! is a byte stream that a dropped connection or an unflushed buffer can cut
-//! short, and it carries no proof of which launch produced it. The console is
-//! still bridged to the terminal so a run can be followed live, and the launch
-//! uses it to wait for the app to exit.
+//! The report travels as a file, not over the console. The test writes it
+//! atomically to `Documents/waterkit-test-reports/waterkit-test-report.json`
+//! inside the app's data container — a fixed path, safe because the runner
+//! reads the report only after the test has finished, and a finished test
+//! has always just written it. Build and test output still reach the
+//! terminal, so a run can be followed live.
 
 use std::ffi::OsString;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use cargo_metadata::{Message, TargetKind};
 use eyre::{Context, Result};
@@ -36,19 +36,22 @@ const BUNDLE_ID: &str = "com.waterkit.test";
 /// root.
 const PROJECT: &str = "tests/ios/app/WaterKitTest.xcodeproj";
 
-/// The project's app target.
-const TARGET: &str = "WaterKitTest";
+/// The shared scheme that builds the app and runs its hosted test bundle.
+const SCHEME: &str = "WaterKitTest";
 
 /// Manifest of the Rust library the app links, relative to the workspace root.
 const HARNESS_MANIFEST: &str = "tests/ios/rust/Cargo.toml";
 
-/// How long one launch may take, from the launch request until the app exits
-/// after writing its report.
+/// Where the test writes the report, inside the app's data container.
+const REPORT_PATH: &str = "Documents/waterkit-test-reports/waterkit-test-report.json";
+
+/// How long one `xcodebuild test` run may take: it installs the app, launches
+/// it under testmanagerd with the test bundle injected, and runs every case.
 ///
 /// The camera case dominates a device run: it may wait up to a minute for
 /// someone to answer the camera access prompt, then streams from every camera
 /// in turn with 15 s for each (an iPhone 16 Pro has four).
-const RUN_TIMEOUT: Duration = Duration::from_secs(300);
+const RUN_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Arguments of `waterkit-test ios`.
 #[derive(clap::Args)]
@@ -75,8 +78,8 @@ struct DeviceArgs {
     team: String,
 
     /// SSH destination of the Mac the device is attached to, when that is not
-    /// this Mac. The app is built and signed here, then installed and run
-    /// through `devicectl` on that Mac
+    /// this Mac. The app is built and signed here; `xcodebuild
+    /// test-without-building` runs it on that Mac
     #[arg(long)]
     ssh: Option<String>,
 }
@@ -126,32 +129,16 @@ pub fn run(args: IosArgs) -> Result<()> {
 
 fn run_on(root: &Path, feature: &str, destination: &impl Destination) -> Result<()> {
     let library = build_library(root, destination.rust_target(), feature)?;
-    let app = build_app(root, destination, &library)?;
+    let products = build_for_testing(root, destination, &library)?;
 
-    info!("{}", "Installing app...".yellow().bold());
-    destination.install(&app)?;
-    destination.grant_permissions(feature)?;
+    destination.prepare(feature, &products)?;
 
-    let run_id = format!(
-        "{:x}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .context("System clock is before the Unix epoch")?
-            .as_nanos()
-    );
-    info!(
-        "{}",
-        format!("Launching app (run {run_id})...").green().bold()
-    );
-    let report_json = destination.run(&run_id)?;
+    info!("{}", "Running the harness suite...".green().bold());
+    destination.run_tests(feature, &products)?;
+
+    let report_json = destination.report()?;
     let report = from_json(&report_json).context("Failed to parse the iOS test report")?;
     ensure_report_success(&report)
-}
-
-/// Where the app writes the report of run `run_id`, relative to its data
-/// container.
-fn report_path(run_id: &str) -> String {
-    format!("Documents/waterkit-test-reports/{run_id}.json")
 }
 
 /// The harness's static library and the native link flags rustc reports for
@@ -266,32 +253,46 @@ fn app_link_flags(flags: &str) -> String {
     kept.join(" ")
 }
 
-/// Builds the app around `library` with `xcodebuild`, signed for
-/// `destination`, and returns the `.app` bundle.
+/// What `xcodebuild build-for-testing` produced: the products root and the
+/// `.xctestrun` describing the run inside it.
+struct TestProducts {
+    /// The build-products root (`Build/` and `Products/` live under it).
+    /// Staging the whole directory keeps every path the `.xctestrun` baked in
+    /// reachable at the same relative spot wherever it is run from.
+    root: PathBuf,
+    /// The `.xctestrun` `test-without-building` consumes.
+    xctestrun: PathBuf,
+}
+
+/// Builds the app and its hosted test bundle around `library` with
+/// `xcodebuild`, signed for `destination`.
 ///
 /// Every run builds from clean: the project links the library through a build
 /// setting, which Xcode does not track as a link input, so an incremental
 /// build could keep a binary linked against an older library.
-fn build_app(
+fn build_for_testing(
     root: &Path,
     destination: &impl Destination,
     library: &RustLibrary,
-) -> Result<PathBuf> {
-    info!("{}", "Building and signing the app...".yellow().bold());
+) -> Result<TestProducts> {
+    info!(
+        "{}",
+        "Building and signing the app and test bundle..."
+            .yellow()
+            .bold()
+    );
     let products = library
         .archive
         .parent()
         .expect("a cargo artifact path has a parent directory")
         .join("WaterKitTest-xcode");
+    let build_dir = products.join("Products");
 
     let mut settings: Vec<OsString> = Vec::new();
     for (name, value) in [
         ("SYMROOT", products.join("Build").into_os_string()),
         ("OBJROOT", products.join("Intermediates").into_os_string()),
-        (
-            "CONFIGURATION_BUILD_DIR",
-            products.join("Products").into_os_string(),
-        ),
+        ("CONFIGURATION_BUILD_DIR", build_dir.into_os_string()),
         (
             "WATERKIT_RUST_LIBRARY",
             library.archive.as_os_str().to_owned(),
@@ -306,30 +307,83 @@ fn build_app(
         settings.push(setting);
     }
 
+    let specifier = destination.specifier()?;
     let status = Command::new("xcodebuild")
         .current_dir(root)
         .arg("-quiet")
         .arg("-project")
         .arg(root.join(PROJECT))
-        .args(["-target", TARGET, "-configuration", "Debug"])
+        .args(["-scheme", SCHEME, "-configuration", "Debug"])
         .args(["-sdk", destination.sdk()])
+        .args(["-destination", &specifier])
         .args(destination.signing_arguments())
         .args(settings)
-        .args(["clean", "build"])
+        .args(["clean", "build-for-testing"])
         .status()
         .context("Failed to run xcodebuild")?;
     if !status.success() {
-        eyre::bail!("xcodebuild failed to build the harness app");
+        eyre::bail!("xcodebuild failed to build the harness app and test bundle");
     }
 
-    let app = products.join("Products/WaterKitTest.app");
-    if !app.is_dir() {
+    Ok(TestProducts {
+        xctestrun: find_xctestrun(&products)?,
+        root: products,
+    })
+}
+
+/// The single `.xctestrun` under `dir`, searched recursively.
+fn find_xctestrun(dir: &Path) -> Result<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in
+            std::fs::read_dir(&dir).with_context(|| format!("Failed to read {}", dir.display()))?
+        {
+            let path = entry?.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension() == Some(std::ffi::OsStr::new("xctestrun")) {
+                found.push(path);
+            }
+        }
+    }
+    match found.as_slice() {
+        [xctestrun] => Ok(xctestrun.clone()),
+        [] => eyre::bail!("xcodebuild produced no .xctestrun under {}", dir.display()),
+        many => eyre::bail!(
+            "xcodebuild produced several .xctestrun files under {}: {many:?}",
+            dir.display()
+        ),
+    }
+}
+
+/// The arguments of `xcodebuild test-without-building` for `xctestrun` on
+/// `specifier`.
+fn test_without_building_args<'a>(xctestrun: &'a str, specifier: &'a str) -> Vec<&'a str> {
+    vec![
+        "test-without-building",
+        "-xctestrun",
+        xctestrun,
+        "-destination",
+        specifier,
+    ]
+}
+
+/// Runs `command`, bounded by [`RUN_TIMEOUT`], with its output bridged to this
+/// terminal, and fails when it exits unsuccessfully.
+fn run_xcodebuild_test(mut command: Command, description: &str) -> Result<()> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    let output = run_with_timeout(command, RUN_TIMEOUT, description)?;
+    if !output.status.success() {
         eyre::bail!(
-            "xcodebuild reported success but {} is missing",
-            app.display()
+            "xcodebuild could not {description} (exit {}); its output is printed above",
+            output.status
         );
     }
-    Ok(app)
+    Ok(())
 }
 
 /// Where the harness app runs.
@@ -340,18 +394,22 @@ trait Destination {
     /// The SDK `xcodebuild` builds the app against.
     fn sdk(&self) -> &'static str;
 
-    /// The `xcodebuild` arguments that sign the app for this destination.
+    /// The `xcodebuild` arguments that sign the app and test bundle for this
+    /// destination.
     fn signing_arguments(&self) -> Vec<String>;
 
-    /// Installs the built app.
-    fn install(&self, app: &Path) -> Result<()>;
+    /// The `xcodebuild -destination` specifier of the machine the suite runs
+    /// on.
+    fn specifier(&self) -> Result<String>;
 
-    /// Grants, before launch, the permissions the cases of `feature` need.
-    fn grant_permissions(&self, feature: &str) -> Result<()>;
+    /// Prepares, before the test run, what its cases need.
+    fn prepare(&self, feature: &str, products: &TestProducts) -> Result<()>;
 
-    /// Launches the app for run `run_id`, waits for it to exit and returns the
-    /// report it wrote.
-    fn run(&self, run_id: &str) -> Result<String>;
+    /// Runs the test bundle on the destination for `feature`.
+    fn run_tests(&self, feature: &str, products: &TestProducts) -> Result<()>;
+
+    /// Reads the report the test wrote into the app's data container.
+    fn report(&self) -> Result<String>;
 }
 
 /// The booted iOS simulator.
@@ -359,6 +417,73 @@ struct Simulator;
 
 /// The `simctl` device selector for the booted simulator.
 const BOOTED: &str = "booted";
+
+/// The UDID of the booted simulator. `xcodebuild test` needs an unambiguous
+/// destination, so exactly one simulator may be booted.
+fn booted_simulator() -> Result<String> {
+    let output = Command::new("xcrun")
+        .args(["simctl", "list", "--json", "devices"])
+        .output()
+        .context("Failed to list simulators")?;
+    if !output.status.success() {
+        eyre::bail!(
+            "simctl list devices failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let list: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("simctl printed invalid JSON")?;
+    let devices = list
+        .get("devices")
+        .and_then(|devices| devices.as_object())
+        .ok_or_else(|| eyre::eyre!("simctl list devices reported no devices"))?;
+    let mut booted = Vec::new();
+    for runtime_devices in devices.values() {
+        for device in runtime_devices.as_array().into_iter().flatten() {
+            if device.get("state").and_then(|state| state.as_str()) == Some("Booted")
+                && let Some(udid) = device.get("udid").and_then(|udid| udid.as_str())
+            {
+                booted.push((
+                    udid.to_owned(),
+                    device
+                        .get("name")
+                        .and_then(|name| name.as_str())
+                        .unwrap_or(udid)
+                        .to_owned(),
+                ));
+            }
+        }
+    }
+    match booted.as_slice() {
+        [(udid, _)] => Ok(udid.clone()),
+        [] => eyre::bail!("no simulator is booted; boot one first"),
+        many => eyre::bail!(
+            "more than one simulator is booted ({}); keep exactly one booted",
+            many.iter()
+                .map(|(_, name)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+/// The path of the harness app's data container on the booted simulator,
+/// while the app is installed.
+fn app_data_container() -> Result<PathBuf> {
+    let output = Command::new("xcrun")
+        .args(["simctl", "get_app_container", BOOTED, BUNDLE_ID, "data"])
+        .output()
+        .context("Failed to query the iOS app data container")?;
+    if !output.status.success() {
+        eyre::bail!(
+            "simctl get_app_container failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let container = String::from_utf8(output.stdout)
+        .context("iOS app data container path was not valid UTF-8")?;
+    Ok(PathBuf::from(container.trim()))
+}
 
 impl Destination for Simulator {
     fn rust_target(&self) -> &'static str {
@@ -376,84 +501,97 @@ impl Destination for Simulator {
         Vec::new()
     }
 
-    fn install(&self, app: &Path) -> Result<()> {
-        let status = Command::new("xcrun")
-            .args(["simctl", "install", BOOTED])
-            .arg(app)
-            .status()
-            .context("Failed to run simctl install")?;
-        if !status.success() {
-            eyre::bail!("Installation failed (ensure a simulator is booted)");
-        }
-        Ok(())
+    fn specifier(&self) -> Result<String> {
+        Ok(format!("platform=iOS Simulator,id={}", booted_simulator()?))
     }
 
     /// Grants the TCC permissions the harness can set without the system
-    /// prompt once the app is installed, then plants a deterministic simulated
-    /// location so `Location::get()` has a fix to return. Notification
-    /// authorization is not a `simctl privacy` service, so that case skips
-    /// instead.
-    fn grant_permissions(&self, feature: &str) -> Result<()> {
-        if !matches!(feature, "full" | "location" | "permission") {
-            return Ok(());
+    /// prompt, then plants a deterministic simulated location so
+    /// `Location::get()` has a fix to return. Notification authorization is
+    /// not a `simctl privacy` service, so that case skips instead.
+    ///
+    /// The grants are keyed by the app's bundle identifier, so the app is
+    /// installed first: a grant made before the install would not survive
+    /// `test-without-building` replacing it. A stale report from an earlier
+    /// run is removed so only this run's file can come back.
+    fn prepare(&self, feature: &str, products: &TestProducts) -> Result<()> {
+        let app = products.root.join("Products/WaterKitTest.app");
+        let status = Command::new("xcrun")
+            .args(["simctl", "install", BOOTED])
+            .arg(&app)
+            .status()
+            .context("Failed to install the harness app")?;
+        if !status.success() {
+            eyre::bail!("simctl install {} failed", app.display());
         }
 
-        for service in ["location", "location-always"] {
+        if matches!(feature, "full" | "location" | "permission") {
+            for service in ["location", "location-always"] {
+                let status = Command::new("xcrun")
+                    .args(["simctl", "privacy", BOOTED, "grant", service, BUNDLE_ID])
+                    .status()
+                    .context("Failed to grant simulator privacy permission")?;
+                if !status.success() {
+                    eyre::bail!("simctl privacy grant {service} failed");
+                }
+            }
+
             let status = Command::new("xcrun")
-                .args(["simctl", "privacy", BOOTED, "grant", service, BUNDLE_ID])
+                .args(["simctl", "location", BOOTED, "set", "37.3349,-122.0090"])
                 .status()
-                .context("Failed to grant simulator privacy permission")?;
+                .context("Failed to set simulated location")?;
             if !status.success() {
-                eyre::bail!("simctl privacy grant {service} failed");
+                eyre::bail!("simctl location set failed");
             }
         }
 
-        let status = Command::new("xcrun")
-            .args(["simctl", "location", BOOTED, "set", "37.3349,-122.0090"])
-            .status()
-            .context("Failed to set simulated location")?;
-        if !status.success() {
-            eyre::bail!("simctl location set failed");
+        if let Ok(container) = app_data_container() {
+            let _ = std::fs::remove_file(container.join(REPORT_PATH));
         }
-
         Ok(())
     }
 
-    fn run(&self, run_id: &str) -> Result<String> {
-        let mut launch = Command::new("xcrun");
-        launch.args([
-            "simctl",
-            "launch",
-            "--console",
-            BOOTED,
-            BUNDLE_ID,
-            "--waterkit-run-test",
-            run_id,
-        ]);
-        let output = run_with_timeout(launch, RUN_TIMEOUT, "run the harness app on the simulator")?;
-        if !output.status.success() {
-            eyre::bail!("simctl launch failed with {}", output.status);
+    fn run_tests(&self, feature: &str, products: &TestProducts) -> Result<()> {
+        let specifier = self.specifier()?;
+        let xctestrun = products.xctestrun.to_str().ok_or_else(|| {
+            eyre::eyre!(
+                "xctestrun path {} is not valid UTF-8",
+                products.xctestrun.display()
+            )
+        })?;
+
+        // An app's payments are bound to the StoreKit Test environment only
+        // when its StoreKit client first registers at launch, and creating an
+        // `SKTestSession` later in the same process does not rebind them — so
+        // the persisted Octane configuration must exist before the suite's
+        // app process starts. On a fresh simulator it does not: the
+        // registration test runs first in its own launch, where
+        // `store_test_begin`'s session writes the configuration, and the
+        // suite's later launch then binds to it.
+        if matches!(feature, "full" | "store") {
+            let mut args = test_without_building_args(xctestrun, &specifier);
+            args.push("-only-testing:WaterKitTestTests/StoreKitEnvironmentTests");
+            let mut command = Command::new("xcodebuild");
+            command.args(args);
+            run_xcodebuild_test(command, "register the StoreKit Test environment")?;
         }
 
-        let container = Command::new("xcrun")
-            .args(["simctl", "get_app_container", BOOTED, BUNDLE_ID, "data"])
-            .output()
-            .context("Failed to query the iOS app data container")?;
-        if !container.status.success() {
-            eyre::bail!(
-                "simctl get_app_container failed: {}",
-                String::from_utf8_lossy(&container.stderr).trim()
-            );
-        }
-        let container = String::from_utf8(container.stdout)
-            .context("iOS app data container path was not valid UTF-8")?;
-        let report = PathBuf::from(container.trim()).join(report_path(run_id));
+        let mut args = test_without_building_args(xctestrun, &specifier);
+        args.push("-only-testing:WaterKitTestTests/WaterKitTestTests");
+        let mut command = Command::new("xcodebuild");
+        command.args(args);
+        run_xcodebuild_test(command, "run the harness suite on the simulator")
+    }
+
+    fn report(&self) -> Result<String> {
+        let report = app_data_container()?.join(REPORT_PATH);
         std::fs::read_to_string(&report)
-            .with_context(|| format!("The iOS app did not write {}", report.display()))
+            .with_context(|| format!("The iOS test did not write {}", report.display()))
     }
 }
 
-/// A paired physical device, reached through `devicectl` on `host`.
+/// A paired physical device, reached through `devicectl` and `xcodebuild` on
+/// `host`.
 struct Device<H> {
     /// UDID or name of the device.
     id: String,
@@ -467,7 +605,9 @@ impl<H: DeviceHost> Device<H> {
     /// Runs `xcrun devicectl <args>` on the device's Mac, bounded by
     /// `timeout`, with its output bridged to this terminal.
     fn devicectl(&self, args: &[&str], timeout: Duration, description: &str) -> Result<()> {
-        let mut command = self.host.xcrun(&[&["devicectl"], args].concat())?;
+        let mut command = self
+            .host
+            .command("xcrun", &[&["devicectl"], args].concat())?;
         command
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
@@ -483,7 +623,7 @@ impl<H: DeviceHost> Device<H> {
     }
 }
 
-/// How long a `devicectl` step other than the harness run may take.
+/// How long a `devicectl` step may take.
 const DEVICECTL_TIMEOUT: Duration = Duration::from_secs(120);
 
 impl<H: DeviceHost> Destination for Device<H> {
@@ -504,13 +644,15 @@ impl<H: DeviceHost> Destination for Device<H> {
         ]
     }
 
-    fn install(&self, app: &Path) -> Result<()> {
-        let app = self.host.stage_app(app)?;
-        self.devicectl(
-            &["device", "install", "app", "--device", &self.id, &app],
-            DEVICECTL_TIMEOUT,
-            "install the harness app on the device",
-        )
+    fn specifier(&self) -> Result<String> {
+        // `xcodebuild -destination` names a device by UDID or by name.
+        let key =
+            if self.id.len() >= 25 && self.id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+                "id"
+            } else {
+                "name"
+            };
+        Ok(format!("platform=iOS,{key}={}", self.id))
     }
 
     /// Nothing can be granted from the host: iOS has no `simctl privacy` for a
@@ -518,7 +660,7 @@ impl<H: DeviceHost> Destination for Device<H> {
     /// answered on the device. The cases request what they need and report a
     /// denied or unanswered prompt; the answer persists until the app is
     /// deleted, so it is needed once per device.
-    fn grant_permissions(&self, feature: &str) -> Result<()> {
+    fn prepare(&self, feature: &str, _products: &TestProducts) -> Result<()> {
         if matches!(feature, "full" | "camera") {
             info!(
                 "Camera access on a device is granted only by answering the system prompt on the \
@@ -529,27 +671,13 @@ impl<H: DeviceHost> Destination for Device<H> {
         Ok(())
     }
 
-    fn run(&self, run_id: &str) -> Result<String> {
-        // `--console` bridges the app's output and keeps devicectl running
-        // until the app exits, which is the run's completion signal.
-        self.devicectl(
-            &[
-                "device",
-                "process",
-                "launch",
-                "--device",
-                &self.id,
-                "--terminate-existing",
-                "--console",
-                BUNDLE_ID,
-                "--waterkit-run-test",
-                run_id,
-            ],
-            RUN_TIMEOUT,
-            "run the harness app on the device",
-        )?;
+    fn run_tests(&self, _feature: &str, products: &TestProducts) -> Result<()> {
+        self.host
+            .test_without_building(products, &self.specifier()?)
+    }
 
-        let destination = self.host.report_destination(run_id);
+    fn report(&self) -> Result<String> {
+        let destination = self.host.report_destination();
         self.devicectl(
             &[
                 "device",
@@ -562,7 +690,7 @@ impl<H: DeviceHost> Destination for Device<H> {
                 "--domain-identifier",
                 BUNDLE_ID,
                 "--source",
-                &report_path(run_id),
+                REPORT_PATH,
                 "--destination",
                 &destination,
             ],
@@ -575,17 +703,31 @@ impl<H: DeviceHost> Destination for Device<H> {
 
 /// The Mac a device is attached to.
 trait DeviceHost {
-    /// A command that runs `xcrun <args>` on that Mac.
-    fn xcrun(&self, args: &[&str]) -> Result<Command>;
+    /// A command that runs `program <args>` on that Mac.
+    fn command(&self, program: &str, args: &[&str]) -> Result<Command>;
 
-    /// Makes the built `app` available on that Mac and returns its path there.
-    fn stage_app(&self, app: &Path) -> Result<String>;
+    /// Makes `products` available on that Mac and returns the path of the
+    /// `.xctestrun` there.
+    fn stage(&self, products: &TestProducts) -> Result<String>;
 
-    /// The path on that Mac where the report of run `run_id` is copied to.
-    fn report_destination(&self, run_id: &str) -> String;
+    /// The path on that Mac where the test report is copied to.
+    fn report_destination(&self) -> String;
 
     /// Reads a text file on that Mac.
     fn read(&self, path: &str) -> Result<String>;
+
+    /// Runs the test bundle on the device through
+    /// `xcodebuild test-without-building` on that Mac.
+    fn test_without_building(&self, products: &TestProducts, specifier: &str) -> Result<()> {
+        let xctestrun = self.stage(products)?;
+        let mut args = test_without_building_args(&xctestrun, specifier);
+        // Keep the environment-registration test out of the suite's launch:
+        // it exists to seed the StoreKit Test environment in its own process
+        // on the simulator, and must never run inside the suite itself.
+        args.push("-only-testing:WaterKitTestTests/WaterKitTestTests");
+        let command = self.command("xcodebuild", &args)?;
+        run_xcodebuild_test(command, "run the harness suite on the device")
+    }
 }
 
 /// The device is attached to this Mac.
@@ -595,21 +737,29 @@ struct LocalHost {
 }
 
 impl DeviceHost for LocalHost {
-    fn xcrun(&self, args: &[&str]) -> Result<Command> {
-        let mut command = Command::new("xcrun");
+    fn command(&self, program: &str, args: &[&str]) -> Result<Command> {
+        let mut command = Command::new(program);
         command.args(args);
         Ok(command)
     }
 
-    fn stage_app(&self, app: &Path) -> Result<String> {
-        app.to_str()
+    /// Nothing to stage: the products are already on this Mac.
+    fn stage(&self, products: &TestProducts) -> Result<String> {
+        products
+            .xctestrun
+            .to_str()
             .map(str::to_owned)
-            .ok_or_else(|| eyre::eyre!("App path {} is not valid UTF-8", app.display()))
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "xctestrun path {} is not valid UTF-8",
+                    products.xctestrun.display()
+                )
+            })
     }
 
-    fn report_destination(&self, run_id: &str) -> String {
+    fn report_destination(&self) -> String {
         self.work_dir
-            .join(format!("{run_id}.json"))
+            .join("waterkit-test-report.json")
             .to_string_lossy()
             .into_owned()
     }
@@ -623,8 +773,8 @@ impl DeviceHost for LocalHost {
 ///
 /// SSH hands its command to the remote login shell as one string, so every
 /// argument is single-quoted (see [`remote_word`]). A temporary directory on
-/// that Mac holds the staged app and the copied report, and is removed when
-/// the run ends.
+/// that Mac holds the staged products and the copied report, and is removed
+/// when the run ends.
 struct SshHost {
     destination: String,
     work_dir: String,
@@ -656,7 +806,7 @@ impl SshHost {
         })
     }
 
-    fn command(&self, words: &[&str]) -> Result<Command> {
+    fn ssh_command(&self, words: &[&str]) -> Result<Command> {
         let mut command = Command::new("ssh");
         command.arg(&self.destination);
         for word in words {
@@ -667,41 +817,80 @@ impl SshHost {
 }
 
 impl DeviceHost for SshHost {
-    fn xcrun(&self, args: &[&str]) -> Result<Command> {
-        self.command(&[&["xcrun"], args].concat())
+    fn command(&self, program: &str, args: &[&str]) -> Result<Command> {
+        self.ssh_command(&[&[program], args].concat())
     }
 
-    fn stage_app(&self, app: &Path) -> Result<String> {
-        let name = app
+    /// `scp`s the products root over and rewrites the `.xctestrun` to it: the
+    /// plist bakes in the absolute build paths, so every occurrence of the
+    /// local root is replaced by the staged one.
+    fn stage(&self, products: &TestProducts) -> Result<String> {
+        let name = products
+            .root
             .file_name()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| eyre::eyre!("App path {} has no UTF-8 file name", app.display()))?;
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "Products path {} has no UTF-8 file name",
+                    products.root.display()
+                )
+            })?;
         // scp addresses the remote path itself (over SFTP), so the path goes
         // unquoted; it is the `mktemp` path, which contains no shell syntax.
         let target = format!("{}:{}", self.destination, self.work_dir);
         let status = Command::new("scp")
             .args(["-rq"])
-            .arg(app)
-            .arg(target)
+            .arg(&products.root)
+            .arg(&target)
             .status()
             .context("Failed to run scp")?;
         if !status.success() {
             eyre::bail!(
                 "scp could not copy {} to {}",
-                app.display(),
+                products.root.display(),
                 self.destination
             );
         }
-        Ok(format!("{}/{name}", self.work_dir))
+        let staged = format!("{}/{name}", self.work_dir);
+        let xctestrun = products
+            .xctestrun
+            .strip_prefix(&products.root)
+            .expect("the .xctestrun lives in the products directory");
+        let xctestrun = format!("{staged}/{}", xctestrun.to_string_lossy());
+
+        let local = products.root.to_str().ok_or_else(|| {
+            eyre::eyre!(
+                "Products path {} is not valid UTF-8",
+                products.root.display()
+            )
+        })?;
+        let mut relocate = self.ssh_command(&[
+            "sed",
+            "-i",
+            "",
+            "-e",
+            &format!("s|{local}|{staged}|g"),
+            &xctestrun,
+        ])?;
+        let output = relocate.output().context("Failed to run ssh")?;
+        if !output.status.success() {
+            eyre::bail!(
+                "Could not rewrite {} on {}: {}",
+                xctestrun,
+                self.destination,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Ok(xctestrun)
     }
 
-    fn report_destination(&self, run_id: &str) -> String {
-        format!("{}/{run_id}.json", self.work_dir)
+    fn report_destination(&self) -> String {
+        format!("{}/waterkit-test-report.json", self.work_dir)
     }
 
     fn read(&self, path: &str) -> Result<String> {
         let output = self
-            .command(&["cat", path])?
+            .ssh_command(&["cat", path])?
             .output()
             .context("Failed to run ssh")?;
         if !output.status.success() {
@@ -718,7 +907,7 @@ impl DeviceHost for SshHost {
 impl Drop for SshHost {
     fn drop(&mut self) {
         let removed = self
-            .command(&["rm", "-rf", &self.work_dir])
+            .ssh_command(&["rm", "-rf", &self.work_dir])
             .and_then(|mut command| command.status().context("Failed to run ssh"));
         match removed {
             Ok(status) if status.success() => {}

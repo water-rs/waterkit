@@ -154,9 +154,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ios-device-e2e
-      - name: Boot an available iPhone simulator
+      # StoreKit Test cannot load a configuration outside an Xcode debug
+      # session on the iOS 26.3-26.5 simulator runtimes (FB22237318), so
+      # the harness runs on an iPhone of the newest installed iOS runtime.
+      - name: Boot an iPhone simulator on the newest iOS runtime
         run: |
-          read SIMULATOR_ID SIMULATOR_STATE < <(xcrun simctl list devices available -j | ruby -rjson -e 'devices = JSON.parse($stdin.read)["devices"].values.flatten; device = devices.find { |candidate| candidate["isAvailable"] && candidate["name"].include?("iPhone") && candidate["state"] == "Shutdown" } || devices.find { |candidate| candidate["isAvailable"] && candidate["name"].include?("iPhone") }; abort("no available iPhone simulator") unless device; puts "#{device["udid"]} #{device["state"]}"')
+          read -r SIMULATOR_ID SIMULATOR_STATE SIMULATOR_RUNTIME < <(xcrun simctl list devices available -j | ruby -rjson -e '
+            runtimes = JSON.parse($stdin.read)["devices"].select { |runtime, _| runtime.include?(".SimRuntime.iOS-") }
+            runtime, devices = runtimes.max_by { |runtime, _| Gem::Version.new(runtime[/iOS-(.*)\z/, 1].tr("-", ".")) }
+            abort("no iOS simulator runtime") unless runtime
+            iphones = devices.select { |device| device["isAvailable"] && device["name"].include?("iPhone") }
+            device = iphones.find { |candidate| candidate["state"] == "Shutdown" } || iphones.first
+            abort("no available iPhone simulator on #{runtime}") unless device
+            puts "#{device["udid"]} #{device["state"]} #{runtime}"')
+          echo "Using $SIMULATOR_ID on $SIMULATOR_RUNTIME"
           if [ "$SIMULATOR_STATE" != "Booted" ]; then
             xcrun simctl boot "$SIMULATOR_ID"
           fi

@@ -1,5 +1,10 @@
 //! The Rust half of the iOS test harness: runs the enabled `WaterKit` cases
 //! and returns their structured report to the Swift app.
+//
+// The crate only makes sense on Apple targets: its `extern "Swift"` blocks
+// are satisfied by the hosting iOS app, so anywhere else they would be
+// unresolved symbols at link time.
+#![cfg(target_vendor = "apple")]
 
 use waterkit_test_report::{TestCase, TestReport, to_json_pretty};
 

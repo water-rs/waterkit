@@ -144,9 +144,7 @@ jobs:
 
   ios-device-e2e:
     name: iOS device E2E
-    # The newest iOS runtime on macos-latest is 26.5, inside the StoreKit
-    # Test breakage below; the xcode-27 image carries the iOS 27 runtime.
-    runs-on: xcode-27
+    runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -156,13 +154,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ios-device-e2e
-      # Xcode 27 ships the Metal toolchain as a separate component; the
-      # harness's Rust crates compile Metal shaders.
-      - name: Install the Metal toolchain
-        run: xcodebuild -downloadComponent MetalToolchain
       # StoreKit Test cannot load a configuration outside an Xcode debug
-      # session on the iOS 26.3-26.5 simulator runtimes (FB22237318), so
-      # the harness runs on an iPhone of the newest installed iOS runtime.
+      # session on the iOS 26.3-26.5 simulator runtimes (FB22237318), the
+      # newest on macos-latest. Under Xcode 27 the iOS 27.0 runtime routes
+      # Product.purchase() out of the test session to the real sandbox, so
+      # the harness runs Xcode 26.6 against an installed iOS 27.0 runtime.
+      - name: Install the iOS 27.0 simulator runtime
+        run: |
+          xcodes runtimes install "iOS 27.0" --architecture arm64
+          xcrun simctl create waterkit-e2e "iPhone 17" com.apple.CoreSimulator.SimRuntime.iOS-27-0
       - name: Boot an iPhone simulator on the newest iOS runtime
         run: |
           read -r SIMULATOR_ID SIMULATOR_STATE SIMULATOR_RUNTIME < <(xcrun simctl list devices available -j | ruby -rjson -e '

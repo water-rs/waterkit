@@ -303,7 +303,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 # Audio/Video
 rodio = { version = "0.22", default-features = false }
-cpal = "0.18"
+# The cpal rodio depends on, and no other: two cpal versions both export a
+# `wasm-bindgen` `SampleFormat`, so a wasm32 build that links both fails.
+# Move this together with rodio.
+cpal = "0.17"
 symphonia-core = "0.6.0"
 symphonia-codec-aac = "0.6.0"
 symphonia-adapter-fdk-aac = "0.2.0"

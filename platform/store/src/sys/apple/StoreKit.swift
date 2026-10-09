@@ -299,14 +299,16 @@ private func unverifiedReply(
     )
 }
 
-/// Buffers `Transaction.updates` replies for `events()`: the listener
-/// enqueues them, each `store_next_event` call dequeues exactly one.
+/// Buffers `Transaction.updates` replies for the event stream: the
+/// listener enqueues them, each `store_next_event` call dequeues exactly
+/// one.
 private actor EventQueue {
     private var buffer: [String] = []
     private var waiters: [CheckedContinuation<String, Never>] = []
     private var ended = false
 
     func enqueue(_ json: String) {
+        guard !ended else { return }
         if let waiter = waiters.first {
             waiters.removeFirst()
             waiter.resume(returning: json)
@@ -345,7 +347,7 @@ private actor EventQueue {
 }
 
 /// The StoreKit session: owns the `Transaction.updates` listener that feeds
-/// `events()` from `connect` until the store drops. Thread-safe by
+/// the event stream from `connect` until the store drops. Thread-safe by
 /// construction: every mutating call dispatches a `Task`, and the only
 /// mutable state lives in the `EventQueue` actor.
 final class AppleStore: @unchecked Sendable {
@@ -540,6 +542,14 @@ final class AppleStore: @unchecked Sendable {
 
     func store_retain() -> AppleStore {
         self
+    }
+
+    // Ends the session: cancels the updates listener and closes the queue,
+    // so the event stream ends even while it retains this session.
+    func store_disconnect() {
+        updatesTask.cancel()
+        let queue = queue
+        Task { await queue.end() }
     }
 
     func store_products(callback: @escaping (String) -> Void) {

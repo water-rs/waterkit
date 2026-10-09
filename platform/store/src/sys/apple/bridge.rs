@@ -14,8 +14,12 @@ pub mod ffi {
         // the StoreKit 2 floor is already met here.
         fn store_connect(catalog_json: &str) -> AppleStore;
 
-        // Retains the session for a second owner (the `events()` stream).
+        // Retains the session for a second owner (the events stream).
         fn store_retain(&self) -> AppleStore;
+
+        // Ends the session: cancels the updates listener and closes the
+        // event queue, so the events stream ends when the store drops.
+        fn store_disconnect(&self);
 
         fn store_products(&self, callback: Box<dyn FnOnce(String) -> ()>);
         fn store_purchase(&self, product_id: &str, callback: Box<dyn FnOnce(String) -> ()>);

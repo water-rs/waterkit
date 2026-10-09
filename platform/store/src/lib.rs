@@ -168,10 +168,7 @@ impl Store {
     pub async fn connect(catalog: Catalog) -> Result<(Self, StoreEvents), StoreError> {
         let catalog = std::sync::Arc::new(catalog);
         let (sys, events) = sys::Store::connect(&catalog).await?;
-        Ok((
-            Self { catalog, sys },
-            StoreEvents { inner: events },
-        ))
+        Ok((Self { catalog, sys }, StoreEvents { inner: events }))
     }
 
     /// Queries every product in the catalog.

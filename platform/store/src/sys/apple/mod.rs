@@ -51,6 +51,15 @@ impl std::fmt::Debug for Store {
     }
 }
 
+impl Drop for Store {
+    fn drop(&mut self) {
+        // The events stream keeps its own retain on the session, so
+        // `deinit` would not run here — disconnect ends the updates
+        // listener and closes the event queue, ending the stream.
+        self.handle.store_disconnect();
+    }
+}
+
 /// The platform's finish handle: the `StoreKit` transaction id.
 #[derive(Debug)]
 pub struct Purchase {

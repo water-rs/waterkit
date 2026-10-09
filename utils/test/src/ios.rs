@@ -131,7 +131,7 @@ fn run_on(root: &Path, feature: &str, destination: &impl Destination) -> Result<
     let library = build_library(root, destination.rust_target(), feature)?;
     let products = build_for_testing(root, destination, &library)?;
 
-    destination.prepare(feature)?;
+    destination.prepare(feature, &products)?;
 
     info!("{}", "Running the harness suite...".green().bold());
     destination.run_tests(&products)?;
@@ -403,7 +403,7 @@ trait Destination {
     fn specifier(&self) -> Result<String>;
 
     /// Prepares, before the test run, what its cases need.
-    fn prepare(&self, feature: &str) -> Result<()>;
+    fn prepare(&self, feature: &str, products: &TestProducts) -> Result<()>;
 
     /// Runs the test bundle on the destination.
     fn run_tests(&self, products: &TestProducts) -> Result<()>;
@@ -510,10 +510,21 @@ impl Destination for Simulator {
     /// `Location::get()` has a fix to return. Notification authorization is
     /// not a `simctl privacy` service, so that case skips instead.
     ///
-    /// The grants are keyed by the app's bundle identifier and are made
-    /// before the test run installs it. A stale report from an earlier run
-    /// is removed so only this run's file can come back.
-    fn prepare(&self, feature: &str) -> Result<()> {
+    /// The grants are keyed by the app's bundle identifier, so the app is
+    /// installed first: a grant made before the install would not survive
+    /// `test-without-building` replacing it. A stale report from an earlier
+    /// run is removed so only this run's file can come back.
+    fn prepare(&self, feature: &str, products: &TestProducts) -> Result<()> {
+        let app = products.root.join("Products/WaterKitTest.app");
+        let status = Command::new("xcrun")
+            .args(["simctl", "install", BOOTED])
+            .arg(&app)
+            .status()
+            .context("Failed to install the harness app")?;
+        if !status.success() {
+            eyre::bail!("simctl install {} failed", app.display());
+        }
+
         if matches!(feature, "full" | "location" | "permission") {
             for service in ["location", "location-always"] {
                 let status = Command::new("xcrun")
@@ -630,7 +641,7 @@ impl<H: DeviceHost> Destination for Device<H> {
     /// answered on the device. The cases request what they need and report a
     /// denied or unanswered prompt; the answer persists until the app is
     /// deleted, so it is needed once per device.
-    fn prepare(&self, feature: &str) -> Result<()> {
+    fn prepare(&self, feature: &str, _products: &TestProducts) -> Result<()> {
         if matches!(feature, "full" | "camera") {
             info!(
                 "Camera access on a device is granted only by answering the system prompt on the \

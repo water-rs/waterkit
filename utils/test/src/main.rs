@@ -1186,7 +1186,7 @@ mod tests {
     const RAW_QUERY: &str = "\
 Row: 0 _id=1, message_body=probe test message
 Row: 1 _id=2, message_body=airplane probe msg
-Row: 2 _id=3, message_body=Your waterkit code is 123456 J5ENdFmR_P8
+Row: 2 _id=3, message_body=Your waterkit code is 123456 Q7xZ2kW9pLm
 ";
 
     #[test]
@@ -1195,7 +1195,7 @@ Row: 2 _id=3, message_body=Your waterkit code is 123456 J5ENdFmR_P8
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0], (1, "probe test message".to_owned()));
         assert_eq!(rows[2].0, 3);
-        assert_eq!(rows[2].1, "Your waterkit code is 123456 J5ENdFmR_P8");
+        assert_eq!(rows[2].1, "Your waterkit code is 123456 Q7xZ2kW9pLm");
     }
 
     #[test]

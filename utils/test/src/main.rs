@@ -57,6 +57,22 @@ const ANDROID_SMS_DELIVERY_TIMEOUT: Duration = Duration::from_secs(15);
 /// emulator that dropped the injection from reporting as a test timeout.
 const ANDROID_SMS_SURFACE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long the harness waits for the guest's telephony stack to be able to
+/// receive an SMS at all.
+///
+/// `adb emu sms send` only queues the message at the virtual modem; until the
+/// guest's radio is powered and its inbound SMS pipeline is armed, the +CMT
+/// the modem emits is dropped silently. `dumpsys telephony.registry` reports
+/// `mVoiceRegState=0(IN_SERVICE)` only once the whole chain is live, so the
+/// harness treats that as the readiness signal. The bound only keeps a guest
+/// whose telephony never comes up from hanging the run.
+const ANDROID_TELEPHONY_READY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bound for a single `adb` query against the guest (`dumpsys`,
+/// `content query`). The answers are immediate on a healthy guest; the bound
+/// only absorbs a guest too busy to answer promptly.
+const ANDROID_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Deserialize)]
 struct SmsRequest {
     sender: String,
@@ -699,7 +715,7 @@ fn android_device_is_emulator(toolchain: &AndroidToolchain) -> Result<bool> {
     let output = run_adb_with_timeout(
         toolchain,
         &["shell", "getprop", "ro.boot.qemu"],
-        Duration::from_secs(10),
+        ANDROID_QUERY_TIMEOUT,
         "query Android emulator status",
     )?;
     if !output.status.success() {
@@ -746,6 +762,8 @@ fn poll_sms_request(toolchain: &AndroidToolchain) -> Result<Option<SmsRequest>> 
 }
 
 fn deliver_sms_request(toolchain: &AndroidToolchain, request: &SmsRequest) -> Result<()> {
+    wait_for_telephony_sms_ready(toolchain)?;
+
     // The SMS Retriever token is derived from the signing key, so its body is
     // the same on every run and a leftover raw row cannot be told from a fresh
     // one by text alone; the row ids staged before the injection are the
@@ -806,6 +824,39 @@ fn deliver_sms_request(toolchain: &AndroidToolchain, request: &SmsRequest) -> Re
     }
 }
 
+/// Blocks until the guest's telephony stack reports a voice registration —
+/// the state at which the inbound SMS pipeline is armed and an injected SMS
+/// will actually be dispatched — or until the ready deadline expires.
+fn wait_for_telephony_sms_ready(toolchain: &AndroidToolchain) -> Result<()> {
+    let deadline = Instant::now() + ANDROID_TELEPHONY_READY_TIMEOUT;
+    loop {
+        let output = run_adb_with_timeout(
+            toolchain,
+            &["exec-out", "dumpsys", "telephony.registry"],
+            ANDROID_QUERY_TIMEOUT,
+            "query the guest's telephony registration state",
+        )?;
+        if !output.status.success() {
+            eyre::bail!(
+                "Could not query the guest's telephony registration state: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        if String::from_utf8_lossy(&output.stdout).contains("mVoiceRegState=0(IN_SERVICE)") {
+            info!("Guest telephony is registered; the SMS pipeline is ready");
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            eyre::bail!(
+                "The guest's telephony stack never came up: no IN_SERVICE voice \
+                 registration within {ANDROID_TELEPHONY_READY_TIMEOUT:?}. An SMS \
+                 injected now would be dropped by the emulated modem."
+            );
+        }
+        thread::sleep(ANDROID_REPORT_POLL_INTERVAL);
+    }
+}
+
 /// Reads the SMS provider's raw staging table as `(row id, message body)`
 /// pairs.
 ///
@@ -825,7 +876,7 @@ fn staged_sms_rows(toolchain: &AndroidToolchain) -> Result<Vec<(i64, String)>> {
             "--projection",
             "_id,message_body",
         ],
-        Duration::from_secs(10),
+        ANDROID_QUERY_TIMEOUT,
         "query the SMS staging table",
     )?;
     if !output.status.success() {

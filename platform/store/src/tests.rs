@@ -286,3 +286,134 @@ fn event_decoding_covers_purchase_and_end() {
     let end: wire::EventJson = serde_json::from_str(r#"{"end":true}"#).unwrap();
     assert!(matches!(end, wire::EventJson::End(true)));
 }
+
+// ---- Windows pure mappings ----
+
+use crate::sys::mapping::{
+    BillingUnit, ConsumableStatus, PurchaseStatus, PurchaseVerdict, StoreProductKind,
+    billing_period, fulfillment_verdict, kind_matches, price_micros, purchase_verdict,
+    store_product_kind,
+};
+
+#[test]
+fn store_product_kind_parses_the_documented_values() {
+    assert_eq!(
+        store_product_kind("Consumable"),
+        StoreProductKind::Consumable
+    );
+    assert_eq!(
+        store_product_kind("UnmanagedConsumable"),
+        StoreProductKind::UnmanagedConsumable
+    );
+    assert_eq!(store_product_kind("Durable"), StoreProductKind::Durable);
+    assert_eq!(store_product_kind("Application"), StoreProductKind::Other);
+    assert_eq!(store_product_kind("whatever-next"), StoreProductKind::Other);
+}
+
+#[test]
+fn windows_kind_matching_uses_the_subscription_sku() {
+    use ProductKind::{Consumable, NonConsumable, Subscription};
+    use StoreProductKind::{Consumable as C, Durable, Other, UnmanagedConsumable as U};
+
+    for store in [C, U] {
+        assert!(kind_matches(Consumable, store, false));
+        assert!(!kind_matches(NonConsumable, store, false));
+        assert!(!kind_matches(Subscription, store, false));
+    }
+    // A durable without a subscription SKU is a non-consumable.
+    assert!(kind_matches(NonConsumable, Durable, false));
+    assert!(!kind_matches(Consumable, Durable, false));
+    assert!(!kind_matches(Subscription, Durable, false));
+    // A durable with a subscription SKU is a subscription.
+    assert!(kind_matches(Subscription, Durable, true));
+    assert!(!kind_matches(NonConsumable, Durable, true));
+    assert!(!kind_matches(Consumable, Durable, true));
+
+    for declared in [Consumable, NonConsumable, Subscription] {
+        assert!(!kind_matches(declared, Other, false));
+        assert!(!kind_matches(declared, Other, true));
+    }
+}
+
+#[test]
+fn billing_period_maps_calendar_units() {
+    assert_eq!(
+        billing_period(3, BillingUnit::Month).unwrap(),
+        crate::Period {
+            unit: PeriodUnit::Month,
+            count: 3
+        }
+    );
+    for (unit, expected) in [
+        (BillingUnit::Day, PeriodUnit::Day),
+        (BillingUnit::Week, PeriodUnit::Week),
+        (BillingUnit::Year, PeriodUnit::Year),
+    ] {
+        assert_eq!(billing_period(1, unit).unwrap().unit, expected);
+    }
+    // Minute and Hour have no PeriodUnit counterpart; they fail rather than
+    // misreport a subscription's period.
+    for unit in [BillingUnit::Minute, BillingUnit::Hour] {
+        assert!(matches!(
+            billing_period(1, unit),
+            Err(StoreError::Platform(_))
+        ));
+    }
+}
+
+#[test]
+fn purchase_verdict_maps_each_status() {
+    let id = ProductId::new("app.pro");
+    assert_eq!(
+        purchase_verdict(PurchaseStatus::Succeeded, &id, None).unwrap(),
+        PurchaseVerdict::Purchased
+    );
+    assert_eq!(
+        purchase_verdict(PurchaseStatus::NotPurchased, &id, None).unwrap(),
+        PurchaseVerdict::Cancelled
+    );
+    assert!(matches!(
+        purchase_verdict(PurchaseStatus::AlreadyPurchased, &id, None),
+        Err(StoreError::AlreadyOwned(ref product)) if product == &id
+    ));
+    assert!(matches!(
+        purchase_verdict(PurchaseStatus::NetworkError, &id, None),
+        Err(StoreError::Network(_))
+    ));
+    assert!(matches!(
+        purchase_verdict(
+            PurchaseStatus::ServerError,
+            &id,
+            Some("store backend said no".into())
+        ),
+        Err(StoreError::Platform(ref message)) if message == "store backend said no"
+    ));
+}
+
+#[test]
+fn fulfillment_verdict_maps_each_status() {
+    assert!(fulfillment_verdict(ConsumableStatus::Succeeded, None).is_ok());
+    assert!(matches!(
+        fulfillment_verdict(ConsumableStatus::NetworkError, None),
+        Err(StoreError::Network(_))
+    ));
+    assert!(matches!(
+        fulfillment_verdict(ConsumableStatus::InsufficientQuantity, None),
+        Err(StoreError::Platform(_))
+    ));
+    assert!(matches!(
+        fulfillment_verdict(ConsumableStatus::ServerError, Some("x".into())),
+        Err(StoreError::Platform(ref message)) if message == "x"
+    ));
+}
+
+#[test]
+fn price_micros_parses_decimal_prices() {
+    assert_eq!(price_micros("4.99").unwrap(), 4_990_000);
+    assert_eq!(price_micros("0").unwrap(), 0);
+    assert_eq!(price_micros("12.345").unwrap(), 12_345_000);
+    assert!(matches!(
+        price_micros("not a price"),
+        Err(StoreError::Platform(_))
+    ));
+}

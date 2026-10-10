@@ -8825,6 +8825,8 @@ dependencies = [
  "tracing",
  "waterkit-build",
  "waterkit-core",
+ "windows 0.62.2",
+ "windows-collections 0.3.2",
 ]
 
 [[package]]
@@ -8947,6 +8949,7 @@ dependencies = [
  "waterkit-sensor",
  "waterkit-share",
  "waterkit-speech",
+ "waterkit-store",
  "waterkit-system",
 ]
 

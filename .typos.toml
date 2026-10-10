@@ -24,3 +24,6 @@ cros = "cros"
 UDID = "UDID"
 # Win32 accelerator flag on `ACCEL::fVirt`, alongside FSHIFT and FCONTROL.
 FALT = "FALT"
+# Windows.Services.Store spells the variant `StoreConsumableStatus::InsufficentQuantity`;
+# matching on it needs the platform spelling.
+Insufficent = "Insufficent"

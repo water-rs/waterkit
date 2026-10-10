@@ -29,6 +29,18 @@ waterkit-build = { workspace = true, features = ["native-callback"] }
 jni.workspace = true
 ndk-context.workspace = true
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+    "Services_Store",
+    "Foundation",
+    "Globalization_NumberFormatting",
+    "Win32_Foundation",
+    "Win32_Storage_Packaging_Appx",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-collections.workspace = true
+
 [build-dependencies]
 waterkit-build = { workspace = true, features = ["native-callback"] }
 

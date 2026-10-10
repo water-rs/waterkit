@@ -297,6 +297,7 @@ waterkit-test-report = { path = "utils/test-report", version = "0.1.1" }
 
 # Windows
 windows = { version = "0.62", features = ["Devices_Geolocation", "Foundation"] }
+windows-collections = "0.3"
 
 # Linux
 zbus = "5"

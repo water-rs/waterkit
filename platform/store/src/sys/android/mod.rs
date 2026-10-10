@@ -340,7 +340,7 @@ fn build_purchase(
         fields.kind,
         fields.quantity,
         fields.purchased_at,
-        fields.proof,
+        Some(fields.proof),
         Purchase {
             connection,
             token: fields.transaction_id,
@@ -358,6 +358,6 @@ fn build_transaction(
         fields.kind,
         fields.quantity,
         fields.purchased_at,
-        fields.proof,
+        Some(fields.proof),
     ))
 }

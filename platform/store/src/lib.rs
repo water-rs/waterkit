@@ -4,7 +4,7 @@
 //! | --- | --- | --- |
 //! | Android | Play Billing Library 9 | needs the Play Store; the app declares each product's [`ProductKind`] because Play does not distinguish consumables from non-consumables |
 //! | iOS / macOS | StoreKit 2 | iOS 15 / macOS 12 floor; below it the store reports unavailable |
-//! | Windows | — | `Windows.Services.Store` does not expose a per-purchase signed proof or a transaction update stream, so the store reports unavailable |
+//! | Windows | `Windows.Services.Store.StoreContext` | needs a Microsoft Store packaged app on Windows 10 1809 or newer (`IStorePrice2`); no per-purchase signed proof ([`Purchase::proof`] is `None` — server-side verification goes through [`Store::store_id_key`]); new and renewed add-on licenses arrive as purchases |
 //! | Linux / wasm | — | unavailable |
 //!
 //! ```no_run
@@ -118,7 +118,8 @@ impl Catalog {
 #[non_exhaustive]
 pub struct StoreCapabilities {
     /// Whether this device can make purchases at all: Play Store present on
-    /// Android, `canMakePayments` on Apple, never on other platforms.
+    /// Android, `canMakePayments` on Apple, a Microsoft Store packaged
+    /// process on Windows, never on other platforms.
     pub purchases: bool,
 }
 
@@ -160,7 +161,8 @@ impl Store {
     ///
     /// Fails with [`StoreError::Unavailable`] when the platform reports no
     /// store: no Play Store app on Android, an OS below the `StoreKit` 2
-    /// floor, or an unsupported platform.
+    /// floor, a process not packaged for the Microsoft Store on Windows, or
+    /// an unsupported platform.
     ///
     /// # Errors
     /// [`StoreError::Unavailable`] when the device cannot purchase, or the
@@ -188,6 +190,9 @@ impl Store {
     /// Consumable or non-consumable purchase.
     ///
     /// A subscription product passed here is [`StoreError::KindMismatch`].
+    /// On Windows `RequestPurchaseAsync` shows modal UI owned by the app's
+    /// foreground window, so the call must be made from the thread that
+    /// owns that window (the UI thread).
     ///
     /// # Errors
     /// [`StoreError::KindMismatch`] for a subscription product, or the store's
@@ -206,9 +211,12 @@ impl Store {
     /// Subscription purchase of one of the product's offers.
     ///
     /// Play requires the offer token: it selects the base plan and pricing
-    /// phases the subscription runs under. On Apple the token is unused —
-    /// the standard price and any introductory offer the user is eligible
-    /// for apply automatically.
+    /// phases the subscription runs under. On Apple and Windows the token
+    /// is unused — the standard price and any introductory offer the user
+    /// is eligible for apply automatically. On Windows
+    /// `RequestPurchaseAsync` shows modal UI owned by the app's foreground
+    /// window, so the call must be made from the thread that owns that
+    /// window (the UI thread).
     ///
     /// # Errors
     /// [`StoreError::KindMismatch`] for a non-subscription product, or the
@@ -233,6 +241,30 @@ impl Store {
         &self.catalog
     }
 
+    /// A Microsoft Store ID key for the current user.
+    ///
+    /// Windows has no per-purchase signed proof, so server-side verification
+    /// instead goes through the Microsoft Store collections API with this
+    /// key: the app's backend creates `service_ticket` as an Entra ID access
+    /// token with the audience
+    /// `https://onestore.microsoft.com/b2b/keys/create/collections`, and the
+    /// returned key — valid for 30 days — queries or consumes the user's
+    /// entitlements service-side. `publisher_user_id` is the publisher's own
+    /// anonymous identifier for the user, embedded in the key.
+    ///
+    /// # Errors
+    /// The store's own error (`network`, `platform`, `unavailable`).
+    #[cfg(target_os = "windows")]
+    pub async fn store_id_key(
+        &self,
+        service_ticket: &str,
+        publisher_user_id: &str,
+    ) -> Result<String, StoreError> {
+        self.sys
+            .store_id_key(service_ticket, publisher_user_id)
+            .await
+    }
+
     /// What the user currently owns: non-consumables and active
     /// subscriptions, each either still unfinished or already finished.
     ///
@@ -255,7 +287,10 @@ impl Store {
 /// On Android, Play delivers subscription renewals only to the app's
 /// backend through Real-time Developer Notifications — never to
 /// `PurchasesUpdatedListener` — so renewals do not appear in this stream
-/// there.
+/// there. On Windows, `OfflineLicensesChanged` carries no transaction, so
+/// the stream reports add-on licenses that newly appear or renew — a
+/// purchase made elsewhere and each subscription renewal — and stays
+/// silent for consumables, which hold no license.
 ///
 /// The stream ends when the [`Store`] drops.
 pub struct StoreEvents {
@@ -293,8 +328,14 @@ pub struct Product {
 
 impl Product {
     #[cfg_attr(
-        not(any(target_os = "android", target_os = "ios", target_os = "macos", test)),
-        expect(dead_code, reason = "only the platform wire decoder builds these")
+        not(any(
+            target_os = "android",
+            target_os = "ios",
+            target_os = "macos",
+            target_os = "windows",
+            test
+        )),
+        expect(dead_code, reason = "only the platform backends build these")
     )]
     pub(crate) const fn new(
         id: ProductId,
@@ -415,8 +456,14 @@ pub struct Offer {
 
 impl Offer {
     #[cfg_attr(
-        not(any(target_os = "android", target_os = "ios", target_os = "macos", test)),
-        expect(dead_code, reason = "only the platform wire decoder builds these")
+        not(any(
+            target_os = "android",
+            target_os = "ios",
+            target_os = "macos",
+            target_os = "windows",
+            test
+        )),
+        expect(dead_code, reason = "only the platform backends build these")
     )]
     pub(crate) const fn new(token: OfferToken, phases: Vec<PricingPhase>) -> Self {
         Self { token, phases }
@@ -442,8 +489,14 @@ pub struct OfferToken(String);
 
 impl OfferToken {
     #[cfg_attr(
-        not(any(target_os = "android", target_os = "ios", target_os = "macos", test)),
-        expect(dead_code, reason = "only the platform wire decoder builds these")
+        not(any(
+            target_os = "android",
+            target_os = "ios",
+            target_os = "macos",
+            target_os = "windows",
+            test
+        )),
+        expect(dead_code, reason = "only the platform backends build these")
     )]
     pub(crate) const fn new(value: String) -> Self {
         Self(value)
@@ -491,7 +544,8 @@ pub enum PurchaseOutcome {
     /// Paid; the purchase is unfinished until [`Purchase::finish`] runs.
     Purchased(Purchase),
     /// Waiting on external action (e.g. Ask to Buy); the purchase completes
-    /// or fails through [`StoreEvents`].
+    /// or fails through [`StoreEvents`]. The Microsoft Store has no pending
+    /// state, so Windows never returns this.
     Pending,
     /// The user cancelled the flow.
     Cancelled,
@@ -508,7 +562,7 @@ pub struct Purchase {
     kind: ProductKind,
     quantity: u32,
     purchased_at: Timestamp,
-    proof: PurchaseProof,
+    proof: Option<PurchaseProof>,
     sys: sys::Purchase,
 }
 
@@ -550,15 +604,24 @@ impl Purchase {
     }
 
     /// The store's signed proof of purchase, for server verification.
+    ///
+    /// Present on Android (a Play purchase token) and Apple (an App Store
+    /// JWS). `None` on Windows: `Windows.Services.Store` issues no
+    /// per-purchase signature, so server-side verification there goes
+    /// through [`Store::store_id_key`] and the collections API.
     #[must_use]
-    pub const fn proof(&self) -> &PurchaseProof {
-        &self.proof
+    pub const fn proof(&self) -> Option<&PurchaseProof> {
+        self.proof.as_ref()
     }
 
     /// Consumes a consumable, or acknowledges a non-consumable or
     /// subscription (`StoreKit`: `transaction.finish()`).
     ///
     /// Consumed items leave the user's entitlements; acknowledged ones stay.
+    /// On Windows a consumable's finish reports fulfillment of its units to
+    /// the Store (`ReportConsumableFulfillmentAsync`); durables and
+    /// subscriptions need no acknowledgement there, so finishing them makes
+    /// no store call.
     ///
     /// # Errors
     /// The store's own error (`network`, `platform`, `unavailable`).
@@ -577,15 +640,20 @@ impl Purchase {
 
 impl Purchase {
     #[cfg_attr(
-        not(any(target_os = "android", target_os = "ios", target_os = "macos")),
-        expect(dead_code, reason = "only the platform wire decoder builds these")
+        not(any(
+            target_os = "android",
+            target_os = "ios",
+            target_os = "macos",
+            target_os = "windows"
+        )),
+        expect(dead_code, reason = "only the platform backends build these")
     )]
     pub(crate) const fn new(
         product_id: ProductId,
         kind: ProductKind,
         quantity: u32,
         purchased_at: Timestamp,
-        proof: PurchaseProof,
+        proof: Option<PurchaseProof>,
         sys: sys::Purchase,
     ) -> Self {
         Self {
@@ -607,7 +675,7 @@ pub struct Transaction {
     kind: ProductKind,
     quantity: u32,
     purchased_at: Timestamp,
-    proof: PurchaseProof,
+    proof: Option<PurchaseProof>,
 }
 
 impl Transaction {
@@ -616,7 +684,7 @@ impl Transaction {
         kind: ProductKind,
         quantity: u32,
         purchased_at: Timestamp,
-        proof: PurchaseProof,
+        proof: Option<PurchaseProof>,
     ) -> Self {
         Self {
             product_id,
@@ -651,10 +719,11 @@ impl Transaction {
         self.purchased_at
     }
 
-    /// The store's signed proof of purchase.
+    /// The store's signed proof of purchase. `None` on Windows, which
+    /// issues no per-purchase signature.
     #[must_use]
-    pub const fn proof(&self) -> &PurchaseProof {
-        &self.proof
+    pub const fn proof(&self) -> Option<&PurchaseProof> {
+        self.proof.as_ref()
     }
 }
 

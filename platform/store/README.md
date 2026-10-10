@@ -9,7 +9,11 @@ In-app purchases and subscriptions through the platform's store backend:
 - **iOS / macOS**: StoreKit 2 (no Objective-C API exists). Requires
   iOS 15 / macOS 12 or newer; earlier OS versions report the store as
   unavailable.
-- **Windows, Linux, wasm**: report as unavailable.
+- **Windows**: `Windows.Services.Store.StoreContext`. Requires a Microsoft
+  Store packaged process on Windows 10 1809 or newer (`IStorePrice2` for
+  the unformatted price); an unpackaged process reports the store as
+  unavailable.
+- **Linux, wasm**: report as unavailable.
 
 ## Usage
 
@@ -62,4 +66,15 @@ active subscriptions — split into `Unfinished` and `Finished` records.
   `VerificationResult.unverified` surfaces as [`StoreError::Unverified`]
   carrying the proof for inspection — an unverified transaction is never
   returned as a `Purchase`. On Play the proof is the purchase token, which a
-  backend verifies through the Play Developer API.
+  backend verifies through the Play Developer API. The Microsoft Store
+  issues no per-purchase signature, so `Purchase::proof()` is `None` on
+  Windows; server-side verification there goes through
+  `Store::store_id_key` — the backend mints a service ticket (Entra ID
+  audience `https://onestore.microsoft.com/b2b/keys/create/collections`) and
+  uses the returned key, valid 30 days, with the Microsoft Store collections
+  API.
+- **Purchases need a foreground window on Windows.** `RequestPurchaseAsync`
+  shows modal Store UI, which requires an owner window: the call fails with
+  a platform error when the app's process has no foreground top-level
+  window, and it must be made from the thread that owns that window — the
+  UI thread.

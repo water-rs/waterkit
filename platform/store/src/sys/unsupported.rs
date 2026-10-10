@@ -1,12 +1,4 @@
-//! Platforms without a store backend: Linux, wasm, and Windows.
-//!
-//! Windows is deliberately unsupported rather than partial: the
-//! `Windows.Services.Store` surface has no per-purchase signed proof
-//! (`GetCustomerPurchaseIdAsync` yields a user-level collections token, not
-//! a transaction signature), no pending-purchase state, and no transaction
-//! update stream — `OfflineLicensesChanged` is a license invalidation, not a
-//! purchase feed. The public API's `Purchase::proof` and `StoreEvents`
-//! cannot be honored there.
+//! Platforms without a store backend: Linux and wasm.
 
 #![expect(
     clippy::unused_async,

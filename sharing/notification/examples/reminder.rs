@@ -10,6 +10,15 @@ fn main() -> Result<(), waterkit_notification::NotificationError> {
 }
 
 async fn run() -> Result<(), waterkit_notification::NotificationError> {
+    // Toasts are attributed to an AppUserModelID; unpackaged apps register one
+    // before the first notification.
+    #[cfg(target_os = "windows")]
+    let _registration = waterkit_notification::windows::AppIdentity::new(
+        "dev.waterkit.examples.reminder",
+        "WaterKit Reminder Example",
+    )
+    .register()?;
+
     println!("Showing a reminder toast; it stays on screen until dismissed...");
 
     Notification::new()

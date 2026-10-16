@@ -22,6 +22,13 @@ fn main() {
     let _ = waterkit_system::thermal_state();
     let _ = futures::executor::block_on(waterkit_system::load());
     std::mem::drop(waterkit_passkey::is_available());
+    // Unpackaged apps must register an AppUserModelID before the first toast;
+    // the registration also installs the COM activator toast clicks reach.
+    let _registration = waterkit_notification::windows::AppIdentity::new(
+        "dev.waterkit.test-harness",
+        "WaterKit Test Harness",
+    )
+    .register();
 }
 
 #[cfg(not(target_os = "windows"))]

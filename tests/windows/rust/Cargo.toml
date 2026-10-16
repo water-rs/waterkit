@@ -19,5 +19,6 @@ waterkit-deeplink.workspace = true
 waterkit-sensor.workspace = true
 waterkit-store.workspace = true
 waterkit-system.workspace = true
+waterkit-notification.workspace = true
 futures.workspace = true
 waterkit-passkey.workspace = true

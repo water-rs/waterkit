@@ -112,6 +112,26 @@ Notification::new()
 | iOS | `UserNotifications` framework |
 | Android | `NotificationManager` with channels |
 
+## Windows Notes
+
+Toasts are attributed to an `AppUserModelID`. Packaged (MSIX) apps inherit
+theirs from the package; an unpackaged process must register an identity
+before the first `show()`, which fails otherwise:
+
+```rust
+#[cfg(target_os = "windows")]
+let registration = waterkit_notification::windows::AppIdentity::new(
+    "com.example.myapp",
+    "My App",
+)
+.register()?;
+```
+
+Keep the returned `AppRegistration` alive for as long as the process shows or
+answers toasts — dropping it revokes the in-process activator, and a toast
+click then launches a new instance of the executable (with the
+`-ToastActivated` argument) instead of reaching the running process.
+
 ## Android Notes
 
 On Android, you must use `show_with_context()` with a valid Android `Context`:

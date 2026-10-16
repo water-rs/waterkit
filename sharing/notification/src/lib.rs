@@ -62,9 +62,32 @@
 //! persists until dismissed and requires an action. Anything the toast
 //! schema cannot render fails with [`NotificationError::Unsupported`] instead
 //! of being silently dropped.
+//!
+//! # Windows App Identity
+//!
+//! A toast is attributed to the `AppUserModelID` it is shown under. Packaged
+//! (MSIX) apps inherit one from their package; an unpackaged process must
+//! register one through `waterkit_notification::windows::AppIdentity` before
+//! the first `show()`, or showing a notification fails with
+//! [`NotificationError::Platform`]:
+//!
+//! ```no_run
+//! # #[cfg(target_os = "windows")]
+//! # fn register() -> Result<(), waterkit_notification::NotificationError> {
+//! // Keep the registration alive for as long as the process shows toasts.
+//! let registration =
+//!     waterkit_notification::windows::AppIdentity::new("com.example.myapp", "My App")
+//!         .register()?;
+//! # let _ = registration;
+//! # Ok(())
+//! # }
+//! ```
 
 mod error;
 mod sys;
+
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 use std::path::PathBuf;
 
@@ -266,8 +289,6 @@ impl TextInputAction {
 }
 
 /// Response from a notification action.
-///
-/// This is passed to the callback set via [`Notification::on_response`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotificationResponse {
     /// User clicked a URL action.

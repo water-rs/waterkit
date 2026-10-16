@@ -432,9 +432,8 @@ mod tests {
     use tempfile::NamedTempFile;
     use transmux::{
         AVCConfigurationBox, AVCDecoderConfigurationRecord, AvcPps, AvcSps, CodecConfig,
-        DecoderConfigDescriptor, DecoderSpecificInfo, ESDescriptor, EsdsBox, Media,
-        ObjectTypeIndication, ProgressiveMux, SLConfigDescriptor, Sample, StreamType, Track,
-        TrackSpec,
+        DecoderConfigDescriptor, DecoderSpecificInfo, ESDescriptor, EsdsBox, Media, ProgressiveMux,
+        SLConfigDescriptor, Sample, Track, TrackSpec,
     };
 
     use super::ProgressiveTrackReader;
@@ -492,9 +491,9 @@ mod tests {
             vec![video_track(
                 7,
                 vec![
-                    Sample::new(vec![0x01], 1_000, true, 0),
-                    Sample::new(vec![0x02], 1_000, false, 0),
-                    Sample::new(vec![0x03], 1_000, true, 0),
+                    Sample::new(vec![0x01], Some(0), Some(0), Some(1_000), true),
+                    Sample::new(vec![0x02], Some(1_000), Some(1_000), Some(1_000), false),
+                    Sample::new(vec![0x03], Some(2_000), Some(2_000), Some(1_000), true),
                 ],
             )],
             1_000,
@@ -552,35 +551,30 @@ mod tests {
             48_000,
             CodecConfig::Aac {
                 esds: EsdsBox {
-                    es_descriptor: ESDescriptor {
-                        es_id: u16::try_from(track_id).expect("test track id must fit u16"),
-                        stream_dependence_flag: false,
-                        url_flag: false,
-                        ocr_stream_flag: false,
-                        stream_priority: 0,
-                        depends_on_es_id: None,
-                        url: None,
-                        ocr_es_id: None,
-                        decoder_config: Some(DecoderConfigDescriptor {
-                            object_type_indication: ObjectTypeIndication(0x40),
-                            stream_type: StreamType(5),
-                            up_stream: false,
-                            buffer_size_db: 0,
-                            max_bitrate: 128_000,
-                            avg_bitrate: 128_000,
-                            decoder_specific_info: Some(DecoderSpecificInfo {
-                                data: vec![0x11, 0x90],
-                            }),
-                        }),
-                        sl_config: Some(SLConfigDescriptor { body: vec![0x02] }),
-                    },
+                    es_descriptor: ESDescriptor::new(
+                        u16::try_from(track_id).expect("test track id must fit u16"),
+                        0,
+                        Some(DecoderConfigDescriptor::new(
+                            0x40,
+                            5,
+                            false,
+                            0,
+                            128_000,
+                            128_000,
+                            Some(DecoderSpecificInfo::new(vec![0x11, 0x90])),
+                        )),
+                        Some(SLConfigDescriptor::predefined_two()),
+                    ),
                 },
                 channel_count: 2,
                 sample_rate: 48_000,
                 sample_size: 16,
             },
         );
-        Track::new(spec, vec![Sample::new(data, 1_024, true, 0)])
+        Track::new(
+            spec,
+            vec![Sample::new(data, Some(0), Some(0), Some(1_024), true)],
+        )
     }
 
     fn video_track(track_id: u32, samples: Vec<Sample>) -> Track {

@@ -846,10 +846,7 @@ fn collect_traf_samples(
                 )));
             }
             let presentation_time = decode_time
-                .checked_add_signed(composition_time_offset_i64(
-                    sample.sample_composition_time_offset.unwrap_or(0),
-                    run.version,
-                ))
+                .checked_add_signed(sample.sample_composition_time_offset.unwrap_or(0))
                 .ok_or_else(|| {
                     VideoError::Container(String::from(
                         "fragmented sample has a negative or overflowing presentation timestamp",
@@ -1157,8 +1154,8 @@ mod tests {
         default_sample_flags: Option<u32>,
         runs: Vec<TrackFragmentRunBox>,
     ) -> TrackFragmentBox {
-        TrackFragmentBox {
-            tfhd: TrackFragmentHeaderBox {
+        TrackFragmentBox::new(
+            TrackFragmentHeaderBox {
                 flags: tfhd_flags,
                 track_id: TRACK_ID,
                 base_data_offset: None,
@@ -1168,8 +1165,8 @@ mod tests {
                 default_sample_flags,
             },
             tfdt,
-            trun: runs,
-        }
+            runs,
+        )
     }
 
     fn trun(
@@ -1191,7 +1188,7 @@ mod tests {
         duration: Option<u32>,
         size: Option<u32>,
         flags: Option<u32>,
-        composition_offset: Option<i32>,
+        composition_offset: Option<i64>,
     ) -> TrunSample {
         TrunSample {
             sample_duration: duration,
@@ -1215,13 +1212,19 @@ mod tests {
         trafs: Vec<TrackFragmentBox>,
         payload: &[u8],
     ) -> Vec<u8> {
-        let mut moof = MovieFragmentBox {
-            mfhd: MovieFragmentHeaderBox::new(sequence_number),
-            traf: trafs,
-        };
+        let mut moof = MovieFragmentBox::new(MovieFragmentHeaderBox::new(sequence_number), trafs);
+        // `trun.data_offset` only enters `serialized_len`/`tr_flags` once it is
+        // `Some` (transmux derives presence bits from the fields), so the field
+        // must be reserved before measuring the moof.
+        moof.traf[0].trun[0].data_offset = Some(0);
         let moof_len = i32::try_from(moof.serialized_len()).expect("moof fits in i32");
         moof.traf[0].trun[0].data_offset = Some(moof_len + 8);
         let mut bytes = moof.to_bytes();
+        assert_eq!(
+            bytes.len(),
+            usize::try_from(moof_len).unwrap(),
+            "moof size drift"
+        );
         bytes.extend_from_slice(
             &u32::try_from(payload.len() + 8)
                 .expect("mdat fits in u32")
@@ -1507,7 +1510,13 @@ mod tests {
         let media = Media::new(
             vec![Track::new(
                 video_spec(TRACK_ID),
-                vec![Sample::new(vec![0xE8; 4], 1_000, true, 0)],
+                vec![Sample::new(
+                    vec![0xE8; 4],
+                    Some(0),
+                    Some(0),
+                    Some(1_000),
+                    true,
+                )],
             )],
             TIMESCALE,
         );
@@ -1558,7 +1567,7 @@ mod tests {
                             | TRUN_SAMPLE_SIZE_PRESENT
                             | TRUN_SAMPLE_COMPOSITION_TIME_OFFSET_PRESENT,
                         None,
-                        vec![sample(None, Some(4), None, Some(-2_147_483_648))],
+                        vec![sample(None, Some(4), None, Some(2_147_483_648))],
                     ),
                     trun(
                         1,
@@ -1654,9 +1663,9 @@ mod tests {
             vec![Track::new(
                 video_spec(TRACK_ID),
                 vec![
-                    Sample::new(vec![0xE0; 4], 1_000, true, 0),
-                    Sample::new(vec![0xE1; 4], 1_000, false, 500),
-                    Sample::new(vec![0xE2; 4], 1_000, false, 1_000),
+                    Sample::new(vec![0xE0; 4], Some(0), Some(0), Some(1_000), true),
+                    Sample::new(vec![0xE1; 4], Some(1_000), Some(1_500), Some(1_000), false),
+                    Sample::new(vec![0xE2; 4], Some(2_000), Some(3_000), Some(1_000), false),
                 ],
             )],
             TIMESCALE,

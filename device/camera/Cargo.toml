@@ -28,7 +28,7 @@ wgpu-external-frame.workspace = true
 # The YCbCr mode codes the converter's shaders take.
 waterkit-video-core.workspace = true
 # CPU conversion for offline raw-video decoding and desktop recording.
-yuv = "0.8.16"
+yuv = "0.8.19"
 
 [build-dependencies]
 # The frame converter's shaders are composed with the shared Y'CbCr fragment

@@ -26,7 +26,6 @@ use crate::{
 
 pub const SAMPLE_FLAG_IS_NON_SYNC: u32 = 0x0001_0000;
 pub const TFHD_DEFAULT_BASE_IS_MOOF: u32 = 0x0002_0000;
-const MPEG_TIMESTAMP_TIMESCALE: NonZeroU32 = NonZeroU32::new(90_000).unwrap();
 
 /// Stable, non-zero track identity within one presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1815,9 +1814,7 @@ impl CmafRunContext<'_> {
             let decode_ticks = i64::try_from(decode_time)
                 .map_err(|_| Error::Container(String::from("CMAF decode time exceeds i64")))?;
             let presentation_ticks = decode_ticks
-                .checked_add(i64::from(
-                    sample.sample_composition_time_offset.unwrap_or(0),
-                ))
+                .checked_add(sample.sample_composition_time_offset.unwrap_or(0))
                 .ok_or_else(|| {
                     Error::Container(String::from("CMAF presentation timestamp overflow"))
                 })?;
@@ -1923,11 +1920,13 @@ impl MpegTsDemuxer {
         while let Some(event) = self.inner.poll_event() {
             match event {
                 TransmuxDemuxEvent::TrackAdded(track) | TransmuxDemuxEvent::TrackUpdated(track) => {
-                    let track = track_info_from_transmux(&track)?;
+                    let track = track_info_from_spec(&track)?;
                     self.tracks.insert(track.id(), track.clone());
                     events.push(MpegTsEvent::Track(track));
                 }
-                TransmuxDemuxEvent::Sample { track_id, sample } => {
+                TransmuxDemuxEvent::Sample {
+                    track_id, sample, ..
+                } => {
                     let track_id = TrackId::new(track_id)?;
                     let track = self.tracks.get(&track_id).ok_or_else(|| {
                         Error::Container(format!(
@@ -1935,37 +1934,30 @@ impl MpegTsDemuxer {
                             track_id.get()
                         ))
                     })?;
-                    let (decode_time, presentation_time) =
-                        if let Some(timing) = sample.source_timing {
-                            (
-                                MediaTime::new(
-                                    u64_to_i64(timing.dts, "MPEG-TS DTS")?,
-                                    MPEG_TIMESTAMP_TIMESCALE,
-                                ),
-                                MediaTime::new(
-                                    u64_to_i64(timing.pts, "MPEG-TS PTS")?,
-                                    MPEG_TIMESTAMP_TIMESCALE,
-                                ),
-                            )
-                        } else {
+                    let (decode_time, presentation_time) = match (sample.dts, sample.pts) {
+                        (Some(dts), Some(pts)) => (
+                            MediaTime::new(dts, track.timescale()),
+                            MediaTime::new(pts, track.timescale()),
+                        ),
+                        (None, None) => {
                             let ticks = self.next_decode_time.get(&track_id).copied().unwrap_or(0);
-                            let presentation = ticks
-                                .checked_add(i64::from(sample.composition_offset))
-                                .ok_or_else(|| {
-                                    Error::Container(String::from("MPEG-TS PTS overflow"))
-                                })?;
                             (
                                 MediaTime::new(ticks, track.timescale()),
-                                MediaTime::new(presentation, track.timescale()),
+                                MediaTime::new(ticks, track.timescale()),
                             )
-                        };
-                    let next = if let Some(timing) = sample.source_timing {
-                        u64_to_i64(timing.dts, "MPEG-TS DTS")?
-                    } else {
-                        decode_time.ticks()
-                    }
-                    .checked_add(i64::from(sample.duration))
-                    .ok_or_else(|| Error::Container(String::from("MPEG-TS timeline overflow")))?;
+                        }
+                        _ => {
+                            return Err(Error::Container(String::from(
+                                "MPEG-TS sample carries only one of dts/pts",
+                            )));
+                        }
+                    };
+                    let next = decode_time
+                        .ticks()
+                        .checked_add(i64::from(sample.duration.unwrap_or(0)))
+                        .ok_or_else(|| {
+                            Error::Container(String::from("MPEG-TS timeline overflow"))
+                        })?;
                     self.next_decode_time.insert(track_id, next);
                     let discontinuity = track
                         .source_pid()
@@ -1974,20 +1966,32 @@ impl MpegTsDemuxer {
                         track_id,
                         decode_time,
                         presentation_time,
-                        duration: MediaTime::new(i64::from(sample.duration), track.timescale()),
-                        keyframe: sample.is_sync,
+                        duration: MediaTime::new(
+                            i64::from(sample.duration.unwrap_or(0)),
+                            track.timescale(),
+                        ),
+                        keyframe: sample.flags.is_sync,
                         discontinuity,
-                        data: Bytes::from(sample.data),
+                        data: sample.data,
                         encryption: None,
                     }));
                 }
-                TransmuxDemuxEvent::Discontinuity { pid } => {
-                    self.discontinuous_pids.insert(pid);
+                TransmuxDemuxEvent::TrackRemoved { track_id, .. } => {
+                    let track_id = TrackId::new(track_id)?;
+                    self.tracks.remove(&track_id);
+                    self.next_decode_time.remove(&track_id);
                 }
-                TransmuxDemuxEvent::TracksResolved => {
+                TransmuxDemuxEvent::Discontinuity { provenance, .. } => {
+                    if let Some(pid) = provenance.pid {
+                        self.discontinuous_pids.insert(pid);
+                    }
+                }
+                TransmuxDemuxEvent::TracksResolved { .. } => {
                     events.push(MpegTsEvent::TracksResolved);
                 }
-                TransmuxDemuxEvent::Pcr(_) => {}
+                TransmuxDemuxEvent::ClockReference { .. }
+                | TransmuxDemuxEvent::TrackAbandoned { .. }
+                | TransmuxDemuxEvent::InputDegraded { .. } => {}
                 _ => {
                     return Err(Error::Unsupported(String::from(
                         "transmux emitted an unknown MPEG-TS event",
@@ -2368,11 +2372,6 @@ fn usize_range(
     Ok(start..end)
 }
 
-fn u64_to_i64(value: u64, field: &str) -> Result<i64, Error> {
-    i64::try_from(value)
-        .map_err(|_| Error::Container(format!("{field} exceeds signed media-time range")))
-}
-
 #[cfg(test)]
 mod tests {
     use std::{num::NonZeroU32, time::Duration};
@@ -2382,9 +2381,9 @@ mod tests {
     use transmux::{
         AVCConfigurationBox, AVCDecoderConfigurationRecord, AvcPps, AvcSps, CencScheme,
         CodecConfig, DecoderConfigDescriptor, DecoderSpecificInfo, ESDescriptor, EsdsBox,
-        FragmentTrackData, ObjectTypeIndication, SLConfigDescriptor, Sample, SampleEncryptionEntry,
-        StreamType, SubSampleEntry, TrackEncryption, TrackEncryptionBox, TrackSpec,
-        build_init_segment, build_media_segment,
+        FragmentTrackData, SLConfigDescriptor, Sample, SampleEncryptionEntry, SubSampleEntry,
+        TrackEncryption, TrackEncryptionBox, TrackSpec, build_init_segment, build_media_segment,
+        cenc::ConstantIvSenc,
         init_segment::protect_init_segment,
         movie_fragment::{FragmentProtection, protect_media_segment},
     };
@@ -2452,28 +2451,20 @@ mod tests {
             44_100,
             CodecConfig::Aac {
                 esds: EsdsBox {
-                    es_descriptor: ESDescriptor {
-                        es_id: 2,
-                        stream_dependence_flag: false,
-                        url_flag: false,
-                        ocr_stream_flag: false,
-                        stream_priority: 0,
-                        depends_on_es_id: None,
-                        url: None,
-                        ocr_es_id: None,
-                        decoder_config: Some(DecoderConfigDescriptor {
-                            object_type_indication: ObjectTypeIndication(0x40),
-                            stream_type: StreamType(5),
-                            up_stream: false,
-                            buffer_size_db: 0,
-                            max_bitrate: 96_000,
-                            avg_bitrate: 96_000,
-                            decoder_specific_info: Some(DecoderSpecificInfo {
-                                data: vec![0x12, 0x10],
-                            }),
-                        }),
-                        sl_config: Some(SLConfigDescriptor { body: vec![0x02] }),
-                    },
+                    es_descriptor: ESDescriptor::new(
+                        2,
+                        0,
+                        Some(DecoderConfigDescriptor::new(
+                            0x40,
+                            5,
+                            false,
+                            0,
+                            96_000,
+                            96_000,
+                            Some(DecoderSpecificInfo::new(vec![0x12, 0x10])),
+                        )),
+                        Some(SLConfigDescriptor::predefined_two()),
+                    ),
                 },
                 channel_count: 2,
                 sample_rate: 44_100,
@@ -2531,14 +2522,22 @@ mod tests {
         let init = build_init_segment(std::slice::from_ref(&track), 1_000)
             .expect("CMAF initialization must build");
         let samples = [
-            Sample::new(vec![0, 0, 0, 1, 0x65], 3_003, true, 1_001),
-            Sample::new(vec![0, 0, 0, 1, 0x41], 3_003, false, -1_001),
+            Sample::new(
+                vec![0, 0, 0, 1, 0x65],
+                Some(0),
+                Some(1_001),
+                Some(3_003),
+                true,
+            ),
+            Sample::new(
+                vec![0, 0, 0, 1, 0x41],
+                Some(0),
+                Some(-1_001),
+                Some(3_003),
+                false,
+            ),
         ];
-        let fragment = FragmentTrackData {
-            track_id: track.track_id,
-            base_media_decode_time: 180_000,
-            samples: &samples,
-        };
+        let fragment = FragmentTrackData::new(track.track_id, 180_000, &samples);
         let segment = build_media_segment(7, &[fragment]).expect("CMAF media segment must build");
         let initialization = CmafInitialization::parse(&init).expect("initialization must parse");
         assert_eq!(initialization.tracks()[0].codec(), Codec::H264);
@@ -2554,7 +2553,7 @@ mod tests {
         assert_eq!(demuxed[0].duration().ticks(), 3_003);
         assert!(demuxed[0].is_keyframe());
         assert!(demuxed[0].is_discontinuity());
-        assert_eq!(demuxed[0].data().as_ref(), samples[0].data.as_slice());
+        assert_eq!(demuxed[0].data().as_ref(), samples[0].data.as_ref());
         assert_eq!(demuxed[1].decode_time().ticks(), 183_003);
         assert_eq!(demuxed[1].presentation_time().ticks(), 182_002);
         assert!(!demuxed[1].is_keyframe());
@@ -2569,17 +2568,17 @@ mod tests {
                 .expect("CMAF initialization must build"),
         )
         .expect("CMAF initialization must parse");
-        let sample = Sample::new(vec![0, 0, 0, 1, 0x65], 3_000, true, 0);
+        let sample = Sample::new(vec![0, 0, 0, 1, 0x65], Some(0), Some(0), Some(3_000), true);
         let mut segment = event_message_v0();
         segment.extend_from_slice(&event_message_v1());
         segment.extend_from_slice(
             &build_media_segment(
                 8,
-                &[FragmentTrackData {
-                    track_id: track.track_id,
-                    base_media_decode_time: 450_000,
-                    samples: std::slice::from_ref(&sample),
-                }],
+                &[FragmentTrackData::new(
+                    track.track_id,
+                    450_000,
+                    std::slice::from_ref(&sample),
+                )],
             )
             .expect("CMAF media segment must build"),
         );
@@ -2611,8 +2610,8 @@ mod tests {
     fn protected_cmaf_preserves_track_and_sample_encryption_metadata() {
         let track = video_track();
         let samples = [
-            Sample::new(vec![0, 0, 0, 1, 0x65], 3_003, true, 0),
-            Sample::new(vec![0, 0, 0, 1, 0x41], 3_003, false, 0),
+            Sample::new(vec![0, 0, 0, 1, 0x65], Some(0), Some(0), Some(3_003), true),
+            Sample::new(vec![0, 0, 0, 1, 0x41], Some(0), Some(0), Some(3_003), false),
         ];
         let encryption_entries = vec![
             SampleEncryptionEntry {
@@ -2636,9 +2635,9 @@ mod tests {
                 ],
             },
         ];
-        let encryption = TrackEncryption {
-            scheme: CencScheme::Cenc,
-            tenc: TrackEncryptionBox {
+        let encryption = TrackEncryption::new(
+            CencScheme::Cenc,
+            TrackEncryptionBox {
                 version: 0,
                 default_crypt_byte_block: 0,
                 default_skip_byte_block: 0,
@@ -2647,8 +2646,9 @@ mod tests {
                 default_kid: [0x44; 16],
                 default_constant_iv: None,
             },
-            samples: encryption_entries.clone(),
-        };
+            encryption_entries.clone(),
+            ConstantIvSenc::Emit,
+        );
         let init = protect_init_segment(
             &build_init_segment(std::slice::from_ref(&track), 1_000)
                 .expect("CMAF initialization must build"),
@@ -2659,11 +2659,7 @@ mod tests {
         let segment = protect_media_segment(
             &build_media_segment(
                 7,
-                &[FragmentTrackData {
-                    track_id: track.track_id,
-                    base_media_decode_time: 180_000,
-                    samples: &samples,
-                }],
+                &[FragmentTrackData::new(track.track_id, 180_000, &samples)],
             )
             .expect("CMAF media segment must build"),
             &[FragmentProtection {
@@ -2710,24 +2706,25 @@ mod tests {
                 .expect("CMAF initialization must build"),
         )
         .expect("CMAF initialization must parse");
-        let first_sample = Sample::new(vec![0, 0, 0, 1, 0x65], 3_000, true, 0);
-        let second_sample = Sample::new(vec![0, 0, 0, 1, 0x41], 3_000, false, 0);
+        let first_sample = Sample::new(vec![0, 0, 0, 1, 0x65], Some(0), Some(0), Some(3_000), true);
+        let second_sample =
+            Sample::new(vec![0, 0, 0, 1, 0x41], Some(0), Some(0), Some(3_000), false);
         let first = build_media_segment(
             1,
-            &[FragmentTrackData {
-                track_id: track.track_id,
-                base_media_decode_time: 0,
-                samples: std::slice::from_ref(&first_sample),
-            }],
+            &[FragmentTrackData::new(
+                track.track_id,
+                0,
+                std::slice::from_ref(&first_sample),
+            )],
         )
         .expect("first CMAF chunk must build");
         let second = build_media_segment(
             2,
-            &[FragmentTrackData {
-                track_id: track.track_id,
-                base_media_decode_time: 3_000,
-                samples: std::slice::from_ref(&second_sample),
-            }],
+            &[FragmentTrackData::new(
+                track.track_id,
+                3_000,
+                std::slice::from_ref(&second_sample),
+            )],
         )
         .expect("second CMAF chunk must build");
         let split = first.len() / 2;

@@ -4,7 +4,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use dash_mpd::{
+use dash_mpd_core::{
     AdaptationSet, BaseURL, ContentProtection, MPD, Period, Representation, SegmentBase,
     SegmentList, SegmentTemplate,
 };
@@ -543,7 +543,7 @@ pub async fn fetch_dash_manifest(request: MediaRequest) -> Result<DashManifest, 
 /// external `XLinks`, invalid ranges, invalid `CENC` metadata, or incomplete
 /// representation/segment declarations.
 pub fn parse_dash_manifest(base_url: &Url, input: &str) -> Result<DashManifest, Error> {
-    let mpd = dash_mpd::parse(input)
+    let mpd = dash_mpd_core::parse(input)
         .map_err(|error| Error::Streaming(format!("invalid DASH MPD: {error}")))?;
     normalize_manifest(base_url, &mpd)
 }
@@ -614,7 +614,7 @@ fn normalize_manifest(base_url: &Url, mpd: &MPD) -> Result<DashManifest, Error> 
     })
 }
 
-fn xs_datetime_to_system_time(value: &dash_mpd::XsDatetime) -> Result<SystemTime, Error> {
+fn xs_datetime_to_system_time(value: &dash_mpd_core::XsDatetime) -> Result<SystemTime, Error> {
     let seconds = value.timestamp();
     let nanos = value.timestamp_subsec_nanos();
     let subsecond = Duration::from_nanos(u64::from(nanos));
@@ -1046,7 +1046,7 @@ fn normalize_segment_base(
 }
 
 fn normalize_initialization(
-    initialization: &dash_mpd::Initialization,
+    initialization: &dash_mpd_core::Initialization,
     bases: &[DashBaseUrl],
 ) -> Result<DashInitialization, Error> {
     let urls = match initialization.sourceURL.as_deref() {
@@ -1064,7 +1064,7 @@ fn normalize_initialization(
 }
 
 fn normalize_timeline(
-    timeline: &dash_mpd::SegmentTimeline,
+    timeline: &dash_mpd_core::SegmentTimeline,
 ) -> Result<Vec<DashTimelineEntry>, Error> {
     timeline
         .segments
@@ -1142,7 +1142,7 @@ fn normalize_protection(
 }
 
 fn normalize_service_descriptions(
-    descriptions: &[dash_mpd::ServiceDescription],
+    descriptions: &[dash_mpd_core::ServiceDescription],
 ) -> Result<Vec<DashServiceDescription>, Error> {
     descriptions
         .iter()
@@ -1196,7 +1196,7 @@ fn normalize_service_descriptions(
 }
 
 fn normalize_producer_reference_times(
-    references: &[dash_mpd::ProducerReferenceTime],
+    references: &[dash_mpd_core::ProducerReferenceTime],
     timescale: NonZeroU64,
 ) -> Result<Vec<DashProducerReferenceTime>, Error> {
     references

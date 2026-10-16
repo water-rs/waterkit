@@ -64,7 +64,7 @@ apple-artwork = ["media-session", "dep:zenwave"]
 [dependencies]
 thiserror = { workspace = true }
 # Audio metadata extraction
-lofty = { version = "0.24", optional = true }
+lofty = { version = "0.25", optional = true }
 # Async primitives (runtime-agnostic)
 async-channel = { workspace = true }
 futures = { workspace = true }
@@ -87,7 +87,7 @@ rodio = { workspace = true, features = ["playback", "flac", "vorbis", "wav", "mp
 cpal = { workspace = true, features = ["wasm-bindgen"], optional = true }
 # Browser HTTP via the Fetch API; zenwave forbids explicit backend features
 # on wasm32, so none are selected here.
-zenwave = { version = "0.6.1", default-features = false, features = ["ws"], optional = true }
+zenwave = { version = "0.7.1", default-features = false, features = ["ws"], optional = true }
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["Navigator", "Window"] }
@@ -153,7 +153,7 @@ waterkit-core = { workspace = true, optional = true }
 block2 = { workspace = true, optional = true }
 dispatch2 = { workspace = true, optional = true }
 
-zenwave = { version = "0.6.1", default-features = false, features = ["hyper-native-tls", "ws"], optional = true }
+zenwave = { version = "0.7.1", default-features = false, features = ["hyper-native-tls", "ws"], optional = true }
 
 # Android - use rustls with ring backend (avoids aws-lc-rs CMake issues)
 [target.'cfg(target_os = "android")'.dependencies]
@@ -162,18 +162,18 @@ waterkit-build = { workspace = true, optional = true }
 ndk-context = { workspace = true, optional = true }
 ndk = { version = "0.9", features = ["media", "api-level-29"], optional = true }
 ndk-sys = { version = "0.6", optional = true }
-zenwave = { version = "0.6.1", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
+zenwave = { version = "0.7.1", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
 
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = ["Media_Playback", "Media_Control", "Foundation", "Storage_Streams", "Win32_Media_MediaFoundation", "Win32_System_Com"], optional = true }
-zenwave = { version = "0.6.1", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
+zenwave = { version = "0.7.1", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
 
 # Linux
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { workspace = true, optional = true }
 mpris-server = { version = "0.10", optional = true }
-zenwave = { version = "0.6.1", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
+zenwave = { version = "0.7.1", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
 smol = { version = "2", optional = true }
 tempfile = { version = "3", optional = true }
 url = { version = "2", optional = true }

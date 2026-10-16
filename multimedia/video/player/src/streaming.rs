@@ -1924,8 +1924,7 @@ mod tests {
     use transmux::{
         AVCConfigurationBox, AVCDecoderConfigurationRecord, AvcPps, AvcSps, CodecConfig,
         DecoderConfigDescriptor, DecoderSpecificInfo, ESDescriptor, EsdsBox, FragmentTrackData,
-        ObjectTypeIndication, SLConfigDescriptor, Sample, StreamType, TrackSpec,
-        build_init_segment, build_media_segment,
+        SLConfigDescriptor, Sample, TrackSpec, build_init_segment, build_media_segment,
     };
     use waterkit_video_container::{EncodedSample, MediaTime, TrackId, TrackKind};
     use waterkit_video_streaming::{
@@ -2032,16 +2031,16 @@ mod tests {
         let track = video_track();
         let init = build_init_segment(std::slice::from_ref(&track), 1_000)
             .expect("test initialization must build");
-        let samples = [Sample::new(vec![0, 0, 0, 1, 0x65], 3_000, true, 0)];
-        let segment = build_media_segment(
-            1,
-            &[FragmentTrackData {
-                track_id: track.track_id,
-                base_media_decode_time: 0,
-                samples: &samples,
-            }],
-        )
-        .expect("test media segment must build");
+        let samples = [Sample::new(
+            vec![0, 0, 0, 1, 0x65],
+            Some(0),
+            Some(0),
+            Some(3_000),
+            true,
+        )];
+        let segment =
+            build_media_segment(1, &[FragmentTrackData::new(track.track_id, 0, &samples)])
+                .expect("test media segment must build");
         let server = TestHlsServer::start(init, segment);
         let manifest_url = Url::parse(&format!("http://{}/master.m3u8", server.address))
             .expect("test manifest URL must parse");
@@ -2077,7 +2076,7 @@ mod tests {
         assert_eq!(segment.sequence(), 0);
         assert_eq!(segment.tracks().len(), 1);
         assert_eq!(segment.samples().len(), 1);
-        assert_eq!(segment.samples()[0].data().as_ref(), samples[0].data);
+        assert_eq!(segment.samples()[0].data().as_ref(), &samples[0].data[..]);
         server.finish();
     }
 
@@ -2095,15 +2094,14 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, data)| {
-                let sample = Sample::new(data.clone(), 500, index != 1, 0);
+                let sample = Sample::new(data.clone(), Some(0), Some(0), Some(500), index != 1);
                 build_media_segment(
                     u32::try_from(index + 1).expect("test sequence must fit u32"),
-                    &[FragmentTrackData {
-                        track_id: track.track_id,
-                        base_media_decode_time: 4_000
-                            + u64::try_from(index).expect("test index must fit u64") * 500,
-                        samples: std::slice::from_ref(&sample),
-                    }],
+                    &[FragmentTrackData::new(
+                        track.track_id,
+                        4_000 + u64::try_from(index).expect("test index must fit u64") * 500,
+                        std::slice::from_ref(&sample),
+                    )],
                 )
                 .expect("test partial segment must build")
             })
@@ -2162,16 +2160,16 @@ mod tests {
         let track = video_track();
         let init = build_init_segment(std::slice::from_ref(&track), 1_000)
             .expect("test initialization must build");
-        let samples = [Sample::new(vec![0, 0, 0, 1, 0x65], 3_000, true, 0)];
-        let plaintext = build_media_segment(
-            1,
-            &[FragmentTrackData {
-                track_id: track.track_id,
-                base_media_decode_time: 0,
-                samples: &samples,
-            }],
-        )
-        .expect("test media segment must build");
+        let samples = [Sample::new(
+            vec![0, 0, 0, 1, 0x65],
+            Some(0),
+            Some(0),
+            Some(3_000),
+            true,
+        )];
+        let plaintext =
+            build_media_segment(1, &[FragmentTrackData::new(track.track_id, 0, &samples)])
+                .expect("test media segment must build");
         let key = [0x42_u8; 16];
         let initialization_vector = [0_u8; 16];
         let ciphertext =
@@ -2204,7 +2202,7 @@ mod tests {
             }
         });
         assert_eq!(streamed.samples().len(), 1);
-        assert_eq!(streamed.samples()[0].data().as_ref(), samples[0].data);
+        assert_eq!(streamed.samples()[0].data().as_ref(), &samples[0].data[..]);
         server.finish();
     }
 
@@ -2213,27 +2211,33 @@ mod tests {
         let video_track = video_track();
         let video_init = build_init_segment(std::slice::from_ref(&video_track), 1_000)
             .expect("video initialization must build");
-        let video_sample = Sample::new(vec![0, 0, 0, 1, 0x65], 3_000, true, 0);
+        let video_sample = Sample::new(vec![0, 0, 0, 1, 0x65], Some(0), Some(0), Some(3_000), true);
         let video_segment = build_media_segment(
             1,
-            &[FragmentTrackData {
-                track_id: video_track.track_id,
-                base_media_decode_time: 0,
-                samples: std::slice::from_ref(&video_sample),
-            }],
+            &[FragmentTrackData::new(
+                video_track.track_id,
+                0,
+                std::slice::from_ref(&video_sample),
+            )],
         )
         .expect("video media segment must build");
         let audio_track = audio_track();
         let audio_init = build_init_segment(std::slice::from_ref(&audio_track), 1_000)
             .expect("audio initialization must build");
-        let audio_sample = Sample::new(vec![0x21, 0x10, 0x04, 0x60], 1_024, true, 0);
+        let audio_sample = Sample::new(
+            vec![0x21, 0x10, 0x04, 0x60],
+            Some(0),
+            Some(0),
+            Some(1_024),
+            true,
+        );
         let audio_segment = build_media_segment(
             100,
-            &[FragmentTrackData {
-                track_id: audio_track.track_id,
-                base_media_decode_time: 0,
-                samples: std::slice::from_ref(&audio_sample),
-            }],
+            &[FragmentTrackData::new(
+                audio_track.track_id,
+                0,
+                std::slice::from_ref(&audio_sample),
+            )],
         )
         .expect("audio media segment must build");
         let server = TestHlsServer::start_with_alternate_audio(
@@ -2295,14 +2299,14 @@ mod tests {
         let track = video_track();
         let init = build_init_segment(std::slice::from_ref(&track), 1_000)
             .expect("video initialization must build");
-        let sample = Sample::new(vec![0, 0, 0, 1, 0x65], 3_000, true, 0);
+        let sample = Sample::new(vec![0, 0, 0, 1, 0x65], Some(0), Some(0), Some(3_000), true);
         let media = build_media_segment(
             1,
-            &[FragmentTrackData {
-                track_id: track.track_id,
-                base_media_decode_time: 0,
-                samples: std::slice::from_ref(&sample),
-            }],
+            &[FragmentTrackData::new(
+                track.track_id,
+                0,
+                std::slice::from_ref(&sample),
+            )],
         )
         .expect("video media segment must build");
         let server = TestHlsServer::start_with_subtitles(init, media);
@@ -2404,28 +2408,20 @@ mod tests {
             44_100,
             CodecConfig::Aac {
                 esds: EsdsBox {
-                    es_descriptor: ESDescriptor {
-                        es_id: 1,
-                        stream_dependence_flag: false,
-                        url_flag: false,
-                        ocr_stream_flag: false,
-                        stream_priority: 0,
-                        depends_on_es_id: None,
-                        url: None,
-                        ocr_es_id: None,
-                        decoder_config: Some(DecoderConfigDescriptor {
-                            object_type_indication: ObjectTypeIndication(0x40),
-                            stream_type: StreamType(5),
-                            up_stream: false,
-                            buffer_size_db: 0,
-                            max_bitrate: 96_000,
-                            avg_bitrate: 96_000,
-                            decoder_specific_info: Some(DecoderSpecificInfo {
-                                data: vec![0x12, 0x10],
-                            }),
-                        }),
-                        sl_config: Some(SLConfigDescriptor { body: vec![0x02] }),
-                    },
+                    es_descriptor: ESDescriptor::new(
+                        1,
+                        0,
+                        Some(DecoderConfigDescriptor::new(
+                            0x40,
+                            5,
+                            false,
+                            0,
+                            96_000,
+                            96_000,
+                            Some(DecoderSpecificInfo::new(vec![0x12, 0x10])),
+                        )),
+                        Some(SLConfigDescriptor::predefined_two()),
+                    ),
                 },
                 sample_rate: 44_100,
                 channel_count: 2,

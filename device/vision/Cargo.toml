@@ -182,7 +182,7 @@ image.workspace = true
 # Renders a QR code at test time; no image fixture is committed.
 qrcode = "0.14"
 # Renders 1D symbologies at test time.
-barcoders = "1"
+barcoders = "2"
 # Rasterizes glyphs for text recognition tests.
 ab_glyph = "0.2"
 # A bundled DejaVu font; no font binary is committed.

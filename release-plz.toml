@@ -11,3 +11,10 @@ allow_dirty = false
 # Git release settings
 git_release_enable = true
 git_tag_enable = true
+
+# waterkit#367: filtrate's executor API is only on water-rs/waterui's dev, so
+# this crate builds through a `[patch.crates-io]` git pin that crates.io drops.
+# It stays at the published 0.1.4 until filtrate is published again.
+[[package]]
+name = "waterkit-video-processing"
+release = false

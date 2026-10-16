@@ -24,7 +24,7 @@ wgpu = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 qrcode = { version = "0.14", optional = true }
-barcoders = { version = "1", optional = true }
+barcoders = { version = "2", optional = true }
 ab_glyph = { version = "0.2", optional = true }
 dejavu = { version = "2.37", optional = true }
 

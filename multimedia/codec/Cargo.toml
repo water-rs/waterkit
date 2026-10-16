@@ -37,8 +37,8 @@ rav1e = { workspace = true, optional = true }
 rav1d = { workspace = true, optional = true }
 num-traits = { workspace = true, optional = true }
 avif-parse = { version = "2.1", optional = true }
-yuv = { version = "0.8.16", optional = true }
-moxcms = { version = "0.8.1", features = ["extended_range"], optional = true }
+yuv = { version = "0.8.19", optional = true }
+moxcms = { version = "0.9.1", features = ["extended_range"], optional = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2.workspace = true

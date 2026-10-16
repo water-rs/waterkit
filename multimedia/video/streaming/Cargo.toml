@@ -17,11 +17,11 @@ blocking.workspace = true
 futures.workspace = true
 url.workspace = true
 blake3 = "1"
-uuid = { version = "1.24", features = ["v4"] }
+uuid = { version = "1.28", features = ["v4"] }
 quick-m3u8 = "0.8"
 hex = "0.4"
-dash-mpd = { version = "0.20.3", default-features = false }
-base64 = "0.22"
+dash-mpd-core = "0.1"
+base64 = "0.23"
 bytes.workspace = true
 num-traits.workspace = true
 async-channel = { workspace = true, optional = true }
@@ -29,7 +29,7 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-uuid = { version = "1.24", features = ["js", "v4"] }
+uuid = { version = "1.28", features = ["js", "v4"] }
 zenwave.workspace = true
 
 [target.'cfg(target_vendor = "apple")'.dependencies]

@@ -14,14 +14,14 @@ categories = ["os", "gui"]
 workspace = true
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 waterkit-core.workspace = true
-zip = { version = "6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true

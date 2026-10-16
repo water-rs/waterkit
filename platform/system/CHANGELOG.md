@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-system-v0.1.4...waterkit-system-v0.2.0) - 2026-10-16
+
+### Fixed
+
+- *(system)* [**breaking**] make load() async and wait out the CPU sample window via futures-timer
+- *(system)* read desktop connectivity from the platform's network state
+- *(system)* [**breaking**] report bridge failures as SystemError instead of defaults
+- clear the workspace lints in waterkit-system, waterkit-build, waterkit-test and the facade tests
+- *(android)* compile Kotlin helpers on the application classpath ([#108](https://github.com/water-rs/waterkit/pull/108))
+
+### Other
+
+- *(system)* declare Network.framework in-crate and make connectivity async
+- *(system)* call Mach host APIs through mach2
+- *(system)* [**breaking**] call Network and Foundation through objc2 instead of Swift
+- *(build)* [**breaking**] one Swift bridge builder for every crate
+- *(lints)* opt every workspace member into the workspace lints
+
 ## [0.1.0](https://github.com/water-rs/waterkit/releases/tag/waterkit-system-v0.1.0) - 2026-02-07
 
 ### Added

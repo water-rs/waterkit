@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-biometric-v0.1.4...waterkit-biometric-v0.2.0) - 2026-10-16
+
+### Fixed
+
+- *(biometric)* correct inverted Android authentication result mapping ([#116](https://github.com/water-rs/waterkit/pull/116))
+- *(android)* compile Kotlin helpers on the application classpath ([#108](https://github.com/water-rs/waterkit/pull/108))
+
+### Other
+
+- *(biometric)* [**breaking**] call LocalAuthentication through objc2 instead of Swift
+- *(build)* [**breaking**] one Swift bridge builder for every crate
+- *(codec)* [**breaking**] split AV1 software decode and encode; gate the Swift bridge toolchain on Apple hosts; package the YUV shader
+
 ## [0.1.0](https://github.com/water-rs/waterkit/releases/tag/waterkit-biometric-v0.1.0) - 2026-02-07
 
 ### Added

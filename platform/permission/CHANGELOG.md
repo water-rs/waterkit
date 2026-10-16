@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-permission-v0.1.4...waterkit-permission-v0.2.0) - 2026-10-16
+
+### Fixed
+
+- clear the clippy lints of every wasm32 build
+- *(permission)* await Apple permission answers instead of blocking
+- *(android)* compile Kotlin helpers on the application classpath ([#108](https://github.com/water-rs/waterkit/pull/108))
+
+### Other
+
+- share the usage-key check through waterkit-core
+- fail fast on missing usage keys and gate the harness on permission
+- *(waterkit-permission)* keep stores alive through access completion
+- *(permission)* [**breaking**] call the Apple privacy frameworks through objc2 instead of Swift
+- *(build)* [**breaking**] one Swift bridge builder for every crate
+- *(codec)* [**breaking**] split AV1 software decode and encode; gate the Swift bridge toolchain on Apple hosts; package the YUV shader
+
 ## [0.1.0](https://github.com/water-rs/waterkit/releases/tag/waterkit-permission-v0.1.0) - 2026-02-07
 
 ### Added

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-audio-v0.1.4...waterkit-audio-v0.2.0) - 2026-10-16
+
+### Fixed
+
+- *(audio)* depend on the cpal rodio uses
+- *(audio)* keep waterkit-build behind media-session for the Android helper
+- *(audio)* select the pure-Rust AAC decoder on wasm32 under he-aac
+- *(audio)* keep the Media Foundation AAC decoder continuous across packets
+- *(android)* compile Kotlin helpers on the application classpath ([#108](https://github.com/water-rs/waterkit/pull/108))
+
+### Other
+
+- *(deps)* update every dependency to its latest release
+- *(audio)* [**breaking**] hold Apple players behind MainThreadBound
+- *(audio)* [**breaking**] use objc2-avf-audio, promote previous session, share on_main
+- *(audio)* [**breaking**] call MediaPlayer and AVFoundation through objc2 instead of Swift
+- Merge remote-tracking branch 'origin/dev' into feat/240-swift-bridges
+- *(build)* [**breaking**] one Swift bridge builder for every crate
+- move gated Android metadata to feature subtables
+- Merge remote-tracking branch 'origin/dev' into ci/173-workspace-tests
+- negotiate the Windows AAC decoder's offered float PCM output type
+- *(audio)* read the HE-AAC fixture line by line
+- *(codec)* [**breaking**] split AV1 software decode and encode; gate the Swift bridge toolchain on Apple hosts; package the YUV shader
+
 ## [0.1.3](https://github.com/water-rs/waterkit/compare/waterkit-audio-v0.1.2...waterkit-audio-v0.1.3) - 2026-09-17
 
 ### Fixed

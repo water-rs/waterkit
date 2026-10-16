@@ -16,7 +16,7 @@ workspace = true
 [dependencies]
 futures.workspace = true
 thiserror.workspace = true
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v5"] }
 
 # Desktop platforms where notify-rust does not pull in tauri-winrt-notification
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
@@ -25,7 +25,20 @@ notify-rust = { workspace = true }
 # Windows - direct WinRT toasts through windows-rs
 [target.'cfg(target_os = "windows")'.dependencies]
 url = { workspace = true }
-windows = { workspace = true, features = ["Data_Xml_Dom", "UI_Notifications"] }
+tracing.workspace = true
+# `#[implement]` expands against `windows_core` paths, so the support crate is
+# a direct dependency, not only `windows`' re-export.
+windows-core.workspace = true
+windows = { workspace = true, features = [
+    "Data_Xml_Dom",
+    "UI_Notifications",
+    "Win32_Storage_Packaging_Appx",
+    "Win32_System_Com",
+    "Win32_UI_Notifications",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-registry = { workspace = true }
 
 # Linux - for opening URLs when action buttons are clicked
 [target.'cfg(target_os = "linux")'.dependencies]

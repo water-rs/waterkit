@@ -3,24 +3,15 @@
 //! The toast XML is built through the `Windows.Data.Xml.Dom` DOM API so all
 //! text and attribute escaping is handled by the document serializer.
 
-use windows::Data::Xml::Dom::{XmlDocument, XmlElement};
-use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
-use windows::core::HSTRING;
+use ::windows::Data::Xml::Dom::{XmlDocument, XmlElement};
+use ::windows::UI::Notifications::{ToastNotification, ToastNotificationManager, ToastNotifier};
+use ::windows::core::HSTRING;
 
 use crate::{Icon, Notification, NotificationError, Sound, Timeout};
 
 /// Handle to a shown notification.
 #[derive(Debug)]
 pub struct NotificationHandleInner;
-
-/// `AppUserModelID` handed to `CreateToastNotifierWithId`.
-///
-/// Showing a toast requires an AUMID registered with the shell, which only
-/// packaged/installed apps have. Borrow the id of the PowerShell shortcut
-/// that ships with Windows — the same workaround notify-rust used through
-/// `tauri-winrt-notification`.
-const APP_USER_MODEL_ID: &str =
-    r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe";
 
 /// The toast schema allows at most this many action buttons.
 const MAX_ACTIONS: usize = 5;
@@ -46,11 +37,32 @@ pub async fn show_notification(
             .map_err(|error| NotificationError::Platform(error.to_string()))?;
     }
 
-    ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(APP_USER_MODEL_ID))
-        .and_then(|notifier| notifier.Show(&toast))
+    toast_notifier()?
+        .Show(&toast)
         .map_err(|error| NotificationError::Platform(error.to_string()))?;
 
     Ok(NotificationHandleInner)
+}
+
+/// The notifier for this process's `AppUserModelID`.
+///
+/// A packaged process toasts under its package identity; an unpackaged one
+/// must have registered an identity through
+/// [`AppIdentity::register`](crate::windows::AppIdentity::register) first —
+/// there is no borrowed `AppUserModelID` to fall back to.
+fn toast_notifier() -> Result<ToastNotifier, NotificationError> {
+    let platform = |error: ::windows::core::Error| NotificationError::Platform(error.to_string());
+    if crate::windows::has_package_identity()? {
+        return ToastNotificationManager::CreateToastNotifier().map_err(platform);
+    }
+    let Some(id) = crate::windows::current_app_user_model_id() else {
+        return Err(NotificationError::Platform(
+            "the process has no AppUserModelID: call \
+             `waterkit_notification::windows::AppIdentity::register` before showing notifications"
+                .into(),
+        ));
+    };
+    ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(id)).map_err(platform)
 }
 
 /// Build the toast payload through the `XmlDocument` DOM API.
@@ -112,6 +124,11 @@ fn toast_document(notification: &Notification) -> Result<XmlDocument, Notificati
     document
         .AppendChild(&toast)
         .map_err(|error| NotificationError::Platform(error.to_string()))?;
+
+    // Foreground (the schema default, stated explicitly) routes a body click
+    // through the `CustomActivator` `AppIdentity::register` installed instead
+    // of launching whatever the shell associates with the AUMID.
+    attribute(&toast, "activationType", "foreground")?;
 
     // A requested duration is rounded up to the next representable one so a
     // toast never disappears earlier than asked.

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-location-v0.1.4...waterkit-location-v0.2.0) - 2026-10-16
+
+### Added
+
+- *(location)* Fused Location Provider on devices with Play services
+
+### Fixed
+
+- *(location)* decide Apple authorization from the delegate callback
+- *(location)* answer location fixes through NativeCallback instead of a parked latch
+- clear the clippy lints of every wasm32 build
+- *(android)* compile Kotlin helpers on the application classpath ([#108](https://github.com/water-rs/waterkit/pull/108))
+
+### Other
+
+- Merge pull request #333 from water-rs/fix/331-location-no-timeout
+- [**breaking**] drop the library's fixed request deadline on every platform
+- log which Apple path denies a request, and surface harness logs in CI
+- *(location)* [**breaking**] call Core Location through objc2 instead of Swift
+- *(build)* [**breaking**] one Swift bridge builder for every crate
+- *(codec)* [**breaking**] split AV1 software decode and encode; gate the Swift bridge toolchain on Apple hosts; package the YUV shader
+
 ### Added
 
 - `Location::capabilities()` returns `LocationCapabilities`, reporting the

@@ -7,6 +7,270 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-v0.1.4...waterkit-v0.2.0) - 2026-10-16
+
+### Added
+
+- *(core)* [**breaking**] migrate to nami 0.13 / nami-core 0.5
+- *(store)* buy through the Microsoft Store on Windows
+- *(store)* in-app purchases and subscriptions ([#153](https://github.com/water-rs/waterkit/pull/153))
+- *(sensor)* stream Android watches through one listener each ([#324](https://github.com/water-rs/waterkit/pull/324))
+- *(core)* add a non-blocking main-thread hop for Apple realizations
+- *(vision)* pass document scanner pages as typed pixel data
+- *(vision)* structured document recognition through Apple Vision
+- *(vision)* barcode detection and text recognition through Apple Vision
+- *(wallet)* add waterkit-wallet for Google Wallet and Apple Wallet passes
+- *(notification)* WinRT toast notifications on Windows
+- *(menu)* native menu bar crate
+- *(vision)* serve barcode and text requests from ML Kit on Android
+- *(camera)* [**breaking**] adopt wgpu-external-frame 0.3.0
+- *(vision)* recognize text on Windows through Windows.Media.Ocr
+- *(vision)* add one-shot system code scanner
+- *(build)* add shared Android activity-result bridge
+- *(otp)* add SMS one-time-code retrieval crate
+- *(language)* translate on device through the OS translation services
+- *(vision)* add the waterkit-vision request framework
+- *(location)* Fused Location Provider on devices with Play services
+- *(camera)* [**breaking**] import Android camera buffers without a copy
+- *(tests/ios)* run the harness on a physical device
+- *(camera)* [**breaking**] import Apple capture buffers without a copy
+- *(camera)* [**breaking**] expose frame planes and orientation; add FrameConverter
+- [**breaking**] upgrade wgpu to 30.0.1
+- *(video)* port the filtrate effect processor to water-rs/cherenkov
+- *(clipboard)* expose the Linux primary selection (X11 and Wayland)
+- record compressed and raw camera video on desktop
+
+### Fixed
+
+- *(notification)* [**breaking**] show Windows toasts under the application's own identity
+- *(audio)* keep the rest of the lockfile as it was
+- *(audio)* depend on the cpal rodio uses
+- *(location)* answer location fixes through NativeCallback instead of a parked latch
+- *(system)* [**breaking**] make load() async and wait out the CPU sample window via futures-timer
+- *(clipboard)* [**breaking**] watch the iOS pasteboard through notifications instead of polling
+- *(test)* link the iOS harness with rustc's native-static-libs
+- *(build)* fail fast when the link deployment target is below the Swift floor
+- *(menu)* gate crate and macOS harness to their platforms
+- *(menu)* address review findings on the menu bar crate
+- *(camera)* tag desktop recordings with source color
+- *(video-core)* decode 10-bit samples from the high bits of their element
+- *(vision)* drop an unused import and link the vision module in the README
+- *(vision)* prepare tuple elements concurrently
+- *(clipboard)* write file URLs other apps can open on iOS and Android
+- *(clipboard)* serve the X11 selections through x11rb
+- *(clipboard)* choose the CLIPBOARD display server explicitly
+- *(clipboard)* choose the PRIMARY display server explicitly
+- *(system)* read desktop connectivity from the platform's network state
+- *(test)* keep the harness screen on only while a run is in flight
+- *(test)* drain child output while waiting on a command deadline
+- *(test)* wake and unlock the Android device before launching the harness
+- *(system)* [**breaking**] report bridge failures as SystemError instead of defaults
+- clear the workspace lints in waterkit-system, waterkit-build, waterkit-test and the facade tests
+- *(camera)* address review of the zero-copy frame path
+- *(clipboard)* keep the Linux-only PRIMARY example on the Linux-only type
+- *(android)* emit clipboard watch events for same-type clip updates
+- *(android)* compile Kotlin helpers on the application classpath ([#108](https://github.com/water-rs/waterkit/pull/108))
+- *(deps)* resolve gpu-allocator against windows 0.62
+- *(codec)* gate the Linux VA-API stack behind a vaapi feature
+
+### Other
+
+- *(release)* skip waterkit-video's semver check while filtrate is unpublished
+- Merge pull request #366 from water-rs/chore/21-deps-latest
+- *(release)* hold waterkit-video-processing back until filtrate is published
+- *(deps)* update every dependency to its latest release
+- *(typos)* accept the Store API's InsufficentQuantity spelling
+- Merge pull request #353 from water-rs/feat/153-store-purchases
+- run iOS E2E on the xcode-27 image
+- *(ios)* register the StoreKit Test environment in its own launch
+- install the iOS 27.0 release runtime, 24A434
+- run iOS E2E with Xcode 26.6 on an installed iOS 27.0 runtime
+- install the Metal toolchain on the xcode-27 image
+- run iOS E2E on the xcode-27 image
+- run iOS E2E on the newest installed iOS simulator runtime
+- *(ios)* rewrite the storekit config to the Xcode 26 schema
+- *(ios)* run the suite through xcodebuild test
+- release unanswered native peers from a finalizer, not Cleaner
+- *(camera)* [**breaking**] call AVFoundation through objc2 instead of Swift
+- Merge pull request #333 from water-rs/fix/331-location-no-timeout
+- [**breaking**] drop the library's fixed request deadline on every platform
+- log which Apple path denies a request, and surface harness logs in CI
+- Merge pull request #328 from water-rs/feat/275-screen-objc2
+- Merge pull request #311 from water-rs/feat/281-calendar-objc2
+- Merge pull request #327 from water-rs/feat/266-audio-objc2
+- Merge pull request #306 from water-rs/feat/279-notification-objc2
+- share the usage-key check through waterkit-core
+- fail fast on missing usage keys and gate the harness on permission
+- *(waterkit-calendar)* [**breaking**] call EventKit through objc2 instead of Swift
+- Merge remote-tracking branch 'origin/dev' into feat/275-screen-objc2
+- Merge pull request #329 from water-rs/fix/291-system-load-async
+- Merge remote-tracking branch 'origin/dev' into feat/266-audio-objc2
+- Merge pull request #326 from water-rs/feat/269-video-player
+- Merge pull request #309 from water-rs/feat/257-bluetooth-objc2
+- Merge remote-tracking branch 'origin/dev' into feat/279-notification-objc2
+- Merge pull request #322 from water-rs/fix/314-clipboard-ios-notifications
+- Merge pull request #325 from water-rs/fix/301-sensor-watch-streams
+- *(screen)* [**breaking**] await completions and return typed errors
+- *(screen)* [**breaking**] call ScreenCaptureKit and UIKit through objc2 instead of Swift
+- *(audio)* [**breaking**] hold Apple players behind MainThreadBound
+- *(audio)* [**breaking**] use objc2-avf-audio, promote previous session, share on_main
+- *(audio)* [**breaking**] call MediaPlayer and AVFoundation through objc2 instead of Swift
+- *(video-player)* [**breaking**] require the main thread in Apple host entry points
+- *(video-player)* [**breaking**] call AVKit/AVFoundation through objc2 instead of Swift
+- Merge remote-tracking branch 'origin/dev' into feat/257-bluetooth-objc2
+- Merge pull request #312 from water-rs/feat/60-health-objc2
+- Merge pull request #310 from water-rs/feat/276-system-objc2
+- drive Apple watches from the main queue, not a worker thread
+- Merge pull request #316 from water-rs/feat/272-deeplink-objc2
+- Merge remote-tracking branch 'origin/dev' into feat/257-bluetooth-objc2
+- Merge remote-tracking branch 'origin/dev' into feat/60-health-objc2
+- Merge remote-tracking branch 'origin/dev' into feat/276-system-objc2
+- Merge pull request #304 from water-rs/feat/270-background-objc2
+- Merge remote-tracking branch 'origin/dev' into feat/272-deeplink-objc2
+- Merge pull request #305 from water-rs/feat/278-dialog-objc2
+- *(waterkit-notification)* [**breaking**] resolve show through a oneshot and make it async
+- *(notification)* [**breaking**] call UserNotifications through objc2 instead of Swift
+- *(waterkit-background)* hop through waterkit_core::apple::on_main
+- *(waterkit-background)* type task handles and stay on the main queue
+- *(waterkit-background)* [**breaking**] call BackgroundTasks through objc2 instead of Swift
+- Merge pull request #315 from water-rs/feat/259-haptic-objc2
+- Merge pull request #318 from water-rs/feat/271-clipboard-objc2
+- *(waterkit-dialog)* hop through waterkit_core::apple::on_main
+- *(waterkit-dialog)* [**breaking**] call UIKit, PhotosUI and Photos through objc2 instead of Swift
+- Merge pull request #317 from water-rs/feat/280-share-objc2
+- Merge remote-tracking branch 'origin/dev' into feat/272-deeplink-objc2
+- *(haptic)* [**breaking**] call Core Haptics through objc2 instead of Swift
+- Merge pull request #313 from water-rs/feat/308-adopt-on-main
+- Merge pull request #307 from water-rs/feat/261-nfc-objc2
+- *(clipboard)* [**breaking**] call UIPasteboard through objc2 instead of Swift
+- *(share)* [**breaking**] call UIKit and AppKit through objc2 instead of Swift
+- *(deeplink)* [**breaking**] call UIKit and Core Services through objc2 instead of Swift
+- Merge pull request #293 from water-rs/feat/268-speech-objc2
+- *(waterkit-passkey)* hop through waterkit_core::apple::on_main
+- *(waterkit-health)* [**breaking**] call HealthKit through objc2 instead of Swift
+- *(system)* declare Network.framework in-crate and make connectivity async
+- *(system)* call Mach host APIs through mach2
+- *(system)* [**breaking**] call Network and Foundation through objc2 instead of Swift
+- *(waterkit-bluetooth)* hop to the main queue through waterkit_core::apple::on_main
+- *(bluetooth)* [**breaking**] call CoreBluetooth and IOBluetooth through objc2 instead of Swift
+- Merge pull request #295 from water-rs/feat/265-passkey-objc2
+- *(nfc)* use waterkit_core::apple::on_main
+- *(nfc)* [**breaking**] call CoreNFC through objc2 instead of Swift
+- *(speech)* [**breaking**] call AVFAudio and Speech through objc2 instead of Swift
+- Merge pull request #299 from water-rs/feat/298-core-on-main
+- Merge remote-tracking branch 'origin/dev' into feat/265-passkey-objc2
+- Merge pull request #303 from water-rs/feat/274-permission-objc2
+- Merge remote-tracking branch 'origin/dev' into feat/274-permission-objc2
+- *(ios)* leave the harness project's frameworks to rustc's link flags
+- *(permission)* [**breaking**] call the Apple privacy frameworks through objc2 instead of Swift
+- Merge remote-tracking branch 'origin/dev' into feat/262-sensor-objc2
+- *(sensor)* [**breaking**] call CoreMotion and IOKit through objc2 instead of Swift
+- Merge remote-tracking branch 'origin/dev' into feat/265-passkey-objc2
+- Merge remote-tracking branch 'origin/dev' into feat/277-wallet-objc2
+- Merge pull request #283 from water-rs/feat/137-vision-mlkit
+- Merge remote-tracking branch 'origin/dev' into feat/277-wallet-objc2
+- Merge remote-tracking branch 'origin/dev' into feat/265-passkey-objc2
+- *(waterkit-passkey)* [**breaking**] call AuthenticationServices through objc2 instead of Swift
+- *(wallet)* [**breaking**] call PassKit through objc2 instead of Swift
+- Merge pull request #288 from water-rs/feat/267-codec-objc2
+- Merge origin/dev into feat/137-vision-mlkit
+- drop the duplicate block2 workspace dependency
+- Merge remote-tracking branch 'origin/dev' into feat/264-contacts-objc2
+- Merge pull request #287 from water-rs/feat/144-document-scanner
+- *(waterkit-contacts)* [**breaking**] call Contacts through objc2 instead of Swift
+- Merge pull request #286 from water-rs/feat/263-biometric-objc2
+- Merge remote-tracking branch 'origin/dev' into feat/137-vision-mlkit
+- *(codec)* [**breaking**] call ImageIO and Core Image through objc2 instead of Swift
+- *(biometric)* [**breaking**] call LocalAuthentication through objc2 instead of Swift
+- *(fs)* [**breaking**] call Foundation through objc2 instead of Swift
+- *(location)* [**breaking**] call Core Location through objc2 instead of Swift
+- Merge origin/dev into feat/137-vision-mlkit
+- *(vision)* system document scanner
+- Merge remote-tracking branch 'origin/dev' into feat/142-recognize-document
+- Merge remote-tracking branch 'origin/dev' into feat/137-vision-mlkit
+- *(build)* [**breaking**] one Swift bridge builder for every crate
+- move gated Android metadata to feature subtables
+- pass the release pull request's gate without CI
+- Merge pull request #246 from water-rs/build/242-shaderloom-0.2
+- Merge pull request #232 from water-rs/fix/224-winrt-notification
+- Merge remote-tracking branch 'origin/dev' into build/242-shaderloom-0.2
+- take shaderloom 0.2.1 from crates.io
+- bound every PR-gate job at 30 minutes
+- Merge remote-tracking branch 'origin/dev' into feat/131-vision-apple
+- Merge pull request #208 from water-rs/feat/159-translation
+- Merge pull request #236 from water-rs/feat/223-menu-bar
+- Merge remote-tracking branch 'origin/dev' into feat/159-translation
+- Merge remote-tracking branch 'origin/dev' into feat/159-translation
+- Merge remote-tracking branch 'origin/dev' into feat/223-menu-bar
+- Merge origin/dev into feat/156-wallet; save passes through a library-owned activity
+- pin shaderloom to the explicit Metal target fix
+- Merge origin/dev into feat/131-vision-apple
+- Merge remote-tracking branch 'origin/dev' into feat/131-vision-apple
+- Merge remote-tracking branch 'origin/feat/138-vision-windows-ocr' into feat/131-vision-apple
+- Merge pull request #210 from water-rs/fix/205-activity-results
+- Merge remote-tracking branch 'origin/dev' into fix/205-activity-results
+- Merge remote-tracking branch 'origin/dev' into feat/135-system-code-scanner
+- Merge remote-tracking branch 'origin/dev' into feat/223-menu-bar
+- Merge remote-tracking branch 'origin/dev' into feat/223-menu-bar
+- bound and retry every apt connection
+- Merge remote-tracking branch 'origin/dev' into fix/224-winrt-notification
+- exclude the macOS vision harness from the wasm and coverage legs
+- Merge remote-tracking branch 'origin/dev' into feat/135-system-code-scanner
+- Merge remote-tracking branch 'origin/dev' into fix/205-activity-results
+- Merge remote-tracking branch 'origin/dev' into feat/159-translation
+- Merge remote-tracking branch 'origin/dev' into feat/151-sms-otp
+- Merge remote-tracking branch 'origin/dev' into fix/205-activity-results
+- Merge remote-tracking branch 'origin/dev' into feat/159-translation
+- Merge remote-tracking branch 'origin/dev' into feat/151-sms-otp
+- Merge branch 'feat/175-frame-colour-description' into fix/169-recording-colour-tags
+- Merge pull request #221 from water-rs/feat/138-vision-windows-ocr
+- Merge pull request #227 from water-rs/feat/213-wef-0-3
+- Merge branch 'feat/175-frame-colour-description' into fix/169-recording-colour-tags
+- record that no dependency comes from the Tauri project
+- Merge remote-tracking branch 'origin/dev' into feat/138-vision-windows-ocr
+- Merge branch 'feat/175-frame-colour-description' into fix/169-recording-colour-tags
+- Merge remote-tracking branch 'origin/dev' into feat/135-system-code-scanner
+- Merge remote-tracking branch 'origin/dev' into fix/170-p010-precision
+- Merge pull request #207 from water-rs/feat/129-vision-framework
+- Merge remote-tracking branch 'origin/dev' into fix/205-activity-results
+- Merge remote-tracking branch 'origin/dev' into feat/151-sms-otp
+- Merge remote-tracking branch 'origin/dev' into feat/159-translation
+- Merge pull request #206 from water-rs/feat/147-fused-location
+- clippy the facade's vision feature on wasm32
+- Merge remote-tracking branch 'origin/fix/136-camera-zero-copy' into feat/129-vision-framework
+- *(camera)* depend on the published wgpu-external-frame 0.2.0
+- Merge remote-tracking branch 'origin/dev' into fix/136-camera-zero-copy
+- Merge remote-tracking branch 'origin/dev' into fix/202-clipboard-file-urls
+- lint every member that builds for wasm32
+- drive the camera, clipboard and screen examples without tokio
+- Merge remote-tracking branch 'origin/dev' into fix/136-camera-zero-copy
+- Merge remote-tracking branch 'origin/dev' into fix/178-primary-clipboard-test
+- start the X server from a shared action in the test and coverage jobs
+- stop installing dav1d, FFmpeg and other libraries nothing links
+- Merge pull request #192 from water-rs/fix/189-desktop-connectivity
+- *(clipboard)* run the PRIMARY round trip against Xvfb and xclip
+- Merge pull request #191 from water-rs/fix/190-android-harness-wake
+- negotiate the Windows AAC decoder's offered float PCM output type
+- *(lints)* opt every workspace member into the workspace lints
+- *(tests)* drop the macOS biometric harness's no-op build script
+- lint every workspace member in the clippy jobs
+- run the doctests even when a unit test failed
+- run every workspace member's tests in the per-OS test jobs
+- *(camera)* pin wgpu-external-frame's push-descriptor conversion
+- *(ios)* report camera frames through the new Frame API
+- Merge remote-tracking branch 'origin/dev' into fix/136-camera-zero-copy
+- *(typos)* accept UDID, Apple's device identifier
+- *(typos)* accept nokhwa's set_camera_requset spelling
+- *(codec,video-core)* share the YCbCr range and matrix WGSL
+- consume nami 0.12 / nami-core 0.4 from crates.io
+- derive test-app manifest paths from the package location ([#68](https://github.com/water-rs/waterkit/pull/68))
+- Merge branch 'dev' into feat/efv-frames
+- *(deps)* repin cherenkov engine crates to dev f2209fb4
+- pin shaderloom to its merged wgpu 30 revision
+- repin cherenkov to its rewritten history
+- *(codec)* [**breaking**] split AV1 software decode and encode; gate the Swift bridge toolchain on Apple hosts; package the YUV shader
+- [**breaking**] migrate to nami's Signal::snapshot ([#94](https://github.com/water-rs/waterkit/pull/94))
+
 ## [0.1.4](https://github.com/water-rs/waterkit/compare/waterkit-v0.1.3...waterkit-v0.1.4) - 2026-09-17
 
 ### Other

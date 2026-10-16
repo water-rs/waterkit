@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-fs-v0.1.4...waterkit-fs-v0.2.0) - 2026-10-16
+
+### Other
+
+- *(fs)* [**breaking**] call Foundation through objc2 instead of Swift
+- *(build)* [**breaking**] one Swift bridge builder for every crate
+- *(codec)* [**breaking**] split AV1 software decode and encode; gate the Swift bridge toolchain on Apple hosts; package the YUV shader
+
 ## [0.1.2](https://github.com/water-rs/waterkit/compare/waterkit-fs-v0.1.1...waterkit-fs-v0.1.2) - 2026-09-11
 
 ### Fixed

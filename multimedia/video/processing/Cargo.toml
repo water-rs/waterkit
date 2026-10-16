@@ -1,6 +1,8 @@
 [package]
 name = "waterkit-video-processing"
-version.workspace = true
+# waterkit#367: held out of releases (release-plz.toml), so the version stays
+# at the one crates.io serves instead of following the workspace.
+version = "0.1.4"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

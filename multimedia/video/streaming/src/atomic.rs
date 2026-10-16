@@ -64,6 +64,32 @@ fn replace_windows(source: &Path, destination: &Path) -> Result<(), Error> {
         core::PCWSTR,
     };
 
+    // A plain path given to `MoveFileExW` is limited to MAX_PATH (260 UTF-16
+    // units), and a cache object's partial-file name alone is 177 characters,
+    // so ordinary cache roots exceed it. `std::fs` switches to the verbatim
+    // `\\?\` form internally, which is how the partial file was created; this
+    // call has to be handed that form explicitly. Both parents exist (the
+    // partial file was just written into the destination's directory), so
+    // `canonicalize` produces it.
+    let verbatim = |path: &Path| {
+        std::fs::canonicalize(path).map_err(|error| {
+            Error::Streaming(format!(
+                "failed to resolve media cache path {}: {error}",
+                path.display()
+            ))
+        })
+    };
+    let source = verbatim(source)?;
+    let destination = match (destination.parent(), destination.file_name()) {
+        (Some(parent), Some(file_name)) => verbatim(parent)?.join(file_name),
+        _ => {
+            return Err(Error::Streaming(format!(
+                "atomic media destination {} has no parent directory or file name",
+                destination.display()
+            )));
+        }
+    };
+
     let source_wide = source
         .as_os_str()
         .encode_wide()

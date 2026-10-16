@@ -116,28 +116,28 @@ pub fn is_available() -> bool {
     block_on(feedback_service_available_async())
 }
 
-pub fn impact(intensity: Intensity) -> Result<(), HapticError> {
+pub async fn impact(intensity: Intensity) -> Result<(), HapticError> {
     let candidates = impact_candidates(intensity);
     spawn_haptic_task(move || trigger_feedback_event_candidates(candidates))
 }
 
-pub fn selection() -> Result<(), HapticError> {
+pub async fn selection() -> Result<(), HapticError> {
     spawn_haptic_task(|| trigger_feedback_event_candidates(IMPACT_LOW_EVENTS))
 }
 
-pub fn notification_success() -> Result<(), HapticError> {
+pub async fn notification_success() -> Result<(), HapticError> {
     spawn_haptic_task(|| trigger_feedback_event_candidates(SUCCESS_EVENTS))
 }
 
-pub fn notification_warning() -> Result<(), HapticError> {
+pub async fn notification_warning() -> Result<(), HapticError> {
     spawn_haptic_task(|| trigger_feedback_event_candidates(WARNING_EVENTS))
 }
 
-pub fn notification_error() -> Result<(), HapticError> {
+pub async fn notification_error() -> Result<(), HapticError> {
     spawn_haptic_task(|| trigger_feedback_event_candidates(ERROR_EVENTS))
 }
 
-pub fn play_pattern(pattern: &HapticPattern) -> Result<(), HapticError> {
+pub async fn play_pattern(pattern: &HapticPattern) -> Result<(), HapticError> {
     if pattern.steps().is_empty() {
         return Err(HapticError::InvalidPattern(
             "pattern must contain at least one step".into(),

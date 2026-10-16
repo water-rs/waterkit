@@ -1,13 +1,14 @@
 //! Camera preview harness: winit window + wgpu renderer.
 //!
 //! Lists cameras, allows selection, and renders the camera feed to a window.
-//! The camera API returns GPU textures directly for zero-copy rendering.
+//! Each frame is converted upright on the GPU by `FrameConverter` and drawn
+//! from that texture.
 
 use futures::StreamExt;
 use shaderloom::CompiledShader;
 use std::sync::Arc;
 use std::time::Instant;
-use waterkit_camera::{Camera, CameraConfig, CameraInfo, Frame};
+use waterkit_camera::{Camera, CameraConfig, CameraInfo, Frame, FrameConverter};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -48,7 +49,9 @@ struct State {
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     pipeline: wgpu::RenderPipeline,
-    current_frame: Option<Frame>,
+    converter: FrameConverter,
+    /// The newest frame, converted upright, and the bind group sampling it.
+    upright: Option<(wgpu::Texture, wgpu::BindGroup)>,
     last_fps_update: Instant,
     frame_count: u32,
 }
@@ -94,10 +97,9 @@ impl ApplicationHandler for App {
                 .unwrap(),
         );
 
-        let state = self.rt.block_on(State::new(
-            window.clone(),
-            &self.cameras[self.selected_camera].id,
-        ));
+        let state = self
+            .rt
+            .block_on(State::new(window, &self.cameras[self.selected_camera].id));
 
         match state {
             Ok(s) => self.state = Some(s),
@@ -151,7 +153,7 @@ impl State {
 
         let surface = instance
             .create_surface(window.clone())
-            .map_err(|e| format!("Surface: {}", e))?;
+            .map_err(|e| format!("Surface: {e}"))?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -162,19 +164,30 @@ impl State {
             .map_err(|_| "No adapter")?;
 
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: FrameConverter::required_features(adapter.features()),
+                ..Default::default()
+            })
             .await
-            .map_err(|e| format!("Device: {}", e))?;
+            .map_err(|e| format!("Device: {e}"))?;
 
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
         let caps = surface.get_capabilities(&adapter);
-        let format = caps.formats[0];
+        // The converted frames hold display-ready gamma values, which a
+        // non-sRGB target shows unchanged.
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|format| !format.is_srgb())
+            .ok_or("the window surface offers no non-sRGB format")?;
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width,
             height: size.height,
             present_mode: wgpu::PresentMode::AutoVsync,
@@ -188,7 +201,7 @@ impl State {
         let camera_config = CameraConfig::default();
         let camera = Camera::open(camera_id, camera_config, device.clone(), queue.clone())
             .await
-            .map_err(|e| format!("Camera: {}", e))?;
+            .map_err(|e| format!("Camera: {e}"))?;
 
         let res = camera.resolution();
         log::info!("Camera resolution: {}x{}", res.width, res.height);
@@ -200,6 +213,13 @@ impl State {
         tokio::spawn(async move {
             let mut frames = std::pin::pin!(camera.frames());
             while let Some(frame) = frames.next().await {
+                let frame = match frame {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        log::error!("camera stream failed: {error}");
+                        break;
+                    }
+                };
                 // Drop old frames if receiver is slow
                 let _ = frame_tx.try_send(frame);
             }
@@ -207,64 +227,9 @@ impl State {
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
 
-        // Create bind group layout
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("texture_bind_group_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+        let (bind_group_layout, pipeline) = create_pipeline(&device, format);
 
-        // Create shader and pipeline
-        let (vertex_shader, fragment_shader) =
-            CAMERA_TEST_SHADER.create_render_stages(&device, "vs_main", "fs_main");
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("pipeline_layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("render_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: vertex_shader.module(),
-                entry_point: Some(vertex_shader.entry_point()),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: fragment_shader.module(),
-                entry_point: Some(fragment_shader.entry_point()),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let converter = FrameConverter::new(&device);
 
         Ok(Self {
             window,
@@ -276,16 +241,59 @@ impl State {
             bind_group_layout,
             sampler,
             pipeline,
-            current_frame: None,
+            converter,
+            upright: None,
             last_fps_update: Instant::now(),
             frame_count: 0,
         })
     }
 
+    /// Converts `frame` upright into the reused output texture, recreating it
+    /// when the upright size changes.
+    fn show_frame(&mut self, frame: &Frame) {
+        let size = FrameConverter::upright_size(frame);
+        if self
+            .upright
+            .as_ref()
+            .is_none_or(|(texture, _)| texture.size() != size)
+        {
+            let texture = FrameConverter::create_output(&self.device, frame);
+            // The converted frame holds display-ready gamma values, and the
+            // surface is not sRGB, so they reach the screen unchanged.
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("texture_bind_group"),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+            self.upright = Some((texture, bind_group));
+        }
+        let Some((texture, _)) = &self.upright else {
+            return;
+        };
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        self.converter
+            .encode(&self.device, &mut encoder, frame, texture)
+            .expect("camera preview frame has supported color");
+        self.queue.submit([encoder.finish()]);
+    }
+
     fn update_and_render(&mut self) {
-        // Try to get latest frame (non-blocking)
-        while let Ok(frame) = self.frame_rx.try_recv() {
-            self.current_frame = Some(frame);
+        // Show the newest frame (non-blocking).
+        if let Some(frame) = std::iter::from_fn(|| self.frame_rx.try_recv().ok()).last() {
+            self.show_frame(&frame);
+            log::trace!("frame orientation {:?}", frame.orientation());
         }
 
         // Calculate FPS
@@ -293,9 +301,9 @@ impl State {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_fps_update);
         if elapsed.as_secs_f32() >= 1.0 {
-            let fps = self.frame_count as f32 / elapsed.as_secs_f32();
+            let fps = f64::from(self.frame_count) / elapsed.as_secs_f64();
             self.window
-                .set_title(&format!("Camera Preview - {:.1} FPS", fps));
+                .set_title(&format!("Camera Preview - {fps:.1} FPS"));
             self.frame_count = 0;
             self.last_fps_update = now;
         }
@@ -340,28 +348,81 @@ impl State {
             });
 
             pass.set_pipeline(&self.pipeline);
-            if let Some(frame) = &self.current_frame {
-                let texture_view = frame.view();
-                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("texture_bind_group"),
-                    layout: &self.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&texture_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
-                        },
-                    ],
-                });
-                pass.set_bind_group(0, &bind_group, &[]);
+            if let Some((_, bind_group)) = &self.upright {
+                pass.set_bind_group(0, bind_group, &[]);
                 pass.draw(0..6, 0..1);
             }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
+        self.queue.present(output);
     }
+}
+
+/// Creates the bind group layout that samples a camera frame, and the render
+/// pipeline that draws it full-screen into a `format` target.
+fn create_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+    // Create bind group layout
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("texture_bind_group_layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
+
+    // Create shader and pipeline
+    let (vertex_shader, fragment_shader) =
+        CAMERA_TEST_SHADER.create_render_stages(device, "vs_main", "fs_main");
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("pipeline_layout"),
+        bind_group_layouts: &[Some(&bind_group_layout)],
+        immediate_size: 0,
+    });
+
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("render_pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: vertex_shader.module(),
+            entry_point: Some(vertex_shader.entry_point()),
+            buffers: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: fragment_shader.module(),
+            entry_point: Some(fragment_shader.entry_point()),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+
+    (bind_group_layout, pipeline)
 }

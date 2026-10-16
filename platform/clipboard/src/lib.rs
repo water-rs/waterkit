@@ -12,7 +12,7 @@
 //! let mut clipboard = Clipboard::new()?;
 //!
 //! // Check and read text
-//! if clipboard.has_text() {
+//! if clipboard.has_text()? {
 //!     if let Some(text) = clipboard.text().await? {
 //!         println!("Clipboard text: {text}");
 //!     }
@@ -32,7 +32,7 @@
 //!
 //! # async fn example() -> Result<(), waterkit_clipboard::ClipboardError> {
 //! let clipboard = Clipboard::new()?;
-//! let mut stream = clipboard.watch()?;
+//! let mut stream = clipboard.watch().await?;
 //!
 //! while let Some(event) = stream.next().await {
 //!     println!("Clipboard changed! has_text={}", event.has_text());
@@ -72,6 +72,53 @@
 //! # }
 //! ```
 //!
+//! # Primary Selection (Linux only)
+//!
+//! Linux desktops also have a PRIMARY selection holding the text last
+//! selected; it is pasted with the middle mouse button. [`PrimarySelection`]
+//! reads and writes it under X11, and under Wayland through the data-control
+//! protocol's primary-selection support. Its own documentation carries the
+//! example.
+//!
+//! PRIMARY exists only on Linux desktops, so this API is compiled only for
+//! `target_os = "linux"`; other platforms do not get it at all.
+//!
+//! # Linux Display Server
+//!
+//! On Linux, [`Clipboard::new`] and [`PrimarySelection::new`] each choose the
+//! display server once, from the session, and every later operation on that
+//! handle, watching included, uses it:
+//!
+//! - **Wayland** when `WAYLAND_DISPLAY` is set. The compositor must offer a
+//!   data-control protocol (`ext_data_control_manager_v1` or
+//!   `zwlr_data_control_manager_v1`); PRIMARY also needs it to provide a
+//!   primary selection (`ext_data_control_manager_v1`, or
+//!   `zwlr_data_control_manager_v1` version 2+). `new` checks by binding the
+//!   compositor's registry. Without what it needs, `new` returns
+//!   [`ClipboardError::Platform`] naming the reason. It never falls through to
+//!   X11, even when an X server such as Xwayland is reachable: that server's
+//!   selections are not the Wayland session's.
+//! - **X11** when only `DISPLAY` is set.
+//!
+//! A variable set to the empty string counts as unset, so
+//! `WAYLAND_DISPLAY= app` uses X11.
+//!
+//! Both display servers carry the same formats. Text is offered as
+//! `text/plain;charset=utf-8`, `UTF8_STRING` and `text/plain`, and read from
+//! the first of those the owner offers; HTML is `text/html`, images are
+//! `image/png`, and files are a `text/uri-list` of `file:` URIs (with
+//! `x-special/gnome-copied-files` and the paths as text alongside). Custom
+//! data uses its MIME type, which on X11 is the target name.
+//!
+//! After a write the process owns the selection and keeps answering paste
+//! requests from other clients until another client claims it, and:
+//!
+//! - **Wayland**: until the process exits, independent of the handle's
+//!   lifetime; a thread inside the process serves data-control requests.
+//! - **X11**: until the handle that wrote it, its clones and the watches
+//!   started from them are all dropped; a thread inside the crate answers
+//!   `SelectionRequest`s, sending large formats incrementally (`INCR`).
+//!
 //! # Platform Notes
 //!
 //! | Feature | Windows | Linux | macOS | iOS | Android |
@@ -81,6 +128,7 @@
 //! | Image   | ✓       | ✓     | ✓     | ✓   | ✓       |
 //! | Files   | ✓       | ✓     | ✓     | ✓   | ✓       |
 //! | Watch   | ✓       | ✓     | ✓     | ✓   | ✓       |
+//! | PRIMARY | —       | ✓     | —     | —   | —       |
 //!
 //! ## Android
 //!
@@ -107,6 +155,9 @@ pub use stream::ClipboardStream;
 /// This struct provides methods to read and write clipboard content,
 /// query available types, and watch for changes.
 ///
+/// On Linux this is the CLIPBOARD selection of the display server
+/// [`new`](Self::new) chose; see [Linux Display Server](crate#linux-display-server).
+///
 /// # Async Reads
 ///
 /// All read operations are async because the clipboard source might be slow
@@ -123,9 +174,16 @@ pub struct Clipboard {
 impl Clipboard {
     /// Create a new clipboard handle.
     ///
+    /// On Linux this chooses the display server, as
+    /// [Linux Display Server](crate#linux-display-server) describes.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the clipboard cannot be accessed.
+    /// Returns an error if the clipboard cannot be accessed. On Linux that is
+    /// [`ClipboardError::Platform`] when the session is a Wayland session whose
+    /// compositor offers no data-control protocol (whether or not an X server
+    /// is also reachable), when the chosen display server cannot be reached,
+    /// and when neither `WAYLAND_DISPLAY` nor `DISPLAY` is set.
     ///
     /// # Panics
     ///
@@ -139,26 +197,48 @@ impl Clipboard {
     // ========== Query (sync - instant metadata checks) ==========
 
     /// Check if text content is available in the clipboard.
-    #[must_use]
-    pub fn has_text(&self) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard's formats cannot be listed, for
+    /// example when the platform bridge fails or, on Linux, the display server
+    /// is gone. A failure is never reported as an empty clipboard. In a
+    /// browser, [`ClipboardError::UnsupportedType`]: the browser clipboard has
+    /// no synchronous format query.
+    pub fn has_text(&self) -> Result<bool, ClipboardError> {
         self.inner.has_text()
     }
 
     /// Check if HTML content is available in the clipboard.
-    #[must_use]
-    pub fn has_html(&self) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard's formats cannot be listed, as
+    /// [`has_text`](Self::has_text) describes. In a browser,
+    /// [`ClipboardError::UnsupportedType`].
+    pub fn has_html(&self) -> Result<bool, ClipboardError> {
         self.inner.has_html()
     }
 
     /// Check if file paths are available in the clipboard.
-    #[must_use]
-    pub fn has_files(&self) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard's formats cannot be listed, as
+    /// [`has_text`](Self::has_text) describes. In a browser,
+    /// [`ClipboardError::UnsupportedType`].
+    pub fn has_files(&self) -> Result<bool, ClipboardError> {
         self.inner.has_files()
     }
 
     /// Check if image data is available in the clipboard.
-    #[must_use]
-    pub fn has_image(&self) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clipboard's formats cannot be listed, as
+    /// [`has_text`](Self::has_text) describes. In a browser,
+    /// [`ClipboardError::UnsupportedType`].
+    pub fn has_image(&self) -> Result<bool, ClipboardError> {
         self.inner.has_image()
     }
 
@@ -169,6 +249,13 @@ impl Clipboard {
     /// # Errors
     ///
     /// Returns an error if the clipboard cannot be accessed.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "the browser reads text through a `JsFuture`, which is bound to the thread that created it"
+        )
+    )]
     pub async fn text(&self) -> Result<Option<String>, ClipboardError> {
         #[cfg(target_arch = "wasm32")]
         {
@@ -200,9 +287,17 @@ impl Clipboard {
 
     /// Get file paths from the clipboard.
     ///
+    /// On Linux the paths come from the clipboard's `text/uri-list`; URIs of a
+    /// scheme other than `file` name no local file and are left out. On iOS
+    /// they are the pasteboard's file URLs. On Android they are the clip's
+    /// `file://` URIs and the `content://` URIs this app's
+    /// `ClipboardFileProvider` serves; other `content://` URIs name no path.
+    ///
     /// # Errors
     ///
-    /// Returns an error if the clipboard cannot be accessed.
+    /// Returns an error if the clipboard cannot be accessed. On Linux,
+    /// [`ClipboardError::Decode`] when the URI list is malformed or names a
+    /// file on another host.
     pub async fn files(&self) -> Result<Vec<PathBuf>, ClipboardError> {
         #[cfg(target_arch = "wasm32")]
         {
@@ -314,9 +409,30 @@ impl Clipboard {
 
     /// Set file paths to the clipboard.
     ///
+    /// # Platform Notes
+    ///
+    /// - **iOS**: Each file is an item provider carrying its contents, which
+    ///   other apps paste, and its file URL.
+    /// - **Android**: Each file is a `content://` URI that other apps open
+    ///   through the read access the clipboard grants them. The URI is served
+    ///   by `waterkit.clipboard.ClipboardFileProvider`, which the app's
+    ///   manifest must declare, under any authority:
+    ///
+    ///   ```xml
+    ///   <provider
+    ///       android:name="waterkit.clipboard.ClipboardFileProvider"
+    ///       android:authorities="${applicationId}.waterkit.clipboard"
+    ///       android:exported="false"
+    ///       android:grantUriPermissions="true" />
+    ///   ```
+    ///
     /// # Errors
     ///
-    /// Returns an error if the clipboard cannot be accessed.
+    /// Returns an error if the clipboard cannot be accessed. On Linux, iOS and
+    /// Android, [`ClipboardError::Encode`] when a path is not absolute, which a
+    /// file URL needs, or on iOS and Android is not Unicode. On Android,
+    /// [`ClipboardError::Platform`] when the manifest does not declare the
+    /// provider as above.
     pub fn set_files(&mut self, files: &[PathBuf]) -> Result<(), ClipboardError> {
         self.inner.set_files(files)
     }
@@ -328,7 +444,9 @@ impl Clipboard {
     /// # Errors
     ///
     /// Returns an error if the clipboard cannot be accessed or if
-    /// the image cannot be read.
+    /// the image cannot be read. On Android the image goes on the clipboard
+    /// as a file, which needs the provider [`set_files`](Self::set_files)
+    /// describes.
     pub fn set_image(&mut self, path: &Path) -> Result<(), ClipboardError> {
         self.inner.set_image_from_path(path)
     }
@@ -341,7 +459,8 @@ impl Clipboard {
     /// # Errors
     ///
     /// Returns an error if the clipboard cannot be accessed or if
-    /// encoding fails.
+    /// encoding fails. On Android the data goes on the clipboard as a file,
+    /// which needs the provider [`set_files`](Self::set_files) describes.
     pub fn set_data<T: ClipboardData>(&mut self, data: &T) -> Result<(), ClipboardError> {
         let bytes = data.encode()?;
         self.inner.set_binary(&bytes, T::MIME_TYPE)
@@ -353,7 +472,9 @@ impl Clipboard {
     ///
     /// # Errors
     ///
-    /// Returns an error if the clipboard cannot be accessed.
+    /// Returns an error if the clipboard cannot be accessed. On Android the
+    /// data goes on the clipboard as a file, which needs the provider
+    /// [`set_files`](Self::set_files) describes.
     pub fn set_binary(&mut self, data: &[u8], mime: &str) -> Result<(), ClipboardError> {
         self.inner.set_binary(data, mime)
     }
@@ -396,15 +517,110 @@ impl Clipboard {
     ///
     /// # Platform Notes
     ///
-    /// - **Desktop (Windows/Linux/macOS)**: Uses native clipboard change notifications.
-    /// - **iOS**: Uses polling with `UIPasteboard.changeCount` (500ms interval).
-    /// - **Android**: Uses polling with `ClipboardManager.getPrimaryClipDescription` (500ms interval).
+    /// - **Windows/macOS**: Uses native clipboard change notifications.
+    /// - **Linux**: Watches the display server this handle chose: the
+    ///   compositor's data-control selection events on Wayland, `XFixes`
+    ///   selection notifications on X11. The selection held when the watch
+    ///   starts is not reported, only later changes. A failure of the display
+    ///   server ends the stream and is logged through `tracing`.
+    /// - **iOS**: Observes `UIPasteboardChangedNotification` for changes made
+    ///   while the app is active and re-compares `UIPasteboard.changeCount`
+    ///   once on `UIApplicationDidBecomeActiveNotification`, where other
+    ///   apps' changes become visible. Dropping the watch removes both
+    ///   observers; nothing runs while nothing changes.
+    /// - **Android**: Uses `ClipboardManager.OnPrimaryClipChangedListener`; every clip
+    ///   notification emits an event, including same-type content updates.
     ///
     /// # Errors
     ///
     /// Returns an error if the clipboard watcher cannot be started.
-    pub fn watch(&self) -> Result<ClipboardStream, ClipboardError> {
-        let (receiver, shutdown) = sys::start_watch()?;
+    pub async fn watch(&self) -> Result<ClipboardStream, ClipboardError> {
+        let (receiver, shutdown) = sys::start_watch(&self.inner).await?;
         Ok(ClipboardStream::new(receiver, shutdown))
+    }
+}
+
+/// A handle to the Linux PRIMARY selection.
+///
+/// PRIMARY holds the text last selected and is pasted with the middle mouse
+/// button. This type exists only on Linux (`cfg(target_os = "linux")`): the
+/// selection has no equivalent on other platforms and is never emulated with
+/// CLIPBOARD.
+///
+/// [`new`](Self::new) chooses the display server once, from the session, as
+/// [Linux Display Server](crate#linux-display-server) describes; a Wayland
+/// compositor must offer a primary selection to data-control clients.
+///
+/// After [`set_text`](Self::set_text) the process owns PRIMARY and serves it
+/// for as long as [Linux Display Server](crate#linux-display-server)
+/// describes: on X11 while this handle or a clone lives, on Wayland until the
+/// process exits.
+///
+/// # Example
+///
+/// ```no_run
+/// # async fn example() -> Result<(), waterkit_clipboard::ClipboardError> {
+/// let mut primary = waterkit_clipboard::PrimarySelection::new()?;
+/// primary.set_text("selected text")?;
+/// assert_eq!(primary.text().await?.as_deref(), Some("selected text"));
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone)]
+pub struct PrimarySelection {
+    inner: Arc<sys::PrimaryInner>,
+}
+
+#[cfg(target_os = "linux")]
+impl PrimarySelection {
+    /// Create a new PRIMARY selection handle.
+    ///
+    /// Chooses the display server as
+    /// [Linux Display Server](crate#linux-display-server) describes: the
+    /// Wayland compositor when `WAYLAND_DISPLAY` is set, the X server when
+    /// only `DISPLAY` is.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClipboardError::Platform`] when the session is a Wayland
+    /// session whose compositor offers no primary selection to data-control
+    /// clients (whether or not an X server is also reachable), when the
+    /// chosen display server cannot be reached, and when neither
+    /// `WAYLAND_DISPLAY` nor `DISPLAY` is set.
+    pub fn new() -> Result<Self, ClipboardError> {
+        Ok(Self {
+            inner: Arc::new(sys::PrimaryInner::new()?),
+        })
+    }
+
+    /// Get text content from the PRIMARY selection.
+    ///
+    /// Returns `None` when no client currently owns a PRIMARY selection, and
+    /// on Wayland also when its owner offers no plain-text type. On X11 an owner
+    /// that refuses to convert PRIMARY to `UTF8_STRING` reads as an empty
+    /// string.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClipboardError::Platform`] if the display server fails the
+    /// read or, on X11, the owner does not answer in time, and
+    /// [`ClipboardError::Decode`] if the text is not UTF-8.
+    pub async fn text(&self) -> Result<Option<String>, ClipboardError> {
+        let inner = Arc::clone(&self.inner);
+        blocking::unblock(move || inner.get_text()).await
+    }
+
+    /// Set the PRIMARY selection text.
+    ///
+    /// The crate owns and serves the selection afterwards; see the type-level
+    /// docs for the per-display-server lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClipboardError::Platform`] if the display server refuses the
+    /// selection or cannot be reached.
+    pub fn set_text(&mut self, text: &str) -> Result<(), ClipboardError> {
+        self.inner.set_text(text)
     }
 }

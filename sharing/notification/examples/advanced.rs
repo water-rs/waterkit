@@ -4,6 +4,19 @@ use std::path::PathBuf;
 use waterkit_notification::{Icon, InterruptionLevel, Notification, Sound, Timeout};
 
 fn main() -> Result<(), waterkit_notification::NotificationError> {
+    pollster::block_on(run())
+}
+
+async fn run() -> Result<(), waterkit_notification::NotificationError> {
+    // Toasts are attributed to an AppUserModelID; unpackaged apps register one
+    // before the first notification.
+    #[cfg(target_os = "windows")]
+    let _registration = waterkit_notification::windows::AppIdentity::new(
+        "dev.waterkit.examples.advanced",
+        "WaterKit Advanced Example",
+    )
+    .register()?;
+
     // Basic notification with all options
     Notification::new()
         .title("Download Complete")
@@ -13,8 +26,9 @@ fn main() -> Result<(), waterkit_notification::NotificationError> {
         .icon(Icon::Theme("folder-download".into())) // Linux theme icon
         .sound(Sound::Theme("complete".into())) // Linux sound theme
         .interruption_level(InterruptionLevel::Active)
-        .timeout(Timeout::Milliseconds(5000)) // Linux only
-        .show()?;
+        .timeout(Timeout::Milliseconds(5000)) // Linux/Windows
+        .show()
+        .await?;
 
     println!("Notification sent!");
 
@@ -23,7 +37,8 @@ fn main() -> Result<(), waterkit_notification::NotificationError> {
         .title("Urgent: Meeting Starting")
         .body("Your meeting with the team starts in 5 minutes")
         .interruption_level(waterkit_notification::InterruptionLevel::TimeSensitive)
-        .show()?;
+        .show()
+        .await?;
 
     println!("Time-sensitive notification sent!");
 
@@ -34,7 +49,8 @@ fn main() -> Result<(), waterkit_notification::NotificationError> {
             .title("Custom Icon")
             .body("This notification uses a file-based icon.")
             .icon(Icon::File(icon_path))
-            .show()?;
+            .show()
+            .await?;
 
         println!("Custom icon notification sent!");
     }
@@ -45,7 +61,8 @@ fn main() -> Result<(), waterkit_notification::NotificationError> {
         .body("Sync completed in the background.")
         .interruption_level(InterruptionLevel::Passive)
         .sound(Sound::Suppress)
-        .show()?;
+        .show()
+        .await?;
 
     println!("Silent notification sent!");
 

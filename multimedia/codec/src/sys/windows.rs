@@ -1,7 +1,8 @@
 //! Windows Media Foundation hardware encoding and decoding.
 
 use crate::{
-    CodecError, DecodePacket, DecodedPixelLayout, bitstream::NalStreamConverter,
+    CodecError, DecodePacket, DecodedPixelLayout,
+    bitstream::{NalStreamConverter, build_h264_avcc_from_annex_b, build_h265_hvcc_from_annex_b},
     config::decoded_pixel_layout,
 };
 use std::collections::BTreeMap;
@@ -9,16 +10,24 @@ use std::ffi::c_void;
 use std::fmt;
 use std::ptr;
 use std::time::Duration;
+use waterkit_video_core::{
+    ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo,
+};
 use windows::Win32::Media::MediaFoundation::{
     IMF2DBuffer, IMFMediaType, IMFSample, IMFTransform, MF_E_NO_MORE_TYPES,
     MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE, MF_MT_FRAME_RATE,
     MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MPEG_SEQUENCE_HEADER,
-    MF_MT_SUBTYPE, MF_VERSION, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
-    MFSTARTUP_NOSOCKET, MFShutdown, MFStartup, MFT_CATEGORY_VIDEO_DECODER,
-    MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER,
-    MFT_ENUM_FLAG_SYNCMFT, MFT_MESSAGE_COMMAND_DRAIN, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
-    MFT_MESSAGE_NOTIFY_END_OF_STREAM, MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER,
-    MFT_OUTPUT_STREAM_INFO, MFTEnumEx, MFVideoFormat_P010, MFVideoInterlace_Progressive,
+    MF_MT_SUBTYPE, MF_MT_TRANSFER_FUNCTION, MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_VIDEO_PRIMARIES,
+    MF_MT_YUV_MATRIX, MF_VERSION, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
+    MFNominalRange, MFNominalRange_0_255, MFNominalRange_16_235, MFSTARTUP_NOSOCKET, MFShutdown,
+    MFStartup, MFT_CATEGORY_VIDEO_DECODER, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE,
+    MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_SYNCMFT, MFT_MESSAGE_COMMAND_DRAIN,
+    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_END_OF_STREAM,
+    MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_OUTPUT_DATA_BUFFER, MFT_OUTPUT_STREAM_INFO, MFTEnumEx,
+    MFVideoFormat_P010, MFVideoInterlace_Progressive, MFVideoPrimaries, MFVideoPrimaries_BT709,
+    MFVideoPrimaries_BT2020, MFVideoPrimaries_SMPTE170M, MFVideoTransFunc_709,
+    MFVideoTransFunc_2084, MFVideoTransFunc_HLG, MFVideoTransferFunction, MFVideoTransferMatrix,
+    MFVideoTransferMatrix_BT601, MFVideoTransferMatrix_BT709, MFVideoTransferMatrix_BT2020_10,
 };
 use windows::Win32::System::Com::{
     COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize,
@@ -416,7 +425,12 @@ impl fmt::Debug for WindowsEncoder {
 
 impl WindowsEncoder {
     /// Create a new Windows hardware encoder.
-    pub fn new(codec_type: CodecType, width: u32, height: u32) -> Result<Self, CodecError> {
+    pub fn new(
+        codec_type: CodecType,
+        width: u32,
+        height: u32,
+        color: VideoColorInfo,
+    ) -> Result<Self, CodecError> {
         let media_foundation = MediaFoundationSession::new()?;
 
         unsafe {
@@ -428,6 +442,7 @@ impl WindowsEncoder {
             )?;
 
             let output_type = create_video_type(codec_type.subtype(), width, height)?;
+            set_color_metadata(&output_type, color)?;
             output_type.SetUINT32(&MF_MT_AVG_BITRATE, 4_000_000).ok();
 
             transform.SetOutputType(0, &output_type, 0).map_err(|e| {
@@ -435,6 +450,7 @@ impl WindowsEncoder {
             })?;
 
             let input_type = create_video_type(MFVideoFormat_NV12, width, height)?;
+            set_color_metadata(&input_type, color)?;
             transform.SetInputType(0, &input_type, 0).map_err(|e| {
                 CodecError::InitializationFailed(format!("SetInputType failed: {e}"))
             })?;
@@ -450,6 +466,12 @@ impl WindowsEncoder {
                 .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
                 .ok();
 
+            // The encoder publishes its parameter sets on the output media
+            // type as soon as the types are negotiated; read them right away
+            // and keep re-reading lazily for transforms that fill the
+            // attribute only once encoding has started.
+            let codec_config = codec_config_from_media_type(&transform, codec_type);
+
             Ok(Self {
                 transform,
                 codec_type,
@@ -457,7 +479,7 @@ impl WindowsEncoder {
                 height,
                 frame_count: 0,
                 output_stream_info,
-                codec_config: None,
+                codec_config,
                 _media_foundation: media_foundation,
             })
         }
@@ -491,7 +513,47 @@ impl WindowsEncoder {
                 .map_err(|e| CodecError::EncodingFailed(format!("ProcessInput: {e}")))?;
 
             let mut encoded_data = Vec::new();
+            for packet in self.pump_output_samples()? {
+                encoded_data.extend_from_slice(&packet);
+            }
 
+            if self.codec_config.is_none() {
+                self.codec_config = codec_config_from_media_type(&self.transform, self.codec_type);
+            }
+
+            Ok(encoded_data)
+        }
+    }
+
+    /// Notify end-of-stream, drain the access units the encoder still buffers
+    /// for lookahead, and return each drained sample as its own packet.
+    ///
+    /// Media Foundation encoders emit with several frames of delay, so the
+    /// tail of a recording only ever arrives here; each entry is one access
+    /// unit and becomes one container sample.
+    pub fn drain(&mut self) -> Result<Vec<Vec<u8>>, CodecError> {
+        unsafe {
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)
+                .map_err(|e| CodecError::EncodingFailed(format!("encoder end-of-stream: {e}")))?;
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)
+                .map_err(|e| CodecError::EncodingFailed(format!("encoder drain: {e}")))?;
+        }
+
+        let packets = self.pump_output_samples()?;
+        if self.codec_config.is_none() {
+            self.codec_config = codec_config_from_media_type(&self.transform, self.codec_type);
+        }
+        Ok(packets)
+    }
+
+    /// Pump every output sample the transform can currently produce,
+    /// returning each sample's bytes as a separate entry (one access unit per
+    /// element). Returns when the transform asks for more input.
+    fn pump_output_samples(&mut self) -> Result<Vec<Vec<u8>>, CodecError> {
+        let mut packets = Vec::new();
+        unsafe {
             loop {
                 let output_sample = if self.output_stream_info.dwFlags & 0x100 != 0 {
                     None
@@ -521,7 +583,7 @@ impl WindowsEncoder {
                         if let Some(sample) = output_sample.as_ref()
                             && let Ok(data) = extract_sample_data(sample)
                         {
-                            encoded_data.extend_from_slice(&data);
+                            packets.push(data);
                         }
                     }
                     Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => break,
@@ -530,9 +592,8 @@ impl WindowsEncoder {
                     }
                 }
             }
-
-            Ok(encoded_data)
         }
+        Ok(packets)
     }
 
     /// Get the codec configuration data if available.
@@ -573,6 +634,94 @@ fn create_video_type(subtype: GUID, width: u32, height: u32) -> Result<IMFMediaT
 
         Ok(media_type)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MediaFoundationColor {
+    primaries: MFVideoPrimaries,
+    transfer: MFVideoTransferFunction,
+    matrix: MFVideoTransferMatrix,
+    range: MFNominalRange,
+}
+
+fn media_foundation_color(color: VideoColorInfo) -> Result<MediaFoundationColor, CodecError> {
+    let primaries = match color.primaries {
+        ColorPrimaries::Bt709 => MFVideoPrimaries_BT709,
+        ColorPrimaries::Bt601 => MFVideoPrimaries_SMPTE170M,
+        ColorPrimaries::Bt2020 => MFVideoPrimaries_BT2020,
+        ColorPrimaries::DisplayP3 => {
+            return Err(CodecError::Unsupported(
+                "Media Foundation cannot represent Display P3 primaries".into(),
+            ));
+        }
+    };
+    let transfer = match color.transfer {
+        TransferFunction::Sdr => MFVideoTransFunc_709,
+        TransferFunction::Pq => MFVideoTransFunc_2084,
+        TransferFunction::Hlg => MFVideoTransFunc_HLG,
+    };
+    let matrix = match color.matrix {
+        MatrixCoefficients::Bt601 => MFVideoTransferMatrix_BT601,
+        MatrixCoefficients::Bt709 => MFVideoTransferMatrix_BT709,
+        MatrixCoefficients::Bt2020NonConstantLuminance => MFVideoTransferMatrix_BT2020_10,
+        MatrixCoefficients::Bt2020ConstantLuminance => {
+            return Err(CodecError::Unsupported(
+                "Media Foundation cannot represent BT.2020 constant-luminance matrix coefficients"
+                    .into(),
+            ));
+        }
+    };
+    let range = match color.range {
+        ColorRange::Full => MFNominalRange_0_255,
+        ColorRange::Limited => MFNominalRange_16_235,
+    };
+    if color.dolby_vision {
+        return Err(CodecError::Unsupported(
+            "Media Foundation cannot signal Dolby Vision metadata".into(),
+        ));
+    }
+    Ok(MediaFoundationColor {
+        primaries,
+        transfer,
+        matrix,
+        range,
+    })
+}
+
+fn set_color_metadata(media_type: &IMFMediaType, color: VideoColorInfo) -> Result<(), CodecError> {
+    let color = media_foundation_color(color)?;
+    let to_u32 = |value: i32| {
+        u32::try_from(value).map_err(|_| {
+            CodecError::InitializationFailed("negative Media Foundation color codepoint".into())
+        })
+    };
+    unsafe {
+        media_type
+            .SetUINT32(&MF_MT_VIDEO_PRIMARIES, to_u32(color.primaries.0)?)
+            .map_err(|error| {
+                CodecError::InitializationFailed(format!(
+                    "SetUINT32 video primaries failed: {error}"
+                ))
+            })?;
+        media_type
+            .SetUINT32(&MF_MT_TRANSFER_FUNCTION, to_u32(color.transfer.0)?)
+            .map_err(|error| {
+                CodecError::InitializationFailed(format!(
+                    "SetUINT32 transfer function failed: {error}"
+                ))
+            })?;
+        media_type
+            .SetUINT32(&MF_MT_YUV_MATRIX, to_u32(color.matrix.0)?)
+            .map_err(|error| {
+                CodecError::InitializationFailed(format!("SetUINT32 YUV matrix failed: {error}"))
+            })?;
+        media_type
+            .SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, to_u32(color.range.0)?)
+            .map_err(|error| {
+                CodecError::InitializationFailed(format!("SetUINT32 nominal range failed: {error}"))
+            })?;
+    }
+    Ok(())
 }
 
 const fn create_register_type_info(
@@ -641,6 +790,29 @@ fn activate_hardware_transform(
         activate.ActivateObject().map_err(|error| {
             CodecError::InitializationFailed(format!("hardware {kind} activation failed: {error}"))
         })
+    }
+}
+
+/// Read the codec configuration the encoder publishes on its output media
+/// type: `MF_MT_MPEG_SEQUENCE_HEADER` carries the Annex-B parameter sets
+/// (SPS/PPS for H.264, plus VPS for H.265), which convert to the avcC/hvcC
+/// record the container stores. `None` while the transform has not exposed
+/// the attribute yet.
+fn codec_config_from_media_type(
+    transform: &IMFTransform,
+    codec_type: CodecType,
+) -> Option<Vec<u8>> {
+    unsafe {
+        let media_type = transform.GetOutputCurrentType(0).ok()?;
+        let size = media_type.GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER).ok()?;
+        let mut annex_b = vec![0u8; usize::try_from(size).ok()?];
+        media_type
+            .GetBlob(&MF_MT_MPEG_SEQUENCE_HEADER, &mut annex_b, None)
+            .ok()?;
+        match codec_type {
+            CodecType::H264 => build_h264_avcc_from_annex_b(&annex_b),
+            CodecType::H265 => build_h265_hvcc_from_annex_b(&annex_b),
+        }
     }
 }
 
@@ -843,5 +1015,74 @@ fn extract_sample_data(sample: &IMFSample) -> Result<Vec<u8>, CodecError> {
             .map_err(|e| CodecError::EncodingFailed(format!("Unlock: {e}")))?;
 
         Ok(data)
+    }
+}
+
+/// Open a hardware decoder for a crate-level codec type.
+pub fn open_decoder(
+    codec: crate::CodecType,
+    config: Option<&[u8]>,
+    width: u32,
+    height: u32,
+) -> Result<crate::DecoderInner, CodecError> {
+    let codec = match codec {
+        crate::CodecType::H264 => CodecType::H264,
+        crate::CodecType::H265 => CodecType::H265,
+        crate::CodecType::Av1 => unreachable!(),
+    };
+    WindowsDecoder::new(codec, config, width, height).map(crate::DecoderInner::Windows)
+}
+
+/// Open a hardware encoder for a crate-level codec type.
+pub fn open_encoder(
+    codec: crate::CodecType,
+    width: u32,
+    height: u32,
+    color: VideoColorInfo,
+) -> Result<crate::EncoderInner, CodecError> {
+    let codec = match codec {
+        crate::CodecType::H264 => CodecType::H264,
+        crate::CodecType::H265 => CodecType::H265,
+        crate::CodecType::Av1 => unreachable!(),
+    };
+    WindowsEncoder::new(codec, width, height, color).map(crate::EncoderInner::Windows)
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    fn bt709() -> VideoColorInfo {
+        VideoColorInfo {
+            primaries: ColorPrimaries::Bt709,
+            transfer: TransferFunction::Sdr,
+            matrix: MatrixCoefficients::Bt709,
+            range: ColorRange::Limited,
+            content_light_level: None,
+            dolby_vision: false,
+        }
+    }
+
+    #[test]
+    fn media_foundation_color_maps_bt709_sdr_limited() {
+        assert_eq!(
+            media_foundation_color(bt709()).expect("BT.709 is supported"),
+            MediaFoundationColor {
+                primaries: MFVideoPrimaries_BT709,
+                transfer: MFVideoTransFunc_709,
+                matrix: MFVideoTransferMatrix_BT709,
+                range: MFNominalRange_16_235,
+            }
+        );
+    }
+
+    #[test]
+    fn media_foundation_color_rejects_unsupported_colorimetry() {
+        let mut color = bt709();
+        color.primaries = ColorPrimaries::DisplayP3;
+        assert!(media_foundation_color(color).is_err());
+        color = bt709();
+        color.matrix = MatrixCoefficients::Bt2020ConstantLuminance;
+        assert!(media_foundation_color(color).is_err());
     }
 }

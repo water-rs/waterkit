@@ -41,6 +41,8 @@ compile_error!("waterkit-audio supports only macOS, iOS, Android, Windows, and L
 pub use apple::MediaSessionInner;
 
 #[cfg(all(feature = "playback", target_os = "ios"))]
+pub use apple::on_main;
+#[cfg(all(feature = "playback", target_os = "ios"))]
 pub use apple::{NativeAudioPlayerInner, NativeAudioPlayerState};
 
 #[cfg(all(feature = "media-session", target_os = "android"))]

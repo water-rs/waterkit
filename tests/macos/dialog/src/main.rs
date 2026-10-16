@@ -1,3 +1,5 @@
+//! Manual macOS check of `waterkit-dialog`'s file and photo pickers.
+
 use waterkit_dialog::FileDialog;
 
 #[tokio::main]
@@ -12,9 +14,9 @@ async fn main() {
         .pick_single()
         .await
     {
-        Ok(Some(path)) => println!("File selected: {:?}", path),
+        Ok(Some(path)) => println!("File selected: {}", path.display()),
         Ok(None) => println!("No file selected (cancelled)."),
-        Err(e) => println!("Error showing file picker: {}", e),
+        Err(e) => println!("Error showing file picker: {e}"),
     }
 
     // Test Photo Picker
@@ -26,11 +28,11 @@ async fn main() {
         Ok(Some(handle)) => {
             println!("Photo selected (handle received). Loading...");
             match handle.load().await {
-                Ok(path) => println!("Photo loaded at: {:?}", path),
-                Err(e) => println!("Error loading photo: {}", e),
+                Ok(path) => println!("Photo loaded at: {}", path.display()),
+                Err(e) => println!("Error loading photo: {e}"),
             }
         }
         Ok(None) => println!("No photo selected (cancelled)."),
-        Err(e) => println!("Error showing photo picker: {}", e),
+        Err(e) => println!("Error showing photo picker: {e}"),
     }
 }

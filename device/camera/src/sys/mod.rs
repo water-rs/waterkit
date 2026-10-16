@@ -6,6 +6,11 @@ pub mod apple;
 #[cfg(target_os = "android")]
 pub mod android;
 
+// The session runs its reader on a `std::thread`, so its host tests need a
+// target with threads.
+#[cfg(any(target_os = "android", all(test, not(target_family = "wasm"))))]
+mod android_session;
+
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub mod desktop;
 
@@ -31,8 +36,8 @@ pub use desktop::CameraInner;
 )))]
 mod fallback {
     use crate::{
-        CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo, Frame, Photo,
-        RawPhoto, Resolution,
+        AnalysisFrame, CameraCapabilities, CameraConfig, CameraControls, CameraError, CameraInfo,
+        Frame, Photo, RawPhoto, Resolution,
     };
     use std::num::NonZeroU8;
     use std::path::Path;
@@ -41,11 +46,22 @@ mod fallback {
 
     pub struct CameraInner;
 
+    #[expect(
+        clippy::unused_self,
+        clippy::unused_async,
+        clippy::needless_pass_by_ref_mut,
+        clippy::missing_const_for_fn,
+        reason = "this shim answers `Unsupported` through the signatures every platform's `CameraInner` shares with `Camera`"
+    )]
     impl CameraInner {
         pub fn list() -> Result<Vec<CameraInfo>, CameraError> {
             Err(CameraError::Unsupported)
         }
 
+        #[expect(
+            clippy::future_not_send,
+            reason = "on wasm32 `wgpu::Device` and `wgpu::Queue` are not `Send`, so neither is a future holding them"
+        )]
         pub async fn open(
             _camera_id: &str,
             _config: CameraConfig,
@@ -82,7 +98,14 @@ mod fallback {
             &EMPTY
         }
 
-        pub fn apply_controls(&mut self, _controls: &CameraControls) -> Result<(), CameraError> {
+        #[expect(
+            clippy::unused_async,
+            reason = "the fallback camera never does session work"
+        )]
+        pub async fn apply_controls(
+            &mut self,
+            _controls: &CameraControls,
+        ) -> Result<(), CameraError> {
             Err(CameraError::Unsupported)
         }
 
@@ -103,8 +126,16 @@ mod fallback {
             Resolution::HD
         }
 
-        pub fn frames(&self) -> impl futures::Stream<Item = Frame> + '_ {
+        pub fn frames(&self) -> impl futures::Stream<Item = Result<Frame, CameraError>> + '_ {
             futures::stream::empty()
+        }
+
+        pub fn analysis_frames(
+            &self,
+        ) -> impl futures::Stream<Item = Result<AnalysisFrame, CameraError>> + '_ {
+            crate::analysis::stream::<(), _>(None, |()| {
+                unreachable!("the fallback camera never opens, so its stream never maps")
+            })
         }
 
         pub async fn capture_photo(&self) -> Result<Photo, CameraError> {
@@ -115,25 +146,45 @@ mod fallback {
             Err(CameraError::Unsupported)
         }
 
-        pub fn start_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
+        #[expect(
+            clippy::unused_async,
+            reason = "the fallback camera never does session work"
+        )]
+        pub async fn start_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
             Err(CameraError::Unsupported)
         }
 
-        pub fn stop_recording(&mut self) -> Result<(), CameraError> {
+        #[expect(
+            clippy::unused_async,
+            reason = "the fallback camera never does session work"
+        )]
+        pub async fn stop_recording(&mut self) -> Result<(), CameraError> {
             Err(CameraError::Unsupported)
         }
+
+        pub fn abandon_recording(&mut self) {}
 
         pub fn recording_duration(&self) -> Duration {
             Duration::ZERO
         }
 
-        pub fn start_raw_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
+        #[expect(
+            clippy::unused_async,
+            reason = "the fallback camera never does session work"
+        )]
+        pub async fn start_raw_recording(&mut self, _path: &Path) -> Result<(), CameraError> {
             Err(CameraError::Unsupported)
         }
 
-        pub fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
+        #[expect(
+            clippy::unused_async,
+            reason = "the fallback camera never does session work"
+        )]
+        pub async fn stop_raw_recording(&mut self) -> Result<(), CameraError> {
             Err(CameraError::Unsupported)
         }
+
+        pub fn abandon_raw_recording(&mut self) {}
 
         pub fn raw_recording_duration(&self) -> Duration {
             Duration::ZERO

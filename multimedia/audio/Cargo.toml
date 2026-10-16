@@ -37,7 +37,19 @@ streaming = [
 he-aac = ["streaming", "dep:symphonia-adapter-fdk-aac"]
 media-session = [
     "dep:tracing",
-    "dep:swift-bridge",
+    "dep:waterkit-build",
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-core-foundation",
+    "dep:objc2-media-player",
+    "dep:objc2-core-media",
+    "dep:objc2-av-foundation",
+    "dep:objc2-avf-audio",
+    "dep:waterkit-core",
+    "dep:objc2-ui-kit",
+    "dep:objc2-app-kit",
+    "dep:block2",
+    "dep:dispatch2",
     "dep:jni",
     "dep:ndk-context",
     "dep:windows",
@@ -52,7 +64,7 @@ apple-artwork = ["media-session", "dep:zenwave"]
 [dependencies]
 thiserror = { workspace = true }
 # Audio metadata extraction
-lofty = { version = "0.24", optional = true }
+lofty = { version = "0.25", optional = true }
 # Async primitives (runtime-agnostic)
 async-channel = { workspace = true }
 futures = { workspace = true }
@@ -75,16 +87,17 @@ rodio = { workspace = true, features = ["playback", "flac", "vorbis", "wav", "mp
 cpal = { workspace = true, features = ["wasm-bindgen"], optional = true }
 # Browser HTTP via the Fetch API; zenwave forbids explicit backend features
 # on wasm32, so none are selected here.
-zenwave = { version = "0.6.1", default-features = false, features = ["ws"], optional = true }
+zenwave = { version = "0.7.1", default-features = false, features = ["ws"], optional = true }
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["Navigator", "Window"] }
 
-[build-dependencies]
-waterkit-build.workspace = true
-
 [dev-dependencies]
 hex = "0.4"
+
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { workspace = true, optional = true, features = ["NSImage"] }
 
 [target.'cfg(any(target_os = "ios", target_os = "macos", target_os = "android", target_os = "windows", target_os = "linux"))'.dependencies]
 # Cross-platform audio playback (default features include vorbis/mp3/flac/wav)
@@ -94,32 +107,78 @@ cpal = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 rodio = { workspace = true, optional = true }
+objc2-av-foundation = { workspace = true, optional = true, features = [
+    "AVAudioProcessingSettings",
+    "AVPlayer",
+    "AVPlayerItem",
+    "objc2-core-foundation",
+    "objc2-core-media",
+] }
+objc2-ui-kit = { workspace = true, optional = true, features = ["UIImage", "objc2-core-foundation"] }
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge = { workspace = true, optional = true }
-zenwave = { version = "0.6.1", default-features = false, features = ["hyper-native-tls", "ws"], optional = true }
+objc2 = { workspace = true, optional = true }
+objc2-foundation = { workspace = true, optional = true, features = [
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSError",
+    "NSNotification",
+    "NSObject",
+    "NSOperation",
+    "NSValue",
+    "NSString",
+    "NSURL",
+    "block2",
+] }
+objc2-core-foundation = { workspace = true, optional = true }
+objc2-media-player = { workspace = true, optional = true, features = [
+    "MPMediaItem",
+    "MPNowPlayingInfoCenter",
+    "MPRemoteCommand",
+    "MPRemoteCommandCenter",
+    "MPRemoteCommandEvent",
+    "block2",
+    "objc2-app-kit",
+    "objc2-core-foundation",
+] }
+objc2-core-media = { workspace = true, optional = true }
+objc2-avf-audio = { workspace = true, optional = true, features = [
+    "AVAudioPlayer",
+    "AVAudioSession",
+    "AVAudioSessionTypes",
+] }
+waterkit-core = { workspace = true, optional = true }
+block2 = { workspace = true, optional = true }
+dispatch2 = { workspace = true, optional = true }
 
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+zenwave = { version = "0.7.1", default-features = false, features = ["hyper-native-tls", "ws"], optional = true }
 
 # Android - use rustls with ring backend (avoids aws-lc-rs CMake issues)
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true, optional = true }
+waterkit-build = { workspace = true, optional = true }
 ndk-context = { workspace = true, optional = true }
 ndk = { version = "0.9", features = ["media", "api-level-29"], optional = true }
 ndk-sys = { version = "0.6", optional = true }
-zenwave = { version = "0.6.1", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
+zenwave = { version = "0.7.1", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
 
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = ["Media_Playback", "Media_Control", "Foundation", "Storage_Streams", "Win32_Media_MediaFoundation", "Win32_System_Com"], optional = true }
-zenwave = { version = "0.6.1", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
+zenwave = { version = "0.7.1", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
 
 # Linux
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { workspace = true, optional = true }
 mpris-server = { version = "0.10", optional = true }
-zenwave = { version = "0.6.1", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
+zenwave = { version = "0.7.1", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
 smol = { version = "2", optional = true }
 tempfile = { version = "3", optional = true }
 url = { version = "2", optional = true }
+
+# Android helper classes the packager compiles into the application's
+# classpath when `media-session` is enabled.
+[package.metadata.waterui.android.feature.media-session]
+kotlin-sources = ["src/sys/android/MediaSessionHelper.kt"]

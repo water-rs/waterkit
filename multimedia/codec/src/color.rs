@@ -1,13 +1,14 @@
 //! Shared color-conversion contract for decoded YUV textures.
 
-use waterkit_video_core::{
-    ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo,
-};
+use waterkit_video_core::{ColorPrimaries, TransferFunction, VideoColorInfo};
 
 use crate::DecodedPixelLayout;
 
-/// Unified GPU shader used by `WaterKit` conversion and presentation pipelines.
-pub const YUV_COLOR_SHADER_WGSL: &str = include_str!("yuv_to_rgba.wgsl");
+/// Unified GPU shader used by `WaterKit` conversion and presentation pipelines:
+/// the complete module, `waterkit-video-core`'s shared YCbCr fragment followed
+/// by the codec's YUV source.
+pub const YUV_COLOR_SHADER_WGSL: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/yuv_color_source.wgsl"));
 
 /// `WaterUI`'s linear-light value for diffuse SDR white, in nits.
 pub const SDR_REFERENCE_WHITE_NITS: f32 = 203.0;
@@ -63,16 +64,11 @@ pub fn video_color_uniform(
     target: ColorOutputTarget,
 ) -> VideoColorUniform {
     VideoColorUniform {
-        matrix_mode: match color.matrix {
-            MatrixCoefficients::Bt709 => 0,
-            MatrixCoefficients::Bt601 => 1,
-            MatrixCoefficients::Bt2020NonConstantLuminance => 2,
-            MatrixCoefficients::Bt2020ConstantLuminance => 3,
-        },
-        range_mode: match color.range {
-            ColorRange::Limited => 0,
-            ColorRange::Full => 1,
-        },
+        // Constant-luminance BT.2020 has no shared matrix mode: it takes the
+        // codec's own mode, which its shader handles before the shared
+        // matrices (`MATRIX_BT2020_CONSTANT_LUMINANCE`).
+        matrix_mode: color.matrix.ycbcr_mode().unwrap_or(3),
+        range_mode: color.range.ycbcr_mode(),
         primaries_mode: match color.primaries {
             ColorPrimaries::Bt709 => 0,
             ColorPrimaries::Bt601 => 1,

@@ -18,20 +18,37 @@ waterkit-core = { workspace = true }
 futures.workspace = true
 futures-core = "0.3"
 thiserror = { workspace = true }
+tracing.workspace = true
 futures-timer = { workspace = true }
-
-[build-dependencies]
-waterkit-build.workspace = true
+async-channel = { workspace = true }
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
+objc2-foundation = { workspace = true, features = ["NSError", "NSOperation", "NSValue"] }
 
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+[target.'cfg(target_os = "ios")'.dependencies]
+block2.workspace = true
+dispatch2.workspace = true
+objc2.workspace = true
+objc2-core-motion = { workspace = true, features = [
+    "block2",
+    "CMAccelerometer",
+    "CMAltimeter",
+    "CMAltitude",
+    "CMGyro",
+    "CMLogItem",
+    "CMMagnetometer",
+    "CMMotionManager",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+mach2.workspace = true
+objc2-core-foundation = { workspace = true, features = ["CFDictionary"] }
+objc2-io-kit = { workspace = true, features = ["libc"] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
-waterkit-build.workspace = true
+waterkit-build = { workspace = true, features = ["native-callback"] }
 jni.workspace = true
 ndk-context.workspace = true
 
@@ -46,3 +63,8 @@ windows = { workspace = true, features = [
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus.workspace = true
 serde.workspace = true
+
+# Android helper classes the packager compiles into the application's
+# classpath (see water-rs/cli's android backend).
+[package.metadata.waterui.android]
+kotlin-sources = ["src/sys/android/SensorHelper.kt"]

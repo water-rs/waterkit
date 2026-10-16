@@ -35,12 +35,12 @@ fn is_bundled_app() -> bool {
 }
 
 /// Show a notification on macOS.
-pub fn show_notification(
+pub async fn show_notification(
     notification: &Notification,
 ) -> Result<NotificationHandleInner, NotificationError> {
     // Try native UserNotifications first (for bundled apps)
     if is_bundled_app() {
-        super::apple::show_notification(notification)?;
+        super::apple::show_notification(notification).await?;
         return Ok(NotificationHandleInner {
             desktop_handle: None,
         });
@@ -56,7 +56,7 @@ pub fn show_notification(
     }
 
     // Use notify-rust for unbundled apps (basic notifications only)
-    let handle = super::desktop::show_notification(notification)?;
+    let handle = super::desktop::show_notification(notification).await?;
     Ok(NotificationHandleInner {
         desktop_handle: Some(handle),
     })

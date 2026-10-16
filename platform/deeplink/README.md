@@ -15,8 +15,8 @@ Part of the [Waterkit](https://github.com/water-rs/waterkit) ecosystem.
 
 | Platform | Status |
 |----------|--------|
-| iOS      | Native (UIApplication via Swift bridge) |
-| macOS    | Native (NSAppleEventManager via Swift bridge) |
+| iOS      | Native (UIApplication via objc2) |
+| macOS    | Native (NSAppleEventManager via objc2) |
 | Android  | Native (Intent via JNI/Kotlin) |
 | Windows  | Open URL / can_open_url only (incoming-link listener pending) |
 | Linux    | Open URL / can_open_url only (incoming-link listener pending) |

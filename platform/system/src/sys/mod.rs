@@ -10,6 +10,9 @@ pub use android::*;
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod desktop;
+
+#[cfg(any(test, target_os = "windows", target_os = "linux"))]
+mod network;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub use desktop::*;
 
@@ -29,7 +32,11 @@ compile_error!("waterkit-system supports only macOS, iOS, Android, Windows, and 
     target_os = "windows",
     target_os = "linux"
 )))]
-pub(crate) fn get_connectivity_info() -> crate::ConnectivityInfo {
+#[expect(
+    clippy::unused_async,
+    reason = "the public signature is async on every platform; this one resolves synchronously"
+)]
+pub(crate) async fn connectivity() -> Result<crate::ConnectivityInfo, crate::SystemError> {
     panic!("waterkit-system supports only macOS, iOS, Android, Windows, and Linux.")
 }
 
@@ -40,7 +47,7 @@ pub(crate) fn get_connectivity_info() -> crate::ConnectivityInfo {
     target_os = "windows",
     target_os = "linux"
 )))]
-pub(crate) fn get_thermal_state() -> crate::ThermalState {
+pub(crate) fn thermal_state() -> Result<Option<crate::ThermalState>, crate::SystemError> {
     panic!("waterkit-system supports only macOS, iOS, Android, Windows, and Linux.")
 }
 
@@ -51,6 +58,10 @@ pub(crate) fn get_thermal_state() -> crate::ThermalState {
     target_os = "windows",
     target_os = "linux"
 )))]
-pub(crate) fn get_system_load() -> crate::SystemLoad {
+#[expect(
+    clippy::unused_async,
+    reason = "the facade calls every platform's backend through the same async signature; this shim has nothing to await"
+)]
+pub(crate) async fn load() -> Result<crate::SystemLoad, crate::SystemError> {
     panic!("waterkit-system supports only macOS, iOS, Android, Windows, and Linux.")
 }

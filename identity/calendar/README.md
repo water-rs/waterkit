@@ -15,8 +15,8 @@ Part of the [Waterkit](https://github.com/water-rs/waterkit) ecosystem.
 
 | Platform | Status |
 |----------|--------|
-| iOS      | Native (EventKit via Swift bridge) |
-| macOS    | Native (EventKit via Swift bridge) |
+| iOS      | Native (EventKit via objc2) |
+| macOS    | Native (EventKit via objc2) |
 | Android  | Native (CalendarProvider via JNI/Kotlin) |
 | Windows  | Desktop store (persistent local data) |
 | Linux    | Desktop store (persistent local data) |

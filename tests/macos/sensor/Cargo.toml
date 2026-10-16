@@ -5,6 +5,9 @@ edition = "2021"
 publish = false
 description = "macOS test for waterkit-sensor"
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "sensor-test"
 path = "src/main.rs"
@@ -14,9 +17,3 @@ waterkit-sensor.workspace = true
 waterkit-test-report.workspace = true
 tokio.workspace = true
 
-# Apple platforms (iOS, macOS)
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
-
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
-swift-bridge-build.workspace = true

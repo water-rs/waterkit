@@ -13,6 +13,8 @@ import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.DynamicRangeProfiles
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
+import android.hardware.HardwareBuffer
+import android.hardware.display.DisplayManager
 import android.media.Image
 import android.media.ImageReader
 import android.media.MediaCodecInfo
@@ -26,15 +28,17 @@ import android.os.SystemClock
 import android.util.Log
 import android.util.Range
 import android.util.Size
+import android.view.Display
 import android.view.Surface
 import kotlin.math.roundToInt
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import waterkit.build.NativeCallback
 
 /**
  * Camera helper for waterkit-camera crate.
@@ -43,10 +47,45 @@ import java.util.concurrent.TimeUnit
 class CameraHelper(private val appContext: Context) {
     private companion object {
         private const val TAG = "WaterkitCamera"
+        private const val DATA_SPACE_STANDARD_SHIFT = 16
+        private const val DATA_SPACE_STANDARD_MASK = 0x3F
+        private const val DATA_SPACE_RANGE_SHIFT = 27
+        private const val DATA_SPACE_RANGE_MASK = 0x7
 
-        private const val OPEN_TIMEOUT_SECONDS = 5L
-        private const val SESSION_TIMEOUT_SECONDS = 5L
-        private const val PHOTO_TIMEOUT_SECONDS = 5L
+        /**
+         * Preview images the consumer may hold at once: the newest waiting
+         * in `frameQueue`, the one in the Rust reader channel, and the frames
+         * whose `HardwareBuffer` the GPU still reads. The preview listener
+         * acquires only while fewer are out, so a consumer that falls behind
+         * makes the camera drop frames instead of running the reader dry.
+         */
+        private const val PREVIEW_MAX_IN_FLIGHT = 4
+
+        /**
+         * `acquireLatestImage` acquires the next image before closing the
+         * stale ones it drains, so while it runs the reader hands out one
+         * more than were out at entry: the pool needs a spare slot above
+         * `PREVIEW_MAX_IN_FLIGHT`.
+         */
+        private const val PREVIEW_IMAGES = PREVIEW_MAX_IN_FLIGHT + 1
+
+        /**
+         * Analysis images the consumer may hold at once: the newest waiting
+         * in `analysisQueue`, the one parked in the Rust reader's channel,
+         * and the frames an application still holds while it analyzes them.
+         * The analysis listener acquires only while fewer are out, so a
+         * consumer that falls behind makes the camera drop frames instead of
+         * running the reader dry.
+         */
+        private const val ANALYSIS_MAX_IN_FLIGHT = 4
+
+        /**
+         * `acquireLatestImage` acquires the next image before closing the
+         * stale ones it drains, so while it runs the reader hands out one
+         * more than were out at entry: the pool needs a spare slot above
+         * `ANALYSIS_MAX_IN_FLIGHT`.
+         */
+        private const val ANALYSIS_IMAGES = ANALYSIS_MAX_IN_FLIGHT + 1
 
         private const val DYNAMIC_RANGE_SDR = 0
         private const val DYNAMIC_RANGE_HDR10 = 1
@@ -78,6 +117,13 @@ class CameraHelper(private val appContext: Context) {
     private var previewRequestBuilder: CaptureRequest.Builder? = null
 
     private var previewImageReader: ImageReader? = null
+    /**
+     * CPU-readable YUV_420_888 frames for image analysis, present only when
+     * the camera was opened with an analysis output.
+     */
+    private var analysisImageReader: ImageReader? = null
+    /** CPU-readable YUV frames for RAW video recording, present only while it runs. */
+    private var rawVideoImageReader: ImageReader? = null
     private var stillImageReader: ImageReader? = null
     private var rawImageReader: ImageReader? = null
 
@@ -86,28 +132,235 @@ class CameraHelper(private val appContext: Context) {
     private var recordingStartElapsedRealtimeMs: Long = 0
     private var isRecording: Boolean = false
     private var rawVideoOutput: FileOutputStream? = null
+    private var rawVideoDataSpace: Int? = null
     private var rawVideoRecordingStartElapsedRealtimeMs: Long = 0
     private var isRawVideoRecording: Boolean = false
 
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
 
-    private val frameQueue: LinkedBlockingDeque<ByteArray> = LinkedBlockingDeque(1)
-    private var latestPhotoData: ByteArray? = null
-    private var latestRawPhotoData: ByteArray? = null
-    private var latestRawImage: Image? = null
-    private var pendingPhotoLatch: CountDownLatch? = null
-    private var pendingRawImageLatch: CountDownLatch? = null
+    /**
+     * One preview frame: the `Image` acquired from the GPU-sampled `PRIVATE`
+     * reader, its `HardwareBuffer`, and the display rotation, in degrees,
+     * when the frame arrived, plus its data space and active dynamic-range
+     * profile. Together with the sensor orientation and lens facing the
+     * rotation gives the frame's orientation.
+     * Below API 33 the bridge reports `DATASPACE_UNKNOWN` (0), so each
+     * unspecified data-space component uses the captured profile's default.
+     * The profile is captured with the image so Rust does not look it up
+     * after arrival.
+     *
+     * The receiver owns the frame and must call [close] once the GPU has
+     * finished with `hardwareBuffer`: it returns the image to the reader,
+     * freeing one of the `PREVIEW_MAX_IN_FLIGHT` slots, and drops this
+     * handle's reference on the buffer. The receiver also closes
+     * `hardwareBuffer` itself, once it has taken a reference of its own;
+     * [close] then only releases the image. The pixels are never read on
+     * the CPU.
+     */
+    class CapturedFrame(
+        val image: Image,
+        val hardwareBuffer: HardwareBuffer,
+        val displayRotation: Int,
+        val dataSpace: Int,
+        val dynamicRangeProfile: Int,
+        /** The image's sensor timestamp, the start of exposure. */
+        val captureTimeNs: Long,
+        /**
+         * Runs after the image is closed, on whichever thread called
+         * [close]; the reader bookkeeping lives behind it.
+         */
+        private val onClosed: () -> Unit,
+    ) {
+        private val closed = AtomicBoolean(false)
 
-    private val photoLock = Any()
-    private val rawPhotoLock = Any()
+        /** Returns the image and the buffer reference to the reader, once. */
+        fun close() {
+            if (closed.compareAndSet(false, true)) {
+                hardwareBuffer.close()
+                image.close()
+                onClosed()
+            }
+        }
+    }
+
+    private fun imageDataSpace(image: Image): Int =
+        if (Build.VERSION.SDK_INT >= 33) image.dataSpace else 0
+
+    private val frameQueue: LinkedBlockingDeque<CapturedFrame> = LinkedBlockingDeque(1)
+
+    /**
+     * One analysis image acquired from `analysisImageReader`: the
+     * `YUV_420_888` `Image`, the display rotation in degrees when it
+     * arrived, its data space, and its sensor timestamp.
+     *
+     * The receiver owns the frame and must call [close] once it has read
+     * the image: it returns the image to the reader, freeing one of the
+     * `ANALYSIS_MAX_IN_FLIGHT` slots. The queue closes one a consumer
+     * never takes.
+     */
+    class AnalysisFrame(
+        val image: Image,
+        val displayRotation: Int,
+        val dataSpace: Int,
+        /** The image's sensor timestamp, the start of exposure. */
+        val captureTimeNs: Long,
+        /**
+         * Runs after the image is closed, on whichever thread called
+         * [close]; the reader bookkeeping lives behind it.
+         */
+        private val onClosed: () -> Unit,
+    ) {
+        private val closed = AtomicBoolean(false)
+
+        /** Returns the image and its in-flight slot to the reader, once. */
+        fun close() {
+            if (closed.compareAndSet(false, true)) {
+                image.close()
+                onClosed()
+            }
+        }
+    }
+
+    /**
+     * The newest pending analysis frame; a second frame evicts — and closes
+     * — the one nobody took.
+     */
+    private val analysisQueue: LinkedBlockingDeque<AnalysisFrame> = LinkedBlockingDeque(1)
+
+    /**
+     * Preview images acquired from `previewImageReader` and not yet closed:
+     * the one waiting in `frameQueue` plus every frame leased to the
+     * consumer. Read and written only on the camera background thread,
+     * except that `closeCamera` resets it once that thread has stopped.
+     */
+    private var previewImagesInFlight = 0
+
+    /**
+     * Frames the producer wrote while `previewImagesInFlight` was at
+     * `PREVIEW_MAX_IN_FLIGHT`; they stay with the producer and are dropped.
+     * Counted and logged on the camera background thread.
+     */
+    private var previewFramesDropped = 0
+
+    /**
+     * True while [drainPreviewReader] runs; the release a stale frame's
+     * close posts back must not re-enter it.
+     */
+    private var previewDrainActive = false
+
+    /**
+     * Analysis images acquired from `analysisImageReader` and not yet
+     * closed: the one waiting in `analysisQueue` plus every frame leased to
+     * the consumer. Read and written only on the camera background thread,
+     * except that `closeCamera` resets it once that thread has stopped.
+     */
+    private var analysisImagesInFlight = 0
+
+    /**
+     * Frames the producer wrote while `analysisImagesInFlight` was at
+     * `ANALYSIS_MAX_IN_FLIGHT`; they stay with the producer and are dropped.
+     * Counted and logged on the camera background thread.
+     */
+    private var analysisFramesDropped = 0
+
+    /**
+     * True while [drainAnalysisReader] runs; the release a stale frame's
+     * close posts back must not re-enter it.
+     */
+    private var analysisDrainActive = false
+    private val displayManager: DisplayManager =
+        appContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+    /**
+     * Delivers one operation's peer result exactly once: the device, session
+     * and capture callbacks race each other and `closeCamera`, and only the
+     * first answer may reach the `NativeCallback`.
+     */
+    private class PendingResult(private val callback: NativeCallback?) {
+        private val answered = AtomicBoolean(false)
+
+        fun complete(result: Any?) {
+            if (answered.compareAndSet(false, true)) {
+                callback?.complete(result)
+            }
+        }
+
+        fun fail(message: String) {
+            if (answered.compareAndSet(false, true)) {
+                callback?.fail(message)
+            }
+        }
+    }
+
+    /**
+     * One RAW still request: its newest `RAW_SENSOR` image and its capture
+     * result build the DNG together, so both halves race to answer it.
+     */
+    private class RawPhotoResult(
+        callback: NativeCallback,
+        private val characteristics: CameraCharacteristics,
+    ) {
+        private val result = PendingResult(callback)
+        private var image: Image? = null
+        private var captureResult: TotalCaptureResult? = null
+
+        @Synchronized
+        fun onImage(image: Image) {
+            this.image?.close()
+            this.image = image
+            maybeFinish()
+        }
+
+        @Synchronized
+        fun onResult(result: TotalCaptureResult) {
+            captureResult = result
+            maybeFinish()
+        }
+
+        fun fail(message: String) {
+            synchronized(this) {
+                image?.close()
+                image = null
+            }
+            result.fail(message)
+        }
+
+        private fun maybeFinish() {
+            val image = image ?: return
+            val result = captureResult ?: return
+            try {
+                val output = ByteArrayOutputStream()
+                DngCreator(characteristics, result).use { creator ->
+                    creator.writeImage(output, image)
+                }
+                image.close()
+                this.image = null
+                this.result.complete(output.toByteArray())
+            } catch (error: Exception) {
+                image.close()
+                this.image = null
+                fail("DNG write failed: ${error.message ?: error.javaClass.name}")
+            }
+        }
+    }
+
+    /**
+     * In-flight peer operations, so `closeCamera` can answer them: the
+     * single lock guards every slot — writes are rare and short.
+     */
+    private val requestLock = Any()
+    private var pendingOpen: PendingResult? = null
+    private var pendingSession: PendingResult? = null
+    private var pendingPhoto: PendingResult? = null
+    private var pendingRawPhoto: RawPhotoResult? = null
+
     private val rawVideoLock = Any()
 
     private var frameWidth: Int = 1280
     private var frameHeight: Int = 720
     private var frameRate: Int = 30
 
-    private var selectedDynamicRangeProfile: Int = DYNAMIC_RANGE_SDR
+    @Volatile private var selectedDynamicRangeProfile: Int = DYNAMIC_RANGE_SDR
     private var selectedPlatformDynamicRangeProfile: Long = PLATFORM_DYNAMIC_RANGE_STANDARD
     private var selectedFlashMode: Int = FLASH_OFF
     private var selectedStabilizationMode: Int = STABILIZATION_OFF
@@ -180,23 +433,33 @@ class CameraHelper(private val appContext: Context) {
     }
 
     /**
-     * Open a camera by ID with requested configuration.
+     * Open a camera by ID with requested configuration; [callback] answers
+     * once `CameraDevice.StateCallback` reports the open, a disconnect, or
+     * an error.
      */
     fun openCamera(
         cameraId: String,
         requestedWidth: Int,
         requestedHeight: Int,
         requestedFrameRate: Int,
-    ): Boolean {
+        analysisWidth: Int,
+        analysisHeight: Int,
+        callback: NativeCallback,
+    ) {
+        val pending = PendingResult(callback)
         closeCamera()
+        synchronized(requestLock) {
+            pendingOpen = pending
+        }
 
         startBackgroundThread()
         val handler = backgroundHandler ?: run {
             Log.e(TAG, "background handler is not initialized")
-            return false
+            pending.fail("background handler is not initialized")
+            return
         }
 
-        return try {
+        try {
             val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val characteristics = manager.getCameraCharacteristics(cameraId)
             val snapshot = queryCapabilitySnapshot(manager, cameraId, characteristics)
@@ -227,85 +490,108 @@ class CameraHelper(private val appContext: Context) {
             isRawVideoRecording = false
             rawVideoRecordingStartElapsedRealtimeMs = 0L
 
-            previewImageReader = ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.YUV_420_888, 3)
+            // PRIVATE buffers for GPU sampling reach the GPU as they are; the
+            // driver describes their YCbCr layout and encoding. The pool is
+            // one slot wider than the number of images the consumer may hold
+            // at once, so `acquireLatestImage` always has a slot to take.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                throw IllegalStateException(
+                    "GPU-sampled camera frames need Android 10 (API 29); this device runs API ${Build.VERSION.SDK_INT}",
+                )
+            }
+            previewImageReader = ImageReader.newInstance(
+                frameWidth,
+                frameHeight,
+                ImageFormat.PRIVATE,
+                PREVIEW_IMAGES,
+                HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE,
+            )
             stillImageReader = ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.JPEG, 2)
+            // The analysis reader runs beside the preview at its own size;
+            // the PRIVATE preview plus YUV_420_888 combination at preview
+            // size is guaranteed on every hardware level.
+            analysisImageReader = if (analysisWidth > 0 && analysisHeight > 0) {
+                ImageReader.newInstance(
+                    analysisWidth,
+                    analysisHeight,
+                    ImageFormat.YUV_420_888,
+                    ANALYSIS_IMAGES,
+                )
+            } else {
+                null
+            }
+            // RAW_SENSOR streams only come in the sizes the sensor reads
+            // out, normally just its full array; a reader at the preview size
+            // makes the whole capture session fail to configure.
             rawImageReader = if (snapshot.supportsRawPhoto) {
-                ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.RAW_SENSOR, 2)
+                val rawSize = characteristics
+                    .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                    ?.getOutputSizes(ImageFormat.RAW_SENSOR)
+                    ?.maxByOrNull { size -> size.width.toLong() * size.height }
+                    ?: throw IllegalStateException("camera $cameraId reports RAW without a RAW_SENSOR size")
+                ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 2)
             } else {
                 null
             }
 
             previewImageReader?.setOnImageAvailableListener({ reader ->
-                val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-                try {
-                    frameWidth = image.width
-                    frameHeight = image.height
-                    val rgba = yuv420ToRgba(image)
-                    val timestampNs = SystemClock.elapsedRealtimeNanos()
-                    frameQueue.pollLast()
-                    frameQueue.offerLast(rgba)
-                    maybeWriteRawVideoFrame(rgba, image.width, image.height, timestampNs)
-                } catch (error: Exception) {
-                    Log.e(TAG, "Failed to process camera frame", error)
-                } finally {
-                    image.close()
-                }
+                drainPreviewReader(reader, handler)
+            }, handler)
+
+            analysisImageReader?.setOnImageAvailableListener({ reader ->
+                drainAnalysisReader(reader, handler)
             }, handler)
 
             rawImageReader?.setOnImageAvailableListener({ reader ->
                 val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-                synchronized(rawPhotoLock) {
-                    latestRawImage?.close()
-                    latestRawImage = image
-                    pendingRawImageLatch?.countDown()
+                val pending = synchronized(requestLock) { pendingRawPhoto }
+                if (pending == null) {
+                    image.close()
+                } else {
+                    pending.onImage(image)
                 }
             }, handler)
 
             stillImageReader?.setOnImageAvailableListener({ reader ->
                 val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+                val pending = synchronized(requestLock) {
+                    val current = pendingPhoto
+                    if (current == null) {
+                        image.close()
+                        return@setOnImageAvailableListener
+                    }
+                    pendingPhoto = null
+                    current
+                }
                 try {
                     if (image.format != ImageFormat.JPEG) {
-                        Log.e(TAG, "Unexpected still image format: ${image.format}")
-                        synchronized(photoLock) {
-                            pendingPhotoLatch?.countDown()
-                            pendingPhotoLatch = null
-                        }
+                        pending.fail("unexpected still image format ${image.format}")
                         return@setOnImageAvailableListener
                     }
                     val plane = image.planes.firstOrNull() ?: run {
-                        synchronized(photoLock) {
-                            pendingPhotoLatch?.countDown()
-                            pendingPhotoLatch = null
-                        }
+                        pending.fail("still image carries no plane")
                         return@setOnImageAvailableListener
                     }
                     val buffer = plane.buffer
                     val bytes = ByteArray(buffer.remaining())
                     buffer.get(bytes)
-                    synchronized(photoLock) {
-                        latestPhotoData = bytes
-                        pendingPhotoLatch?.countDown()
-                        pendingPhotoLatch = null
-                    }
+                    pending.complete(bytes)
                 } catch (error: Exception) {
-                    Log.e(TAG, "Failed to process still image", error)
-                    synchronized(photoLock) {
-                        pendingPhotoLatch?.countDown()
-                        pendingPhotoLatch = null
-                    }
+                    pending.fail("failed to process still image: ${error.message ?: error.javaClass.name}")
                 } finally {
                     image.close()
                 }
             }, handler)
 
-            val openLatch = CountDownLatch(1)
-            var opened = false
-
             manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     cameraDevice = camera
-                    opened = true
-                    openLatch.countDown()
+                    synchronized(requestLock) {
+                        if (pendingOpen === pending) {
+                            pendingOpen = null
+                        }
+                    }
+                    pending.complete(null)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
@@ -314,7 +600,12 @@ class CameraHelper(private val appContext: Context) {
                     if (cameraDevice === camera) {
                         cameraDevice = null
                     }
-                    openLatch.countDown()
+                    synchronized(requestLock) {
+                        if (pendingOpen === pending) {
+                            pendingOpen = null
+                        }
+                    }
+                    pending.fail("camera $cameraId disconnected")
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
@@ -323,34 +614,33 @@ class CameraHelper(private val appContext: Context) {
                     if (cameraDevice === camera) {
                         cameraDevice = null
                     }
-                    openLatch.countDown()
+                    synchronized(requestLock) {
+                        if (pendingOpen === pending) {
+                            pendingOpen = null
+                        }
+                    }
+                    pending.fail("camera $cameraId open failed with error $error")
                 }
             }, handler)
-
-            val completed = openLatch.await(OPEN_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            if (!completed || !opened) {
-                Log.e(TAG, "Timed out opening camera: $cameraId")
-                closeCamera()
-                return false
-            }
-
-            true
         } catch (error: SecurityException) {
             Log.e(TAG, "Missing camera permission", error)
             closeCamera()
-            false
+            pending.fail("missing camera permission")
         } catch (error: Exception) {
             Log.e(TAG, "Failed to open camera", error)
             closeCamera()
-            false
+            pending.fail("failed to open camera: ${error.message ?: error.javaClass.name}")
         }
     }
 
     /**
-     * Start frame capture.
+     * Start frame capture; [callback] answers once the capture session is
+     * configured and the repeating request is running.
      */
-    fun startCapture(): Boolean {
-        return createCaptureSession(includeRecorderSurface = false)
+    fun startCapture(callback: NativeCallback) {
+        createCaptureSession(includeRecorderSurface = false, callback) {
+            callback.complete(null)
+        }
     }
 
     /**
@@ -363,32 +653,38 @@ class CameraHelper(private val appContext: Context) {
     }
 
     /**
-     * Capture a high-quality still image using Camera2 still-capture pipeline.
+     * Capture a high-quality still image using Camera2 still-capture
+     * pipeline; [callback] answers with the JPEG bytes.
      */
-    fun capturePhoto(): Boolean {
+    fun capturePhoto(callback: NativeCallback) {
+        val pending = PendingResult(callback)
         val session = captureSession ?: run {
             Log.e(TAG, "capturePhoto called before capture session start")
-            return false
+            pending.fail("capturePhoto called before capture session start")
+            return
         }
         val device = cameraDevice ?: run {
             Log.e(TAG, "capturePhoto called before camera open")
-            return false
+            pending.fail("capturePhoto called before camera open")
+            return
         }
         val stillReader = stillImageReader ?: run {
             Log.e(TAG, "capturePhoto called before still image reader init")
-            return false
+            pending.fail("capturePhoto called before still image reader init")
+            return
         }
         val handler = backgroundHandler ?: run {
             Log.e(TAG, "capturePhoto called without background handler")
-            return false
+            pending.fail("capturePhoto called without background handler")
+            return
         }
 
-        synchronized(photoLock) {
-            latestPhotoData = null
-            pendingPhotoLatch = CountDownLatch(1)
+        synchronized(requestLock) {
+            pendingPhoto?.fail("superseded by a newer photo capture")
+            pendingPhoto = pending
         }
 
-        return try {
+        try {
             val stillBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
             stillBuilder.addTarget(stillReader.surface)
             applyRequestControls(stillBuilder, forStillCapture = true)
@@ -402,84 +698,65 @@ class CameraHelper(private val appContext: Context) {
                         failure: android.hardware.camera2.CaptureFailure,
                     ) {
                         Log.e(TAG, "Still capture failed: $failure")
-                        synchronized(photoLock) {
-                            pendingPhotoLatch?.countDown()
-                            pendingPhotoLatch = null
-                        }
+                        photoFailed(pending, "still capture failed: $failure")
                     }
                 },
                 handler,
             )
-
-            val latch = synchronized(photoLock) { pendingPhotoLatch } ?: return false
-            val completed = latch.await(PHOTO_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            if (!completed) {
-                Log.e(TAG, "Timed out waiting for still image")
-                synchronized(photoLock) {
-                    pendingPhotoLatch = null
-                }
-                return false
-            }
-
-            synchronized(photoLock) { latestPhotoData != null }
         } catch (error: Exception) {
             Log.e(TAG, "Failed to capture still image", error)
-            synchronized(photoLock) {
-                pendingPhotoLatch?.countDown()
-                pendingPhotoLatch = null
+            photoFailed(pending, "failed to capture still image: ${error.message ?: error.javaClass.name}")
+        }
+    }
+
+    private fun photoFailed(pending: PendingResult, message: String) {
+        synchronized(requestLock) {
+            if (pendingPhoto === pending) {
+                pendingPhoto = null
             }
-            false
         }
+        pending.fail(message)
     }
 
     /**
-     * Consume captured still image bytes (JPEG).
+     * Capture RAW photo using RAW_SENSOR + DNG container; [callback]
+     * answers with the DNG bytes once the newest RAW image and the capture
+     * result have both arrived.
      */
-    fun consumePhotoData(): ByteArray? {
-        synchronized(photoLock) {
-            val data = latestPhotoData
-            latestPhotoData = null
-            return data
-        }
-    }
-
-    /**
-     * Capture RAW photo using RAW_SENSOR + DNG container.
-     */
-    fun captureRawPhoto(): Boolean {
+    fun captureRawPhoto(callback: NativeCallback) {
         val session = captureSession ?: run {
             Log.e(TAG, "captureRawPhoto called before capture session start")
-            return false
+            callback.fail("captureRawPhoto called before capture session start")
+            return
         }
         val device = cameraDevice ?: run {
             Log.e(TAG, "captureRawPhoto called before camera open")
-            return false
+            callback.fail("captureRawPhoto called before camera open")
+            return
         }
         val reader = rawImageReader ?: run {
             Log.e(TAG, "captureRawPhoto called on camera without RAW_SENSOR support")
-            return false
+            callback.fail("captureRawPhoto called on camera without RAW_SENSOR support")
+            return
         }
         val characteristics = currentCharacteristics ?: run {
             Log.e(TAG, "captureRawPhoto called without camera characteristics")
-            return false
+            callback.fail("captureRawPhoto called without camera characteristics")
+            return
         }
         val handler = backgroundHandler ?: run {
             Log.e(TAG, "captureRawPhoto called without background handler")
-            return false
+            callback.fail("captureRawPhoto called without background handler")
+            return
         }
 
-        val imageLatch = CountDownLatch(1)
-        val resultLatch = CountDownLatch(1)
-        var captureResult: TotalCaptureResult? = null
-
-        synchronized(rawPhotoLock) {
-            latestRawPhotoData = null
-            latestRawImage?.close()
-            latestRawImage = null
-            pendingRawImageLatch = imageLatch
+        val pending = RawPhotoResult(callback, characteristics)
+        synchronized(requestLock) {
+            pendingRawPhoto?.fail("superseded by a newer RAW photo capture")
+            pendingRawPhoto = pending
         }
 
-        return try {
+        try {
             val request = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
             request.addTarget(reader.surface)
             applyRequestControls(request, forStillCapture = true)
@@ -492,8 +769,7 @@ class CameraHelper(private val appContext: Context) {
                         request: CaptureRequest,
                         result: TotalCaptureResult,
                     ) {
-                        captureResult = result
-                        resultLatch.countDown()
+                        pending.onResult(result)
                     }
 
                     override fun onCaptureFailed(
@@ -502,153 +778,126 @@ class CameraHelper(private val appContext: Context) {
                         failure: android.hardware.camera2.CaptureFailure,
                     ) {
                         Log.e(TAG, "RAW still capture failed: $failure")
-                        resultLatch.countDown()
+                        rawPhotoFailed(pending, "RAW still capture failed: $failure")
                     }
                 },
                 handler,
             )
-
-            val imageReady = imageLatch.await(PHOTO_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            val resultReady = resultLatch.await(PHOTO_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            if (!imageReady || !resultReady) {
-                Log.e(TAG, "Timed out waiting for RAW still capture")
-                synchronized(rawPhotoLock) {
-                    pendingRawImageLatch = null
-                }
-                return false
-            }
-
-            val image = synchronized(rawPhotoLock) {
-                pendingRawImageLatch = null
-                val current = latestRawImage
-                latestRawImage = null
-                current
-            } ?: run {
-                Log.e(TAG, "RAW image was not available after capture")
-                return false
-            }
-
-            val result = captureResult ?: run {
-                image.close()
-                Log.e(TAG, "RAW capture result was unavailable")
-                return false
-            }
-
-            val dngBytes = try {
-                val output = ByteArrayOutputStream()
-                DngCreator(characteristics, result).use { creator ->
-                    creator.writeImage(output, image)
-                }
-                output.toByteArray()
-            } finally {
-                image.close()
-            }
-
-            synchronized(rawPhotoLock) {
-                latestRawPhotoData = dngBytes
-            }
-
-            true
         } catch (error: Exception) {
             Log.e(TAG, "Failed to capture RAW photo", error)
-            synchronized(rawPhotoLock) {
-                pendingRawImageLatch = null
-                latestRawImage?.close()
-                latestRawImage = null
+            rawPhotoFailed(pending, "failed to capture RAW photo: ${error.message ?: error.javaClass.name}")
+        }
+    }
+
+    private fun rawPhotoFailed(pending: RawPhotoResult, message: String) {
+        synchronized(requestLock) {
+            if (pendingRawPhoto === pending) {
+                pendingRawPhoto = null
             }
-            false
         }
+        pending.fail(message)
     }
 
     /**
-     * Consume captured RAW photo bytes (DNG).
+     * Start video recording via MediaRecorder; [callback] answers once the
+     * recorder is running, or once a failure leaves the preview session
+     * restored.
      */
-    fun consumeRawPhotoData(): ByteArray? {
-        synchronized(rawPhotoLock) {
-            val data = latestRawPhotoData
-            latestRawPhotoData = null
-            return data
-        }
-    }
-
-    /**
-     * Start video recording via MediaRecorder.
-     */
-    fun startRecording(path: String): Boolean {
+    fun startRecording(path: String, callback: NativeCallback) {
         if (isRecording) {
             Log.e(TAG, "startRecording called while already recording")
-            return false
+            callback.fail("startRecording called while already recording")
+            return
         }
         if (isRawVideoRecording) {
             Log.e(TAG, "startRecording called while RAW recording is active")
-            return false
+            callback.fail("startRecording called while RAW recording is active")
+            return
         }
 
         if (!prepareRecorder(path)) {
-            return false
+            callback.fail("failed to prepare the recorder for $path")
+            return
         }
 
-        if (!createCaptureSession(includeRecorderSurface = true)) {
-            releaseRecorder()
-            return false
-        }
-
-        return try {
-            mediaRecorder?.start()
-            recordingStartElapsedRealtimeMs = SystemClock.elapsedRealtime()
-            isRecording = true
-            true
-        } catch (error: Exception) {
-            Log.e(TAG, "Failed to start MediaRecorder", error)
-            releaseRecorder()
-            stopCapture()
-            createCaptureSession(includeRecorderSurface = false)
-            false
+        createCaptureSession(includeRecorderSurface = true, callback) {
+            try {
+                mediaRecorder?.start()
+                recordingStartElapsedRealtimeMs = SystemClock.elapsedRealtime()
+                isRecording = true
+                callback.complete(null)
+            } catch (error: Exception) {
+                Log.e(TAG, "Failed to start MediaRecorder", error)
+                releaseRecorder()
+                stopCapture()
+                // Restore the preview session before reporting the failure.
+                createCaptureSession(includeRecorderSurface = false, callback) {
+                    callback.fail(
+                        "failed to start MediaRecorder: ${error.message ?: error.javaClass.name}",
+                    )
+                }
+            }
         }
     }
 
     /**
-     * Stop video recording.
+     * Stop video recording; [callback] answers once the recorder has
+     * stopped and the preview session is restored.
      */
-    fun stopRecording(): Boolean {
-        return stopRecordingInternal(restorePreviewSession = true)
-    }
-
-    private fun stopRecordingInternal(restorePreviewSession: Boolean): Boolean {
+    fun stopRecording(callback: NativeCallback) {
         if (!isRecording) {
-            return true
+            callback.complete(null)
+            return
         }
 
         val recorder = mediaRecorder ?: run {
             Log.e(TAG, "stopRecording called with missing MediaRecorder")
             isRecording = false
             recordingStartElapsedRealtimeMs = 0
-            return false
+            callback.fail("stopRecording called with missing MediaRecorder")
+            return
         }
 
-        var stopped = true
+        var stopError: String? = null
         try {
             recorder.stop()
         } catch (error: RuntimeException) {
             Log.e(TAG, "Failed to stop MediaRecorder cleanly", error)
-            stopped = false
+            stopError = error.message ?: "MediaRecorder.stop failed"
         } catch (error: Exception) {
             Log.e(TAG, "Failed to stop MediaRecorder", error)
-            stopped = false
+            stopError = error.message ?: "MediaRecorder.stop failed"
         }
 
         isRecording = false
         recordingStartElapsedRealtimeMs = 0
         releaseRecorder()
 
-        if (!restorePreviewSession) {
-            stopCapture()
-            return stopped
-        }
-
         stopCapture()
-        val previewRestored = createCaptureSession(includeRecorderSurface = false)
-        return stopped && previewRestored
+        createCaptureSession(includeRecorderSurface = false, callback) {
+            when (val error = stopError) {
+                null -> callback.complete(null)
+                else -> callback.fail(error)
+            }
+        }
+    }
+
+    /**
+     * Synchronously stops an active recording for teardown, where no
+     * session restore is wanted because the camera is closing anyway.
+     */
+    private fun stopRecordingNow() {
+        if (!isRecording) {
+            return
+        }
+        try {
+            mediaRecorder?.stop()
+        } catch (error: Exception) {
+            Log.e(TAG, "Failed to stop MediaRecorder during teardown", error)
+        }
+        isRecording = false
+        recordingStartElapsedRealtimeMs = 0
+        releaseRecorder()
     }
     fun getRecordingDurationMs(): Long {
         if (!isRecording || recordingStartElapsedRealtimeMs == 0L) {
@@ -658,50 +907,129 @@ class CameraHelper(private val appContext: Context) {
     }
 
     /**
-     * Start RAW video frame stream recording.
+     * Start RAW video frame stream recording; [callback] answers once the
+     * session carries the RAW output.
      */
-    fun startRawRecording(path: String): Boolean {
+    fun startRawRecording(path: String, callback: NativeCallback) {
         val outputPath = path.trim()
         if (outputPath.isEmpty()) {
             Log.e(TAG, "RAW recording path must not be empty")
-            return false
+            callback.fail("RAW recording path must not be empty")
+            return
         }
         if (isRawVideoRecording) {
             Log.e(TAG, "startRawRecording called while already recording RAW")
-            return false
+            callback.fail("startRawRecording called while already recording RAW")
+            return
         }
         if (isRecording) {
             Log.e(TAG, "startRawRecording called while standard recording is active")
-            return false
+            callback.fail("startRawRecording called while standard recording is active")
+            return
         }
 
-        return try {
+        try {
             val file = File(outputPath)
             if (file.exists() && !file.delete()) {
-                Log.e(TAG, "Failed to remove existing RAW output file: $outputPath")
-                return false
+                callback.fail("failed to remove existing RAW output file: $outputPath")
+                return
             }
             file.parentFile?.mkdirs()
             val stream = FileOutputStream(file)
-            writeRawVideoHeader(stream, frameWidth, frameHeight, frameRate, isBgra = false)
             synchronized(rawVideoLock) {
                 rawVideoOutput = stream
+                rawVideoDataSpace = null
                 rawVideoRecordingStartElapsedRealtimeMs = SystemClock.elapsedRealtime()
                 isRawVideoRecording = true
             }
-            true
+            // The preview frames are GPU-only, so RAW video reads its own
+            // CPU-readable YUV stream, attached only while recording.
+            val reader = ImageReader.newInstance(frameWidth, frameHeight, ImageFormat.YUV_420_888, 2)
+            reader.setOnImageAvailableListener({ source ->
+                val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
+                try {
+                    maybeWriteRawVideoFrame(image, SystemClock.elapsedRealtimeNanos())
+                } finally {
+                    image.close()
+                }
+            }, backgroundHandler)
+            rawVideoImageReader = reader
         } catch (error: Exception) {
             Log.e(TAG, "Failed to start RAW recording", error)
-            stopRawVideoRecordingInternal()
-            false
+            stopRawVideoRecordingNow()
+            callback.fail("failed to start RAW recording: ${error.message ?: error.javaClass.name}")
+            return
+        }
+
+        createCaptureSession(includeRecorderSurface = false, callback) {
+            callback.complete(null)
         }
     }
 
     /**
-     * Stop RAW video frame stream recording.
+     * Stop RAW video frame stream recording; [callback] answers once the
+     * reader is off the session and the output file is closed.
      */
-    fun stopRawRecording(): Boolean {
-        return stopRawVideoRecordingInternal()
+    fun stopRawRecording(callback: NativeCallback) {
+        val reader = rawVideoImageReader
+        rawVideoImageReader = null
+
+        if (reader != null && cameraDevice != null) {
+            // Reconfigure the session without the reader before closing it.
+            createCaptureSession(includeRecorderSurface = false, callback) {
+                reader.close()
+                closeRawVideoOutput(callback)
+            }
+        } else {
+            reader?.close()
+            closeRawVideoOutput(callback)
+        }
+    }
+
+    /**
+     * Closes the RAW output stream and answers [callback] when one is set
+     * (an internal teardown passes none).
+     */
+    private fun closeRawVideoOutput(callback: NativeCallback?) {
+        val output = synchronized(rawVideoLock) {
+            val stream = rawVideoOutput
+            rawVideoOutput = null
+            rawVideoDataSpace = null
+            isRawVideoRecording = false
+            rawVideoRecordingStartElapsedRealtimeMs = 0L
+            stream
+        }
+        try {
+            output?.flush()
+            output?.close()
+            callback?.complete(null)
+        } catch (error: Exception) {
+            Log.e(TAG, "Failed to stop RAW recording stream", error)
+            callback?.fail("failed to stop RAW recording stream: ${error.message ?: error.javaClass.name}")
+        }
+    }
+
+    /**
+     * Synchronous teardown of RAW video recording for closeCamera, where
+     * the session is being torn down anyway.
+     */
+    private fun stopRawVideoRecordingNow() {
+        rawVideoImageReader?.close()
+        rawVideoImageReader = null
+        val output = synchronized(rawVideoLock) {
+            val stream = rawVideoOutput
+            rawVideoOutput = null
+            rawVideoDataSpace = null
+            isRawVideoRecording = false
+            rawVideoRecordingStartElapsedRealtimeMs = 0L
+            stream
+        }
+        try {
+            output?.flush()
+            output?.close()
+        } catch (error: Exception) {
+            Log.e(TAG, "Failed to stop RAW recording stream", error)
+        }
     }
     fun getRawRecordingDurationMs(): Long {
         if (!isRawVideoRecording || rawVideoRecordingStartElapsedRealtimeMs == 0L) {
@@ -711,18 +1039,13 @@ class CameraHelper(private val appContext: Context) {
     }
 
     /**
-     * Get latest frame as RGBA bytes.
-     * Returns null if no new frame is available.
-     */
-    fun getFrame(): ByteArray? {
-        return frameQueue.pollFirst()
-    }
-
-    /**
      * Wait for the next available frame and consume it.
      * Returns null on timeout or if no frame is available.
+     *
+     * The returned frame keeps one of the `PREVIEW_MAX_IN_FLIGHT` slots
+     * until its [CapturedFrame.close] runs.
      */
-    fun waitForNextFrame(timeoutMs: Int): ByteArray? {
+    fun waitForNextFrame(timeoutMs: Int): CapturedFrame? {
         return try {
             if (timeoutMs <= 0) {
                 frameQueue.pollFirst()
@@ -732,6 +1055,220 @@ class CameraHelper(private val appContext: Context) {
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()
             null
+        }
+    }
+
+    /**
+     * Wait for the next analysis frame and consume it.
+     * Returns null on timeout or when the camera was opened without an
+     * analysis output, whose queue never fills.
+     *
+     * The receiver owns the returned frame: [AnalysisFrame.close] returns
+     * its image to the reader and frees one of the `ANALYSIS_MAX_IN_FLIGHT`
+     * slots, re-arming acquisition.
+     */
+    fun waitForNextAnalysisFrame(timeoutMs: Int): AnalysisFrame? {
+        return try {
+            if (timeoutMs <= 0) {
+                analysisQueue.pollFirst()
+            } else {
+                analysisQueue.pollFirst(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+            }
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            null
+        }
+    }
+
+    /**
+     * Takes the newest pending preview image while a slot is free, evicting
+     * the queued frame nobody took — newest wins. Runs only on the camera
+     * background thread; the counter it reads is mutated there alone.
+     *
+     * When `PREVIEW_MAX_IN_FLIGHT` images are already out this acquires
+     * nothing, so `acquireLatestImage` always has a spare `PREVIEW_IMAGES`
+     * slot: the pending frame stays with the producer and is dropped once a
+     * leased image's close re-arms the drain through [releasePreviewImage].
+     */
+    private fun drainPreviewReader(reader: ImageReader, handler: Handler) {
+        if (reader !== previewImageReader || previewDrainActive) {
+            return
+        }
+        previewDrainActive = true
+        try {
+            while (true) {
+                if (previewImagesInFlight >= PREVIEW_MAX_IN_FLIGHT) {
+                    previewFramesDropped += 1
+                    if (previewFramesDropped == 1) {
+                        Log.i(
+                            TAG,
+                            "preview consumer holds $PREVIEW_MAX_IN_FLIGHT frames; " +
+                                "dropping until one returns",
+                        )
+                    }
+                    return
+                }
+                val image = reader.acquireLatestImage() ?: return
+                previewImagesInFlight += 1
+                if (previewFramesDropped != 0) {
+                    Log.i(TAG, "preview resumed after dropping $previewFramesDropped frames")
+                    previewFramesDropped = 0
+                }
+                val buffer = image.hardwareBuffer
+                if (buffer == null) {
+                    image.close()
+                    previewImagesInFlight -= 1
+                    throw IllegalStateException(
+                        "a GPU-sampled camera image carries no HardwareBuffer",
+                    )
+                }
+                frameWidth = image.width
+                frameHeight = image.height
+                // Newest wins: a frame nobody took yet goes back to the reader.
+                frameQueue.pollLast()?.let { stale -> stale.close() }
+                frameQueue.offerLast(
+                    CapturedFrame(
+                        image,
+                        buffer,
+                        displayRotationDegrees(),
+                        imageDataSpace(image),
+                        selectedDynamicRangeProfile,
+                        image.timestamp,
+                    ) {
+                        releasePreviewImage(reader, handler)
+                    },
+                )
+            }
+        } finally {
+            previewDrainActive = false
+        }
+    }
+
+    /**
+     * A leased preview image was closed on some thread: free one in-flight
+     * slot, then re-check the reader for the newest image that waited for
+     * it. Runs on the camera background thread — [close] on another thread
+     * posts here; once the session's looper is gone the slot count has been
+     * reset anyway, so a close during teardown is dropped.
+     */
+    private fun releasePreviewImage(reader: ImageReader, handler: Handler) {
+        val released = Runnable {
+            if (reader === previewImageReader) {
+                previewImagesInFlight -= 1
+                drainPreviewReader(reader, handler)
+            }
+        }
+        if (handler.looper.isCurrentThread) {
+            released.run()
+        } else if (handler.looper.thread.isAlive) {
+            handler.post(released)
+        }
+    }
+
+    /**
+     * Takes the newest pending analysis image while a slot is free,
+     * evicting the queued frame nobody took — newest wins. Runs only on
+     * the camera background thread; the counter it reads is mutated there
+     * alone.
+     *
+     * When `ANALYSIS_MAX_IN_FLIGHT` images are already out this acquires
+     * nothing, so `acquireLatestImage` always has a spare `ANALYSIS_IMAGES`
+     * slot: the pending frame stays with the producer and is dropped once a
+     * leased image's close re-arms the drain through [releaseAnalysisImage].
+     */
+    private fun drainAnalysisReader(reader: ImageReader, handler: Handler) {
+        if (reader !== analysisImageReader || analysisDrainActive) {
+            return
+        }
+        analysisDrainActive = true
+        try {
+            while (true) {
+                if (analysisImagesInFlight >= ANALYSIS_MAX_IN_FLIGHT) {
+                    analysisFramesDropped += 1
+                    if (analysisFramesDropped == 1) {
+                        Log.i(
+                            TAG,
+                            "analysis consumer holds $ANALYSIS_MAX_IN_FLIGHT frames; " +
+                                "dropping until one returns",
+                        )
+                    }
+                    return
+                }
+                val image = reader.acquireLatestImage() ?: return
+                analysisImagesInFlight += 1
+                if (analysisFramesDropped != 0) {
+                    Log.i(TAG, "analysis resumed after dropping $analysisFramesDropped frames")
+                    analysisFramesDropped = 0
+                }
+                // Newest wins: a frame nobody took yet goes back to the reader.
+                analysisQueue.pollLast()?.let { stale -> stale.close() }
+                analysisQueue.offerLast(
+                    AnalysisFrame(
+                        image,
+                        displayRotationDegrees(),
+                        imageDataSpace(image),
+                        image.timestamp,
+                    ) {
+                        releaseAnalysisImage(reader, handler)
+                    },
+                )
+            }
+        } finally {
+            analysisDrainActive = false
+        }
+    }
+
+    /**
+     * A leased analysis image was closed on some thread: free one in-flight
+     * slot, then re-check the reader for the newest image that waited for
+     * it. Runs on the camera background thread — [AnalysisFrame.close] on
+     * another thread posts here; once the session's looper is gone the slot
+     * count has been reset anyway, so a close during teardown is dropped.
+     */
+    private fun releaseAnalysisImage(reader: ImageReader, handler: Handler) {
+        val released = Runnable {
+            if (reader === analysisImageReader) {
+                analysisImagesInFlight -= 1
+                drainAnalysisReader(reader, handler)
+            }
+        }
+        if (handler.looper.isCurrentThread) {
+            released.run()
+        } else if (handler.looper.thread.isAlive) {
+            handler.post(released)
+        }
+    }
+
+    /**
+     * Clockwise angle, in degrees, through which the sensor's output must be
+     * rotated to be upright in the device's natural orientation.
+     */
+    fun getSensorOrientation(cameraId: String): Int {
+        val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        return manager.getCameraCharacteristics(cameraId)
+            .get(CameraCharacteristics.SENSOR_ORIENTATION)
+            ?: throw IllegalStateException("camera $cameraId reports no SENSOR_ORIENTATION")
+    }
+
+    /**
+     * Whether the lens faces away from the display. Front and external lenses
+     * do not, so the display rotation turns their image the other way.
+     */
+    fun lensFacesBack(cameraId: String): Boolean {
+        val manager = appContext.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        return manager.getCameraCharacteristics(cameraId)
+            .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+    }
+
+    private fun displayRotationDegrees(): Int {
+        val display = displayManager.getDisplay(Display.DEFAULT_DISPLAY)
+            ?: throw IllegalStateException("the default display is gone")
+        return when (val rotation = display.rotation) {
+            Surface.ROTATION_0 -> 0
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> throw IllegalStateException("unknown display rotation $rotation")
         }
     }
 
@@ -746,43 +1283,63 @@ class CameraHelper(private val appContext: Context) {
      * Close camera resources.
      */
     fun closeCamera() {
-        stopRecordingInternal(restorePreviewSession = false)
+        stopRecordingNow()
         stopCapture()
+
+        synchronized(requestLock) {
+            pendingOpen?.fail("camera closed")
+            pendingOpen = null
+            pendingSession?.fail("camera closed")
+            pendingSession = null
+            pendingPhoto?.fail("camera closed")
+            pendingPhoto = null
+            pendingRawPhoto?.fail("camera closed")
+            pendingRawPhoto = null
+        }
 
         cameraDevice?.close()
         cameraDevice = null
 
+        // The readers' listeners run on the background thread and read their
+        // images' buffers there; closing a reader frees those buffers, so the
+        // thread must have finished with them first.
+        stopBackgroundThread()
+
         previewImageReader?.close()
         previewImageReader = null
+        analysisImageReader?.close()
+        analysisImageReader = null
         stillImageReader?.close()
         stillImageReader = null
         rawImageReader?.close()
         rawImageReader = null
 
         releaseRecorder()
-        stopRawVideoRecordingInternal()
+        stopRawVideoRecordingNow()
 
-        frameQueue.clear()
-        synchronized(photoLock) {
-            latestPhotoData = null
-            pendingPhotoLatch?.countDown()
-            pendingPhotoLatch = null
+        // The background thread is dead by now, so the frames' closes could
+        // not post their bookkeeping anyway; the count resets below.
+        while (true) {
+            val stale = frameQueue.pollFirst() ?: break
+            stale.hardwareBuffer.close()
+            stale.image.close()
         }
-        synchronized(rawPhotoLock) {
-            latestRawPhotoData = null
-            latestRawImage?.close()
-            latestRawImage = null
-            pendingRawImageLatch?.countDown()
-            pendingRawImageLatch = null
+        while (true) {
+            val stale = analysisQueue.pollFirst() ?: break
+            stale.close()
         }
+        previewImagesInFlight = 0
+        previewFramesDropped = 0
+        previewDrainActive = false
+        analysisImagesInFlight = 0
+        analysisFramesDropped = 0
+        analysisDrainActive = false
 
         currentCameraId = null
         currentCharacteristics = null
         cameraManager = null
         recordingStartElapsedRealtimeMs = 0L
         isRecording = false
-
-        stopBackgroundThread()
     }
 
     // -------------------------------------------------------------------------
@@ -1209,43 +1766,66 @@ class CameraHelper(private val appContext: Context) {
         return supported.minBy { fps -> kotlin.math.abs(fps - requestedFps) }
     }
 
-    private fun createCaptureSession(includeRecorderSurface: Boolean): Boolean {
+    /**
+     * Rebuilds the capture session; [callback] fails on a configure error,
+     * and on success [onReady] runs before it, answering the operation's
+     * caller. There is no timeout — a session that never answers surfaces
+     * through the caller's own deadline.
+     */
+    private fun createCaptureSession(
+        includeRecorderSurface: Boolean,
+        callback: NativeCallback?,
+        onReady: () -> Unit,
+    ) {
+        val pending = PendingResult(callback)
+        synchronized(requestLock) {
+            pendingSession?.fail("superseded by a newer session request")
+            pendingSession = pending
+        }
+
         val device = cameraDevice ?: run {
             Log.e(TAG, "createCaptureSession called before camera open")
-            return false
+            sessionFailed(pending, "createCaptureSession called before camera open")
+            return
         }
         val previewReader = previewImageReader ?: run {
             Log.e(TAG, "createCaptureSession called before preview reader init")
-            return false
+            sessionFailed(pending, "createCaptureSession called before preview reader init")
+            return
         }
         val stillReader = stillImageReader ?: run {
             Log.e(TAG, "createCaptureSession called before still reader init")
-            return false
+            sessionFailed(pending, "createCaptureSession called before still reader init")
+            return
         }
         val handler = backgroundHandler ?: run {
             Log.e(TAG, "createCaptureSession called without background handler")
-            return false
+            sessionFailed(pending, "createCaptureSession called without background handler")
+            return
         }
 
+        val rawVideoSurface = rawVideoImageReader?.surface
+        val analysisSurface = analysisImageReader?.surface
         val surfaces = mutableListOf<Surface>(
             previewReader.surface,
             stillReader.surface,
         )
         rawImageReader?.surface?.let { surfaces.add(it) }
+        rawVideoSurface?.let { surfaces.add(it) }
+        analysisSurface?.let { surfaces.add(it) }
 
         if (includeRecorderSurface) {
             val surface = recorderSurface ?: run {
                 Log.e(TAG, "Recorder surface is missing while starting recording session")
-                return false
+                sessionFailed(pending, "recorder surface is missing while starting recording session")
+                return
             }
             surfaces.add(surface)
         }
 
         stopCapture()
 
-        val sessionLatch = CountDownLatch(1)
-        var configured = false
-        val callback = object : CameraCaptureSession.StateCallback() {
+        val sessionCallback = object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(session: CameraCaptureSession) {
                 captureSession = session
                 try {
@@ -1256,6 +1836,8 @@ class CameraHelper(private val appContext: Context) {
                     }
                     val builder = device.createCaptureRequest(template)
                     builder.addTarget(previewReader.surface)
+                    rawVideoSurface?.let { builder.addTarget(it) }
+                    analysisSurface?.let { builder.addTarget(it) }
                     if (includeRecorderSurface) {
                         val recordingSurface = recorderSurface
                             ?: error("Recorder surface lost during session configuration")
@@ -1264,18 +1846,32 @@ class CameraHelper(private val appContext: Context) {
                     applyRequestControls(builder, forStillCapture = false)
                     session.setRepeatingRequest(builder.build(), null, handler)
                     previewRequestBuilder = builder
-                    configured = true
                 } catch (error: Exception) {
                     Log.e(TAG, "Failed to configure repeating request", error)
                     previewRequestBuilder = null
-                    configured = false
+                    sessionFailed(
+                        pending,
+                        "failed to configure repeating request: ${error.message ?: error.javaClass.name}",
+                    )
+                    return
                 }
-                sessionLatch.countDown()
+                synchronized(requestLock) {
+                    if (pendingSession === pending) {
+                        pendingSession = null
+                    }
+                }
+                try {
+                    onReady()
+                } catch (error: Exception) {
+                    pending.fail(
+                        "session-ready step failed: ${error.message ?: error.javaClass.name}",
+                    )
+                }
             }
 
             override fun onConfigureFailed(session: CameraCaptureSession) {
                 Log.e(TAG, "Camera capture session configuration failed")
-                sessionLatch.countDown()
+                sessionFailed(pending, "camera capture session configuration failed")
             }
         }
 
@@ -1298,25 +1894,26 @@ class CameraHelper(private val appContext: Context) {
                         SessionConfiguration.SESSION_REGULAR,
                         outputs,
                         executor,
-                        callback,
+                        sessionCallback,
                     ),
                 )
             } else {
-                device.createCaptureSession(surfaces, callback, handler)
+                @Suppress("DEPRECATION") // the only session API on API < 33
+                device.createCaptureSession(surfaces, sessionCallback, handler)
             }
         } catch (error: Exception) {
             Log.e(TAG, "Failed to create capture session", error)
-            return false
+            sessionFailed(pending, "failed to create capture session: ${error.message ?: error.javaClass.name}")
         }
+    }
 
-        val completed = sessionLatch.await(SESSION_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        if (!completed || !configured) {
-            Log.e(TAG, "Timed out configuring camera capture session")
-            stopCapture()
-            return false
+    private fun sessionFailed(pending: PendingResult, message: String) {
+        synchronized(requestLock) {
+            if (pendingSession === pending) {
+                pendingSession = null
+            }
         }
-
-        return true
+        pending.fail(message)
     }
 
     private fun updateRepeatingRequest(): Boolean {
@@ -1470,7 +2067,13 @@ class CameraHelper(private val appContext: Context) {
         releaseRecorder()
 
         return try {
-            val recorder = MediaRecorder()
+            val recorder =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    MediaRecorder(appContext)
+                } else {
+                    @Suppress("DEPRECATION") // `MediaRecorder(context)` needs API 31
+                    MediaRecorder()
+                }
             recorder.setVideoSource(MediaRecorder.VideoSource.SURFACE)
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
 
@@ -1508,51 +2111,128 @@ class CameraHelper(private val appContext: Context) {
         return bitrate.coerceIn(2_000_000L, 60_000_000L).toInt()
     }
 
-    private fun stopRawVideoRecordingInternal(): Boolean {
-        val output = synchronized(rawVideoLock) {
-            val stream = rawVideoOutput
-            rawVideoOutput = null
-            isRawVideoRecording = false
-            rawVideoRecordingStartElapsedRealtimeMs = 0L
-            stream
+
+
+    /**
+     * Appends one YUV_420_888 image as NV12: the luma rows, then the
+     * interleaved Cb/Cr rows, without padding. The planes are copied as
+     * stored; no colour conversion happens.
+     */
+    private fun maybeWriteRawVideoFrame(image: Image, timestampNs: Long) {
+        if (!synchronized(rawVideoLock) { isRawVideoRecording && rawVideoOutput != null }) {
+            return
         }
 
-        return try {
-            output?.flush()
-            output?.close()
-            true
+        val dataSpace = imageDataSpace(image)
+        val colorCodes = rawVideoColorCodes(dataSpace)
+        if (colorCodes == null) {
+            failRawVideoRecording(
+                "Unsupported RAW video data space=$dataSpace " +
+                    "(0x${Integer.toHexString(dataSpace)}), " +
+                    "standard=${rawVideoDataSpaceStandard(dataSpace)}, " +
+                    "range=${rawVideoDataSpaceRange(dataSpace)}",
+            )
+            return
+        }
+
+        try {
+            val width = image.width
+            val height = image.height
+            val chromaWidth = (width + 1) / 2
+            val chromaHeight = (height + 1) / 2
+            val nv12 = ByteArray(width * height + chromaWidth * chromaHeight * 2)
+            val luma = image.planes[0]
+            for (row in 0 until height) {
+                val source = luma.buffer.duplicate()
+                source.position(row * luma.rowStride)
+                source.get(nv12, row * width, width)
+            }
+            val cb = image.planes[1]
+            val cr = image.planes[2]
+            var offset = width * height
+            for (row in 0 until chromaHeight) {
+                for (column in 0 until chromaWidth) {
+                    nv12[offset] = cb.buffer.get(row * cb.rowStride + column * cb.pixelStride)
+                    nv12[offset + 1] = cr.buffer.get(row * cr.rowStride + column * cr.pixelStride)
+                    offset += 2
+                }
+            }
+
+            val changedDataSpace = synchronized(rawVideoLock) {
+                val output = rawVideoOutput ?: return
+                val firstDataSpace = rawVideoDataSpace
+                if (firstDataSpace != null && firstDataSpace != dataSpace) {
+                    firstDataSpace
+                } else {
+                    if (firstDataSpace == null) {
+                        writeRawVideoHeader(
+                            output,
+                            width,
+                            height,
+                            frameRate,
+                            colorCodes.first,
+                            colorCodes.second,
+                        )
+                        rawVideoDataSpace = dataSpace
+                    }
+                    writeU64LE(output, timestampNs)
+                    writeU32LE(output, nv12.size)
+                    output.write(nv12)
+                    null
+                }
+            }
+            if (changedDataSpace != null) {
+                failRawVideoRecording(
+                    "RAW video data space changed from $changedDataSpace " +
+                        "(0x${Integer.toHexString(changedDataSpace)}) to $dataSpace " +
+                        "(0x${Integer.toHexString(dataSpace)})",
+                )
+            }
         } catch (error: Exception) {
-            Log.e(TAG, "Failed to stop RAW recording stream", error)
-            false
+            failRawVideoRecording("Failed writing RAW video frame in data space $dataSpace", error)
         }
     }
 
-    private fun maybeWriteRawVideoFrame(
-        rgba: ByteArray,
-        width: Int,
-        height: Int,
-        timestampNs: Long,
-    ) {
-        val output = synchronized(rawVideoLock) {
-            if (!isRawVideoRecording) {
-                return
-            }
-            rawVideoOutput
-        } ?: return
-
-        try {
-            val expected = width.toLong() * height.toLong() * 4L
-            if (expected != rgba.size.toLong()) {
-                Log.e(TAG, "RAW frame byte count mismatch: expected=$expected actual=${rgba.size}")
-                return
-            }
-            writeU64LE(output, timestampNs)
-            writeU32LE(output, rgba.size)
-            output.write(rgba)
-        } catch (error: Exception) {
-            Log.e(TAG, "Failed writing RAW video frame", error)
-            stopRawVideoRecordingInternal()
+    private fun rawVideoColorCodes(dataSpace: Int): Pair<Int, Int>? {
+        val matrix = when (rawVideoDataSpaceStandard(dataSpace)) {
+            0 -> 6
+            1 -> 1
+            2, 3, 4, 5 -> 6
+            6 -> 9
+            else -> return null
         }
+        val range = when (rawVideoDataSpaceRange(dataSpace)) {
+            0, 1 -> 1
+            2 -> 0
+            else -> return null
+        }
+        return matrix to range
+    }
+
+    private fun rawVideoDataSpaceStandard(dataSpace: Int): Int =
+        (dataSpace ushr DATA_SPACE_STANDARD_SHIFT) and DATA_SPACE_STANDARD_MASK
+
+    private fun rawVideoDataSpaceRange(dataSpace: Int): Int =
+        (dataSpace ushr DATA_SPACE_RANGE_SHIFT) and DATA_SPACE_RANGE_MASK
+
+    private fun failRawVideoRecording(message: String, error: Exception? = null) {
+        if (error == null) {
+            Log.e(TAG, message)
+        } else {
+            Log.e(TAG, message, error)
+        }
+        // Torn down internally, so no caller is waiting: detach the reader's
+        // surface from the session, then close the reader and the output.
+        val reader = rawVideoImageReader
+        rawVideoImageReader = null
+        if (reader != null && cameraDevice != null) {
+            createCaptureSession(includeRecorderSurface = false, callback = null) {
+                reader.close()
+            }
+        } else {
+            reader?.close()
+        }
+        closeRawVideoOutput(callback = null)
     }
 
     private fun writeRawVideoHeader(
@@ -1560,24 +2240,17 @@ class CameraHelper(private val appContext: Context) {
         width: Int,
         height: Int,
         fps: Int,
-        isBgra: Boolean,
+        matrix: Int,
+        range: Int,
     ) {
         // Header layout:
-        // magic(4)='WKRV', version(u8)=1, pixel_format(u8), reserved(u16)=0,
-        // width(u32), height(u32), fps(u32)
+        // magic(4)='WKRV', version=2, NV12 pixel format, H.273 matrix, range,
+        // then width(u32), height(u32), fps(u32).
         output.write(byteArrayOf('W'.code.toByte(), 'K'.code.toByte(), 'R'.code.toByte(), 'V'.code.toByte()))
-        output.write(byteArrayOf(1, if (isBgra) 1 else 2))
-        writeU16LE(output, 0)
+        output.write(byteArrayOf(2, 3, matrix.toByte(), range.toByte()))
         writeU32LE(output, width)
         writeU32LE(output, height)
         writeU32LE(output, fps)
-    }
-
-    private fun writeU16LE(output: FileOutputStream, value: Int) {
-        output.write(byteArrayOf(
-            (value and 0xFF).toByte(),
-            ((value ushr 8) and 0xFF).toByte(),
-        ))
     }
 
     private fun writeU32LE(output: FileOutputStream, value: Int) {
@@ -1660,62 +2333,5 @@ class CameraHelper(private val appContext: Context) {
         } catch (_: IllegalArgumentException) {
             // Key unsupported on this device/request template. Skip gracefully.
         }
-    }
-
-    private fun yuv420ToRgba(image: Image): ByteArray {
-        val width = image.width
-        val height = image.height
-
-        val yPlane = image.planes[0]
-        val uPlane = image.planes[1]
-        val vPlane = image.planes[2]
-
-        val yBuffer = yPlane.buffer
-        val uBuffer = uPlane.buffer
-        val vBuffer = vPlane.buffer
-
-        val yRowStride = yPlane.rowStride
-        val yPixelStride = yPlane.pixelStride
-
-        val uRowStride = uPlane.rowStride
-        val uPixelStride = uPlane.pixelStride
-
-        val vRowStride = vPlane.rowStride
-        val vPixelStride = vPlane.pixelStride
-
-        val rgba = ByteArray(width * height * 4)
-
-        for (row in 0 until height) {
-            val yRowOffset = row * yRowStride
-            val uvRowOffsetU = (row / 2) * uRowStride
-            val uvRowOffsetV = (row / 2) * vRowStride
-
-            for (col in 0 until width) {
-                val yIndex = yRowOffset + col * yPixelStride
-                val uvCol = col / 2
-                val uIndex = uvRowOffsetU + uvCol * uPixelStride
-                val vIndex = uvRowOffsetV + uvCol * vPixelStride
-
-                val y = yBuffer.get(yIndex).toInt() and 0xFF
-                val u = uBuffer.get(uIndex).toInt() and 0xFF
-                val v = vBuffer.get(vIndex).toInt() and 0xFF
-
-                val c = y - 16
-                val d = u - 128
-                val e = v - 128
-
-                val r = ((298 * c + 409 * e + 128) shr 8).coerceIn(0, 255)
-                val g = ((298 * c - 100 * d - 208 * e + 128) shr 8).coerceIn(0, 255)
-                val b = ((298 * c + 516 * d + 128) shr 8).coerceIn(0, 255)
-
-                val rgbaIndex = (row * width + col) * 4
-                rgba[rgbaIndex] = r.toByte()
-                rgba[rgbaIndex + 1] = g.toByte()
-                rgba[rgbaIndex + 2] = b.toByte()
-                rgba[rgbaIndex + 3] = 0xFF.toByte()
-            }
-        }
-
-        return rgba
     }
 }

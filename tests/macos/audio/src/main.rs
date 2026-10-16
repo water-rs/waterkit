@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let player = if let Some(file_path) = args.audio_file {
         let expanded_path = expand_path(&file_path);
-        println!("Opening: {}", expanded_path);
+        println!("Opening: {expanded_path}");
 
         let p = AudioPlayer::open(&expanded_path)?;
         println!("✓ Audio opened");
@@ -99,7 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let expanded = expand_path(&art);
             let encoded = std::fs::read(&expanded)?;
             p = p.artwork(MediaArtwork::new(encoded));
-            println!("Artwork: {}", expanded);
+            println!("Artwork: {expanded}");
         }
 
         println!("\nNow Playing (Metadata):");
@@ -160,7 +160,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             futures::pin_mut!(commands);
 
             while let Some(cmd) = commands.next().await {
-                println!("Received command: {:?}", cmd);
+                println!("Received command: {cmd:?}");
                 player_ref.handle(&cmd);
 
                 if matches!(cmd, waterkit_audio::MediaCommand::Stop) {

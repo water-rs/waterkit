@@ -13,55 +13,136 @@ categories = ["multimedia::video", "gui"]
 [lints]
 workspace = true
 
-[package.metadata.cargo-machete]
-ignored = ["waterkit-codec"]
-
 [dependencies]
 waterkit-core = { workspace = true }
 thiserror = { workspace = true }
 wgpu.workspace = true
 futures.workspace = true
 async-channel.workspace = true
+tracing.workspace = true
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
-
-waterkit-codec = { workspace = true, optional = true }
-shaderloom = { workspace = true, optional = true }
+shaderloom = { workspace = true, features = ["runtime"] }
+# Zero-copy import of the platform frame buffers, and the YCbCr encoding types
+# frames carry.
+wgpu-external-frame.workspace = true
+# The YCbCr mode codes the converter's shaders take.
+waterkit-video-core.workspace = true
+# CPU conversion for offline raw-video decoding and desktop recording.
+yuv = "0.8.19"
 
 [build-dependencies]
-waterkit-build.workspace = true
-shaderloom = { workspace = true, features = ["build"], optional = true }
+# The frame converter's shaders are composed with the shared Y'CbCr fragment
+# and compiled to the target's native shader format at build time.
+shaderloom = { workspace = true, features = ["build"] }
+waterkit-video-core.workspace = true
 
 [features]
-codec = ["dep:waterkit-codec"]
-preview-example = ["dep:shaderloom"]
+preview-example = []
+# VA-API hardware encoders on Linux; off by default like the codec's own
+# `vaapi` (the software AV1 encoder still covers encoding without it).
+vaapi = ["waterkit-codec/vaapi"]
 
 [[example]]
 name = "preview"
 required-features = ["preview-example"]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 pollster = "1.0"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
 
-# winit pulls in `android-activity`, which only builds once an application picks
-# an activity backend; the preview example it serves is desktop-only.
+# winit serves the preview example's window. On Android it pulls in
+# `android-activity`, which only builds once an activity backend is selected, so
+# the example selects one there; it still opens its window only on desktop.
 [target.'cfg(not(target_os = "android"))'.dev-dependencies]
 winit.workspace = true
 
-# Desktop platforms (Windows, macOS, Linux) - use nokhwa
+[target.'cfg(target_os = "android")'.dev-dependencies]
+winit = { workspace = true, features = ["android-native-activity"] }
+
+# The preview example runs its camera loop on the browser's event loop.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-futures = "0.4"
+
+# Desktop platforms (Windows, Linux) - use nokhwa. Recording encodes through
+# waterkit-codec and muxes with waterkit-video-container. `yuv` is a common
+# dependency because the public WKRV reader converts NV12 on every platform.
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 nokhwa = { workspace = true, features = ["input-native"] }
+# `software-encode` carries the rav1e AV1 encoder; the `vaapi` feature adds
+# the VA-API hardware encoders via cros-codecs on Linux.
+waterkit-codec = { workspace = true, features = ["software-encode"] }
+waterkit-video-container.workspace = true
 
-# Apple platforms (iOS, macOS) - use native AVCaptureSession
+# Apple platforms (iOS, macOS) - AVCaptureSession through objc2
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge.workspace = true
-objc.workspace = true
+objc2.workspace = true
+dispatch2 = { workspace = true, features = ["block2"] }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSDictionary",
+    "NSError",
+    "NSNotification",
+    "NSString",
+    "NSURL",
+    "NSValue",
+] }
+objc2-av-foundation = { workspace = true, features = [
+    "dispatch2",
+    "block2",
+    "objc2-core-foundation",
+    "objc2-core-media",
+    "AVCaptureDevice",
+    "AVCaptureFileOutput",
+    "AVCaptureInput",
+    "AVCaptureOutput",
+    "AVCaptureOutputBase",
+    "AVCapturePhotoOutput",
+    "AVCaptureSession",
+    "AVCaptureSessionPreset",
+    "AVCaptureVideoDataOutput",
+    "AVMediaFormat",
+    "AVVideoSettings",
+] }
+objc2-core-media = { workspace = true, features = [
+    "CMFormatDescription",
+    "CMSampleBuffer",
+    "CMTime",
+] }
 core-graphics-types = "0.2"
+objc2-core-foundation = { workspace = true, features = ["CFString", "CFCGTypes"] }
+objc2-core-video = { workspace = true, features = [
+    "CVBase",
+    "CVBuffer",
+    "CVImageBuffer",
+    "CVPixelBuffer",
+    "CVPixelBufferIOSurface",
+    "CVReturn",
+    "objc2-io-surface",
+] }
+objc2-io-surface.workspace = true
 
-[target.'cfg(any(target_os = "ios", target_os = "macos"))'.build-dependencies]
+# iOS only: interface orientation drives each frame's rotation.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = { workspace = true, features = [
+    "UIApplication",
+    "UIInterface",
+    "UIResponder",
+    "UIScene",
+    "UISceneDefinitions",
+    "UIOrientation",
+    "UISceneSizeRestrictions",
+    "UIWindowScene",
+] }
 
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
-waterkit-build.workspace = true
+waterkit-build = { workspace = true, features = ["native-callback"] }
 jni.workspace = true
 ndk-context.workspace = true
+# `HardwareBuffer::from_jni`, to reach each camera image's AHardwareBuffer.
+ndk = { version = "0.9", default-features = false, features = ["api-level-28"] }
+
+# Android helper classes the packager compiles into the application's
+# classpath (see water-rs/cli's android backend).
+[package.metadata.waterui.android]
+kotlin-sources = ["src/sys/android/CameraHelper.kt"]

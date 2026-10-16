@@ -39,7 +39,17 @@ mod id_tracker {
 }
 
 /// Show a notification using notify-rust.
-pub fn show_notification(
+// The per-platform sys contract is async; the notify-rust post is synchronous.
+// The lint fires only in this fn's macOS body (its linux arm contains a spawned
+// closure clippy counts as async work), so the expectation is scoped to macOS.
+#[cfg_attr(
+    target_os = "macos",
+    expect(
+        clippy::unused_async,
+        reason = "the per-platform sys contract is async; notify-rust posts synchronously"
+    )
+)]
+pub async fn show_notification(
     notification: &Notification,
 ) -> Result<NotificationHandleInner, NotificationError> {
     let mut n = NrNotification::new();

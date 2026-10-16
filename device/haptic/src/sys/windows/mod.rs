@@ -89,7 +89,7 @@ pub fn is_available() -> bool {
     VibrationDevice::RequestAccessAsync().is_ok() && VibrationDevice::GetDefaultAsync().is_ok()
 }
 
-pub fn impact(intensity: Intensity) -> Result<(), HapticError> {
+pub async fn impact(intensity: Intensity) -> Result<(), HapticError> {
     let waveform_id = if intensity.value() > 0.6 {
         KnownSimpleHapticsControllerWaveforms::Press()
     } else {
@@ -103,7 +103,7 @@ pub fn impact(intensity: Intensity) -> Result<(), HapticError> {
     })
 }
 
-pub fn selection() -> Result<(), HapticError> {
+pub async fn selection() -> Result<(), HapticError> {
     let waveform_id = KnownSimpleHapticsControllerWaveforms::Click()
         .map_err(|e| HapticError::Platform(e.to_string()))?;
 
@@ -113,11 +113,11 @@ pub fn selection() -> Result<(), HapticError> {
     })
 }
 
-pub fn notification_success() -> Result<(), HapticError> {
-    impact(Intensity::MEDIUM)
+pub async fn notification_success() -> Result<(), HapticError> {
+    impact(Intensity::MEDIUM).await
 }
 
-pub fn notification_warning() -> Result<(), HapticError> {
+pub async fn notification_warning() -> Result<(), HapticError> {
     let waveform_id = KnownSimpleHapticsControllerWaveforms::BuzzContinuous()
         .map_err(|e| HapticError::Platform(e.to_string()))?;
 
@@ -127,7 +127,7 @@ pub fn notification_warning() -> Result<(), HapticError> {
     })
 }
 
-pub fn notification_error() -> Result<(), HapticError> {
+pub async fn notification_error() -> Result<(), HapticError> {
     let waveform_id = KnownSimpleHapticsControllerWaveforms::BuzzContinuous()
         .map_err(|e| HapticError::Platform(e.to_string()))?;
 
@@ -137,7 +137,7 @@ pub fn notification_error() -> Result<(), HapticError> {
     })
 }
 
-pub fn play_pattern(pattern: &HapticPattern) -> Result<(), HapticError> {
+pub async fn play_pattern(pattern: &HapticPattern) -> Result<(), HapticError> {
     if pattern.steps().is_empty() {
         return Err(HapticError::InvalidPattern(
             "pattern must contain at least one step".into(),

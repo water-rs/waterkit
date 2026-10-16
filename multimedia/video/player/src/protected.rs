@@ -3405,32 +3405,27 @@ fn media_format_integer_optional(
 fn decode_android_pcm(bytes: &[u8], encoding: i32) -> Result<Vec<f32>, Error> {
     match encoding {
         MEDIA_CODEC_PCM_16_BIT => {
-            let mut chunks = bytes.chunks_exact(2);
-            let samples = chunks
-                .by_ref()
-                .map(|sample| f32::from(i16::from_le_bytes([sample[0], sample[1]])) / 32_768.0)
-                .collect::<Vec<_>>();
-            if !chunks.remainder().is_empty() {
+            let (samples, remainder) = bytes.as_chunks::<2>();
+            if !remainder.is_empty() {
                 return Err(Error::Codec(format!(
                     "16-bit protected PCM contains {} trailing byte(s)",
-                    chunks.remainder().len()
+                    remainder.len()
                 )));
             }
-            Ok(samples)
+            Ok(samples
+                .iter()
+                .map(|&sample| f32::from(i16::from_le_bytes(sample)) / 32_768.0)
+                .collect())
         }
         MEDIA_CODEC_PCM_FLOAT => {
-            let mut chunks = bytes.chunks_exact(4);
-            let samples = chunks
-                .by_ref()
-                .map(|sample| f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]]))
-                .collect::<Vec<_>>();
-            if !chunks.remainder().is_empty() {
+            let (samples, remainder) = bytes.as_chunks::<4>();
+            if !remainder.is_empty() {
                 return Err(Error::Codec(format!(
                     "float protected PCM contains {} trailing byte(s)",
-                    chunks.remainder().len()
+                    remainder.len()
                 )));
             }
-            Ok(samples)
+            Ok(samples.iter().copied().map(f32::from_le_bytes).collect())
         }
         other => Err(Error::Unsupported(format!(
             "unsupported Android protected PCM encoding {other}"

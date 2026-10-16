@@ -7,12 +7,14 @@ Cross-platform local notifications for Rust.
 | Feature | Linux | macOS | Windows | iOS | Android |
 |---------|:-----:|:-----:|:-------:|:---:|:-------:|
 | title/body | ✓ | ✓ | ✓ | ✓ | ✓ |
-| icon | ✓ | ✓ | ✓ | ✗ | ✗ |
+| icon | ✓ | ✓ | ✓* | ✗ | ✗ |
 | subtitle | ✗ | ✓ | ✗ | ✓ | ✗ |
 | interruption_level | ✓ | ✗ | ✗ | ✓ | ✓ |
-| timeout | ✓ | ✗ | ✗ | ✗ | ✗ |
-| sound | ✓ | ✗ | ✗ | ✓ | ✓ |
-| actions (URL) | ✓ | ✓ | ✗ | ✓ | ✓ |
+| timeout | ✓ | ✗ | ✓* | ✗ | ✗ |
+| sound | ✓ | ✗ | ✓* | ✓ | ✓ |
+| actions (URL) | ✓ | ✓ | ✓* | ✓ | ✓ |
+
+*Windows: only `Icon::File`, `Sound::Default`/`Sound::Suppress`, and up to 5 actions are supported. `Timeout::Never` shows a reminder toast that persists until dismissed and requires at least one action. Inputs the toast schema cannot render — `Icon::Theme`, `Sound::Theme`/`Sound::File`, more than 5 actions, text input actions, `Timeout::Never` without an action, or a duration above ~25s — fail with `NotificationError::Unsupported` instead of being silently dropped.
 
 ## Installation
 
@@ -26,11 +28,12 @@ waterkit-notification = "0.1"
 ```rust
 use waterkit_notification::Notification;
 
-fn main() -> Result<(), waterkit_notification::NotificationError> {
+async fn greet() -> Result<(), waterkit_notification::NotificationError> {
     Notification::new()
         .title("Hello")
         .body("World from WaterKit!")
-        .show()?;
+        .show()
+        .await?;
     Ok(())
 }
 ```
@@ -46,7 +49,8 @@ Notification::new()
     .title("Meeting Starting")
     .body("Your meeting starts in 5 minutes")
     .time_sensitive()
-    .show()?;
+    .show()
+    .await?;
 ```
 
 ### Interruption Levels
@@ -72,7 +76,8 @@ Notification::new()
     .body("A new version of WaterUI is ready to download")
     .action(Action::new("View Details", "https://waterui.dev"))
     .action(Action::new("Later", "waterui://dismiss"))
-    .show()?;
+    .show()
+    .await?;
 ```
 
 Actions work on Linux, macOS, iOS, and Android. Each action opens the specified URL when clicked.
@@ -91,9 +96,10 @@ Notification::new()
     .app_name("My App")
     .icon(Icon::Theme("folder-download".into())) // Linux theme icon
     .sound(Sound::Theme("complete".into()))   // Linux sound theme
-    .timeout(Timeout::Milliseconds(5000))     // Linux only
+    .timeout(Timeout::Milliseconds(5000))     // Linux/Windows
     .interruption_level(InterruptionLevel::Active)
-    .show()?;
+    .show()
+    .await?;
 ```
 
 ## Platform Backends
@@ -102,9 +108,29 @@ Notification::new()
 |----------|---------|
 | Linux | D-Bus (freedesktop.org notifications) |
 | macOS | `UserNotifications` (bundled apps) / `notify-rust` (CLI) |
-| Windows | `notify-rust` (winrt-notification) |
+| Windows | `WinRT` `Windows.UI.Notifications` via `windows` |
 | iOS | `UserNotifications` framework |
 | Android | `NotificationManager` with channels |
+
+## Windows Notes
+
+Toasts are attributed to an `AppUserModelID`. Packaged (MSIX) apps inherit
+theirs from the package; an unpackaged process must register an identity
+before the first `show()`, which fails otherwise:
+
+```rust
+#[cfg(target_os = "windows")]
+let registration = waterkit_notification::windows::AppIdentity::new(
+    "com.example.myapp",
+    "My App",
+)
+.register()?;
+```
+
+Keep the returned `AppRegistration` alive for as long as the process shows or
+answers toasts — dropping it revokes the in-process activator, and a toast
+click then launches a new instance of the executable (with the
+`-ToastActivated` argument) instead of reaching the running process.
 
 ## Android Notes
 

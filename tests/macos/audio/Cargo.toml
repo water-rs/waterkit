@@ -5,6 +5,9 @@ edition = "2021"
 publish = false
 description = "macOS test for waterkit-audio"
 
+[lints]
+workspace = true
+
 
 [[bin]]
 name = "audio-test"

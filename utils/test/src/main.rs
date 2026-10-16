@@ -1,16 +1,27 @@
+//! `waterkit-test`, the runner that builds, launches and collects the
+//! structured report of a `WaterKit` integration-test harness on macOS, iOS
+//! and Android.
+
 use clap::{Parser, Subcommand};
 use eyre::{Context, Result};
 use owo_colors::OwoColorize;
+use process_control::{ChildExt, Control};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use toml_edit::DocumentMut;
 use tracing::{info, warn};
-use wait_timeout::ChildExt;
 use waterkit_test_report::{TestReport, from_json, parse_report_block};
 
+mod android_device;
+mod ios;
+
 const MACOS_HEADERPAD_RUSTFLAGS: &str = "-C link-arg=-Wl,-headerpad_max_install_names";
+
+/// Package name of the Android harness application.
+const ANDROID_HARNESS_PACKAGE: &str = "com.waterkit.test";
 
 /// How long the harness allows Android to bring the test activity to its first
 /// frame, measured by `am start -W`.
@@ -27,8 +38,46 @@ const ANDROID_LAUNCH_TIMEOUT: Duration = Duration::from_secs(300);
 /// from the moment Android reports the activity displayed.
 const ANDROID_REPORT_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// The report deadline when the harness is waiting for picker interaction.
+const ANDROID_INTERACTIVE_REPORT_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// Cadence for polling the on-device report file over `adb`.
 const ANDROID_REPORT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const ANDROID_SMS_DELIVERY_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How long the guest may take to stage an injected SMS after the emulator
+/// console accepts it.
+///
+/// `adb emu sms send` returning OK only means the virtual modem queued the
+/// message; it can still be lost between the modem and the guest's telephony
+/// stack. Inbound SMS — including the app-token SMS the OTP test uses, which
+/// never lands in the inbox — is staged in `content://sms/raw` before
+/// dispatch, so a new row there is the delivery signal the OTP case's wait
+/// depends on. The hop is normally sub-second; the bound only keeps an
+/// emulator that dropped the injection from reporting as a test timeout.
+const ANDROID_SMS_SURFACE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long the harness waits for the guest's telephony stack to be able to
+/// receive an SMS at all.
+///
+/// `adb emu sms send` only queues the message at the virtual modem; until the
+/// guest's radio is powered and its inbound SMS pipeline is armed, the +CMT
+/// the modem emits is dropped silently. `dumpsys telephony.registry` reports
+/// `mVoiceRegState=0(IN_SERVICE)` only once the whole chain is live, so the
+/// harness treats that as the readiness signal. The bound only keeps a guest
+/// whose telephony never comes up from hanging the run.
+const ANDROID_TELEPHONY_READY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bound for a single `adb` query against the guest (`dumpsys`,
+/// `content query`). The answers are immediate on a healthy guest; the bound
+/// only absorbs a guest too busy to answer promptly.
+const ANDROID_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Deserialize)]
+struct SmsRequest {
+    sender: String,
+    body: String,
+}
 
 #[derive(Parser)]
 #[command(name = "waterkit-test")]
@@ -44,17 +93,17 @@ enum Commands {
     Android {
         /// Path to the crate to run
         crate_path: PathBuf,
+        /// Enable cases that require interaction with Android pickers
+        #[arg(long)]
+        interactive: bool,
     },
     /// Run a crate on macOS
     Macos {
         /// Path to the crate to run
         crate_path: PathBuf,
     },
-    /// Run a crate on iOS
-    Ios {
-        /// Path to the crate to run
-        crate_path: PathBuf,
-    },
+    /// Run a crate on the booted iOS simulator, or on a paired device
+    Ios(ios::IosArgs),
 }
 
 fn main() -> Result<()> {
@@ -66,55 +115,25 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Android { crate_path } => run_android(&crate_path),
+        Commands::Android {
+            crate_path,
+            interactive,
+        } => run_android(&crate_path, interactive),
         Commands::Macos { crate_path } => run_macos(&crate_path),
-        Commands::Ios { crate_path } => run_ios(&crate_path),
+        Commands::Ios(args) => ios::run(args),
     }
 }
 
-fn run_android(crate_path: &Path) -> Result<()> {
+fn run_android(crate_path: &Path, interactive: bool) -> Result<()> {
     info!("{}", "Preparing Android test environment...".green().bold());
 
     let toolchain = AndroidToolchain::resolve()?;
-    with_android_device_awake(&toolchain, || run_android_awake(crate_path, &toolchain))
-}
-
-fn run_android_awake(crate_path: &Path, toolchain: &AndroidToolchain) -> Result<()> {
-    // 1. Verify crate path
-    let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
-
-    if !crate_path.join("Cargo.toml").exists() {
-        eyre::bail!("No Cargo.toml found at {}", crate_path.display());
-    }
-
-    info!("Target crate: {}", crate_path.display());
-
-    // 2. Resolve workspace root
-    let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap() // tools
-        .parent()
-        .unwrap() // kit (root)
-        .to_path_buf();
+    let feature = harness_feature(crate_path)?;
+    let root_dir = workspace_root();
     let android_api = android_min_sdk(&root_dir)?;
+    let sms_delivery = android_device_is_emulator(&toolchain)?;
 
-    // 3. Get feature
-    let content_cargo_path = crate_path.join("Cargo.toml");
-    let content_toml_str =
-        std::fs::read_to_string(&content_cargo_path).context("Read content toml")?;
-    let content_doc = content_toml_str
-        .parse::<DocumentMut>()
-        .context("Parse content toml")?;
-    let package_name = content_doc
-        .get("package")
-        .and_then(|package| package.get("name"))
-        .and_then(|name| name.as_str())
-        .unwrap_or("");
-    let feature = get_crate_feature(package_name).ok_or_else(|| {
-        eyre::eyre!("Unsupported crate package name for harness features: {package_name}")
-    })?;
-
-    // 4. Run cargo ndk build
+    // Run cargo ndk build
     info!("{}", "Building Android test library...".yellow().bold());
     let mut args = vec![
         "ndk",
@@ -145,11 +164,21 @@ fn run_android_awake(crate_path: &Path, toolchain: &AndroidToolchain) -> Result<
 
     info!("{}", "Android libraries built successfully.".green().bold());
 
-    build_android_apk(&root_dir, toolchain)?;
-    install_android_apk(&root_dir, toolchain)?;
-    grant_android_permissions_for_feature(feature, toolchain)?;
-    launch_android_test(toolchain)?;
-    let report = wait_for_android_report(ANDROID_REPORT_TIMEOUT, toolchain)?;
+    build_android_apk(&root_dir, &toolchain, feature)?;
+    install_android_apk(&root_dir, &toolchain)?;
+    grant_android_permissions_for_feature(feature, &toolchain)?;
+    // Wake the device only now: the build and install above take minutes, long
+    // enough for the screen to time out again. The harness window keeps the
+    // screen on from its first frame.
+    android_device::wake_and_unlock(&toolchain)?;
+    launch_android_test(&toolchain, sms_delivery, interactive)?;
+    android_device::wait_for_harness_focus(&toolchain)?;
+    let report_timeout = if interactive {
+        ANDROID_INTERACTIVE_REPORT_TIMEOUT
+    } else {
+        ANDROID_REPORT_TIMEOUT
+    };
+    let report = wait_for_android_report(report_timeout, &toolchain, sms_delivery)?;
     ensure_report_success(&report)?;
 
     Ok(())
@@ -215,199 +244,6 @@ fn run_macos(crate_path: &Path) -> Result<()> {
     };
 
     let report = parse_process_report("macOS", &metadata.package_name, &output)?;
-    ensure_report_success(&report)?;
-
-    Ok(())
-}
-
-fn run_ios(crate_path: &Path) -> Result<()> {
-    info!("{}", "Preparing iOS test environment...".green().bold());
-
-    // 1. Verify crate path
-    let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
-
-    if !crate_path.join("Cargo.toml").exists() {
-        eyre::bail!("No Cargo.toml found at {}", crate_path.display());
-    }
-
-    info!("Target crate: {}", crate_path.display());
-
-    // 2. Resolve workspace root
-    let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap() // tools
-        .parent()
-        .unwrap() // kit (root)
-        .to_path_buf();
-
-    // 2.5 Get feature
-    let content_cargo_path = crate_path.join("Cargo.toml");
-    let content_toml_str =
-        std::fs::read_to_string(&content_cargo_path).context("Read content toml")?;
-    let content_doc = content_toml_str
-        .parse::<DocumentMut>()
-        .context("Parse content toml")?;
-    let package_name = content_doc
-        .get("package")
-        .and_then(|package| package.get("name"))
-        .and_then(|name| name.as_str())
-        .unwrap_or("");
-    let feature = get_crate_feature(package_name).ok_or_else(|| {
-        eyre::eyre!("Unsupported crate package name for harness features: {package_name}")
-    })?;
-
-    // 3. Build for iOS Simulator
-    info!("{}", "Building iOS test library...".yellow().bold());
-    let mut args = vec![
-        "build",
-        "--target",
-        "aarch64-apple-ios-sim",
-        "-p",
-        "waterkit-test-ios",
-    ];
-    args.push("--features");
-    args.push(feature);
-
-    let status = std::process::Command::new("cargo")
-        .current_dir(&root_dir)
-        .args(&args)
-        .status()
-        .context("Failed to run cargo build")?;
-
-    if !status.success() {
-        eyre::bail!("iOS build failed");
-    }
-
-    // 4. Swift Compile
-    info!("{}", "Compiling Swift app...".yellow().bold());
-
-    // The app only compiles its own generated bridge; every component crate's
-    // `sys/apple` Swift bridge is already compiled into the static lib by that
-    // crate's own build script.
-
-    // 4.1 Get SDK Path
-    let sdk_path_output = std::process::Command::new("xcrun")
-        .args(["--sdk", "iphonesimulator", "--show-sdk-path"])
-        .output()
-        .context("Failed to get SDK path")?;
-    let sdk_path = String::from_utf8(sdk_path_output.stdout)?
-        .trim()
-        .to_string();
-
-    let mut swiftc_cmd = std::process::Command::new("xcrun");
-    swiftc_cmd
-        .current_dir(&root_dir)
-        .arg("swiftc")
-        .arg("-target")
-        .arg("arm64-apple-ios17.0-simulator") // Target iOS 17 (Sim)
-        .arg("-sdk")
-        .arg(&sdk_path)
-        .arg("-I")
-        .arg("tests/ios/app/WaterKitTest/Generated")
-        .arg("-import-objc-header")
-        .arg("tests/ios/app/WaterKitTest/Generated/Bridging-Header.h")
-        .arg("-L")
-        .arg("target/aarch64-apple-ios-sim/debug")
-        .arg("-lwaterkit_test_ios")
-        .arg("-framework")
-        .arg("CoreFoundation")
-        .arg("-framework")
-        .arg("Security")
-        .arg("-framework")
-        .arg("Foundation")
-        .arg("-framework")
-        .arg("SwiftUI")
-        .arg("tests/ios/app/WaterKitTest/WaterKitTestApp.swift")
-        .arg("tests/ios/app/WaterKitTest/ContentView.swift")
-        .arg("tests/ios/app/WaterKitTest/Generated/SwiftBridgeCore.swift")
-        .arg("tests/ios/app/WaterKitTest/Generated/waterkit-test-ios/waterkit-test-ios.swift");
-
-    let status = swiftc_cmd
-        .arg("-o")
-        .arg("WaterKitTestBinary")
-        .status()
-        .context("Failed to compile Swift app")?;
-
-    if !status.success() {
-        eyre::bail!("Swift compilation failed");
-    }
-
-    // 5. Bundle
-    info!("{}", "Bundling app...".yellow().bold());
-    let app_dir = root_dir.join("WaterKitTest.app");
-    if app_dir.exists() {
-        std::fs::remove_dir_all(&app_dir)?;
-    }
-    std::fs::create_dir_all(&app_dir)?;
-
-    std::fs::rename(
-        root_dir.join("WaterKitTestBinary"),
-        app_dir.join("WaterKitTest"),
-    )?;
-
-    std::fs::copy(
-        root_dir.join("tests/ios/app/Info.plist"),
-        app_dir.join("Info.plist"),
-    )?;
-
-    // 6. Codesign
-    // Plain ad-hoc signing: the simulator rejects launches when an ad-hoc
-    // signature carries entitlements.
-    info!("{}", "Codesigning...".yellow().bold());
-    let status = std::process::Command::new("codesign")
-        .args(["-s", "-", "WaterKitTest.app"])
-        .current_dir(&root_dir)
-        .status()
-        .context("Failed to codesign")?;
-
-    if !status.success() {
-        eyre::bail!("Codesign failed");
-    }
-
-    // 7. Install & Launch
-    info!("{}", "Installing to Simulator (booted)...".yellow().bold());
-    let simulator_id = "booted"; // Use "booted" to target the active simulator automatically!
-
-    let status = std::process::Command::new("xcrun")
-        .args(["simctl", "install", simulator_id, "WaterKitTest.app"])
-        .current_dir(&root_dir)
-        .status()
-        .context("Failed to install to simulator")?;
-
-    if !status.success() {
-        eyre::bail!("Installation failed (ensure a simulator is booted)");
-    }
-
-    grant_ios_permissions(feature, simulator_id)?;
-
-    let report_path = ios_report_path(simulator_id)?;
-    if report_path.exists() {
-        std::fs::remove_file(&report_path)
-            .with_context(|| format!("Failed to remove stale {}", report_path.display()))?;
-    }
-
-    info!("{}", "Launching app...".green().bold());
-    let status = std::process::Command::new("xcrun")
-        .args([
-            "simctl",
-            "launch",
-            "--console",
-            simulator_id,
-            "com.waterkit.test",
-            "--waterkit-run-test",
-        ])
-        .current_dir(&root_dir)
-        .status()
-        .context("Failed to launch app")?;
-
-    if !status.success() {
-        eyre::bail!("Launch failed");
-    }
-
-    let report_json = std::fs::read_to_string(&report_path)
-        .with_context(|| format!("iOS app did not write {}", report_path.display()))?;
-    let report = from_json(&report_json)
-        .with_context(|| format!("Failed to parse {}", report_path.display()))?;
     ensure_report_success(&report)?;
 
     Ok(())
@@ -626,71 +462,6 @@ impl AndroidToolchain {
     }
 }
 
-fn with_android_device_awake<T>(
-    toolchain: &AndroidToolchain,
-    run: impl FnOnce() -> Result<T>,
-) -> Result<T> {
-    let original = android_stay_awake_setting(toolchain)?;
-    set_android_stay_awake(toolchain, original | 2)?;
-
-    let run_result =
-        run_adb(toolchain, ["shell", "input", "keyevent", "KEYCODE_WAKEUP"]).and_then(|()| run());
-    let restore_result = set_android_stay_awake(toolchain, original);
-    match (run_result, restore_result) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), Ok(())) => Err(error),
-        (Ok(_), Err(error)) => Err(error).context("Android tests passed, but restoring the device stay-awake setting failed"),
-        (Err(error), Err(restore_error)) => Err(error).with_context(|| {
-            format!(
-                "Android test failed and restoring the device stay-awake setting also failed: {restore_error:#}"
-            )
-        }),
-    }
-}
-
-fn android_stay_awake_setting(toolchain: &AndroidToolchain) -> Result<u32> {
-    let output = std::process::Command::new(&toolchain.adb)
-        .args([
-            "shell",
-            "settings",
-            "get",
-            "global",
-            "stay_on_while_plugged_in",
-        ])
-        .output()
-        .context("Failed to read Android stay-awake setting with adb")?;
-    if !output.status.success() {
-        eyre::bail!(
-            "adb could not read Android stay-awake setting: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-
-    String::from_utf8(output.stdout)
-        .context("Android stay-awake setting was not valid UTF-8")?
-        .trim()
-        .parse()
-        .context("Android stay-awake setting was not an integer bitmask")
-}
-
-fn set_android_stay_awake(toolchain: &AndroidToolchain, setting: u32) -> Result<()> {
-    let status = std::process::Command::new(&toolchain.adb)
-        .args([
-            "shell",
-            "settings",
-            "put",
-            "global",
-            "stay_on_while_plugged_in",
-        ])
-        .arg(setting.to_string())
-        .status()
-        .context("Failed to set Android stay-awake setting with adb")?;
-    if !status.success() {
-        eyre::bail!("adb could not set Android stay-awake setting to {setting}");
-    }
-    Ok(())
-}
-
 fn configured_android_sdk_root() -> Option<PathBuf> {
     ["ANDROID_SDK_ROOT", "ANDROID_HOME"]
         .into_iter()
@@ -706,7 +477,7 @@ fn sdk_root_from_adb(adb: &Path) -> Option<PathBuf> {
     platform_tools.parent().map(Path::to_path_buf)
 }
 
-fn build_android_apk(root_dir: &Path, toolchain: &AndroidToolchain) -> Result<()> {
+fn build_android_apk(root_dir: &Path, toolchain: &AndroidToolchain, feature: &str) -> Result<()> {
     info!("{}", "Building Android APK...".yellow().bold());
     let android_dir = root_dir.join("tests/android");
     let gradlew = android_dir.join("gradlew");
@@ -715,6 +486,11 @@ fn build_android_apk(root_dir: &Path, toolchain: &AndroidToolchain) -> Result<()
         .env("ANDROID_HOME", &toolchain.sdk_root)
         .env("ANDROID_SDK_ROOT", &toolchain.sdk_root)
         .arg(":app:assembleDebug")
+        // The app module resolves each crate's
+        // [package.metadata.waterui.android] declarations through cargo
+        // metadata for exactly this feature set (the same channel the water
+        // CLI's classpath staging consumes).
+        .arg(format!("-PwaterkitFeatures={feature}"))
         .status()
         .context("Failed to run Android Gradle build")?;
 
@@ -764,7 +540,7 @@ fn grant_android_permissions_for_feature(
             "android.permission.ACCESS_FINE_LOCATION",
             "android.permission.ACCESS_COARSE_LOCATION",
         ],
-        "camera" => &["android.permission.CAMERA"],
+        "camera" | "vision" => &["android.permission.CAMERA"],
         "audio" | "speech" => &["android.permission.RECORD_AUDIO"],
         "contacts" => &["android.permission.READ_CONTACTS"],
         "calendar" => &["android.permission.READ_CALENDAR"],
@@ -775,27 +551,33 @@ fn grant_android_permissions_for_feature(
     for permission in permissions {
         run_adb(
             toolchain,
-            ["shell", "pm", "grant", "com.waterkit.test", permission],
+            ["shell", "pm", "grant", ANDROID_HARNESS_PACKAGE, permission],
         )?;
     }
 
     Ok(())
 }
 
-fn launch_android_test(toolchain: &AndroidToolchain) -> Result<()> {
+fn launch_android_test(
+    toolchain: &AndroidToolchain,
+    sms_delivery: bool,
+    interactive: bool,
+) -> Result<()> {
     run_adb(
         toolchain,
-        ["shell", "am", "force-stop", "com.waterkit.test"],
+        ["shell", "am", "force-stop", ANDROID_HARNESS_PACKAGE],
     )?;
     run_adb(
         toolchain,
         [
             "shell",
             "run-as",
-            "com.waterkit.test",
+            ANDROID_HARNESS_PACKAGE,
             "rm",
             "-f",
             "files/waterkit-test-report.json",
+            "files/waterkit-sms-request.json",
+            "files/waterkit-sms-request.json.tmp",
         ],
     )?;
     // Everything logcat holds from here on belongs to this run, so a failure
@@ -807,19 +589,22 @@ fn launch_android_test(toolchain: &AndroidToolchain) -> Result<()> {
     // frame instead of returning as soon as the start request is queued. The
     // report deadline then bounds the native test alone, which is the thing it
     // is meant to bound.
+    let component = format!("{ANDROID_HARNESS_PACKAGE}/.MainActivity");
+    let mut args = vec!["shell", "am", "start", "-W", "-n", component.as_str()];
+    if sms_delivery {
+        args.extend_from_slice(&["--ez", "sms_delivery", "true"]);
+    }
+    args.extend_from_slice(&[
+        "--ez",
+        "run_test",
+        "true",
+        "--ez",
+        "interactive",
+        if interactive { "true" } else { "false" },
+    ]);
     let output = run_adb_with_timeout(
         toolchain,
-        &[
-            "shell",
-            "am",
-            "start",
-            "-W",
-            "-n",
-            "com.waterkit.test/.MainActivity",
-            "--ez",
-            "run_test",
-            "true",
-        ],
+        &args,
         ANDROID_LAUNCH_TIMEOUT,
         "launch the Android test activity",
     )?;
@@ -860,41 +645,31 @@ fn run_adb_with_timeout(
     timeout: Duration,
     description: &str,
 ) -> Result<Output> {
-    let mut child = std::process::Command::new(&toolchain.adb)
+    let mut command = Command::new(&toolchain.adb);
+    command
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("Failed to run adb to {description}"))?;
-
-    if child
-        .wait_timeout(timeout)
-        .with_context(|| format!("Failed to wait for adb to {description}"))?
-        .is_none()
-    {
-        child
-            .kill()
-            .with_context(|| format!("Failed to kill the adb command that should {description}"))?;
-        child
-            .wait()
-            .with_context(|| format!("Failed to reap the adb command that should {description}"))?;
-        eyre::bail!("adb did not {description} within {timeout:?}");
-    }
-
-    child
-        .wait_with_output()
-        .with_context(|| format!("Failed to read the output of the adb command that {description}"))
+        .stderr(Stdio::piped());
+    run_with_timeout(command, timeout, description)
 }
 
-fn wait_for_android_report(timeout: Duration, toolchain: &AndroidToolchain) -> Result<TestReport> {
+fn wait_for_android_report(
+    timeout: Duration,
+    toolchain: &AndroidToolchain,
+    sms_delivery: bool,
+) -> Result<TestReport> {
     let deadline = Instant::now() + timeout;
 
     loop {
+        if sms_delivery && let Some(request) = poll_sms_request(toolchain)? {
+            deliver_sms_request(toolchain, &request)?;
+        }
+
         let output = std::process::Command::new(&toolchain.adb)
             .args([
                 "exec-out",
                 "run-as",
-                "com.waterkit.test",
+                ANDROID_HARNESS_PACKAGE,
                 "sh",
                 "-c",
                 "test -s files/waterkit-test-report.json && cat files/waterkit-test-report.json",
@@ -936,6 +711,201 @@ fn wait_for_android_report(timeout: Duration, toolchain: &AndroidToolchain) -> R
     }
 }
 
+fn android_device_is_emulator(toolchain: &AndroidToolchain) -> Result<bool> {
+    let output = run_adb_with_timeout(
+        toolchain,
+        &["shell", "getprop", "ro.boot.qemu"],
+        ANDROID_QUERY_TIMEOUT,
+        "query Android emulator status",
+    )?;
+    if !output.status.success() {
+        eyre::bail!(
+            "Could not query ro.boot.qemu: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let property = String::from_utf8(output.stdout)
+        .context("Android emulator property was not valid UTF-8")?;
+    Ok(property.trim() == "1")
+}
+
+fn poll_sms_request(toolchain: &AndroidToolchain) -> Result<Option<SmsRequest>> {
+    let output = std::process::Command::new(&toolchain.adb)
+        .args([
+            "exec-out",
+            "run-as",
+            ANDROID_HARNESS_PACKAGE,
+            "sh",
+            "-c",
+            "test -s files/waterkit-sms-request.json && cat files/waterkit-sms-request.json",
+        ])
+        .output()
+        .context("Failed to read Android SMS request with adb")?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return Ok(None);
+    }
+
+    let request: SmsRequest = serde_json::from_slice(&output.stdout)
+        .context("Failed to parse Android SMS request JSON")?;
+    run_adb(
+        toolchain,
+        [
+            "shell",
+            "run-as",
+            ANDROID_HARNESS_PACKAGE,
+            "rm",
+            "-f",
+            "files/waterkit-sms-request.json",
+        ],
+    )?;
+    Ok(Some(request))
+}
+
+fn deliver_sms_request(toolchain: &AndroidToolchain, request: &SmsRequest) -> Result<()> {
+    wait_for_telephony_sms_ready(toolchain)?;
+
+    // The SMS Retriever token is derived from the signing key, so its body is
+    // the same on every run and a leftover raw row cannot be told from a fresh
+    // one by text alone; the row ids staged before the injection are the
+    // baseline the surface wait compares against.
+    let staged: std::collections::HashSet<i64> = staged_sms_rows(toolchain)?
+        .into_iter()
+        .map(|(id, _body)| id)
+        .collect();
+
+    let args = [
+        "emu",
+        "sms",
+        "send",
+        request.sender.as_str(),
+        request.body.as_str(),
+    ];
+    let output = run_adb_with_timeout(
+        toolchain,
+        &args,
+        ANDROID_SMS_DELIVERY_TIMEOUT,
+        "deliver an OTP SMS to the Android emulator",
+    )?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() || stdout.contains("KO:") {
+        eyre::bail!(
+            "adb emu sms send failed: {}\n{}",
+            stdout.trim(),
+            stderr.trim()
+        );
+    }
+
+    // Wait for the guest to actually stage the SMS rather than trusting the
+    // console's acceptance. An emulator that drops the injection surfaces here
+    // as an environment failure, and a stage that does arrive leaves the
+    // app's own `request.message()` as the delivery signal for the case.
+    let deadline = Instant::now() + ANDROID_SMS_SURFACE_TIMEOUT;
+    loop {
+        let rows = staged_sms_rows(toolchain)?;
+        if rows
+            .iter()
+            .any(|(id, body)| !staged.contains(id) && *body == request.body)
+        {
+            info!(
+                "Delivered a test OTP SMS to sender {} (staged by the guest's telephony stack)",
+                request.sender
+            );
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            eyre::bail!(
+                "The emulator accepted the test OTP SMS but the guest never surfaced it: no \
+                 new row in content://sms/raw within {ANDROID_SMS_SURFACE_TIMEOUT:?}. The \
+                 emulator dropped the injection before it reached the telephony stack."
+            );
+        }
+        thread::sleep(ANDROID_REPORT_POLL_INTERVAL);
+    }
+}
+
+/// Blocks until the guest's telephony stack reports a voice registration —
+/// the state at which the inbound SMS pipeline is armed and an injected SMS
+/// will actually be dispatched — or until the ready deadline expires.
+fn wait_for_telephony_sms_ready(toolchain: &AndroidToolchain) -> Result<()> {
+    let deadline = Instant::now() + ANDROID_TELEPHONY_READY_TIMEOUT;
+    loop {
+        let output = run_adb_with_timeout(
+            toolchain,
+            &["exec-out", "dumpsys", "telephony.registry"],
+            ANDROID_QUERY_TIMEOUT,
+            "query the guest's telephony registration state",
+        )?;
+        if !output.status.success() {
+            eyre::bail!(
+                "Could not query the guest's telephony registration state: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        if String::from_utf8_lossy(&output.stdout).contains("mVoiceRegState=0(IN_SERVICE)") {
+            info!("Guest telephony is registered; the SMS pipeline is ready");
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            eyre::bail!(
+                "The guest's telephony stack never came up: no IN_SERVICE voice \
+                 registration within {ANDROID_TELEPHONY_READY_TIMEOUT:?}. An SMS \
+                 injected now would be dropped by the emulated modem."
+            );
+        }
+        thread::sleep(ANDROID_REPORT_POLL_INTERVAL);
+    }
+}
+
+/// Reads the SMS provider's raw staging table as `(row id, message body)`
+/// pairs.
+///
+/// `InboundSmsHandler` stages every inbound SMS in `content://sms/raw` before
+/// dispatching it, and marks the row deleted rather than removing it once
+/// dispatch completes, so the table keeps a durable record of what the radio
+/// delivered.
+fn staged_sms_rows(toolchain: &AndroidToolchain) -> Result<Vec<(i64, String)>> {
+    let output = run_adb_with_timeout(
+        toolchain,
+        &[
+            "exec-out",
+            "content",
+            "query",
+            "--uri",
+            "content://sms/raw",
+            "--projection",
+            "_id,message_body",
+        ],
+        ANDROID_QUERY_TIMEOUT,
+        "query the SMS staging table",
+    )?;
+    if !output.status.success() {
+        eyre::bail!(
+            "Could not query the SMS staging table: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let stdout = String::from_utf8(output.stdout)
+        .context("SMS staging table query output was not valid UTF-8")?;
+    Ok(parse_staged_sms(&stdout))
+}
+
+/// Parses `content query` rows (`Row: N _id=<id>, message_body=<body>`) into
+/// `(id, body)` pairs. `message_body` is the last projected column, so its
+/// value is the remainder of the line.
+fn parse_staged_sms(stdout: &str) -> Vec<(i64, String)> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let row = line.trim().strip_prefix("Row: ")?;
+            let (first, rest) = row.split_once(", ")?;
+            let id = first.rsplit('=').next()?.trim().parse().ok()?;
+            let body = rest.strip_prefix("message_body=")?;
+            Some((id, body.to_owned()))
+        })
+        .collect()
+}
+
 fn run_adb<const N: usize>(toolchain: &AndroidToolchain, args: [&str; N]) -> Result<()> {
     let status = std::process::Command::new(&toolchain.adb)
         .args(args)
@@ -949,68 +919,45 @@ fn run_adb<const N: usize>(toolchain: &AndroidToolchain, args: [&str; N]) -> Res
     Ok(())
 }
 
-/// Grants the TCC permissions the harness can set without the system prompt
-/// once the app is installed, then plants a deterministic simulated location
-/// so `Location::get()` has a fix to return. Notification authorization is not
-/// a `simctl privacy` service, so that case skips instead.
-fn grant_ios_permissions(feature: &str, simulator_id: &str) -> Result<()> {
-    if !matches!(feature, "full" | "location" | "permission") {
-        return Ok(());
+/// Resolves the harness feature that exercises the crate at `crate_path`.
+fn harness_feature(crate_path: &Path) -> Result<&'static str> {
+    let crate_path = std::fs::canonicalize(crate_path).context("Failed to find crate path")?;
+    let manifest_path = crate_path.join("Cargo.toml");
+    if !manifest_path.exists() {
+        eyre::bail!("No Cargo.toml found at {}", crate_path.display());
     }
+    info!("Target crate: {}", crate_path.display());
 
-    for service in ["location", "location-always"] {
-        let status = std::process::Command::new("xcrun")
-            .args([
-                "simctl",
-                "privacy",
-                simulator_id,
-                "grant",
-                service,
-                "com.waterkit.test",
-            ])
-            .status()
-            .context("Failed to grant simulator privacy permission")?;
-        if !status.success() {
-            eyre::bail!("simctl privacy grant {service} failed");
-        }
-    }
-
-    let status = std::process::Command::new("xcrun")
-        .args([
-            "simctl",
-            "location",
-            simulator_id,
-            "set",
-            "37.3349,-122.0090",
-        ])
-        .status()
-        .context("Failed to set simulated location")?;
-    if !status.success() {
-        eyre::bail!("simctl location set failed");
-    }
-
-    Ok(())
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("Read {}", manifest_path.display()))?
+        .parse::<DocumentMut>()
+        .with_context(|| format!("Parse {}", manifest_path.display()))?;
+    let package_name = manifest
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(|name| name.as_str())
+        .ok_or_else(|| eyre::eyre!("Missing package.name in {}", manifest_path.display()))?;
+    get_crate_feature(package_name).ok_or_else(|| {
+        eyre::eyre!("Unsupported crate package name for harness features: {package_name}")
+    })
 }
 
-fn ios_report_path(simulator_id: &str) -> Result<PathBuf> {
-    let output = std::process::Command::new("xcrun")
-        .args([
-            "simctl",
-            "get_app_container",
-            simulator_id,
-            "com.waterkit.test",
-            "data",
-        ])
-        .output()
-        .context("Failed to query iOS app data container")?;
-
-    if !output.status.success() {
-        eyre::bail!("Failed to query iOS app data container");
-    }
-
-    let container = String::from_utf8(output.stdout)
-        .context("iOS app data container path was not valid UTF-8")?;
-    Ok(PathBuf::from(container.trim()).join("Documents/waterkit-test-report.json"))
+/// Runs `command` to completion, killing it when it outlives `timeout`.
+///
+/// Its piped stdout and stderr are drained while it runs: a child whose output
+/// outgrows the pipe buffer would otherwise block on the write and be killed at
+/// the deadline with its work already done.
+fn run_with_timeout(mut command: Command, timeout: Duration, description: &str) -> Result<Output> {
+    let output = command
+        .spawn()
+        .with_context(|| format!("Failed to start the command that should {description}"))?
+        .controlled_with_output()
+        .time_limit(timeout)
+        .terminate_for_timeout()
+        .wait()
+        .with_context(|| format!("Failed to wait for the command that should {description}"))?
+        .ok_or_else(|| eyre::eyre!("Did not {description} within {timeout:?}"))?;
+    Ok(output.into_std_lossy())
 }
 
 fn parse_process_report(platform: &str, package_name: &str, output: &str) -> Result<TestReport> {
@@ -1036,6 +983,14 @@ fn ensure_report_success(report: &TestReport) -> Result<()> {
         report.skipped_count(),
         report.failed_count()
     );
+
+    for case in &report.cases {
+        if let Some(message) = &case.message {
+            info!("  {:?} {}: {message}", case.status, case.name);
+        } else {
+            info!("  {:?} {}", case.status, case.name);
+        }
+    }
 
     if report.has_failures() {
         eyre::bail!("WaterKit test failures: {}", report.failure_summary());
@@ -1153,6 +1108,8 @@ fn get_crate_feature(package_name: &str) -> Option<&'static str> {
         Some("calendar")
     } else if package_name.contains("health") {
         Some("health")
+    } else if package_name.contains("language") {
+        Some("language")
     } else if package_name.contains("deeplink") {
         Some("deeplink")
     } else if package_name.contains("screen") {
@@ -1161,6 +1118,14 @@ fn get_crate_feature(package_name: &str) -> Option<&'static str> {
         Some("background")
     } else if package_name.contains("passkey") {
         Some("passkey")
+    } else if package_name.contains("vision") {
+        Some("vision")
+    } else if package_name.contains("otp") {
+        Some("otp")
+    } else if package_name.contains("wallet") {
+        Some("wallet")
+    } else if package_name.contains("store") {
+        Some("store")
     } else {
         None
     }
@@ -1168,7 +1133,10 @@ fn get_crate_feature(package_name: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{am_start_field, get_crate_feature, parse_android_min_sdk, sdk_root_from_adb};
+    use super::{
+        am_start_field, get_crate_feature, parse_android_min_sdk, parse_staged_sms,
+        sdk_root_from_adb,
+    };
     use std::path::{Path, PathBuf};
 
     /// A real `am start -W` reply, captured from a Pixel 9 Pro.
@@ -1205,8 +1173,37 @@ mod tests {
     }
 
     #[test]
+    fn selects_otp_harness_feature() {
+        assert_eq!(get_crate_feature("waterkit-otp"), Some("otp"));
+    }
+
+    #[test]
     fn parses_android_min_sdk_from_default_config() {
         let build_gradle = include_str!("../tests/fixtures/android-build.gradle.kts");
         assert_eq!(parse_android_min_sdk(build_gradle).as_deref(), Some("26"));
+    }
+
+    /// `content query --uri content://sms/raw --projection _id,message_body`
+    /// on an API 35 emulator that has received three injected SMS.
+    const RAW_QUERY: &str = "\
+Row: 0 _id=1, message_body=probe test message
+Row: 1 _id=2, message_body=airplane probe msg
+Row: 2 _id=3, message_body=Your waterkit code is 123456 Q7xZ2kW9pLm
+";
+
+    #[test]
+    fn parses_staged_sms_rows() {
+        let rows = parse_staged_sms(RAW_QUERY);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], (1, "probe test message".to_owned()));
+        assert_eq!(rows[2].0, 3);
+        assert_eq!(rows[2].1, "Your waterkit code is 123456 Q7xZ2kW9pLm");
+    }
+
+    #[test]
+    fn ignores_query_output_without_rows() {
+        let empty: Vec<(i64, String)> = Vec::new();
+        assert_eq!(parse_staged_sms(""), empty);
+        assert_eq!(parse_staged_sms("No result found.\n"), empty);
     }
 }

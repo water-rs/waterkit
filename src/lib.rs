@@ -56,6 +56,10 @@ pub use waterkit_fs as fs;
 #[doc(inline)]
 pub use waterkit_haptic as haptic;
 
+#[cfg(feature = "language")]
+#[doc(inline)]
+pub use waterkit_language as language;
+
 #[cfg(feature = "location")]
 #[doc(inline)]
 pub use waterkit_location as location;
@@ -91,6 +95,10 @@ pub use waterkit_regional as regional;
 #[cfg(feature = "video")]
 #[doc(inline)]
 pub use waterkit_video as video;
+
+#[cfg(feature = "vision")]
+#[doc(inline)]
+pub use waterkit_vision as vision;
 
 #[cfg(feature = "bluetooth")]
 #[doc(inline)]
@@ -131,3 +139,18 @@ pub use waterkit_background as background;
 #[cfg(feature = "passkey")]
 #[doc(inline)]
 pub use waterkit_passkey as passkey;
+
+#[cfg(feature = "menu")]
+#[doc(inline)]
+pub use waterkit_menu as menu;
+#[cfg(feature = "otp")]
+#[doc(inline)]
+pub use waterkit_otp as otp;
+
+#[cfg(feature = "wallet")]
+#[doc(inline)]
+pub use waterkit_wallet as wallet;
+
+#[cfg(feature = "store")]
+#[doc(inline)]
+pub use waterkit_store as store;

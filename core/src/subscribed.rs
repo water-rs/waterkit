@@ -3,7 +3,7 @@
 //! [`Subscribed<T>`] is a read-only view of a value that may be updated from
 //! any thread. It is a thin wrapper around `nami::Binding<T>`:
 //!
-//! - Readers on the binding's home thread observe via [`Subscribed::get`],
+//! - Readers on the binding's home thread observe via [`Subscribed::snapshot`],
 //!   [`Subscribed::watch`], or [`Subscribed::stream`] — the type implements
 //!   `nami::Signal<Output = T>` directly, so any nami combinator (`map`,
 //!   `zip`, `distinct`, `cached`, …) composes natively.
@@ -76,10 +76,10 @@ impl<T: Clone + 'static> Clone for Subscribed<T> {
 impl<T: Clone + 'static> Subscribed<T> {
     /// Synchronous snapshot of the current value.
     ///
-    /// Equivalent to `<Self as nami::Signal>::get(&self)`.
+    /// Equivalent to `<Self as nami::Signal>::snapshot(&self)`.
     #[must_use]
-    pub fn get(&self) -> T {
-        Signal::get(&self.binding)
+    pub fn snapshot(&self) -> T {
+        Signal::snapshot(&self.binding)
     }
 
     /// Wraps as a `futures::Stream<Item = T>`.
@@ -111,8 +111,8 @@ impl<T: Clone + 'static> Signal for Subscribed<T> {
     type Output = T;
     type Guard = <Binding<T> as Signal>::Guard;
 
-    fn get(&self) -> T {
-        Signal::get(&self.binding)
+    fn snapshot(&self) -> T {
+        Signal::snapshot(&self.binding)
     }
 
     fn watch(&self, watcher: impl Fn(WatcherContext<T>) + 'static) -> Self::Guard {
@@ -123,7 +123,7 @@ impl<T: Clone + 'static> Signal for Subscribed<T> {
 impl<T: fmt::Debug + Clone + 'static> fmt::Debug for Subscribed<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Subscribed")
-            .field("value", &self.get())
+            .field("value", &self.snapshot())
             .finish()
     }
 }
@@ -231,14 +231,14 @@ mod tests {
     #[test]
     fn snapshot_returns_initial_value() {
         let sub = make(7_u32);
-        assert_eq!(sub.get(), 7);
+        assert_eq!(sub.snapshot(), 7);
     }
 
     #[test]
     fn map_derives_value() {
         let sub = make(3_u32);
         let doubled = sub.map(|x: u32| x * 2);
-        assert_eq!(doubled.get(), 6);
+        assert_eq!(doubled.snapshot(), 6);
     }
 
     #[test]
@@ -251,15 +251,15 @@ mod tests {
         });
         sub.as_binding().set(42);
         assert_eq!(captured.get(), 42);
-        assert_eq!(sub.get(), 42);
+        assert_eq!(sub.snapshot(), 42);
     }
 
     #[test]
     fn map_propagates_upstream_set() {
         let sub = make(10_i32);
         let plus_one = sub.map(|x: i32| x + 1);
-        assert_eq!(plus_one.get(), 11);
+        assert_eq!(plus_one.snapshot(), 11);
         sub.as_binding().set(20);
-        assert_eq!(plus_one.get(), 21);
+        assert_eq!(plus_one.snapshot(), 21);
     }
 }

@@ -148,7 +148,7 @@ impl RegionalContext {
     /// Synchronous snapshot of the current settings.
     #[must_use]
     pub fn snapshot(&self) -> SystemSettingsContext {
-        self.subscribed.get()
+        self.subscribed.snapshot()
     }
 
     /// Re-detects from system APIs (or the active override) and pushes
@@ -156,7 +156,7 @@ impl RegionalContext {
     /// snapshot.
     pub fn refresh(&self) -> SystemSettingsContext {
         let next = override_snapshot(&self.override_state).unwrap_or_else(detect_system_context);
-        if self.subscribed.get() != next {
+        if self.subscribed.snapshot() != next {
             self.sink.set(next.clone());
         }
         next
@@ -175,7 +175,7 @@ impl RegionalContext {
                 .expect("regional override mutex poisoned");
             *guard = Some(context.clone());
         }
-        if self.subscribed.get() != context {
+        if self.subscribed.snapshot() != context {
             self.sink.set(context);
         }
     }

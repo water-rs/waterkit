@@ -15,8 +15,8 @@ Part of the [Waterkit](https://github.com/water-rs/waterkit) ecosystem.
 
 | Platform | Status |
 |----------|--------|
-| iOS      | Native (CNContact via Swift bridge) |
-| macOS    | Native (CNContact via Swift bridge) |
+| iOS      | Native (Contacts framework via objc2) |
+| macOS    | Native (Contacts framework via objc2) |
 | Android  | Native (ContactsContract via JNI/Kotlin) |
 | Windows  | Desktop store (persistent local data) |
 | Linux    | Desktop store (persistent local data) |

@@ -185,6 +185,7 @@ const fn is_visual_sample_entry(kind: [u8; 4]) -> bool {
         kind,
         [b'a' | b'h', b'v', b'c', b'1']
             | [b'a', b'v', b'c', b'3']
+            | [b'a', b'v', b'0', b'1']
             | [b'h', b'e', b'v', b'1']
             | [b'd', b'v', b'h', b'e' | b'1']
             | [b'e', b'n', b'c', b'v']
@@ -368,13 +369,10 @@ pub fn inferred_sdr_color_info(height_hint: Option<u32>) -> VideoColorInfo {
 }
 
 fn map_matrix(matrix: u16, height_hint: Option<u32>) -> MatrixCoefficients {
-    match matrix {
-        1 => MatrixCoefficients::Bt709,
-        5 | 6 => MatrixCoefficients::Bt601,
-        9 => MatrixCoefficients::Bt2020NonConstantLuminance,
-        10 => MatrixCoefficients::Bt2020ConstantLuminance,
-        _ => inferred_sdr_color_info(height_hint).matrix,
-    }
+    u8::try_from(matrix)
+        .ok()
+        .and_then(MatrixCoefficients::from_cicp)
+        .unwrap_or_else(|| inferred_sdr_color_info(height_hint).matrix)
 }
 
 fn map_primaries(primaries: u16, height_hint: Option<u32>) -> ColorPrimaries {
@@ -419,7 +417,7 @@ mod tests {
         ColorPrimaries, ColorRange, ContentLightLevel, MatrixCoefficients, TransferFunction,
     };
 
-    use super::{ColorMetadata, NclxColorInfo, resolve_color_info};
+    use super::{ColorMetadata, NclxColorInfo, map_matrix, resolve_color_info};
 
     #[test]
     fn nclx_metadata_retains_hdr_color_signals() {
@@ -467,5 +465,22 @@ mod tests {
         let hd = resolve_color_info(ColorMetadata::default(), Some(1_080));
         assert_eq!(sd.matrix, MatrixCoefficients::Bt601);
         assert_eq!(hd.matrix, MatrixCoefficients::Bt709);
+    }
+
+    #[test]
+    fn matrix_codes_use_shared_cicp_mapping_and_keep_unknown_height_hints() {
+        assert_eq!(map_matrix(1, None), MatrixCoefficients::Bt709);
+        assert_eq!(map_matrix(5, None), MatrixCoefficients::Bt601);
+        assert_eq!(map_matrix(6, None), MatrixCoefficients::Bt601);
+        assert_eq!(
+            map_matrix(9, None),
+            MatrixCoefficients::Bt2020NonConstantLuminance
+        );
+        assert_eq!(
+            map_matrix(10, None),
+            MatrixCoefficients::Bt2020ConstantLuminance
+        );
+        assert_eq!(map_matrix(0, Some(576)), MatrixCoefficients::Bt601);
+        assert_eq!(map_matrix(11, Some(1_080)), MatrixCoefficients::Bt709);
     }
 }

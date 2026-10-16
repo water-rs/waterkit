@@ -1,6 +1,10 @@
 //! AV1 software encoding (rav1e) and decoding (rav1d).
 
+#[cfg(waterkit_av1_software_encode)]
+use crate::EncoderProfile;
 use crate::{CodecError, DecodePacket, DecodedPixelLayout};
+#[cfg(waterkit_av1_software_encode)]
+use num_traits::FromPrimitive;
 use rav1d::include::dav1d::data::Dav1dData;
 use rav1d::include::dav1d::dav1d::{Dav1dContext, Dav1dSettings};
 use rav1d::include::dav1d::headers::{
@@ -9,11 +13,19 @@ use rav1d::include::dav1d::headers::{
 };
 use rav1d::include::dav1d::picture::Dav1dPicture;
 use rav1d::src::lib as rav1d_lib;
+#[cfg(waterkit_av1_software_encode)]
 use rav1e::prelude::*;
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 use std::{ptr, slice};
+#[cfg(all(
+    not(any(target_os = "android", target_arch = "wasm32")),
+    any(test, not(target_vendor = "apple"))
+))]
+use waterkit_video_core::CicpColor;
+#[cfg(waterkit_av1_software_encode)]
+use waterkit_video_core::VideoColorInfo;
 
 /// `EAGAIN` as `rav1d` reports it: "no picture yet, send more data".
 ///
@@ -39,33 +51,18 @@ pub struct CpuFrame {
         not(any(target_os = "android", target_arch = "wasm32")),
         any(test, not(target_vendor = "apple"))
     ))]
-    pub color: Av1ColorDescription,
-}
-
-/// Coding-independent color metadata attached to an AV1 frame.
-#[cfg(all(
-    not(any(target_os = "android", target_arch = "wasm32")),
-    any(test, not(target_vendor = "apple"))
-))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Av1ColorDescription {
-    /// H.273 color-primaries code point.
-    pub primaries: u8,
-    /// H.273 transfer-characteristics code point.
-    pub transfer: u8,
-    /// H.273 matrix-coefficients code point.
-    pub matrix: u8,
-    /// Whether YUV samples use full rather than studio range.
-    pub full_range: bool,
+    pub color: CicpColor,
 }
 
 /// AV1 software encoder using rav1e.
+#[cfg(waterkit_av1_software_encode)]
 pub struct Av1Encoder {
     ctx: Context<u8>,
     width: usize,
     height: usize,
 }
 
+#[cfg(waterkit_av1_software_encode)]
 impl fmt::Debug for Av1Encoder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Av1Encoder")
@@ -75,19 +72,71 @@ impl fmt::Debug for Av1Encoder {
     }
 }
 
+#[cfg(waterkit_av1_software_encode)]
 impl Av1Encoder {
-    pub fn new(width: usize, height: usize) -> Result<Self, CodecError> {
+    pub fn new(
+        width: usize,
+        height: usize,
+        profile: EncoderProfile,
+        color: VideoColorInfo,
+    ) -> Result<Self, CodecError> {
+        let realtime = matches!(profile, EncoderProfile::Realtime);
+        if color.dolby_vision {
+            return Err(CodecError::Unsupported(
+                "AV1 encoder cannot preserve Dolby Vision metadata".into(),
+            ));
+        }
+        let cicp = color.cicp();
+        let color_description = ColorDescription {
+            color_primaries: ColorPrimaries::from_u8(cicp.primaries).ok_or_else(|| {
+                CodecError::Unsupported(format!(
+                    "rav1e does not represent CICP color primaries {}",
+                    cicp.primaries
+                ))
+            })?,
+            transfer_characteristics: TransferCharacteristics::from_u8(cicp.transfer).ok_or_else(
+                || {
+                    CodecError::Unsupported(format!(
+                        "rav1e does not represent CICP transfer characteristics {}",
+                        cicp.transfer
+                    ))
+                },
+            )?,
+            matrix_coefficients: MatrixCoefficients::from_u8(cicp.matrix).ok_or_else(|| {
+                CodecError::Unsupported(format!(
+                    "rav1e does not represent CICP matrix coefficients {}",
+                    cicp.matrix
+                ))
+            })?,
+        };
         let cfg = Config::new()
             .with_encoder_config(EncoderConfig {
                 width,
                 height,
                 bit_depth: 8,
                 chroma_sampling: ChromaSampling::Cs420,
-                speed_settings: SpeedSettings::from_preset(6),
+                // Realtime capture trades compression efficiency for speed;
+                // offline encoding keeps the balanced preset.
+                speed_settings: SpeedSettings::from_preset(if realtime { 10 } else { 6 }),
                 low_latency: true,
+                pixel_range: if cicp.full_range {
+                    PixelRange::Full
+                } else {
+                    PixelRange::Limited
+                },
+                color_description: Some(color_description),
+                content_light: color.content_light_level.map(|level| ContentLight {
+                    max_content_light_level: level.max_content_light_level(),
+                    max_frame_average_light_level: level.max_frame_average_light_level(),
+                }),
+                mastering_display: None,
                 ..Default::default()
             })
-            .with_threads(4);
+            .with_threads(if realtime {
+                std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get)
+            } else {
+                4
+            });
 
         let ctx = cfg
             .new_context()
@@ -161,6 +210,37 @@ impl Av1Encoder {
         }
 
         Ok(output)
+    }
+
+    /// The `av1C` (`AV1CodecConfigurationRecord`) payload for this stream.
+    ///
+    /// rav1e knows the sequence-level fields at construction, so the record
+    /// is available before the first encoded packet; the container gets the
+    /// sequence header OBU itself inside the first keyframe sample.
+    pub fn codec_config(&self) -> Vec<u8> {
+        self.ctx.container_sequence_header()
+    }
+
+    /// Signal end of input and drain every packet the encoder still holds.
+    ///
+    /// rav1e keeps submitted frames queued internally; `encode_nv12` only
+    /// returns packets once the encoder decides to emit, so a recording must
+    /// call `flush` to receive the frames it already submitted. Each element
+    /// is one encoded frame.
+    pub fn flush(&mut self) -> Result<Vec<Vec<u8>>, CodecError> {
+        self.ctx.flush();
+
+        let mut packets = Vec::new();
+        loop {
+            match self.ctx.receive_packet() {
+                Ok(pkt) => packets.push(pkt.data),
+                Err(EncoderStatus::Encoded | EncoderStatus::NeedMoreData) => {}
+                Err(EncoderStatus::LimitReached) => break,
+                Err(e) => return Err(CodecError::EncodingFailed(e.to_string())),
+            }
+        }
+
+        Ok(packets)
     }
 }
 
@@ -359,7 +439,7 @@ impl Av1Decoder {
             not(any(target_os = "android", target_arch = "wasm32")),
             any(test, not(target_vendor = "apple"))
         ))]
-        let color = Av1ColorDescription {
+        let color = CicpColor {
             primaries: u8::try_from(sequence_header.pri).map_err(|_| {
                 CodecError::DecodingFailed("AV1 color primaries exceed CICP range".into())
             })?,

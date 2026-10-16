@@ -1704,16 +1704,15 @@ mod tests {
         let track = video_track();
         let init = build_init_segment(std::slice::from_ref(&track), 1_000)
             .expect("test initialization must build");
-        let samples = [Sample::new(vec![0, 0, 0, 1, 0x65], 3_000, true, 0)];
-        let media = build_media_segment(
-            1,
-            &[FragmentTrackData {
-                track_id: track.track_id,
-                base_media_decode_time: 0,
-                samples: &samples,
-            }],
-        )
-        .expect("test media segment must build");
+        let samples = [Sample::new(
+            vec![0, 0, 0, 1, 0x65],
+            Some(0),
+            Some(0),
+            Some(3_000),
+            true,
+        )];
+        let media = build_media_segment(1, &[FragmentTrackData::new(track.track_id, 0, &samples)])
+            .expect("test media segment must build");
         let server = TestDashServer::start(init, media);
         let request = MediaRequest::new(
             Url::parse(&format!("http://{}/manifest.mpd", server.address))
@@ -1749,7 +1748,7 @@ mod tests {
         assert_eq!(segment.start(), Duration::ZERO);
         assert_eq!(segment.tracks().len(), 1);
         assert_eq!(segment.samples().len(), 1);
-        assert_eq!(segment.samples()[0].data().as_ref(), samples[0].data);
+        assert_eq!(segment.samples()[0].data().as_ref(), &samples[0].data[..]);
         server.finish();
     }
 
@@ -1758,26 +1757,22 @@ mod tests {
         let track = video_track();
         let init = build_init_segment(std::slice::from_ref(&track), 1_000)
             .expect("test initialization must build");
-        let first_samples = [Sample::new(vec![0, 0, 0, 1, 0x65, 1], 3_000, true, 0)];
-        let second_samples = [Sample::new(vec![0, 0, 0, 1, 0x41, 2], 3_000, false, 0)];
-        let first_chunk = build_media_segment(
-            1,
-            &[FragmentTrackData {
-                track_id: track.track_id,
-                base_media_decode_time: 0,
-                samples: &first_samples,
-            }],
-        )
-        .expect("first CMAF chunk must build");
-        let second_chunk = build_media_segment(
-            2,
-            &[FragmentTrackData {
-                track_id: track.track_id,
-                base_media_decode_time: 3_000,
-                samples: &second_samples,
-            }],
-        )
-        .expect("second CMAF chunk must build");
+        let first_samples = [Sample::new(
+            vec![0, 0, 0, 1, 0x65, 1],
+            Some(0),
+            Some(0),
+            Some(3_000),
+            true,
+        )];
+        let second_samples = [Sample::new(
+            vec![0, 0, 0, 1, 0x41, 2],
+            Some(0),
+            Some(0),
+            Some(3_000),
+            false,
+        )];
+        let first_chunk = test_cmaf_chunk(&track, 1, 0, &first_samples);
+        let second_chunk = test_cmaf_chunk(&track, 2, 3_000, &second_samples);
         let server = TestLowLatencyDashServer::start(init, first_chunk, second_chunk);
         let session = open_low_latency_dash_session(server.address);
         let live_rates = session
@@ -1827,7 +1822,10 @@ mod tests {
         };
         assert_eq!(first.chunk_index(), Some(0));
         assert_eq!(first.samples().len(), 1);
-        assert_eq!(first.samples()[0].data().as_ref(), first_samples[0].data);
+        assert_eq!(
+            first.samples()[0].data().as_ref(),
+            &first_samples[0].data[..]
+        );
         server
             .release_second_chunk
             .send(())
@@ -1845,7 +1843,10 @@ mod tests {
         };
         assert_eq!(second.chunk_index(), Some(1));
         assert_eq!(second.samples().len(), 1);
-        assert_eq!(second.samples()[0].data().as_ref(), second_samples[0].data);
+        assert_eq!(
+            second.samples()[0].data().as_ref(),
+            &second_samples[0].data[..]
+        );
         first_poll_worker
             .join()
             .expect("first DASH poll worker must finish");
@@ -1857,16 +1858,15 @@ mod tests {
         let track = video_track();
         let init = build_init_segment(std::slice::from_ref(&track), 1_000)
             .expect("test initialization must build");
-        let samples = [Sample::new(vec![0, 0, 0, 1, 0x65], 3_000, true, 0)];
-        let media = build_media_segment(
-            1,
-            &[FragmentTrackData {
-                track_id: track.track_id,
-                base_media_decode_time: 0,
-                samples: &samples,
-            }],
-        )
-        .expect("test media segment must build");
+        let samples = [Sample::new(
+            vec![0, 0, 0, 1, 0x65],
+            Some(0),
+            Some(0),
+            Some(3_000),
+            true,
+        )];
+        let media = build_media_segment(1, &[FragmentTrackData::new(track.track_id, 0, &samples)])
+            .expect("test media segment must build");
         let server = TestDashServer::start_with_subtitles(init, media);
         let request = MediaRequest::new(
             Url::parse(&format!("http://{}/manifest.mpd", server.address))
@@ -1967,6 +1967,23 @@ mod tests {
                 height: 1_080,
             },
         )
+    }
+
+    fn test_cmaf_chunk(
+        track: &TrackSpec,
+        sequence_number: u32,
+        base_media_decode_time: u64,
+        samples: &[Sample],
+    ) -> Vec<u8> {
+        build_media_segment(
+            sequence_number,
+            &[FragmentTrackData::new(
+                track.track_id,
+                base_media_decode_time,
+                samples,
+            )],
+        )
+        .expect("test CMAF chunk must build")
     }
 
     fn test_playback_options() -> SegmentedPlaybackOptions {

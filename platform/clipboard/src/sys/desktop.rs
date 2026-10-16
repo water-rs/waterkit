@@ -1,13 +1,13 @@
 //! Desktop clipboard implementation using clipboard-rs.
 //!
-//! Supports Windows, Linux, and macOS.
+//! Supports Windows and macOS; Linux has its own implementation.
 
 use crate::content::{ClipboardEvent, Image};
 use crate::error::ClipboardError;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{
-    Clipboard, ClipboardContext, ClipboardHandler, ClipboardWatcher, ClipboardWatcherContext,
-    WatcherShutdown,
+    Clipboard, ClipboardContent, ClipboardContext, ClipboardHandler, ClipboardWatcher,
+    ClipboardWatcherContext, ContentFormat, WatcherShutdown,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -44,34 +44,53 @@ impl ClipboardInner {
     }
 
     // ========== Query (sync) ==========
+    //
+    // `clipboard-rs` answers whether a format is present as a `bool`: on
+    // macOS `NSPasteboard availableTypeFromArray:` cannot fail, and on Windows
+    // it does not expose `IsClipboardFormatAvailable`'s error. The queries
+    // keep the cross-platform `Result` signature, which fails on Linux.
 
     /// Check if text is available.
-    pub fn has_text(&self) -> bool {
-        self.lock_ctx().has(clipboard_rs::ContentFormat::Text)
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform query fails on other backends; see the comment above"
+    )]
+    pub fn has_text(&self) -> Result<bool, ClipboardError> {
+        Ok(self.lock_ctx().has(ContentFormat::Text))
     }
 
     /// Check if HTML is available.
-    pub fn has_html(&self) -> bool {
-        self.lock_ctx().has(clipboard_rs::ContentFormat::Html)
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform query fails on other backends; see the comment above"
+    )]
+    pub fn has_html(&self) -> Result<bool, ClipboardError> {
+        Ok(self.lock_ctx().has(ContentFormat::Html))
     }
 
     /// Check if files are available.
-    pub fn has_files(&self) -> bool {
-        let ctx = self.lock_ctx();
-        ctx.available_formats()
-            .is_ok_and(|formats| formats.iter().any(|f| f.to_lowercase().contains("file")))
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform query fails on other backends; see the comment above"
+    )]
+    pub fn has_files(&self) -> Result<bool, ClipboardError> {
+        Ok(self.lock_ctx().has(ContentFormat::Files))
     }
 
     /// Check if image is available.
-    pub fn has_image(&self) -> bool {
-        self.lock_ctx().has(clipboard_rs::ContentFormat::Image)
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "the cross-platform query fails on other backends; see the comment above"
+    )]
+    pub fn has_image(&self) -> Result<bool, ClipboardError> {
+        Ok(self.lock_ctx().has(ContentFormat::Image))
     }
 
     // ========== Read (sync, called from blocking::unblock) ==========
 
     /// Get text content.
     pub fn get_text(&self) -> Result<Option<String>, ClipboardError> {
-        if !self.has_text() {
+        if !self.has_text()? {
             return Ok(None);
         }
         let ctx = self.lock_ctx();
@@ -82,7 +101,7 @@ impl ClipboardInner {
 
     /// Get HTML content.
     pub fn get_html(&self) -> Result<Option<String>, ClipboardError> {
-        if !self.has_html() {
+        if !self.has_html()? {
             return Ok(None);
         }
         let ctx = self.lock_ctx();
@@ -93,7 +112,7 @@ impl ClipboardInner {
 
     /// Get file paths.
     pub fn get_files(&self) -> Result<Vec<PathBuf>, ClipboardError> {
-        if !self.has_files() {
+        if !self.has_files()? {
             return Ok(Vec::new());
         }
         let ctx = self.lock_ctx();
@@ -104,27 +123,30 @@ impl ClipboardInner {
 
     /// Get image as RGBA.
     pub fn get_image(&self) -> Result<Option<Image>, ClipboardError> {
-        let ctx = self.lock_ctx();
-        match ctx.get_image() {
-            Ok(img) => {
-                let (width, height) = img.get_size();
-                let rgba = img
-                    .to_rgba8()
-                    .map_err(|e| ClipboardError::InvalidImage(format!("{e}")))?;
-                Ok(Some(Image::new(width, height, rgba.into_raw())))
+        let img = {
+            let ctx = self.lock_ctx();
+            if !ctx.has(ContentFormat::Image) {
+                return Ok(None);
             }
-            Err(_) => Ok(None),
-        }
+            ctx.get_image()
+                .map_err(|e| ClipboardError::Platform(e.to_string()))?
+        };
+        let (width, height) = img.get_size();
+        let rgba = img
+            .to_rgba8()
+            .map_err(|e| ClipboardError::InvalidImage(format!("{e}")))?;
+        Ok(Some(Image::new(width, height, rgba.into_raw())))
     }
 
     /// Get binary data by MIME type.
     pub fn get_binary(&self, mime: &str) -> Result<Option<Vec<u8>>, ClipboardError> {
         let ctx = self.lock_ctx();
-        match ctx.get_buffer(mime) {
-            Ok(buffer) => Ok(Some(buffer)),
-            Err(error) if error.to_string().contains("not found") => Ok(None),
-            Err(error) => Err(ClipboardError::Platform(error.to_string())),
+        if !ctx.has(ContentFormat::Other(mime.to_owned())) {
+            return Ok(None);
         }
+        ctx.get_buffer(mime)
+            .map(Some)
+            .map_err(|e| ClipboardError::Platform(e.to_string()))
     }
 
     // ========== Write (sync) ==========
@@ -136,14 +158,17 @@ impl ClipboardInner {
             .map_err(|e| ClipboardError::Platform(e.to_string()))
     }
 
-    /// Set HTML content.
+    /// Set HTML content, with `alt_text` as its plain-text form.
+    ///
+    /// One write carries both: every write replaces the whole clipboard.
     pub fn set_html(&self, html: &str, alt_text: Option<&str>) -> Result<(), ClipboardError> {
-        let ctx = self.lock_ctx();
-        // Set plain text first if alt_text provided
-        if let Some(alt) = alt_text {
-            let _ = ctx.set_text(alt.to_string());
-        }
-        ctx.set_html(html.to_string())
+        let contents = alt_text
+            .map(|alt| ClipboardContent::Text(alt.to_owned()))
+            .into_iter()
+            .chain([ClipboardContent::Html(html.to_owned())])
+            .collect();
+        self.lock_ctx()
+            .set(contents)
             .map_err(|e| ClipboardError::Platform(e.to_string()))
     }
 
@@ -215,12 +240,10 @@ struct WatchHandler {
 impl ClipboardHandler for WatchHandler {
     fn on_clipboard_change(&mut self) {
         let event = ClipboardEvent::new(
-            self.ctx.has(clipboard_rs::ContentFormat::Text),
-            self.ctx.has(clipboard_rs::ContentFormat::Html),
-            self.ctx
-                .available_formats()
-                .is_ok_and(|f| f.iter().any(|s| s.to_lowercase().contains("file"))),
-            self.ctx.has(clipboard_rs::ContentFormat::Image),
+            self.ctx.has(ContentFormat::Text),
+            self.ctx.has(ContentFormat::Html),
+            self.ctx.has(ContentFormat::Files),
+            self.ctx.has(ContentFormat::Image),
         );
         // Try to send, ignore if receiver dropped
         let _ = self.sender.try_send(event);

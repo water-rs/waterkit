@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/notification", "tests/macos/passkey", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "multimedia/video/core", "multimedia/video/container", "multimedia/video/streaming", "multimedia/video/processing", "multimedia/video/player", "multimedia/video/cli", "identity/*", "sharing/*", "utils/build"]
+members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/notification", "tests/macos/passkey", "tests/macos/menu", "tests/macos/vision", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "multimedia/video/core", "multimedia/video/container", "multimedia/video/streaming", "multimedia/video/processing", "multimedia/video/player", "multimedia/video/cli", "identity/*", "sharing/*", "utils/build"]
 
 
 [workspace.package]
@@ -29,11 +29,15 @@ categories = ["gui", "development-tools"]
 [package.metadata.docs.rs]
 all-features = true
 
+[lints]
+workspace = true
+
 [dependencies]
 waterkit-permission = { workspace = true, optional = true }
 waterkit-location = { workspace = true, optional = true }
 waterkit-audio = { workspace = true, optional = true, features = ["playback", "recording", "streaming", "media-session", "apple-artwork"] }
 waterkit-haptic = { workspace = true, optional = true }
+waterkit-language = { workspace = true, optional = true }
 waterkit-notification = { workspace = true, optional = true }
 waterkit-dialog = { workspace = true, optional = true }
 waterkit-biometric = { workspace = true, optional = true }
@@ -41,8 +45,9 @@ waterkit-clipboard = { workspace = true, optional = true }
 waterkit-fs = { workspace = true, optional = true }
 waterkit-secret = { workspace = true, optional = true }
 waterkit-camera = { workspace = true, optional = true }
+waterkit-vision = { workspace = true, optional = true }
 waterkit-sensor = { workspace = true, optional = true }
-waterkit-codec = { workspace = true, optional = true }
+waterkit-codec = { workspace = true, features = ["gpu", "software-encode"], optional = true }
 waterkit-screen = { workspace = true, optional = true }
 waterkit-system = { workspace = true, optional = true }
 waterkit-video = { workspace = true, optional = true }
@@ -57,6 +62,10 @@ waterkit-health = { workspace = true, optional = true }
 waterkit-deeplink = { workspace = true, optional = true }
 waterkit-background = { workspace = true, optional = true }
 waterkit-passkey = { workspace = true, optional = true }
+waterkit-menu = { workspace = true, optional = true }
+waterkit-otp = { workspace = true, optional = true }
+waterkit-wallet = { workspace = true, optional = true }
+waterkit-store = { workspace = true, optional = true }
 
 [dev-dependencies]
 toml = { workspace = true }
@@ -68,6 +77,7 @@ full = [
     "location",
     "audio",
     "haptic",
+    "language",
     "notification",
     "dialog",
     "biometric",
@@ -75,6 +85,7 @@ full = [
     "fs",
     "secret",
     "camera",
+    "vision",
     "sensor",
     "codec",
     "screen",
@@ -91,20 +102,29 @@ full = [
     "deeplink",
     "background",
     "passkey",
+    "menu",
+    "otp",
+    "wallet",
+    "store",
 ]
 permission = ["dep:waterkit-permission"]
 location = ["dep:waterkit-location", "permission"]
 audio = ["dep:waterkit-audio"]
 haptic = ["dep:waterkit-haptic"]
+language = ["dep:waterkit-language"]
 notification = ["dep:waterkit-notification"]
 dialog = ["dep:waterkit-dialog"]
 biometric = ["dep:waterkit-biometric"]
 clipboard = ["dep:waterkit-clipboard"]
 fs = ["dep:waterkit-fs"]
 secret = ["dep:waterkit-secret"]
-camera = ["dep:waterkit-camera"]
+camera = ["dep:waterkit-camera", "waterkit-vision?/camera"]
+vision = ["dep:waterkit-vision", "waterkit-vision?/barcode", "waterkit-vision?/text", "waterkit-vision?/document", "waterkit-vision?/scanner", "waterkit-vision?/document-scanner"]
 sensor = ["dep:waterkit-sensor"]
 codec = ["dep:waterkit-codec"]
+# VA-API hardware video decode/encode on Linux. A still-image consumer keeps
+# `codec` alone; a video consumer that wants the hardware path opts in here.
+vaapi = ["codec", "waterkit-codec/vaapi"]
 screen = ["dep:waterkit-screen"]
 system = ["dep:waterkit-system"]
 video = ["dep:waterkit-video"]
@@ -119,15 +139,20 @@ health = ["dep:waterkit-health"]
 deeplink = ["dep:waterkit-deeplink"]
 background = ["dep:waterkit-background"]
 passkey = ["dep:waterkit-passkey"]
+menu = ["dep:waterkit-menu"]
+otp = ["dep:waterkit-otp"]
+wallet = ["dep:waterkit-wallet"]
+store = ["dep:waterkit-store"]
 
 
 [workspace.dependencies]
-aes = "0.9.1"
+aes = "0.9.3"
 cbc = "0.2.1"
 tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 # Reactive primitive used by waterkit-core.
-nami = "0.11.0"
-nami-core = "0.3.3"
+nami = "0.13"
+nami-core = "0.5"
 executor-core = { version = "0.7.1", features = ["std"] }
 # Core primitives shared by every functional crate.
 waterkit-core = { path = "core", version = "0.1.4" }
@@ -136,6 +161,7 @@ waterkit-permission = { path = "platform/permission", version = "0.1.4" }
 waterkit-location = { path = "device/location", version = "0.1.4" }
 waterkit-audio = { path = "multimedia/audio", version = "0.1.4", default-features = false }
 waterkit-haptic = { path = "device/haptic", version = "0.1.4" }
+waterkit-language = { path = "platform/language", version = "0.1.4" }
 waterkit-notification = { path = "sharing/notification", version = "0.1.4" }
 waterkit-dialog = { path = "sharing/dialog", version = "0.1.4" }
 waterkit-biometric = { path = "identity/biometric", version = "0.1.4" }
@@ -143,9 +169,13 @@ waterkit-clipboard = { path = "platform/clipboard", version = "0.1.4" }
 waterkit-fs = { path = "platform/fs", version = "0.1.4" }
 waterkit-secret = { path = "platform/secret", version = "0.1.4" }
 waterkit-camera = { path = "device/camera", version = "0.1.4" }
+waterkit-vision = { path = "device/vision", version = "0.1.4" }
 waterkit-sensor = { path = "device/sensor", version = "0.1.4" }
-waterkit-codec = { path = "multimedia/codec", version = "0.1.4" }
-shaderloom = "0.1.2"
+# No default features: consumers opt into `gpu` (decoded-frame upload),
+# `software-decode` (rav1d + image decoding), `software-encode` (adds rav1e)
+# and `vaapi` explicitly.
+waterkit-codec = { path = "multimedia/codec", version = "0.1.4", default-features = false }
+shaderloom = { version = "0.2.1", default-features = false }
 waterkit-screen = { path = "platform/screen", version = "0.1.4" }
 waterkit-system = { path = "platform/system", version = "0.1.4" }
 waterkit-video = { path = "multimedia/video", version = "0.1.4" }
@@ -165,10 +195,16 @@ waterkit-health = { path = "device/health", version = "0.1.4" }
 waterkit-deeplink = { path = "platform/deeplink", version = "0.1.4" }
 waterkit-background = { path = "platform/background", version = "0.1.4" }
 waterkit-passkey = { path = "identity/passkey", version = "0.1.4" }
+waterkit-menu = { path = "platform/menu", version = "0.1.4" }
+waterkit-otp = { path = "identity/otp", version = "0.1.4" }
+waterkit-wallet = { path = "platform/wallet", version = "0.1.4" }
+waterkit-store = { path = "platform/store", version = "0.1.4" }
 
 # Cross-platform
+enumset = "1.1"
 futures = "0.3"
-smallvec = "1.15"
+futures-channel = "0.3"
+smallvec = "1.16"
 async-channel = "2.5"
 async-fs = "2"
 thiserror = "2"
@@ -176,8 +212,11 @@ num-traits = "0.2"
 blocking = "1"
 async-io = "2"
 async-process = "2"
-wgpu = "29.0.4"
-wgpu-hal = { version = "29.0.4", features = ["metal"] }
+base64 = "0.23"
+hex = "0.4"
+sha2 = "0.11"
+wgpu = "30.0.1"
+wgpu-hal = { version = "30.0.1", features = ["metal"] }
 
 # Common
 log = "0.4"
@@ -191,16 +230,54 @@ toml = "1.1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
 
 # Apple
+block2 = "0.6"
 core-foundation = "0.10"
 objc2 = "0.6"
 objc2-foundation = "0.3"
+objc2-av-foundation = { version = "0.3", default-features = false }
+objc2-avf-audio = { version = "0.3", default-features = false }
+objc2-av-kit = { version = "0.3", default-features = false }
+objc2-contacts = { version = "0.3", default-features = false }
+objc2-core-graphics = { version = "0.3", default-features = false }
+objc2-core-bluetooth = { version = "0.3", default-features = false }
+objc2-core-image = { version = "0.3", default-features = false }
+objc2-core-location = { version = "0.3", default-features = false }
+objc2-event-kit = { version = "0.3", default-features = false }
+objc2-health-kit = { version = "0.3", default-features = false }
+objc2-photos = { version = "0.3", default-features = false }
+dispatch2 = "0.3"
 objc2-core-media = "0.3"
+objc2-app-kit = "0.3"
+objc2-authentication-services = { version = "0.3", default-features = false }
+objc2-background-tasks = { version = "0.3", default-features = false }
+# W3C KeyboardEvent key/modifier vocabulary.
+keyboard-types = "0.8"
+mach2 = "0.7"
 objc2-core-video = "0.3"
 objc2-video-toolbox = "0.3"
 objc2-core-foundation = "0.3"
+objc2-image-io = { version = "0.3", default-features = false }
+objc2-io-bluetooth = { version = "0.3", default-features = false }
+objc2-core-services = { version = "0.3", default-features = false }
+objc2-core-haptics = { version = "0.3", default-features = false }
 objc2-io-surface = "0.3"
+objc2-local-authentication = { version = "0.3", default-features = false }
 objc2-metal = "0.3"
+objc2-core-motion = { version = "0.3", default-features = false }
+objc2-core-nfc = { version = "0.3", default-features = false }
+objc2-io-kit = { version = "0.3", default-features = false }
+objc2-media-player = { version = "0.3", default-features = false }
+objc2-quartz-core = { version = "0.3", default-features = false }
+objc2-pass-kit = { version = "0.3", default-features = false }
+objc2-photos-ui = { version = "0.3", default-features = false }
+objc2-screen-capture-kit = { version = "0.3", default-features = false }
+objc2-speech = { version = "0.3", default-features = false }
+objc2-ui-kit = { version = "0.3", default-features = false }
+objc2-user-notifications = { version = "0.3", default-features = false }
+objc2-uniform-type-identifiers = { version = "0.3", default-features = false }
 objc = "0.2"
+# Zero-copy import of platform frame buffers into wgpu textures.
+wgpu-external-frame = "0.4.0"
 
 # Security
 keyring = "4"
@@ -220,6 +297,12 @@ waterkit-test-report = { path = "utils/test-report", version = "0.1.1" }
 
 # Windows
 windows = { version = "0.62", features = ["Devices_Geolocation", "Foundation"] }
+# Held at 0.3: 0.100 requires the newer `windows-core`/`windows` line that has
+# no crates.io release paired with `windows` 0.62 — the two types' `RuntimeType`
+# impls diverge, so `IIterable`/`IMapView` generics are unresolvable.
+windows-collections = "0.3"
+windows-core = "0.62"
+windows-registry = "0.6"
 
 # Linux
 zbus = "5"
@@ -229,17 +312,20 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 
 # Audio/Video
-rodio = { version = "0.22", default-features = false }
+rodio = { version = "0.23", default-features = false }
+# The cpal rodio depends on, and no other: two cpal versions both export a
+# `wasm-bindgen` `SampleFormat`, so a wasm32 build that links both fails.
+# Move this together with rodio.
 cpal = "0.18"
-symphonia-core = "0.6.0"
-symphonia-codec-aac = "0.6.0"
+symphonia-core = "0.6.1"
+symphonia-codec-aac = "0.6.1"
 symphonia-adapter-fdk-aac = "0.2.0"
 mp4 = "0.14"
 byteorder = "1.5"
 bytes = "1.12"
-broadcast-common = { version = "8.4", default-features = false, features = ["std"] }
-transmux = { version = "0.17", default-features = false, features = ["std"] }
-quick-xml = "0.41"
+broadcast-common = { version = "9.4", default-features = false, features = ["std"] }
+transmux = { version = "0.26", default-features = false, features = ["std"] }
+quick-xml = "0.42"
 subtp = "0.2"
 winit = "0.30"
 pollster = "1.0"
@@ -247,28 +333,35 @@ nokhwa = "0.10"
 rav1e = { version = "0.8", default-features = false, features = ["threading"] }
 rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
 media-codec = "0.9"
-timestretch = "0.8"
+timestretch = "0.15"
 
 # Time
 jiff = "0.2"
 
 # URL encoding
 percent-encoding = "2.3"
+
+# BCP-47 language identifiers shared by capability APIs.
+icu_locale_core = { version = "2.3", features = ["alloc"] }
+# Likely-subtags expansion (`LocaleExpander`), for routing languages to the
+# scripts a recognizer serves.
+icu_locale = "2.3"
 url = "2.5"
-zenwave = { version = "0.6.1", default-features = false, features = ["hyper-backend"] }
+zenwave = { version = "0.7.1", default-features = false, features = ["hyper-backend"] }
 
 # System/OS
 sysinfo = "0.39"
-dirs = "6.0"
+dirs = "7.0"
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
-arboard = "3"
+wl-clipboard-rs = "0.9.4"
+rustix = "1.1"
+x11rb = "0.14"
 clipboard-rs = { version = "0.3", features = ["image"] }
 wayland-sys = { version = "0.31.11", features = ["dlopen"] }
 xcap = "0.9.8"
 notify-rust = "4"
 futures-timer = "3"
-netdev = "0.45"
-swift-rs = "1.0.7"
+swift-rs = "1.0.9"
 sys-locale = "0.3"
 iana-time-zone = "0.1"
 
@@ -303,3 +396,10 @@ xcb = { git = "https://github.com/rust-x-bindings/rust-xcb", rev = "ae3b2cd080e7
 # static. Keep WaterKit's standalone workspace warning-free until that fix is
 # released upstream.
 block = { git = "https://github.com/Dicklesworthstone/rust-block", rev = "b39ae859d1ee8e8cb5eef6a516471f1578d26b96" }
+
+# waterkit#96: filtrate moved into water-rs/cherenkov ahead of a release.
+# Drop these entries once a filtrate release carries the new executor API.
+filtrate = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }
+filtrate-core = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }
+filtrate-derive = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }
+cherenkov-shader = { git = "https://github.com/water-rs/cherenkov", rev = "f2209fb4225f7432dd97784c99542f54aca242e6" }

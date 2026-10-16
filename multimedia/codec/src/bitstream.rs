@@ -277,6 +277,191 @@ fn protection_runs(
     Ok(runs)
 }
 
+/// Convert Annex-B (start-code) NAL units to length-prefixed framing.
+///
+/// This is the exact inverse of [`NalStreamConverter::length_prefixed_to_annex_b`]:
+/// encoders emit Annex-B; ISO-BMFF samples carry length-prefixed NAL units.
+///
+/// Detects both 4-byte (`00 00 00 01`) and 3-byte (`00 00 01`) start codes;
+/// each NAL is written as a big-endian `u32` length prefix followed by the NAL
+/// bytes, with no start codes. Returns `None` for a packet with no start
+/// code at all (already length-prefixed or unknown framing — the caller then
+/// writes the packet unchanged).
+///
+/// The second return value reports whether the packet contains a keyframe:
+/// NAL unit type 5 (IDR) for H.264, type 19 or 20 (`IDR_W_RADL`/`IDR_N_LP`)
+/// for H.265.
+#[must_use]
+pub fn annex_b_to_length_prefixed(data: &[u8], is_hevc: bool) -> (Option<Vec<u8>>, bool) {
+    let nalus = annex_b_nalus(data);
+    if nalus.is_empty() {
+        return (None, false);
+    }
+    let mut out = Vec::with_capacity(data.len());
+    let mut is_keyframe = false;
+    for (start, end) in nalus {
+        let nalu = &data[start..end];
+        let Ok(len) = u32::try_from(nalu.len()) else {
+            return (None, false);
+        };
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(nalu);
+        let nalu_type = if is_hevc {
+            (nalu[0] >> 1) & 0x3f
+        } else {
+            nalu[0] & 0x1f
+        };
+        if (!is_hevc && nalu_type == 5) || (is_hevc && (nalu_type == 19 || nalu_type == 20)) {
+            is_keyframe = true;
+        }
+    }
+    (Some(out), is_keyframe)
+}
+
+/// Returns `(start, end)` byte ranges of each NAL unit after its start code.
+fn annex_b_nalus(data: &[u8]) -> Vec<(usize, usize)> {
+    let mut nalus = Vec::new();
+    let mut i = 0;
+    while i + 3 <= data.len() {
+        let (is_start, start_code_len) = if data[i..].starts_with(&[0, 0, 0, 1]) {
+            (true, 4)
+        } else if data[i..].starts_with(&[0, 0, 1]) {
+            (true, 3)
+        } else {
+            (false, 0)
+        };
+        if is_start {
+            let start = i + start_code_len;
+            let mut end = data.len();
+            let mut j = start;
+            while j + 3 <= data.len() {
+                if data[j..].starts_with(&[0, 0, 1]) || data[j..].starts_with(&[0, 0, 0, 1]) {
+                    end = j;
+                    break;
+                }
+                j += 1;
+            }
+            if start < end {
+                nalus.push((start, end));
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    nalus
+}
+
+/// Builds the `avcC` (`AVCDecoderConfigurationRecord`) payload from an
+/// Annex-B bitstream that contains SPS (NAL type 7) and PPS (NAL type 8)
+/// units — either the parameter sets an encoder prepends to its first IDR
+/// access unit or the raw `MF_MT_MPEG_SEQUENCE_HEADER` blob on Windows.
+/// Returns `None` when the bitstream carries no usable SPS/PPS pair.
+#[cfg(any(waterkit_hw_codec_vaapi, waterkit_hw_codec_windows))]
+pub fn build_h264_avcc_from_annex_b(bitstream: &[u8]) -> Option<Vec<u8>> {
+    let mut sps = None;
+    let mut pps = None;
+
+    for (start, end) in annex_b_nalus(bitstream) {
+        let nalu = &bitstream[start..end];
+        if nalu.is_empty() {
+            continue;
+        }
+        match nalu[0] & 0x1f {
+            7 if sps.is_none() => sps = Some(nalu),
+            8 if pps.is_none() => pps = Some(nalu),
+            _ => {}
+        }
+        if sps.is_some() && pps.is_some() {
+            break;
+        }
+    }
+
+    let sps = sps?;
+    let pps = pps?;
+    if sps.len() < 4 {
+        return None;
+    }
+    let sps_len = u16::try_from(sps.len()).ok()?;
+    let pps_len = u16::try_from(pps.len()).ok()?;
+
+    let mut avcc = Vec::with_capacity(11 + sps.len() + pps.len());
+    avcc.push(1);
+    avcc.push(sps[1]);
+    avcc.push(sps[2]);
+    avcc.push(sps[3]);
+    avcc.push(0xFC | 0x03);
+    avcc.push(0xE0 | 1);
+    avcc.extend_from_slice(&sps_len.to_be_bytes());
+    avcc.extend_from_slice(sps);
+    avcc.push(1);
+    avcc.extend_from_slice(&pps_len.to_be_bytes());
+    avcc.extend_from_slice(pps);
+
+    Some(avcc)
+}
+
+/// Builds the `hvcC` (`HEVCDecoderConfigurationRecord`, ISO/IEC 14496-15)
+/// payload from an Annex-B bitstream that contains VPS (NAL type 32), SPS
+/// (type 33) and PPS (type 34) units. Profile/tier/level and the temporal
+/// layer fields are read out of the first SPS; the record is `None` when any
+/// of the three parameter sets is missing.
+#[cfg(waterkit_hw_codec_windows)]
+pub fn build_h265_hvcc_from_annex_b(bitstream: &[u8]) -> Option<Vec<u8>> {
+    let mut vps_nalus: Vec<&[u8]> = Vec::new();
+    let mut sps_nalus: Vec<&[u8]> = Vec::new();
+    let mut pps_nalus: Vec<&[u8]> = Vec::new();
+    for (start, end) in annex_b_nalus(bitstream) {
+        let nalu = &bitstream[start..end];
+        if nalu.len() < 2 {
+            continue;
+        }
+        match (nalu[0] >> 1) & 0x3f {
+            32 => vps_nalus.push(nalu),
+            33 => sps_nalus.push(nalu),
+            34 => pps_nalus.push(nalu),
+            _ => {}
+        }
+    }
+    if vps_nalus.is_empty() || sps_nalus.is_empty() || pps_nalus.is_empty() {
+        return None;
+    }
+
+    // sps[2] packs sps_video_parameter_set_id (4) | sps_max_sub_layers_minus1
+    // (3) | sps_temporal_id_nesting_flag (1); sps[3..15] is the 12-byte
+    // general_profile_tier_level copied verbatim into the record.
+    let sps = sps_nalus[0];
+    if sps.len() < 15 {
+        return None;
+    }
+    let num_temporal_layers = ((sps[2] >> 1) & 0x07) + 1;
+    let temporal_id_nested = sps[2] & 0x01;
+
+    let mut hvcc = Vec::new();
+    hvcc.push(1); // configurationVersion
+    hvcc.extend_from_slice(&sps[3..15]);
+    hvcc.extend_from_slice(&0xF000_u16.to_be_bytes()); // reserved + min_spatial_segmentation_idc
+    hvcc.push(0xFC); // reserved + parallelismType
+    hvcc.push(0xFC | 1); // reserved + chromaFormatIdc (4:2:0)
+    hvcc.push(0xF8); // reserved + bitDepthLumaMinus8
+    hvcc.push(0xF8); // reserved + bitDepthChromaMinus8
+    hvcc.extend_from_slice(&0u16.to_be_bytes()); // avgFrameRate
+    hvcc.push((num_temporal_layers << 3) | (temporal_id_nested << 1) | 0x03);
+
+    let arrays = [(32u8, vps_nalus), (33u8, sps_nalus), (34u8, pps_nalus)];
+    hvcc.push(u8::try_from(arrays.len()).ok()?);
+    for (nal_type, nalus) in arrays {
+        hvcc.push(0x80 | nal_type); // array_completeness + NAL_unit_type
+        hvcc.extend_from_slice(&u16::try_from(nalus.len()).ok()?.to_be_bytes());
+        for nalu in nalus {
+            let len = u16::try_from(nalu.len()).ok()?;
+            hvcc.extend_from_slice(&len.to_be_bytes());
+            hvcc.extend_from_slice(nalu);
+        }
+    }
+    Some(hvcc)
+}
+
 fn push_run(runs: &mut Vec<ProtectionRun>, encrypted: bool, length: usize) {
     if length == 0 {
         return;

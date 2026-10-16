@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "waterkit-codec-bench"
 path = "src/main.rs"
@@ -18,6 +21,7 @@ path = "src/profiler.rs"
 
 [dependencies]
 waterkit-codec.workspace = true
+waterkit-video-core.workspace = true
 waterkit-screen.workspace = true
 wgpu.workspace = true
 pollster.workspace = true

@@ -189,14 +189,14 @@ pub fn parse_ttml_document(document: &str) -> Result<Vec<SubtitleCue>, Error> {
             .map_err(|error| Error::Container(format!("invalid TTML XML: {error}")))?
         {
             Event::Start(element) => {
-                if element.local_name().as_ref() == b"tt" {
-                    timing = TtmlTimingParameters::from_root(&element, &reader)?;
+                if element.local_name().as_ref() == "tt" {
+                    timing = TtmlTimingParameters::from_root(&element)?;
                 }
                 let parent = stack.last().copied().ok_or_else(|| {
                     Error::Container(String::from("TTML timing stack lost its root interval"))
                 })?;
-                let interval = TtmlInterval::from_element(&element, &reader, parent, timing)?;
-                if element.local_name().as_ref() == b"p" {
+                let interval = TtmlInterval::from_element(&element, parent, timing)?;
+                if element.local_name().as_ref() == "p" {
                     if cue.is_some() {
                         return Err(Error::Container(String::from(
                             "TTML cue paragraphs must not be nested",
@@ -207,7 +207,7 @@ pub fn parse_ttml_document(document: &str) -> Result<Vec<SubtitleCue>, Error> {
                 stack.push(interval);
             }
             Event::Empty(element) => {
-                if element.local_name().as_ref() == b"br"
+                if element.local_name().as_ref() == "br"
                     && let Some(cue) = cue.as_mut()
                 {
                     cue.text.push('\n');
@@ -215,18 +215,12 @@ pub fn parse_ttml_document(document: &str) -> Result<Vec<SubtitleCue>, Error> {
             }
             Event::Text(text) => {
                 if let Some(cue) = cue.as_mut() {
-                    let decoded = text
-                        .xml10_content()
-                        .map_err(|error| Error::Container(format!("invalid TTML text: {error}")))?;
-                    cue.text.push_str(&decoded);
+                    cue.text.push_str(&text.xml10_content());
                 }
             }
             Event::CData(text) => {
                 if let Some(cue) = cue.as_mut() {
-                    let decoded = text.xml10_content().map_err(|error| {
-                        Error::Container(format!("invalid TTML CDATA: {error}"))
-                    })?;
-                    cue.text.push_str(&decoded);
+                    cue.text.push_str(&text.xml10_content());
                 }
             }
             Event::GeneralRef(reference) => {
@@ -238,7 +232,7 @@ pub fn parse_ttml_document(document: &str) -> Result<Vec<SubtitleCue>, Error> {
                 let interval = stack
                     .pop()
                     .ok_or_else(|| Error::Container(String::from("TTML timing stack underflow")))?;
-                if element.local_name().as_ref() == b"p" {
+                if element.local_name().as_ref() == "p" {
                     let pending = cue.take().ok_or_else(|| {
                         Error::Container(String::from("TTML paragraph closed without a cue"))
                     })?;
@@ -280,10 +274,8 @@ fn resolve_ttml_reference(reference: &BytesRef<'_>) -> Result<String, Error> {
     {
         return Ok(character.to_string());
     }
-    let name = reference
-        .decode()
-        .map_err(|error| Error::Container(format!("invalid TTML entity reference: {error}")))?;
-    resolve_predefined_entity(&name)
+    let name = reference.as_ref();
+    resolve_predefined_entity(name)
         .map(ToOwned::to_owned)
         .ok_or_else(|| Error::Container(format!("unsupported TTML entity reference &{name};")))
 }
@@ -443,25 +435,22 @@ impl Default for TtmlTimingParameters {
 }
 
 impl TtmlTimingParameters {
-    fn from_root(
-        element: &quick_xml::events::BytesStart<'_>,
-        reader: &Reader<&[u8]>,
-    ) -> Result<Self, Error> {
+    fn from_root(element: &quick_xml::events::BytesStart<'_>) -> Result<Self, Error> {
         let mut result = Self::default();
         for attribute in element.attributes() {
             let attribute = attribute
                 .map_err(|error| Error::Container(format!("invalid TTML attribute: {error}")))?;
             let value = attribute
-                .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                .normalized_value(XmlVersion::Implicit1_0)
                 .map_err(|error| Error::Container(format!("invalid TTML attribute: {error}")))?;
             match attribute.key.local_name().as_ref() {
-                b"frameRate" => {
+                "frameRate" => {
                     result.frames_per_second = positive_number(&value, "frameRate")?;
                 }
-                b"subFrameRate" => {
+                "subFrameRate" => {
                     result.subframes_per_frame = positive_number(&value, "subFrameRate")?;
                 }
-                b"tickRate" => {
+                "tickRate" => {
                     result.ticks_per_second = positive_number(&value, "tickRate")?;
                 }
                 _ => {}
@@ -487,7 +476,6 @@ impl TtmlInterval {
 
     fn from_element(
         element: &quick_xml::events::BytesStart<'_>,
-        reader: &Reader<&[u8]>,
         parent: Self,
         timing: TtmlTimingParameters,
     ) -> Result<Self, Error> {
@@ -498,12 +486,12 @@ impl TtmlInterval {
             let attribute = attribute
                 .map_err(|error| Error::Container(format!("invalid TTML attribute: {error}")))?;
             let value = attribute
-                .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                .normalized_value(XmlVersion::Implicit1_0)
                 .map_err(|error| Error::Container(format!("invalid TTML attribute: {error}")))?;
             match attribute.key.local_name().as_ref() {
-                b"begin" => begin = Some(parse_clock_time(&value, timing)?),
-                b"end" => end = Some(parse_clock_time(&value, timing)?),
-                b"dur" => duration = Some(parse_clock_time(&value, timing)?),
+                "begin" => begin = Some(parse_clock_time(&value, timing)?),
+                "end" => end = Some(parse_clock_time(&value, timing)?),
+                "dur" => duration = Some(parse_clock_time(&value, timing)?),
                 _ => {}
             }
         }

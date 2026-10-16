@@ -24,10 +24,11 @@ waterkit-codec = "0.1"
 | Feature | Default | Gates |
 | :--- | :--- | :--- |
 | `gpu` | yes | `wgpu` texture upload and the YUV-to-linear-RGBA compute conversion (`GpuFrame`, `DecodedFrameUploader`, `LinearRgbaConverter`, `DecodedFrame::to_gpu_frame`), plus the `wgpu`, `wgpu-hal` and `shaderloom` dependencies. |
-| `software-fallback` | yes | AV1 encode and decode in software on desktop platforms (`rav1e`, `rav1d`, `avif-parse`, `yuv`, `moxcms`). |
+| `software-decode` | via `software-encode` | AV1/AVIF decode in software on desktop (`rav1d`, `avif-parse`, `yuv`, `moxcms`). |
+| `software-encode` | yes | AV1 encode in software on desktop (`rav1e`); implies `software-decode`. |
 
 A consumer that only wants decoded pixels can take
-`default-features = false, features = ["software-fallback"]` and link no `wgpu`
+`default-features = false, features = ["software-decode"]` and link no `wgpu`
 at all; decoded planes come out through `DecodedFrame::copy_to_buffer` and
 `Decoder::decode_into`.
 

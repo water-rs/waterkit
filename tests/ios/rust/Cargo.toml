@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["staticlib"]
 
@@ -11,15 +14,21 @@ crate-type = ["staticlib"]
 ignored = ["waterkit"]
 
 [dependencies]
+futures = { workspace = true, optional = true }
 swift-bridge.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tracing-subscriber.workspace = true
 waterkit = { path = "../../..", default-features = false }
 waterkit-test-report.workspace = true
+wgpu = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+qrcode = { version = "0.14", optional = true }
+barcoders = { version = "2", optional = true }
+ab_glyph = { version = "0.2", optional = true }
+dejavu = { version = "2.37", optional = true }
 
 [features]
-# `health` stays out of `full`: waterkit-health declares extern Swift symbols
-# but ships no Apple implementation, so enabling it breaks the harness link
-# (water-rs/waterkit#60).
 full = [
     "sensor",
     "biometric",
@@ -43,15 +52,23 @@ full = [
     "speech",
     "contacts",
     "calendar",
+    "health",
+    "language",
     "deeplink",
     "background",
     "passkey",
+    "vision",
+    "wallet",
+    "store",
 ]
 sensor = ["waterkit/sensor"]
 biometric = ["waterkit/biometric"]
-location = ["waterkit/location"]
+# The location case checks access through waterkit-permission first.
+location = ["waterkit/location", "waterkit/permission"]
 audio = ["waterkit/audio"]
-camera = ["waterkit/camera"]
+# The camera case asks for camera access through waterkit-permission before
+# it opens a camera.
+camera = ["dep:futures", "waterkit/camera", "waterkit/permission"]
 clipboard = ["waterkit/clipboard"]
 codec = ["waterkit/codec"]
 dialog = ["waterkit/dialog"]
@@ -68,12 +85,28 @@ nfc = ["waterkit/nfc"]
 share = ["waterkit/share"]
 speech = ["waterkit/speech"]
 contacts = ["waterkit/contacts"]
-calendar = ["waterkit/calendar"]
+# The calendar case checks access through waterkit-permission before
+# listing, like location and camera.
+calendar = ["waterkit/calendar", "waterkit/permission"]
+language = ["waterkit/language"]
 health = ["waterkit/health"]
 deeplink = ["waterkit/deeplink"]
 background = ["waterkit/background"]
 passkey = ["waterkit/passkey"]
+# The vision case generates QR/barcode/text images and runs real Vision
+# requests through them.
+vision = [
+    "dep:wgpu",
+    "dep:image",
+    "dep:bytes",
+    "dep:qrcode",
+    "dep:barcoders",
+    "dep:ab_glyph",
+    "dep:dejavu",
+    "waterkit/vision",
+]
+wallet = ["waterkit/wallet"]
+store = ["dep:futures", "waterkit/store"]
 
 [build-dependencies]
-swift-bridge-build.workspace = true
 waterkit-build.workspace = true

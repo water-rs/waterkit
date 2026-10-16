@@ -1,201 +1,28 @@
 //! Android media control implementation using JNI and `MediaSession`.
 
 use crate::{MediaCommand, MediaError, MediaMetadata, PlaybackState, PlaybackStatus};
-use jni::objects::{Global, JClass, JObject, JString, JValue};
+use jni::objects::{Global, JObject, JString, JValue};
 use jni::{Env, JavaVM, jni_sig, jni_str};
-use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
 use std::time::Duration;
+use waterkit_build::{AndroidError, DexHelper, dex_helper};
 
-/// Embedded DEX bytecode containing `MediaSessionHelper` class.
-/// Generated at build time by kotlinc + D8.
-const DEX_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
+/// `waterkit.media.MediaSessionHelper`, compiled into the app's DEX by the
+/// packager and loaded on first use.
+static HELPER: DexHelper = dex_helper!("waterkit.media.MediaSessionHelper");
 
-struct DexArtifact(PathBuf);
-
-impl DexArtifact {
-    fn create(env: &mut Env<'_>, cache_dir: &JObject) -> Result<Self, MediaError> {
-        let prefix = env.new_string("waterkit-media-").map_err(|error| {
-            MediaError::InitializationFailed(format!("DEX prefix string failed: {error}"))
-        })?;
-        let suffix = env.new_string(".dex").map_err(|error| {
-            MediaError::InitializationFailed(format!("DEX suffix string failed: {error}"))
-        })?;
-        let file_class = env.find_class(jni_str!("java/io/File")).map_err(|error| {
-            MediaError::InitializationFailed(format!("java.io.File lookup failed: {error}"))
-        })?;
-        let file = env
-            .call_static_method(
-                file_class,
-                jni_str!("createTempFile"),
-                jni_sig!("(Ljava/lang/String;Ljava/lang/String;Ljava/io/File;)Ljava/io/File;"),
-                &[
-                    JValue::Object(&prefix),
-                    JValue::Object(&suffix),
-                    JValue::Object(cache_dir),
-                ],
-            )
-            .map_err(|error| {
-                MediaError::InitializationFailed(format!("temporary DEX creation failed: {error}"))
-            })?
-            .l()
-            .map_err(|error| {
-                MediaError::InitializationFailed(format!(
-                    "temporary DEX file result failed: {error}"
-                ))
-            })?;
-        let absolute_path = env
-            .call_method(
-                &file,
-                jni_str!("getAbsolutePath"),
-                jni_sig!("()Ljava/lang/String;"),
-                &[],
-            )
-            .map_err(|error| {
-                MediaError::InitializationFailed(format!(
-                    "temporary DEX absolute path failed: {error}"
-                ))
-            })?
-            .l()
-            .map_err(|error| {
-                MediaError::InitializationFailed(format!(
-                    "temporary DEX absolute path result failed: {error}"
-                ))
-            })?;
-        let path = env
-            .as_cast::<JString>(&absolute_path)
-            .and_then(|path| path.try_to_string(env))
-            .map_err(|error| {
-                MediaError::InitializationFailed(format!(
-                    "temporary DEX path string failed: {error}"
-                ))
-            })?;
-        let artifact = Self(PathBuf::from(path));
-        std::fs::write(artifact.path(), DEX_BYTES).map_err(|error| {
-            MediaError::InitializationFailed(format!("temporary DEX write failed: {error}"))
-        })?;
-        Ok(artifact)
+impl From<AndroidError> for MediaError {
+    fn from(error: AndroidError) -> Self {
+        Self::InitializationFailed(error.to_string())
     }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for DexArtifact {
-    fn drop(&mut self) {
-        if let Err(error) = std::fs::remove_file(&self.0) {
-            tracing::error!(%error, path = %self.0.display(), "failed to remove temporary Android media DEX");
-        }
-    }
-}
-
-/// Initialize the DEX class loader. Must be called with a valid Context.
-///
-/// # Safety
-///
-/// The `context` must be a valid Android Context `JObject`.
-fn create_class_loader(
-    env: &mut Env<'_>,
-    context: &JObject,
-) -> Result<(Global<JObject<'static>>, DexArtifact), MediaError> {
-    // Write DEX to cache directory
-    let cache_dir = env
-        .call_method(
-            context,
-            jni_str!("getCacheDir"),
-            jni_sig!("()Ljava/io/File;"),
-            &[],
-        )
-        .map_err(|e| MediaError::InitializationFailed(format!("getCacheDir failed: {e}")))?
-        .l()
-        .map_err(|e| MediaError::InitializationFailed(format!("getCacheDir result: {e}")))?;
-
-    let cache_path = env
-        .call_method(
-            &cache_dir,
-            jni_str!("getAbsolutePath"),
-            jni_sig!("()Ljava/lang/String;"),
-            &[],
-        )
-        .map_err(|e| MediaError::InitializationFailed(format!("getAbsolutePath failed: {e}")))?
-        .l()
-        .map_err(|e| MediaError::InitializationFailed(format!("getAbsolutePath result: {e}")))?;
-
-    let artifact = DexArtifact::create(env, &cache_dir)?;
-
-    // Create DexClassLoader
-    let dex_path_jstring = env
-        .new_string(artifact.path().to_string_lossy())
-        .map_err(|e| MediaError::InitializationFailed(format!("new_string failed: {e}")))?;
-
-    let parent_loader = env
-        .call_method(
-            context,
-            jni_str!("getClassLoader"),
-            jni_sig!("()Ljava/lang/ClassLoader;"),
-            &[],
-        )
-        .map_err(|e| MediaError::InitializationFailed(format!("getClassLoader failed: {e}")))?
-        .l()
-        .map_err(|e| MediaError::InitializationFailed(format!("getClassLoader result: {e}")))?;
-
-    let dex_class_loader_class = env
-        .find_class(jni_str!("dalvik/system/DexClassLoader"))
-        .map_err(|e| MediaError::InitializationFailed(format!("find DexClassLoader: {e}")))?;
-
-    let class_loader = env
-        .new_object(
-            dex_class_loader_class,
-            jni_sig!(
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V"
-            ),
-            &[
-                JValue::Object(&dex_path_jstring),
-                JValue::Object(&cache_path),
-                JValue::Object(&JObject::null()),
-                JValue::Object(&parent_loader),
-            ],
-        )
-        .map_err(|e| MediaError::InitializationFailed(format!("new DexClassLoader: {e}")))?;
-
-    let class_loader = env
-        .new_global_ref(class_loader)
-        .map_err(|e| MediaError::InitializationFailed(format!("new_global_ref: {e}")))?;
-    Ok((class_loader, artifact))
-}
-
-/// Get the `MediaSessionHelper` class.
-fn get_helper_class<'local>(
-    env: &mut Env<'local>,
-    class_loader: &Global<JObject<'static>>,
-) -> Result<JClass<'local>, MediaError> {
-    let helper_class_name = env
-        .new_string("waterkit.media.MediaSessionHelper")
-        .map_err(|e| MediaError::Unknown(format!("new_string: {e}")))?;
-
-    let helper_class = env
-        .call_method(
-            class_loader.as_obj(),
-            jni_str!("loadClass"),
-            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-            &[JValue::Object(&helper_class_name)],
-        )
-        .map_err(|e| MediaError::Unknown(format!("loadClass: {e}")))?
-        .l()
-        .map_err(|e| MediaError::Unknown(format!("loadClass result: {e}")))?;
-
-    env.cast_local::<JClass>(helper_class)
-        .map_err(MediaError::from)
 }
 
 /// Create an instance-owned media session helper using the Context.
 fn create_session_with_context(
     env: &mut Env<'_>,
     context: &JObject,
-) -> Result<(Global<JObject<'static>>, DexArtifact), MediaError> {
-    let (class_loader, artifact) = create_class_loader(env, context)?;
-    let helper_class = get_helper_class(env, &class_loader)?;
+) -> Result<Global<JObject<'static>>, MediaError> {
+    let helper_class = HELPER.class(env, context)?;
     let helper = env
         .new_object(
             helper_class,
@@ -204,10 +31,9 @@ fn create_session_with_context(
         )
         .map_err(|e| MediaError::InitializationFailed(format!("create MediaSessionHelper: {e}")))?;
 
-    let helper = env.new_global_ref(helper).map_err(|e| {
+    env.new_global_ref(helper).map_err(|e| {
         MediaError::InitializationFailed(format!("new_global_ref MediaSessionHelper: {e}"))
-    })?;
-    Ok((helper, artifact))
+    })
 }
 
 /// Set metadata on the media session helper.
@@ -421,16 +247,13 @@ pub struct MediaSessionInner {
     vm: JavaVM,
     context: Global<JObject<'static>>,
     helper: Global<JObject<'static>>,
-    dex_artifact: DexArtifact,
     command_receiver: async_channel::Receiver<MediaCommand>,
     command_worker: Option<JoinHandle<()>>,
 }
 
 impl core::fmt::Debug for MediaSessionInner {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("MediaSessionInner")
-            .field("dex_path", &self.dex_artifact.path())
-            .finish_non_exhaustive()
+        f.debug_struct("MediaSessionInner").finish_non_exhaustive()
     }
 }
 
@@ -457,16 +280,15 @@ impl MediaSessionInner {
         );
         let vm = unsafe { JavaVM::from_raw(raw_vm) };
 
-        let (context, helper, dex_artifact) =
-            vm.attach_current_thread(|env| -> Result<_, MediaError> {
-                let context_ref = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
-                let context = env.new_global_ref(&*context_ref).map_err(|e| {
-                    MediaError::InitializationFailed(format!("new_global_ref context failed: {e}"))
-                })?;
-
-                let (helper, dex_artifact) = create_session_with_context(env, context.as_obj())?;
-                Ok((context, helper, dex_artifact))
+        let (context, helper) = vm.attach_current_thread(|env| -> Result<_, MediaError> {
+            let context_ref = unsafe { env.as_cast_raw::<JObject>(&raw_context)? };
+            let context = env.new_global_ref(&*context_ref).map_err(|e| {
+                MediaError::InitializationFailed(format!("new_global_ref context failed: {e}"))
             })?;
+
+            let helper = create_session_with_context(env, context.as_obj())?;
+            Ok((context, helper))
+        })?;
         let command_vm = vm.clone();
         let command_helper = vm.attach_current_thread(|env| -> Result<_, MediaError> {
             env.new_global_ref(helper.as_obj()).map_err(|error| {
@@ -502,7 +324,6 @@ impl MediaSessionInner {
             vm,
             context,
             helper,
-            dex_artifact,
             command_receiver,
             command_worker: Some(command_worker),
         })

@@ -181,12 +181,26 @@ pub struct DecodedVideoFrame {
 impl DecodedVideoFrame {
     /// Returns the opaque platform-backed decoded frame.
     #[must_use]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::uninhabited_references,
+            reason = "waterkit-codec has no wasm32 decoder, so `DecodedFrame` is uninhabited there and this frame can never exist"
+        )
+    )]
     pub const fn frame(&self) -> &DecodedFrame {
         &self.frame
     }
 
     /// Consumes the wrapper and returns its opaque decoded frame.
     #[must_use]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::missing_const_for_fn,
+            reason = "waterkit-codec has no wasm32 decoder, so `DecodedFrame` is uninhabited there and this frame can never exist"
+        )
+    )]
     pub fn into_frame(self) -> DecodedFrame {
         self.frame
     }

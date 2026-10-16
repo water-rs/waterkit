@@ -1,10 +1,34 @@
+//! The Rust half of the iOS test harness: runs the enabled `WaterKit` cases
+//! and returns their structured report to the Swift app.
+//
+// The crate only makes sense on Apple targets: its `extern "Swift"` blocks
+// are satisfied by the hosting iOS app, so anywhere else they would be
+// unresolved symbols at link time.
+#![cfg(target_vendor = "apple")]
+
 use waterkit_test_report::{TestCase, TestReport, to_json_pretty};
+
+#[cfg(feature = "camera")]
+mod camera;
+#[cfg(feature = "store")]
+mod store;
+#[cfg(feature = "vision")]
+mod vision;
 
 #[swift_bridge::bridge]
 mod ffi {
     extern "Rust" {
         fn run_tests();
         fn run_tests_json() -> String;
+    }
+
+    extern "Swift" {
+        // StoreKit Test session helpers; implemented by the app's
+        // StoreHarness.swift. Always declared so the bridge glue compiles
+        // whether or not the store feature is enabled.
+        fn store_test_begin() -> String;
+        fn store_test_force_renewal(product_id: &str);
+        fn store_test_end();
     }
 }
 
@@ -13,166 +37,162 @@ fn run_tests() {
 }
 
 fn run_tests_json() -> String {
+    // `simctl launch --console` copies stderr into the CI log, so warnings
+    // land next to the report they explain.
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_new("warn,waterkit=debug,waterkit_location=debug")
+                .expect("the harness's tracing filter directives are valid"),
+        )
+        .try_init();
     let report = build_report();
     to_json_pretty(&report).expect("failed to serialize WaterKit iOS test report")
 }
 
+#[allow(clippy::too_many_lines)]
 fn build_report() -> TestReport {
-    let mut report = TestReport::new("ios", "waterkit-test-ios");
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("failed to build tokio runtime for iOS test harness");
+    let mut report = Harness {
+        runtime: &runtime,
+        report: TestReport::new("ios", "waterkit-test-ios"),
+    }
+    .run();
 
-    rt.block_on(async {
-        #[cfg(feature = "sensor")]
-        record_sensor(&mut report).await;
-
-        #[cfg(feature = "location")]
-        record_location(&mut report).await;
-
-        #[cfg(feature = "permission")]
-        record_permission(&mut report).await;
-
-        #[cfg(feature = "camera")]
-        record_camera(&mut report);
-
-        #[cfg(feature = "clipboard")]
-        record_clipboard(&mut report);
-
-        #[cfg(feature = "fs")]
-        record_fs(&mut report);
-
-        #[cfg(feature = "haptic")]
-        record_haptic(&mut report);
-
-        #[cfg(feature = "notification")]
-        report.push(TestCase::skipped(
-            "notification.show",
-            "notification authorization cannot be granted headless on the simulator",
-        ));
-
-        #[cfg(feature = "secret")]
-        record_secret(&mut report).await;
-
-        #[cfg(feature = "system")]
-        record_system(&mut report);
-
-        #[cfg(feature = "screen")]
-        record_screen(&mut report);
-
-        #[cfg(feature = "background")]
-        record_background(&mut report);
-
-        #[cfg(feature = "passkey")]
-        record_passkey(&mut report).await;
-
-        #[cfg(feature = "biometric")]
-        report.push(TestCase::skipped(
-            "biometric.authenticate",
-            "biometric authentication requires an interactive prompt",
-        ));
-
-        #[cfg(feature = "audio")]
-        report.push(TestCase::passed("audio.linked"));
-
-        #[cfg(feature = "codec")]
-        report.push(TestCase::passed("codec.linked"));
-
-        #[cfg(feature = "dialog")]
-        report.push(TestCase::passed("dialog.linked"));
-
-        #[cfg(feature = "video")]
-        report.push(TestCase::passed("video.linked"));
-
-        #[cfg(feature = "bluetooth")]
-        report.push(TestCase::passed("bluetooth.linked"));
-
-        #[cfg(feature = "nfc")]
-        {
-            let available = waterkit::nfc::is_available();
-            if cfg!(target_abi = "sim") && available {
-                report.push(TestCase::failed(
-                    "nfc.availability",
-                    "NFCNDEFReaderSession.readingAvailable is true on a simulator with no NFC hardware",
-                ));
-            } else {
-                report.push(TestCase::passed_with_message(
-                    "nfc.availability",
-                    format!("available={available}"),
-                ));
-            }
-        }
-
-        #[cfg(feature = "share")]
-        report.push(TestCase::skipped(
-            "share.sheet",
-            "share sheet requires an interactive chooser",
-        ));
-
-        #[cfg(feature = "speech")]
-        report.push(TestCase::skipped(
-            "speech.tts",
-            "speech synthesis is audible and not asserted by this harness",
-        ));
-
-        #[cfg(feature = "contacts")]
-        report.push(TestCase::skipped(
-            "contacts.fetch_all",
-            "contacts access depends on runtime user data permissions",
-        ));
-
-        #[cfg(feature = "calendar")]
-        report.push(TestCase::skipped(
-            "calendar.list",
-            "calendar access depends on runtime user data permissions",
-        ));
-
-        #[cfg(feature = "health")]
-        report.push(TestCase::skipped(
-            "health.availability",
-            "waterkit-health declares extern Swift symbols but ships no Apple implementation",
-        ));
-
-        #[cfg(feature = "deeplink")]
-        report.push(TestCase::passed("deeplink.linked"));
-
-        #[cfg(not(any(
-            feature = "sensor",
-            feature = "biometric",
-            feature = "location",
-            feature = "audio",
-            feature = "camera",
-            feature = "clipboard",
-            feature = "codec",
-            feature = "dialog",
-            feature = "fs",
-            feature = "haptic",
-            feature = "notification",
-            feature = "permission",
-            feature = "secret",
-            feature = "system",
-            feature = "video",
-            feature = "screen",
-            feature = "bluetooth",
-            feature = "nfc",
-            feature = "share",
-            feature = "speech",
-            feature = "contacts",
-            feature = "calendar",
-            feature = "health",
-            feature = "deeplink",
-            feature = "background",
-            feature = "passkey"
-        )))]
+    // Every enabled feature records at least one case, so an empty report
+    // means the harness was built without any feature.
+    if report.cases.is_empty() {
         report.push(TestCase::failed(
             "harness.feature",
             "no WaterKit feature was enabled for the iOS harness",
         ));
-    });
+    }
 
     report
 }
+
+/// What every capability's recorder shares: the runtime its asynchronous
+/// calls run on, and the report its cases go into.
+struct Harness<'h> {
+    runtime: &'h tokio::runtime::Runtime,
+    report: TestReport,
+}
+
+impl Harness<'_> {
+    /// Runs every enabled capability's recorder and returns the report.
+    fn run(mut self) -> TestReport {
+        // Every recorder runs in the runtime's context, and the asynchronous
+        // ones drive their future on it.
+        let _runtime_context = self.runtime.enter();
+        for record in RECORDERS {
+            record(&mut self);
+        }
+        self.report
+    }
+}
+
+/// Records one capability's cases.
+type Recorder = fn(&mut Harness<'_>);
+
+/// The recorder of every enabled capability, in report order.
+const RECORDERS: &[Recorder] = &[
+    #[cfg(feature = "sensor")]
+    |h| h.runtime.block_on(record_sensor(&mut h.report)),
+    #[cfg(feature = "location")]
+    |h| h.runtime.block_on(record_location(&mut h.report)),
+    #[cfg(feature = "permission")]
+    |h| h.runtime.block_on(record_permission(&mut h.report)),
+    #[cfg(feature = "camera")]
+    |h| h.runtime.block_on(camera::record(&mut h.report)),
+    #[cfg(feature = "clipboard")]
+    |h| h.runtime.block_on(record_clipboard(&mut h.report)),
+    #[cfg(feature = "fs")]
+    |h| record_fs(&mut h.report),
+    #[cfg(feature = "haptic")]
+    |h| h.runtime.block_on(record_haptic(&mut h.report)),
+    #[cfg(feature = "notification")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "notification.show",
+            "notification authorization cannot be granted headless on the simulator",
+        ));
+    },
+    #[cfg(feature = "secret")]
+    |h| h.runtime.block_on(record_secret(&mut h.report)),
+    #[cfg(feature = "system")]
+    |h| h.runtime.block_on(record_system(&mut h.report)),
+    #[cfg(feature = "screen")]
+    |h| record_screen(&mut h.report),
+    #[cfg(feature = "background")]
+    |h| record_background(&mut h.report),
+    #[cfg(feature = "passkey")]
+    |h| h.runtime.block_on(record_passkey(&mut h.report)),
+    #[cfg(feature = "language")]
+    |h| h.runtime.block_on(record_language(&mut h.report)),
+    #[cfg(feature = "wallet")]
+    |h| h.runtime.block_on(record_wallet(&mut h.report)),
+    #[cfg(feature = "store")]
+    |h| h.runtime.block_on(store::record(&mut h.report)),
+    #[cfg(feature = "biometric")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "biometric.authenticate",
+            "biometric authentication requires an interactive prompt",
+        ));
+    },
+    #[cfg(feature = "audio")]
+    |h| h.report.push(TestCase::passed("audio.linked")),
+    #[cfg(feature = "codec")]
+    |h| h.report.push(TestCase::passed("codec.linked")),
+    #[cfg(feature = "dialog")]
+    |h| h.report.push(TestCase::passed("dialog.linked")),
+    #[cfg(feature = "video")]
+    |h| h.report.push(TestCase::passed("video.linked")),
+    #[cfg(feature = "bluetooth")]
+    |h| h.report.push(TestCase::passed("bluetooth.linked")),
+    #[cfg(feature = "nfc")]
+    |h| record_nfc(&mut h.report),
+    #[cfg(feature = "share")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "share.sheet",
+            "share sheet requires an interactive chooser",
+        ));
+    },
+    #[cfg(feature = "speech")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "speech.tts",
+            "speech synthesis is audible and not asserted by this harness",
+        ));
+    },
+    #[cfg(feature = "contacts")]
+    |h| {
+        h.report.push(TestCase::skipped(
+            "contacts.fetch_all",
+            "contacts access depends on runtime user data permissions",
+        ));
+    },
+    #[cfg(feature = "calendar")]
+    |h| h.runtime.block_on(record_calendar(&mut h.report)),
+    #[cfg(feature = "health")]
+    |h| {
+        let capabilities = waterkit::health::capabilities();
+        h.report.push(TestCase::passed_with_message(
+            "health.availability",
+            format!("available={}", capabilities.available),
+        ));
+    },
+    #[cfg(feature = "deeplink")]
+    |h| h.report.push(TestCase::passed("deeplink.linked")),
+    #[cfg(feature = "vision")]
+    |h| h.runtime.block_on(record_vision(&mut h.report)),
+    #[cfg(feature = "vision")]
+    |h| h.runtime.block_on(vision::record(&mut h.report)),
+];
 
 #[cfg(feature = "sensor")]
 async fn record_sensor(report: &mut TestReport) {
@@ -204,6 +224,41 @@ async fn record_sensor(report: &mut TestReport) {
             "sensor.accelerometer",
             format!("accelerometer reported available but read failed: {error}"),
         )),
+    }
+}
+
+#[cfg(feature = "calendar")]
+async fn record_calendar(report: &mut TestReport) {
+    match waterkit::permission::check(waterkit::permission::Permission::Calendar).await {
+        waterkit::permission::PermissionStatus::Granted => {}
+        status => {
+            report.push(TestCase::skipped(
+                "calendar.list",
+                format!("calendar permission is {status:?}"),
+            ));
+            return;
+        }
+    }
+
+    match waterkit::calendar::list_calendars().await {
+        Ok(calendars) => {
+            report.push(TestCase::passed_with_message(
+                "calendar.list",
+                format!("count={}", calendars.len()),
+            ));
+        }
+        Err(
+            waterkit::calendar::CalendarError::PermissionDenied
+            | waterkit::calendar::CalendarError::NotAvailable,
+        ) => {
+            report.push(TestCase::skipped(
+                "calendar.list",
+                "calendar access depends on runtime user data permissions",
+            ));
+        }
+        Err(error) => {
+            report.push(TestCase::failed("calendar.list", format!("{error}")));
+        }
     }
 }
 
@@ -254,34 +309,123 @@ async fn record_permission(report: &mut TestReport) {
     ));
 }
 
-#[cfg(feature = "camera")]
-fn record_camera(report: &mut TestReport) {
-    match waterkit::camera::Camera::list() {
-        Ok(cameras) => report.push(TestCase::passed_with_message(
-            "camera.list",
-            format!("count={}", cameras.len()),
+#[cfg(feature = "clipboard")]
+async fn record_clipboard(report: &mut TestReport) {
+    let mut clipboard = match waterkit::clipboard::Clipboard::new() {
+        Ok(clipboard) => clipboard,
+        Err(error) => {
+            report.push(TestCase::failed(
+                "clipboard.init",
+                format!("clipboard init failed: {error}"),
+            ));
+            return;
+        }
+    };
+    if let Err(error) = clipboard.set_text("WaterKit Test") {
+        report.push(TestCase::failed(
+            "clipboard.set_text",
+            format!("set_text failed: {error}"),
+        ));
+        return;
+    }
+    report.push(TestCase::passed("clipboard.set_text"));
+
+    match clipboard.has_text() {
+        Ok(true) => report.push(TestCase::passed("clipboard.has_text")),
+        Ok(false) => report.push(TestCase::failed(
+            "clipboard.has_text",
+            "has_text reported no text right after set_text",
         )),
         Err(error) => report.push(TestCase::failed(
-            "camera.list",
-            format!("camera list failed: {error}"),
+            "clipboard.has_text",
+            format!("has_text failed: {error}"),
         )),
     }
+
+    report.push(match clipboard_files_round_trip(&mut clipboard).await {
+        Ok(url) => {
+            TestCase::passed_with_message("clipboard.files_round_trip", format!("url={url}"))
+        }
+        Err(error) => TestCase::failed("clipboard.files_round_trip", error),
+    });
 }
 
+/// Copies two files, one with a name every URL encoding must escape, and
+/// checks that the pasteboard carries the first file's contents, which other
+/// apps paste, and its file URL, and that the paths read back unchanged.
 #[cfg(feature = "clipboard")]
-fn record_clipboard(report: &mut TestReport) {
-    match waterkit::clipboard::Clipboard::new() {
-        Ok(mut clipboard) => match clipboard.set_text("WaterKit Test") {
-            Ok(()) => report.push(TestCase::passed("clipboard.set_text")),
-            Err(error) => report.push(TestCase::failed(
-                "clipboard.set_text",
-                format!("set_text failed: {error}"),
-            )),
-        },
-        Err(error) => report.push(TestCase::failed(
-            "clipboard.init",
-            format!("clipboard init failed: {error}"),
-        )),
+async fn clipboard_files_round_trip(
+    clipboard: &mut waterkit::clipboard::Clipboard,
+) -> Result<String, String> {
+    const NAME: &str = "waterkit clipboard n\u{e4}me #1?.txt";
+    const ENCODED_NAME: &str = "waterkit%20clipboard%20n%C3%A4me%20%231%3F.txt";
+    const CONTENTS: &[u8] = b"WaterKit clipboard file\n";
+
+    let dir = std::env::temp_dir();
+    let paths = vec![dir.join(NAME), dir.join("plain.txt")];
+    for path in &paths {
+        std::fs::write(path, CONTENTS)
+            .map_err(|error| format!("writing {}: {error}", path.display()))?;
+    }
+    clipboard
+        .set_files(&paths)
+        .map_err(|error| format!("set_files failed: {error}"))?;
+    if !clipboard
+        .has_files()
+        .map_err(|error| format!("has_files failed: {error}"))?
+    {
+        return Err("has_files reported no files right after set_files".into());
+    }
+    let contents = clipboard
+        .binary("public.plain-text")
+        .await
+        .map_err(|error| format!("reading public.plain-text failed: {error}"))?;
+    if contents.as_deref() != Some(CONTENTS) {
+        return Err(format!(
+            "the pasteboard's public.plain-text is {contents:?}"
+        ));
+    }
+    let url = clipboard
+        .binary("public.file-url")
+        .await
+        .map_err(|error| format!("reading public.file-url failed: {error}"))?
+        .ok_or("the pasteboard has no public.file-url")?;
+    // The representation is a binary property list that holds the URL
+    // string; take the URL from its scheme to the copied file's name.
+    let url = String::from_utf8_lossy(&url);
+    let url = url
+        .find("file:///")
+        .and_then(|start| {
+            let end = start + url[start..].find(ENCODED_NAME)? + ENCODED_NAME.len();
+            Some(url[start..end].to_owned())
+        })
+        .ok_or_else(|| format!("public.file-url holds no URL ending in {ENCODED_NAME}: {url:?}"))?;
+    let read = clipboard
+        .files()
+        .await
+        .map_err(|error| format!("files failed: {error}"))?;
+    if read != paths {
+        return Err(format!("url={url} files() returned {read:?} for {paths:?}"));
+    }
+    if url.contains(' ') {
+        return Err(format!("the pasteboard's file URL is {url}"));
+    }
+    Ok(url)
+}
+
+#[cfg(feature = "nfc")]
+fn record_nfc(report: &mut TestReport) {
+    let available = waterkit::nfc::is_available();
+    if cfg!(target_abi = "sim") && available {
+        report.push(TestCase::failed(
+            "nfc.availability",
+            "NFCNDEFReaderSession.readingAvailable is true on a simulator with no NFC hardware",
+        ));
+    } else {
+        report.push(TestCase::passed_with_message(
+            "nfc.availability",
+            format!("available={available}"),
+        ));
     }
 }
 
@@ -304,8 +448,8 @@ fn record_fs(report: &mut TestReport) {
 }
 
 #[cfg(feature = "haptic")]
-fn record_haptic(report: &mut TestReport) {
-    match waterkit::haptic::Haptic::notification_success() {
+async fn record_haptic(report: &mut TestReport) {
+    match waterkit::haptic::Haptic::notification_success().await {
         Ok(()) => report.push(TestCase::passed("haptic.notification_success")),
         Err(waterkit::haptic::HapticError::Unsupported) => report.push(TestCase::skipped(
             "haptic.notification_success",
@@ -320,33 +464,16 @@ fn record_haptic(report: &mut TestReport) {
 
 #[cfg(feature = "secret")]
 async fn record_secret(report: &mut TestReport) {
-    // SecItem queries need `keychain-access-groups`, which an ad-hoc signed
-    // harness app cannot carry: the simulator rejects launches for any
-    // entitlement-bearing ad-hoc signature.
     if let Err(error) =
         waterkit::secret::SecretManager::set("waterkit", "ios_test", "secret123").await
     {
-        if error.to_string().contains("entitlement") {
-            report.push(TestCase::skipped(
-                "secret.set",
-                format!("keychain unavailable without entitlements: {error}"),
-            ));
-            report.push(TestCase::skipped(
-                "secret.get",
-                "keychain unavailable without entitlements",
-            ));
-            report.push(TestCase::skipped(
-                "secret.delete",
-                "keychain unavailable without entitlements",
-            ));
-            return;
-        }
         report.push(TestCase::failed(
             "secret.set",
             format!("secret set failed: {error}"),
         ));
         return;
     }
+    report.push(TestCase::passed("secret.set"));
 
     match waterkit::secret::SecretManager::get("waterkit", "ios_test").await {
         Ok(value) if value == "secret123" => report.push(TestCase::passed("secret.get")),
@@ -370,12 +497,17 @@ async fn record_secret(report: &mut TestReport) {
 }
 
 #[cfg(feature = "system")]
-fn record_system(report: &mut TestReport) {
-    let connectivity = waterkit::system::connectivity();
-    report.push(TestCase::passed_with_message(
-        "system.connectivity",
-        format!("connection_type={:?}", connectivity.connection_type()),
-    ));
+async fn record_system(report: &mut TestReport) {
+    match waterkit::system::connectivity().await {
+        Ok(connectivity) => report.push(TestCase::passed_with_message(
+            "system.connectivity",
+            format!("connection_type={:?}", connectivity.connection_type()),
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "system.connectivity",
+            format!("connectivity query failed: {error}"),
+        )),
+    }
 }
 
 #[cfg(feature = "screen")]
@@ -407,6 +539,83 @@ fn record_background(report: &mut TestReport) {
     ));
 }
 
+/// `VisionKit`'s `DataScannerViewController` and
+/// `VNDocumentCameraViewController` report unsupported on the simulator, so
+/// `capabilities()` must say so and `scan()` must fail with
+/// [`waterkit::vision::VisionError::Unsupported`] instead of presenting a
+/// UI or falling back to another realization.
+#[cfg(feature = "vision")]
+async fn record_vision(report: &mut TestReport) {
+    let available = waterkit::vision::CodeScanner::capabilities().available;
+    if cfg!(target_abi = "sim") && available {
+        report.push(TestCase::failed(
+            "vision.scanner_capabilities",
+            "DataScannerViewController reports supported on a simulator with no camera",
+        ));
+    } else {
+        report.push(TestCase::passed_with_message(
+            "vision.scanner_capabilities",
+            format!("available={available}"),
+        ));
+        if available {
+            report.push(TestCase::skipped(
+                "vision.scanner_scan",
+                "presenting the code scanner requires an interactive session",
+            ));
+        } else {
+            match waterkit::vision::CodeScanner::new(waterkit::vision::Symbology::Qr)
+                .scan()
+                .await
+            {
+                Err(waterkit::vision::VisionError::Unsupported(message)) => {
+                    report.push(TestCase::passed_with_message(
+                        "vision.scanner_scan",
+                        format!("unsupported: {message}"),
+                    ));
+                }
+                other => report.push(TestCase::failed(
+                    "vision.scanner_scan",
+                    format!("scan() on an unsupported device returned {other:?}"),
+                )),
+            }
+        }
+    }
+
+    // `VNDocumentCameraViewController.isSupported` reports false where no
+    // camera can scan, like the simulator.
+    let document_available = waterkit::vision::DocumentScanner::capabilities().available;
+    if cfg!(target_abi = "sim") && document_available {
+        report.push(TestCase::failed(
+            "vision.document_scanner_capabilities",
+            "VNDocumentCameraViewController reports supported on a simulator with no camera",
+        ));
+    } else {
+        report.push(TestCase::passed_with_message(
+            "vision.document_scanner_capabilities",
+            format!("available={document_available}"),
+        ));
+        if document_available {
+            report.push(TestCase::skipped(
+                "vision.document_scanner_scan",
+                "presenting the document scanner requires an interactive session",
+            ));
+        } else {
+            match waterkit::vision::DocumentScanner::new().scan().await {
+                Err(waterkit::vision::VisionError::Unsupported(message)) => {
+                    report.push(TestCase::passed_with_message(
+                        "vision.document_scanner_scan",
+                        format!("unsupported: {message}"),
+                    ));
+                }
+                other => report.push(TestCase::failed(
+                    "vision.document_scanner_scan",
+                    format!("scan() on an unsupported device returned {other:?}"),
+                )),
+            }
+        }
+    }
+}
+
 #[cfg(feature = "passkey")]
 async fn record_passkey(report: &mut TestReport) {
     match waterkit::passkey::is_available().await {
@@ -418,7 +627,7 @@ async fn record_passkey(report: &mut TestReport) {
                     availability.supports_user_verification,
                     availability.supports_discoverable_credentials
                 ),
-            ))
+            ));
         }
         Ok(_) => report.push(TestCase::failed(
             "passkey.availability",
@@ -427,6 +636,175 @@ async fn record_passkey(report: &mut TestReport) {
         Err(error) => report.push(TestCase::failed(
             "passkey.availability",
             format!("passkey availability failed: {error}"),
+        )),
+    }
+}
+
+#[cfg(feature = "language")]
+async fn record_language(report: &mut TestReport) {
+    use waterkit::language::translation;
+
+    let capabilities = match translation::capabilities().await {
+        Ok(capabilities) => capabilities,
+        Err(error) => {
+            record_language_query_failure(report, &error);
+            return;
+        }
+    };
+    record_language_capabilities(report, &capabilities);
+    record_language_translation(report, &capabilities).await;
+    record_language_not_installed(report, &capabilities).await;
+}
+
+#[cfg(feature = "language")]
+fn record_language_query_failure(
+    report: &mut TestReport,
+    error: &waterkit::language::translation::TranslationError,
+) {
+    report.push(TestCase::failed(
+        "language.capabilities",
+        format!("capability query failed: {error}"),
+    ));
+    report.push(TestCase::skipped(
+        "language.translate",
+        "capability query failed",
+    ));
+    report.push(TestCase::skipped(
+        "language.not_installed",
+        "capability query failed",
+    ));
+}
+
+#[cfg(feature = "language")]
+fn record_language_capabilities(
+    report: &mut TestReport,
+    capabilities: &waterkit::language::translation::TranslationCapabilities,
+) {
+    let pairs = capabilities
+        .pairs()
+        .iter()
+        .map(|capability| format!("{}={:?}", capability.pair(), capability.status()))
+        .collect::<Vec<_>>();
+    report.push(TestCase::passed_with_message(
+        "language.capabilities",
+        if pairs.is_empty() {
+            "0 pairs (no on-device translation pairs on this OS)".into()
+        } else {
+            pairs.join(", ")
+        },
+    ));
+}
+
+#[cfg(feature = "language")]
+async fn record_language_translation(
+    report: &mut TestReport,
+    capabilities: &waterkit::language::translation::TranslationCapabilities,
+) {
+    use waterkit::language::translation::{AssetStatus, Translator};
+
+    if let Some(capability) = capabilities
+        .pairs()
+        .iter()
+        .find(|capability| capability.status() == AssetStatus::Installed)
+    {
+        let pair = capability.pair().clone();
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            Translator::new(pair.source().clone(), pair.target().clone()),
+        )
+        .await
+        {
+            Err(_) => report.push(TestCase::failed(
+                "language.translate",
+                "system translation service did not create a translator within 20 s",
+            )),
+            Ok(Ok(translator)) => match tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                translator.translate_batch(&["Hello", "Good morning"]),
+            )
+            .await
+            {
+                Err(_) => report.push(TestCase::failed(
+                    "language.translate",
+                    "system translation service did not translate within 20 s",
+                )),
+                Ok(Ok(translations))
+                    if translations.len() == 2
+                        && translations
+                            .iter()
+                            .all(|translation| !translation.trim().is_empty()) =>
+                {
+                    report.push(TestCase::passed_with_message(
+                        "language.translate",
+                        format!("{} => {translations:?}", translator.pair()),
+                    ));
+                }
+                Ok(Ok(translations)) => report.push(TestCase::failed(
+                    "language.translate",
+                    format!("invalid batch result: {translations:?}"),
+                )),
+                Ok(Err(error)) => report.push(TestCase::failed(
+                    "language.translate",
+                    format!("batch translation failed: {error}"),
+                )),
+            },
+            Ok(Err(error)) => report.push(TestCase::failed(
+                "language.translate",
+                format!("translator creation failed: {error}"),
+            )),
+        }
+    } else {
+        report.push(TestCase::skipped("language.translate", "no installed pair"));
+    }
+}
+
+#[cfg(feature = "language")]
+async fn record_language_not_installed(
+    report: &mut TestReport,
+    capabilities: &waterkit::language::translation::TranslationCapabilities,
+) {
+    use waterkit::language::translation::{AssetStatus, TranslationError, Translator};
+
+    if let Some(capability) = capabilities
+        .pairs()
+        .iter()
+        .find(|capability| capability.status() == AssetStatus::NeedsDownload)
+    {
+        let pair = capability.pair().clone();
+        match Translator::new(pair.source().clone(), pair.target().clone()).await {
+            Err(TranslationError::NeedsDownload(actual)) if actual == pair => {
+                report.push(TestCase::passed_with_message(
+                    "language.not_installed",
+                    format!("{actual} needs download"),
+                ));
+            }
+            Err(error) => report.push(TestCase::failed(
+                "language.not_installed",
+                format!("expected NeedsDownload for {pair}, got {error}"),
+            )),
+            Ok(_) => report.push(TestCase::failed(
+                "language.not_installed",
+                format!("unexpectedly created a translator for {pair}"),
+            )),
+        }
+    } else {
+        report.push(TestCase::skipped(
+            "language.not_installed",
+            "no pair needs downloading",
+        ));
+    }
+}
+
+#[cfg(feature = "wallet")]
+async fn record_wallet(report: &mut TestReport) {
+    match waterkit::wallet::capabilities().await {
+        Ok(capabilities) => report.push(TestCase::passed_with_message(
+            "wallet.availability",
+            format!("available={}", capabilities.available),
+        )),
+        Err(error) => report.push(TestCase::failed(
+            "wallet.availability",
+            format!("wallet capability probe failed: {error}"),
         )),
     }
 }

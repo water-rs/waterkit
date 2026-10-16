@@ -23,6 +23,11 @@ pub enum DialogError {
     /// The requested feature is not supported on this platform.
     #[error("not supported: {0}")]
     Unsupported(String),
+
+    /// An Android activity-result operation failed.
+    #[cfg(target_os = "android")]
+    #[error(transparent)]
+    ActivityResult(#[from] waterkit_build::ActivityResultError),
 }
 
 #[cfg(target_os = "android")]

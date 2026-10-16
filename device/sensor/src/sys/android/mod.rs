@@ -1,10 +1,16 @@
 //! Android sensor implementation using JNI.
 
 use crate::{ScalarData, SensorData, SensorError};
-use futures::stream;
+use futures::StreamExt;
+use futures::channel::oneshot;
 use jni::objects::{JDoubleArray, JObject, JValue};
+use jni::signature::MethodSignature;
+use jni::strings::JNIStr;
 use jni::{Env, jni_sig, jni_str};
-use waterkit_build::{AndroidError, DexHelper, dex_helper, with_android_context};
+use waterkit_build::{
+    AndroidError, DexHelper, FromJava, NativeCallback, NativeChannel, PeerError, dex_helper,
+    with_android_context,
+};
 use waterkit_core::Timestamp;
 
 /// `waterkit.sensor.SensorHelper`, embedded as a DEX by this crate's build script and
@@ -17,55 +23,44 @@ impl From<AndroidError> for SensorError {
     }
 }
 
-/// Reads the `[D` payload the helper returns, rejecting the "unavailable"
-/// marker in slot 0.
-fn read_result_values(
-    env: &Env<'_>,
-    result: JObject<'_>,
-    minimum_len: usize,
-) -> Result<Vec<f64>, SensorError> {
-    let array = env
-        .cast_local::<JDoubleArray>(result)
-        .map_err(|e| SensorError::Platform(format!("sensor result is not a double array: {e}")))?;
-    let len = array
-        .len(env)
-        .map_err(|e| SensorError::Platform(format!("sensor result length: {e}")))?;
+/// The `[D` payload a `NativeCallback` delivers: sensor values followed by
+/// the epoch-millisecond timestamp.
+struct RawReading(Vec<f64>);
 
-    if len < 1 {
-        return Err(SensorError::NotAvailable);
+impl FromJava for RawReading {
+    fn from_java(env: &mut Env<'_>, object: &JObject<'_>) -> Result<Self, AndroidError> {
+        let array = env.as_cast::<JDoubleArray>(object)?;
+        let mut values = vec![0.0f64; array.len(env)?];
+        array.get_region(env, 0, &mut values)?;
+        Ok(Self(values))
     }
-
-    let mut values = vec![0.0f64; len];
-    array
-        .get_region(env, 0, &mut values)
-        .map_err(|e| SensorError::Platform(format!("sensor result read: {e}")))?;
-
-    if values[0] < 0.5 {
-        return Err(SensorError::NotAvailable);
-    }
-
-    if len < minimum_len {
-        return Err(SensorError::Platform("Invalid result array".into()));
-    }
-
-    Ok(values)
 }
 
-fn parse_sensor_result(env: &Env<'_>, result: JObject<'_>) -> Result<SensorData, SensorError> {
-    let values = read_result_values(env, result, 5)?;
+impl From<PeerError> for SensorError {
+    fn from(error: PeerError) -> Self {
+        Self::Platform(error.to_string())
+    }
+}
+
+fn parse_sensor_reading(values: &[f64]) -> Result<SensorData, SensorError> {
+    let [x, y, z, timestamp] = values else {
+        return Err(SensorError::Platform("invalid sensor reading".into()));
+    };
     Ok(SensorData::new(
-        values[1],
-        values[2],
-        values[3],
-        timestamp_from_jni_double(values[4])?,
+        *x,
+        *y,
+        *z,
+        timestamp_from_jni_double(*timestamp)?,
     ))
 }
 
-fn parse_scalar_result(env: &Env<'_>, result: JObject<'_>) -> Result<ScalarData, SensorError> {
-    let values = read_result_values(env, result, 3)?;
+fn parse_scalar_reading(values: &[f64]) -> Result<ScalarData, SensorError> {
+    let [value, timestamp] = values else {
+        return Err(SensorError::Platform("invalid scalar reading".into()));
+    };
     Ok(ScalarData::new(
-        values[1],
-        timestamp_from_jni_double(values[2])?,
+        *value,
+        timestamp_from_jni_double(*timestamp)?,
     ))
 }
 
@@ -109,77 +104,192 @@ pub fn is_sensor_available_with_context(
 /// Read a sensor with an explicit Android `Context`.
 ///
 /// # Errors
-/// Returns [`SensorError`] when DEX initialization, helper loading, JNI access, or payload
-/// decoding fails.
+/// Returns [`SensorError`] when the sensor is unavailable, DEX initialization,
+/// helper loading, JNI access, or payload decoding fails, or the read reports
+/// failure.
 pub fn read_sensor_with_context(
     env: &mut Env<'_>,
     context: &JObject<'_>,
     sensor_type: i32,
-) -> Result<SensorData, SensorError> {
-    let helper = HELPER.class(env, context)?;
-
-    let result = env
-        .call_static_method(
-            helper,
-            jni_str!("readSensor"),
-            jni_sig!("(Landroid/content/Context;I)[D"),
-            &[JValue::Object(context), JValue::Int(sensor_type)],
-        )
-        .map_err(|e| SensorError::Platform(format!("readSensor: {e}")))?
-        .l()
-        .map_err(|e| SensorError::Platform(format!("readSensor result: {e}")))?;
-
-    parse_sensor_result(env, result)
+) -> impl Future<Output = Result<SensorData, SensorError>> + Send + use<> {
+    let receiver = begin_read(
+        env,
+        context,
+        jni_str!("readSensor"),
+        jni_sig!("(Landroid/content/Context;ILwaterkit/build/NativeCallback;)V"),
+        &[JValue::Int(sensor_type)],
+    );
+    async move {
+        let reading = finish_read(receiver?).await?;
+        parse_sensor_reading(&reading.0)
+    }
 }
 
 /// Read pressure data with an explicit Android `Context`.
 ///
 /// # Errors
-/// Returns [`SensorError`] when DEX initialization, helper loading, JNI access, or payload
-/// decoding fails.
+/// Returns [`SensorError`] when the sensor is unavailable, DEX initialization,
+/// helper loading, JNI access, or payload decoding fails, or the read reports
+/// failure.
 pub fn read_pressure_with_context(
     env: &mut Env<'_>,
     context: &JObject<'_>,
-) -> Result<ScalarData, SensorError> {
-    let helper = HELPER.class(env, context)?;
-
-    let result = env
-        .call_static_method(
-            helper,
-            jni_str!("readPressure"),
-            jni_sig!("(Landroid/content/Context;)[D"),
-            &[JValue::Object(context)],
-        )
-        .map_err(|e| SensorError::Platform(format!("readPressure: {e}")))?
-        .l()
-        .map_err(|e| SensorError::Platform(format!("readPressure result: {e}")))?;
-
-    parse_scalar_result(env, result)
+) -> impl Future<Output = Result<ScalarData, SensorError>> + Send + use<> {
+    let receiver = begin_read(
+        env,
+        context,
+        jni_str!("readPressure"),
+        jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeCallback;)V"),
+        &[],
+    );
+    async move {
+        let reading = finish_read(receiver?).await?;
+        parse_scalar_reading(&reading.0)
+    }
 }
 
 /// Read ambient light data with an explicit Android `Context`.
 ///
 /// # Errors
-/// Returns [`SensorError`] when DEX initialization, helper loading, JNI access, or payload
-/// decoding fails.
+/// Returns [`SensorError`] when the sensor is unavailable, DEX initialization,
+/// helper loading, JNI access, or payload decoding fails, or the read reports
+/// failure.
 pub fn read_light_with_context(
     env: &mut Env<'_>,
     context: &JObject<'_>,
-) -> Result<ScalarData, SensorError> {
-    let helper = HELPER.class(env, context)?;
+) -> impl Future<Output = Result<ScalarData, SensorError>> + Send + use<> {
+    let receiver = begin_read(
+        env,
+        context,
+        jni_str!("readLight"),
+        jni_sig!("(Landroid/content/Context;Lwaterkit/build/NativeCallback;)V"),
+        &[],
+    );
+    async move {
+        let reading = finish_read(receiver?).await?;
+        parse_scalar_reading(&reading.0)
+    }
+}
 
-    let result = env
+/// Creates a `NativeCallback<RawReading>` and hands it to the helper's `method`
+/// entry point, returning the receiver the reading resolves on.
+fn begin_read(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+    method: &'static JNIStr,
+    signature: MethodSignature<'_, '_>,
+    args: &[JValue],
+) -> Result<oneshot::Receiver<Result<RawReading, PeerError>>, SensorError> {
+    let helper = HELPER.class(env, context)?;
+    let (callback, receiver) = NativeCallback::<RawReading>::new(env)?;
+    let all_args: Vec<JValue> = std::iter::once(JValue::Object(context))
+        .chain(args.iter().copied())
+        .chain(std::iter::once(JValue::Object(callback.as_obj())))
+        .collect();
+    env.call_static_method(helper, method, signature, &all_args)
+        .map_err(|e| SensorError::Platform(format!("{method}: {e}")))?;
+    Ok(receiver)
+}
+
+/// Awaits one reading: cancellation means the callback object was released
+/// unanswered.
+async fn finish_read(
+    receiver: oneshot::Receiver<Result<RawReading, PeerError>>,
+) -> Result<RawReading, SensorError> {
+    receiver
+        .await
+        .map_err(|_| SensorError::Platform("sensor read was abandoned".into()))?
+        .map_err(SensorError::from)
+}
+/// An Android sensor watch: the Kotlin `SensorWatch` object owns the
+/// registered `SensorEventListener`; dropping this stream calls its `stop()`,
+/// which unregisters the listener and closes the channel.
+struct WatchStream<T> {
+    handle: jni::objects::Global<JObject<'static>>,
+    inner: std::pin::Pin<Box<dyn futures_core::Stream<Item = Result<T, SensorError>> + Send>>,
+}
+
+impl<T> futures_core::Stream for WatchStream<T> {
+    type Item = Result<T, SensorError>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+impl<T> Drop for WatchStream<T> {
+    fn drop(&mut self) {
+        if let Err(error) = with_android_context(|env, _context| {
+            env.call_method(self.handle.as_obj(), jni_str!("stop"), jni_sig!("()V"), &[])
+                .map(|_| ())
+                .map_err(AndroidError::from)
+        }) {
+            tracing::warn!(%error, "failed to stop Android sensor watch");
+        }
+    }
+}
+
+/// Registers one `SensorEventListener` at `interval_ms` and returns the stream
+/// of decoded events.
+fn watch_sensor<T: Send + 'static>(
+    env: &mut Env<'_>,
+    context: &JObject<'_>,
+    sensor_type: i32,
+    interval_ms: u32,
+    decode: fn(&[f64]) -> Result<T, SensorError>,
+) -> Result<WatchStream<T>, SensorError> {
+    if !is_sensor_available_with_context(env, context, sensor_type)? {
+        return Err(SensorError::NotAvailable);
+    }
+    let helper = HELPER.class(env, context)?;
+    let (channel, receiver) = NativeChannel::<RawReading>::new(env)?;
+    let sampling_us = i32::try_from(u64::from(interval_ms) * 1000).unwrap_or(i32::MAX);
+    let watch = env
         .call_static_method(
             helper,
-            jni_str!("readLight"),
-            jni_sig!("(Landroid/content/Context;)[D"),
-            &[JValue::Object(context)],
+            jni_str!("watchSensor"),
+            jni_sig!(
+                "(Landroid/content/Context;IILwaterkit/build/NativeChannel;)Lwaterkit/sensor/SensorWatch;"
+            ),
+            &[
+                JValue::Object(context),
+                JValue::Int(sensor_type),
+                JValue::Int(sampling_us),
+                JValue::Object(channel.as_obj()),
+            ],
         )
-        .map_err(|e| SensorError::Platform(format!("readLight: {e}")))?
+        .map_err(|e| SensorError::Platform(format!("watchSensor: {e}")))?
         .l()
-        .map_err(|e| SensorError::Platform(format!("readLight result: {e}")))?;
+        .map_err(|e| SensorError::Platform(format!("watchSensor result: {e}")))?;
+    let handle = env
+        .new_global_ref(watch)
+        .map_err(|e| SensorError::Platform(format!("retain sensor watch: {e}")))?;
 
-    parse_scalar_result(env, result)
+    let inner = receiver.map(move |item| {
+        item.map_err(SensorError::from)
+            .and_then(|reading| decode(&reading.0))
+    });
+    Ok(WatchStream {
+        handle,
+        inner: Box::pin(inner),
+    })
+}
+
+#[expect(
+    clippy::unused_async,
+    reason = "keeps the sys-impl signature uniform across platforms"
+)]
+async fn watch_internal<T: Send + 'static>(
+    sensor_type: i32,
+    interval_ms: u32,
+    decode: fn(&[f64]) -> Result<T, SensorError>,
+) -> Result<WatchStream<T>, SensorError> {
+    with_android_context(|env, context| {
+        watch_sensor(env, context, sensor_type, interval_ms, decode)
+    })
 }
 
 // --- Parameter-less API Implementation using ndk-context ---
@@ -189,124 +299,93 @@ fn is_sensor_available_internal(sensor_type: i32) -> bool {
         .unwrap_or(false)
 }
 
-fn read_sensor_internal(sensor_type: i32) -> Result<SensorData, SensorError> {
-    with_android_context(|env, context| read_sensor_with_context(env, context, sensor_type))
+async fn read_sensor_internal(sensor_type: i32) -> Result<SensorData, SensorError> {
+    with_android_context(|env, context| {
+        Ok::<_, SensorError>(read_sensor_with_context(env, context, sensor_type))
+    })?
+    .await
 }
 
-fn read_pressure_internal() -> Result<ScalarData, SensorError> {
-    with_android_context(read_pressure_with_context)
+async fn read_pressure_internal() -> Result<ScalarData, SensorError> {
+    with_android_context(|env, context| {
+        Ok::<_, SensorError>(read_pressure_with_context(env, context))
+    })?
+    .await
 }
 
-fn read_light_internal() -> Result<ScalarData, SensorError> {
-    with_android_context(read_light_with_context)
+async fn read_light_internal() -> Result<ScalarData, SensorError> {
+    with_android_context(|env, context| {
+        Ok::<_, SensorError>(read_light_with_context(env, context))
+    })?
+    .await
 }
 
 pub fn accelerometer_available() -> bool {
     is_sensor_available_internal(1)
 }
 
-#[allow(clippy::unused_async)]
 pub async fn accelerometer_read() -> Result<SensorData, SensorError> {
-    read_sensor_internal(1)
+    read_sensor_internal(1).await
 }
 
-pub fn accelerometer_watch(
+pub async fn accelerometer_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
-    if !accelerometer_available() {
-        return Err(SensorError::NotAvailable);
-    }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        (accelerometer_read().await).map_or(None, |data| Some((data, ())))
-    }))
+) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
+    watch_internal(1, interval_ms, parse_sensor_reading).await
 }
 
 pub fn gyroscope_available() -> bool {
     is_sensor_available_internal(4)
 }
 
-#[allow(clippy::unused_async)]
 pub async fn gyroscope_read() -> Result<SensorData, SensorError> {
-    read_sensor_internal(4)
+    read_sensor_internal(4).await
 }
 
-pub fn gyroscope_watch(
+pub async fn gyroscope_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
-    if !gyroscope_available() {
-        return Err(SensorError::NotAvailable);
-    }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        (gyroscope_read().await).map_or(None, |data| Some((data, ())))
-    }))
+) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
+    watch_internal(4, interval_ms, parse_sensor_reading).await
 }
 
 pub fn magnetometer_available() -> bool {
     is_sensor_available_internal(2)
 }
 
-#[allow(clippy::unused_async)]
 pub async fn magnetometer_read() -> Result<SensorData, SensorError> {
-    read_sensor_internal(2)
+    read_sensor_internal(2).await
 }
 
-pub fn magnetometer_watch(
+pub async fn magnetometer_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = SensorData> + Send, SensorError> {
-    if !magnetometer_available() {
-        return Err(SensorError::NotAvailable);
-    }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        (magnetometer_read().await).map_or(None, |data| Some((data, ())))
-    }))
+) -> Result<impl futures_core::Stream<Item = Result<SensorData, SensorError>> + Send, SensorError> {
+    watch_internal(2, interval_ms, parse_sensor_reading).await
 }
 
 pub fn barometer_available() -> bool {
     is_sensor_available_internal(6)
 }
 
-#[allow(clippy::unused_async)]
 pub async fn barometer_read() -> Result<ScalarData, SensorError> {
-    read_pressure_internal()
+    read_pressure_internal().await
 }
 
-pub fn barometer_watch(
+pub async fn barometer_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = ScalarData> + Send, SensorError> {
-    if !barometer_available() {
-        return Err(SensorError::NotAvailable);
-    }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        (barometer_read().await).map_or(None, |data| Some((data, ())))
-    }))
+) -> Result<impl futures_core::Stream<Item = Result<ScalarData, SensorError>> + Send, SensorError> {
+    watch_internal(6, interval_ms, parse_scalar_reading).await
 }
 
 pub fn ambient_light_available() -> bool {
     is_sensor_available_internal(5)
 }
 
-#[allow(clippy::unused_async)]
 pub async fn ambient_light_read() -> Result<ScalarData, SensorError> {
-    read_light_internal()
+    read_light_internal().await
 }
 
-pub fn ambient_light_watch(
+pub async fn ambient_light_watch(
     interval_ms: u32,
-) -> Result<impl futures_core::Stream<Item = ScalarData> + Send, SensorError> {
-    if !ambient_light_available() {
-        return Err(SensorError::NotAvailable);
-    }
-    let interval = std::time::Duration::from_millis(u64::from(interval_ms));
-    Ok(stream::unfold((), move |()| async move {
-        futures_timer::Delay::new(interval).await;
-        (ambient_light_read().await).map_or(None, |data| Some((data, ())))
-    }))
+) -> Result<impl futures_core::Stream<Item = Result<ScalarData, SensorError>> + Send, SensorError> {
+    watch_internal(5, interval_ms, parse_scalar_reading).await
 }

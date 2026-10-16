@@ -4,10 +4,10 @@
 //! native decoder storage or CPU memory. Uploading them to `wgpu` textures lives
 //! in the `gpu` submodule behind the `gpu` feature.
 
-#[cfg(target_vendor = "apple")]
+#[cfg(waterkit_hw_codec_apple)]
 use {objc2_core_foundation::CFRetained, objc2_io_surface::IOSurfaceRef, std::ptr};
 
-#[cfg(all(target_vendor = "apple", feature = "gpu"))]
+#[cfg(all(waterkit_hw_codec_apple, feature = "gpu"))]
 use objc2_core_video::CVPixelBuffer;
 
 #[cfg(feature = "gpu")]
@@ -16,6 +16,8 @@ mod gpu;
 #[cfg(feature = "gpu")]
 pub use gpu::{DecodedFrameUploader, GpuFrame, LinearRgbaConverter};
 
+use waterkit_video_core::CicpColor;
+
 /// Decoded frame - opaque type hiding platform details.
 ///
 /// This represents a decoded video frame that has not yet been converted to GPU textures.
@@ -23,11 +25,12 @@ pub use gpu::{DecodedFrameUploader, GpuFrame, LinearRgbaConverter};
 /// otherwise read the pixels out with [`copy_to_buffer`](Self::copy_to_buffer).
 pub struct DecodedFrame {
     inner: DecodedFrameInner,
+    color: Option<CicpColor>,
 }
 
 // SAFETY: Apple IOSurfaces are explicitly cross-thread shareable allocations and
 // the retained CF ownership keeps their storage alive until the frame is dropped.
-#[cfg(target_vendor = "apple")]
+#[cfg(waterkit_hw_codec_apple)]
 #[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for DecodedFrame {}
 
@@ -68,7 +71,7 @@ impl DecodedPixelLayout {
 /// Private enum holding platform-specific frame data.
 enum DecodedFrameInner {
     /// Hardware-decoded frame backed by `IOSurface` (Apple only).
-    #[cfg(target_vendor = "apple")]
+    #[cfg(waterkit_hw_codec_apple)]
     Hardware {
         surface: CFRetained<IOSurfaceRef>,
         /// Retained Core Video buffer used for Metal texture-cache interop.
@@ -80,15 +83,8 @@ enum DecodedFrameInner {
         layout: DecodedPixelLayout,
     },
     /// Software-decoded frame with NV12 data.
-    /// Available on non-Apple platforms, or desktop Apple platforms with software-fallback.
+    /// Available on non-Apple platforms, or desktop Apple platforms with `software-decode`.
     #[cfg(waterkit_software_frames)]
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(
-            dead_code,
-            reason = "WebCodecs frame construction is owned by the browser adapter"
-        )
-    )]
     Software {
         data: Vec<u8>,
         width: u32,
@@ -110,7 +106,7 @@ impl std::fmt::Debug for DecodedFrame {
 
 impl DecodedFrame {
     /// Create a decoded frame from a hardware `IOSurface` output (Apple only).
-    #[cfg(target_vendor = "apple")]
+    #[cfg(waterkit_hw_codec_apple)]
     pub(crate) fn from_iosurface(frame: &crate::sys::apple::IOSurfaceFrame) -> Self {
         Self {
             inner: DecodedFrameInner::Hardware {
@@ -122,24 +118,19 @@ impl DecodedFrame {
                 timestamp_ns: frame.timestamp_ns,
                 layout: frame.layout,
             },
+            color: None,
         }
     }
 
     /// Create a decoded frame from tightly packed bi-planar software output.
     #[cfg(waterkit_software_frames)]
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(
-            dead_code,
-            reason = "WebCodecs frame construction is owned by the browser adapter"
-        )
-    )]
     pub(crate) const fn from_biplanar_data(
         data: Vec<u8>,
         width: u32,
         height: u32,
         timestamp_ns: u64,
         layout: DecodedPixelLayout,
+        color: Option<CicpColor>,
     ) -> Self {
         Self {
             inner: DecodedFrameInner::Software {
@@ -149,52 +140,65 @@ impl DecodedFrame {
                 timestamp_ns,
                 layout,
             },
+            color,
         }
+    }
+
+    /// Returns the CICP description carried by the decoded bitstream, when available.
+    ///
+    /// Currently the software AV1 decoder reports this metadata. Hardware
+    /// decoders do not expose their bitstream color description.
+    #[must_use]
+    pub const fn color(&self) -> Option<CicpColor> {
+        self.color
     }
 
     /// Returns the native decoded pixel layout.
     #[must_use]
     pub const fn pixel_layout(&self) -> DecodedPixelLayout {
-        match &self.inner {
-            #[cfg(target_vendor = "apple")]
-            DecodedFrameInner::Hardware { layout, .. } => *layout,
+        match self.inner {
+            #[cfg(waterkit_hw_codec_apple)]
+            DecodedFrameInner::Hardware { ref layout, .. } => *layout,
             #[cfg(waterkit_software_frames)]
-            DecodedFrameInner::Software { layout, .. } => *layout,
+            DecodedFrameInner::Software { ref layout, .. } => *layout,
         }
     }
 
     /// Get the frame width in pixels.
     #[must_use]
     pub const fn width(&self) -> u32 {
-        match &self.inner {
-            #[cfg(target_vendor = "apple")]
-            DecodedFrameInner::Hardware { width, .. } => *width,
+        match self.inner {
+            #[cfg(waterkit_hw_codec_apple)]
+            DecodedFrameInner::Hardware { ref width, .. } => *width,
             #[cfg(waterkit_software_frames)]
-            DecodedFrameInner::Software { width, .. } => *width,
+            DecodedFrameInner::Software { ref width, .. } => *width,
         }
     }
 
     /// Get the frame height in pixels.
     #[must_use]
     pub const fn height(&self) -> u32 {
-        match &self.inner {
-            #[cfg(target_vendor = "apple")]
-            DecodedFrameInner::Hardware { height, .. } => *height,
+        match self.inner {
+            #[cfg(waterkit_hw_codec_apple)]
+            DecodedFrameInner::Hardware { ref height, .. } => *height,
             #[cfg(waterkit_software_frames)]
-            DecodedFrameInner::Software { height, .. } => *height,
+            DecodedFrameInner::Software { ref height, .. } => *height,
         }
     }
 
     /// Returns the presentation timestamp.
     #[must_use]
     pub const fn timestamp(&self) -> std::time::Duration {
-        let ns = match &self.inner {
-            #[cfg(target_vendor = "apple")]
-            DecodedFrameInner::Hardware { timestamp_ns, .. } => *timestamp_ns,
+        match self.inner {
+            #[cfg(waterkit_hw_codec_apple)]
+            DecodedFrameInner::Hardware {
+                ref timestamp_ns, ..
+            } => std::time::Duration::from_nanos(*timestamp_ns),
             #[cfg(waterkit_software_frames)]
-            DecodedFrameInner::Software { timestamp_ns, .. } => *timestamp_ns,
-        };
-        std::time::Duration::from_nanos(ns)
+            DecodedFrameInner::Software {
+                ref timestamp_ns, ..
+            } => std::time::Duration::from_nanos(*timestamp_ns),
+        }
     }
 
     /// Copy the native bi-planar data to a provided buffer slice.
@@ -215,24 +219,32 @@ impl DecodedFrame {
             output.len()
         );
 
-        match &self.inner {
-            #[cfg(target_vendor = "apple")]
-            DecodedFrameInner::Hardware {
-                surface, layout, ..
-            } => {
-                Self::copy_iosurface_to_buffer(surface, width, height, *layout, output);
+        #[cfg(waterkit_any_codec)]
+        {
+            match self.inner {
+                #[cfg(waterkit_hw_codec_apple)]
+                DecodedFrameInner::Hardware {
+                    ref surface,
+                    ref layout,
+                    ..
+                } => {
+                    Self::copy_iosurface_to_buffer(surface, width, height, *layout, output);
+                }
+                #[cfg(waterkit_software_frames)]
+                DecodedFrameInner::Software { ref data, .. } => {
+                    output[..data.len()].copy_from_slice(data);
+                }
             }
-            #[cfg(waterkit_software_frames)]
-            DecodedFrameInner::Software { data, .. } => {
-                output[..data.len()].copy_from_slice(data);
-            }
+            required_size
         }
-
-        required_size
+        #[cfg(not(waterkit_any_codec))]
+        {
+            match self.inner {}
+        }
     }
 
     /// Copy `IOSurface` data to a buffer.
-    #[cfg(target_vendor = "apple")]
+    #[cfg(waterkit_hw_codec_apple)]
     fn copy_iosurface_to_buffer(
         surface: &CFRetained<IOSurfaceRef>,
         width: u32,

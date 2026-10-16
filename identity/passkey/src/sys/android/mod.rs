@@ -1,12 +1,10 @@
-//! Android passkey backend via dynamically loaded Kotlin helper.
-
-use std::sync::OnceLock;
+//! Android passkey backend via the app-classpath Kotlin helper.
 
 use async_trait::async_trait;
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{Global, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jlong};
-use jni::{Env, EnvUnowned, NativeMethod, jni_sig, jni_str};
+use jni::{Env, EnvUnowned, jni_sig, jni_str};
 use waterkit_build::{AndroidError, DexHelper, dex_helper, with_android_context};
 
 use crate::{
@@ -17,8 +15,8 @@ use crate::{
 
 use super::PasskeyBackend;
 
-/// `waterkit.passkey.PasskeyHelper`, embedded as a DEX by this crate's build
-/// script and loaded on first use.
+/// `waterkit.passkey.PasskeyHelper`, compiled into the app's DEX by the
+/// packager and resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.passkey.PasskeyHelper");
 
 impl From<AndroidError> for PasskeyError {
@@ -93,51 +91,14 @@ impl PasskeyBackend for PlatformBackend {
     }
 }
 
-/// Returns the helper class, registering its native callbacks on first use.
-///
-/// The helper lives in a DEX loaded at runtime, so the JVM cannot resolve its
-/// native methods by symbol name - they have to be registered against the loaded
-/// class explicitly. `RegisterNatives` just re-sets the same function pointers,
-/// so a racing second registration is harmless.
+/// Returns the helper class from the application's class loader. Its
+/// `external fun`s bind to the `Java_waterkit_passkey_*` exports by symbol
+/// name once it is on the app's classpath.
 fn helper_class(
     env: &mut Env<'_>,
     context: &JObject<'_>,
 ) -> Result<&'static Global<JClass<'static>>, PasskeyError> {
-    static NATIVES_REGISTERED: OnceLock<()> = OnceLock::new();
-
-    let class = HELPER.class(env, context)?;
-    if NATIVES_REGISTERED.get().is_none() {
-        register_natives(env, class)?;
-        let _ = NATIVES_REGISTERED.set(());
-    }
-    Ok(class)
-}
-
-fn register_natives(
-    env: &mut Env<'_>,
-    helper_class: &Global<JClass<'static>>,
-) -> Result<(), PasskeyError> {
-    // SAFETY: both callbacks are static native methods, so their Rust
-    // counterparts take `EnvUnowned` and `JClass` as the first two parameters,
-    // and the remaining parameters match the descriptors below.
-    let methods = unsafe {
-        [
-            NativeMethod::from_raw_parts(
-                jni_str!("onRegisterResult"),
-                jni_str!("(JZLjava/lang/String;Ljava/lang/String;)V"),
-                Java_waterkit_passkey_PasskeyHelper_onRegisterResult as *mut _,
-            ),
-            NativeMethod::from_raw_parts(
-                jni_str!("onAuthenticateResult"),
-                jni_str!("(JZLjava/lang/String;Ljava/lang/String;)V"),
-                Java_waterkit_passkey_PasskeyHelper_onAuthenticateResult as *mut _,
-            ),
-        ]
-    };
-
-    // SAFETY: the descriptors above match the exported functions' signatures.
-    unsafe { env.register_native_methods(helper_class, &methods) }
-        .map_err(|error| PasskeyError::Platform(format!("register_native_methods failed: {error}")))
+    Ok(HELPER.class(env, context)?)
 }
 
 fn register_with_context(

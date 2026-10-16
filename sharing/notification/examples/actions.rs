@@ -5,6 +5,19 @@
 use waterkit_notification::{Action, Notification};
 
 fn main() -> Result<(), waterkit_notification::NotificationError> {
+    pollster::block_on(run())
+}
+
+async fn run() -> Result<(), waterkit_notification::NotificationError> {
+    // Toasts are attributed to an AppUserModelID; unpackaged apps register one
+    // before the first notification.
+    #[cfg(target_os = "windows")]
+    let _registration = waterkit_notification::windows::AppIdentity::new(
+        "dev.waterkit.examples.notification-actions",
+        "WaterKit Actions Example",
+    )
+    .register()?;
+
     println!("Showing notification with action buttons...");
 
     Notification::new()
@@ -12,7 +25,8 @@ fn main() -> Result<(), waterkit_notification::NotificationError> {
         .body("A new version of WaterUI is ready to download")
         .action(Action::new("View Details", "https://waterui.dev"))
         .action(Action::new("Later", "waterui://dismiss"))
-        .show()?;
+        .show()
+        .await?;
 
     println!("Notification sent!");
     println!("Click an action button to open the URL.");

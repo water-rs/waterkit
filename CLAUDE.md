@@ -12,7 +12,7 @@ cargo check --all-features
 cargo build --all-features
 
 # Run clippy with all features
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Format code
 cargo fmt --all
@@ -38,7 +38,7 @@ cargo machete
 
 - **Root crate (`waterkit`)**: Facade that re-exports all modules via feature flags
 - **Functional crates**: `audio`, `biometric`, `camera`, `clipboard`, `codec`, `dialog`, `fs`, `haptic`, `location`, `notification`, `permission`, `screen`, `secret`, `sensor`, `system`, `video`
-- **`waterkit-build`**: Shared build utilities for Swift/Kotlin compilation
+- **`waterkit-build`**: Shared build utilities for Swift compilation and Android helper resolution
 - **`tests/`**: Platform-specific test harnesses (`macos/`, `ios/`, `android/`)
 
 ### Crate Internal Structure
@@ -53,13 +53,13 @@ src/
 │   ├── android/     # JNI/Kotlin
 │   ├── windows/     # windows-rs
 │   └── linux/       # zbus/D-Bus
-└── build.rs         # Swift/Kotlin compilation (if needed)
+└── build.rs         # Swift compilation (if needed)
 ```
 
 ### Platform Bridges
 
-- **Apple (iOS/macOS)**: `swift-bridge` for Swift interop, compiled via `waterkit-build::build_apple_bridge()`
-- **Android**: JNI with Kotlin helpers, compiled via `waterkit-build::build_kotlin()`
+- **Apple (iOS/macOS)**: `swift-bridge` for Swift interop, compiled via `waterkit-build::SwiftBridges`
+- **Android**: JNI with Kotlin helpers declared in `[package.metadata.waterui.android]` and compiled into the app by the packager
 - **Windows**: `windows-rs` crate for Win32 APIs
 - **Linux**: `zbus` for D-Bus communication
 
@@ -174,7 +174,7 @@ written justification.
 - `nami` is a hard dependency, not a feature. Returning `Subscribed<T>`
   is the single canonical way for a capability crate to expose a
   reactive value; downstream code uses
-  `subscribed.get()` / `.watch()` / `.map()` (Signal trait) or
+  `subscribed.snapshot()` / `.watch()` / `.map()` (Signal trait) or
   `subscribed.stream().next().await` (Stream).
 - Cross-thread producers (OS callbacks, background workers) hold the
   matching `SubscribedSink<T>` and call `sink.set(value)`. The mailbox
@@ -198,6 +198,8 @@ written justification.
 - **Multimedia**: `rodio`, `cpal`, `wgpu`, `nokhwa`, `mp4`, `media-codec`
 - **Apple objc2 bindings**: `objc2`, `objc2-foundation`, `objc2-core-media`, etc.
 
+No dependency, direct or transitive, comes from the Tauri project (crates published by tauri-apps); the capability is implemented in waterkit instead.
+
 ## Linting
 
-Workspace enforces strict clippy lints (all categories at warn level). Run `cargo clippy --all-targets --all-features -- -D warnings` before committing.
+Workspace enforces strict clippy lints (all categories at warn level). Run `cargo clippy --workspace --all-targets --all-features -- -D warnings` before committing.

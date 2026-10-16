@@ -65,7 +65,7 @@ async fn main() -> ExitCode {
         ));
     }
 
-    finish(report)
+    finish(&report)
 }
 
 fn record_three_axis(
@@ -127,8 +127,8 @@ fn record_scalar(
     }
 }
 
-fn finish(report: TestReport) -> ExitCode {
-    write_report_block_to_stdout(&report).expect("failed to write structured test report");
+fn finish(report: &TestReport) -> ExitCode {
+    write_report_block_to_stdout(report).expect("failed to write structured test report");
 
     if report.has_failures() {
         ExitCode::FAILURE

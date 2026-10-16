@@ -1,15 +1,16 @@
 //! Incremental elementary-track access for progressive MP4 and MOV files.
 
 use std::collections::BTreeMap;
-use std::io::BufReader;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::Duration;
 
 use broadcast_common::Unpackage as _;
+use bytes::Bytes;
 use transmux::Fmp4Demux;
 use waterkit_video_core::Error;
 
-use crate::demuxer::{SampleMeta, build_sample_metas};
+use crate::demuxer::{IndexedTrackSamples, index_track_samples};
 use crate::isobmff::read_top_level_box;
 use crate::stream::{
     EncodedSample, MediaTime, TrackId, TrackInfo, TrackKind, track_info_from_spec,
@@ -59,7 +60,8 @@ pub struct ProgressiveTrackReader {
     reader: mp4::Mp4Reader<BufReader<std::fs::File>>,
     kind: TrackKind,
     tracks: Vec<ProgressiveTrack>,
-    sample_metadata: BTreeMap<TrackId, Vec<SampleMeta>>,
+    sample_metadata: BTreeMap<TrackId, IndexedTrackSamples>,
+    fragmented_data: Option<BufReader<std::fs::File>>,
     selected_track: Option<usize>,
     sample_index: usize,
     discontinuity: bool,
@@ -143,9 +145,8 @@ impl ProgressiveTrackReader {
                     "MP4 {kind:?} track {track_id} disappeared after probing"
                 ))
             })?;
-            let sample_count = mp4_track.sample_count();
-            let metadata = build_sample_metas(mp4_track, sample_count)?;
-            let presentation_end = metadata.iter().fold(0_u64, |end, sample| {
+            let indexed = index_track_samples(path, mp4_track)?;
+            let presentation_end = indexed.metas.iter().fold(0_u64, |end, sample| {
                 end.max(
                     sample
                         .presentation_time
@@ -153,14 +154,25 @@ impl ProgressiveTrackReader {
                 )
             });
             let duration = media_duration(presentation_end, info.timescale());
+            let sample_count = u32::try_from(indexed.metas.len()).map_err(|_| {
+                Error::Container(format!(
+                    "MP4 {kind:?} track {track_id} sample count exceeds u32"
+                ))
+            })?;
             tracks.push(ProgressiveTrack {
                 info,
                 language: mp4_track.language().to_owned(),
                 duration,
                 sample_count,
             });
-            sample_metadata.insert(id, metadata);
+            sample_metadata.insert(id, indexed);
         }
+        let fragmented_data = sample_metadata
+            .values()
+            .any(|indexed| indexed.locations.is_some())
+            .then(|| std::fs::File::open(path))
+            .transpose()?
+            .map(BufReader::new);
 
         Ok(Self {
             reader,
@@ -168,6 +180,7 @@ impl ProgressiveTrackReader {
             selected_track: (!tracks.is_empty()).then_some(0),
             tracks,
             sample_metadata,
+            fragmented_data,
             sample_index: 0,
             discontinuity: false,
         })
@@ -225,15 +238,26 @@ impl ProgressiveTrackReader {
         let timescale = track.info.timescale();
         let track_duration = track.duration;
         let target_ticks = duration_to_ticks(position, timescale)?;
-        let metadata = self.sample_metadata.get(&track_id).ok_or_else(|| {
-            Error::Container(format!(
-                "progressive {:?} track {} has no sample metadata",
-                self.kind,
-                track_id.get()
-            ))
-        })?;
-        self.sample_index =
-            metadata.partition_point(|sample| sample.presentation_time < target_ticks);
+        let metadata = &self
+            .sample_metadata
+            .get(&track_id)
+            .ok_or_else(|| {
+                Error::Container(format!(
+                    "progressive {:?} track {} has no sample metadata",
+                    self.kind,
+                    track_id.get()
+                ))
+            })?
+            .metas;
+        // Metadata is decode-ordered; presentation order may be nonmonotonic
+        // (B-frames / signed composition offsets), so select the sample with
+        // the smallest presentation time at or after the target.
+        self.sample_index = metadata
+            .iter()
+            .enumerate()
+            .filter(|(_, sample)| sample.presentation_time >= target_ticks)
+            .min_by_key(|(_, sample)| sample.presentation_time)
+            .map_or(metadata.len(), |(index, _)| index);
         self.discontinuity = self.sample_index < metadata.len();
         Ok(metadata
             .get(self.sample_index)
@@ -264,14 +288,29 @@ impl ProgressiveTrackReader {
         let timescale = track.info.timescale();
         let track_duration = track.duration;
         let target_ticks = duration_to_ticks(position, timescale)?;
-        let metadata = self.sample_metadata.get(&track_id).ok_or_else(|| {
-            Error::Container(format!(
-                "progressive video track {} has no sample metadata",
-                track_id.get()
-            ))
-        })?;
-        let after = metadata.partition_point(|sample| sample.presentation_time <= target_ticks);
-        self.sample_index = metadata[..after]
+        let metadata = &self
+            .sample_metadata
+            .get(&track_id)
+            .ok_or_else(|| {
+                Error::Container(format!(
+                    "progressive video track {} has no sample metadata",
+                    track_id.get()
+                ))
+            })?
+            .metas;
+        // Find the sample presented at or before the target (presentation
+        // order is nonmonotonic), then rewind to the latest keyframe ahead of
+        // it in decode order. An empty track has no target sample and no
+        // keyframe: the cursor stays at zero and reports no discontinuity.
+        let target_index = metadata
+            .iter()
+            .enumerate()
+            .filter(|(_, sample)| sample.presentation_time <= target_ticks)
+            .max_by_key(|(_, sample)| sample.presentation_time)
+            .map_or(0, |(index, _)| index);
+        self.sample_index = metadata
+            .get(..=target_index)
+            .unwrap_or(&[])
             .iter()
             .rposition(|sample| sample.is_keyframe)
             .unwrap_or(0);
@@ -306,24 +345,46 @@ impl ProgressiveTrackReader {
                 track_id.get()
             ))
         })?;
-        let Some(sample_metadata) = metadata.get(self.sample_index).copied() else {
+        let Some(sample_metadata) = metadata.metas.get(self.sample_index).copied() else {
             return Ok(None);
         };
-        let sample_id = u32::try_from(self.sample_index)
-            .map_err(|_| Error::Container(String::from("MP4 sample index exceeds u32")))?
-            .checked_add(1)
-            .ok_or_else(|| Error::Container(String::from("MP4 sample id exceeds u32")))?;
-        let sample = self
-            .reader
-            .read_sample(track_id.get(), sample_id)
-            .map_err(|error| Error::Container(error.to_string()))?
-            .ok_or_else(|| {
-                Error::Container(format!(
-                    "MP4 {:?} track {} is missing declared sample {sample_id}",
-                    self.kind,
-                    track_id.get()
+        let data = if let Some(locations) = &metadata.locations {
+            let location = locations.get(self.sample_index).copied().ok_or_else(|| {
+                Error::Container(String::from(
+                    "fragmented sample index exceeds the parsed fragment layout",
                 ))
             })?;
+            let reader = self.fragmented_data.as_mut().ok_or_else(|| {
+                Error::Container(String::from("fragmented sample reader missing"))
+            })?;
+            let mut bytes = vec![
+                0_u8;
+                usize::try_from(location.size).map_err(|_| {
+                    Error::Container(String::from(
+                        "fragmented sample size exceeds the current architecture",
+                    ))
+                })?
+            ];
+            reader.seek(SeekFrom::Start(location.offset))?;
+            reader.read_exact(&mut bytes)?;
+            Bytes::from(bytes)
+        } else {
+            let sample_id = u32::try_from(self.sample_index)
+                .map_err(|_| Error::Container(String::from("MP4 sample index exceeds u32")))?
+                .checked_add(1)
+                .ok_or_else(|| Error::Container(String::from("MP4 sample id exceeds u32")))?;
+            self.reader
+                .read_sample(track_id.get(), sample_id)
+                .map_err(|error| Error::Container(error.to_string()))?
+                .ok_or_else(|| {
+                    Error::Container(format!(
+                        "MP4 {:?} track {} is missing declared sample {sample_id}",
+                        self.kind,
+                        track_id.get()
+                    ))
+                })?
+                .bytes
+        };
         self.sample_index = self.sample_index.saturating_add(1);
         let encoded = EncodedSample::new(
             track_id,
@@ -341,7 +402,7 @@ impl ProgressiveTrackReader {
             ),
             MediaTime::new(i64::from(sample_metadata.duration), timescale),
             sample_metadata.is_keyframe,
-            sample.bytes,
+            data,
         )
         .with_discontinuity(std::mem::take(&mut self.discontinuity));
         Ok(Some(encoded))
@@ -371,9 +432,8 @@ mod tests {
     use tempfile::NamedTempFile;
     use transmux::{
         AVCConfigurationBox, AVCDecoderConfigurationRecord, AvcPps, AvcSps, CodecConfig,
-        DecoderConfigDescriptor, DecoderSpecificInfo, ESDescriptor, EsdsBox, Media,
-        ObjectTypeIndication, ProgressiveMux, SLConfigDescriptor, Sample, StreamType, Track,
-        TrackSpec,
+        DecoderConfigDescriptor, DecoderSpecificInfo, ESDescriptor, EsdsBox, Media, ProgressiveMux,
+        SLConfigDescriptor, Sample, Track, TrackSpec,
     };
 
     use super::ProgressiveTrackReader;
@@ -431,9 +491,9 @@ mod tests {
             vec![video_track(
                 7,
                 vec![
-                    Sample::new(vec![0x01], 1_000, true, 0),
-                    Sample::new(vec![0x02], 1_000, false, 0),
-                    Sample::new(vec![0x03], 1_000, true, 0),
+                    Sample::new(vec![0x01], Some(0), Some(0), Some(1_000), true),
+                    Sample::new(vec![0x02], Some(1_000), Some(1_000), Some(1_000), false),
+                    Sample::new(vec![0x03], Some(2_000), Some(2_000), Some(1_000), true),
                 ],
             )],
             1_000,
@@ -491,35 +551,30 @@ mod tests {
             48_000,
             CodecConfig::Aac {
                 esds: EsdsBox {
-                    es_descriptor: ESDescriptor {
-                        es_id: u16::try_from(track_id).expect("test track id must fit u16"),
-                        stream_dependence_flag: false,
-                        url_flag: false,
-                        ocr_stream_flag: false,
-                        stream_priority: 0,
-                        depends_on_es_id: None,
-                        url: None,
-                        ocr_es_id: None,
-                        decoder_config: Some(DecoderConfigDescriptor {
-                            object_type_indication: ObjectTypeIndication(0x40),
-                            stream_type: StreamType(5),
-                            up_stream: false,
-                            buffer_size_db: 0,
-                            max_bitrate: 128_000,
-                            avg_bitrate: 128_000,
-                            decoder_specific_info: Some(DecoderSpecificInfo {
-                                data: vec![0x11, 0x90],
-                            }),
-                        }),
-                        sl_config: Some(SLConfigDescriptor { body: vec![0x02] }),
-                    },
+                    es_descriptor: ESDescriptor::new(
+                        u16::try_from(track_id).expect("test track id must fit u16"),
+                        0,
+                        Some(DecoderConfigDescriptor::new(
+                            0x40,
+                            5,
+                            false,
+                            0,
+                            128_000,
+                            128_000,
+                            Some(DecoderSpecificInfo::new(vec![0x11, 0x90])),
+                        )),
+                        Some(SLConfigDescriptor::predefined_two()),
+                    ),
                 },
                 channel_count: 2,
                 sample_rate: 48_000,
                 sample_size: 16,
             },
         );
-        Track::new(spec, vec![Sample::new(data, 1_024, true, 0)])
+        Track::new(
+            spec,
+            vec![Sample::new(data, Some(0), Some(0), Some(1_024), true)],
+        )
     }
 
     fn video_track(track_id: u32, samples: Vec<Sample>) -> Track {
@@ -545,5 +600,31 @@ mod tests {
             },
         );
         Track::new(spec, samples)
+    }
+
+    #[test]
+    fn seeks_empty_video_track_to_track_duration() {
+        let media = Media::new(vec![video_track(4, Vec::new())], 1_000);
+        let bytes = ProgressiveMux::new(true)
+            .package(&media)
+            .expect("empty-track fixture must mux");
+        let mut file = NamedTempFile::new().expect("temporary media file must open");
+        file.write_all(&bytes)
+            .expect("temporary media fixture must write");
+
+        let mut reader = ProgressiveTrackReader::open(file.path(), TrackKind::Video)
+            .expect("empty-track file must open");
+
+        let landed = reader
+            .seek_to_keyframe(Duration::from_secs(1))
+            .expect("empty-track keyframe seek must not fail");
+        assert_eq!(landed, reader.tracks()[0].duration());
+        assert_eq!(landed, Duration::ZERO);
+        assert!(
+            reader
+                .read_sample()
+                .expect("empty-track read must not fail")
+                .is_none()
+        );
     }
 }

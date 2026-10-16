@@ -36,6 +36,10 @@ pub use linux::*;
     target_os = "linux"
 )))]
 /// Save a secret (fallback).
+#[expect(
+    clippy::unused_async,
+    reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
+)]
 pub async fn set(
     _service: &str,
     _account: &str,
@@ -52,6 +56,10 @@ pub async fn set(
     target_os = "linux"
 )))]
 /// Retrieve a secret (fallback).
+#[expect(
+    clippy::unused_async,
+    reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
+)]
 pub async fn get(_service: &str, _account: &str) -> Result<String, crate::SecretError> {
     Err(crate::SecretError::Platform("Unsupported platform".into()))
 }
@@ -64,6 +72,10 @@ pub async fn get(_service: &str, _account: &str) -> Result<String, crate::Secret
     target_os = "linux"
 )))]
 /// Delete a secret (fallback).
+#[expect(
+    clippy::unused_async,
+    reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
+)]
 pub async fn delete(_service: &str, _account: &str) -> Result<(), crate::SecretError> {
     Err(crate::SecretError::Platform("Unsupported platform".into()))
 }

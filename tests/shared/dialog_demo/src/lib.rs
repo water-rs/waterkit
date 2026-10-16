@@ -2,6 +2,13 @@
 use waterkit_dialog::{Dialog, DialogType};
 
 /// Runs the dialog demonstration.
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        clippy::future_not_send,
+        reason = "the browser shows dialogs through `JsFuture`s, which are bound to the thread that created them"
+    )
+)]
 pub async fn run() {
     println!("Running Dialog Demo...");
 

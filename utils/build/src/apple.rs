@@ -1,20 +1,21 @@
 //! Apple platform build utilities.
 
-#[cfg(any(target_os = "ios", target_os = "macos", test))]
+#[cfg(any(target_os = "ios", target_os = "macos"))]
 use std::collections::BTreeSet;
+#[cfg(any(target_os = "ios", target_os = "macos"))]
 use std::env;
-#[cfg(any(target_os = "ios", target_os = "macos", test))]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-fn has_ios26_background_task_apis(sdk: &str, target: &str) -> bool {
-    if !target.contains("ios") {
+fn has_ios26_background_task_apis(target: &SwiftTarget) -> bool {
+    // The iOS 26 continued-processing task APIs are unavailable in Mac
+    // Catalyst, whatever the macOS SDK version.
+    if !target.rust_target.contains("ios") || target.mac_catalyst {
         return false;
     }
 
     let output = std::process::Command::new("xcrun")
-        .args(["--sdk", sdk, "--show-sdk-version"])
+        .args(["--sdk", target.sdk, "--show-sdk-version"])
         .output();
     let Ok(output) = output else {
         return false;
@@ -34,82 +35,41 @@ fn has_ios26_background_task_apis(sdk: &str, target: &str) -> bool {
     major.parse::<u32>().is_ok_and(|value| value >= 26)
 }
 
-/// Configuration for Swift compilation.
-#[derive(Debug, Clone)]
-pub struct AppleSwiftConfig {
-    /// The crate/module name (e.g., "waterkit-camera").
-    pub pkg_name: String,
-    /// Swift source files to compile.
-    pub swift_sources: Vec<PathBuf>,
-    /// Output library name (e.g., "CameraHelper").
-    pub lib_name: String,
-    /// Frameworks to link.
-    pub frameworks: Vec<String>,
-}
-
-impl AppleSwiftConfig {
-    /// Create a new config with required fields.
-    #[must_use]
-    pub fn new(pkg_name: impl Into<String>, lib_name: impl Into<String>) -> Self {
-        Self {
-            pkg_name: pkg_name.into(),
-            swift_sources: Vec::new(),
-            lib_name: lib_name.into(),
-            frameworks: vec!["Foundation".to_string()],
-        }
-    }
-
-    /// Add a Swift source file.
-    #[must_use]
-    pub fn swift_source(mut self, path: impl Into<PathBuf>) -> Self {
-        self.swift_sources.push(path.into());
-        self
-    }
-
-    /// Add a framework to link.
-    #[must_use]
-    pub fn framework(mut self, name: impl Into<String>) -> Self {
-        self.frameworks.push(name.into());
-        self
-    }
-}
-
-/// A Swift bridge crate definition for multi-crate compilation.
+/// One `#[swift_bridge::bridge]` module of a crate and the Swift sources and
+/// frameworks that implement its `extern "Swift"` side.
 ///
-/// Used with [`compile_multi_swift`] to compile Swift code from multiple
-/// dependent crates into a single static library for a test binary.
+/// The module and every source are crate-relative paths, resolved against
+/// `CARGO_MANIFEST_DIR` by [`SwiftBridges`].
 #[derive(Debug, Clone)]
-pub struct SwiftBridgeCrate {
-    /// Path to the crate's bridge module (absolute path).
-    pub bridge_rs: PathBuf,
-    /// Swift source files to include (absolute paths).
-    pub swift_sources: Vec<PathBuf>,
-    /// Frameworks required by this crate.
-    pub frameworks: Vec<String>,
+pub struct SwiftBridge {
+    module: PathBuf,
+    sources: Vec<PathBuf>,
+    frameworks: Vec<String>,
 }
 
-impl SwiftBridgeCrate {
-    /// Create a new Swift bridge crate definition.
-    ///
-    /// # Arguments
-    /// * `bridge_rs` - Absolute path to the Rust bridge module (e.g., `crate/src/sys/apple/mod.rs`)
+impl SwiftBridge {
+    /// The crate-relative path of the `#[swift_bridge::bridge]` module, such
+    /// as `src/sys/apple/mod.rs`.
     #[must_use]
-    pub fn new(bridge_rs: impl Into<PathBuf>) -> Self {
+    pub fn new(module: impl Into<PathBuf>) -> Self {
         Self {
-            bridge_rs: bridge_rs.into(),
-            swift_sources: Vec::new(),
+            module: module.into(),
+            sources: Vec::new(),
             frameworks: Vec::new(),
         }
     }
 
-    /// Add a Swift source file.
+    /// Adds a Swift source implementing the bridge's `extern "Swift"` side, as
+    /// a crate-relative path.
     #[must_use]
     pub fn swift_source(mut self, path: impl Into<PathBuf>) -> Self {
-        self.swift_sources.push(path.into());
+        self.sources.push(path.into());
         self
     }
 
-    /// Add a framework to link.
+    /// Adds an Apple framework the bridge's Swift code links against. A build
+    /// script picks frameworks per target from `CARGO_CFG_TARGET_OS` and
+    /// `CARGO_CFG_TARGET_ABI`.
     #[must_use]
     pub fn framework(mut self, name: impl Into<String>) -> Self {
         self.frameworks.push(name.into());
@@ -117,197 +77,242 @@ impl SwiftBridgeCrate {
     }
 }
 
-#[cfg(any(target_os = "ios", target_os = "macos", test))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AppleTargetOs {
-    Ios,
-    Macos,
+/// All of a crate's Swift bridges.
+#[derive(Debug, Clone, Default)]
+pub struct SwiftBridges {
+    bridges: Vec<SwiftBridge>,
 }
 
-#[cfg(any(target_os = "ios", target_os = "macos", test))]
-impl AppleTargetOs {
-    fn from_cfg_target_os(target_os: &str) -> Option<Self> {
-        match target_os {
-            "ios" => Some(Self::Ios),
-            "macos" => Some(Self::Macos),
-            _ => None,
-        }
+impl SwiftBridges {
+    /// An empty builder. Add each of the crate's bridges with
+    /// [`Self::bridge`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    fn matches_swift_os(self, name: &str) -> Option<bool> {
-        match name {
-            "iOS" => Some(matches!(self, Self::Ios)),
-            "macOS" => Some(matches!(self, Self::Macos)),
-            _ => None,
-        }
+    /// Adds a bridge to the builder.
+    #[must_use]
+    pub fn bridge(mut self, bridge: SwiftBridge) -> Self {
+        self.bridges.push(bridge);
+        self
     }
 }
 
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+impl SwiftBridges {
+    /// Generates swift-bridge's core and every bridge's glue once, compiles
+    /// them with the bridges' Swift sources into one static library named
+    /// after `CARGO_PKG_NAME`, links each declared framework, and emits
+    /// `rerun-if-changed` for every module and Swift source.
+    ///
+    /// # Panics
+    ///
+    /// Panics when it does not run inside a Cargo build script, when the
+    /// builder holds no bridges, when a bridge declares no Swift sources, or
+    /// when a Swift source cannot be read or the Swift toolchain fails to
+    /// compile or archive it.
+    pub fn compile(self) {
+        let manifest_dir = PathBuf::from(cargo_env("CARGO_MANIFEST_DIR"));
+        let pkg_name = cargo_env("CARGO_PKG_NAME");
+        let out_dir = PathBuf::from(cargo_env("OUT_DIR"));
+
+        assert!(
+            !self.bridges.is_empty(),
+            "SwiftBridges::compile() requires at least one bridge; \
+             add each of the crate's bridge modules with .bridge(SwiftBridge::new(..))"
+        );
+        for bridge in &self.bridges {
+            assert!(
+                !bridge.sources.is_empty(),
+                "Swift bridge {} declares no Swift sources; \
+                 point .swift_source() at the files implementing its extern \"Swift\" side",
+                bridge.module.display(),
+            );
+        }
+
+        self.emit_rerun_if_changed(&manifest_dir);
+
+        let modules = self.module_paths(&manifest_dir);
+        swift_bridge_build::parse_bridges(&modules).write_all_concatenated(&out_dir, &pkg_name);
+
+        let sources: Vec<PathBuf> = self
+            .bridges
+            .iter()
+            .flat_map(|bridge| bridge.sources.iter().map(|s| manifest_dir.join(s)))
+            .collect();
+        let lib_name = pkg_name.replace('-', "_");
+        build_swift_library(&out_dir, &pkg_name, &lib_name, &sources);
+
+        let frameworks: BTreeSet<&str> = self
+            .bridges
+            .iter()
+            .flat_map(|bridge| bridge.frameworks.iter().map(String::as_str))
+            .collect();
+        for framework in frameworks {
+            println!("cargo:rustc-link-lib=framework={framework}");
+        }
+    }
+
+    /// Writes the generated Swift glue and headers into `dir` without
+    /// compiling, for an app target that compiles them itself: swift-bridge's
+    /// `SwiftBridgeCore`, the crate's bridge glue, and a `Bridging-Header.h`
+    /// including both. A relative `dir` resolves against
+    /// `CARGO_MANIFEST_DIR`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when it does not run inside a Cargo build script, when the
+    /// builder holds no bridges, or when `dir` cannot be created or written.
+    pub fn generate_into(self, dir: impl AsRef<Path>) {
+        let manifest_dir = PathBuf::from(cargo_env("CARGO_MANIFEST_DIR"));
+        let pkg_name = cargo_env("CARGO_PKG_NAME");
+
+        assert!(
+            !self.bridges.is_empty(),
+            "SwiftBridges::generate_into() requires at least one bridge; \
+             add each of the crate's bridge modules with .bridge(SwiftBridge::new(..))"
+        );
+
+        let dir = manifest_dir.join(dir.as_ref());
+        std::fs::create_dir_all(&dir).unwrap_or_else(|error| {
+            panic!(
+                "failed to create Swift bridge output dir {}: {error}",
+                dir.display()
+            )
+        });
+
+        self.emit_rerun_if_changed(&manifest_dir);
+
+        let modules = self.module_paths(&manifest_dir);
+        swift_bridge_build::parse_bridges(&modules).write_all_concatenated(&dir, &pkg_name);
+
+        let bridging_header =
+            format!("#include \"SwiftBridgeCore.h\"\n#include \"{pkg_name}/{pkg_name}.h\"\n");
+        std::fs::write(dir.join("Bridging-Header.h"), bridging_header).unwrap_or_else(|error| {
+            panic!(
+                "failed to write {}: {error}",
+                dir.join("Bridging-Header.h").display()
+            )
+        });
+    }
+
+    /// The bridge module paths, resolved against `manifest_dir`.
+    fn module_paths(&self, manifest_dir: &Path) -> Vec<PathBuf> {
+        self.bridges
+            .iter()
+            .map(|bridge| manifest_dir.join(&bridge.module))
+            .collect()
+    }
+
+    /// Tracks the build script, every bridge module and every Swift source for
+    /// rebuilds.
+    fn emit_rerun_if_changed(&self, manifest_dir: &Path) {
+        println!("cargo:rerun-if-changed=build.rs");
+        for bridge in &self.bridges {
+            println!(
+                "cargo:rerun-if-changed={}",
+                manifest_dir.join(&bridge.module).display()
+            );
+            for source in &bridge.sources {
+                println!(
+                    "cargo:rerun-if-changed={}",
+                    manifest_dir.join(source).display()
+                );
+            }
+        }
+    }
+}
+
+/// Swift is generated and compiled with the Xcode toolchain, which only a
+/// macOS host has.
+#[cfg(not(any(target_os = "ios", target_os = "macos")))]
+impl SwiftBridges {
+    /// Compiling Swift requires the Xcode toolchain.
+    ///
+    /// # Panics
+    ///
+    /// Always: a build script reaches this only when it targets an Apple
+    /// platform from a host that cannot build for one.
+    pub fn compile(self) {
+        panic!(
+            "compiling the Swift bridges [{}] requires a macOS host with Xcode",
+            self.summary()
+        );
+    }
+
+    /// Generating bridge glue parses the modules with `swift-bridge-build`,
+    /// which `waterkit-build` links only on an Apple host.
+    ///
+    /// # Panics
+    ///
+    /// Always: a build script reaches this only when it targets an Apple
+    /// platform from a host that cannot generate for one.
+    pub fn generate_into(self, dir: impl AsRef<Path>) {
+        panic!(
+            "generating the Swift bridges [{}] into {} requires a macOS host with Xcode",
+            self.summary(),
+            dir.as_ref().display(),
+        );
+    }
+
+    /// The declared bridges, for the unsupported-host panic messages.
+    fn summary(&self) -> String {
+        self.bridges
+            .iter()
+            .map(|bridge| {
+                format!(
+                    "{} ({} sources, {} frameworks)",
+                    bridge.module.display(),
+                    bridge.sources.len(),
+                    bridge.frameworks.len()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// An OS version as `major.minor[.patch]`, ordered the way deployment targets
+/// compare.
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
-#[derive(Debug, Clone, Copy)]
-struct SwiftConditionalFrame {
-    parent_active: bool,
-    branch_matched: bool,
-    current_active: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct OsVersion {
+    major: u32,
+    minor: u32,
+    patch: u32,
 }
 
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
-fn swift_bridge_static_lib_name(pkg_name: &str) -> String {
-    format!("{}_swift_bridge", pkg_name.replace('-', "_"))
-}
+impl OsVersion {
+    const fn new(major: u32, minor: u32) -> Self {
+        Self {
+            major,
+            minor,
+            patch: 0,
+        }
+    }
 
-#[cfg(any(target_os = "ios", target_os = "macos", test))]
-fn discover_swift_bridge_crates(
-    manifest_dir: &Path,
-    bridges: &[String],
-    target_os: AppleTargetOs,
-) -> Vec<SwiftBridgeCrate> {
-    bridges
-        .iter()
-        .filter_map(|bridge| {
-            let bridge_path = manifest_dir.join(bridge);
-            let swift_sources = discover_swift_sources_for_bridge(&bridge_path);
-            if swift_sources.is_empty() {
-                return None;
-            }
-
-            let mut crate_def = SwiftBridgeCrate::new(bridge_path);
-            let frameworks = infer_swift_frameworks(&swift_sources, target_os);
-            for source in swift_sources {
-                crate_def = crate_def.swift_source(source);
-            }
-            for framework in frameworks {
-                crate_def = crate_def.framework(framework);
-            }
-            Some(crate_def)
+    fn parse(text: &str) -> Option<Self> {
+        let mut components = text.split('.');
+        let component = |part: Option<&str>| part.map_or(Some(0), |part| part.parse().ok());
+        Some(Self {
+            major: component(components.next())?,
+            minor: component(components.next())?,
+            patch: component(components.next())?,
         })
-        .collect()
-}
-
-#[cfg(any(target_os = "ios", target_os = "macos", test))]
-fn discover_swift_sources_for_bridge(bridge_path: &Path) -> Vec<PathBuf> {
-    let Some(bridge_dir) = bridge_path.parent() else {
-        return Vec::new();
-    };
-
-    let Ok(entries) = std::fs::read_dir(bridge_dir) else {
-        return Vec::new();
-    };
-
-    let mut swift_sources = entries
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "swift") {
-                Some(path)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    swift_sources.sort();
-    swift_sources
-}
-
-#[cfg(any(target_os = "ios", target_os = "macos", test))]
-fn infer_swift_frameworks(swift_sources: &[PathBuf], target_os: AppleTargetOs) -> Vec<String> {
-    let mut frameworks = BTreeSet::new();
-    for source in swift_sources {
-        let contents = std::fs::read_to_string(source)
-            .unwrap_or_else(|_| panic!("Failed to read {}", source.display()));
-        frameworks.extend(infer_swift_frameworks_from_source(&contents, target_os));
     }
-    frameworks.into_iter().collect()
 }
 
 #[cfg(any(target_os = "ios", target_os = "macos", test))]
-fn infer_swift_frameworks_from_source(
-    contents: &str,
-    target_os: AppleTargetOs,
-) -> BTreeSet<String> {
-    let mut frameworks = BTreeSet::new();
-    let mut frames = Vec::<SwiftConditionalFrame>::new();
-
-    for line in contents.lines() {
-        let trimmed = line.trim();
-
-        if let Some(condition) = trimmed.strip_prefix("#if os(") {
-            let os_name = condition.strip_suffix(')').unwrap_or_else(|| {
-                panic!("Unsupported Swift conditional directive: {trimmed}");
-            });
-            let parent_active = frames.last().is_none_or(|frame| frame.current_active);
-            let current_active = parent_active
-                && target_os.matches_swift_os(os_name).unwrap_or_else(|| {
-                    panic!("Unsupported Swift target conditional os({os_name})");
-                });
-            frames.push(SwiftConditionalFrame {
-                parent_active,
-                branch_matched: current_active,
-                current_active,
-            });
-            continue;
-        }
-
-        if let Some(condition) = trimmed.strip_prefix("#elseif os(") {
-            let os_name = condition.strip_suffix(')').unwrap_or_else(|| {
-                panic!("Unsupported Swift conditional directive: {trimmed}");
-            });
-            let frame = frames.last_mut().unwrap_or_else(|| {
-                panic!("Encountered `#elseif` without matching `#if`: {trimmed}");
-            });
-            if !frame.parent_active || frame.branch_matched {
-                frame.current_active = false;
-            } else {
-                let matches = target_os.matches_swift_os(os_name).unwrap_or_else(|| {
-                    panic!("Unsupported Swift target conditional os({os_name})");
-                });
-                frame.current_active = matches;
-                if matches {
-                    frame.branch_matched = true;
-                }
-            }
-            continue;
-        }
-
-        if trimmed == "#else" {
-            let frame = frames.last_mut().unwrap_or_else(|| {
-                panic!("Encountered `#else` without matching `#if`");
-            });
-            frame.current_active = frame.parent_active && !frame.branch_matched;
-            frame.branch_matched = true;
-            continue;
-        }
-
-        if trimmed == "#endif" {
-            frames.pop().unwrap_or_else(|| {
-                panic!("Encountered `#endif` without matching `#if`");
-            });
-            continue;
-        }
-
-        if frames.last().is_some_and(|frame| !frame.current_active) {
-            continue;
-        }
-
-        let Some(module) = trimmed.strip_prefix("import ").map(str::trim) else {
-            continue;
-        };
-        if should_link_swift_import(module) {
-            frameworks.insert(module.to_string());
+impl std::fmt::Display for OsVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.patch == 0 {
+            write!(f, "{}.{}", self.major, self.minor)
+        } else {
+            write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
         }
     }
-
-    assert!(
-        frames.is_empty(),
-        "Unclosed Swift conditional compilation block while inferring frameworks"
-    );
-
-    frameworks
-}
-
-#[cfg(any(target_os = "ios", target_os = "macos", test))]
-fn should_link_swift_import(module: &str) -> bool {
-    !matches!(module, "Foundation" | "OSLog" | "ObjectiveC")
 }
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
@@ -405,6 +410,66 @@ fn link_clang_builtins(swift_runtime_dir: &str) {
     }
 }
 
+/// The deployment target rustc stamps on binaries built for `rust_target`, as
+/// the `VAR=value` line `rustc --print deployment-target` reports.
+///
+/// Asking rustc — rather than reading the environment — gives the effective
+/// value: a `*_DEPLOYMENT_TARGET` variable overrides the target's default, and
+/// the print reflects both.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn rustc_deployment_target(rust_target: &str) -> (String, OsVersion) {
+    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    let output = std::process::Command::new(rustc)
+        .args(["--print", "deployment-target", "--target", rust_target])
+        .output()
+        .expect("failed to run rustc --print deployment-target");
+    assert!(
+        output.status.success(),
+        "rustc --print deployment-target --target {rust_target} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("rustc --print output must be UTF-8");
+    let line = stdout.trim();
+    let (var, version) = line.split_once('=').unwrap_or_else(|| {
+        panic!("rustc --print deployment-target printed {line:?}, not NAME=value")
+    });
+    let version = OsVersion::parse(version)
+        .unwrap_or_else(|| panic!("rustc reported an unparsable deployment target {version:?}"));
+    (var.to_string(), version)
+}
+
+/// Fails the build when the deployment target rustc will stamp on binaries is
+/// below `target.deployment`, the floor the Swift objects are compiled for.
+///
+/// `ld` consults the SDK stubs' back-deployment rules against the *binary's*
+/// deployment version, not the objects': below the version an OS shipped a
+/// Swift runtime library, the stub records the `@rpath` install name a bundle
+/// embedding the library would satisfy. `rustc` defaults
+/// `aarch64-apple-darwin` to macOS 11, below the Swift concurrency runtime's
+/// in-OS floor of macOS 12, so a binary linking those objects — the `waterkit`
+/// facade's test binary is one — referenced `@rpath/libswift_Concurrency.dylib`
+/// and aborted in dyld with no `LC_RPATH`. A library build script cannot raise
+/// a dependent's deployment target (`rustc-link-arg` does not propagate), so
+/// the mismatch must fail here, naming the `*_DEPLOYMENT_TARGET` override the
+/// consumer controls.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn assert_deployment_floor(target: &SwiftTarget) {
+    let (env_var, effective) = rustc_deployment_target(&target.rust_target);
+    println!("cargo:rerun-if-env-changed={env_var}");
+    let pkg = cargo_env("CARGO_PKG_NAME");
+    assert!(
+        effective >= target.deployment,
+        "{pkg} compiles Swift code with deployment target {}, but rustc links \
+         {} binaries with {env_var}={effective}, below that floor: the linker \
+         records @rpath install names for Swift runtime libraries, and every \
+         binary linking the crate aborts in dyld at launch. Set {env_var}={} \
+         or newer.",
+        target.deployment,
+        target.rust_target,
+        target.deployment,
+    );
+}
+
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 fn link_swift_runtime(swift_runtime_dir: &str) {
     let toolchain_lib = swift_runtime_lib_dir(swift_runtime_dir);
@@ -421,353 +486,154 @@ fn link_swift_runtime(swift_runtime_dir: &str) {
     link_clang_builtins(swift_runtime_dir);
 }
 
-/// Generate Swift bridge code from bridge modules.
-///
-/// This is for crates that only need bridge generation, not full Swift compilation.
-///
-/// # Arguments
-/// * `bridges` - Iterator of paths to Rust bridge modules (e.g., "src/sys/apple/mod.rs")
-pub fn build_apple_bridge(bridges: impl IntoIterator<Item = impl AsRef<str>>) {
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let pkg_name = env::var("CARGO_PKG_NAME").unwrap();
+/// Reads an environment variable Cargo sets for every build script.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn cargo_env(name: &str) -> String {
+    env::var(name)
+        .unwrap_or_else(|error| panic!("Cargo did not set {name} for the build script: {error}"))
+}
 
-    let bridges: Vec<String> = bridges
-        .into_iter()
-        .map(|b| b.as_ref().to_string())
-        .collect();
+/// The Swift toolchain coordinates of the Apple target Cargo is building for.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+struct SwiftTarget {
+    /// The Rust target triple, as Cargo passes it in `TARGET`.
+    rust_target: String,
+    /// The SDK `xcrun --sdk` resolves.
+    sdk: &'static str,
+    /// The target triple `swiftc -target` takes.
+    swift_triple: String,
+    /// The directory of the Swift runtime under the toolchain's `lib/swift`.
+    runtime_dir: &'static str,
+    /// The deployment version `swift_triple` encodes: the oldest OS version the
+    /// compiled Swift objects run on.
+    deployment: OsVersion,
+    /// Whether this is a Mac Catalyst target. It compiles against the macOS
+    /// SDK, whose `UIKit` lives under `System/iOSSupport`, outside `swiftc`'s
+    /// default framework search path.
+    mac_catalyst: bool,
+}
 
-    for bridge in &bridges {
-        println!("cargo:rerun-if-changed={bridge}");
-    }
-
-    #[cfg(any(target_os = "ios", target_os = "macos"))]
-    {
-        let bridge_refs: Vec<&str> = bridges.iter().map(String::as_str).collect();
-        swift_bridge_build::parse_bridges(bridge_refs).write_all_concatenated(out_dir, &pkg_name);
-
-        let target_os = AppleTargetOs::from_cfg_target_os(
-            &env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS is required"),
-        )
-        .expect("build_apple_bridge only supports Apple targets");
-        let swift_bridge_crates = discover_swift_bridge_crates(&manifest_dir, &bridges, target_os);
-        if !swift_bridge_crates.is_empty() {
-            compile_multi_swift(
-                &swift_bridge_static_lib_name(&pkg_name),
-                swift_bridge_crates,
-            );
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+impl SwiftTarget {
+    fn from_cargo_env() -> Self {
+        let rust_target = cargo_env("TARGET");
+        let mac_catalyst = rust_target.ends_with("-apple-ios-macabi");
+        let (sdk, swift_triple, runtime_dir, deployment) = if rust_target.contains("ios") {
+            let arch = if rust_target.contains("x86_64") {
+                "x86_64"
+            } else {
+                "arm64"
+            };
+            let ios14 = OsVersion::new(14, 0);
+            if mac_catalyst {
+                // Mac Catalyst: the macOS SDK and runtime, with the `-macabi`
+                // environment selecting the iOS API surface.
+                (
+                    "macosx",
+                    format!("{arch}-apple-ios14.0-macabi"),
+                    "macosx",
+                    ios14,
+                )
+            } else if rust_target.contains("ios-sim") {
+                (
+                    "iphonesimulator",
+                    format!("{arch}-apple-ios14.0-simulator"),
+                    "iphonesimulator",
+                    ios14,
+                )
+            } else {
+                (
+                    "iphoneos",
+                    format!("{arch}-apple-ios14.0"),
+                    "iphoneos",
+                    ios14,
+                )
+            }
+        } else {
+            let arch = if rust_target.contains("aarch64") || rust_target.contains("arm64") {
+                "arm64"
+            } else {
+                "x86_64"
+            };
+            (
+                "macosx",
+                format!("{arch}-apple-macos12.3"),
+                "macosx",
+                OsVersion::new(12, 3),
+            )
+        };
+        Self {
+            rust_target,
+            sdk,
+            swift_triple,
+            runtime_dir,
+            deployment,
+            mac_catalyst,
         }
     }
 
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
-    {
-        let _ = (out_dir, manifest_dir, pkg_name, bridges);
+    fn sdk_path(&self) -> String {
+        let output = std::process::Command::new("xcrun")
+            .args(["--sdk", self.sdk, "--show-sdk-path"])
+            .output()
+            .expect("failed to run xcrun --show-sdk-path");
+        assert!(
+            output.status.success(),
+            "xcrun --sdk {} --show-sdk-path failed: {}",
+            self.sdk,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("xcrun --show-sdk-path output must be UTF-8")
+            .trim()
+            .to_string()
     }
 }
 
-/// Compile Swift code and link it into the crate.
-///
-/// This handles:
-/// 1. Swift bridge generation
-/// 2. Creating bridging headers
-/// 3. Compiling Swift to object file
-/// 4. Creating static library
-/// 5. Linking frameworks
-///
-/// # Arguments
-/// * `bridge_rs` - Path to the Rust bridge module
-/// * `config` - Swift compilation configuration
+/// Compiles the bridge code `swift-bridge` generated under `generated_name`,
+/// together with `sources`, into the Swift module `module_name`, archives it
+/// as `lib<module_name>.a`, and links that archive and the Swift runtime into
+/// the crate.
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-#[allow(clippy::too_many_lines)]
-pub fn compile_swift(bridge_rs: &str, config: &AppleSwiftConfig) {
+fn build_swift_library(
+    out_dir: &Path,
+    generated_name: &str,
+    module_name: &str,
+    sources: &[PathBuf],
+) {
     use std::fs;
     use std::process::Command;
 
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-
-    // Track changes
-    println!("cargo:rerun-if-changed={bridge_rs}");
-    for source in &config.swift_sources {
-        let full_path = manifest_dir.join(source);
-        println!("cargo:rerun-if-changed={}", full_path.display());
-    }
-
-    // 1. Generate Swift bridge code
-    swift_bridge_build::parse_bridges(vec![bridge_rs])
-        .write_all_concatenated(out_dir.clone(), &config.pkg_name);
-
-    // 2. Create combined bridging header
-    let core_h = out_dir.join("SwiftBridgeCore.h");
-    let pkg_h = out_dir.join(format!("{}/{}.h", config.pkg_name, config.pkg_name));
     let bridging_h = out_dir.join("Bridging-Header.h");
-
     let bridging_content = format!(
         "#include \"{}\"\n#include \"{}\"\n",
-        core_h.display(),
-        pkg_h.display()
+        out_dir.join("SwiftBridgeCore.h").display(),
+        out_dir
+            .join(format!("{generated_name}/{generated_name}.h"))
+            .display()
     );
     fs::write(&bridging_h, bridging_content).expect("Failed to write bridging header");
 
-    // 3. Concatenate all Swift sources into one file
-    let core_swift = out_dir.join("SwiftBridgeCore.swift");
-    let gen_swift = out_dir.join(format!("{}/{}.swift", config.pkg_name, config.pkg_name));
-    let combined_swift = out_dir.join(format!("Combined{}.swift", config.lib_name));
-
-    let mut combined_content =
-        fs::read_to_string(&core_swift).expect("Failed to read SwiftBridgeCore.swift");
-    combined_content.push('\n');
-    combined_content
-        .push_str(&fs::read_to_string(&gen_swift).expect("Failed to read generated swift"));
-
-    for source in &config.swift_sources {
-        let full_path = manifest_dir.join(source);
-        combined_content.push('\n');
-        combined_content.push_str(
-            &fs::read_to_string(&full_path)
-                .unwrap_or_else(|_| panic!("Failed to read {}", full_path.display())),
-        );
-    }
-
-    fs::write(&combined_swift, combined_content).expect("Failed to write combined Swift file");
-
-    // 4. Compile Swift to object file
-    let obj_file = out_dir.join(format!("{}.o", config.lib_name));
-
-    let target = env::var("TARGET").unwrap();
-    let (sdk, swift_target, swift_runtime_dir) = if target.contains("ios") {
-        let is_simulator = target.contains("ios-sim") || target.contains("apple-ios-sim");
-        let arch = if target.contains("x86_64") {
-            "x86_64"
-        } else {
-            "arm64"
-        };
-        if is_simulator {
-            (
-                "iphonesimulator",
-                format!("{arch}-apple-ios14.0-simulator"),
-                "iphonesimulator",
-            )
-        } else {
-            ("iphoneos", format!("{arch}-apple-ios14.0"), "iphoneos")
-        }
-    } else {
-        // macOS
-        let arch = if target.contains("aarch64") || target.contains("arm64") {
-            "arm64"
-        } else {
-            "x86_64"
-        };
-        ("macosx", format!("{arch}-apple-macos12.3"), "macosx")
-    };
-
-    let sdk_path = String::from_utf8(
-        Command::new("xcrun")
-            .args(["--sdk", sdk, "--show-sdk-path"])
-            .output()
-            .expect("xcrun failed")
-            .stdout,
-    )
-    .unwrap()
-    .trim()
-    .to_string();
-
-    let mut swiftc = Command::new("swiftc");
-    swiftc
-        .arg("-emit-object")
-        .arg("-o")
-        .arg(&obj_file)
-        .arg("-sdk")
-        .arg(&sdk_path)
-        .arg("-import-objc-header")
-        .arg(&bridging_h)
-        .arg("-parse-as-library")
-        .arg("-module-name")
-        .arg(&config.lib_name)
-        .arg(&combined_swift);
-
-    // Add target triple for cross-compilation
-    swiftc.arg("-target").arg(&swift_target);
-    if has_ios26_background_task_apis(sdk, &target) {
-        swiftc.arg("-D").arg("WATERKIT_HAS_IOS26_BACKGROUND_TASKS");
-    }
-
-    let output = swiftc.output().expect("Failed to run swiftc");
-    if !output.status.success() {
-        eprintln!(
-            "Swift compilation : swiftc args: {:?}",
-            swiftc.get_args().collect::<Vec<_>>()
-        );
-        eprintln!("Swift compilation failed:");
-        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
-        panic!("Swift compilation failed");
-    }
-
-    // Create static library from object file
-    let lib_file = out_dir.join(format!("lib{}.a", config.lib_name));
-    let ar_status = Command::new("ar")
-        .args([
-            "rcs",
-            lib_file.to_str().unwrap(),
-            obj_file.to_str().unwrap(),
-        ])
-        .status()
-        .expect("Failed to run ar");
-    assert!(ar_status.success(), "ar failed");
-
-    // Link the Swift library
-    println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static={}", config.lib_name);
-
-    // Link Swift runtime
-    link_swift_runtime(swift_runtime_dir);
-
-    // Link required frameworks
-    for framework in &config.frameworks {
-        println!("cargo:rustc-link-lib=framework={framework}");
-    }
-}
-
-/// No-op on non-Apple platforms.
-#[cfg(not(any(target_os = "ios", target_os = "macos")))]
-pub fn compile_swift(_bridge_rs: &str, _config: &AppleSwiftConfig) {}
-
-/// Compile multiple Swift bridge crates into a single static library.
-///
-/// This is for test binaries that depend on multiple Swift-bridge crates.
-/// It combines all bridge definitions and Swift sources into one compilation unit.
-///
-/// # Arguments
-/// * `lib_name` - Name for the output static library (e.g., "LocationTest")
-/// * `crates` - Iterator of Swift bridge crate definitions
-///
-/// # Example
-///
-/// ```ignore
-/// use waterkit_build::{compile_multi_swift, SwiftBridgeCrate};
-/// use std::path::PathBuf;
-///
-/// fn main() {
-///     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-///     let location = manifest_dir.join("../../../location");
-///     let permission = manifest_dir.join("../../../permission");
-///
-///     compile_multi_swift("LocationTest", [
-///         SwiftBridgeCrate::new(location.join("src/sys/apple/mod.rs"))
-///             .swift_source(location.join("src/sys/apple/Location.swift"))
-///             .framework("CoreLocation"),
-///         SwiftBridgeCrate::new(permission.join("src/sys/apple/mod.rs"))
-///             .swift_source(permission.join("src/sys/apple/Permission.swift"))
-///             .framework("CoreLocation")
-///             .framework("AVFoundation")
-///             .framework("Photos")
-///             .framework("Contacts")
-///             .framework("EventKit"),
-///     ]);
-/// }
-/// ```
-#[cfg(any(target_os = "ios", target_os = "macos"))]
-pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = SwiftBridgeCrate>) {
-    use std::fs;
-    use std::process::Command;
-
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let crates: Vec<SwiftBridgeCrate> = crates.into_iter().collect();
-
-    // Collect all bridge paths and set up rerun-if-changed
-    let bridge_strings: Vec<String> = crates
+    let generated = [
+        out_dir.join("SwiftBridgeCore.swift"),
+        out_dir.join(format!("{generated_name}/{generated_name}.swift")),
+    ];
+    let combined = generated
         .iter()
-        .map(|c| c.bridge_rs.to_string_lossy().into_owned())
-        .collect();
-
-    for krate in &crates {
-        println!("cargo:rerun-if-changed={}", krate.bridge_rs.display());
-        for source in &krate.swift_sources {
-            println!("cargo:rerun-if-changed={}", source.display());
-        }
-    }
-    println!("cargo:rerun-if-changed=build.rs");
-
-    let bridges: Vec<&str> = bridge_strings.iter().map(String::as_str).collect();
-
-    // Generate Swift bridge code for all crates
-    swift_bridge_build::parse_bridges(bridges).write_all_concatenated(&out_dir, lib_name);
-
-    // Paths to generated files
-    let core_swift = out_dir.join("SwiftBridgeCore.swift");
-    let gen_swift = out_dir.join(format!("{lib_name}/{lib_name}.swift"));
-    let core_h = out_dir.join("SwiftBridgeCore.h");
-    let gen_h = out_dir.join(format!("{lib_name}/{lib_name}.h"));
-
-    // Combine all Swift sources
-    let mut combined =
-        fs::read_to_string(&core_swift).expect("Failed to read SwiftBridgeCore.swift");
-    combined.push('\n');
-    combined.push_str(&fs::read_to_string(&gen_swift).expect("Failed to read generated swift"));
-
-    for krate in &crates {
-        for source in &krate.swift_sources {
-            combined.push('\n');
-            combined.push_str(
-                &fs::read_to_string(source)
-                    .unwrap_or_else(|_| panic!("Failed to read {}", source.display())),
-            );
-        }
-    }
-
-    let combined_swift = out_dir.join(format!("Combined{lib_name}.swift"));
+        .chain(sources)
+        .map(|source| {
+            fs::read_to_string(source)
+                .unwrap_or_else(|error| panic!("Failed to read {}: {error}", source.display()))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let combined_swift = out_dir.join(format!("Combined{module_name}.swift"));
     fs::write(&combined_swift, combined).expect("Failed to write combined Swift file");
 
-    // Create bridging header
-    let bridging_h = out_dir.join("Bridging-Header.h");
-    let bridging_content = format!(
-        "#include \"{}\"\n#include \"{}\"\n",
-        core_h.display(),
-        gen_h.display()
-    );
-    fs::write(&bridging_h, bridging_content).expect("Failed to write bridging header");
-
-    // Get SDK path
-    let target = env::var("TARGET").unwrap();
-    let (sdk, swift_target, swift_runtime_dir) = if target.contains("ios") {
-        let is_simulator = target.contains("ios-sim") || target.contains("apple-ios-sim");
-        let arch = if target.contains("x86_64") {
-            "x86_64"
-        } else {
-            "arm64"
-        };
-        if is_simulator {
-            (
-                "iphonesimulator",
-                format!("{arch}-apple-ios14.0-simulator"),
-                "iphonesimulator",
-            )
-        } else {
-            ("iphoneos", format!("{arch}-apple-ios14.0"), "iphoneos")
-        }
-    } else {
-        let arch = if target.contains("aarch64") || target.contains("arm64") {
-            "arm64"
-        } else {
-            "x86_64"
-        };
-        ("macosx", format!("{arch}-apple-macos12.3"), "macosx")
-    };
-
-    let sdk_path = String::from_utf8(
-        Command::new("xcrun")
-            .args(["--sdk", sdk, "--show-sdk-path"])
-            .output()
-            .expect("xcrun failed")
-            .stdout,
-    )
-    .unwrap()
-    .trim()
-    .to_string();
-
-    // Compile Swift to object file
-    let obj_file = out_dir.join(format!("{lib_name}.o"));
-
+    let target = SwiftTarget::from_cargo_env();
+    assert_deployment_floor(&target);
+    let sdk_path = target.sdk_path();
+    let obj_file = out_dir.join(format!("{module_name}.o"));
     let mut swiftc = Command::new("swiftc");
     swiftc
         .arg("-emit-object")
@@ -779,136 +645,66 @@ pub fn compile_multi_swift(lib_name: &str, crates: impl IntoIterator<Item = Swif
         .arg(&bridging_h)
         .arg("-parse-as-library")
         .arg("-module-name")
-        .arg(lib_name)
-        .arg(&combined_swift);
-
-    // Add target triple
-    swiftc.arg("-target").arg(&swift_target);
-    if has_ios26_background_task_apis(sdk, &target) {
+        .arg(module_name)
+        .arg(&combined_swift)
+        .arg("-target")
+        .arg(&target.swift_triple);
+    if target.mac_catalyst {
+        swiftc.arg("-F").arg(format!(
+            "{sdk_path}/System/iOSSupport/System/Library/Frameworks"
+        ));
+    }
+    if has_ios26_background_task_apis(&target) {
         swiftc.arg("-D").arg("WATERKIT_HAS_IOS26_BACKGROUND_TASKS");
     }
 
     let output = swiftc.output().expect("Failed to run swiftc");
-    if !output.status.success() {
-        eprintln!(
-            "Swift compilation: swiftc args: {:?}",
-            swiftc.get_args().collect::<Vec<_>>()
-        );
-        eprintln!("Swift compilation failed:");
-        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
-        panic!("Swift compilation failed");
-    }
+    assert!(
+        output.status.success(),
+        "Swift compilation failed (swiftc args: {:?}):\n{}",
+        swiftc.get_args().collect::<Vec<_>>(),
+        String::from_utf8_lossy(&output.stderr)
+    );
 
-    // Create static library
-    let lib_file = out_dir.join(format!("lib{lib_name}.a"));
+    let lib_file = out_dir.join(format!("lib{module_name}.a"));
     let ar_status = Command::new("ar")
-        .args([
-            "rcs",
-            lib_file.to_str().unwrap(),
-            obj_file.to_str().unwrap(),
-        ])
+        .arg("rcs")
+        .arg(&lib_file)
+        .arg(&obj_file)
         .status()
         .expect("Failed to run ar");
     assert!(ar_status.success(), "ar failed");
 
-    // Link the static library
     println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static={lib_name}");
+    println!("cargo:rustc-link-lib=static={module_name}");
 
-    // Link Swift runtime
-    link_swift_runtime(swift_runtime_dir);
-
-    // Collect and deduplicate frameworks, always include Foundation
-    use std::collections::HashSet;
-    let mut frameworks: HashSet<String> = HashSet::new();
-    frameworks.insert("Foundation".to_string());
-    for krate in &crates {
-        for fw in &krate.frameworks {
-            frameworks.insert(fw.clone());
-        }
-    }
-
-    for framework in &frameworks {
-        println!("cargo:rustc-link-lib=framework={framework}");
-    }
+    link_swift_runtime(target.runtime_dir);
 }
-
-/// No-op on non-Apple platforms.
-#[cfg(not(any(target_os = "ios", target_os = "macos")))]
-pub fn compile_multi_swift(_lib_name: &str, _crates: impl IntoIterator<Item = SwiftBridgeCrate>) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        AppleTargetOs, discover_swift_bridge_crates, infer_swift_frameworks_from_source,
-        swift_bridge_static_lib_name,
-    };
+    use super::OsVersion;
 
     #[test]
-    fn infers_only_active_platform_frameworks_from_conditionals() {
-        let contents = r#"
-import Foundation
-#if os(iOS)
-import UIKit
-import CoreHaptics
-#elseif os(macOS)
-import AppKit
-#endif
-import OSLog
-"#;
-
-        let ios = infer_swift_frameworks_from_source(contents, AppleTargetOs::Ios);
-        assert!(ios.contains("UIKit"));
-        assert!(ios.contains("CoreHaptics"));
-        assert!(!ios.contains("AppKit"));
-        assert!(!ios.contains("OSLog"));
-
-        let macos = infer_swift_frameworks_from_source(contents, AppleTargetOs::Macos);
-        assert!(macos.contains("AppKit"));
-        assert!(!macos.contains("UIKit"));
-        assert!(!macos.contains("CoreHaptics"));
-    }
-
-    #[test]
-    fn discovers_swift_sources_next_to_bridge_module() {
-        let root = std::env::temp_dir().join(format!(
-            "waterkit-build-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("time went backwards")
-                .as_nanos()
-        ));
-        let apple_dir = root.join("src/sys/apple");
-        std::fs::create_dir_all(&apple_dir).expect("create swift dir");
-        std::fs::write(
-            apple_dir.join("mod.rs"),
-            "#[swift_bridge::bridge] mod ffi {}",
-        )
-        .expect("write bridge");
-        std::fs::write(
-            apple_dir.join("Feature.swift"),
-            "import Foundation\n#if os(iOS)\nimport UIKit\n#endif\n",
-        )
-        .expect("write swift source");
-
-        let discovered = discover_swift_bridge_crates(
-            &root,
-            &[String::from("src/sys/apple/mod.rs")],
-            AppleTargetOs::Ios,
-        );
-        assert_eq!(discovered.len(), 1);
-        assert_eq!(discovered[0].swift_sources.len(), 1);
-        assert!(discovered[0].frameworks.contains(&String::from("UIKit")));
-
-        std::fs::remove_dir_all(&root).expect("cleanup temp dir");
-    }
-
-    #[test]
-    fn sanitizes_generated_swift_bridge_library_name() {
+    fn parses_and_orders_os_versions() {
         assert_eq!(
-            swift_bridge_static_lib_name("waterkit-haptic"),
-            "waterkit_haptic_swift_bridge"
+            OsVersion::parse("12.3"),
+            Some(OsVersion {
+                major: 12,
+                minor: 3,
+                patch: 0
+            })
         );
+        assert_eq!(
+            OsVersion::parse("10.14.4"),
+            Some(OsVersion {
+                major: 10,
+                minor: 14,
+                patch: 4
+            })
+        );
+        assert!(OsVersion::new(12, 3) > OsVersion::parse("12.0").unwrap());
+        assert!(OsVersion::new(14, 0) < OsVersion::parse("15.0").unwrap());
+        assert_eq!(OsVersion::parse("x"), None);
     }
 }

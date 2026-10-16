@@ -15,24 +15,25 @@ pub fn recognition_is_available() -> bool {
 pub struct TtsInner;
 
 impl TtsInner {
-    #[allow(clippy::unused_async)]
     pub async fn new() -> Result<Self, SpeechError> {
         // Verify speech-dispatcher is available
-        let status = std::process::Command::new("which")
+        let status = async_process::Command::new("which")
             .arg("spd-say")
-            .output()
+            .status()
+            .await
             .map_err(|e| SpeechError::Platform(e.to_string()))?;
-        if !status.status.success() {
+        if !status.success() {
             return Err(SpeechError::NotAvailable);
         }
         Ok(Self)
     }
 
-    pub fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
+    pub async fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
         let _ = self;
-        let output = std::process::Command::new("spd-say")
+        let output = async_process::Command::new("spd-say")
             .arg("-L")
             .output()
+            .await
             .map_err(|e| SpeechError::Platform(e.to_string()))?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(stdout
@@ -76,7 +77,11 @@ impl TtsInner {
         let _ = std::process::Command::new("spd-say").arg("-S").spawn();
     }
 
-    pub const fn is_speaking(&self) -> bool {
+    #[expect(
+        clippy::unused_async,
+        reason = "the async signature is part of the crate API surface and other platforms await here"
+    )]
+    pub async fn is_speaking(&self) -> bool {
         let _ = self;
         false
     }

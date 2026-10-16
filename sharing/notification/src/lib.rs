@@ -6,13 +6,14 @@
 //! # Example
 //!
 //! ```no_run
-//! use waterkit_notification::{Notification, InterruptionLevel};
+//! use waterkit_notification::Notification;
 //!
-//! fn main() -> Result<(), waterkit_notification::NotificationError> {
+//! async fn greet() -> Result<(), waterkit_notification::NotificationError> {
 //!     Notification::new()
 //!         .title("Hello")
 //!         .body("World from WaterKit!")
-//!         .show()?;
+//!         .show()
+//!         .await?;
 //!     Ok(())
 //! }
 //! ```
@@ -24,18 +25,22 @@
 //! ```no_run
 //! use waterkit_notification::Notification;
 //!
+//! # async fn run() -> Result<(), waterkit_notification::NotificationError> {
 //! // Show initial notification
 //! let handle = Notification::new()
 //!     .title("Downloading...")
 //!     .body("0%")
-//!     .show()?;
+//!     .show()
+//!     .await?;
 //!
 //! // Update the same notification using the handle
 //! handle.update()
 //!     .title("Downloading...")
 //!     .body("50%")
-//!     .show()?;
-//! # Ok::<(), waterkit_notification::NotificationError>(())
+//!     .show()
+//!     .await?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # Platform Feature Support
@@ -43,17 +48,46 @@
 //! | Feature | Linux | macOS | Windows | iOS | Android |
 //! |---------|-------|-------|---------|-----|---------|
 //! | title/body | ✓ | ✓ | ✓ | ✓ | ✓ |
-//! | icon | ✓ | ✓ | ✓ | ✗ | ✗ |
+//! | icon | ✓ | ✓ | ✓* | ✗ | ✗ |
 //! | subtitle | ✗ | ✓ | ✗ | ✓ | ✗ |
-//! | interruption_level | ✓ | ✗ | ✗ | ✓ | ✓ |
-//! | timeout | ✓ | ✗ | ✗ | ✗ | ✗ |
-//! | sound | ✓ | ✗ | ✗ | ✓ | ✓ |
-//! | actions (URL) | ✓ | ✓ | ✗ | ✓ | ✓ |
+//! | `interruption_level` | ✓ | ✗ | ✗ | ✓ | ✓ |
+//! | timeout | ✓ | ✗ | ✓* | ✗ | ✗ |
+//! | sound | ✓ | ✗ | ✓* | ✓ | ✓ |
+//! | actions (URL) | ✓ | ✓ | ✓* | ✓ | ✓ |
 //! | quick reply | ✗ | ✓ | ✗ | ✓ | ✓ |
 //! | update by ID | ✓ | ✓ | ✓ | ✓ | ✓ |
+//!
+//! *Windows: only `Icon::File`, `Sound::Default`/`Sound::Suppress`, and up to
+//! 5 actions are supported; `Timeout::Never` shows a reminder toast that
+//! persists until dismissed and requires an action. Anything the toast
+//! schema cannot render fails with [`NotificationError::Unsupported`] instead
+//! of being silently dropped.
+//!
+//! # Windows App Identity
+//!
+//! A toast is attributed to the `AppUserModelID` it is shown under. Packaged
+//! (MSIX) apps inherit one from their package; an unpackaged process must
+//! register one through `waterkit_notification::windows::AppIdentity` before
+//! the first `show()`, or showing a notification fails with
+//! [`NotificationError::Platform`]:
+//!
+//! ```no_run
+//! # #[cfg(target_os = "windows")]
+//! # fn register() -> Result<(), waterkit_notification::NotificationError> {
+//! // Keep the registration alive for as long as the process shows toasts.
+//! let registration =
+//!     waterkit_notification::windows::AppIdentity::new("com.example.myapp", "My App")
+//!         .register()?;
+//! # let _ = registration;
+//! # Ok(())
+//! # }
+//! ```
 
 mod error;
 mod sys;
+
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 use std::path::PathBuf;
 
@@ -255,8 +289,6 @@ impl TextInputAction {
 }
 
 /// Response from a notification action.
-///
-/// This is passed to the callback set via [`Notification::on_response`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotificationResponse {
     /// User clicked a URL action.
@@ -291,16 +323,20 @@ pub enum NotificationResponse {
 /// ```no_run
 /// use waterkit_notification::Notification;
 ///
-/// let mut handle = Notification::new()
+/// # async fn run() -> Result<(), waterkit_notification::NotificationError> {
+/// let handle = Notification::new()
 ///     .title("Downloading...")
 ///     .body("0%")
-///     .show()?;
+///     .show()
+///     .await?;
 ///
 /// // Update the notification
 /// handle.update()
 ///     .body("50%")
-///     .show()?;
-/// # Ok::<(), waterkit_notification::NotificationError>(())
+///     .show()
+///     .await?;
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Debug)]
 pub struct NotificationHandle {
@@ -390,7 +426,10 @@ impl Notification {
 
     /// Set the notification icon.
     ///
-    /// **Desktop only**: On mobile platforms, this is ignored.
+    /// **Desktop only**: On mobile platforms, this is ignored. On Windows
+    /// only [`Icon::File`] is supported; [`Icon::Theme`] is a freedesktop
+    /// concept with no `WinRT` equivalent and fails with
+    /// [`NotificationError::Unsupported`].
     #[must_use]
     pub fn icon(mut self, icon: Icon) -> Self {
         self.icon = Some(icon);
@@ -400,7 +439,9 @@ impl Notification {
     /// Set the notification sound.
     ///
     /// **Linux/iOS/Android**: Custom sounds are supported.
-    /// **macOS/Windows**: Only default sound is used.
+    /// **Windows**: `Default` and `Suppress` are honored; `Theme` and `File`
+    /// fail with [`NotificationError::Unsupported`].
+    /// **macOS**: Only default sound is used.
     #[must_use]
     pub fn sound(mut self, sound: Sound) -> Self {
         self.sound = Some(sound);
@@ -416,7 +457,12 @@ impl Notification {
 
     /// Set the timeout duration for the notification.
     ///
-    /// **Linux only**: On other platforms, this is ignored.
+    /// **Linux and Windows**: Ignored on other platforms. On Windows a
+    /// millisecond value is rounded up to the short (~7s) or long (~25s)
+    /// toast duration; anything longer and [`Timeout::Never`] without an
+    /// action fail with [`NotificationError::Unsupported`]. `Timeout::Never`
+    /// with at least one action shows a reminder toast that persists until
+    /// dismissed.
     #[must_use]
     pub const fn timeout(mut self, timeout: Timeout) -> Self {
         self.timeout = timeout;
@@ -424,6 +470,9 @@ impl Notification {
     }
 
     /// Add an action button to the notification.
+    ///
+    /// **Windows**: the toast schema allows at most 5 actions; a sixth fails
+    /// with [`NotificationError::Unsupported`].
     #[must_use]
     pub fn action(mut self, action: Action) -> Self {
         self.actions.push(action);
@@ -435,7 +484,8 @@ impl Notification {
     /// When the user taps this action, a text input field appears.
     ///
     /// **Supported:** iOS, macOS, Android
-    /// **Not supported:** Linux, Windows (silently ignored)
+    /// **Not supported:** Linux, Windows — on Windows this fails with
+    /// [`NotificationError::Unsupported`]
     #[must_use]
     pub fn text_input_action(mut self, action: TextInputAction) -> Self {
         self.text_input_actions.push(action);
@@ -447,7 +497,7 @@ impl Notification {
     /// # Errors
     ///
     /// Returns an error if the notification cannot be shown.
-    pub fn show(mut self) -> Result<NotificationHandle, NotificationError> {
+    pub async fn show(mut self) -> Result<NotificationHandle, NotificationError> {
         // Generate ID if not provided
         let id = self
             .id
@@ -463,7 +513,7 @@ impl Notification {
             target_os = "ios"
         ))]
         {
-            let inner = sys::show_notification(&self)?;
+            let inner = sys::show_notification(&self).await?;
             Ok(NotificationHandle { inner, id })
         }
 

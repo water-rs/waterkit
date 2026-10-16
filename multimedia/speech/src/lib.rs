@@ -74,8 +74,8 @@ impl Tts {
     ///
     /// # Errors
     /// Returns error if voices cannot be enumerated.
-    pub fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
-        self.inner.available_voices()
+    pub async fn available_voices(&self) -> Result<Vec<Voice>, SpeechError> {
+        self.inner.available_voices().await
     }
 
     /// Speak the given text.
@@ -93,10 +93,8 @@ impl Tts {
     }
 
     /// Check if currently speaking.
-    #[must_use]
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn is_speaking(&self) -> bool {
-        self.inner.is_speaking()
+    pub async fn is_speaking(&self) -> bool {
+        self.inner.is_speaking().await
     }
 }
 

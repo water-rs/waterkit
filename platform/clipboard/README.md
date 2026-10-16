@@ -6,7 +6,12 @@ System clipboard access for Rust applications.
 
 - **Text**: Read and write plain text.
 - **Images**: (Experimental) Read and write images.
-- **Reactive**: (Roadmap) Listen for clipboard changes.
+- **Files**: Read and write file paths.
+- **Custom data**: Read and write arbitrary MIME-typed payloads.
+- **Reactive**: Listen for clipboard changes.
+- **Primary selection (Linux)**: Read and write the PRIMARY selection text on
+  X11 and Wayland — the text last selected, pasted with the middle mouse
+  button.
 
 ## Installation
 
@@ -21,24 +26,94 @@ waterkit = { version = "0.1", features = ["clipboard"] }
 
 | Platform | Backend |
 | :--- | :--- |
-| **macOS** | `NSPasteboard` / `arboard` |
-| **iOS** | `UIPasteboard` (Swift Bridge) |
+| **macOS** | `clipboard-rs` (`NSPasteboard`) |
+| **iOS** | `UIPasteboard` (objc2) |
 | **Android** | `ClipboardManager` (Kotlin/JNI) |
-| **Windows/Linux** | `arboard` |
+| **Windows** | `clipboard-rs` (Win32) |
+| **Linux** | `wl-clipboard-rs` (Wayland data-control) in a Wayland session, `x11rb` (X11) otherwise, for CLIPBOARD and PRIMARY alike |
 
 ## Usage
 
 ```rust
 use waterkit_clipboard::Clipboard;
 
-async fn copy_paste() {
-    let clipboard = Clipboard::new().await.unwrap();
-    
+async fn copy_paste() -> Result<(), waterkit_clipboard::ClipboardError> {
+    let mut clipboard = Clipboard::new()?;
+
     // Write
-    clipboard.set_text("Hello World").await.unwrap();
-    
+    clipboard.set_text("Hello World")?;
+
     // Read
-    let content = clipboard.get_text().await.unwrap();
-    println!("Clipboard content: {}", content);
+    if let Some(text) = clipboard.text().await? {
+        println!("Clipboard content: {text}");
+    }
+    Ok(())
 }
 ```
+
+## Android file provider
+
+Android apps cannot open another app's `file://` URIs, so files, images and
+binary data go on the clipboard as `content://` URIs served by
+`waterkit.clipboard.ClipboardFileProvider`. The app's `AndroidManifest.xml`
+declares it inside `<application>`, under any authority:
+
+```xml
+<provider
+    android:name="waterkit.clipboard.ClipboardFileProvider"
+    android:authorities="${applicationId}.waterkit.clipboard"
+    android:exported="false"
+    android:grantUriPermissions="true" />
+```
+
+The provider is not exported: an app opens a URI only through the read
+access the clipboard grants the app that reads the clip. Without the
+declaration, writing a file returns `ClipboardError::Platform`.
+
+## Linux display server
+
+`Clipboard::new` and `PrimarySelection::new` each choose the display server
+once, from the session: Wayland when `WAYLAND_DISPLAY` is set, X11 when only
+`DISPLAY` is. Wayland needs a compositor with a data-control protocol
+(`ext_data_control_manager_v1` or `zwlr_data_control_manager_v1`; PRIMARY
+needs one offering a primary selection: `ext_data_control_manager_v1`, or
+`zwlr_data_control_manager_v1` version 2+), which `new` checks by binding the
+compositor's registry. Without it, `new` returns `ClipboardError::Platform`
+naming the reason; it never falls through to X11, even when Xwayland is
+running. Watching uses the chosen display server too.
+
+Both display servers carry the same formats: text, HTML, PNG images, files
+(as a `text/uri-list`) and custom MIME types.
+
+## Primary Selection (Linux only)
+
+Linux desktops keep a second selection, PRIMARY, holding the text last
+selected; terminals and editors write it on select and read it on
+middle-click. `PrimarySelection` reads and writes its text under both X11
+and Wayland:
+
+```rust
+use waterkit_clipboard::PrimarySelection;
+
+async fn primary() -> Result<(), waterkit_clipboard::ClipboardError> {
+    let mut primary = PrimarySelection::new()?;
+    primary.set_text("selected text")?;
+    if let Some(text) = primary.text().await? {
+        println!("PRIMARY: {text}");
+    }
+    Ok(())
+}
+```
+
+After a write the crate owns the selection and keeps serving paste requests
+until another client claims it: on X11 an in-process thread answers
+`SelectionRequest`s while the handle (or a clone) lives; on Wayland an
+in-process thread serves data-control requests until the process exits.
+
+The API is `cfg`-gated to `target_os = "linux"`: other platforms do not get
+it at all — there is no stub and no CLIPBOARD emulation.
+
+## License
+
+Licensed under either of [Apache-2.0](LICENSE-APACHE) or
+[MIT](LICENSE-MIT) at your option.

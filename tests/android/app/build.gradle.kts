@@ -2,12 +2,110 @@ plugins {
     id("com.android.application")
 }
 
+// waterkit crates declare their Android classpath in
+// `[package.metadata.waterui.android]` — `kotlin-sources` paths relative to
+// the crate manifest and `maven` coordinates — the same channel the water
+// CLI's classpath staging consumes (`scan_android_sources` in water-rs/cli).
+// The harness resolves those declarations through `cargo metadata` against
+// the feature set the waterkit-test driver builds the harness library with
+// (passed here as `-PwaterkitFeatures=<feature>`), so a helper only compiles
+// into the test app when its crate and gate feature are in the resolved
+// graph — dead or undeclared sources never reach the DEX. A crate's base
+// table always applies; `feature.<cargo-feature>` subtables apply only when
+// that feature is enabled on the crate.
+val waterkitFeatures = providers.gradleProperty("waterkitFeatures").orNull
+    ?: error(
+        "missing -PwaterkitFeatures=<feature>: the waterkit-test driver passes " +
+            "the cargo feature it builds the harness library with"
+    )
+
+val cargoMetadataOutput = providers.exec {
+    isIgnoreExitValue = true
+    commandLine(
+        "cargo",
+        "metadata",
+        "--format-version",
+        "1",
+        "--manifest-path",
+        rootProject.projectDir.resolve("rust/Cargo.toml").absolutePath,
+        "--features",
+        waterkitFeatures,
+    )
+}
+val cargoMetadataJson = cargoMetadataOutput.standardOutput.asText.get()
+if (cargoMetadataOutput.result.get().exitValue != 0) {
+    error("cargo metadata failed: ${cargoMetadataOutput.standardError.asText.get()}")
+}
+
+val cargoMetadata = groovy.json.JsonSlurper().parseText(cargoMetadataJson) as Map<*, *>
+val enabledFeatures =
+    ((cargoMetadata["resolve"] as Map<*, *>)["nodes"] as List<*>)
+        .associate { node ->
+            node as Map<*, *>
+            node["id"] to (node["features"] as List<*>).toSet()
+        }
+
+val kotlinSources = linkedMapOf<String, File>()
+val mavenCoordinates = linkedSetOf<String>()
+for (pkg in cargoMetadata["packages"] as List<*>) {
+    pkg as Map<*, *>
+    val waterui = (pkg["metadata"] as? Map<*, *>)?.get("waterui") as? Map<*, *> ?: continue
+    val android = waterui["android"] as? Map<*, *> ?: continue
+    // The base table always contributes; each `feature.<cargo-feature>`
+    // subtable contributes only while that feature is enabled on the crate.
+    val featureTables = android["feature"] as? Map<*, *> ?: emptyMap<Any, Any>()
+    val declaredFeatures = (pkg["features"] as Map<*, *>).keys
+    val enabled = enabledFeatures[pkg["id"]] ?: emptySet<Any>()
+    val tables = mutableListOf<Map<*, *>>(android)
+    for ((feature, table) in featureTables) {
+        require(feature in declaredFeatures) {
+            "crate ${pkg["name"]} declares [package.metadata.waterui.android.feature.$feature] " +
+                "but has no cargo feature `$feature`"
+        }
+        if (feature in enabled) {
+            tables += table as Map<*, *>
+        }
+    }
+    val crateRoot = File(pkg["manifest_path"] as String).parentFile
+    for (table in tables) {
+        for (source in table["kotlin-sources"] as? List<*> ?: emptyList<Any>()) {
+            val file = File(crateRoot, source as String)
+            require(file.isFile) {
+                "crate ${pkg["name"]} declares Kotlin source $source that does not exist"
+            }
+            val previous = kotlinSources.put(file.name, file)
+            require(previous == null || previous == file) {
+                "two crates declare a Kotlin source named ${file.name}"
+            }
+        }
+        for (coordinate in table["maven"] as? List<*> ?: emptyList<Any>()) {
+            mavenCoordinates += coordinate as String
+        }
+    }
+}
+
+// Stage the declared sources into a build-dir directory, mirroring the CLI's
+// `src/main/java/waterui/` staging, so only declared files compile.
+val stagedHelpers = layout.buildDirectory.dir("waterkit-classpath/java").get().asFile
+stagedHelpers.listFiles()?.forEach { stale ->
+    if (stale.name !in kotlinSources.keys) {
+        stale.delete()
+    }
+}
+stagedHelpers.mkdirs()
+kotlinSources.forEach { (name, source) ->
+    source.copyTo(stagedHelpers.resolve(name), overwrite = true)
+}
+
 android {
     namespace = "com.waterkit.test"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.waterkit.test"
+        // Overridable for parallel installs of the harness (e.g. a focused
+        // single-feature build next to the full harness on one device):
+        // ./gradlew :app:assembleDebug -PwaterkitApplicationId=com.example.other
+        applicationId = providers.gradleProperty("waterkitApplicationId").getOrElse("com.waterkit.test")
         minSdk = 26
         targetSdk = 37
         versionCode = 1
@@ -16,6 +114,11 @@ android {
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
+
+        // The manifest's hand-declared clipboard file provider exists only
+        // when waterkit-clipboard's helpers compile into the DEX.
+        manifestPlaceholders["waterkitClipboardProvider"] =
+            kotlinSources.containsKey("ClipboardFileProvider.kt").toString()
     }
 
     buildTypes {
@@ -32,6 +135,10 @@ android {
     sourceSets {
         getByName("main") {
             jniLibs.directories.add("src/main/jniLibs")
+            // .kt files compile from the `kotlin` source set, not `java` —
+            // adding the staged dir to `java.directories` leaves the helpers
+            // out of the DEX and every runtime loadClass fails.
+            kotlin.directories.add(stagedHelpers.absolutePath)
         }
     }
 }
@@ -41,4 +148,7 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("com.google.android.material:material:1.14.0")
     implementation("androidx.activity:activity-ktx:1.13.0")
+    // Maven coordinates waterkit crates declare for their helpers
+    // ([package.metadata.waterui.android] maven entries).
+    mavenCoordinates.forEach { implementation(it) }
 }

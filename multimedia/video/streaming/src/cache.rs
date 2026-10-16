@@ -882,12 +882,12 @@ mod tests {
             NonZeroU64::new(8).expect("test quota must be non-zero"),
         ))
         .expect("reopening with a smaller quota must evict unpinned LRU objects");
-        assert!(
+        assert_eq!(
             reopened
                 .coverage(&first)
                 .expect("coverage must be valid")
-                .ranges()
-                .is_empty()
+                .ranges(),
+            &[] as &[MediaByteRange]
         );
         assert_eq!(reopened.used_bytes().expect("cache size must be valid"), 8);
         std::fs::remove_dir_all(root).expect("test cache directory must remove");

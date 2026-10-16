@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 waterkit-notification.workspace = true
 core-foundation-sys = "0.8"
 tracing.workspace = true
+tokio = { workspace = true, features = ["full"] }

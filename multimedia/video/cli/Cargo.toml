@@ -19,7 +19,7 @@ waterkit-video-core.workspace = true
 waterkit-video-container.workspace = true
 waterkit-video-player.workspace = true
 waterkit-video-streaming.workspace = true
-waterkit-codec.workspace = true
+waterkit-codec = { workspace = true, features = ["gpu", "software-encode"] }
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -27,6 +27,12 @@ dirs.workspace = true
 pollster.workspace = true
 wgpu.workspace = true
 num-traits.workspace = true
+
+[features]
+# Hardware decode benchmarks opt in per invocation:
+# `cargo run -p waterkit-video-cli --features vaapi`. Kept off by default so a
+# workspace build does not drag VA-API into machines without the headers.
+vaapi = ["waterkit-video-player/vaapi"]
 
 [lints]
 workspace = true

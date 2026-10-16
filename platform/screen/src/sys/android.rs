@@ -22,7 +22,8 @@ use wgpu::{Device, Queue};
 
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
 
-/// `waterkit.screen.ScreenHelper`, loaded directly from the embedded DEX.
+/// `waterkit.screen.ScreenHelper`, compiled into the app's DEX by the
+/// packager and resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.screen.ScreenHelper");
 
 fn get_vm() -> Result<JavaVM, Error> {
@@ -40,7 +41,7 @@ fn with_attached_env<T>(
     get_vm()?.attach_current_thread(operation)
 }
 
-fn ensure_dex_loaded() -> Result<(), Error> {
+fn ensure_helper_initialized() -> Result<(), Error> {
     let android_context = ndk_context::android_context();
     let raw_context: jni::sys::jobject = android_context.context().cast();
     if raw_context.is_null() {
@@ -55,7 +56,7 @@ fn ensure_dex_loaded() -> Result<(), Error> {
 fn init_with_context(env: &mut Env<'_>, context: &JObject) -> Result<(), Error> {
     HELPER
         .class(env, context)
-        .map_err(|error| Error::Platform(format!("load embedded ScreenHelper DEX: {error}")))?;
+        .map_err(|error| Error::Platform(format!("load ScreenHelper: {error}")))?;
     let helper_class = get_helper_class(env)?;
     env.call_static_method(
         &helper_class,
@@ -93,7 +94,7 @@ pub fn init(env: &mut Env<'_>, context: &JObject) -> Result<(), Error> {
 
 /// Enumerate screens (returns single main screen with actual dimensions).
 pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
-    ensure_dex_loaded()?;
+    ensure_helper_initialized()?;
     with_attached_env(|env| {
         let helper_class = get_helper_class(env)?;
         let dims = env
@@ -143,7 +144,7 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
 
 /// Return the maximum refresh rate reported by Android display metadata.
 pub fn max_refresh_rate_hz() -> Result<f32, Error> {
-    ensure_dex_loaded()?;
+    ensure_helper_initialized()?;
     let refresh_hz = with_attached_env(|env| {
         let helper_class = get_helper_class(env)?;
         env.call_static_method(
@@ -167,13 +168,21 @@ pub fn max_refresh_rate_hz() -> Result<f32, Error> {
 }
 
 /// Capture a screenshot on Android using `MediaProjection`.
-pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
+pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
     if !matches!(format, ImageFormat::Png) {
         return Err(Error::Unsupported);
     }
 
-    ensure_dex_loaded()?;
-    let data = with_attached_env(|env| {
+    let (width, height) = (display.width(), display.height());
+    let data = blocking::unblock(capture_screenshot_png).await?;
+
+    Ok(Screenshot::new(data, width, height, format))
+}
+
+/// Runs the `MediaProjection` screenshot JNI calls off the executor thread.
+fn capture_screenshot_png() -> Result<Vec<u8>, Error> {
+    ensure_helper_initialized()?;
+    with_attached_env(|env| {
         let helper_class = get_helper_class(env)?;
         let has_permission = env
             .call_static_method(
@@ -217,20 +226,16 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
             ));
         }
         Ok(data)
-    })?;
-
-    Ok(Screenshot::new(
-        data,
-        display.width(),
-        display.height(),
-        format,
-    ))
+    })
 }
 
 /// Get screen brightness.
-#[allow(clippy::unused_async)]
+#[expect(
+    clippy::unused_async,
+    reason = "the public API is async on every platform; the JNI call is synchronous"
+)]
 pub async fn get_brightness() -> Result<f32, Error> {
-    ensure_dex_loaded()?;
+    ensure_helper_initialized()?;
     with_attached_env(|env| {
         let helper_class = get_helper_class(env)?;
         env.call_static_method(
@@ -246,9 +251,12 @@ pub async fn get_brightness() -> Result<f32, Error> {
 }
 
 /// Set screen brightness.
-#[allow(clippy::unused_async)]
+#[expect(
+    clippy::unused_async,
+    reason = "the public API is async on every platform; the JNI call is synchronous"
+)]
 pub async fn set_brightness(val: f32) -> Result<(), Error> {
-    ensure_dex_loaded()?;
+    ensure_helper_initialized()?;
     with_attached_env(|env| {
         let helper_class = get_helper_class(env)?;
         let result = env
@@ -356,13 +364,17 @@ pub struct ScreenStreamInner {
 }
 
 impl ScreenStreamInner {
-    pub fn new(
+    #[expect(
+        clippy::unused_async,
+        reason = "the public API is async on every platform; the JNI setup is synchronous"
+    )]
+    pub async fn new(
         display: &ScreenInfo,
         device: Arc<Device>,
         queue: Arc<Queue>,
         config: &StreamConfig,
     ) -> Result<Self, Error> {
-        ensure_dex_loaded()?;
+        ensure_helper_initialized()?;
         let frame_interval = frame_interval(config.target_fps)?;
 
         with_attached_env(|env| {

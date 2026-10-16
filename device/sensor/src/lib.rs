@@ -14,8 +14,8 @@
 //!     let data = Accelerometer::read().await?;
 //!     println!("x={}, y={}, z={}", data.x(), data.y(), data.z());
 //!
-//!     let mut stream = Accelerometer::watch(100)?;
-//!     while let Some(data) = stream.next().await {
+//!     let mut stream = Accelerometer::watch(100).await?;
+//!     while let Some(Ok(data)) = stream.next().await {
 //!         println!("x={}, y={}, z={}", data.x(), data.y(), data.z());
 //!     }
 //! }
@@ -51,6 +51,18 @@ pub struct SensorData {
 impl SensorData {
     /// Creates a new `SensorData` instance.
     #[must_use]
+    #[cfg_attr(
+        not(any(
+            target_os = "ios",
+            target_os = "android",
+            target_os = "windows",
+            target_os = "linux"
+        )),
+        expect(
+            dead_code,
+            reason = "only the platform backends produce 3-axis samples; macOS and unsupported platforms produce none"
+        )
+    )]
     pub(crate) const fn new(x: f64, y: f64, z: f64, timestamp: Timestamp) -> Self {
         Self { x, y, z, timestamp }
     }
@@ -91,6 +103,19 @@ pub struct ScalarData {
 impl ScalarData {
     /// Creates a new `ScalarData` instance.
     #[must_use]
+    #[cfg_attr(
+        not(any(
+            target_os = "ios",
+            target_os = "macos",
+            target_os = "android",
+            target_os = "windows",
+            target_os = "linux"
+        )),
+        expect(
+            dead_code,
+            reason = "only the platform backends produce samples; the unsupported-platform shim produces none"
+        )
+    )]
     pub(crate) const fn new(value: f64, timestamp: Timestamp) -> Self {
         Self { value, timestamp }
     }
@@ -167,10 +192,11 @@ impl Accelerometer {
     /// # Errors
     ///
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
-    pub fn watch(
+    pub async fn watch(
         interval_ms: u32,
-    ) -> Result<impl Stream<Item = SensorData> + Send + 'static, SensorError> {
-        sys::accelerometer_watch(interval_ms)
+    ) -> Result<impl Stream<Item = Result<SensorData, SensorError>> + Send + 'static, SensorError>
+    {
+        sys::accelerometer_watch(interval_ms).await
     }
 }
 
@@ -202,10 +228,11 @@ impl Gyroscope {
     /// # Errors
     ///
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
-    pub fn watch(
+    pub async fn watch(
         interval_ms: u32,
-    ) -> Result<impl Stream<Item = SensorData> + Send + 'static, SensorError> {
-        sys::gyroscope_watch(interval_ms)
+    ) -> Result<impl Stream<Item = Result<SensorData, SensorError>> + Send + 'static, SensorError>
+    {
+        sys::gyroscope_watch(interval_ms).await
     }
 }
 
@@ -236,10 +263,11 @@ impl Magnetometer {
     /// # Errors
     ///
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
-    pub fn watch(
+    pub async fn watch(
         interval_ms: u32,
-    ) -> Result<impl Stream<Item = SensorData> + Send + 'static, SensorError> {
-        sys::magnetometer_watch(interval_ms)
+    ) -> Result<impl Stream<Item = Result<SensorData, SensorError>> + Send + 'static, SensorError>
+    {
+        sys::magnetometer_watch(interval_ms).await
     }
 }
 
@@ -271,10 +299,11 @@ impl Barometer {
     /// # Errors
     ///
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
-    pub fn watch(
+    pub async fn watch(
         interval_ms: u32,
-    ) -> Result<impl Stream<Item = ScalarData> + Send + 'static, SensorError> {
-        sys::barometer_watch(interval_ms)
+    ) -> Result<impl Stream<Item = Result<ScalarData, SensorError>> + Send + 'static, SensorError>
+    {
+        sys::barometer_watch(interval_ms).await
     }
 }
 
@@ -307,9 +336,10 @@ impl AmbientLight {
     /// # Errors
     ///
     /// Returns [`SensorError`] when the sensor cannot be subscribed to.
-    pub fn watch(
+    pub async fn watch(
         interval_ms: u32,
-    ) -> Result<impl Stream<Item = ScalarData> + Send + 'static, SensorError> {
-        sys::ambient_light_watch(interval_ms)
+    ) -> Result<impl Stream<Item = Result<ScalarData, SensorError>> + Send + 'static, SensorError>
+    {
+        sys::ambient_light_watch(interval_ms).await
     }
 }

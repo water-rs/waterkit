@@ -48,31 +48,59 @@ pub use linux::{
 mod fallback {
     use crate::{HapticError, HapticPattern, Intensity};
 
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "the facade calls every platform's backend through the same non-const signature; only this unsupported-platform shim could be const"
+    )]
     pub fn is_available() -> bool {
         false
     }
 
-    pub fn impact(_intensity: Intensity) -> Result<(), HapticError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the facade calls every platform's backend through the same async signature; this implementation completes synchronously and has nothing to await"
+    )]
+    pub async fn impact(_intensity: Intensity) -> Result<(), HapticError> {
         Err(HapticError::Unsupported)
     }
 
-    pub fn selection() -> Result<(), HapticError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the facade calls every platform's backend through the same async signature; this implementation completes synchronously and has nothing to await"
+    )]
+    pub async fn selection() -> Result<(), HapticError> {
         Err(HapticError::Unsupported)
     }
 
-    pub fn notification_success() -> Result<(), HapticError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the facade calls every platform's backend through the same async signature; this implementation completes synchronously and has nothing to await"
+    )]
+    pub async fn notification_success() -> Result<(), HapticError> {
         Err(HapticError::Unsupported)
     }
 
-    pub fn notification_warning() -> Result<(), HapticError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the facade calls every platform's backend through the same async signature; this implementation completes synchronously and has nothing to await"
+    )]
+    pub async fn notification_warning() -> Result<(), HapticError> {
         Err(HapticError::Unsupported)
     }
 
-    pub fn notification_error() -> Result<(), HapticError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the facade calls every platform's backend through the same async signature; this implementation completes synchronously and has nothing to await"
+    )]
+    pub async fn notification_error() -> Result<(), HapticError> {
         Err(HapticError::Unsupported)
     }
 
-    pub fn play_pattern(_pattern: &HapticPattern) -> Result<(), HapticError> {
+    #[expect(
+        clippy::unused_async,
+        reason = "the facade calls every platform's backend through the same async signature; this implementation completes synchronously and has nothing to await"
+    )]
+    pub async fn play_pattern(_pattern: &HapticPattern) -> Result<(), HapticError> {
         Err(HapticError::Unsupported)
     }
 }

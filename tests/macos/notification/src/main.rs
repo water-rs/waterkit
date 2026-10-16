@@ -5,16 +5,18 @@ use std::fs::OpenOptions;
 #[cfg(target_os = "macos")]
 use std::io::Write;
 #[cfg(target_os = "macos")]
+use std::time::Duration;
+#[cfg(target_os = "macos")]
 use waterkit_notification::{Action, Notification, TextInputAction};
 
 #[cfg(target_os = "macos")]
 fn log(msg: &str) {
     // Write to a fixed log path relative to the executable
-    let log_path = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .map(|p| p.join("../../../notification-test.log"))
-        .unwrap_or_else(|| "/tmp/notification-test.log".into());
+    let executable = std::env::current_exe().expect("the harness executable has a path");
+    let log_path = executable
+        .parent()
+        .expect("the harness executable lives in a directory")
+        .join("../../../notification-test.log");
 
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
         let _ = writeln!(file, "{msg}");
@@ -32,19 +34,25 @@ unsafe extern "C" {
     ) -> i32;
 }
 
+/// Runs the main run loop for `duration`, so notification callbacks are
+/// delivered while the harness waits for interactions.
 #[cfg(target_os = "macos")]
-fn run_loop_for(seconds: f64) {
-    let iterations = (seconds * 10.0) as u32;
-    for _ in 0..iterations {
+fn run_loop_for(duration: Duration) {
+    const SLICE: Duration = Duration::from_millis(100);
+    for _ in 0..duration.as_millis() / SLICE.as_millis() {
+        // SAFETY: `kCFRunLoopDefaultMode` is a constant CoreFoundation string
+        // that lives for the whole process, and running the current thread's
+        // run loop has no other precondition.
         unsafe {
             let mode = core_foundation_sys::runloop::kCFRunLoopDefaultMode;
-            CFRunLoopRunInMode(mode.cast(), 0.1, false);
+            CFRunLoopRunInMode(mode.cast(), SLICE.as_secs_f64(), false);
         }
     }
 }
 
 #[cfg(target_os = "macos")]
-fn main() {
+#[tokio::main]
+async fn main() {
     // Test 1: Notification with quick reply
     log("=== Test 1: Quick Reply ===");
     log("Sending notification with quick reply...");
@@ -60,6 +68,7 @@ fn main() {
         )
         .action(Action::new("View", "https://waterui.dev"))
         .show()
+        .await
     {
         Ok(_handle) => {
             log("Notification sent!");
@@ -71,7 +80,7 @@ fn main() {
         }
     }
 
-    run_loop_for(5.0);
+    run_loop_for(Duration::from_secs(5));
 
     // Test 2: Notification update using handle
     log("\n=== Test 2: Notification Update ===");
@@ -83,6 +92,7 @@ fn main() {
         .body("0% complete")
         .subtitle("Update test")
         .show()
+        .await
     {
         Ok(h) => {
             log("Initial notification sent (0%)");
@@ -94,7 +104,7 @@ fn main() {
         }
     };
 
-    run_loop_for(0.5);
+    run_loop_for(Duration::from_millis(500));
 
     // Update using the handle
     for progress in (20..=100).step_by(20) {
@@ -104,6 +114,7 @@ fn main() {
             .body(format!("{progress}% complete"))
             .subtitle("Update test")
             .show()
+            .await
         {
             Ok(_) => log(&format!("Updated to {progress}%")),
             Err(e) => {
@@ -111,7 +122,7 @@ fn main() {
                 return;
             }
         }
-        run_loop_for(0.5);
+        run_loop_for(Duration::from_millis(500));
     }
 
     // Final update with action
@@ -122,16 +133,19 @@ fn main() {
         .subtitle("Update test")
         .action(Action::new("Open", "https://waterui.dev"))
         .show()
+        .await
     {
         Ok(_) => log("Download complete notification sent!"),
         Err(e) => log(&format!("Failed to send final notification: {e}")),
     }
 
     log("\nWaiting 10 seconds for interactions...");
-    run_loop_for(10.0);
+    run_loop_for(Duration::from_secs(10));
 
     log("Test complete.");
 }
 
 #[cfg(not(target_os = "macos"))]
-fn main() {}
+fn main() {
+    eprintln!("waterkit-notification-test is a macOS-only harness; nothing to run on this target.");
+}

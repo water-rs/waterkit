@@ -385,7 +385,7 @@ pub enum MediaError {
     Unknown(String),
 }
 
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "media-session", target_os = "android"))]
 impl From<jni::errors::Error> for MediaError {
     fn from(error: jni::errors::Error) -> Self {
         Self::Unknown(error.to_string())

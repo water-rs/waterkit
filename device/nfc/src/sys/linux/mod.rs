@@ -264,7 +264,7 @@ async fn stop_poll_loop(conn: &Connection, adapter_path: &str) -> Result<(), Nfc
 
 fn run_tag_listener(
     adapter_path: String,
-    tag_tx: async_channel::Sender<NfcTag>,
+    tag_tx: async_channel::Sender<Result<NfcTag, NfcError>>,
     latest_tag_path: Arc<Mutex<Option<String>>>,
     stop_rx: async_channel::Receiver<()>,
     stopped: Arc<AtomicBool>,
@@ -298,7 +298,7 @@ fn run_tag_listener(
                     if let Ok(mut guard) = latest_tag_path.lock() {
                         *guard = Some(path_str.clone());
                     }
-                    if tag_tx.try_send(tag).is_err() {
+                    if tag_tx.try_send(Ok(tag)).is_err() {
                         return;
                     }
                 }
@@ -335,7 +335,7 @@ fn run_tag_listener(
                         if let Ok(mut guard) = latest_tag_path.lock() {
                             *guard = Some(path);
                         }
-                        if tag_tx.try_send(tag).is_err() {
+                        if tag_tx.try_send(Ok(tag)).is_err() {
                             break;
                         }
                     }
@@ -369,7 +369,7 @@ pub struct NfcReaderInner {
 impl NfcReaderInner {
     pub async fn start_session(
         _message: &str,
-    ) -> Result<(Self, async_channel::Receiver<NfcTag>), NfcError> {
+    ) -> Result<(Self, async_channel::Receiver<Result<NfcTag, NfcError>>), NfcError> {
         let conn = get_system_connection().await?;
         if !has_neard_owner(&conn).await? {
             return Err(NfcError::NotAvailable);

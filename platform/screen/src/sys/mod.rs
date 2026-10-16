@@ -37,6 +37,10 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     target_os = "ios",
     target_os = "android"
 )))]
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "the facade calls every platform's backend through the same non-const signature; only this unsupported-platform shim could be const"
+)]
 pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     Err(Error::Unsupported)
 }
@@ -112,7 +116,7 @@ pub async fn set_brightness(val: f32) -> Result<(), Error> {
     target_os = "ios",
     target_os = "android"
 )))]
-#[allow(clippy::unused_async)]
+#[expect(clippy::unused_async, reason = "the facade is async on every platform")]
 pub async fn get_brightness() -> Result<f32, Error> {
     Err(Error::Unsupported)
 }
@@ -124,7 +128,7 @@ pub async fn get_brightness() -> Result<f32, Error> {
     target_os = "ios",
     target_os = "android"
 )))]
-#[allow(clippy::unused_async)]
+#[expect(clippy::unused_async, reason = "the facade is async on every platform")]
 pub async fn set_brightness(_val: f32) -> Result<(), Error> {
     Err(Error::Unsupported)
 }
@@ -134,18 +138,18 @@ pub async fn set_brightness(_val: f32) -> Result<(), Error> {
 // ============================================================================
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
-    desktop::screenshot(display, format)
+pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
+    desktop::screenshot(display, format).await
 }
 
 #[cfg(target_os = "ios")]
-pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
-    apple::screenshot(display, format)
+pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
+    apple::screenshot(display, format).await
 }
 
 #[cfg(target_os = "android")]
-pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
-    android::screenshot(display, format)
+pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
+    android::screenshot(display, format).await
 }
 
 #[cfg(not(any(
@@ -155,7 +159,8 @@ pub fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screensho
     target_os = "ios",
     target_os = "android"
 )))]
-pub fn screenshot(_display: &ScreenInfo, _format: ImageFormat) -> Result<Screenshot, Error> {
+#[expect(clippy::unused_async, reason = "the facade is async on every platform")]
+pub async fn screenshot(_display: &ScreenInfo, _format: ImageFormat) -> Result<Screenshot, Error> {
     Err(Error::Unsupported)
 }
 
@@ -191,8 +196,24 @@ pub struct ScreenStreamInner;
     target_os = "ios",
     target_os = "android"
 )))]
+#[expect(
+    clippy::unused_self,
+    clippy::missing_const_for_fn,
+    reason = "this unsupported-platform shim keeps no state and computes nothing, but the facade calls every platform's backend through the same non-const `&self` methods"
+)]
 impl ScreenStreamInner {
-    pub fn new(
+    #[expect(
+        clippy::unused_async,
+        reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
+    )]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "wgpu's WebGPU device is not Send on wasm"
+        )
+    )]
+    pub async fn new(
         _display: &ScreenInfo,
         _device: std::sync::Arc<wgpu::Device>,
         _queue: std::sync::Arc<wgpu::Queue>,
@@ -201,6 +222,10 @@ impl ScreenStreamInner {
         Err(Error::Unsupported)
     }
 
+    #[expect(
+        clippy::unused_async,
+        reason = "the cross-platform facade calls this entry point as async; other platforms await inside it"
+    )]
     pub async fn next_frame(&self) -> Option<crate::frame::ScreenFrame> {
         None
     }

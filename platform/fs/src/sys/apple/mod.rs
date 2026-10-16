@@ -1,23 +1,28 @@
-//! Apple platform (iOS/macOS) file system implementation using swift-bridge.
+//! Apple platform (iOS/macOS) file system implementation backed by
+//! Foundation's `NSFileManager` search-path lookup.
 
 use std::path::PathBuf;
 
-#[swift_bridge::bridge]
-mod ffi {
-    extern "Swift" {
-        fn documents_dir() -> Option<String>;
-        fn cache_dir() -> Option<String>;
-    }
+use objc2_foundation::{NSFileManager, NSSearchPathDirectory, NSSearchPathDomainMask};
+
+/// The first user-domain URL Foundation reports for `directory`, mirroring
+/// `FileManager.default.urls(for:in:).first?.path`.
+fn search_path(directory: NSSearchPathDirectory) -> Option<PathBuf> {
+    NSFileManager::defaultManager()
+        .URLsForDirectory_inDomains(directory, NSSearchPathDomainMask::UserDomainMask)
+        .firstObject()
+        .and_then(|url| url.path())
+        .map(|path| PathBuf::from(path.to_string()))
 }
 
 /// Gets the application's documents directory on Apple platforms.
 #[must_use]
 pub fn documents_dir() -> Option<PathBuf> {
-    ffi::documents_dir().map(PathBuf::from)
+    search_path(NSSearchPathDirectory::DocumentDirectory)
 }
 
 /// Gets the application's cache directory on Apple platforms.
 #[must_use]
 pub fn cache_dir() -> Option<PathBuf> {
-    ffi::cache_dir().map(PathBuf::from)
+    search_path(NSSearchPathDirectory::CachesDirectory)
 }

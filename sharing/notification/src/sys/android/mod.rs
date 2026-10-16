@@ -8,8 +8,8 @@ use serde::Serialize;
 use crate::{InterruptionLevel, Notification, NotificationError};
 use waterkit_build::{AndroidError, DexHelper, dex_helper};
 
-/// `waterkit.notification.NotificationHelper`, embedded as a DEX by this crate's build script and
-/// loaded on first use.
+/// `waterkit.notification.NotificationHelper`, compiled into the app's DEX by the
+/// packager and resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.notification.NotificationHelper");
 
 impl From<AndroidError> for NotificationError {
@@ -133,7 +133,7 @@ pub fn show_notification_with_context(
 /// # Panics
 ///
 /// Panics if `ndk_context` has no `JavaVM` or Android `Context` yet.
-pub fn show_notification(
+pub async fn show_notification(
     notification: &Notification,
 ) -> Result<NotificationHandleInner, NotificationError> {
     let android_context = ndk_context::android_context();

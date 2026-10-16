@@ -6,8 +6,8 @@ use jni::{Env, jni_sig, jni_str};
 use waterkit_build::{AndroidError, DexHelper, dex_helper, with_android_context};
 use waterkit_core::Timestamp;
 
-/// `waterkit.calendar.CalendarHelper`, embedded as a DEX by this crate's build script and
-/// loaded on first use.
+/// `waterkit.calendar.CalendarHelper`, compiled into the app's DEX by the
+/// packager and resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.calendar.CalendarHelper");
 
 impl From<AndroidError> for CalendarError {

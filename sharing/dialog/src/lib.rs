@@ -9,7 +9,7 @@
 //! Platforms supported:
 //! - macOS (via `rfd` / `AppKit`)
 //! - Android (via JNI / Kotlin)
-//! - iOS (via Swift Bridge / `UIKit`)
+//! - iOS (via `objc2` / `UIKit`)
 //!
 //! ## Android
 //!
@@ -29,8 +29,7 @@ mod sys;
 #[cfg(target_os = "android")]
 pub mod android {
     pub use crate::sys::android::{
-        Selection, init_with_context, load_media_with_context, show_alert_with_context,
-        show_confirm_with_context, show_photo_picker_with_context,
+        Selection, load_media_with_context, show_alert_with_context, show_confirm_with_context,
     };
 }
 
@@ -39,10 +38,10 @@ pub use error::*;
 
 use std::path::{Path, PathBuf};
 
-#[cfg(any(target_os = "android", target_os = "ios", test))]
+#[cfg(test)]
 pub(crate) const PATH_LIST_SEPARATOR: char = '\0';
 
-#[cfg(any(target_os = "android", target_os = "ios", test))]
+#[cfg(test)]
 pub(crate) fn decode_string_list(encoded: Option<String>) -> Option<Vec<String>> {
     let encoded = encoded?;
     Some(
@@ -567,7 +566,7 @@ pub(crate) fn loaded_media_from_path(path: PathBuf) -> LoadedMedia {
     }
 }
 
-#[cfg(any(target_os = "ios", test))]
+#[cfg(test)]
 pub(crate) fn decode_loaded_media_payload(
     encoded: Option<String>,
 ) -> Result<LoadedMedia, DialogError> {

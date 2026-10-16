@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-screen-v0.1.4...waterkit-screen-v0.2.0) - 2026-10-16
+
+### Fixed
+
+- *(screen)* expect future_not_send on wasm, where the WebGPU device is not Send
+- clear the clippy lints of every wasm32 build
+- *(android)* compile Kotlin helpers on the application classpath ([#108](https://github.com/water-rs/waterkit/pull/108))
+
+### Other
+
+- *(screen)* drop availability checks at or below the deployment floor
+- *(screen)* [**breaking**] turn unused_async allows into cfg-gated expects
+- *(screen)* [**breaking**] make ScreenStreamInner::new async on all platforms
+- *(screen)* [**breaking**] await completions and return typed errors
+- *(screen)* [**breaking**] call ScreenCaptureKit and UIKit through objc2 instead of Swift
+- *(build)* [**breaking**] one Swift bridge builder for every crate
+- drive the camera, clipboard and screen examples without tokio
+
 ## [0.1.0](https://github.com/water-rs/waterkit/releases/tag/waterkit-screen-v0.1.0) - 2026-02-07
 
 ### Added

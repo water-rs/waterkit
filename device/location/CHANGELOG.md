@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which asks its own `FUSED_PROVIDER` from API 31 when the device registers
   one.
 
+### Fixed
+
+- Apple: `get_location` no longer reads `authorizationStatus` synchronously on
+  a freshly created `CLLocationManager`, which could surface a stale denial
+  right after the system grant landed; the request is now armed from the
+  first `locationManagerDidChangeAuthorization:` callback and the fix is
+  requested exactly once across later authorization callbacks.
+
 ## [0.1.0](https://github.com/water-rs/waterkit/releases/tag/waterkit-location-v0.1.0) - 2026-02-07
 
 ### Added

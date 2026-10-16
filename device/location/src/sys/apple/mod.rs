@@ -1,7 +1,11 @@
 //! Apple platform (iOS/macOS) location implementation backed by Core Location.
 //!
 //! The whole request runs on the main run loop: the `CLLocationManager` and
-//! its delegate are created, configured and driven on the main queue. Core
+//! its delegate are created, configured and driven on the main queue. The
+//! authorization status is only ever read inside
+//! `locationManagerDidChangeAuthorization:` — Core Location's first callback
+//! carries the authoritative value, where a synchronous read on a freshly
+//! created manager can return a stale denial. Core
 //! Location ends every `requestLocation` itself, with
 //! `locationManager:didUpdateLocations:` or
 //! `locationManager:didFailWithError:` — the request carries no deadline of
@@ -33,6 +37,9 @@ struct RequestState {
     /// Strong self-retain: `CLLocationManager.delegate` is a weak property,
     /// so the request owns itself for its lifetime.
     keep_alive: Option<Retained<LocationRequest>>,
+    /// `true` once `requestLocation` armed the one-shot fix; a second
+    /// authorization callback must not re-arm it.
+    location_requested: bool,
 }
 
 /// The `ObjC` ivars of [`LocationRequest`]: the manager running the request
@@ -136,7 +143,9 @@ define_class!(
 
         #[unsafe(method(locationManagerDidChangeAuthorization:))]
         fn did_change_authorization(&self, manager: &CLLocationManager) {
-            // SAFETY: read-only accessor on the main thread.
+            // SAFETY: read-only accessor on the main thread. The status
+            // read is authoritative here: Core Location delivers this
+            // callback once the delegate is set and again on every change.
             let status = unsafe { manager.authorizationStatus() };
             if status == CLAuthorizationStatus::Denied
                 || status == CLAuthorizationStatus::Restricted
@@ -147,7 +156,22 @@ define_class!(
                     "location permission denied"
                 );
                 self.finish(Err(LocationError::PermissionDenied));
+                return;
             }
+            // `NotDetermined` and the authorized statuses take the same
+            // path: `requestLocation` raises the when-in-use prompt
+            // itself while undetermined, and the pending fix proceeds
+            // once the grant lands.
+            let already_requested = {
+                let mut state = self.ivars().state.borrow_mut();
+                core::mem::replace(&mut state.location_requested, true)
+            };
+            if already_requested {
+                return;
+            }
+            // SAFETY: `requestLocation` arms the one-shot delivery on the
+            // main run loop this request is pinned to.
+            unsafe { manager.requestLocation() };
         }
     }
 );
@@ -164,6 +188,7 @@ impl LocationRequest {
             state: RefCell::new(RequestState {
                 sender: Some(sender),
                 keep_alive: None,
+                location_requested: false,
             }),
         });
         // SAFETY: `this` is a freshly allocated `LocationRequest` and
@@ -200,28 +225,18 @@ impl LocationRequest {
             return;
         }
         let manager = &self.ivars().manager;
-        // SAFETY: `authorizationStatus` is a read-only accessor called on the
-        // main thread, like every other manager use.
-        let status = unsafe { manager.authorizationStatus() };
-        if status == CLAuthorizationStatus::Denied || status == CLAuthorizationStatus::Restricted {
-            tracing::warn!(
-                path = "start_on_main",
-                status = i64::from(status.0),
-                "location permission denied"
-            );
-            self.finish(Err(LocationError::PermissionDenied));
-            return;
-        }
         // SAFETY: `delegate` is a weak property; the request stays alive
         // through `keep_alive`, so it cannot dangle.
         // `kCLLocationAccuracyBest` is a constant double read once.
+        // Setting the delegate makes Core Location report the current
+        // authorization through `locationManagerDidChangeAuthorization:`;
+        // a synchronous `authorizationStatus` read on a freshly created
+        // manager can return a stale value, so the request is driven from
+        // that callback instead.
         unsafe {
             manager.setDelegate(Some(ProtocolObject::from_ref(self)));
             manager.setDesiredAccuracy(kCLLocationAccuracyBest);
         }
-        // SAFETY: `requestLocation` arms the one-shot delivery on the main
-        // run loop this request is pinned to.
-        unsafe { manager.requestLocation() };
     }
 
     /// Resolves the request exactly once: the first call sends the result and

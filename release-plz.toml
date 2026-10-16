@@ -18,3 +18,11 @@ git_tag_enable = true
 [[package]]
 name = "waterkit-video-processing"
 release = false
+
+# waterkit#367: the semver check builds every feature from a copy outside the
+# workspace, where the `[patch.crates-io]` filtrate pin does not apply, so the
+# `filtrate` feature cannot compile there. Published consumers resolve
+# waterkit-video-processing to the published 0.1.4, which builds.
+[[package]]
+name = "waterkit-video"
+semver_check = false

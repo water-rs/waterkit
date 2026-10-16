@@ -182,7 +182,7 @@ waterkit-video = { path = "multimedia/video", version = "0.2.0" }
 waterkit-video-core = { path = "multimedia/video/core", version = "0.2.0" }
 waterkit-video-container = { path = "multimedia/video/container", version = "0.2.0" }
 waterkit-video-streaming = { path = "multimedia/video/streaming", version = "0.2.0" }
-waterkit-video-processing = { path = "multimedia/video/processing", version = "0.2.0" }
+waterkit-video-processing = { path = "multimedia/video/processing", version = "0.1.4" }
 waterkit-video-player = { path = "multimedia/video/player", version = "0.2.0" }
 waterkit-regional = { path = "platform/regional", version = "0.2.0" }
 waterkit-bluetooth = { path = "device/bluetooth", version = "0.2.0" }

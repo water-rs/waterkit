@@ -9206,7 +9206,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-video-processing"
-version = "0.2.0"
+version = "0.1.4"
 dependencies = [
  "filtrate",
  "futures-lite",

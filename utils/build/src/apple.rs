@@ -117,7 +117,7 @@ impl SwiftModule {
     /// A private Objective-C bridging header `swiftc` sees through
     /// `-import-objc-header`, used by `SwiftBridges` for its generated
     /// C glue; header-free callers leave this unset.
-    #[cfg(feature = "swift-bridge")]
+    #[cfg(all(feature = "swift-bridge", any(target_os = "ios", target_os = "macos")))]
     pub(crate) fn bridging_header(mut self, path: impl Into<PathBuf>) -> Self {
         self.bridging_header = Some(path.into());
         self
@@ -841,6 +841,7 @@ impl SwiftModule {
     ///
     /// Always: a build script reaches this only when it targets an Apple
     /// platform from a host that cannot build for one.
+    #[must_use]
     pub fn compile(self) -> SwiftArtifacts {
         self.assert_sources();
         panic!(
@@ -852,8 +853,7 @@ impl SwiftModule {
             self.compiler_args.len(),
             self.bridging_header
                 .as_ref()
-                .map(|header| header.display().to_string())
-                .unwrap_or_else(|| "none".to_string()),
+                .map_or_else(|| "none".to_string(), |header| header.display().to_string()),
         );
     }
 }

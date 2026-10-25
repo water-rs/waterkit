@@ -42,7 +42,7 @@ windows = { workspace = true, features = [
 windows-collections.workspace = true
 
 [build-dependencies]
-waterkit-build = { workspace = true, features = ["native-callback"] }
+waterkit-build = { workspace = true, features = ["native-callback", "swift-bridge"] }
 
 [dev-dependencies]
 futures.workspace = true

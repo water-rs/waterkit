@@ -7,7 +7,26 @@
 //!
 //! # Usage
 //!
-//! In your `build.rs`:
+//! Header-free Swift modules need no extra dependency:
+//!
+//! ```ignore
+//! use waterkit_build::SwiftModule;
+//!
+//! fn main() {
+//!     let artifacts = SwiftModule::new("MyModule")
+//!         .swift_source("First.swift")
+//!         .swift_source("Second.swift")
+//!         .framework("Foundation")
+//!         .compiler_arg("-D")
+//!         .compiler_arg("MY_FLAG")
+//!         .compile();
+//!     let archive = artifacts.archive();
+//!     let module = artifacts.module();
+//! }
+//! ```
+//!
+//! The `SwiftBridges` pipeline requires `features = ["swift-bridge"]` on the
+//! `[build-dependencies]` `waterkit-build` entry:
 //!
 //! ```ignore
 //! use waterkit_build::{SwiftBridge, SwiftBridges};
@@ -39,6 +58,9 @@ mod apple;
 mod peers;
 
 #[cfg(not(target_os = "android"))]
+pub use apple::{SwiftArtifacts, SwiftModule};
+#[cfg(not(target_os = "android"))]
+#[cfg(feature = "swift-bridge")]
 pub use apple::{SwiftBridge, SwiftBridges};
 
 #[cfg(target_os = "android")]

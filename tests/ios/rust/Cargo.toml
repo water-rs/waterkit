@@ -109,4 +109,4 @@ wallet = ["waterkit/wallet"]
 store = ["dep:futures", "waterkit/store"]
 
 [build-dependencies]
-waterkit-build.workspace = true
+waterkit-build = { workspace = true, features = ["swift-bridge"] }

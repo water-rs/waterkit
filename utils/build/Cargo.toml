@@ -16,6 +16,7 @@ workspace = true
 [features]
 activity-result = ["native-callback"]
 native-callback = []
+swift-bridge = ["dep:swift-bridge-build"]
 
 # The build-time half. Build scripts are compiled for the host, so these cfgs
 # match the build host, not the app's target: Swift bridge generation compiles
@@ -23,7 +24,7 @@ native-callback = []
 # Windows hosts never compile `swift-bridge-build` (or its `swift-bridge-ir` /
 # `syn` 1 chain). The gate matches the `cfg`s on the helpers in `src/apple.rs`.
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-swift-bridge-build.workspace = true
+swift-bridge-build = { workspace = true, optional = true }
 
 # The runtime half. Only a build *targeting* Android pulls these in, which is why
 # the Swift/Kotlin toolchain never reaches an application's dependency closure.

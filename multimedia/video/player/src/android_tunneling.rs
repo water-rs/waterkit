@@ -7,9 +7,9 @@ use jni::{
     objects::{Global, JObject, JValue},
     strings::JNIStr,
 };
-use waterkit_codec::NalStreamConverter;
-use waterkit_video_container::{Codec, EncodedSample, TrackInfo, TrackKind};
-use waterkit_video_core::Error;
+use mediax_codec::NalStreamConverter;
+use mediax_container::{Codec, EncodedSample, TrackInfo, TrackKind};
+use mediax_core::Error;
 
 use crate::{
     AndroidOffloadAudioController, AndroidOffloadAudioPlayback, AndroidVideoSurface,

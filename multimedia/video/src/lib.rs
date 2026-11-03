@@ -7,17 +7,17 @@
 
 #![warn(missing_docs)]
 
-pub use waterkit_video_core as core;
-pub use waterkit_video_core::{
+pub use mediax_core as core;
+pub use mediax_core::{
     ColorPrimaries, ColorRange, CommonEncryptionScheme, ContentLightLevel, EncryptionSubsample,
     Error as VideoError, FrameRate, FrameSize, FrameTiming, MatrixCoefficients, ProtectionInitData,
     SampleEncryption, TrackProtection, TransferFunction, VideoColorInfo,
 };
 
 #[cfg(feature = "container")]
-pub use waterkit_video_container as container;
+pub use mediax_container as container;
 #[cfg(feature = "container")]
-pub use waterkit_video_container::{
+pub use mediax_container::{
     EmbeddedSubtitleCodec, EmbeddedSubtitleCue, EmbeddedSubtitleTrack, MuxerCodecType, SubtitleCue,
     TimedMetadata, VideoFormat, VideoReader, VideoWriter, active_subtitle_text,
     decode_cmaf_subtitle_sample, embedded_subtitle_tracks, parse_hls_webvtt_segment,
@@ -26,10 +26,10 @@ pub use waterkit_video_container::{
 };
 
 #[cfg(feature = "streaming")]
-pub use waterkit_video_streaming as streaming;
+pub use mediax_streaming as streaming;
 
 #[cfg(feature = "processing")]
-pub use waterkit_video_processing as processing;
+pub use mediax_processing as processing;
 
 #[cfg(feature = "player")]
 pub use waterkit_video_player as player;

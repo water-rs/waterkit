@@ -34,6 +34,13 @@ pub use dash::{
 };
 pub use decode::{AudioTrackDecoder, DecodedVideoFrame, VideoPlayer, VideoTrackDecoder};
 pub use live::{LivePlaybackRateRange, LiveWindow};
+pub use mediax_codec::audio::DecodedAudioFrame;
+pub use mediax_core::Error;
+#[cfg(feature = "streaming")]
+pub use mediax_streaming::{
+    AnyLicenseServer, LicenseRequest, LicenseResponse, LicenseServer, ZenwaveLicenseServer,
+    acquire_license,
+};
 pub use picture_in_picture::{
     PictureInPictureCommand, PictureInPictureCommandStream, PictureInPictureController,
     PictureInPictureControllerState, PictureInPictureHostId,
@@ -60,10 +67,3 @@ pub use streaming::{
 };
 pub use subtitle_track::SelectableSubtitleTrack;
 pub use video_track::SelectableVideoTrack;
-pub use waterkit_audio::DecodedAudioFrame;
-pub use waterkit_video_core::Error;
-#[cfg(feature = "streaming")]
-pub use waterkit_video_streaming::{
-    AnyLicenseServer, LicenseRequest, LicenseResponse, LicenseServer, ZenwaveLicenseServer,
-    acquire_license,
-};

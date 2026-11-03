@@ -1,4 +1,4 @@
-use waterkit_video_core::{
+use mediax_core::{
     ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo,
 };
 

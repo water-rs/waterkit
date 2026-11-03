@@ -68,13 +68,6 @@ jobs:
       # member as a mere dependency. `--keep-going` makes one run report the
       # lints of every member instead of stopping at the first crate that fails.
       - run: cargo clippy --workspace --all-targets --all-features --keep-going -- -D warnings
-      # A decode-only consumer takes `waterkit-codec` without its `gpu` feature
-      # and must link no `wgpu`. Nothing in `--all-features` exercises that
-      # shape, so check and lint it explicitly.
-      - name: Check waterkit-codec without GPU output
-        run: cargo check -p waterkit-codec --no-default-features --features software-encode
-      - name: Clippy waterkit-codec without GPU output
-        run: cargo clippy -p waterkit-codec --all-targets --no-default-features --features software-encode -- -D warnings
 
   cross-clippy:
     name: Clippy (${{ matrix.target }})
@@ -116,7 +109,7 @@ jobs:
               --exclude waterkit-audio-test
               --exclude waterkit-biometric-test
               --exclude waterkit-camera-test
-              --exclude waterkit-codec-bench
+              --exclude waterkit-capture-tools
               --exclude waterkit-dialog-test
               --exclude waterkit-location-test
               --exclude waterkit-notification-test
@@ -199,7 +192,7 @@ jobs:
           --exclude waterkit-audio-test
           --exclude waterkit-biometric-test
           --exclude waterkit-camera-test
-          --exclude waterkit-codec-bench
+          --exclude waterkit-capture-tools
           --exclude waterkit-dialog-test
           --exclude waterkit-location-test
           --exclude waterkit-notification-test
@@ -269,9 +262,6 @@ jobs:
       - uses: taiki-e/install-action@cargo-hack
       - run: cargo hack check --each-feature --no-dev-deps
       - run: cargo hack check --feature-powerset --no-dev-deps --depth 2
-      # The root package only re-exports `waterkit-codec` with its defaults, so
-      # walk that crate's own features too.
-      - run: cargo hack check -p waterkit-codec --feature-powerset --no-dev-deps
 
   test:
     name: Test

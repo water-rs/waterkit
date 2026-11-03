@@ -9,11 +9,11 @@ use jni::{
     objects::{Global, JByteArray, JIntArray, JObject, JString, JThrowable, JValue},
     strings::JNIStr,
 };
-use waterkit_audio::DecodedAudioFrame;
-use waterkit_codec::NalStreamConverter;
-use waterkit_video_container::{Codec, EncodedSample, TrackInfo, TrackKind};
-use waterkit_video_core::{CommonEncryptionScheme, Error, ProtectionInitData, TrackProtection};
-use waterkit_video_streaming::{LicenseRequest, LicenseResponse, LicenseServer, Url};
+use mediax_codec::NalStreamConverter;
+use mediax_codec::audio::DecodedAudioFrame;
+use mediax_container::{Codec, EncodedSample, TrackInfo, TrackKind};
+use mediax_core::{CommonEncryptionScheme, Error, ProtectionInitData, TrackProtection};
+use mediax_streaming::{LicenseRequest, LicenseResponse, LicenseServer, Url};
 
 use crate::{AndroidVideoSurface, android_surface::with_attached_env};
 
@@ -3064,7 +3064,7 @@ fn queue_secure_sample(
     track: &TrackInfo,
     sample: &EncodedSample,
     data: &[u8],
-    subsamples: &[waterkit_video_core::EncryptionSubsample],
+    subsamples: &[mediax_core::EncryptionSubsample],
 ) -> Result<(), Error> {
     if sample.track_id() != track.id() {
         return Err(Error::Codec(format!(
@@ -3508,7 +3508,7 @@ fn int_array<'a>(env: &mut Env<'a>, values: &[i32], label: &str) -> Result<JIntA
 }
 
 fn android_subsamples(
-    subsamples: &[waterkit_video_core::EncryptionSubsample],
+    subsamples: &[mediax_core::EncryptionSubsample],
     sample_len: usize,
 ) -> Result<(Vec<i32>, Vec<i32>), Error> {
     if subsamples.is_empty() {

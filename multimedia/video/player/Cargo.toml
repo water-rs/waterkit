@@ -18,10 +18,10 @@ workspace = true
 [dependencies]
 waterkit-build.workspace = true
 waterkit-core.workspace = true
-waterkit-video-core.workspace = true
-waterkit-video-container.workspace = true
-waterkit-video-streaming = { workspace = true, optional = true }
-waterkit-codec = { workspace = true, features = ["software-decode"] }
+mediax-core.workspace = true
+mediax-container.workspace = true
+mediax-streaming = { workspace = true, optional = true }
+mediax-codec = { workspace = true, features = ["software-decode", "aac"] }
 waterkit-audio = { workspace = true, features = ["streaming", "media-session"] }
 futures.workspace = true
 async-channel.workspace = true
@@ -33,9 +33,9 @@ bytes = { workspace = true, optional = true }
 
 [features]
 default = []
-streaming = ["dep:waterkit-video-streaming", "dep:aes", "dep:cbc", "dep:bytes"]
+streaming = ["dep:mediax-streaming", "dep:aes", "dep:cbc", "dep:bytes"]
 # VA-API hardware decode on Linux; off by default like the codec's own `vaapi`.
-vaapi = ["waterkit-codec/vaapi"]
+vaapi = ["mediax-codec/vaapi"]
 
 [dev-dependencies]
 transmux.workspace = true

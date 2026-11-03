@@ -18,8 +18,8 @@ use jni::{
     signature::MethodSignature,
     strings::JNIStr,
 };
-use waterkit_video_container::{Codec, EncodedSample, TrackInfo, TrackKind};
-use waterkit_video_core::Error;
+use mediax_container::{Codec, EncodedSample, TrackInfo, TrackKind};
+use mediax_core::Error;
 
 use crate::android_surface::{
     AndroidPlaybackContext, android_api_level, jni_error, with_attached_env,
@@ -644,7 +644,7 @@ fn set_offload_end_of_stream(shared: &OffloadAudioShared) -> Result<(), Error> {
     })
 }
 
-fn validate_audio_track(track: &TrackInfo) -> Result<waterkit_video_container::AudioLayout, Error> {
+fn validate_audio_track(track: &TrackInfo) -> Result<mediax_container::AudioLayout, Error> {
     if track.kind() != TrackKind::Audio {
         return Err(Error::Codec(format!(
             "track {} is not audio and cannot use AudioTrack offload",

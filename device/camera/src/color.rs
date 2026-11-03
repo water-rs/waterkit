@@ -1,5 +1,5 @@
 #[cfg(any(target_os = "android", target_vendor = "apple", test))]
-use waterkit_video_core::{ColorRange, MatrixCoefficients};
+use mediax_core::{ColorRange, MatrixCoefficients};
 #[cfg(any(target_os = "android", test))]
 use wgpu_external_frame::YcbcrEncoding;
 #[cfg(any(target_os = "android", target_vendor = "apple", test))]
@@ -32,7 +32,7 @@ pub const fn from_ycbcr_encoding(encoding: YcbcrEncoding) -> (MatrixCoefficients
 
 #[cfg(test)]
 mod tests {
-    use waterkit_video_core::{ColorRange, MatrixCoefficients};
+    use mediax_core::{ColorRange, MatrixCoefficients};
     use wgpu_external_frame::{YcbcrEncoding, YcbcrMatrix, YcbcrRange};
 
     use super::from_ycbcr_encoding;

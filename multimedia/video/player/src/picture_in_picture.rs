@@ -1,9 +1,9 @@
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 use core::ffi::c_void;
 use core::num::NonZeroU64;
+use mediax_core::Error as VideoError;
 use std::thread::JoinHandle;
 use std::time::Duration;
-use waterkit_video_core::Error as VideoError;
 
 /// Stable identifier for one picture-in-picture host registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -334,9 +334,9 @@ mod android {
         Env, JavaVM, jni_sig, jni_str,
         objects::{JObject, JValue},
     };
+    use mediax_core::Error as VideoError;
     use std::convert::TryFrom;
     use waterkit_build::{DexHelper, dex_helper};
-    use waterkit_video_core::Error as VideoError;
 
     /// `waterkit.video.PictureInPictureHelper`, compiled into the app's DEX by
     /// the packager and resolved through the application's `ClassLoader`.
@@ -505,11 +505,11 @@ mod apple {
     use core::ffi::c_void;
     use core::ptr::NonNull;
 
+    use mediax_core::Error as VideoError;
     use std::collections::{HashMap, VecDeque};
     use std::rc::Rc;
     use std::sync::{Arc, Condvar, Mutex, OnceLock};
     use std::time::Duration;
-    use waterkit_video_core::Error as VideoError;
 
     use block2::{Block, RcBlock};
     use dispatch2::{DispatchQueue, MainThreadBound};

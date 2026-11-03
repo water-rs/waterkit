@@ -7,16 +7,16 @@ use std::{
 };
 
 use futures::Stream;
-use num_traits::ToPrimitive;
-use waterkit_audio::{
+use mediax_codec::audio::{
     AacDecoderConfig, AacPacketDecoder, DecodedAudioFrame, EncodedAudioPacket, PacketAudioDecoder,
 };
-use waterkit_codec::{CodecType, DecodePacket, DecodedFrame, Decoder};
-use waterkit_video_container::{
+use mediax_codec::{CodecType, DecodePacket, DecodedFrame, Decoder};
+use mediax_container::{
     Codec as ContainerCodec, EncodedSample, TrackId, TrackInfo, TrackKind, VideoCodec, VideoReader,
     probe_mp4_color_info,
 };
-use waterkit_video_core::{Error, FrameTiming, VideoColorInfo};
+use mediax_core::{Error, FrameTiming, VideoColorInfo};
+use num_traits::ToPrimitive;
 
 /// Persistent decoder for presentation-wide encoded audio samples.
 ///
@@ -185,7 +185,7 @@ impl DecodedVideoFrame {
         target_arch = "wasm32",
         expect(
             clippy::uninhabited_references,
-            reason = "waterkit-codec has no wasm32 decoder, so `DecodedFrame` is uninhabited there and this frame can never exist"
+            reason = "mediax-codec has no wasm32 decoder, so `DecodedFrame` is uninhabited there and this frame can never exist"
         )
     )]
     pub const fn frame(&self) -> &DecodedFrame {
@@ -198,7 +198,7 @@ impl DecodedVideoFrame {
         target_arch = "wasm32",
         expect(
             clippy::missing_const_for_fn,
-            reason = "waterkit-codec has no wasm32 decoder, so `DecodedFrame` is uninhabited there and this frame can never exist"
+            reason = "mediax-codec has no wasm32 decoder, so `DecodedFrame` is uninhabited there and this frame can never exist"
         )
     )]
     pub fn into_frame(self) -> DecodedFrame {
@@ -542,7 +542,7 @@ fn create_track_decoder(track: &TrackInfo) -> Result<(CodecType, Decoder, VideoC
 ///
 /// This type owns no graphics device and performs no texture upload. Callers
 /// decide whether decoded frames are presented, processed, transcoded, or
-/// uploaded through `waterkit-codec`'s GPU adapter.
+/// uploaded through `mediax-codec`'s GPU adapter.
 pub struct VideoPlayer {
     reader: VideoReader,
     decoder: Decoder,

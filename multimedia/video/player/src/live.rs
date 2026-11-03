@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use waterkit_video_core::Error;
+use mediax_core::Error;
 
 /// Manifest-authorized playback-rate bounds for correcting live latency.
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -5,13 +5,13 @@
 
 mod common;
 
+use mediax_codec::{CodecType, Encoder, EncoderProfile};
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
-use waterkit_codec::{CodecType, Encoder, EncoderProfile};
 use waterkit_screen::{ScreenStream, StreamConfig, screens};
 
 const TARGET_FPS: u64 = 30;

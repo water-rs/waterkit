@@ -3,11 +3,11 @@
 
 use std::time::Duration;
 
+use mediax_core::VideoColorInfo;
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 use objc2_core_foundation::CFRetained;
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 use objc2_core_video::CVPixelBuffer;
-use waterkit_video_core::VideoColorInfo;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 use crate::sys::apple::CapturedPixelBuffer;

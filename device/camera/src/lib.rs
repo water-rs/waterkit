@@ -63,10 +63,10 @@ mod upload;
 pub use analysis::{AnalysisConfig, AnalysisFrame, AnalysisPlane, AnalysisPlanes};
 pub use converter::{FrameConverter, UPRIGHT_FORMAT};
 pub use frame::{Frame, FramePlanes, Orientation};
-pub use raw_video::{RawVideoError, RawVideoFrame, RawVideoHeader, RawVideoLayout, RawVideoReader};
-pub use waterkit_video_core::{
+pub use mediax_core::{
     ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo,
 };
+pub use raw_video::{RawVideoError, RawVideoFrame, RawVideoHeader, RawVideoLayout, RawVideoReader};
 
 use std::num::NonZeroU8;
 use std::path::Path;

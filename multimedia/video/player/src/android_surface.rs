@@ -6,7 +6,7 @@ use jni::{
     Env, JavaVM, jni_sig, jni_str,
     objects::{Global, JObject},
 };
-use waterkit_video_core::Error;
+use mediax_core::Error;
 
 const ANDROID_MINIMUM_VIDEO_API: i32 = 24;
 

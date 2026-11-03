@@ -26,7 +26,7 @@ shaderloom = { workspace = true, features = ["runtime"] }
 # frames carry.
 wgpu-external-frame.workspace = true
 # The YCbCr mode codes the converter's shaders take.
-waterkit-video-core.workspace = true
+mediax-core.workspace = true
 # CPU conversion for offline raw-video decoding and desktop recording.
 yuv = "0.8.19"
 
@@ -34,13 +34,13 @@ yuv = "0.8.19"
 # The frame converter's shaders are composed with the shared Y'CbCr fragment
 # and compiled to the target's native shader format at build time.
 shaderloom = { workspace = true, features = ["build"] }
-waterkit-video-core.workspace = true
+mediax-core.workspace = true
 
 [features]
 preview-example = []
 # VA-API hardware encoders on Linux; off by default like the codec's own
 # `vaapi` (the software AV1 encoder still covers encoding without it).
-vaapi = ["waterkit-codec/vaapi"]
+vaapi = ["mediax-codec/vaapi"]
 
 [[example]]
 name = "preview"
@@ -64,14 +64,14 @@ winit = { workspace = true, features = ["android-native-activity"] }
 wasm-bindgen-futures = "0.4"
 
 # Desktop platforms (Windows, Linux) - use nokhwa. Recording encodes through
-# waterkit-codec and muxes with waterkit-video-container. `yuv` is a common
+# mediax-codec and muxes with mediax-container. `yuv` is a common
 # dependency because the public WKRV reader converts NV12 on every platform.
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 nokhwa = { workspace = true, features = ["input-native"] }
 # `software-encode` carries the rav1e AV1 encoder; the `vaapi` feature adds
 # the VA-API hardware encoders via cros-codecs on Linux.
-waterkit-codec = { workspace = true, features = ["software-encode"] }
-waterkit-video-container.workspace = true
+mediax-codec = { workspace = true, features = ["software-encode"] }
+mediax-container.workspace = true
 
 # Apple platforms (iOS, macOS) - AVCaptureSession through objc2
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]

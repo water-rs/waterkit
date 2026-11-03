@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::frame::{Frame, FramePlanes, Orientation};
-use waterkit_video_core::VideoColorInfo;
+use mediax_core::VideoColorInfo;
 
 /// One frame's pixels in CPU memory, in the layout the platform delivered.
 pub enum CpuPlanes<'a> {

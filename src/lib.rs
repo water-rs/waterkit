@@ -42,7 +42,7 @@ pub use waterkit_clipboard as clipboard;
 
 #[cfg(feature = "codec")]
 #[doc(inline)]
-pub use waterkit_codec as codec;
+pub use mediax_codec as codec;
 
 #[cfg(feature = "dialog")]
 #[doc(inline)]

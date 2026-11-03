@@ -5,20 +5,19 @@ stack. It exposes media timing and color metadata, containers, Zenwave-based
 delivery, typed frame processing, platform codecs, playback, DRM integration,
 and platform media services without depending on WaterUI.
 
-The umbrella keeps each reusable compilation boundary available as its own
-crate:
+The media crates live in [mediax](https://github.com/water-rs/mediax); this
+umbrella re-exports them next to the WaterKit playback engine:
 
-- `waterkit-video-core`: media timing, color, HDR, and protection types.
-- `waterkit-video-container`: MP4/MOV, progressive tracks, CMAF, MPEG-TS,
+- `mediax-core`: media timing, color, HDR, and protection types.
+- `mediax-container`: MP4/MOV, progressive tracks, CMAF, MPEG-TS,
   subtitles, timed metadata, muxing, and demuxing.
-- `waterkit-video-streaming`: progressive download, HLS, LL-HLS, DASH,
+- `mediax-streaming`: progressive download, HLS, LL-HLS, DASH,
   LL-DASH, ABR, caching, offline packages, and license transport. Every network
   request goes through Zenwave.
-- `waterkit-video-processing`: typed asynchronous frame-processing pipelines,
+- `mediax-processing`: typed asynchronous frame-processing pipelines,
   with optional Filtrate GPU effects.
 - `waterkit-video-player`: decode, playback timing, tracks, live playback,
   picture in picture, media sessions, and platform DRM/output integration.
-- `waterkit-video-cli`: media inspection and reproducible decode benchmarks.
 
 ## Feature selection
 
@@ -39,7 +38,7 @@ Available umbrella features:
 
 Selecting only `container` does not pull in Zenwave, audio output, GPU
 processing, or the player. Selecting no features keeps only
-`waterkit-video-core`.
+`mediax-core`.
 
 ## Container example
 

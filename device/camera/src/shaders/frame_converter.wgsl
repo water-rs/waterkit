@@ -5,7 +5,7 @@
 struct ConvertParams {
     // EXIF orientation (1-8) of the stored pixels.
     orientation: u32,
-    // YCBCR_MATRIX_* and YCBCR_RANGE_* from waterkit-video-core's ycbcr.wgsl.
+    // YCBCR_MATRIX_* and YCBCR_RANGE_* from mediax-core's ycbcr.wgsl.
     matrix_mode: u32,
     range_mode: u32,
     // Significant bits per YCbCr sample.

@@ -28,13 +28,8 @@ streaming = [
     "dep:rodio",
     "dep:timestretch",
     "dep:tracing",
-    "dep:symphonia-core",
-    "dep:symphonia-codec-aac",
-    "dep:ndk",
-    "dep:ndk-sys",
-    "dep:windows",
+    "dep:mediax-codec",
 ]
-he-aac = ["streaming", "dep:symphonia-adapter-fdk-aac"]
 media-session = [
     "dep:tracing",
     "dep:waterkit-build",
@@ -72,15 +67,10 @@ num-traits = { workspace = true }
 smallvec = { workspace = true }
 timestretch = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
-
-[target.'cfg(not(any(target_os = "android", target_os = "windows", target_arch = "wasm32")))'.dependencies]
-symphonia-core = { workspace = true, optional = true }
-symphonia-codec-aac = { workspace = true, optional = true }
-symphonia-adapter-fdk-aac = { workspace = true, optional = true }
+# Packet AAC decoding; the streaming output consumes its decoded PCM frames.
+mediax-codec = { workspace = true, features = ["aac"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-symphonia-core = { workspace = true, optional = true }
-symphonia-codec-aac = { workspace = true, optional = true }
 # Browser playback through cpal's WebAudio backend (the `wasm-bindgen`
 # feature); rodio forwards it to its own cpal dependency.
 rodio = { workspace = true, features = ["playback", "flac", "vorbis", "wav", "mp3", "wasm-bindgen"], optional = true }
@@ -91,10 +81,6 @@ zenwave = { version = "0.7.1", default-features = false, features = ["ws"], opti
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["Navigator", "Window"] }
-
-[dev-dependencies]
-hex = "0.4"
-
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { workspace = true, optional = true, features = ["NSImage"] }
@@ -160,13 +146,11 @@ zenwave = { version = "0.7.1", default-features = false, features = ["hyper-nati
 jni = { workspace = true, optional = true }
 waterkit-build = { workspace = true, optional = true }
 ndk-context = { workspace = true, optional = true }
-ndk = { version = "0.9", features = ["media", "api-level-29"], optional = true }
-ndk-sys = { version = "0.6", optional = true }
 zenwave = { version = "0.7.1", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
 
 # Windows
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { workspace = true, features = ["Media_Playback", "Media_Control", "Foundation", "Storage_Streams", "Win32_Media_MediaFoundation", "Win32_System_Com"], optional = true }
+windows = { workspace = true, features = ["Media_Playback", "Media_Control", "Foundation", "Storage_Streams"], optional = true }
 zenwave = { version = "0.7.1", default-features = false, features = ["hyper-rustls", "ws"], optional = true }
 
 # Linux

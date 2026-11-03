@@ -7,14 +7,14 @@ use std::{
 };
 
 use aes::cipher::{BlockModeDecrypt as _, KeyIvInit as _, block_padding::Pkcs7};
-use waterkit_video_container::{
+use mediax_container::{
     CmafDemuxer, CmafInitialization, Codec, EncodedSample, MpegTsDemuxer, MpegTsEvent, SubtitleCue,
     TimedMetadata, TrackId, TrackInfo, TrackKind, decode_cmaf_subtitle_sample,
     parse_hls_webvtt_segment,
 };
-use waterkit_video_core::Error;
-use waterkit_video_core::ProtectionInitData;
-use waterkit_video_streaming::{
+use mediax_core::Error;
+use mediax_core::ProtectionInitData;
+use mediax_streaming::{
     AdaptiveSelectionPolicy, AdaptiveTrackSelector, HlsEncryption, HlsEncryptionMethod,
     HlsInitializationSegment, HlsMediaPlaylist, HlsPartialSegment, HlsPlaylist, HlsRendition,
     HlsRenditionKind, HlsSegment, MediaRequest, SegmentLoader, SegmentResource, StreamVariant,
@@ -1921,15 +1921,15 @@ mod tests {
 
     use aes::cipher::{BlockModeEncrypt as _, KeyIvInit as _, block_padding::Pkcs7};
     use bytes::Bytes;
+    use mediax_container::{EncodedSample, MediaTime, TrackId, TrackKind};
+    use mediax_streaming::{
+        AdaptiveSelectionPolicy, HlsMediaPlaylist, HlsRendition, HlsRenditionKind, HlsSegment,
+        MediaRequest, Url,
+    };
     use transmux::{
         AVCConfigurationBox, AVCDecoderConfigurationRecord, AvcPps, AvcSps, CodecConfig,
         DecoderConfigDescriptor, DecoderSpecificInfo, ESDescriptor, EsdsBox, FragmentTrackData,
         SLConfigDescriptor, Sample, TrackSpec, build_init_segment, build_media_segment,
-    };
-    use waterkit_video_container::{EncodedSample, MediaTime, TrackId, TrackKind};
-    use waterkit_video_streaming::{
-        AdaptiveSelectionPolicy, HlsMediaPlaylist, HlsRendition, HlsRenditionKind, HlsSegment,
-        MediaRequest, Url,
     };
 
     use super::{

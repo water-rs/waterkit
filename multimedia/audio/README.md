@@ -1,6 +1,6 @@
 # WaterKit Audio
 
-Cross-platform audio playback, packet decoding, streaming PCM output,
+Cross-platform audio playback, streaming PCM output,
 recording, media-session integration, playback-rate control, skip-silence,
 spatial playback, and explicit output-device selection.
 
@@ -11,8 +11,7 @@ defaults and select only the layers they use:
 
 - `playback`: file and Zenwave URL playback.
 - `recording`: microphone capture.
-- `streaming`: packet AAC decode and incremental PCM output for media engines.
-- `he-aac`: complete AAC-LC, HE-AAC, and HE-AAC v2 decoding where FDK is used.
+- `streaming`: incremental PCM output for media engines. Packet AAC decoding lives in `mediax-codec` (feature `aac`), whose `audio::DecodedAudioFrame` this output consumes.
 - `media-session`: platform Now Playing, transport controls, and audio focus.
 - `apple-artwork`: Zenwave artwork loading for Apple media sessions.
 

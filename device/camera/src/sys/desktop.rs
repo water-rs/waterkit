@@ -8,8 +8,8 @@
 //! uploads as `Rgb`. Each frame's planes are uploaded into textures created
 //! for it, and desktop frames are always upright.
 //!
-//! Video recording runs the capture stream through `waterkit-codec` and
-//! `waterkit-video-container` on a dedicated worker thread; raw recording
+//! Video recording runs the capture stream through `mediax-codec` and
+//! `mediax-container` on a dedicated worker thread; raw recording
 //! writes uncompressed WKRV version 2 RGBA8 frames.
 
 mod recording;

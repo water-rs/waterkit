@@ -567,9 +567,9 @@ fn append_u64_le(value: u64, data: &mut Vec<u8>) {
 )]
 fn raw_video_matrix_code(pixel_buffer: &CVPixelBuffer) -> Result<u8, String> {
     match capture::ycbcr_matrix(pixel_buffer) {
-        waterkit_video_core::MatrixCoefficients::Bt601 => Ok(6),
-        waterkit_video_core::MatrixCoefficients::Bt709 => Ok(1),
-        waterkit_video_core::MatrixCoefficients::Bt2020NonConstantLuminance => Ok(9),
+        mediax_core::MatrixCoefficients::Bt601 => Ok(6),
+        mediax_core::MatrixCoefficients::Bt709 => Ok(1),
+        mediax_core::MatrixCoefficients::Bt2020NonConstantLuminance => Ok(9),
         other => Err(format!("H.273 has no code for {other:?}")),
     }
 }

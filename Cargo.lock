@@ -576,15 +576,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "avif-serialize"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7178fe5f7d460b13895ebb9dcb28a3a6216d2df2574a0806cb51b555d297f38"
-dependencies = [
- "arrayvec",
-]
-
-[[package]]
 name = "barcoders"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2269,24 +2260,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fdk-aac"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7bb67e142688083cb9afb63f2424203fc98c4e7afb494bf912b60b55513b177e"
-dependencies = [
- "fdk-aac-sys",
-]
-
-[[package]]
-name = "fdk-aac-sys"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24516d2611506d5cb1833555adc75f6baf9fe2706b9c13e6fc33a6b22c51ca83"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "filtrate"
 version = "0.2.1"
 source = "git+https://github.com/water-rs/cherenkov?rev=f2209fb4225f7432dd97784c99542f54aca242e6#f2209fb4225f7432dd97784c99542f54aca242e6"
@@ -3207,8 +3180,6 @@ dependencies = [
  "moxcms 0.8.1",
  "num-traits",
  "png",
- "ravif",
- "rgb",
  "tiff",
  "zune-core",
  "zune-jpeg",
@@ -3223,12 +3194,6 @@ dependencies = [
  "byteorder-lite",
  "quick-error",
 ]
-
-[[package]]
-name = "imgref"
-version = "1.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e44b0a4eaa4c82f441d50a963f2d5f05a787240aeee097597033e72accfd22f"
 
 [[package]]
 name = "impartial-ord"
@@ -3835,15 +3800,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
-name = "loop9"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fae87c125b03c1d2c0150c90365d7d6bcc53fb73a9acaef207d2d065860f062"
-dependencies = [
- "imgref",
-]
-
-[[package]]
 name = "mac-notification-sys"
 version = "0.6.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3991,6 +3947,106 @@ checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if 1.0.5",
  "rayon",
+]
+
+[[package]]
+name = "mediax-codec"
+version = "0.1.0"
+source = "git+https://github.com/water-rs/mediax?branch=dev#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
+dependencies = [
+ "avif-parse",
+ "cfg_aliases 0.2.2",
+ "cros-codecs",
+ "half",
+ "image",
+ "jni",
+ "libc",
+ "mediax-core",
+ "moxcms 0.9.1",
+ "ndk",
+ "ndk-context",
+ "ndk-sys",
+ "num-traits",
+ "objc2 0.6.5",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-image 0.3.2",
+ "objc2-core-media",
+ "objc2-core-video",
+ "objc2-foundation 0.3.2",
+ "objc2-image-io",
+ "objc2-io-surface",
+ "objc2-metal 0.3.2",
+ "objc2-video-toolbox",
+ "rav1d",
+ "rav1e",
+ "shaderloom",
+ "symphonia-codec-aac",
+ "symphonia-core 0.6.1",
+ "thiserror 2.0.21",
+ "tracing",
+ "wgpu",
+ "wgpu-hal",
+ "windows 0.62.2",
+ "yuv",
+]
+
+[[package]]
+name = "mediax-container"
+version = "0.1.0"
+source = "git+https://github.com/water-rs/mediax?branch=dev#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
+dependencies = [
+ "broadcast-common",
+ "byteorder",
+ "bytes",
+ "mediax-core",
+ "mp4",
+ "quick-xml 0.42.0",
+ "subtp",
+ "transmux",
+]
+
+[[package]]
+name = "mediax-core"
+version = "0.1.0"
+source = "git+https://github.com/water-rs/mediax?branch=dev#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "mediax-processing"
+version = "0.1.0"
+source = "git+https://github.com/water-rs/mediax?branch=dev#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
+dependencies = [
+ "filtrate",
+ "mediax-core",
+ "wgpu",
+]
+
+[[package]]
+name = "mediax-streaming"
+version = "0.1.0"
+source = "git+https://github.com/water-rs/mediax?branch=dev#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
+dependencies = [
+ "async-channel",
+ "async-fs",
+ "base64 0.23.1",
+ "blake3",
+ "blocking",
+ "bytes",
+ "dash-mpd-core",
+ "futures",
+ "hex",
+ "mediax-core",
+ "num-traits",
+ "quick-m3u8",
+ "serde",
+ "serde_json",
+ "url",
+ "uuid",
+ "windows 0.62.2",
+ "zenwave",
 ]
 
 [[package]]
@@ -6152,21 +6208,6 @@ dependencies = [
  "simd_helpers",
  "thiserror 2.0.21",
  "v_frame",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "ravif"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e52310197d971b0f5be7fe6b57530dcd27beb35c1b013f29d66c1ad73fbbcc45"
-dependencies = [
- "avif-serialize",
- "imgref",
- "loop9",
- "quick-error",
- "rav1e",
- "rgb",
 ]
 
 [[package]]
@@ -7183,17 +7224,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "symphonia-adapter-fdk-aac"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9cc5d16c27e9cd23e028655c3740ec78e31eb6cb513f1837d36afed82b2dd44"
-dependencies = [
- "fdk-aac",
- "log",
- "symphonia-core 0.6.1",
-]
-
-[[package]]
 name = "symphonia-bundle-flac"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8139,6 +8169,7 @@ dependencies = [
 name = "waterkit"
 version = "0.2.0"
 dependencies = [
+ "mediax-codec",
  "toml",
  "waterkit-audio",
  "waterkit-background",
@@ -8147,7 +8178,6 @@ dependencies = [
  "waterkit-calendar",
  "waterkit-camera",
  "waterkit-clipboard",
- "waterkit-codec",
  "waterkit-contacts",
  "waterkit-deeplink",
  "waterkit-dialog",
@@ -8184,14 +8214,12 @@ dependencies = [
  "cpal",
  "dispatch2",
  "futures",
- "hex",
  "jni",
  "js-sys",
  "lofty",
+ "mediax-codec",
  "mpris-server",
- "ndk",
  "ndk-context",
- "ndk-sys",
  "num-traits",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
@@ -8205,9 +8233,6 @@ dependencies = [
  "rodio",
  "smallvec",
  "smol",
- "symphonia-adapter-fdk-aac",
- "symphonia-codec-aac",
- "symphonia-core 0.6.1",
  "tempfile",
  "thiserror 2.0.21",
  "timestretch",
@@ -8340,6 +8365,9 @@ dependencies = [
  "futures",
  "image",
  "jni",
+ "mediax-codec",
+ "mediax-container",
+ "mediax-core",
  "ndk",
  "ndk-context",
  "nokhwa",
@@ -8358,10 +8386,7 @@ dependencies = [
  "tracing-subscriber",
  "wasm-bindgen-futures",
  "waterkit-build",
- "waterkit-codec",
  "waterkit-core",
- "waterkit-video-container",
- "waterkit-video-core",
  "wgpu",
  "wgpu-external-frame",
  "winit",
@@ -8381,6 +8406,18 @@ dependencies = [
  "waterkit-camera",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "waterkit-capture-tools"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "mediax-codec",
+ "mediax-core",
+ "pollster 1.0.1",
+ "waterkit-screen",
+ "wgpu",
 ]
 
 [[package]]
@@ -8412,58 +8449,6 @@ dependencies = [
  "web-sys",
  "wl-clipboard-rs",
  "x11rb 0.14.0",
-]
-
-[[package]]
-name = "waterkit-codec"
-version = "0.2.0"
-dependencies = [
- "avif-parse",
- "cfg_aliases 0.2.2",
- "cros-codecs",
- "half",
- "image",
- "jni",
- "libc",
- "moxcms 0.9.1",
- "ndk",
- "ndk-sys",
- "num-traits",
- "objc2 0.6.5",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-core-image 0.3.2",
- "objc2-core-media",
- "objc2-core-video",
- "objc2-foundation 0.3.2",
- "objc2-image-io",
- "objc2-io-surface",
- "objc2-metal 0.3.2",
- "objc2-video-toolbox",
- "pollster 1.0.1",
- "rav1d",
- "rav1e",
- "shaderloom",
- "thiserror 2.0.21",
- "tracing",
- "waterkit-build",
- "waterkit-video-core",
- "wgpu",
- "wgpu-hal",
- "windows 0.62.2",
- "yuv",
-]
-
-[[package]]
-name = "waterkit-codec-bench"
-version = "0.1.0"
-dependencies = [
- "env_logger",
- "pollster 1.0.1",
- "waterkit-codec",
- "waterkit-screen",
- "waterkit-video-core",
- "wgpu",
 ]
 
 [[package]]
@@ -9122,51 +9107,11 @@ dependencies = [
 name = "waterkit-video"
 version = "0.2.0"
 dependencies = [
- "waterkit-video-container",
- "waterkit-video-core",
+ "mediax-container",
+ "mediax-core",
+ "mediax-processing",
+ "mediax-streaming",
  "waterkit-video-player",
- "waterkit-video-processing",
- "waterkit-video-streaming",
-]
-
-[[package]]
-name = "waterkit-video-cli"
-version = "0.2.0"
-dependencies = [
- "clap",
- "dirs 7.0.0",
- "num-traits",
- "pollster 1.0.1",
- "serde",
- "serde_json",
- "waterkit-codec",
- "waterkit-video-container",
- "waterkit-video-core",
- "waterkit-video-player",
- "waterkit-video-streaming",
- "wgpu",
-]
-
-[[package]]
-name = "waterkit-video-container"
-version = "0.2.0"
-dependencies = [
- "broadcast-common",
- "byteorder",
- "bytes",
- "mp4",
- "quick-xml 0.42.0",
- "subtp",
- "tempfile",
- "transmux",
- "waterkit-video-core",
-]
-
-[[package]]
-name = "waterkit-video-core"
-version = "0.2.0"
-dependencies = [
- "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -9182,6 +9127,10 @@ dependencies = [
  "dispatch2",
  "futures",
  "jni",
+ "mediax-codec",
+ "mediax-container",
+ "mediax-core",
+ "mediax-streaming",
  "ndk-context",
  "num-traits",
  "objc2 0.6.5",
@@ -9195,47 +9144,8 @@ dependencies = [
  "objc2-quartz-core 0.3.2",
  "tracing",
  "transmux",
- "waterkit-audio",
  "waterkit-build",
- "waterkit-codec",
  "waterkit-core",
- "waterkit-video-container",
- "waterkit-video-core",
- "waterkit-video-streaming",
-]
-
-[[package]]
-name = "waterkit-video-processing"
-version = "0.1.4"
-dependencies = [
- "filtrate",
- "futures-lite",
- "waterkit-video-core",
- "wgpu",
-]
-
-[[package]]
-name = "waterkit-video-streaming"
-version = "0.2.0"
-dependencies = [
- "async-channel",
- "async-fs",
- "base64 0.23.1",
- "blake3",
- "blocking",
- "bytes",
- "dash-mpd-core",
- "futures",
- "hex",
- "num-traits",
- "quick-m3u8",
- "serde",
- "serde_json",
- "url",
- "uuid",
- "waterkit-video-core",
- "windows 0.62.2",
- "zenwave",
 ]
 
 [[package]]

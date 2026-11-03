@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
+use mediax_core::{MatrixCoefficients, TransferFunction, VideoColorInfo};
 use shaderloom::{CompiledShader, ShaderStage};
-use waterkit_video_core::{MatrixCoefficients, TransferFunction, VideoColorInfo};
 use wgpu::util::DeviceExt as _;
 
 use crate::CameraError;
@@ -118,7 +118,7 @@ impl ConvertParams {
     /// Adds how the YCbCr samples decode.
     const fn ycbcr(self, color: VideoColorInfo, sample: SampleDepth) -> Self {
         Self {
-            // YCBCR_MATRIX_* / YCBCR_RANGE_* in waterkit-video-core's ycbcr.wgsl.
+            // YCBCR_MATRIX_* / YCBCR_RANGE_* in mediax-core's ycbcr.wgsl.
             matrix_mode: color
                 .matrix
                 .ycbcr_mode()
@@ -446,9 +446,7 @@ mod tests {
     use std::time::Duration;
 
     use image::{DynamicImage, RgbaImage};
-    use waterkit_video_core::{
-        ColorPrimaries, MatrixCoefficients, TransferFunction, VideoColorInfo,
-    };
+    use mediax_core::{ColorPrimaries, MatrixCoefficients, TransferFunction, VideoColorInfo};
 
     use super::FrameConverter;
     use crate::CameraError;

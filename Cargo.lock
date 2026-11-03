@@ -9144,7 +9144,6 @@ dependencies = [
  "objc2-quartz-core 0.3.2",
  "tracing",
  "transmux",
- "waterkit-audio",
  "waterkit-build",
  "waterkit-core",
 ]

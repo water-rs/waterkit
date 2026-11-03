@@ -73,7 +73,7 @@ pub enum PictureInPictureCommand {
 ///
 /// Apple platform callbacks are bridged through one blocking worker; rendering
 /// code receives commands from the async channel without polling on each
-/// frame. Other platforms expose `PiP` transport through [`waterkit_audio::MediaSession`],
+/// frame. Other platforms expose `PiP` transport through `waterkit-audio`'s `MediaSession`,
 /// so this stream closes immediately there.
 pub struct PictureInPictureCommandStream {
     host_id: PictureInPictureHostId,

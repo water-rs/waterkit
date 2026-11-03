@@ -22,7 +22,6 @@ mediax-core.workspace = true
 mediax-container.workspace = true
 mediax-streaming = { workspace = true, optional = true }
 mediax-codec = { workspace = true, features = ["software-decode", "aac"] }
-waterkit-audio = { workspace = true, features = ["streaming", "media-session"] }
 futures.workspace = true
 async-channel.workspace = true
 tracing.workspace = true
@@ -45,7 +44,6 @@ jni.workspace = true
 ndk-context.workspace = true
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
-waterkit-audio = { workspace = true, features = ["apple-artwork"] }
 block2.workspace = true
 core-foundation.workspace = true
 dispatch2.workspace = true

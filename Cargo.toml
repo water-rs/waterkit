@@ -358,6 +358,7 @@ dirs = "7.0"
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 wl-clipboard-rs = "0.9.4"
 rustix = "1.1"
+tempfile = { version = "3.27", default-features = false }
 x11rb = "0.14"
 clipboard-rs = { version = "0.3", features = ["image"] }
 wayland-sys = { version = "0.31.11", features = ["dlopen"] }

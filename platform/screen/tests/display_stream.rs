@@ -56,10 +56,10 @@ mod mac {
     use objc2::{msg_send, sel};
     use objc2_core_foundation::{CFRunLoop, CGSize, kCFRunLoopDefaultMode};
     use objc2_core_graphics::{
-        CGDirectDisplayID, CGDisplayChangeSummaryFlags, CGDisplayIsActive, CGDisplayIsBuiltin,
-        CGDisplayIsInMirrorSet, CGDisplayIsOnline, CGDisplayModelNumber,
-        CGDisplayRegisterReconfigurationCallback, CGDisplayRemoveReconfigurationCallback,
-        CGDisplayVendorNumber, CGError, CGGetOnlineDisplayList,
+        CGDirectDisplayID, CGDisplayChangeSummaryFlags, CGDisplayIsBuiltin, CGDisplayIsInMirrorSet,
+        CGDisplayModelNumber, CGDisplayRegisterReconfigurationCallback,
+        CGDisplayRemoveReconfigurationCallback, CGDisplayVendorNumber, CGError,
+        CGGetActiveDisplayList, CGGetOnlineDisplayList,
     };
     use objc2_foundation::{NSArray, NSNumber, NSString};
     use waterkit_screen::{
@@ -106,6 +106,41 @@ mod mac {
         let status = unsafe { CGGetOnlineDisplayList(32, ids.as_mut_ptr(), &raw mut count) };
         assert_eq!(status, CGError::Success, "CGGetOnlineDisplayList failed");
         ids.into_iter().take(count as usize).collect()
+    }
+
+    /// The displays `CoreGraphics` reports active (drawable).
+    fn active_displays() -> Vec<u32> {
+        let mut ids = [0_u32; 32];
+        let mut count = 0_u32;
+        // SAFETY: `ids` holds 32 entries and `count` is a valid out pointer.
+        let status = unsafe { CGGetActiveDisplayList(32, ids.as_mut_ptr(), &raw mut count) };
+        assert_eq!(status, CGError::Success, "CGGetActiveDisplayList failed");
+        ids.into_iter().take(count as usize).collect()
+    }
+
+    /// Whether `id` is online, active and mirrored, read from the display
+    /// lists: the `CGDisplayIs*` predicates answer `0xFFFFFFFF` (true) for an
+    /// id `CoreGraphics` does not know, so mirroring is asked only of a
+    /// listed display.
+    struct DisplayStatus {
+        online: bool,
+        active: bool,
+        mirrored: bool,
+    }
+
+    impl DisplayStatus {
+        fn of(id: u32) -> Self {
+            let online = online_displays().contains(&id);
+            Self {
+                online,
+                active: active_displays().contains(&id),
+                mirrored: online && CGDisplayIsInMirrorSet(id),
+            }
+        }
+
+        const fn healthy(&self) -> bool {
+            self.online && self.active && !self.mirrored
+        }
     }
 
     /// How long a new virtual display gets to go online.
@@ -165,7 +200,8 @@ mod mac {
             let mut tick = 0_u32;
             log.probe("apply", id, self);
             loop {
-                if CGDisplayIsOnline(id) && CGDisplayIsActive(id) {
+                let status = DisplayStatus::of(id);
+                if status.online && status.active {
                     return;
                 }
                 if start.elapsed() >= ONLINE_DEADLINE {
@@ -259,14 +295,15 @@ mod mac {
             let sls_registered = sls_contains(SLS_REGISTERED, id);
             let sls_online = sls_contains(SLS_ONLINE, id);
             let child = child_online_displays();
+            let status = DisplayStatus::of(id);
             let line = format!(
                 "vd-probe phase={phase} id={id} cb_add={} sls_registered={} sls_online={} cg_online={} cg_active={} in_mirror_set={} child_cg_online={child}",
                 u8::from(additions.added(id)),
                 u8::from(sls_registered),
                 u8::from(sls_online),
-                u8::from(CGDisplayIsOnline(id)),
-                u8::from(CGDisplayIsActive(id)),
-                u8::from(CGDisplayIsInMirrorSet(id)),
+                u8::from(status.online),
+                u8::from(status.active),
+                u8::from(status.mirrored),
             );
             self.note(&line);
         }
@@ -399,9 +436,7 @@ mod mac {
             };
             assert_ne!(id, 0, "CoreGraphics assigned the virtual display no id");
             additions.wait_until_online(id, &mut log);
-            let healthy =
-                CGDisplayIsOnline(id) && CGDisplayIsActive(id) && !CGDisplayIsInMirrorSet(id);
-            if !healthy {
+            if !DisplayStatus::of(id).healthy() {
                 let needles = [
                     id.to_string(),
                     "tvConnected".into(),

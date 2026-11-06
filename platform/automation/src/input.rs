@@ -144,11 +144,10 @@ impl Input {
         // A move first: AppKit hit-tests a press against the tracking state
         // the window last saw.
         let moved = mouse_event(CGEventType::MouseMoved, point, MouseButton::Left)?;
-        self.stamp_mouse(&moved, target, window.bounds, point, flags, 0);
-        self.symbols.post_to_pid(target.pid, &moved);
+        self.post_mouse(&moved, target, window.bounds, point, flags, 0);
 
         let down = mouse_event(down_type(event.button), point, event.button)?;
-        self.stamp_mouse(
+        self.post_mouse(
             &down,
             target,
             window.bounds,
@@ -156,7 +155,6 @@ impl Input {
             flags,
             event.clicks.get(),
         );
-        self.symbols.post_to_pid(target.pid, &down);
         self.held = Some(Held {
             button: event.button,
             target,
@@ -177,8 +175,7 @@ impl Input {
             }
         };
         let up = mouse_event(up_type(event.button), point, event.button)?;
-        self.stamp_mouse(&up, target, bounds, point, flags, event.clicks.get());
-        self.symbols.post_to_pid(target.pid, &up);
+        self.post_mouse(&up, target, bounds, point, flags, event.clicks.get());
         if self.held.is_some_and(|held| held.button == event.button) {
             self.held = None;
         }
@@ -196,8 +193,7 @@ impl Input {
             let moved = mouse_event(CGEventType::MouseMoved, point, MouseButton::Left)?;
             (moved, window.bounds, target)
         };
-        self.stamp_mouse(&moved, target, bounds, point, flags, 0);
-        self.symbols.post_to_pid(target.pid, &moved);
+        self.post_mouse(&moved, target, bounds, point, flags, 0);
         Ok(())
     }
 
@@ -217,8 +213,7 @@ impl Input {
         )
         .ok_or_else(|| null_event("CGEventCreateScrollWheelEvent2"))?;
         CGEvent::set_location(Some(&scrolled), point);
-        self.stamp_mouse(&scrolled, target, window.bounds, point, flags, 0);
-        self.symbols.post_to_pid(target.pid, &scrolled);
+        self.post_mouse(&scrolled, target, window.bounds, point, flags, 0);
         Ok(())
     }
 
@@ -317,23 +312,25 @@ impl Input {
         if self.key_target == Some(target) {
             return Ok(());
         }
-        tracing::debug!(
-            pid = target.pid,
-            window = target.window,
-            "making the window its application's key window"
-        );
         self.symbols
             .post_record(target.psn, &focus_record(target.window))?;
         for kind in MAKE_KEY_KINDS {
             self.symbols
                 .post_record(target.psn, &make_key_record(target.window, kind))?;
         }
+        tracing::debug!(
+            pid = target.pid,
+            psn = ?target.psn,
+            window = target.window,
+            "posted the records that make the window its application's key window"
+        );
         self.key_target = Some(target);
         Ok(())
     }
 
-    /// Stamps the routing of a mouse event to `target`.
-    fn stamp_mouse(
+    /// Stamps the routing of a mouse event to `target`, whose window has the
+    /// frame `window`, and posts it.
+    fn post_mouse(
         &self,
         event: &CGEvent,
         target: Target,
@@ -343,20 +340,30 @@ impl Input {
         clicks: u32,
     ) {
         CGEvent::set_flags(Some(event), flags);
-        let location = if self.window_local {
-            CGPoint::new(point.x - window.origin.x, point.y - window.origin.y)
-        } else {
-            point
-        };
+        let local = CGPoint::new(point.x - window.origin.x, point.y - window.origin.y);
+        let location = if self.window_local { local } else { point };
         self.symbols.set_window_location(event, location);
         self.symbols
             .set_field(event, FIELD_CLICK_STATE, i64::from(clicks));
         self.stamp_window(event, target);
-        let window = i64::from(target.window);
+        let number = i64::from(target.window);
         self.symbols
-            .set_field(event, FIELD_WINDOW_UNDER_POINTER, window);
+            .set_field(event, FIELD_WINDOW_UNDER_POINTER, number);
         self.symbols
-            .set_field(event, FIELD_WINDOW_HANDLING_EVENT, window);
+            .set_field(event, FIELD_WINDOW_HANDLING_EVENT, number);
+        tracing::debug!(
+            pid = target.pid,
+            psn = ?target.psn,
+            window = target.window,
+            kind = ?CGEvent::r#type(Some(event)),
+            ?flags,
+            clicks,
+            global = ?point,
+            window_local = ?local,
+            stamped = if self.window_local { "window-local" } else { "global" },
+            "posting a mouse event"
+        );
+        self.symbols.post_to_pid(target.pid, event);
     }
 
     fn stamp_window(&self, event: &CGEvent, target: Target) {
@@ -383,6 +390,16 @@ impl Input {
             unsafe { CGEvent::keyboard_set_unicode_string(Some(&event), length, text.as_ptr()) };
         }
         self.stamp_window(&event, target);
+        tracing::debug!(
+            pid = target.pid,
+            psn = ?target.psn,
+            window = target.window,
+            key,
+            down,
+            ?flags,
+            units = text.len(),
+            "posting a keyboard event"
+        );
         self.symbols.post_to_pid(target.pid, &event);
         Ok(())
     }

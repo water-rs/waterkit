@@ -3,7 +3,8 @@
 //!
 //! The target owns the process main thread (`harness = false`, one test
 //! thread): the display is created there, and `AppKit` events are pumped
-//! there.
+//! there. Input is posted from another thread meanwhile, as it is into any
+//! application whose event loop keeps running.
 
 use libtest_mimic::{Arguments, Trial};
 
@@ -39,15 +40,20 @@ fn main() {
 #[cfg(target_os = "macos")]
 mod mac {
     use core::num::NonZeroU32;
+    use core::ptr::NonNull;
     use core::time::Duration;
     use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::thread;
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+    use block2::RcBlock;
     use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
     use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
     use objc2_app_kit::{
         NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent, NSEventMask,
-        NSScreen, NSView, NSWindow, NSWindowStyleMask,
+        NSEventType, NSScreen, NSView, NSWindow, NSWindowStyleMask,
     };
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
     use objc2_core_graphics::{CGDisplayBounds, CGEvent, CGMainDisplayID};
@@ -55,7 +61,7 @@ mod mac {
         NSDate, NSDefaultRunLoopMode, NSNumber, NSPoint, NSProcessInfo, ns_string,
     };
     use waterkit_automation::{
-        Code, Error, Input, KeyDown, KeyUp, MouseButton, MouseDown, MouseUp, Point, Text,
+        Code, Error, Input, KeyDown, KeyUp, MouseButton, MouseDown, MouseUp, Point, Rect, Text,
         VirtualDisplay, VirtualDisplayConfig,
     };
 
@@ -174,6 +180,92 @@ mod mac {
             unsafe { window.setReleasedWhenClosed(false) };
             window
         }
+
+        fn number(&self) -> u32 {
+            u32::try_from(self.windowNumber()).expect("window numbers are 32-bit")
+        }
+    }
+
+    /// Every event `NSApp` dispatches, as a local event monitor sees it.
+    struct EventLog {
+        monitor: Retained<AnyObject>,
+        events: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl EventLog {
+        fn install() -> Self {
+            let events = Rc::new(RefCell::new(Vec::new()));
+            let seen = Rc::clone(&events);
+            let handler = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
+                // SAFETY: `AppKit` hands the monitor a live event.
+                let described = describe_event(unsafe { event.as_ref() });
+                seen.borrow_mut().push(described);
+                event.as_ptr()
+            });
+            // SAFETY: the handler returns the event it is given, so dispatch
+            // goes on unchanged.
+            let monitor = unsafe {
+                NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::Any, &handler)
+            }
+            .expect("AppKit installs a local event monitor");
+            Self { monitor, events }
+        }
+
+        fn describe(&self) -> String {
+            let events = self.events.borrow();
+            if events.is_empty() {
+                "NSApp dispatched no event at all".to_owned()
+            } else {
+                format!("NSApp dispatched, in order: {}", events.join("; "))
+            }
+        }
+    }
+
+    impl Drop for EventLog {
+        fn drop(&mut self) {
+            // SAFETY: the monitor came from
+            // `addLocalMonitorForEventsMatchingMask:handler:` and is removed
+            // once.
+            unsafe { NSEvent::removeMonitor(&self.monitor) };
+        }
+    }
+
+    /// What `AppKit` routes `event` by: its type, window and location or key.
+    fn describe_event(event: &NSEvent) -> String {
+        let kind = event.r#type();
+        let window = event.windowNumber();
+        let pointer = |name: &str| {
+            format!(
+                "{name} in window {window} at {:?}",
+                event.locationInWindow()
+            )
+        };
+        let press = |name: &str| format!("{}, click count {}", pointer(name), event.clickCount());
+        let key = |name: &str| {
+            format!(
+                "{name} in window {window}, key code {}, characters {:?}",
+                event.keyCode(),
+                event
+                    .characters()
+                    .map(|characters| characters.to_string())
+                    .unwrap_or_default()
+            )
+        };
+        let other = |name: &str| format!("{name} subtype {} in window {window}", event.subtype().0);
+        match kind {
+            NSEventType::LeftMouseDown => press("left mouse down"),
+            NSEventType::LeftMouseUp => press("left mouse up"),
+            NSEventType::RightMouseDown => press("right mouse down"),
+            NSEventType::RightMouseUp => press("right mouse up"),
+            NSEventType::MouseMoved => pointer("mouse moved"),
+            NSEventType::LeftMouseDragged => pointer("left mouse dragged"),
+            NSEventType::KeyDown => key("key down"),
+            NSEventType::KeyUp => key("key up"),
+            NSEventType::AppKitDefined => other("AppKit-defined"),
+            NSEventType::SystemDefined => other("system-defined"),
+            NSEventType::ApplicationDefined => other("application-defined"),
+            _ => format!("event type {} in window {window}", kind.0),
+        }
     }
 
     /// The user's cursor, read from a fresh event.
@@ -213,6 +305,35 @@ mod mac {
         true
     }
 
+    /// Runs `post` with `input` on another thread while this one dispatches
+    /// `AppKit` events, until the post has returned and `delivered` holds.
+    /// Gives `input` back with the post's result and whether `delivered`
+    /// held within [`DELIVERY_DEADLINE`].
+    fn post_while_pumping(
+        mtm: MainThreadMarker,
+        mut input: Input,
+        post: impl FnOnce(&mut Input) -> Result<(), Error> + Send + 'static,
+        mut delivered: impl FnMut() -> bool,
+    ) -> (Input, Result<(), Error>, bool) {
+        let poster = thread::spawn(move || {
+            let result = post(&mut input);
+            (input, result)
+        });
+        pump_until(mtm, DELIVERY_DEADLINE, || {
+            delivered() || poster.is_finished()
+        });
+        assert!(
+            poster.is_finished() || delivered(),
+            "Input::post did not return within {DELIVERY_DEADLINE:?}"
+        );
+        let (input, result) = poster.join().expect("the posting thread does not panic");
+        if result.is_err() {
+            return (input, result, false);
+        }
+        let arrived = pump_until(mtm, DELIVERY_DEADLINE, delivered);
+        (input, result, arrived)
+    }
+
     /// The display `AppKit` shows `screen` on.
     fn screen_display(screen: &NSScreen) -> u32 {
         screen
@@ -247,9 +368,9 @@ mod mac {
     }
 
     /// Where `AppKit` and `WindowServer` have the test window.
-    fn describe_window(window: &KeyableWindow, input: &Input) -> String {
-        let number = u32::try_from(window.windowNumber()).expect("window numbers are 32-bit");
-        let listed = input
+    fn describe_window(window: &KeyableWindow, inspector: &Input) -> String {
+        let number = window.number();
+        let listed = inspector
             .windows()
             .expect("the window list reads")
             .into_iter()
@@ -264,11 +385,54 @@ mod mac {
         )
     }
 
+    /// Whether `AppKit` sees the test process as active and the test window
+    /// as key, which decides where it routes a posted event.
+    fn describe_app(mtm: MainThreadMarker, window: &KeyableWindow) -> String {
+        let app = NSApplication::sharedApplication(mtm);
+        let policy = match app.activationPolicy() {
+            NSApplicationActivationPolicy::Regular => "regular".to_owned(),
+            NSApplicationActivationPolicy::Accessory => "accessory".to_owned(),
+            NSApplicationActivationPolicy::Prohibited => "prohibited".to_owned(),
+            other => format!("{other:?}"),
+        };
+        format!(
+            "test process pid {}: activation policy {policy}, active {}, key window {:?}; test window key {}, main {}",
+            std::process::id(),
+            app.isActive(),
+            app.keyWindow().map(|key| key.windowNumber()),
+            window.isKeyWindow(),
+            window.isMainWindow(),
+        )
+    }
+
+    /// Everything that tells where a posted event went; the crate's log
+    /// above lists every record and event `Input` posted.
+    fn describe_delivery(
+        mtm: MainThreadMarker,
+        window: &KeyableWindow,
+        log: &EventLog,
+        inspector: &Input,
+    ) -> String {
+        format!(
+            "{}\n{}\n{}\n{}\nThe crate's log above lists what Input posted.",
+            describe_app(mtm, window),
+            log.describe(),
+            describe_window(window, inspector),
+            describe_screens(mtm),
+        )
+    }
+
     fn outcome(result: &Result<(), Error>) -> String {
         match result {
             Ok(()) => "posted".to_owned(),
             Err(error) => error.to_string(),
         }
+    }
+
+    /// Whether `rect` holds `point`, edges half-open.
+    fn holds(rect: Rect, point: CGPoint) -> bool {
+        (rect.x()..rect.x() + rect.width()).contains(&point.x)
+            && (rect.y()..rect.y() + rect.height()).contains(&point.y)
     }
 
     /// A 1280x800-point display at 2x with a serial the system has not seen.
@@ -368,53 +532,83 @@ mod mac {
 
         let display = create_display(mtm);
         let (window, recorder) = open_window(mtm, &display);
+        let log = EventLog::install();
         let cursor_before = cursor();
-        let mut input = Input::new(display.id()).expect("input opens on the virtual display");
+        let inspector = Input::new(display.id()).expect("input opens on the virtual display");
+        let input = Input::new(display.id()).expect("input opens on the virtual display");
         let at = Point::new(
             WINDOW_ORIGIN.x + CLICK_IN_WINDOW.x,
             WINDOW_ORIGIN.y + CLICK_IN_WINDOW.y,
         );
 
         // `WindowServer` lists the window once it has ordered it in.
-        let mut pressed = Err(Error::DisplayNotFound(display.id()));
+        let display_origin = CGDisplayBounds(display.id()).origin;
+        let point = CGPoint::new(display_origin.x + at.x(), display_origin.y + at.y());
+        let number = window.number();
         let listed = pump_until(mtm, DELIVERY_DEADLINE, || {
-            pressed = input.post(MouseDown::new(at, MouseButton::Left));
-            !matches!(pressed, Err(Error::NoWindow { .. }))
+            inspector
+                .windows()
+                .expect("the window list reads")
+                .iter()
+                .any(|listed| {
+                    listed.id() == number
+                        && listed.on_screen()
+                        && listed.application()
+                        && holds(listed.bounds(), point)
+                })
         });
         assert!(
             listed,
-            "the test window was never found under {at}; the last press gave: {}\n{}\n{}",
-            outcome(&pressed),
-            describe_window(&window, &input),
+            "WindowServer never listed the test window on screen under {at}\n{}\n{}",
+            describe_window(&window, &inspector),
             describe_screens(mtm)
         );
-        pressed.expect("the press is posted");
+
         let observed = || recorder.ivars().borrow();
-        assert!(
-            pump_until(mtm, DELIVERY_DEADLINE, || !observed().presses.is_empty()),
-            "the press never reached the window: {:?}",
-            observed()
+        let (input, pressed, arrived) = post_while_pumping(
+            mtm,
+            input,
+            move |input| input.post(MouseDown::new(at, MouseButton::Left)),
+            || !observed().presses.is_empty(),
         );
-        input
-            .post(MouseUp::new(at, MouseButton::Left))
-            .expect("the release is posted");
         assert!(
-            pump_until(mtm, DELIVERY_DEADLINE, || !observed().releases.is_empty()),
-            "the release never reached the window: {:?}",
-            observed()
+            pressed.is_ok() && arrived,
+            "the press ({}) never reached the window: {:?}\n{}",
+            outcome(&pressed),
+            observed(),
+            describe_delivery(mtm, &window, &log, &inspector)
         );
 
-        input.post(Text::new("hi")).expect("the text is posted");
-        input
-            .post(KeyDown::new(Code::KeyA))
-            .expect("the key press is posted");
-        input
-            .post(KeyUp::new(Code::KeyA))
-            .expect("the key release is posted");
+        let (input, released, arrived) = post_while_pumping(
+            mtm,
+            input,
+            move |input| input.post(MouseUp::new(at, MouseButton::Left)),
+            || !observed().releases.is_empty(),
+        );
         assert!(
-            pump_until(mtm, DELIVERY_DEADLINE, || observed().keys.len() >= 2),
-            "the key presses never reached the window: {:?}",
-            observed()
+            released.is_ok() && arrived,
+            "the release ({}) never reached the window: {:?}\n{}",
+            outcome(&released),
+            observed(),
+            describe_delivery(mtm, &window, &log, &inspector)
+        );
+
+        let (_input, typed, arrived) = post_while_pumping(
+            mtm,
+            input,
+            |input| {
+                input.post(Text::new("hi"))?;
+                input.post(KeyDown::new(Code::KeyA))?;
+                input.post(KeyUp::new(Code::KeyA))
+            },
+            || observed().keys.len() >= 2,
+        );
+        assert!(
+            typed.is_ok() && arrived,
+            "the key presses ({}) never reached the window: {:?}\n{}",
+            outcome(&typed),
+            observed(),
+            describe_delivery(mtm, &window, &log, &inspector)
         );
 
         assert_delivered(&observed());
@@ -425,6 +619,7 @@ mod mac {
                 && cursor_after.y.to_bits() == cursor_before.y.to_bits(),
             "the cursor moved from {cursor_before:?} to {cursor_after:?}"
         );
+        drop(log);
         window.close();
     }
 

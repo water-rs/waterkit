@@ -6,6 +6,7 @@
 //! fresh child of its own executable and requests through an instance
 //! `LaunchServices` launches; see [`crate::helper`] for the protocol.
 
+use core::cell::RefCell;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Output};
@@ -13,15 +14,22 @@ use std::ptr::NonNull;
 use std::time::Duration;
 
 use async_process::{Command, Stdio};
+use block2::RcBlock;
 use futures::FutureExt as _;
+use futures::channel::oneshot;
+use objc2::rc::Retained;
+use objc2::{AnyThread as _, available};
 use objc2_application_services::{
     AXIsProcessTrusted, AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt,
 };
 use objc2_core_foundation::{CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFURL};
 use objc2_core_graphics::{
-    CGMainDisplayID, CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess,
+    CGImage, CGMainDisplayID, CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess,
 };
-use objc2_foundation::NSBundle;
+use objc2_foundation::{NSArray, NSBundle, NSError};
+use objc2_screen_capture_kit::{
+    SCContentFilter, SCScreenshotManager, SCShareableContent, SCStreamConfiguration, SCWindow,
+};
 use objc2_security::{
     SecCSFlags, SecCode, SecCodeSignatureFlags, SecStaticCode, kSecCSSigningInformation,
     kSecCodeInfoFlags,
@@ -35,10 +43,14 @@ use crate::{Permission, PermissionError, PermissionStatus};
 /// the launch to the helper entry.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long the direct-capture request waits for its capture to complete;
+/// the capture may wait on the user answering replayd's consent alert.
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// How long a request instance may take to exit. It raises the system
 /// prompt, which answers asynchronously, and exits; the direct-capture
-/// request also captures the main display once.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// request first waits up to [`CAPTURE_TIMEOUT`] for its capture.
+const REQUEST_TIMEOUT: Duration = CAPTURE_TIMEOUT.saturating_add(Duration::from_secs(10));
 
 // MARK: - Helper side
 
@@ -70,19 +82,118 @@ pub fn run(command: HelperCommand) -> ExitCode {
             // is asynchronous and does not change the return value.
             unsafe { AXIsProcessTrustedWithOptions(Some(options.as_opaque())) };
         }
-        HelperCommand::Request(Grant::DirectScreenCapture) => {
-            // replayd asks for the consent at the app's first capture that
-            // bypasses the picker. Only that prompt matters: the image the
-            // capture produces depends on the answer the user is still
-            // giving, so it is dropped unread.
-            #[expect(
-                deprecated,
-                reason = "a whole-display still with no stream is exactly the capture that raises the consent"
-            )]
-            drop(objc2_core_graphics::CGDisplayCreateImage(CGMainDisplayID()));
-        }
+        HelperCommand::Request(Grant::DirectScreenCapture) => raise_direct_capture_consent(),
     }
     ExitCode::SUCCESS
+}
+
+/// Captures the main display once through `SCScreenshotManager` and waits
+/// for the capture to complete.
+///
+/// replayd asks for the consent at the app's first capture that bypasses
+/// the picker. The capture is asynchronous, and one abandoned by an exiting
+/// process dismisses the consent alert, so this returns only once the
+/// completion handler ran. Whatever it delivers, an image or an error,
+/// answers the consent the user gave and is dropped unread.
+///
+/// # Panics
+///
+/// Panics before macOS 14, which has no `SCScreenshotManager`, when
+/// `ScreenCaptureKit` lists no main display or drops the completion handler,
+/// and when the capture does not complete within [`CAPTURE_TIMEOUT`].
+fn raise_direct_capture_consent() {
+    assert!(
+        available!(macos = 14.0, ..),
+        "the direct-capture consent request captures through SCScreenshotManager, which needs \
+         macOS 14"
+    );
+    let (sender, receiver) = oneshot::channel::<Result<(), String>>();
+    let pending = RefCell::new(Some(sender));
+    let content_handler = RcBlock::new(
+        move |content: *mut SCShareableContent, error: *mut NSError| {
+            let Some(sender) = pending.borrow_mut().take() else {
+                return;
+            };
+            // SAFETY: both pointers come from ScreenCaptureKit and stay
+            // valid for the duration of the callback.
+            let (filter, config) = match unsafe { main_display_capture(content, error) } {
+                Ok(capture) => capture,
+                Err(error) => {
+                    // The receiver lives until the helper gives up waiting.
+                    let _ = sender.send(Err(error));
+                    return;
+                }
+            };
+            let pending = RefCell::new(Some(sender));
+            let captured = RcBlock::new(move |_image: *mut CGImage, _error: *mut NSError| {
+                if let Some(sender) = pending.borrow_mut().take() {
+                    let _ = sender.send(Ok(()));
+                }
+            });
+            // SAFETY: `filter` and `config` are live objects, and the
+            // framework retains the completion block until it runs.
+            unsafe {
+                SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
+                    &filter,
+                    &config,
+                    Some(&captured),
+                );
+            }
+        },
+    );
+    // SAFETY: the framework retains the completion block until it runs.
+    unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&content_handler) };
+    futures::executor::block_on(bounded(receiver, CAPTURE_TIMEOUT))
+        .unwrap_or_else(|| {
+            panic!(
+                "the direct-capture request's capture did not complete within {CAPTURE_TIMEOUT:?}"
+            )
+        })
+        .expect("ScreenCaptureKit dropped the capture's completion handler")
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// The filter and configuration that capture the whole main display.
+///
+/// # Safety
+///
+/// `content` and `error` are the arguments of a `SCShareableContent`
+/// completion handler, valid for the duration of that callback.
+unsafe fn main_display_capture(
+    content: *mut SCShareableContent,
+    error: *mut NSError,
+) -> Result<(Retained<SCContentFilter>, Retained<SCStreamConfiguration>), String> {
+    // SAFETY: a null or live NSError, per the caller's contract.
+    if let Some(error) = unsafe { error.as_ref() } {
+        return Err(format!(
+            "list the displays to capture: {}",
+            error.localizedDescription()
+        ));
+    }
+    // SAFETY: a null or live SCShareableContent, per the caller's contract.
+    let content = unsafe { content.as_ref() }
+        .ok_or("ScreenCaptureKit listed no shareable content and no error")?;
+    let main = CGMainDisplayID();
+    // SAFETY: read-only accessors on live ScreenCaptureKit objects.
+    let display = unsafe { content.displays() }
+        .iter()
+        .find(|display| unsafe { display.displayID() } == main)
+        .ok_or_else(|| format!("ScreenCaptureKit lists no main display (id {main})"))?;
+    let no_windows = NSArray::<SCWindow>::new();
+    // SAFETY: `display` and the empty exclusion list are live objects; the
+    // configuration is a plain data object whose defaults suffice for an
+    // image nobody reads.
+    let capture = unsafe {
+        (
+            SCContentFilter::initWithDisplay_excludingWindows(
+                SCContentFilter::alloc(),
+                &display,
+                &no_windows,
+            ),
+            SCStreamConfiguration::new(),
+        )
+    };
+    Ok(capture)
 }
 
 // MARK: - App side

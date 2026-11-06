@@ -50,7 +50,20 @@ async-io.workspace = true
 async-process.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-objc2-foundation = { workspace = true, features = ["NSBundle", "NSString"] }
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSBundle",
+    "NSError",
+    "NSString",
+] }
+objc2-screen-capture-kit = { workspace = true, features = [
+    "SCScreenshotManager",
+    "SCShareableContent",
+    "SCStream",
+    "block2",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+] }
 objc2-application-services = { workspace = true, features = [
     "std",
     "HIServices",

@@ -8842,6 +8842,7 @@ dependencies = [
  "objc2-event-kit",
  "objc2-foundation 0.3.2",
  "objc2-photos",
+ "objc2-screen-capture-kit",
  "objc2-security",
  "serde",
  "serde_json",

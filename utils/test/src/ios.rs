@@ -92,7 +92,7 @@ pub fn run(args: IosArgs) -> Result<()> {
     let feature = harness_feature(&args.crate_path)?;
 
     match args.device {
-        None => run_on(&root, feature, &Simulator),
+        None => run_on(&root, feature, &Simulator::booted()?),
         Some(DeviceArgs {
             device,
             team,
@@ -412,15 +412,15 @@ trait Destination {
     fn report(&self) -> Result<String>;
 }
 
-/// The booted iOS simulator.
-struct Simulator;
+/// An iOS simulator as `simctl list` reports it.
+struct SimulatorDevice {
+    udid: String,
+    name: String,
+    state: String,
+}
 
-/// The `simctl` device selector for the booted simulator.
-const BOOTED: &str = "booted";
-
-/// The UDID of the booted simulator. `xcodebuild test` needs an unambiguous
-/// destination, so exactly one simulator may be booted.
-fn booted_simulator() -> Result<String> {
+/// Every simulator device `simctl` knows.
+fn simulators() -> Result<Vec<SimulatorDevice>> {
     let output = Command::new("xcrun")
         .args(["simctl", "list", "--json", "devices"])
         .output()
@@ -437,52 +437,86 @@ fn booted_simulator() -> Result<String> {
         .get("devices")
         .and_then(|devices| devices.as_object())
         .ok_or_else(|| eyre::eyre!("simctl list devices reported no devices"))?;
-    let mut booted = Vec::new();
+    let mut simulators = Vec::new();
     for runtime_devices in devices.values() {
         for device in runtime_devices.as_array().into_iter().flatten() {
-            if device.get("state").and_then(|state| state.as_str()) == Some("Booted")
-                && let Some(udid) = device.get("udid").and_then(|udid| udid.as_str())
-            {
-                booted.push((
-                    udid.to_owned(),
-                    device
-                        .get("name")
-                        .and_then(|name| name.as_str())
-                        .unwrap_or(udid)
-                        .to_owned(),
-                ));
+            let field = |key| device.get(key).and_then(|value| value.as_str());
+            if let (Some(udid), Some(state)) = (field("udid"), field("state")) {
+                simulators.push(SimulatorDevice {
+                    udid: udid.to_owned(),
+                    name: field("name").unwrap_or(udid).to_owned(),
+                    state: state.to_owned(),
+                });
             }
         }
     }
-    match booted.as_slice() {
-        [(udid, _)] => Ok(udid.clone()),
-        [] => eyre::bail!("no simulator is booted; boot one first"),
-        many => eyre::bail!(
-            "more than one simulator is booted ({}); keep exactly one booted",
-            many.iter()
-                .map(|(_, name)| name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    }
+    Ok(simulators)
 }
 
-/// The path of the harness app's data container on the booted simulator,
-/// while the app is installed.
-fn app_data_container() -> Result<PathBuf> {
-    let output = Command::new("xcrun")
-        .args(["simctl", "get_app_container", BOOTED, BUNDLE_ID, "data"])
-        .output()
-        .context("Failed to query the iOS app data container")?;
-    if !output.status.success() {
-        eyre::bail!(
-            "simctl get_app_container failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+/// The simulator the suite runs on, selected by UDID. `xcodebuild test` needs
+/// an unambiguous destination, so exactly one simulator is booted when the
+/// run starts.
+struct Simulator {
+    udid: String,
+}
+
+impl Simulator {
+    /// Selects the one simulator that is booted now, before the build starts.
+    fn booted() -> Result<Self> {
+        let booted: Vec<_> = simulators()?
+            .into_iter()
+            .filter(|device| device.state == "Booted")
+            .collect();
+        match booted.as_slice() {
+            [device] => Ok(Self {
+                udid: device.udid.clone(),
+            }),
+            [] => eyre::bail!("no simulator is booted; boot one first"),
+            many => eyre::bail!(
+                "more than one simulator is booted ({}); keep exactly one booted",
+                many.iter()
+                    .map(|device| device.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
     }
-    let container = String::from_utf8(output.stdout)
-        .context("iOS app data container path was not valid UTF-8")?;
-    Ok(PathBuf::from(container.trim()))
+
+    /// Fails when the selected simulator left the booted state after it was
+    /// selected, naming the state it is in now.
+    fn check_booted(&self) -> Result<()> {
+        let device = simulators()?
+            .into_iter()
+            .find(|device| device.udid == self.udid)
+            .ok_or_else(|| eyre::eyre!("simulator {} no longer exists", self.udid))?;
+        if device.state != "Booted" {
+            eyre::bail!(
+                "simulator {} ({}) was booted when the run started and is now {}",
+                device.name,
+                self.udid,
+                device.state
+            );
+        }
+        Ok(())
+    }
+
+    /// The path of the harness app's data container on the simulator, while
+    /// the app is installed.
+    fn app_data_container(&self) -> Result<PathBuf> {
+        let output = Command::new("xcrun")
+            .args(["simctl", "get_app_container", &self.udid, BUNDLE_ID, "data"])
+            .output()
+            .context("Failed to query the iOS app data container")?;
+        if !output.status.success() {
+            eyre::bail!(
+                "simctl get_app_container failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let container = String::from_utf8(output.stdout)
+            .context("iOS app data container path was not valid UTF-8")?;
+        Ok(PathBuf::from(container.trim()))
+    }
 }
 
 impl Destination for Simulator {
@@ -502,7 +536,8 @@ impl Destination for Simulator {
     }
 
     fn specifier(&self) -> Result<String> {
-        Ok(format!("platform=iOS Simulator,id={}", booted_simulator()?))
+        self.check_booted()?;
+        Ok(format!("platform=iOS Simulator,id={}", self.udid))
     }
 
     /// Grants the TCC permissions the harness can set without the system
@@ -515,9 +550,10 @@ impl Destination for Simulator {
     /// `test-without-building` replacing it. A stale report from an earlier
     /// run is removed so only this run's file can come back.
     fn prepare(&self, feature: &str, products: &TestProducts) -> Result<()> {
+        self.check_booted()?;
         let app = products.root.join("Products/WaterKitTest.app");
         let status = Command::new("xcrun")
-            .args(["simctl", "install", BOOTED])
+            .args(["simctl", "install", &self.udid])
             .arg(&app)
             .status()
             .context("Failed to install the harness app")?;
@@ -528,7 +564,7 @@ impl Destination for Simulator {
         if matches!(feature, "full" | "location" | "permission") {
             for service in ["location", "location-always"] {
                 let status = Command::new("xcrun")
-                    .args(["simctl", "privacy", BOOTED, "grant", service, BUNDLE_ID])
+                    .args(["simctl", "privacy", &self.udid, "grant", service, BUNDLE_ID])
                     .status()
                     .context("Failed to grant simulator privacy permission")?;
                 if !status.success() {
@@ -537,7 +573,7 @@ impl Destination for Simulator {
             }
 
             let status = Command::new("xcrun")
-                .args(["simctl", "location", BOOTED, "set", "37.3349,-122.0090"])
+                .args(["simctl", "location", &self.udid, "set", "37.3349,-122.0090"])
                 .status()
                 .context("Failed to set simulated location")?;
             if !status.success() {
@@ -545,7 +581,7 @@ impl Destination for Simulator {
             }
         }
 
-        if let Ok(container) = app_data_container() {
+        if let Ok(container) = self.app_data_container() {
             let _ = std::fs::remove_file(container.join(REPORT_PATH));
         }
         Ok(())
@@ -584,7 +620,7 @@ impl Destination for Simulator {
     }
 
     fn report(&self) -> Result<String> {
-        let report = app_data_container()?.join(REPORT_PATH);
+        let report = self.app_data_container()?.join(REPORT_PATH);
         std::fs::read_to_string(&report)
             .with_context(|| format!("The iOS test did not write {}", report.display()))
     }

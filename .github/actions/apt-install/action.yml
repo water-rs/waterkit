@@ -1,0 +1,72 @@
+name: Install apt packages from a cache
+description: >
+  Installs apt packages without depending on the Ubuntu mirror's speed. The
+  downloaded .deb files of the install (the packages and their missing
+  dependencies) are cached under a key built from the runner image version and
+  the package list, so a run with an unchanged set installs them with `dpkg`
+  and never contacts the mirror. A run that changes the set, or lands on a new
+  runner image, downloads them once under a bounded wait and fills the cache.
+  The apt timeouts in `.github/apt.conf` still bound each connection on that
+  path.
+inputs:
+  packages:
+    description: Space-separated apt package names.
+    required: true
+  options:
+    description: Extra `apt-get install` options, such as `--no-install-recommends`.
+    required: false
+    default: ''
+  download-timeout:
+    description: Seconds the download on a cache miss may take before the step fails.
+    required: false
+    default: '600'
+runs:
+  using: composite
+  steps:
+    # The runner image version is part of the key: the cached files are the
+    # ones missing from that image, so a different image needs a different set.
+    - name: Compute the cache key
+      id: key
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        OPTIONS: ${{ inputs.options }}
+      run: |
+        sorted=$(printf '%s\n' $PACKAGES | LC_ALL=C sort -u)
+        digest=$(printf '%s\n%s\n%s\n%s\n' "${ImageOS:?}" "${ImageVersion:?}" "$OPTIONS" "$sorted" | sha256sum | cut -c1-32)
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+        echo "dir=$HOME/.cache/waterkit-apt/$digest" >> "$GITHUB_OUTPUT"
+    - name: Restore the downloaded packages
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.key.outputs.dir }}
+        key: apt-${{ steps.key.outputs.digest }}
+    - name: Install from the cache
+      if: steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      env:
+        DIR: ${{ steps.key.outputs.dir }}
+      run: sudo dpkg -i "$DIR"/*.deb
+    # `apt-get clean` empties the archive first, so `--download-only` leaves
+    # exactly what this install needs there. The files are copied into the
+    # cache directory, which the cache action saves when the job succeeds.
+    - name: Download and install
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        OPTIONS: ${{ inputs.options }}
+        DIR: ${{ steps.key.outputs.dir }}
+        DOWNLOAD_TIMEOUT: ${{ inputs.download-timeout }}
+      run: |
+        apt_get="sudo apt-get -c $GITHUB_WORKSPACE/.github/apt.conf"
+        $apt_get update
+        $apt_get clean
+        # shellcheck disable=SC2086 # both variables are word lists by design
+        timeout "$DOWNLOAD_TIMEOUT" $apt_get install -y --download-only $OPTIONS $PACKAGES
+        mkdir -p "$DIR"
+        sudo cp /var/cache/apt/archives/*.deb "$DIR"/
+        sudo chown -R "$(id -u):$(id -g)" "$DIR"
+        # shellcheck disable=SC2086
+        $apt_get install -y $OPTIONS $PACKAGES

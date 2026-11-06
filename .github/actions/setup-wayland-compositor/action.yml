@@ -14,6 +14,11 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Install weston
+      uses: ./.github/actions/apt-install
+      with:
+        packages: weston
+        options: --no-install-recommends
     # Weston has no readiness handshake like Xvfb's `-displayfd`. It binds and
     # listens on its socket in one step, so the socket existing is the
     # readiness condition; the wait is bounded and checks weston is alive.
@@ -21,8 +26,6 @@ runs:
       id: weston
       shell: bash
       run: |
-        sudo apt-get -c "$GITHUB_WORKSPACE/.github/apt.conf" update
-        sudo apt-get -c "$GITHUB_WORKSPACE/.github/apt.conf" install -y --no-install-recommends weston
         runtime_dir="$RUNNER_TEMP/weston-runtime"
         mkdir -m 0700 "$runtime_dir"
         socket="$runtime_dir/wayland-waterkit"

@@ -540,11 +540,23 @@ mod mac {
             .unsignedIntValue()
     }
 
-    /// `AppKit`'s screen for `display`, once it lists one.
+    /// `AppKit`'s screen for `display`, once it lists one where
+    /// `CoreGraphics` arranges the display. A window the target process
+    /// placed from an earlier frame of the screen landed on the main display.
     fn appkit_screen(mtm: MainThreadMarker, display: u32) -> Option<Retained<NSScreen>> {
+        let bounds = CGDisplayBounds(display);
+        let main_height = CGDisplayBounds(CGMainDisplayID()).size.height;
+        // `AppKit`'s frames have a bottom-left origin on the main display.
+        let arranged = CGRect::new(
+            CGPoint::new(
+                bounds.origin.x,
+                main_height - bounds.origin.y - bounds.size.height,
+            ),
+            bounds.size,
+        );
         NSScreen::screens(mtm)
             .iter()
-            .find(|screen| screen_display(screen) == display)
+            .find(|screen| screen_display(screen) == display && screen.frame() == arranged)
     }
 
     /// Every screen `AppKit` lists, and the main display `CoreGraphics`
@@ -697,7 +709,8 @@ mod mac {
                 screen = appkit_screen(mtm, display);
                 screen.is_some()
             }),
-            "AppKit never listed display {display}: {}",
+            "AppKit never listed display {display} at {:?}: {}",
+            CGDisplayBounds(display),
             describe_screens(mtm)
         );
         let screen = screen.expect("the wait ends once the screen is listed");

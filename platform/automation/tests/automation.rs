@@ -813,6 +813,27 @@ mod mac {
         screen.expect("the wait ends once the screen is listed")
     }
 
+    /// Moves `window` to `offset` from the bottom-left corner of `display`
+    /// where it is now. macOS can move a display that just came online after
+    /// a process first sees it, and a window placed before the move stays at
+    /// its old global position, so a helper places its window again on every
+    /// turn of its wait for `WindowServer` to list it under the click point.
+    fn follow_display(mtm: MainThreadMarker, window: &NSWindow, display: u32, offset: CGPoint) {
+        if let Some(screen) = appkit_screen(mtm, display) {
+            let origin = screen.frame().origin;
+            window.setFrameOrigin(NSPoint::new(origin.x + offset.x, origin.y + offset.y));
+        }
+    }
+
+    /// Where [`open_window`] puts its window relative to the bottom-left
+    /// corner of a screen `height` points tall.
+    fn window_offset(height: f64) -> CGPoint {
+        CGPoint::new(
+            WINDOW_ORIGIN.x,
+            height - WINDOW_ORIGIN.y - WINDOW_SIZE.height,
+        )
+    }
+
     /// A window on `display` whose content view records what it receives,
     /// placed on `AppKit`'s screen for the display.
     fn open_window(
@@ -824,13 +845,7 @@ mod mac {
         let screen = wait_for_screen(mtm, display);
         // The screen's frame has a bottom-left origin; the window's top edge
         // sits `WINDOW_ORIGIN.y` below the screen's.
-        let frame = CGRect::new(
-            CGPoint::new(
-                WINDOW_ORIGIN.x,
-                screen.frame().size.height - WINDOW_ORIGIN.y - WINDOW_SIZE.height,
-            ),
-            WINDOW_SIZE,
-        );
+        let frame = CGRect::new(window_offset(screen.frame().size.height), WINDOW_SIZE);
         let window = KeyableWindow::new(mtm, frame, &screen);
         let recorder = Recorder::new(
             mtm,
@@ -991,8 +1006,10 @@ mod mac {
         let (window, _recorder) = open_window(mtm, display, false, true);
         let inspector = Input::new(display).expect("the target sees the virtual display");
         let number = window.number();
+        let offset = window_offset(CGDisplayBounds(display).size.height);
         assert!(
             pump_until(mtm, DELIVERY_DEADLINE, || {
+                follow_display(mtm, &window, display, offset);
                 listed_under(&inspector, display, number, click_point())
             }),
             "WindowServer never listed the target window on screen under {:?} of display {display} {:?}: {}; {}",
@@ -1063,6 +1080,7 @@ mod mac {
         let number = u32::try_from(window.windowNumber()).expect("window numbers are 32-bit");
         assert!(
             pump_until(mtm, DELIVERY_DEADLINE, || {
+                follow_display(mtm, &window, display, CGPoint::ZERO);
                 listed_under(&inspector, display, number, click_point())
             }),
             "WindowServer never listed the overlay window on screen under {:?} of display {display} {:?}: {}; {}",

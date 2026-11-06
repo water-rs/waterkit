@@ -1,8 +1,9 @@
 use core::fmt;
+use core::time::Duration;
 
 use keyboard_types::{Code, Modifiers};
 
-use crate::{DisplayWindows, Point};
+use crate::{DisplayWindows, FocusReport, Point};
 
 /// Failure creating a display or posting input.
 #[derive(Debug, Clone, thiserror::Error)]
@@ -67,6 +68,39 @@ pub enum Error {
     /// No application window is on the display to take key events.
     #[error("no application window can take key events on {0}")]
     NoKeyWindow(DisplayWindows),
+    /// The application owning the target window did not come to report
+    /// itself active with that window focused, so it would drop the input;
+    /// nothing but the activation and focus requests was sent.
+    #[error(
+        "pid {pid} did not make window {window} its focused window within {timeout:?}: it {report}"
+    )]
+    NotFocused {
+        /// The owning process.
+        pid: libc::pid_t,
+        /// The target window.
+        window: u32,
+        /// How long the application was given.
+        timeout: Duration,
+        /// What the application reported last.
+        report: FocusReport,
+    },
+    /// `WindowServer` did not route every posted event into the target
+    /// process; some of them may have arrived.
+    #[error(
+        "{routed} of {posted} events posted for window {window} reached pid {pid} within {timeout:?}"
+    )]
+    NotDelivered {
+        /// The target process.
+        pid: libc::pid_t,
+        /// The target window.
+        window: u32,
+        /// Events posted.
+        posted: usize,
+        /// Events that reached the process.
+        routed: usize,
+        /// How long they were given.
+        timeout: Duration,
+    },
     /// The key has no macOS virtual key code.
     #[error("key {0} has no macOS virtual key code")]
     UnmappableKey(Code),

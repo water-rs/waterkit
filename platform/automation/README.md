@@ -12,15 +12,18 @@ user's. macOS only; on every other platform the crate is empty.
 - `Input` posts typed events (`MouseDown`, `MouseUp`, `MouseMove`, `Scroll`,
   `KeyDown`, `KeyUp`, `Text`) to the application that owns the window under a
   point on one display, never through the HID event tap: the user's cursor
-  does not move and the user's front app keeps its focus. A press makes its
-  window the key window of its app without raising it; key events follow the
-  last press.
+  does not move and `WindowServer`'s front process stays the user's. Before a
+  press or a key event the target app is made to report itself active with
+  the target window focused, without raising it; key events follow the last
+  press. `post` returns once the target process has every event, and fails
+  when the app does not take focus or an event does not arrive within
+  `Input::confirm_timeout`.
 
 Posting to another process needs the Accessibility grant: request
 `Permission::Accessibility` through `waterkit-permission` first.
 
-The private `SkyLight` framework is opened at runtime and its functions
-resolved by name, so nothing links a private framework; a missing or changed
+The private `SkyLight` and `HIServices` functions are resolved by name at
+runtime, so nothing links a private framework or symbol; a missing or changed
 private API is an error at the call that needs it.
 
 ```rust,ignore

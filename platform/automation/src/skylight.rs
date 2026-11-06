@@ -1,69 +1,14 @@
-//! Runtime binding of the private `SkyLight` framework.
-//!
-//! Nothing links `SkyLight`: the framework is opened with `dlopen` and each
-//! function is resolved by name, so a library user needs no private-framework
-//! search path and a missing symbol is an [`Error::Unavailable`] at the call
-//! that needs it.
+//! The private `SkyLight` functions this crate calls, `WindowServer`'s client
+//! library, resolved at run time ([`Framework`]).
 
-use core::ffi::{CStr, c_void};
 use core::marker::PhantomData;
-use core::ptr::NonNull;
 
 use objc2_core_foundation::CGPoint;
 use objc2_core_graphics::{CGError, CGEvent};
 
 use crate::error::platform;
+use crate::framework::Framework;
 use crate::{Error, topology};
-
-const PATH: &CStr = c"/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight";
-
-/// A reference on the loaded `SkyLight` image, released on drop.
-#[derive(Debug)]
-pub struct SkyLight(NonNull<c_void>);
-
-// SAFETY: the handle is an opaque reference count on a loaded image; dyld's
-// `dlsym` and `dlclose` take it from any thread.
-unsafe impl Send for SkyLight {}
-// SAFETY: as above; nothing is reached through a shared handle but `dlsym`.
-unsafe impl Sync for SkyLight {}
-
-impl SkyLight {
-    pub fn open() -> Result<Self, Error> {
-        // SAFETY: `PATH` is NUL-terminated; `dlopen` has no other requirement.
-        let handle = unsafe { libc::dlopen(PATH.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
-        NonNull::new(handle)
-            .map(Self)
-            .ok_or(Error::Unavailable("SkyLight.framework"))
-    }
-
-    /// Resolves the function `name`.
-    ///
-    /// # Safety
-    ///
-    /// `F` must be the `unsafe extern "C" fn` pointer type of the symbol's
-    /// real signature, and the pointer must not be called after `self` drops.
-    unsafe fn function<F: Copy>(&self, name: &'static CStr) -> Result<F, Error> {
-        const { assert!(size_of::<F>() == size_of::<*mut c_void>()) };
-        // SAFETY: the handle is open and `name` is NUL-terminated.
-        let symbol = unsafe { libc::dlsym(self.0.as_ptr(), name.as_ptr()) };
-        if symbol.is_null() {
-            return Err(Error::Unavailable(
-                name.to_str().expect("symbol names are ASCII"),
-            ));
-        }
-        // SAFETY: the caller names the symbol's function pointer type, which
-        // has the size of a data pointer (checked above).
-        Ok(unsafe { core::mem::transmute_copy::<*mut c_void, F>(&symbol) })
-    }
-}
-
-impl Drop for SkyLight {
-    fn drop(&mut self) {
-        // SAFETY: the handle came from `dlopen` and is closed once.
-        let status = unsafe { libc::dlclose(self.0.as_ptr()) };
-        assert_eq!(status, 0, "dlclose of SkyLight failed");
-    }
-}
 
 type DisplayListFn = unsafe extern "C" fn(u32, *mut u32, *mut u32) -> CGError;
 
@@ -73,11 +18,11 @@ type DisplayListFn = unsafe extern "C" fn(u32, *mut u32, *mut u32) -> CGError;
 pub struct DisplayLists<'a> {
     registered: DisplayListFn,
     online: DisplayListFn,
-    _skylight: PhantomData<&'a SkyLight>,
+    _skylight: PhantomData<&'a Framework>,
 }
 
 impl<'a> DisplayLists<'a> {
-    pub fn resolve(skylight: &'a SkyLight) -> Result<Self, Error> {
+    pub fn resolve(skylight: &'a Framework) -> Result<Self, Error> {
         // SAFETY: both are `CGError (uint32_t max, CGDirectDisplayID *list,
         // uint32_t *count)`, used only while `skylight` lives.
         unsafe {
@@ -109,7 +54,7 @@ impl<'a> DisplayLists<'a> {
 
 /// The address `WindowServer` delivers a process's events to.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessSerialNumber {
     high: u32,
     low: u32,
@@ -139,12 +84,12 @@ pub struct EventSymbols {
     set_field: SetFieldFn,
     set_window_location: SetWindowLocationFn,
     // Declared last: the functions above stay loaded until it drops.
-    _skylight: SkyLight,
+    _skylight: Framework,
 }
 
 impl EventSymbols {
     pub fn resolve() -> Result<Self, Error> {
-        let skylight = SkyLight::open()?;
+        let skylight = Framework::skylight()?;
         // SAFETY: each type is the function's signature as `SkyLight`
         // exports it; the pointers live in `Self` beside the handle.
         unsafe {
@@ -165,8 +110,7 @@ impl EventSymbols {
     /// when its owner is no application: a connection without a process
     /// serial number, such as `WindowServer`'s own.
     pub fn application_psn(&self, window: u32) -> Result<Option<ProcessSerialNumber>, Error> {
-        // SAFETY: the function takes no arguments.
-        let connection = unsafe { (self.main_connection)() };
+        let connection = self.main_connection();
         let mut owner = 0_u32;
         // SAFETY: `owner` is a valid out pointer.
         let status = unsafe { (self.window_owner)(connection, window, &raw mut owner) };
@@ -182,6 +126,12 @@ impl EventSymbols {
             return Ok(None);
         }
         Ok(Some(psn))
+    }
+
+    /// This process's `WindowServer` connection.
+    pub fn main_connection(&self) -> u32 {
+        // SAFETY: the function takes no arguments.
+        unsafe { (self.main_connection)() }
     }
 
     /// Queues `record` in the event queue of the process `psn` names.
@@ -226,7 +176,7 @@ mod tests {
     /// up symbols creates, posts and shows nothing.
     #[test]
     fn every_function_resolves() {
-        let skylight = SkyLight::open().expect("SkyLight opens");
+        let skylight = Framework::skylight().expect("SkyLight opens");
         let lists = DisplayLists::resolve(&skylight).expect("the display lists resolve");
         assert!(
             !lists

@@ -16,7 +16,8 @@
 //!
 //! # Permissions
 //!
-//! Posting events to another process needs the Accessibility grant
+//! Posting events to another process, reading what it reports about its
+//! focus and tapping the events routed to it need the Accessibility grant
 //! (`Permission::Accessibility`). Request it with
 //! `waterkit_permission::request(Permission::Accessibility)` before posting.
 //!
@@ -36,6 +37,11 @@
 //! which logs through `tracing`, runs on the main thread too.
 //!
 //! [`Input`] holds no thread-bound state and may be used from any thread.
+//! While [`Input::post`] waits for its input to arrive, it runs the calling
+//! thread's run loop in a mode of its own, so the caller's sources do not
+//! run meanwhile. Input into a window of the calling process must come from
+//! a thread other than the one running that window's event loop, which has
+//! to answer the wait.
 //!
 //! # Display creation
 //!
@@ -49,8 +55,9 @@
 //!
 //! # Private API binding
 //!
-//! Nothing links a private framework. `SkyLight` is opened with `dlopen` and
-//! every function is resolved with `dlsym`; the `CGVirtualDisplay` and
+//! Nothing links a private framework or symbol. `SkyLight` and `HIServices`
+//! are opened with `dlopen` and every private function is resolved with
+//! `dlsym`; the `CGVirtualDisplay` and
 //! `SLWindowMirroringManager` classes are looked up through the Objective-C
 //! runtime, and `extend:` is called only after its type encoding matches the
 //! one the call is written against. A missing symbol, class or selector fails
@@ -60,26 +67,47 @@
 //! # Delivery
 //!
 //! A press goes to the topmost on-screen window under its point that an
-//! application owns, and makes that window the key window of its app without
-//! raising it or activating the app: the focus record `SLPSPostEventRecordTo`
-//! takes. Moves and the release while a button is held go to the same window,
-//! as drags. Key events go to the window the last press landed on; before
-//! any press, to the frontmost application window on the display, which is
-//! then focused the same way. The events themselves are posted to the
-//! owning process with `SLEventPostToPid`, stamped with the target window and
-//! its window-local location. When no window takes an event, the error
+//! application owns. Moves and the release while a button is held go to the
+//! same window, as drags. Key events go to the window the last press landed
+//! on; before any press, to the frontmost application window of the normal
+//! window level on the display. When no window takes an event, the error
 //! carries every window that intersects the display ([`DisplayWindows`]);
 //! [`Input::windows`] lists them all.
+//!
+//! An application that does not believe it is active drops the key events
+//! posted to it, and its views refuse a first click they do not accept. So
+//! before a press or a key event, the target application is made to report
+//! itself active with the target window focused, without raising the window
+//! or changing `WindowServer`'s front process, which stays the user's: an
+//! inactive application gets the application-activated event `AppKit` builds
+//! for a real activation, and a window that is not focused gets the focus
+//! record and the make-key record pair `SLPSPostEventRecordTo` takes.
+//! [`Input::post`] then waits, on the application's Accessibility
+//! notifications, until it reports both (`AXFrontmost`, `AXFocusedWindow`),
+//! and fails with [`Error::NotFocused`] when it does not in time.
+//!
+//! The events themselves are posted to the owning process with
+//! `SLEventPostToPid`, stamped with the target window and its window-local
+//! location. For the length of the call, an event tap on that process sees
+//! each of them arrive; [`Input::post`] returns once all have, and fails with
+//! [`Error::NotDelivered`] when one has not in time. Both waits end after
+//! [`Input::confirm_timeout`].
 
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 
+#[cfg(target_os = "macos")]
+mod accessibility;
+#[cfg(target_os = "macos")]
+mod delivery;
 #[cfg(target_os = "macos")]
 mod display;
 #[cfg(target_os = "macos")]
 mod error;
 #[cfg(target_os = "macos")]
 mod event;
+#[cfg(target_os = "macos")]
+mod framework;
 #[cfg(target_os = "macos")]
 mod input;
 #[cfg(target_os = "macos")]
@@ -91,6 +119,8 @@ mod topology;
 #[cfg(target_os = "macos")]
 mod window;
 
+#[cfg(target_os = "macos")]
+pub use accessibility::FocusReport;
 #[cfg(target_os = "macos")]
 pub use display::{BackingScale, VirtualDisplay, VirtualDisplayConfig};
 #[cfg(target_os = "macos")]

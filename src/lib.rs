@@ -28,6 +28,10 @@
 #[doc(inline)]
 pub use waterkit_audio as audio;
 
+#[cfg(feature = "automation")]
+#[doc(inline)]
+pub use waterkit_automation as automation;
+
 #[cfg(feature = "biometric")]
 #[doc(inline)]
 pub use waterkit_biometric as biometric;

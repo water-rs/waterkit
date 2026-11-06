@@ -8020,6 +8020,7 @@ version = "0.2.0"
 dependencies = [
  "toml",
  "waterkit-audio",
+ "waterkit-automation",
  "waterkit-background",
  "waterkit-biometric",
  "waterkit-bluetooth",
@@ -8108,6 +8109,26 @@ dependencies = [
  "futures",
  "futures-timer",
  "waterkit-audio",
+]
+
+[[package]]
+name = "waterkit-automation"
+version = "0.2.0"
+dependencies = [
+ "block2 0.6.2",
+ "dispatch2",
+ "keyboard-types",
+ "libc",
+ "libtest-mimic",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "waterkit-core",
 ]
 
 [[package]]

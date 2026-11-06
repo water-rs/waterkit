@@ -47,11 +47,13 @@ mod mac {
     use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
     use objc2_app_kit::{
         NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent, NSEventMask,
-        NSView, NSWindow, NSWindowStyleMask,
+        NSScreen, NSView, NSWindow, NSWindowStyleMask,
     };
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
     use objc2_core_graphics::{CGDisplayBounds, CGEvent, CGMainDisplayID};
-    use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSProcessInfo};
+    use objc2_foundation::{
+        NSDate, NSDefaultRunLoopMode, NSNumber, NSPoint, NSProcessInfo, ns_string,
+    };
     use waterkit_automation::{
         Code, Error, Input, KeyDown, KeyUp, MouseButton, MouseDown, MouseUp, Point, Text,
         VirtualDisplay, VirtualDisplayConfig,
@@ -135,8 +137,8 @@ mod mac {
     }
 
     define_class!(
-        /// A borderless window, which `AppKit` keeps where it is put even on a
-        /// display it has not listed yet, that can still become key.
+        /// A borderless window, which `AppKit` keeps where it is put, that can
+        /// still become key.
         #[unsafe(super(NSWindow))]
         #[thread_kind = MainThreadOnly]
         #[name = "WaterkitAutomationTestWindow"]
@@ -151,17 +153,20 @@ mod mac {
     );
 
     impl KeyableWindow {
-        fn new(mtm: MainThreadMarker, frame: CGRect) -> Retained<Self> {
+        /// A window whose content rect is `frame`, relative to the
+        /// bottom-left corner of `screen`.
+        fn new(mtm: MainThreadMarker, frame: CGRect, screen: &NSScreen) -> Retained<Self> {
             let this = Self::alloc(mtm).set_ivars(());
-            // SAFETY: the designated initializer, with a valid style and
-            // backing.
+            // SAFETY: an initializer of NSWindow, with a valid style, backing
+            // and screen.
             let window: Retained<Self> = unsafe {
                 msg_send![
                     super(this),
                     initWithContentRect: frame,
                     styleMask: NSWindowStyleMask::Borderless,
                     backing: NSBackingStoreType::Buffered,
-                    defer: false
+                    defer: false,
+                    screen: screen
                 ]
             };
             // SAFETY: the test owns the window through `Retained`; closing it
@@ -208,19 +213,62 @@ mod mac {
         true
     }
 
-    /// The window's content rect in `AppKit` coordinates, whose origin is the
-    /// bottom-left of the main display.
-    fn appkit_frame(display: u32) -> CGRect {
-        let bounds = CGDisplayBounds(display);
-        let main_height = CGDisplayBounds(CGMainDisplayID()).size.height;
-        let top = bounds.origin.y + WINDOW_ORIGIN.y;
-        CGRect::new(
-            CGPoint::new(
-                bounds.origin.x + WINDOW_ORIGIN.x,
-                main_height - top - WINDOW_SIZE.height,
-            ),
-            WINDOW_SIZE,
+    /// The display `AppKit` shows `screen` on.
+    fn screen_display(screen: &NSScreen) -> u32 {
+        screen
+            .deviceDescription()
+            .objectForKey(ns_string!("NSScreenNumber"))
+            .expect("every screen carries its display number")
+            .downcast::<NSNumber>()
+            .expect("the display number is a number")
+            .unsignedIntValue()
+    }
+
+    /// `AppKit`'s screen for `display`, once it lists one.
+    fn appkit_screen(mtm: MainThreadMarker, display: u32) -> Option<Retained<NSScreen>> {
+        NSScreen::screens(mtm)
+            .iter()
+            .find(|screen| screen_display(screen) == display)
+    }
+
+    /// Every screen `AppKit` lists, and the main display `CoreGraphics`
+    /// reports.
+    fn describe_screens(mtm: MainThreadMarker) -> String {
+        let screens: Vec<String> = NSScreen::screens(mtm)
+            .iter()
+            .map(|screen| format!("display {} {:?}", screen_display(&screen), screen.frame()))
+            .collect();
+        let main = CGMainDisplayID();
+        format!(
+            "AppKit screens (bottom-left origin): [{}]; CoreGraphics main display {main} {:?}",
+            screens.join(", "),
+            CGDisplayBounds(main)
         )
+    }
+
+    /// Where `AppKit` and `WindowServer` have the test window.
+    fn describe_window(window: &KeyableWindow, input: &Input) -> String {
+        let number = u32::try_from(window.windowNumber()).expect("window numbers are 32-bit");
+        let listed = input
+            .windows()
+            .expect("the window list reads")
+            .into_iter()
+            .find(|listed| listed.id() == number)
+            .map_or_else(|| "not at all".to_owned(), |listed| listed.to_string());
+        format!(
+            "test window {number}: AppKit frame {:?} on display {:?}, visible {}, occlusion {:?}; WindowServer lists it as {listed}",
+            window.frame(),
+            window.screen().map(|screen| screen_display(&screen)),
+            window.isVisible(),
+            window.occlusionState(),
+        )
+    }
+
+    fn outcome(result: &Result<(), Error>) -> String {
+        match result {
+            Ok(()) => "posted".to_owned(),
+            Err(error) => error.to_string(),
+        }
     }
 
     /// A 1280x800-point display at 2x with a serial the system has not seen.
@@ -246,12 +294,33 @@ mod mac {
         display
     }
 
-    /// A window on `display` whose content view records what it receives.
+    /// A window on `display` whose content view records what it receives,
+    /// placed on `AppKit`'s screen for the display.
     fn open_window(
         mtm: MainThreadMarker,
         display: &VirtualDisplay,
     ) -> (Retained<KeyableWindow>, Retained<Recorder>) {
-        let window = KeyableWindow::new(mtm, appkit_frame(display.id()));
+        let mut screen = None;
+        assert!(
+            pump_until(mtm, DELIVERY_DEADLINE, || {
+                screen = appkit_screen(mtm, display.id());
+                screen.is_some()
+            }),
+            "AppKit never listed display {}: {}",
+            display.id(),
+            describe_screens(mtm)
+        );
+        let screen = screen.expect("the wait ends once the screen is listed");
+        // The screen's frame has a bottom-left origin; the window's top edge
+        // sits `WINDOW_ORIGIN.y` below the screen's.
+        let frame = CGRect::new(
+            CGPoint::new(
+                WINDOW_ORIGIN.x,
+                screen.frame().size.height - WINDOW_ORIGIN.y - WINDOW_SIZE.height,
+            ),
+            WINDOW_SIZE,
+        );
+        let window = KeyableWindow::new(mtm, frame, &screen);
         let recorder = Recorder::new(mtm, CGRect::new(CGPoint::ZERO, WINDOW_SIZE));
         window.setContentView(Some(&recorder));
         window.makeFirstResponder(Some(&recorder));
@@ -314,7 +383,10 @@ mod mac {
         });
         assert!(
             listed,
-            "the test window was never found under {at}; the last press gave {pressed:?}"
+            "the test window was never found under {at}; the last press gave: {}\n{}\n{}",
+            outcome(&pressed),
+            describe_window(&window, &input),
+            describe_screens(mtm)
         );
         pressed.expect("the press is posted");
         let observed = || recorder.ivars().borrow();

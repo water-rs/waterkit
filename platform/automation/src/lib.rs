@@ -67,7 +67,9 @@
 //! any press, to the frontmost application window on the display, which is
 //! then focused the same way. The events themselves are posted to the
 //! owning process with `SLEventPostToPid`, stamped with the target window and
-//! its window-local location.
+//! its window-local location. When no window takes an event, the error
+//! carries every window that intersects the display ([`DisplayWindows`]);
+//! [`Input::windows`] lists them all.
 
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
@@ -86,6 +88,8 @@ mod keycode;
 mod skylight;
 #[cfg(target_os = "macos")]
 mod topology;
+#[cfg(target_os = "macos")]
+mod window;
 
 #[cfg(target_os = "macos")]
 pub use display::{BackingScale, VirtualDisplay, VirtualDisplayConfig};
@@ -103,3 +107,5 @@ pub use keyboard_types::{Code, Modifiers};
 pub use objc2::MainThreadMarker;
 #[cfg(target_os = "macos")]
 pub use waterkit_core::RefreshRate;
+#[cfg(target_os = "macos")]
+pub use window::{DisplayWindows, ListedWindow, Rect};

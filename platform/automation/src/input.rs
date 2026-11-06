@@ -1,19 +1,16 @@
 //! Cursor-free input into windows on one display.
 
-use objc2_core_foundation::{
-    CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGPoint, CGRect,
-};
+use objc2_core_foundation::{CFRetained, CGPoint, CGRect};
 use objc2_core_graphics::{
     CGDirectDisplayID, CGDisplayBounds, CGEvent, CGEventFlags, CGEventType, CGKeyCode,
-    CGMouseButton, CGRectMakeWithDictionaryRepresentation, CGScrollEventUnit,
-    CGWindowListCopyWindowInfo, CGWindowListOption, kCGNullWindowID, kCGWindowAlpha,
-    kCGWindowBounds, kCGWindowNumber, kCGWindowOwnerPID,
+    CGMouseButton, CGScrollEventUnit, CGWindowListOption, kCGNullWindowID,
 };
 use objc2_foundation::NSProcessInfo;
 
 use crate::keycode::{event_flags, virtual_key};
 use crate::skylight::{EventSymbols, ProcessSerialNumber, RECORD_LEN};
 use crate::topology;
+use crate::window::{self, DisplayWindows, ListedWindow, Rect, Window, contains, intersects};
 use crate::{
     Error, InputEvent, KeyDown, KeyUp, MouseButton, MouseDown, MouseMove, MouseUp, Point, Scroll,
     Text,
@@ -68,14 +65,6 @@ struct Held {
     target: Target,
 }
 
-/// One on-screen window, as `CoreGraphics` lists it.
-#[derive(Debug, Clone, Copy)]
-struct Window {
-    id: u32,
-    pid: libc::pid_t,
-    bounds: CGRect,
-}
-
 impl Input {
     /// Input into the windows of the display `display`.
     ///
@@ -105,11 +94,46 @@ impl Input {
     ///   the display;
     /// - [`Error::NoWindow`] when no application window is under it;
     /// - [`Error::NoKeyWindow`] when a key event has no window to go to;
+    ///   both carry every window that intersects the display;
     /// - [`Error::UnmappableKey`] or [`Error::UnmappableModifiers`] when a key
     ///   or modifier has no macOS equivalent;
     /// - [`Error::Platform`] when `CoreGraphics` or `SkyLight` fails a call.
     pub fn post(&mut self, event: impl InputEvent) -> Result<(), Error> {
         event.deliver(self)
+    }
+
+    /// Every window `WindowServer` lists, on any display and on screen or
+    /// not, front to back.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Platform`] when `CoreGraphics` or `SkyLight` fails a call.
+    pub fn windows(&self) -> Result<Vec<ListedWindow>, Error> {
+        window::list(CGWindowListOption::OptionAll, kCGNullWindowID)?
+            .iter()
+            .map(|window| self.listed(window))
+            .collect()
+    }
+
+    fn listed(&self, window: &Window) -> Result<ListedWindow, Error> {
+        let application = self.symbols.application_psn(window.id)?.is_some();
+        Ok(window.listed(application))
+    }
+
+    /// The windows that intersect the display, on screen or not, for an
+    /// error that found none there to take an event.
+    fn display_windows(&self) -> Result<DisplayWindows, Error> {
+        let bounds = CGDisplayBounds(self.display);
+        let windows = window::list(CGWindowListOption::OptionAll, kCGNullWindowID)?
+            .iter()
+            .filter(|window| intersects(window.bounds, bounds))
+            .map(|window| self.listed(window))
+            .collect::<Result<_, _>>()?;
+        Ok(DisplayWindows::new(
+            self.display,
+            Rect::from_cg(bounds),
+            windows,
+        ))
     }
 
     pub(crate) fn mouse_down(&mut self, event: MouseDown) -> Result<(), Error> {
@@ -246,15 +270,15 @@ impl Input {
     fn window_at(&self, at: Point, point: CGPoint) -> Result<(Window, Target), Error> {
         for window in on_screen_windows()? {
             if contains(window.bounds, point)
-                && let Some(target) = self.application_target(window)?
+                && let Some(target) = self.application_target(&window)?
             {
                 return Ok((window, target));
             }
         }
         tracing::debug!(display = self.display, %at, "no application window under the point");
         Err(Error::NoWindow {
-            display: self.display,
             at,
+            windows: self.display_windows()?,
         })
     }
 
@@ -267,19 +291,19 @@ impl Input {
         let display = CGDisplayBounds(self.display);
         for window in on_screen_windows()? {
             if intersects(window.bounds, display)
-                && let Some(target) = self.application_target(window)?
+                && let Some(target) = self.application_target(&window)?
             {
                 self.focus(target)?;
                 return Ok(target);
             }
         }
-        Err(Error::NoKeyWindow(self.display))
+        Err(Error::NoKeyWindow(self.display_windows()?))
     }
 
     /// `window` as a delivery target, when an application owns it: its
     /// owner's connection has a process serial number. `WindowServer`'s own
     /// windows have none.
-    fn application_target(&self, window: Window) -> Result<Option<Target>, Error> {
+    fn application_target(&self, window: &Window) -> Result<Option<Target>, Error> {
         Ok(self.symbols.application_psn(window.id)?.map(|psn| Target {
             pid: window.pid,
             psn,
@@ -415,91 +439,23 @@ const fn drag_type(button: MouseButton) -> CGEventType {
     }
 }
 
-fn contains(rect: CGRect, point: CGPoint) -> bool {
-    (rect.origin.x..rect.origin.x + rect.size.width).contains(&point.x)
-        && (rect.origin.y..rect.origin.y + rect.size.height).contains(&point.y)
-}
-
-fn intersects(a: CGRect, b: CGRect) -> bool {
-    a.origin.x < b.origin.x + b.size.width
-        && b.origin.x < a.origin.x + a.size.width
-        && a.origin.y < b.origin.y + b.size.height
-        && b.origin.y < a.origin.y + a.size.height
-}
-
 /// The on-screen windows with any opacity, front to back.
 fn on_screen_windows() -> Result<Vec<Window>, Error> {
-    window_list(
+    let mut windows = window::list(
         CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements,
         kCGNullWindowID,
-    )
+    )?;
+    windows.retain(|window| window.alpha > 0.0);
+    Ok(windows)
 }
 
 /// The current bounds of `window`.
 fn window_bounds(window: u32) -> Result<CGRect, Error> {
-    window_list(CGWindowListOption::OptionIncludingWindow, window)?
+    window::list(CGWindowListOption::OptionIncludingWindow, window)?
         .into_iter()
         .find(|listed| listed.id == window)
         .map(|listed| listed.bounds)
         .ok_or_else(|| Error::Platform(format!("window {window} is no longer listed")))
-}
-
-fn window_list(option: CGWindowListOption, relative_to: u32) -> Result<Vec<Window>, Error> {
-    let list = CGWindowListCopyWindowInfo(option, relative_to)
-        .ok_or_else(|| null_event("CGWindowListCopyWindowInfo"))?;
-    // SAFETY: the list holds one dictionary per window, keyed by strings.
-    let list: &CFArray<CFDictionary<CFString, CFType>> = unsafe { list.cast_unchecked() };
-    // SAFETY: the keys are immutable constants `CoreGraphics` exports.
-    let (number, owner, bounds, alpha) = unsafe {
-        (
-            kCGWindowNumber,
-            kCGWindowOwnerPID,
-            kCGWindowBounds,
-            kCGWindowAlpha,
-        )
-    };
-    let mut windows = Vec::with_capacity(list.len());
-    for info in list {
-        let number = info
-            .get(number)
-            .and_then(|value| value.downcast::<CFNumber>().ok());
-        let owner = info
-            .get(owner)
-            .and_then(|value| value.downcast::<CFNumber>().ok());
-        let alpha = info
-            .get(alpha)
-            .and_then(|value| value.downcast::<CFNumber>().ok());
-        let bounds = info
-            .get(bounds)
-            .and_then(|value| value.downcast::<CFDictionary>().ok());
-        // Every listed window carries these keys (`CGWindow.h`).
-        let (Some(id), Some(pid), Some(alpha), Some(bounds)) = (
-            number.and_then(|number| number.as_i64()),
-            owner.and_then(|owner| owner.as_i32()),
-            alpha.and_then(|alpha| alpha.as_f64()),
-            bounds,
-        ) else {
-            return Err(Error::Platform(
-                "CGWindowListCopyWindowInfo listed a window without its required keys".to_owned(),
-            ));
-        };
-        if alpha <= 0.0 {
-            continue;
-        }
-        let mut rect = CGRect::default();
-        // SAFETY: `rect` is a valid out pointer.
-        if !unsafe { CGRectMakeWithDictionaryRepresentation(Some(&bounds), &raw mut rect) } {
-            return Err(Error::Platform(format!("window {id} has malformed bounds")));
-        }
-        let id = u32::try_from(id)
-            .map_err(|_| Error::Platform(format!("window number {id} is out of range")))?;
-        windows.push(Window {
-            id,
-            pid,
-            bounds: rect,
-        });
-    }
-    Ok(windows)
 }
 
 /// Kinds of the record pair that makes a window its application's key window.
@@ -551,8 +507,6 @@ fn utf16_chunks(text: &str) -> Vec<Vec<u16>> {
 
 #[cfg(test)]
 mod tests {
-    use objc2_core_foundation::CGSize;
-
     use super::*;
 
     #[test]
@@ -592,18 +546,5 @@ mod tests {
             String::from_utf16(&chunks[1]).ok().as_deref(),
             Some("\u{1F600}")
         );
-    }
-
-    fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
-        CGRect::new(CGPoint::new(x, y), CGSize::new(width, height))
-    }
-
-    #[test]
-    fn rectangles_are_half_open() {
-        let window = rect(10.0, 20.0, 100.0, 50.0);
-        assert!(contains(window, CGPoint::new(10.0, 20.0)));
-        assert!(!contains(window, CGPoint::new(110.0, 20.0)));
-        assert!(intersects(window, rect(109.0, 69.0, 5.0, 5.0)));
-        assert!(!intersects(window, rect(110.0, 20.0, 5.0, 5.0)));
     }
 }

@@ -2,7 +2,7 @@ use core::fmt;
 
 use keyboard_types::{Code, Modifiers};
 
-use crate::Point;
+use crate::{DisplayWindows, Point};
 
 /// Failure creating a display or posting input.
 #[derive(Debug, Clone, thiserror::Error)]
@@ -57,16 +57,16 @@ pub enum Error {
         at: Point,
     },
     /// No application window is under the point.
-    #[error("no application window is at {at} on display {display}")]
+    #[error("no application window is at {at} on {windows}")]
     NoWindow {
-        /// The display.
-        display: u32,
         /// The point, in the display's points.
         at: Point,
+        /// The display and every window that intersected it.
+        windows: DisplayWindows,
     },
     /// No application window is on the display to take key events.
-    #[error("no application window on display {0} can take key events")]
-    NoKeyWindow(u32),
+    #[error("no application window can take key events on {0}")]
+    NoKeyWindow(DisplayWindows),
     /// The key has no macOS virtual key code.
     #[error("key {0} has no macOS virtual key code")]
     UnmappableKey(Code),

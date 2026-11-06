@@ -785,8 +785,11 @@ mod mac {
             pump_until(mtm, DELIVERY_DEADLINE, || {
                 listed_under(&inspector, display, number, click_point())
             }),
-            "WindowServer never listed the target window on screen: {}",
-            describe_listed(&inspector, number)
+            "WindowServer never listed the target window on screen under {:?} of display {display} {:?}: {}; {}",
+            click_point(),
+            CGDisplayBounds(display),
+            describe_window(&window, &inspector),
+            describe_screens(mtm)
         );
         write_report(&Report::Ready {
             pid: std::process::id(),

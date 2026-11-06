@@ -1,0 +1,49 @@
+[package]
+name = "waterkit-automation"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Virtual displays and cursor-free input for desktop automation"
+keywords = ["automation", "virtual-display", "input", "macos"]
+categories = ["os", "gui"]
+
+[lints]
+workspace = true
+
+# The whole API is macOS-only; on every other target the crate is empty.
+[target.'cfg(target_os = "macos")'.dependencies]
+waterkit-core.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+keyboard-types.workspace = true
+libc = "0.2"
+block2.workspace = true
+dispatch2.workspace = true
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSArray", "NSProcessInfo", "NSString", "NSValue",
+] }
+objc2-core-foundation = { workspace = true, features = [
+    "CFArray", "CFCGTypes", "CFDate", "CFDictionary", "CFNumber", "CFRunLoop", "CFString",
+] }
+objc2-core-graphics = { workspace = true, features = [
+    "CGDirectDisplay", "CGDisplayConfiguration", "CGError", "CGEvent", "CGEventTypes",
+    "CGGeometry", "CGRemoteOperation", "CGWindow", "libc",
+] }
+
+[dev-dependencies]
+# The automation test runs its own harness on every target.
+libtest-mimic = "0.8"
+
+# The automation test opens a window on the virtual display it creates, and
+# prints the crate's logs.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-app-kit.workspace = true
+tracing-subscriber.workspace = true
+
+[[test]]
+name = "automation"
+harness = false

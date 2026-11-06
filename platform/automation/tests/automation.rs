@@ -757,22 +757,24 @@ mod mac {
             })
     }
 
-    /// The frontmost visible application window `WindowServer` lists on
-    /// screen under `at` on `display`: where a press picked by window bounds
-    /// alone would go.
-    fn frontmost_listed_under(inspector: &Input, display: u32, at: Point) -> Option<u32> {
+    /// The layer of `number` when `WindowServer` lists it as a visible
+    /// application window on screen under `at` on `display`. The full list
+    /// is not in front-to-back order, so a window's layer is what puts it in
+    /// front of another.
+    fn layer_under(inspector: &Input, display: u32, number: u32, at: Point) -> Option<i32> {
         let point = global(display, at);
         inspector
             .windows()
             .expect("the window list reads")
             .iter()
             .find(|listed| {
-                listed.on_screen()
+                listed.id() == number
+                    && listed.on_screen()
                     && listed.application()
                     && listed.alpha() > 0.0
                     && holds(listed.bounds(), point)
             })
-            .map(ListedWindow::id)
+            .map(ListedWindow::layer)
     }
 
     /// A 1280x800-point display at 2x with a serial the system has not seen.
@@ -1341,12 +1343,13 @@ mod mac {
         let cursor_before = cursor();
         let mut input = open_input(display.id());
         let at = click_point();
-        let frontmost = frontmost_listed_under(&input, display.id(), at);
-        assert_eq!(
-            frontmost,
-            Some(overlay.window),
-            "the overlay window {} is not the frontmost application window WindowServer lists under {at}, so the press would not pass it: the overlay is listed as {}; {}",
+        let overlay_layer = layer_under(&input, display.id(), overlay.window, at);
+        let target_layer = layer_under(&input, display.id(), target.window, at);
+        assert!(
+            matches!((overlay_layer, target_layer), (Some(over), Some(under)) if over > under),
+            "the overlay window {} is not listed under {at} above the target window {} (layers {overlay_layer:?} over {target_layer:?}), so the press would not pass it: the overlay is listed as {}; {}",
             overlay.window,
+            target.window,
             describe_listed(&input, overlay.window),
             target.describe(mtm, &input)
         );

@@ -28,6 +28,9 @@ use objc2_photos::{PHAuthorizationStatus, PHPhotoLibrary};
 
 use crate::{Permission, PermissionError, PermissionStatus};
 
+#[cfg(target_os = "macos")]
+pub mod grants;
+
 /// The subset of [`Permission`] that has an Apple authorization API; kept
 /// as one internal enum so [`check`] and [`request`] share the mapping.
 #[derive(Clone, Copy, Debug)]
@@ -444,6 +447,10 @@ impl LocationPermissionRequest {
 /// returns a typed error.
 ///
 pub async fn check(permission: Permission) -> PermissionStatus {
+    #[cfg(target_os = "macos")]
+    if let Some(grant) = crate::helper::Grant::from_permission(permission) {
+        return grants::check(grant).await;
+    }
     let Some(permission) = permission_to_apple(permission) else {
         return PermissionStatus::NotDetermined;
     };
@@ -469,6 +476,10 @@ pub async fn check(permission: Permission) -> PermissionStatus {
 /// Apple mapping, and [`PermissionError::Platform`] when the system drops
 /// the completion handler without answering.
 pub async fn request(permission: Permission) -> Result<PermissionStatus, PermissionError> {
+    #[cfg(target_os = "macos")]
+    if let Some(grant) = crate::helper::Grant::from_permission(permission) {
+        return grants::request(grant).await;
+    }
     let apple_permission = permission_to_apple(permission).ok_or(PermissionError::Unsupported)?;
     let (sender, receiver) = oneshot::channel();
     match apple_permission {

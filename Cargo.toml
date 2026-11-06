@@ -245,6 +245,8 @@ objc2-photos = { version = "0.3", default-features = false }
 dispatch2 = "0.3"
 objc2-core-media = "0.3"
 objc2-app-kit = "0.3"
+objc2-application-services = { version = "0.3", default-features = false }
+objc2-security = { version = "0.3", default-features = false }
 objc2-authentication-services = { version = "0.3", default-features = false }
 objc2-background-tasks = { version = "0.3", default-features = false }
 # W3C KeyboardEvent key/modifier vocabulary.

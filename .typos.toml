@@ -27,3 +27,5 @@ FALT = "FALT"
 # Windows.Services.Store spells the variant `StoreConsumableStatus::InsufficentQuantity`;
 # matching on it needs the platform spelling.
 Insufficent = "Insufficent"
+# macOS's ReplayKit daemon, which owns the screen recording grant.
+replayd = "replayd"

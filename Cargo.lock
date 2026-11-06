@@ -4573,6 +4573,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-application-services"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69282c2b5bc58fba07cb9de2113619532eb551e98efe3d8d695509ef45fbd53b"
+dependencies = [
+ "bitflags 2.13.2",
+ "objc2-core-foundation",
+]
+
+[[package]]
 name = "objc2-audio-toolbox"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8682,19 +8692,29 @@ name = "waterkit-permission"
 version = "0.2.0"
 dependencies = [
  "async-channel",
+ "async-io",
+ "async-process",
  "block2 0.6.2",
  "dispatch2",
  "futures",
  "jni",
  "js-sys",
+ "libtest-mimic",
  "ndk-context",
  "objc2 0.6.5",
+ "objc2-application-services",
  "objc2-av-foundation",
  "objc2-contacts 0.3.2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-core-location 0.3.2",
  "objc2-event-kit",
  "objc2-foundation 0.3.2",
  "objc2-photos",
+ "objc2-screen-capture-kit",
+ "objc2-security",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "waterkit-build",

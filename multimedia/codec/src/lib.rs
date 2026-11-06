@@ -66,8 +66,6 @@
 ))]
 mod bitstream;
 mod color;
-// The VA-API backend reads its output layout back from the negotiated
-// `DecodedFormat`, so Linux never has to infer it from the codec configuration.
 #[cfg(any(
     test,
     waterkit_hw_codec_apple,
@@ -318,8 +316,6 @@ enum DecoderInner {
     Android(sys::android::AndroidDecoder),
     #[cfg(waterkit_hw_codec_windows)]
     Windows(sys::windows::WindowsDecoder),
-    #[cfg(waterkit_hw_codec_vaapi)]
-    Linux(sys::linux::LinuxDecoder),
     #[cfg(waterkit_av1_software)]
     Av1(software::av1::Av1Decoder),
 }
@@ -378,11 +374,6 @@ impl Decoder {
                 #[cfg(waterkit_hw_codec_windows)]
                 CodecType::H264 | CodecType::H265 => Ok(Self {
                     inner: sys::windows::open_decoder(codec, config, width, height)?,
-                }),
-
-                #[cfg(waterkit_hw_codec_vaapi)]
-                CodecType::H264 | CodecType::H265 => Ok(Self {
-                    inner: sys::linux::open_decoder(codec, config, width, height)?,
                 }),
 
                 #[cfg(not(waterkit_hw_codec))]
@@ -477,24 +468,6 @@ impl Decoder {
                 Ok(frames)
             }
 
-            #[cfg(waterkit_hw_codec_vaapi)]
-            DecoderInner::Linux(ref mut dec) => {
-                let linux_frames = dec.decode(packet)?;
-                let mut frames = Vec::with_capacity(linux_frames.len());
-                for linux_frame in linux_frames {
-                    let frame = DecodedFrame::from_biplanar_data(
-                        linux_frame.data,
-                        linux_frame.width,
-                        linux_frame.height,
-                        linux_frame.timestamp_ns,
-                        linux_frame.layout,
-                        None,
-                    );
-                    frames.push(frame);
-                }
-                Ok(frames)
-            }
-
             #[cfg(waterkit_av1_software)]
             DecoderInner::Av1(ref mut dec) => {
                 let cpu_frames = dec.decode(packet)?;
@@ -575,21 +548,6 @@ impl Decoder {
                 .collect()),
             #[cfg(waterkit_hw_codec_windows)]
             DecoderInner::Windows(ref mut decoder) => Ok(decoder
-                .drain()?
-                .into_iter()
-                .map(|frame| {
-                    DecodedFrame::from_biplanar_data(
-                        frame.data,
-                        frame.width,
-                        frame.height,
-                        frame.timestamp_ns,
-                        frame.layout,
-                        None,
-                    )
-                })
-                .collect()),
-            #[cfg(waterkit_hw_codec_vaapi)]
-            DecoderInner::Linux(ref mut decoder) => Ok(decoder
                 .drain()?
                 .into_iter()
                 .map(|frame| {
@@ -728,17 +686,6 @@ impl Decoder {
                 )
             }
 
-            #[cfg(waterkit_hw_codec_vaapi)]
-            DecoderInner::Linux(ref mut dec) => {
-                let linux_frames = dec.decode(packet)?;
-                copy_frames_to_buffer(
-                    linux_frames
-                        .into_iter()
-                        .map(|f| (f.data, f.width, f.height, f.timestamp_ns, f.layout)),
-                    output,
-                )
-            }
-
             #[cfg(waterkit_av1_software)]
             DecoderInner::Av1(ref mut dec) => {
                 let cpu_frames = dec.decode(packet)?;
@@ -820,8 +767,6 @@ enum EncoderInner {
     Android(sys::android::AndroidEncoder),
     #[cfg(waterkit_hw_codec_windows)]
     Windows(sys::windows::WindowsEncoder),
-    #[cfg(waterkit_hw_codec_vaapi)]
-    Linux(sys::linux::LinuxEncoder),
     #[cfg(waterkit_av1_software_encode)]
     Av1(Box<software::av1::Av1Encoder>),
 }
@@ -877,11 +822,6 @@ impl Encoder {
                 #[cfg(waterkit_hw_codec_windows)]
                 CodecType::H264 | CodecType::H265 => Ok(Self {
                     inner: sys::windows::open_encoder(codec, width, height, color)?,
-                }),
-
-                #[cfg(waterkit_hw_codec_vaapi)]
-                CodecType::H264 | CodecType::H265 => Ok(Self {
-                    inner: sys::linux::open_encoder(codec, width, height, color)?,
                 }),
 
                 #[cfg(not(waterkit_hw_codec))]
@@ -945,9 +885,6 @@ impl Encoder {
             #[cfg(waterkit_hw_codec_windows)]
             EncoderInner::Windows(ref mut enc) => enc.encode_nv12(data),
 
-            #[cfg(waterkit_hw_codec_vaapi)]
-            EncoderInner::Linux(ref mut enc) => enc.encode_nv12(data),
-
             #[cfg(waterkit_av1_software_encode)]
             EncoderInner::Av1(ref mut enc) => enc.encode_nv12(data),
         }
@@ -1003,8 +940,6 @@ impl Encoder {
             EncoderInner::Android(_) => Ok(Vec::new()),
             #[cfg(waterkit_hw_codec_windows)]
             EncoderInner::Windows(ref mut enc) => enc.drain(),
-            #[cfg(waterkit_hw_codec_vaapi)]
-            EncoderInner::Linux(_) => Ok(Vec::new()),
             #[cfg(waterkit_av1_software_encode)]
             EncoderInner::Av1(ref mut enc) => enc.flush(),
         }
@@ -1025,7 +960,7 @@ impl Encoder {
     #[must_use]
     #[allow(
         clippy::missing_const_for_fn,
-        reason = "non-const on backends that call through to a platform encoder; only the reduced no-vaapi build is const-eligible"
+        reason = "non-const on backends that call through to a platform encoder; only the reduced build without a hardware backend is const-eligible"
     )]
     pub fn codec_config(&self) -> Option<Vec<u8>> {
         match self.inner {
@@ -1039,9 +974,6 @@ impl Encoder {
 
             #[cfg(waterkit_hw_codec_windows)]
             EncoderInner::Windows(ref enc) => enc.get_codec_config(),
-
-            #[cfg(waterkit_hw_codec_vaapi)]
-            EncoderInner::Linux(ref enc) => enc.get_codec_config(),
 
             #[cfg(waterkit_av1_software_encode)]
             EncoderInner::Av1(ref enc) => Some(enc.codec_config()),

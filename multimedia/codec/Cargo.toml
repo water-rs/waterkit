@@ -81,9 +81,6 @@ waterkit-build.workspace = true
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = ["Win32_Media_MediaFoundation", "Win32_System_Com"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-cros-codecs = { version = "0.0.6", default-features = false, features = ["vaapi"], optional = true }
-
 # The software AV1 decoder's end-to-end test builds its input with `image`'s
 # AVIF *encoder*. Nothing else in the workspace encodes AVIF, so that encoder
 # (ravif -> rav1e) is asked for here instead of in the shared workspace entry.
@@ -110,11 +107,6 @@ gpu = [
 software-decode = ["dep:rav1d", "dep:avif-parse", "dep:yuv", "dep:moxcms"]
 # AV1 *encode* in software adds `rav1e` on top of the decode stack.
 software-encode = ["dep:rav1e", "dep:num-traits", "software-decode"]
-# VA-API hardware decode/encode on Linux via `cros-codecs`, which compiles
-# `cros-libva` against the system libva headers (>= 2.20). Off by default so a
-# consumer that only decodes still images links no hardware video decoder —
-# video consumers (waterkit-video-player and friends) opt in explicitly.
-vaapi = ["dep:cros-codecs"]
 
 [lints]
 workspace = true

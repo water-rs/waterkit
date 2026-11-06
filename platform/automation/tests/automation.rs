@@ -1,6 +1,7 @@
 //! Input posted through the crate reaches windows on a virtual display the
 //! test creates, one opened by the test process itself and one opened by
-//! another process, and the user's cursor stays where it was.
+//! another process, also under a transparent window of a third process that
+//! ignores mouse events, and the user's cursor stays where it was.
 //!
 //! The test owns the process main thread (`harness = false`, one test
 //! thread): the display is created there, and `AppKit` events are pumped
@@ -11,7 +12,10 @@
 //! set: it opens its window on that display and writes what the window
 //! receives to its standard output, one JSON object per line. Its log, on the
 //! standard error it shares with the test, traces every event `AppKit`
-//! dispatches in it and the key state each one meets.
+//! dispatches in it and the key state each one meets. Run with
+//! [`mac::OVERLAY_DISPLAY`] set instead, it covers that display with a
+//! transparent window above the normal level that ignores mouse events, and
+//! writes every input event it dispatches the same way.
 
 use libtest_mimic::{Arguments, Trial};
 
@@ -20,6 +24,12 @@ fn main() {
     if let Some(display) = std::env::var_os(mac::TARGET_DISPLAY) {
         mac::log_to_stderr("automation=trace");
         mac::serve_target_window(&display);
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(display) = std::env::var_os(mac::OVERLAY_DISPLAY) {
+        mac::log_to_stderr("automation=trace");
+        mac::serve_overlay_window(&display);
         return;
     }
     let mut arguments = Arguments::from_args();
@@ -39,6 +49,13 @@ fn main() {
             mac::a_click_and_keys_reach_a_window_of_another_process();
             Ok(())
         }),
+        Trial::test(
+            "a_click_and_keys_pass_an_overlay_that_ignores_the_mouse",
+            || {
+                mac::a_click_and_keys_pass_an_overlay_that_ignores_the_mouse();
+                Ok(())
+            },
+        ),
         Trial::test("input_needs_an_online_display", || {
             mac::input_needs_an_online_display();
             Ok(())
@@ -51,40 +68,52 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 mod mac {
+    use core::fmt;
     use core::num::NonZeroU32;
     use core::ptr::NonNull;
     use core::time::Duration;
     use std::cell::RefCell;
     use std::ffi::OsStr;
     use std::io::{BufRead, BufReader, Write};
-    use std::process::{Child, Command, Stdio};
+    use std::process::{Child, ChildStdin, Command, Stdio};
     use std::rc::Rc;
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
     use block2::RcBlock;
+    use dispatch2::DispatchQueue;
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
     use objc2_app_kit::{
-        NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSEvent, NSEventMask,
-        NSEventType, NSScreen, NSView, NSWindow, NSWindowStyleMask,
+        NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSEvent,
+        NSEventMask, NSEventType, NSFloatingWindowLevel, NSScreen, NSView, NSWindow,
+        NSWindowStyleMask,
     };
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
     use objc2_core_graphics::{CGDisplayBounds, CGEvent, CGMainDisplayID};
     use objc2_foundation::{
         NSDate, NSDefaultRunLoopMode, NSNumber, NSPoint, NSProcessInfo, ns_string,
     };
+    use serde::de::DeserializeOwned;
     use serde::{Deserialize, Serialize};
     use waterkit_automation::{
-        Code, Error, Input, KeyDown, KeyUp, MouseButton, MouseDown, MouseUp, Point, Rect, Text,
-        VirtualDisplay, VirtualDisplayConfig,
+        Code, Error, Input, KeyDown, KeyUp, ListedWindow, MouseButton, MouseDown, MouseUp, Point,
+        Rect, Text, VirtualDisplay, VirtualDisplayConfig,
     };
 
     /// Set to a display id, this binary opens the target window on that
     /// display instead of running the tests.
     pub const TARGET_DISPLAY: &str = "WATERKIT_AUTOMATION_TARGET_DISPLAY";
+
+    /// Set to a display id, this binary covers that display with a window
+    /// that ignores mouse events instead of running the tests.
+    pub const OVERLAY_DISPLAY: &str = "WATERKIT_AUTOMATION_OVERLAY_DISPLAY";
+
+    /// The line the test writes to the overlay's standard input to learn
+    /// what it has received.
+    const SYNC_REQUEST: &str = "sync";
 
     /// Writes the logs `filter` selects to standard error.
     pub fn log_to_stderr(filter: &str) {
@@ -162,7 +191,20 @@ mod mac {
         },
     }
 
-    fn write_report(report: &Report) {
+    /// One line the overlay process writes.
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    enum OverlayReport {
+        /// The overlay is on screen where `WindowServer` lists it.
+        Ready { pid: u32, window: u32 },
+        /// An input event the overlay's application dispatched.
+        Received { event: String },
+        /// Every event that reached the overlay before the last sync request
+        /// has been dispatched.
+        Synced,
+    }
+
+    fn write_report(report: &impl Serialize) {
         let mut stdout = std::io::stdout().lock();
         serde_json::to_writer(&mut stdout, report).expect("the report serializes");
         stdout
@@ -457,6 +499,44 @@ mod mac {
         }
     }
 
+    /// Whether `event` is mouse or keyboard input.
+    fn is_input(event: &NSEvent) -> bool {
+        matches!(
+            event.r#type(),
+            NSEventType::LeftMouseDown
+                | NSEventType::LeftMouseUp
+                | NSEventType::RightMouseDown
+                | NSEventType::RightMouseUp
+                | NSEventType::OtherMouseDown
+                | NSEventType::OtherMouseUp
+                | NSEventType::MouseMoved
+                | NSEventType::LeftMouseDragged
+                | NSEventType::RightMouseDragged
+                | NSEventType::OtherMouseDragged
+                | NSEventType::ScrollWheel
+                | NSEventType::KeyDown
+                | NSEventType::KeyUp
+                | NSEventType::FlagsChanged
+        )
+    }
+
+    /// Dispatches every event already queued for this process.
+    fn dispatch_queued(mtm: MainThreadMarker) {
+        let app = NSApplication::sharedApplication(mtm);
+        let now = NSDate::distantPast();
+        // SAFETY: the default run loop mode is an immutable constant.
+        while let Some(event) = unsafe {
+            app.nextEventMatchingMask_untilDate_inMode_dequeue(
+                NSEventMask::Any,
+                Some(&now),
+                NSDefaultRunLoopMode,
+                true,
+            )
+        } {
+            app.sendEvent(&event);
+        }
+    }
+
     /// The user's cursor, read from a fresh event.
     fn cursor() -> CGPoint {
         let event = CGEvent::new(None).expect("CoreGraphics creates an event");
@@ -655,11 +735,16 @@ mod mac {
         )
     }
 
+    /// `at` on `display` in global display coordinates.
+    fn global(display: u32, at: Point) -> CGPoint {
+        let origin = CGDisplayBounds(display).origin;
+        CGPoint::new(origin.x + at.x(), origin.y + at.y())
+    }
+
     /// Whether `WindowServer` lists window `number` on screen under `at` on
     /// `display`, as an application window.
     fn listed_under(inspector: &Input, display: u32, number: u32, at: Point) -> bool {
-        let origin = CGDisplayBounds(display).origin;
-        let point = CGPoint::new(origin.x + at.x(), origin.y + at.y());
+        let point = global(display, at);
         inspector
             .windows()
             .expect("the window list reads")
@@ -670,6 +755,26 @@ mod mac {
                     && listed.application()
                     && holds(listed.bounds(), point)
             })
+    }
+
+    /// The layer of `number` when `WindowServer` lists it as a visible
+    /// application window on screen under `at` on `display`. The full list
+    /// is not in front-to-back order, so a window's layer is what puts it in
+    /// front of another.
+    fn layer_under(inspector: &Input, display: u32, number: u32, at: Point) -> Option<i32> {
+        let point = global(display, at);
+        inspector
+            .windows()
+            .expect("the window list reads")
+            .iter()
+            .find(|listed| {
+                listed.id() == number
+                    && listed.on_screen()
+                    && listed.application()
+                    && listed.alpha() > 0.0
+                    && holds(listed.bounds(), point)
+            })
+            .map(ListedWindow::layer)
     }
 
     /// A 1280x800-point display at 2x with a serial the system has not seen.
@@ -695,14 +800,8 @@ mod mac {
         display
     }
 
-    /// A window on `display` whose content view records what it receives,
-    /// placed on `AppKit`'s screen for the display.
-    fn open_window(
-        mtm: MainThreadMarker,
-        display: u32,
-        accepts_first_mouse: bool,
-        reports: bool,
-    ) -> (Retained<KeyableWindow>, Retained<Recorder>) {
+    /// `AppKit`'s screen for `display`, once it lists one.
+    fn wait_for_screen(mtm: MainThreadMarker, display: u32) -> Retained<NSScreen> {
         let mut screen = None;
         assert!(
             pump_until(mtm, DELIVERY_DEADLINE, || {
@@ -713,16 +812,42 @@ mod mac {
             CGDisplayBounds(display),
             describe_screens(mtm)
         );
-        let screen = screen.expect("the wait ends once the screen is listed");
+        screen.expect("the wait ends once the screen is listed")
+    }
+
+    /// Moves `window` to `offset` from the bottom-left corner of `display`
+    /// where it is now. macOS can move a display that just came online after
+    /// a process first sees it, and a window placed before the move stays at
+    /// its old global position, so a helper places its window again on every
+    /// turn of its wait for `WindowServer` to list it under the click point.
+    fn follow_display(mtm: MainThreadMarker, window: &NSWindow, display: u32, offset: CGPoint) {
+        if let Some(screen) = appkit_screen(mtm, display) {
+            let origin = screen.frame().origin;
+            window.setFrameOrigin(NSPoint::new(origin.x + offset.x, origin.y + offset.y));
+        }
+    }
+
+    /// Where [`open_window`] puts its window relative to the bottom-left
+    /// corner of a screen `height` points tall.
+    fn window_offset(height: f64) -> CGPoint {
+        CGPoint::new(
+            WINDOW_ORIGIN.x,
+            height - WINDOW_ORIGIN.y - WINDOW_SIZE.height,
+        )
+    }
+
+    /// A window on `display` whose content view records what it receives,
+    /// placed on `AppKit`'s screen for the display.
+    fn open_window(
+        mtm: MainThreadMarker,
+        display: u32,
+        accepts_first_mouse: bool,
+        reports: bool,
+    ) -> (Retained<KeyableWindow>, Retained<Recorder>) {
+        let screen = wait_for_screen(mtm, display);
         // The screen's frame has a bottom-left origin; the window's top edge
         // sits `WINDOW_ORIGIN.y` below the screen's.
-        let frame = CGRect::new(
-            CGPoint::new(
-                WINDOW_ORIGIN.x,
-                screen.frame().size.height - WINDOW_ORIGIN.y - WINDOW_SIZE.height,
-            ),
-            WINDOW_SIZE,
-        );
+        let frame = CGRect::new(window_offset(screen.frame().size.height), WINDOW_SIZE);
         let window = KeyableWindow::new(mtm, frame, &screen);
         let recorder = Recorder::new(
             mtm,
@@ -865,10 +990,7 @@ mod mac {
     /// event the window receives, until it is killed. Its log traces every
     /// event `NSApp` dispatches, with the active and key state it meets.
     pub fn serve_target_window(display: &OsStr) {
-        let display: u32 = display
-            .to_str()
-            .and_then(|display| display.parse().ok())
-            .expect("the target display is a display id");
+        let display = display_id(display);
         let _span = tracing::debug_span!("target", pid = std::process::id()).entered();
         let mtm = MainThreadMarker::new().expect("the target runs on the main thread");
         let app = NSApplication::sharedApplication(mtm);
@@ -886,8 +1008,10 @@ mod mac {
         let (window, _recorder) = open_window(mtm, display, false, true);
         let inspector = Input::new(display).expect("the target sees the virtual display");
         let number = window.number();
+        let offset = window_offset(CGDisplayBounds(display).size.height);
         assert!(
             pump_until(mtm, DELIVERY_DEADLINE, || {
+                follow_display(mtm, &window, display, offset);
                 listed_under(&inspector, display, number, click_point())
             }),
             "WindowServer never listed the target window on screen under {:?} of display {display} {:?}: {}; {}",
@@ -905,31 +1029,124 @@ mod mac {
         app.run();
     }
 
-    /// The other process, killed on drop, and the reports it writes.
-    struct TargetProcess {
-        child: Child,
-        reports: mpsc::Receiver<Report>,
-        observed: Observed,
+    /// The overlay side of
+    /// [`a_click_and_keys_pass_an_overlay_that_ignores_the_mouse`]: an
+    /// accessory application, as the system processes that draw over the
+    /// main display are, whose borderless, transparent window covers the
+    /// whole display above the normal window level and ignores mouse events.
+    /// It reports when its window is on screen, then every input event its
+    /// application dispatches, and answers each [`SYNC_REQUEST`] on its
+    /// standard input once it has dispatched every event queued for it,
+    /// until it is killed.
+    pub fn serve_overlay_window(display: &OsStr) {
+        let display = display_id(display);
+        let _span = tracing::debug_span!("overlay", pid = std::process::id()).entered();
+        let mtm = MainThreadMarker::new().expect("the overlay runs on the main thread");
+        let app = NSApplication::sharedApplication(mtm);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        app.finishLaunching();
+        let _monitor = EventMonitor::install(|event| {
+            if is_input(event) {
+                let event = describe_event(event);
+                tracing::debug!(%event, "the overlay received input");
+                write_report(&OverlayReport::Received { event });
+            }
+        });
+        let screen = wait_for_screen(mtm, display);
+        let frame = CGRect::new(CGPoint::ZERO, screen.frame().size);
+        // SAFETY: an initializer of NSWindow, with a valid style, backing and
+        // screen.
+        let window = unsafe {
+            NSWindow::initWithContentRect_styleMask_backing_defer_screen(
+                NSWindow::alloc(mtm),
+                frame,
+                NSWindowStyleMask::Borderless,
+                NSBackingStoreType::Buffered,
+                false,
+                Some(&screen),
+            )
+        };
+        // SAFETY: the overlay owns the window through `Retained`; closing it
+        // must not release it a second time.
+        unsafe { window.setReleasedWhenClosed(false) };
+        // As in `KeyableWindow::new`, the window is moved onto `screen`.
+        window.setFrameOrigin(screen.frame().origin);
+        window.setOpaque(false);
+        window.setBackgroundColor(Some(&NSColor::clearColor()));
+        window.setHasShadow(false);
+        window.setIgnoresMouseEvents(true);
+        window.setLevel(NSFloatingWindowLevel);
+        window.orderFrontRegardless();
+
+        let inspector = Input::new(display).expect("the overlay sees the virtual display");
+        let number = u32::try_from(window.windowNumber()).expect("window numbers are 32-bit");
+        assert!(
+            pump_until(mtm, DELIVERY_DEADLINE, || {
+                follow_display(mtm, &window, display, CGPoint::ZERO);
+                listed_under(&inspector, display, number, click_point())
+            }),
+            "WindowServer never listed the overlay window on screen under {:?} of display {display} {:?}: {}; {}",
+            click_point(),
+            CGDisplayBounds(display),
+            describe_listed(&inspector, number),
+            describe_screens(mtm)
+        );
+        write_report(&OverlayReport::Ready {
+            pid: std::process::id(),
+            window: number,
+        });
+        thread::spawn(|| {
+            for line in std::io::stdin().lines() {
+                let line = line.expect("the overlay's input reads");
+                assert_eq!(line, SYNC_REQUEST, "the test sends only sync requests");
+                DispatchQueue::main().exec_async(|| {
+                    let mtm = MainThreadMarker::new().expect("the main queue runs on main");
+                    dispatch_queued(mtm);
+                    write_report(&OverlayReport::Synced);
+                });
+            }
+        });
+        app.run();
     }
 
-    impl TargetProcess {
-        fn spawn(display: u32) -> Self {
+    /// The display id a helper mode is set to.
+    fn display_id(display: &OsStr) -> u32 {
+        display
+            .to_str()
+            .and_then(|display| display.parse().ok())
+            .expect("the helper's display is a display id")
+    }
+
+    /// This binary run again in a helper mode, killed on drop, and the
+    /// reports it writes.
+    struct Helper<R> {
+        child: Child,
+        stdin: ChildStdin,
+        reports: mpsc::Receiver<R>,
+    }
+
+    impl<R: DeserializeOwned + fmt::Debug + Send + 'static> Helper<R> {
+        /// This binary with the environment variable `mode` set to
+        /// `display`.
+        fn spawn(mode: &'static str, display: u32) -> Self {
             let mut child =
                 Command::new(std::env::current_exe().expect("the test binary has a path"))
-                    .env(TARGET_DISPLAY, display.to_string())
-                    .stdin(Stdio::null())
+                    .env(mode, display.to_string())
+                    .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::inherit())
                     .spawn()
-                    .expect("the target process starts");
-            let stdout = child.stdout.take().expect("the target's output is piped");
+                    .unwrap_or_else(|error| panic!("the {mode} helper does not start: {error}"));
+            let stdin = child.stdin.take().expect("the helper's input is piped");
+            let stdout = child.stdout.take().expect("the helper's output is piped");
             let (sender, reports) = mpsc::channel();
             thread::spawn(move || {
                 for line in BufReader::new(stdout).lines() {
-                    let line = line.expect("the target's output reads");
-                    let report = serde_json::from_str(&line)
-                        .unwrap_or_else(|error| panic!("the target wrote {line:?}: {error}"));
-                    tracing::debug!(?report, "the target reported");
+                    let line = line.expect("the helper's output reads");
+                    let report = serde_json::from_str(&line).unwrap_or_else(|error| {
+                        panic!("the {mode} helper wrote {line:?}: {error}")
+                    });
+                    tracing::debug!(mode, ?report, "a helper reported");
                     if sender.send(report).is_err() {
                         return;
                     }
@@ -937,14 +1154,59 @@ mod mac {
             });
             Self {
                 child,
+                stdin,
                 reports,
-                observed: Observed::default(),
             }
         }
 
         /// The next report, within `timeout`.
-        fn next(&self, timeout: Duration) -> Option<Report> {
+        fn next(&self, timeout: Duration) -> Option<R> {
             self.reports.recv_timeout(timeout).ok()
+        }
+    }
+
+    impl<R> Drop for Helper<R> {
+        fn drop(&mut self) {
+            self.child.kill().expect("the helper process is killed");
+            self.child.wait().expect("the helper process is reaped");
+        }
+    }
+
+    /// The other process's window, and what it received.
+    struct TargetProcess {
+        process: Helper<Report>,
+        pid: u32,
+        window: u32,
+        /// Whether the process believed it was active, and the window was
+        /// key, when the window came on screen.
+        active: bool,
+        key: bool,
+        observed: Observed,
+    }
+
+    impl TargetProcess {
+        /// The target process, once its window is on screen.
+        fn spawn(display: u32) -> Self {
+            let process = Helper::spawn(TARGET_DISPLAY, display);
+            // Ready comes first: a report before it would fail the match.
+            match process.next(TARGET_READY_DEADLINE) {
+                Some(Report::Ready {
+                    pid,
+                    window,
+                    active,
+                    key,
+                }) => Self {
+                    process,
+                    pid,
+                    window,
+                    active,
+                    key,
+                    observed: Observed::default(),
+                },
+                other => panic!(
+                    "the target process did not report its window within {TARGET_READY_DEADLINE:?}, got {other:?}"
+                ),
+            }
         }
 
         /// Records reports until `done` holds of what the window received;
@@ -953,56 +1215,84 @@ mod mac {
             let deadline = Instant::now() + DELIVERY_DEADLINE;
             while !done(&self.observed) {
                 let remaining = deadline.saturating_duration_since(Instant::now());
-                match self.reports.recv_timeout(remaining) {
+                match self.process.reports.recv_timeout(remaining) {
                     Ok(report) => self.observed.record(report),
                     Err(_) => return false,
                 }
             }
             true
         }
-    }
 
-    impl Drop for TargetProcess {
-        fn drop(&mut self) {
-            self.child.kill().expect("the target process is killed");
-            self.child.wait().expect("the target process is reaped");
-        }
-    }
-
-    pub fn a_click_and_keys_reach_a_window_of_another_process() {
-        let mtm = MainThreadMarker::new().expect("libtest-mimic runs one thread on main");
-        log_macos_version();
-        let display = create_display(mtm);
-        let mut target = TargetProcess::spawn(display.id());
-        // Ready comes first: a report before it would fail the match below.
-        let (pid, number, active, key) = match target.next(TARGET_READY_DEADLINE) {
-            Some(Report::Ready {
-                pid,
-                window,
-                active,
-                key,
-            }) => (pid, window, active, key),
-            other => panic!(
-                "the target process did not report its window within {TARGET_READY_DEADLINE:?}, got {other:?}"
-            ),
-        };
-        let cursor_before = cursor();
-        let mut input = open_input(display.id());
-        let at = click_point();
-        let describe = |input: &Input, observed: &Observed| {
+        /// What the target received and where `WindowServer` has its window.
+        fn describe(&self, mtm: MainThreadMarker, input: &Input) -> String {
+            let (pid, number) = (self.pid, self.window);
             format!(
-                "the target received {observed:?}; when its window {number} came on screen, process {pid} reported itself active {active}, with the window key {key}; WindowServer lists the window as {}\n{}\nThe log above lists what Input posted, and under target{{pid={pid}}} every event AppKit dispatched in the target.",
+                "the target received {:?}; when its window {number} came on screen, process {pid} reported itself active {}, with the window key {}; WindowServer lists the window as {}\n{}\nThe log above lists what Input posted, and under target{{pid={pid}}} every event AppKit dispatched in the target.",
+                self.observed,
+                self.active,
+                self.key,
                 describe_listed(input, number),
                 describe_screens(mtm),
             )
-        };
+        }
+    }
 
+    /// The overlay process's window, which must receive nothing.
+    struct OverlayProcess {
+        process: Helper<OverlayReport>,
+        pid: u32,
+        window: u32,
+    }
+
+    impl OverlayProcess {
+        /// The overlay process, once its window is on screen.
+        fn spawn(display: u32) -> Self {
+            let process = Helper::spawn(OVERLAY_DISPLAY, display);
+            match process.next(TARGET_READY_DEADLINE) {
+                Some(OverlayReport::Ready { pid, window }) => Self {
+                    process,
+                    pid,
+                    window,
+                },
+                other => panic!(
+                    "the overlay process did not report its window within {TARGET_READY_DEADLINE:?}, got {other:?}"
+                ),
+            }
+        }
+
+        /// The input events the overlay has dispatched, once it has
+        /// dispatched every event queued for it.
+        fn received(&mut self) -> Vec<String> {
+            writeln!(self.process.stdin, "{SYNC_REQUEST}")
+                .and_then(|()| self.process.stdin.flush())
+                .expect("the overlay reads its requests");
+            let deadline = Instant::now() + DELIVERY_DEADLINE;
+            let mut received = Vec::new();
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                match self.process.reports.recv_timeout(remaining) {
+                    Ok(OverlayReport::Received { event }) => received.push(event),
+                    Ok(OverlayReport::Synced) => return received,
+                    Ok(other) => panic!("the overlay reported {other:?} after it was ready"),
+                    Err(error) => panic!(
+                        "the overlay did not answer a sync request within {DELIVERY_DEADLINE:?} ({error}), having received {received:?}"
+                    ),
+                }
+            }
+        }
+    }
+
+    /// Clicks [`click_point`] and types "hi" and the A key with `input`,
+    /// asserting that each step reaches `target`'s window, then that the
+    /// window received exactly that.
+    fn click_and_type(mtm: MainThreadMarker, input: &mut Input, target: &mut TargetProcess) {
+        let at = click_point();
         let pressed = input.post(MouseDown::new(at, MouseButton::Left));
         assert!(
             pressed.is_ok() && target.until(|observed| !observed.presses.is_empty()),
             "the press ({}) never reached the other process's window: {}",
             outcome(&pressed),
-            describe(&input, &target.observed)
+            target.describe(mtm, input)
         );
 
         let released = input.post(MouseUp::new(at, MouseButton::Left));
@@ -1010,7 +1300,7 @@ mod mac {
             released.is_ok() && target.until(|observed| !observed.releases.is_empty()),
             "the release ({}) never reached the other process's window: {}",
             outcome(&released),
-            describe(&input, &target.observed)
+            target.describe(mtm, input)
         );
 
         let typed = input
@@ -1021,10 +1311,57 @@ mod mac {
             typed.is_ok() && target.until(|observed| observed.keys.len() >= 2),
             "the key presses ({}) never reached the other process's window: {}",
             outcome(&typed),
-            describe(&input, &target.observed)
+            target.describe(mtm, input)
         );
 
         assert_delivered(&target.observed);
+    }
+
+    pub fn a_click_and_keys_reach_a_window_of_another_process() {
+        let mtm = MainThreadMarker::new().expect("libtest-mimic runs one thread on main");
+        log_macos_version();
+        let display = create_display(mtm);
+        let mut target = TargetProcess::spawn(display.id());
+        let cursor_before = cursor();
+        let mut input = open_input(display.id());
+        click_and_type(mtm, &mut input, &mut target);
+        assert_cursor_unchanged(cursor_before);
+    }
+
+    /// A third process covers the display, the target's window included,
+    /// with a transparent window above the normal level that ignores mouse
+    /// events, as `NotificationCenter` and the Dock do on the main display.
+    /// `WindowServer` lists it in front of the target under the click, so a
+    /// press picked by window bounds would go to it; the click and keys still
+    /// reach the target, and the overlay receives nothing.
+    pub fn a_click_and_keys_pass_an_overlay_that_ignores_the_mouse() {
+        let mtm = MainThreadMarker::new().expect("libtest-mimic runs one thread on main");
+        log_macos_version();
+        let display = create_display(mtm);
+        let mut target = TargetProcess::spawn(display.id());
+        let mut overlay = OverlayProcess::spawn(display.id());
+        let cursor_before = cursor();
+        let mut input = open_input(display.id());
+        let at = click_point();
+        let overlay_layer = layer_under(&input, display.id(), overlay.window, at);
+        let target_layer = layer_under(&input, display.id(), target.window, at);
+        assert!(
+            matches!((overlay_layer, target_layer), (Some(over), Some(under)) if over > under),
+            "the overlay window {} is not listed under {at} above the target window {} (layers {overlay_layer:?} over {target_layer:?}), so the press would not pass it: the overlay is listed as {}; {}",
+            overlay.window,
+            target.window,
+            describe_listed(&input, overlay.window),
+            target.describe(mtm, &input)
+        );
+
+        click_and_type(mtm, &mut input, &mut target);
+        let received = overlay.received();
+        assert!(
+            received.is_empty(),
+            "the overlay window {} of pid {} received {received:?}",
+            overlay.window,
+            overlay.pid
+        );
         assert_cursor_unchanged(cursor_before);
     }
 

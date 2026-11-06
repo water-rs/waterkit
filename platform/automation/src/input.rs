@@ -14,7 +14,7 @@ use crate::delivery::{APPKIT_DEFINED, Watch};
 use crate::keycode::{event_flags, virtual_key};
 use crate::skylight::EventSymbols;
 use crate::topology;
-use crate::window::{self, DisplayWindows, ListedWindow, Rect, Window, contains, intersects};
+use crate::window::{self, DisplayWindows, ListedWindow, Rect, Window, intersects};
 use crate::{
     Error, InputEvent, KeyDown, KeyUp, MouseButton, MouseDown, MouseMove, MouseUp, Point, Scroll,
     Text,
@@ -140,14 +140,18 @@ impl Input {
     ///
     /// - [`Error::OutsideDisplay`] when a mouse event's point lies outside
     ///   the display;
-    /// - [`Error::NoWindow`] when no application window is under it;
+    /// - [`Error::NoWindow`] when no window takes a press at it;
     /// - [`Error::NoKeyWindow`] when a key event has no window to go to;
     ///   both carry every window that intersects the display;
+    /// - [`Error::NotApplicationWindow`] when the window that takes a press
+    ///   at the point belongs to no application;
     /// - [`Error::UnmappableKey`] or [`Error::UnmappableModifiers`] when a key
     ///   or modifier has no macOS equivalent;
     /// - [`Error::NotFocused`] when the application owning a press's or key
     ///   event's window does not report itself active with that window
     ///   focused in time, which it needs to act on the input;
+    /// - [`Error::NotificationUnsupported`] when that application does not
+    ///   post the Accessibility notifications the wait is woken by;
     /// - [`Error::NotDelivered`] when `WindowServer` does not route every
     ///   event into the target process in time;
     /// - [`Error::Platform`] when `CoreGraphics`, `SkyLight` or
@@ -165,13 +169,17 @@ impl Input {
     pub fn windows(&self) -> Result<Vec<ListedWindow>, Error> {
         window::list(CGWindowListOption::OptionAll, kCGNullWindowID)?
             .iter()
-            .map(|window| self.listed(window))
+            .filter_map(|window| self.listed(window).transpose())
             .collect()
     }
 
-    fn listed(&self, window: &Window) -> Result<ListedWindow, Error> {
-        let application = self.symbols.application_owns(window.id)?;
-        Ok(window.listed(application))
+    /// `window` with its ownership, or `None` when it closed since it was
+    /// listed.
+    fn listed(&self, window: &Window) -> Result<Option<ListedWindow>, Error> {
+        Ok(self
+            .symbols
+            .application_owns(window.id)?
+            .map(|application| window.listed(application)))
     }
 
     /// The windows that intersect the display, on screen or not, for an
@@ -181,7 +189,7 @@ impl Input {
         let windows = window::list(CGWindowListOption::OptionAll, kCGNullWindowID)?
             .iter()
             .filter(|window| intersects(window.bounds, bounds))
-            .map(|window| self.listed(window))
+            .filter_map(|window| self.listed(window).transpose())
             .collect::<Result<_, _>>()?;
         Ok(DisplayWindows::new(
             self.display,
@@ -350,26 +358,43 @@ impl Input {
         ))
     }
 
-    /// The topmost application window under `point`.
+    /// The window `WindowServer` hands a press at `point` to, as a delivery
+    /// target. Its hit test follows each window's shape and passes through
+    /// windows that ignore mouse events, which on the main display include
+    /// system overlays the size of the display.
     fn window_at(&self, at: Point, point: CGPoint) -> Result<(Window, Target), Error> {
-        for window in on_screen_windows()? {
-            if contains(window.bounds, point)
-                && let Some(target) = self.application_target(&window)?
-            {
-                return Ok((window, target));
+        let Some(id) = self.symbols.window_at(point)? else {
+            tracing::debug!(display = self.display, %at, "no window takes a press at the point");
+            return Err(Error::NoWindow {
+                at,
+                windows: self.display_windows()?,
+            });
+        };
+        let window = listed_window(id)?;
+        match self.symbols.application_owns(window.id)? {
+            Some(true) => {
+                let target = Target {
+                    pid: window.pid,
+                    window: window.id,
+                };
+                Ok((window, target))
             }
+            Some(false) => Err(Error::NotApplicationWindow {
+                at,
+                window: window.listed(false),
+            }),
+            None => Err(Error::Platform(format!(
+                "window {id}, which takes a press at {at}, closed before the press"
+            ))),
         }
-        tracing::debug!(display = self.display, %at, "no application window under the point");
-        Err(Error::NoWindow {
-            at,
-            windows: self.display_windows()?,
-        })
     }
 
     /// The window key events go to: the last press's, else the frontmost
-    /// ordinary application window on the display. Menu bar items and other
-    /// windows above the normal level are skipped: on the main display they
-    /// cover every application's windows.
+    /// ordinary application window on the display that takes mouse events.
+    /// Menu bar items and other windows above the normal level are skipped:
+    /// on the main display they cover every application's windows. So are
+    /// windows that let mouse events through, such as overlays drawn over
+    /// other applications, which no click could have made key.
     fn key_target(&self) -> Result<Target, Error> {
         if let Some(target) = self.key_target {
             return Ok(target);
@@ -378,6 +403,7 @@ impl Input {
         for window in on_screen_windows()? {
             if window.layer == NORMAL_LAYER
                 && intersects(window.bounds, display)
+                && !self.symbols.ignores_mouse_events(window.id)?
                 && let Some(target) = self.application_target(&window)?
             {
                 return Ok(target);
@@ -386,12 +412,15 @@ impl Input {
         Err(Error::NoKeyWindow(self.display_windows()?))
     }
 
-    /// `window` as a delivery target, when an application owns it.
+    /// `window` as a delivery target, when an application owns it and it is
+    /// still open.
     fn application_target(&self, window: &Window) -> Result<Option<Target>, Error> {
-        Ok(self.symbols.application_owns(window.id)?.then_some(Target {
-            pid: window.pid,
-            window: window.id,
-        }))
+        Ok(
+            (self.symbols.application_owns(window.id)? == Some(true)).then_some(Target {
+                pid: window.pid,
+                window: window.id,
+            }),
+        )
     }
 
     /// Makes `target`'s window, whose frame is `bounds`, its application's
@@ -416,7 +445,7 @@ impl Input {
     fn focus(&mut self, watch: &mut Watch, target: Target, bounds: CGRect) -> Result<(), Error> {
         let app = Application::new(target.pid, &self.windows, self.confirm_timeout)?;
         // Before anything is sent, so no change goes unnoticed.
-        let _observation = app.observe(watch.run_loop(), watch.mode())?;
+        let _observation = app.observe(target.window, watch.run_loop(), watch.mode())?;
         let mut report = app.report()?;
         if self.key_target == Some(target) && report.settled_on(target.window) {
             return Ok(());
@@ -640,13 +669,17 @@ fn on_screen_windows() -> Result<Vec<Window>, Error> {
     Ok(windows)
 }
 
-/// The current bounds of `window`.
-fn window_bounds(window: u32) -> Result<CGRect, Error> {
+/// How `WindowServer` lists `window` now.
+fn listed_window(window: u32) -> Result<Window, Error> {
     window::list(CGWindowListOption::OptionIncludingWindow, window)?
         .into_iter()
         .find(|listed| listed.id == window)
-        .map(|listed| listed.bounds)
         .ok_or_else(|| Error::Platform(format!("window {window} is no longer listed")))
+}
+
+/// The current bounds of `window`.
+fn window_bounds(window: u32) -> Result<CGRect, Error> {
+    listed_window(window).map(|listed| listed.bounds)
 }
 
 /// `text` as UTF-16, cut between characters into pieces one keyboard event

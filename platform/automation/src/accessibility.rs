@@ -169,9 +169,11 @@ impl<'a> Application<'a> {
     }
 
     /// Wakes `run_loop` in `mode` whenever the application changes its
-    /// active state or key window, until the observation drops.
+    /// active state or key window, until the observation drops, for a wait
+    /// on it to focus `window`.
     pub fn observe(
         &self,
+        window: u32,
         run_loop: &CFRunLoop,
         mode: &CFRunLoopMode,
     ) -> Result<Observation, Error> {
@@ -187,13 +189,21 @@ impl<'a> Application<'a> {
             .ok_or_else(|| Error::Platform("AXObserverCreate returned NULL".to_owned()))?;
         // SAFETY: a created observer is +1 and owned here.
         let observer = unsafe { CFRetained::from_raw(observer) };
-        for notification in NOTIFICATIONS {
-            let notification = CFString::from_static_str(notification);
+        for name in NOTIFICATIONS {
+            let notification = CFString::from_static_str(name);
             // SAFETY: `wake` reads no refcon.
             let status =
                 unsafe { observer.add_notification(&self.element, &notification, ptr::null_mut()) };
-            if status != AXError::Success {
-                return Err(platform("AXObserverAddNotification", status));
+            match status {
+                AXError::Success => {}
+                AXError::NotificationUnsupported => {
+                    return Err(Error::NotificationUnsupported {
+                        pid: self.pid,
+                        window,
+                        notification: name,
+                    });
+                }
+                status => return Err(platform("AXObserverAddNotification", status)),
             }
         }
         // SAFETY: the observer is live.

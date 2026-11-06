@@ -34,8 +34,6 @@ bytes = { workspace = true, optional = true }
 [features]
 default = []
 streaming = ["dep:waterkit-video-streaming", "dep:aes", "dep:cbc", "dep:bytes"]
-# VA-API hardware decode on Linux; off by default like the codec's own `vaapi`.
-vaapi = ["waterkit-codec/vaapi"]
 
 [dev-dependencies]
 transmux.workspace = true

@@ -1,13 +1,18 @@
 //! Cursor-free input into windows on one display.
 
+use core::sync::atomic::{AtomicU32, Ordering};
+use core::time::Duration;
+
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect};
 use objc2_core_graphics::{
     CGDirectDisplayID, CGDisplayBounds, CGEvent, CGEventFlags, CGEventType, CGKeyCode,
     CGMouseButton, CGScrollEventUnit, CGWindowListOption, kCGNullWindowID,
 };
 
+use crate::accessibility::{Application, WindowLookup};
+use crate::delivery::{APPKIT_DEFINED, Watch};
 use crate::keycode::{event_flags, virtual_key};
-use crate::skylight::{EventSymbols, ProcessSerialNumber, RECORD_LEN};
+use crate::skylight::EventSymbols;
 use crate::topology;
 use crate::window::{self, DisplayWindows, ListedWindow, Rect, Window, contains, intersects};
 use crate::{
@@ -23,24 +28,53 @@ const FIELD_BUTTON_NUMBER: u32 = 3;
 const FIELD_TARGET_PID: u32 = 40;
 /// The window number `AppKit` reads as the event's window.
 const FIELD_WINDOW_NUMBER: u32 = 51;
+/// The sender's `WindowServer` connection, which `AppKit` stamps on the
+/// window events it builds.
+const FIELD_WINDOW_CONTEXT: u32 = 52;
+/// The subtype of an `AppKit`-defined event.
+const FIELD_APPKIT_SUBTYPE: u32 = 83;
 /// `kCGMouseEventWindowUnderMousePointer`.
 const FIELD_WINDOW_UNDER_POINTER: u32 = 91;
 /// `kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent`.
 const FIELD_WINDOW_HANDLING_EVENT: u32 = 92;
 
+/// `NSEventSubtypeApplicationActivated`.
+const APPLICATION_ACTIVATED: i64 = 1;
+/// The flags `AppKit` carries on an application-activated event; they are
+/// not held modifiers.
+const ACTIVATION_FLAGS: CGEventFlags = CGEventFlags(0xC_0000);
+
+/// Where the press that makes a window key lands, from the window's top-left:
+/// just outside its frame, so no view takes it.
+const MAKE_KEY_PRESS: CGPoint = CGPoint::new(-1.0, -1.0);
+
+/// The window level of ordinary application windows (`kCGNormalWindowLevel`).
+const NORMAL_LAYER: i32 = 0;
+
 /// The most UTF-16 units one keyboard event carries; the system truncates
 /// longer strings on delivery.
 const UNITS_PER_EVENT: usize = 20;
 
+/// How long, by default, a target application gets to report a window
+/// focused and `WindowServer` to route an event into it.
+const DEFAULT_CONFIRM_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// Posts input to the windows of one display without moving the user's
 /// cursor or focusing anything on the user's displays.
 ///
-/// See the crate documentation for where each event goes.
+/// See the crate documentation for where each event goes and how its arrival
+/// is confirmed.
 #[derive(Debug)]
 pub struct Input {
     symbols: EventSymbols,
+    windows: WindowLookup,
     display: CGDirectDisplayID,
+    confirm_timeout: Duration,
+    /// The next event's marker, unique among this process's posts.
+    markers: AtomicU32,
     held: Option<Held>,
+    /// The window this input last made its application's key window, where
+    /// key events go.
     key_target: Option<Target>,
 }
 
@@ -48,7 +82,6 @@ pub struct Input {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Target {
     pid: libc::pid_t,
-    psn: ProcessSerialNumber,
     window: u32,
 }
 
@@ -65,20 +98,43 @@ impl Input {
     /// # Errors
     ///
     /// [`Error::DisplayNotFound`] when the display is not online, and
-    /// [`Error::Unavailable`] when a `SkyLight` function is missing.
+    /// [`Error::Unavailable`] when a private function is missing.
     pub fn new(display: CGDirectDisplayID) -> Result<Self, Error> {
         if !topology::online()?.contains(&display) {
             return Err(Error::DisplayNotFound(display));
         }
         Ok(Self {
             symbols: EventSymbols::resolve()?,
+            windows: WindowLookup::resolve()?,
             display,
+            confirm_timeout: DEFAULT_CONFIRM_TIMEOUT,
+            markers: AtomicU32::new(0),
             held: None,
             key_target: None,
         })
     }
 
-    /// Delivers `event`.
+    /// How long a target application gets to report the target window
+    /// focused, and `WindowServer` to route each posted event into it,
+    /// before [`post`](Self::post) fails. One second unless set.
+    #[must_use]
+    pub const fn confirm_timeout(&self) -> Duration {
+        self.confirm_timeout
+    }
+
+    /// Sets [`confirm_timeout`](Self::confirm_timeout).
+    pub const fn set_confirm_timeout(&mut self, timeout: Duration) {
+        self.confirm_timeout = timeout;
+    }
+
+    /// Delivers `event`, and returns once every event it posted has entered
+    /// the target process's event stream.
+    ///
+    /// That is the last step the system reports on: no interface tells
+    /// another process whether an application then dispatched an event to a
+    /// view. Before a press or a key event, the target window has been made
+    /// key ahead of the input, and its application has reported itself
+    /// active with that window focused.
     ///
     /// # Errors
     ///
@@ -89,7 +145,13 @@ impl Input {
     ///   both carry every window that intersects the display;
     /// - [`Error::UnmappableKey`] or [`Error::UnmappableModifiers`] when a key
     ///   or modifier has no macOS equivalent;
-    /// - [`Error::Platform`] when `CoreGraphics` or `SkyLight` fails a call.
+    /// - [`Error::NotFocused`] when the application owning a press's or key
+    ///   event's window does not report itself active with that window
+    ///   focused in time, which it needs to act on the input;
+    /// - [`Error::NotDelivered`] when `WindowServer` does not route every
+    ///   event into the target process in time;
+    /// - [`Error::Platform`] when `CoreGraphics`, `SkyLight` or
+    ///   Accessibility fails a call.
     pub fn post(&mut self, event: impl InputEvent) -> Result<(), Error> {
         event.deliver(self)
     }
@@ -108,7 +170,7 @@ impl Input {
     }
 
     fn listed(&self, window: &Window) -> Result<ListedWindow, Error> {
-        let application = self.symbols.application_psn(window.id)?.is_some();
+        let application = self.symbols.application_owns(window.id)?;
         Ok(window.listed(application))
     }
 
@@ -132,14 +194,16 @@ impl Input {
         let flags = event_flags(event.modifiers)?;
         let point = self.global(event.at)?;
         let (window, target) = self.window_at(event.at, point)?;
-        self.focus(target)?;
+        let mut watch = Watch::open(target.pid, self.confirm_timeout)?;
+        self.focus(&mut watch, target, window.bounds)?;
         // A move first: AppKit hit-tests a press against the tracking state
         // the window last saw.
         let moved = mouse_event(CGEventType::MouseMoved, point, MouseButton::Left)?;
-        self.post_mouse(&moved, target, window.bounds, point, flags, 0);
+        self.post_mouse(&mut watch, &moved, target, window.bounds, point, flags, 0);
 
         let down = mouse_event(down_type(event.button), point, event.button)?;
         self.post_mouse(
+            &mut watch,
             &down,
             target,
             window.bounds,
@@ -147,6 +211,7 @@ impl Input {
             flags,
             event.clicks.get(),
         );
+        watch.confirm(target.window)?;
         self.held = Some(Held {
             button: event.button,
             target,
@@ -166,12 +231,21 @@ impl Input {
                 (window.bounds, target)
             }
         };
+        let mut watch = Watch::open(target.pid, self.confirm_timeout)?;
         let up = mouse_event(up_type(event.button), point, event.button)?;
-        self.post_mouse(&up, target, bounds, point, flags, event.clicks.get());
+        self.post_mouse(
+            &mut watch,
+            &up,
+            target,
+            bounds,
+            point,
+            flags,
+            event.clicks.get(),
+        );
         if self.held.is_some_and(|held| held.button == event.button) {
             self.held = None;
         }
-        Ok(())
+        watch.confirm(target.window)
     }
 
     pub(crate) fn mouse_move(&self, event: MouseMove) -> Result<(), Error> {
@@ -185,8 +259,9 @@ impl Input {
             let moved = mouse_event(CGEventType::MouseMoved, point, MouseButton::Left)?;
             (moved, window.bounds, target)
         };
-        self.post_mouse(&moved, target, bounds, point, flags, 0);
-        Ok(())
+        let mut watch = Watch::open(target.pid, self.confirm_timeout)?;
+        self.post_mouse(&mut watch, &moved, target, bounds, point, flags, 0);
+        watch.confirm(target.window)
     }
 
     pub(crate) fn scroll(&self, event: Scroll) -> Result<(), Error> {
@@ -205,22 +280,29 @@ impl Input {
         )
         .ok_or_else(|| null_event("CGEventCreateScrollWheelEvent2"))?;
         CGEvent::set_location(Some(&scrolled), point);
-        self.post_mouse(&scrolled, target, window.bounds, point, flags, 0);
-        Ok(())
+        let mut watch = Watch::open(target.pid, self.confirm_timeout)?;
+        self.post_mouse(
+            &mut watch,
+            &scrolled,
+            target,
+            window.bounds,
+            point,
+            flags,
+            0,
+        );
+        watch.confirm(target.window)
     }
 
     pub(crate) fn key_down(&mut self, event: KeyDown) -> Result<(), Error> {
         let key = virtual_key(event.code)?;
         let flags = event_flags(event.modifiers)?;
-        let target = self.key_target()?;
-        self.post_key(target, key, true, flags, &[])
+        self.keys(|input, watch, target| input.post_key(watch, target, key, true, flags, &[]))
     }
 
     pub(crate) fn key_up(&mut self, event: KeyUp) -> Result<(), Error> {
         let key = virtual_key(event.code)?;
         let flags = event_flags(event.modifiers)?;
-        let target = self.key_target()?;
-        self.post_key(target, key, false, flags, &[])
+        self.keys(|input, watch, target| input.post_key(watch, target, key, false, flags, &[]))
     }
 
     pub(crate) fn text(&mut self, event: &Text) -> Result<(), Error> {
@@ -228,12 +310,27 @@ impl Input {
         if chunks.is_empty() {
             return Ok(());
         }
+        self.keys(|input, watch, target| {
+            for chunk in &chunks {
+                input.post_key(watch, target, 0, true, CGEventFlags::empty(), chunk)?;
+                input.post_key(watch, target, 0, false, CGEventFlags::empty(), chunk)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Focuses the key target, posts key events with `post`, and confirms
+    /// they reached it.
+    fn keys(
+        &mut self,
+        post: impl FnOnce(&Self, &mut Watch, Target) -> Result<(), Error>,
+    ) -> Result<(), Error> {
         let target = self.key_target()?;
-        for chunk in &chunks {
-            self.post_key(target, 0, true, CGEventFlags::empty(), chunk)?;
-            self.post_key(target, 0, false, CGEventFlags::empty(), chunk)?;
-        }
-        Ok(())
+        let bounds = window_bounds(target.window)?;
+        let mut watch = Watch::open(target.pid, self.confirm_timeout)?;
+        self.focus(&mut watch, target, bounds)?;
+        post(self, &mut watch, target)?;
+        watch.confirm(target.window)
     }
 
     /// `at` in global display coordinates, checked to lie on the display.
@@ -270,62 +367,148 @@ impl Input {
     }
 
     /// The window key events go to: the last press's, else the frontmost
-    /// application window on the display, which is focused first.
-    fn key_target(&mut self) -> Result<Target, Error> {
+    /// ordinary application window on the display. Menu bar items and other
+    /// windows above the normal level are skipped: on the main display they
+    /// cover every application's windows.
+    fn key_target(&self) -> Result<Target, Error> {
         if let Some(target) = self.key_target {
             return Ok(target);
         }
         let display = CGDisplayBounds(self.display);
         for window in on_screen_windows()? {
-            if intersects(window.bounds, display)
+            if window.layer == NORMAL_LAYER
+                && intersects(window.bounds, display)
                 && let Some(target) = self.application_target(&window)?
             {
-                self.focus(target)?;
                 return Ok(target);
             }
         }
         Err(Error::NoKeyWindow(self.display_windows()?))
     }
 
-    /// `window` as a delivery target, when an application owns it: its
-    /// owner's connection has a process serial number. `WindowServer`'s own
-    /// windows have none.
+    /// `window` as a delivery target, when an application owns it.
     fn application_target(&self, window: &Window) -> Result<Option<Target>, Error> {
-        Ok(self.symbols.application_psn(window.id)?.map(|psn| Target {
+        Ok(self.symbols.application_owns(window.id)?.then_some(Target {
             pid: window.pid,
-            psn,
             window: window.id,
         }))
     }
 
-    /// Makes `target` the key window of its application, without raising it
-    /// or activating the application.
-    fn focus(&mut self, target: Target) -> Result<(), Error> {
-        if self.key_target == Some(target) {
+    /// Makes `target`'s window, whose frame is `bounds`, its application's
+    /// key window in an application that believes it is active, without
+    /// changing `WindowServer`'s front process, and waits until the
+    /// application reports both.
+    ///
+    /// An application that does not believe it is active drops the key
+    /// events posted to it, and `AppKit` hands the press that makes a window
+    /// key only to a view that accepts first mouse: a text view, like
+    /// `TextEdit`'s, does not. An inactive application is sent the
+    /// application-activated event `AppKit` builds for a real activation,
+    /// then the window is sent a press and release just outside its frame,
+    /// which make it key and reach no view. They go through the same
+    /// per-process queue as the input after them, which `AppKit` handles in
+    /// order, so the window is key before the input arrives.
+    ///
+    /// An inactive application reports as `AXFocusedWindow` a window it did
+    /// not make key, so the press is skipped only for the window this input
+    /// made key last, while the application still reports it focused and
+    /// itself active.
+    fn focus(&mut self, watch: &mut Watch, target: Target, bounds: CGRect) -> Result<(), Error> {
+        let app = Application::new(target.pid, &self.windows, self.confirm_timeout)?;
+        // Before anything is sent, so no change goes unnoticed.
+        let _observation = app.observe(watch.run_loop(), watch.mode())?;
+        let mut report = app.report()?;
+        if self.key_target == Some(target) && report.settled_on(target.window) {
             return Ok(());
         }
-        self.symbols
-            .post_record(target.psn, &focus_record(target.window))?;
-        for kind in MAKE_KEY_KINDS {
-            self.symbols
-                .post_record(target.psn, &make_key_record(target.window, kind))?;
+        if report.active() != Some(true) {
+            let activated = self.activation(target)?;
+            watch.post(&self.symbols, &activated, self.marker());
+        }
+        self.make_key(watch, target, bounds)?;
+        tracing::debug!(
+            pid = target.pid,
+            window = target.window,
+            %report,
+            "asked the application to take input in the window"
+        );
+        let settled = watch.until(|| {
+            report = app.report()?;
+            Ok(report.settled_on(target.window))
+        })?;
+        if !settled {
+            return Err(Error::NotFocused {
+                pid: target.pid,
+                window: target.window,
+                timeout: self.confirm_timeout,
+                report,
+            });
         }
         tracing::debug!(
             pid = target.pid,
-            psn = ?target.psn,
             window = target.window,
-            "posted the records that make the window its application's key window"
+            "the application reports the window focused"
         );
         self.key_target = Some(target);
         Ok(())
+    }
+
+    /// Posts the press and release that make `target`'s window, whose frame
+    /// is `bounds`, its application's key window, at [`MAKE_KEY_PRESS`].
+    fn make_key(&self, watch: &mut Watch, target: Target, bounds: CGRect) -> Result<(), Error> {
+        let point = CGPoint::new(
+            bounds.origin.x + MAKE_KEY_PRESS.x,
+            bounds.origin.y + MAKE_KEY_PRESS.y,
+        );
+        for kind in [CGEventType::LeftMouseDown, CGEventType::LeftMouseUp] {
+            let event = mouse_event(kind, point, MouseButton::Left)?;
+            self.post_mouse(
+                watch,
+                &event,
+                target,
+                bounds,
+                point,
+                CGEventFlags::empty(),
+                1,
+            );
+        }
+        Ok(())
+    }
+
+    /// The application-activated event `AppKit` builds for a real
+    /// activation, addressed to `target`'s window.
+    fn activation(&self, target: Target) -> Result<CFRetained<CGEvent>, Error> {
+        let event = CGEvent::new(None).ok_or_else(|| null_event("CGEventCreate"))?;
+        CGEvent::set_type(Some(&event), APPKIT_DEFINED);
+        CGEvent::set_flags(Some(&event), ACTIVATION_FLAGS);
+        self.stamp_window(&event, target);
+        self.symbols.set_field(
+            &event,
+            FIELD_WINDOW_CONTEXT,
+            i64::from(self.symbols.main_connection()),
+        );
+        self.symbols
+            .set_field(&event, FIELD_APPKIT_SUBTYPE, APPLICATION_ACTIVATED);
+        Ok(event)
+    }
+
+    /// A marker no other event this process posts carries.
+    fn marker(&self) -> i64 {
+        let sequence = self.markers.fetch_add(1, Ordering::Relaxed);
+        (i64::from(std::process::id()) << 32) | i64::from(sequence)
     }
 
     /// Stamps the routing of a mouse event to `target`, whose window has the
     /// frame `window`, and posts it. The receiving window reads the stamped
     /// location as its own top-left-origin point, so the stamp is
     /// window-local.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is one field of the posted event"
+    )]
     fn post_mouse(
         &self,
+        watch: &mut Watch,
         event: &CGEvent,
         target: Target,
         window: CGRect,
@@ -346,7 +529,6 @@ impl Input {
             .set_field(event, FIELD_WINDOW_HANDLING_EVENT, number);
         tracing::debug!(
             pid = target.pid,
-            psn = ?target.psn,
             window = target.window,
             kind = ?CGEvent::r#type(Some(event)),
             ?flags,
@@ -355,7 +537,7 @@ impl Input {
             window_local = ?local,
             "posting a mouse event"
         );
-        self.symbols.post_to_pid(target.pid, event);
+        watch.post(&self.symbols, event, self.marker());
     }
 
     fn stamp_window(&self, event: &CGEvent, target: Target) {
@@ -367,6 +549,7 @@ impl Input {
 
     fn post_key(
         &self,
+        watch: &mut Watch,
         target: Target,
         key: CGKeyCode,
         down: bool,
@@ -384,7 +567,6 @@ impl Input {
         self.stamp_window(&event, target);
         tracing::debug!(
             pid = target.pid,
-            psn = ?target.psn,
             window = target.window,
             key,
             down,
@@ -392,7 +574,7 @@ impl Input {
             units = text.len(),
             "posting a keyboard event"
         );
-        self.symbols.post_to_pid(target.pid, &event);
+        watch.post(&self.symbols, &event, self.marker());
         Ok(())
     }
 }
@@ -467,31 +649,6 @@ fn window_bounds(window: u32) -> Result<CGRect, Error> {
         .ok_or_else(|| Error::Platform(format!("window {window} is no longer listed")))
 }
 
-/// Kinds of the record pair that makes a window its application's key window.
-const MAKE_KEY_KINDS: [u8; 2] = [0x01, 0x02];
-
-/// The record that tells an application it holds input focus in `window`,
-/// without raising the window or activating the application.
-fn focus_record(window: u32) -> [u8; RECORD_LEN] {
-    let mut record = [0_u8; RECORD_LEN];
-    record[0x04] = 0xF8;
-    record[0x08] = 0x0D;
-    record[0x3C..0x40].copy_from_slice(&window.to_le_bytes());
-    record[0x8A] = 0x01;
-    record
-}
-
-/// One record of the pair that makes `window` its application's key window.
-fn make_key_record(window: u32, kind: u8) -> [u8; RECORD_LEN] {
-    let mut record = [0_u8; RECORD_LEN];
-    record[0x04] = 0xF8;
-    record[0x08] = kind;
-    record[0x20..0x30].fill(0xFF);
-    record[0x3A] = 0x10;
-    record[0x3C..0x40].copy_from_slice(&window.to_le_bytes());
-    record
-}
-
 /// `text` as UTF-16, cut between characters into pieces one keyboard event
 /// carries.
 fn utf16_chunks(text: &str) -> Vec<Vec<u16>> {
@@ -519,22 +676,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn records_carry_their_length_kind_and_window() {
-        let focus = focus_record(0x0102_0304);
-        assert_eq!(focus.len(), 0xF8);
-        assert_eq!(focus[0x04], 0xF8);
-        assert_eq!(focus[0x08], 0x0D);
-        assert_eq!(focus[0x3C..0x40], [0x04, 0x03, 0x02, 0x01]);
-        assert_eq!(focus[0x8A], 0x01);
-
-        let make_key = make_key_record(7, 0x02);
-        assert_eq!(make_key[0x08], 0x02);
-        assert_eq!(make_key[0x3A], 0x10);
-        assert!(make_key[0x20..0x30].iter().all(|byte| *byte == 0xFF));
-        assert_eq!(make_key[0x3C..0x40], [7, 0, 0, 0]);
-    }
-
-    #[test]
     fn text_is_cut_between_characters() {
         assert_eq!(utf16_chunks(""), Vec::<Vec<u16>>::new());
         assert_eq!(
@@ -555,5 +696,38 @@ mod tests {
             String::from_utf16(&chunks[1]).ok().as_deref(),
             Some("\u{1F600}")
         );
+    }
+
+    /// The activation event carries what `AppKit` routes an
+    /// application-activated event by. Building an event posts nothing.
+    #[test]
+    fn the_activation_event_names_the_window_and_connection() {
+        let input = Input {
+            symbols: EventSymbols::resolve().expect("the event functions resolve"),
+            windows: WindowLookup::resolve().expect("the window lookup resolves"),
+            display: 0,
+            confirm_timeout: DEFAULT_CONFIRM_TIMEOUT,
+            markers: AtomicU32::new(0),
+            held: None,
+            key_target: None,
+        };
+        let target = Target { pid: 42, window: 7 };
+        let event = input.activation(target).expect("the event is built");
+        let field = |field: u32| {
+            CGEvent::integer_value_field(Some(&event), objc2_core_graphics::CGEventField(field))
+        };
+        assert_eq!(CGEvent::r#type(Some(&event)), APPKIT_DEFINED);
+        assert_eq!(CGEvent::flags(Some(&event)), ACTIVATION_FLAGS);
+        assert_eq!(field(FIELD_WINDOW_NUMBER), 7);
+        assert_eq!(field(FIELD_TARGET_PID), 42);
+        assert_eq!(field(FIELD_APPKIT_SUBTYPE), APPLICATION_ACTIVATED);
+        assert_eq!(
+            field(FIELD_WINDOW_CONTEXT),
+            i64::from(input.symbols.main_connection())
+        );
+
+        let first = input.marker();
+        assert_ne!(first, input.marker(), "every marker is new");
+        assert_eq!(first >> 32, i64::from(std::process::id()));
     }
 }

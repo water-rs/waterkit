@@ -223,7 +223,7 @@ pub struct Window {
     pub pid: libc::pid_t,
     pub bounds: CGRect,
     pub alpha: f64,
-    layer: i32,
+    pub layer: i32,
     on_screen: bool,
     owner: Option<CFRetained<CFString>>,
 }

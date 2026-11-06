@@ -27,7 +27,11 @@ objc2-foundation = { workspace = true, features = [
     "NSArray", "NSProcessInfo", "NSString", "NSValue",
 ] }
 objc2-core-foundation = { workspace = true, features = [
-    "CFArray", "CFCGTypes", "CFDate", "CFDictionary", "CFNumber", "CFRunLoop", "CFString",
+    "CFArray", "CFCGTypes", "CFDate", "CFDictionary", "CFMachPort", "CFNumber", "CFRunLoop",
+    "CFString",
+] }
+objc2-application-services = { workspace = true, features = [
+    "std", "AXError", "AXUIElement", "HIServices", "libc",
 ] }
 objc2-core-graphics = { workspace = true, features = [
     "CGDirectDisplay", "CGDisplayConfiguration", "CGError", "CGEvent", "CGEventTypes",
@@ -38,10 +42,13 @@ objc2-core-graphics = { workspace = true, features = [
 # The automation test runs its own harness on every target.
 libtest-mimic = "0.8"
 
-# The automation test opens a window on the virtual display it creates, and
+# The automation test opens windows on the virtual display it creates, in its
+# own process and in a child that reports what it receives as JSON lines, and
 # prints the crate's logs.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc2-app-kit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tracing-subscriber.workspace = true
 
 [[test]]

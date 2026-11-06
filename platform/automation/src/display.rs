@@ -25,7 +25,8 @@ use objc2_foundation::{NSArray, NSNumber, NSString};
 use waterkit_core::RefreshRate;
 
 use crate::error::platform;
-use crate::skylight::{DisplayLists, SkyLight};
+use crate::framework::Framework;
+use crate::skylight::DisplayLists;
 use crate::topology::Presence;
 use crate::{DisplayState, Error};
 
@@ -170,7 +171,7 @@ impl VirtualDisplay {
     ///   and unmirrored after the timeouts;
     /// - [`Error::Platform`] when a display configuration call fails.
     pub fn new(config: &VirtualDisplayConfig, _mtm: MainThreadMarker) -> Result<Self, Error> {
-        let skylight = SkyLight::open()?;
+        let skylight = Framework::skylight()?;
         let lists = DisplayLists::resolve(&skylight)?;
         let classes = Classes::get()?;
         let (pixels_wide, pixels_high) = config.pixels()?;
@@ -533,7 +534,7 @@ mod tests {
     /// calls. Looking classes and methods up creates and shows nothing.
     #[test]
     fn the_private_display_api_has_the_expected_shape() {
-        let _skylight = SkyLight::open().expect("SkyLight opens");
+        let _skylight = Framework::skylight().expect("SkyLight opens");
         Classes::get().expect("the CGVirtualDisplay classes exist");
         let manager = class(c"SLWindowMirroringManager").expect("the mirroring manager exists");
         let method = manager

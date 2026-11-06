@@ -266,16 +266,20 @@ mod unsupported_display {
     #[derive(Debug)]
     pub struct PixelBufferInner(Infallible);
 
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "the facade's accessors match macOS, which reads CoreVideo at runtime"
+    )]
     impl PixelBufferInner {
-        pub const fn width(&self) -> u32 {
+        pub fn width(&self) -> u32 {
             match self.0 {}
         }
 
-        pub const fn height(&self) -> u32 {
+        pub fn height(&self) -> u32 {
             match self.0 {}
         }
 
-        pub const fn pixel_format(&self) -> PixelFormat {
+        pub fn pixel_format(&self) -> PixelFormat {
             match self.0 {}
         }
 

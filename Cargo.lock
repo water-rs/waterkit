@@ -8831,6 +8831,7 @@ dependencies = [
  "futures",
  "jni",
  "js-sys",
+ "libtest-mimic",
  "ndk-context",
  "objc2 0.6.5",
  "objc2-application-services",

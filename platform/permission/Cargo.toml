@@ -125,6 +125,9 @@ web-sys = { version = "0.3", features = [
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/PermissionHelper.kt"]
 
+[dev-dependencies]
+libtest-mimic = "0.8"
+
 # Its `main` wires the helper entry the way an app does.
 [[test]]
 name = "helper_entry"

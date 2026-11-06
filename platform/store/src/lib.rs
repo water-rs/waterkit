@@ -146,7 +146,8 @@ pub async fn capabilities() -> Result<StoreCapabilities, StoreError> {
 /// A connection to the platform store.
 ///
 /// On Android it owns the `BillingClient` (connected in [`Store::connect`],
-/// ended on drop); on Apple it is a thin handle — `StoreKit` needs no session.
+/// ended on drop); on Apple it owns the `Transaction.updates` listener and
+/// the finish state of every transaction it delivered.
 #[derive(Debug)]
 pub struct Store {
     catalog: std::sync::Arc<Catalog>,
@@ -269,6 +270,12 @@ impl Store {
     /// subscriptions, each either still unfinished or already finished.
     ///
     /// A consumed consumable is never an entitlement.
+    ///
+    /// On Apple, a transaction this store delivered — through a purchase
+    /// call, [`StoreEvents`] or an earlier unfinished entitlement — is
+    /// finished exactly when [`Purchase::finish`] ran on it; `StoreKit`'s
+    /// own unfinished-transaction listing, which lags purchases and
+    /// finishes, decides only for transactions the store has not delivered.
     ///
     /// # Errors
     /// The store's own error (`network`, `platform`, `unavailable`,

@@ -8740,6 +8740,7 @@ dependencies = [
  "objc2-security",
  "serde",
  "serde_json",
+ "tempfile",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "waterkit-build",

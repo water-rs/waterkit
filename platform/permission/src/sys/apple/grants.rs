@@ -8,15 +8,17 @@
 
 use core::cell::RefCell;
 use std::io::Write as _;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Output};
 use std::ptr::NonNull;
 use std::time::Duration;
 
+use async_io::Async;
 use async_process::{Command, Stdio};
 use block2::RcBlock;
-use futures::FutureExt as _;
 use futures::channel::oneshot;
+use futures::{AsyncReadExt as _, FutureExt as _};
 use objc2::rc::Retained;
 use objc2::{AnyThread as _, available};
 use objc2_application_services::{
@@ -35,7 +37,7 @@ use objc2_security::{
     kSecCodeInfoFlags,
 };
 
-use crate::helper::{Grant, GrantReport, HelperCommand};
+use crate::helper::{Grant, GrantReport, HelperCommand, RequestReport};
 use crate::{Permission, PermissionError, PermissionStatus};
 
 /// How long a status helper may take to print its report. It does two TCC
@@ -47,9 +49,10 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 /// the capture may wait on the user answering replayd's consent alert.
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// How long a request instance may take to exit. It raises the system
-/// prompt, which answers asynchronously, and exits; the direct-capture
-/// request first waits up to [`CAPTURE_TIMEOUT`] for its capture.
+/// How long a request instance may take to launch, report and exit. It
+/// raises the system prompt, which answers asynchronously, and exits; the
+/// direct-capture request first waits up to [`CAPTURE_TIMEOUT`] for its
+/// capture.
 const REQUEST_TIMEOUT: Duration = CAPTURE_TIMEOUT.saturating_add(Duration::from_secs(10));
 
 // MARK: - Helper side
@@ -67,12 +70,25 @@ pub fn run(command: HelperCommand) -> ExitCode {
                 .write_all(&report.encode())
                 .expect("the parent reads the grant report from stdout");
         }
-        HelperCommand::Request(Grant::ScreenRecording) => {
+        HelperCommand::Request { grant, report } => {
+            let reporter = Reporter::connect(&report);
+            reporter.report_panics();
+            raise_prompt(grant);
+            reporter.send(&RequestReport::Completed);
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Raises `grant`'s system prompt.
+fn raise_prompt(grant: Grant) {
+    match grant {
+        Grant::ScreenRecording => {
             // The prompt answers asynchronously; the return value is the
             // grant as it stood before the user saw it.
             CGRequestScreenCaptureAccess();
         }
-        HelperCommand::Request(Grant::Accessibility) => {
+        Grant::Accessibility => {
             // SAFETY: an immutable string constant ApplicationServices
             // exports.
             let key: &CFString = unsafe { kAXTrustedCheckOptionPrompt };
@@ -82,9 +98,57 @@ pub fn run(command: HelperCommand) -> ExitCode {
             // is asynchronous and does not change the return value.
             unsafe { AXIsProcessTrustedWithOptions(Some(options.as_opaque())) };
         }
-        HelperCommand::Request(Grant::DirectScreenCapture) => raise_direct_capture_consent(),
+        Grant::DirectScreenCapture => raise_direct_capture_consent(),
     }
-    ExitCode::SUCCESS
+}
+
+/// The request instance's end of the socket the app listens on. The
+/// instance holds it until it exits, so the app reads to its end.
+struct Reporter(UnixStream);
+
+impl Reporter {
+    /// Connects to the app's socket at `path`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the socket does not accept the connection; the app then
+    /// fails its request when no report arrives in time.
+    fn connect(path: &Path) -> Self {
+        Self(UnixStream::connect(path).unwrap_or_else(|error| {
+            panic!(
+                "connect to the request report socket {}: {error}",
+                path.display()
+            )
+        }))
+    }
+
+    /// Sends a panic's description before the panic ends this instance,
+    /// under `panic = "abort"` as much as under unwinding.
+    fn report_panics(&self) {
+        let stream = self
+            .0
+            .try_clone()
+            .expect("duplicate the request report socket for the panic hook");
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let report = RequestReport::Panicked(info.to_string());
+            // A write the app is no longer reading has no one to tell.
+            let _ = (&stream).write_all(&report.encode());
+            previous(info);
+        }));
+    }
+
+    /// Sends `report`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the app stopped reading; the panic report then fails
+    /// too, and the app sees the socket close without a report.
+    fn send(&self, report: &RequestReport) {
+        (&self.0)
+            .write_all(&report.encode())
+            .expect("send the request report to the app");
+    }
 }
 
 /// Captures the main display once through `SCScreenshotManager` and waits
@@ -274,31 +338,116 @@ async fn fresh_report() -> Result<GrantReport, String> {
 const ENTRY_HINT: &str =
     "the app's main must call waterkit_permission::run_helper_entry_if_requested first";
 
-/// `open -n -W -g <app> --args <request command>`: a new instance (`-n`)
+/// `open -n -g <app> --args <request command>`: a new instance (`-n`)
 /// launched by `LaunchServices`, kept in the background (`-g`) so only the
-/// system prompt takes focus, and waited for (`-W`).
+/// system prompt takes focus; it reports through a [`ReportSocket`] and
+/// returns once the instance exited.
+///
+/// `open -W` cannot wait for it: `open` watches the pid only after the
+/// launch completes, and an instance that has already exited by then makes
+/// it fail (`kevent` reports ESRCH) or return success unwatched, while the
+/// instance's own exit status never reaches `open`'s.
 async fn launch_request_instance(app: &Path, grant: Grant) -> Result<(), String> {
-    let output = bounded(
-        Command::new("/usr/bin/open")
-            .args(["-n", "-W", "-g"])
-            .arg(app)
-            .arg("--args")
-            .args(HelperCommand::Request(grant).args())
-            .stdin(Stdio::null())
-            .kill_on_drop(true)
-            .output(),
+    let socket = ReportSocket::bind()?;
+    let launch = Command::new("/usr/bin/open")
+        .args(["-n", "-g"])
+        .arg(app)
+        .arg("--args")
+        .args(
+            HelperCommand::Request {
+                grant,
+                report: socket.path.clone(),
+            }
+            .args(),
+        )
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    request_outcome(
+        &format!("the {} request instance of {}", grant.arg(), app.display()),
+        launch,
+        socket,
         REQUEST_TIMEOUT,
     )
     .await
-    .ok_or_else(|| {
-        format!(
-            "the {} request instance of {} did not exit within {REQUEST_TIMEOUT:?}",
-            grant.arg(),
-            app.display()
-        )
-    })?
-    .map_err(|error| format!("launch the {} request instance: {error}", grant.arg()))?;
-    check_exit(&format!("the {} request instance", grant.arg()), &output)
+}
+
+/// Waits up to `timeout` for `launch` to start the request instance and
+/// for the instance's report through `socket`, ending when the instance
+/// exited. `what` names the instance in errors.
+async fn request_outcome(
+    what: &str,
+    launch: impl Future<Output = std::io::Result<Output>>,
+    socket: ReportSocket,
+    timeout: Duration,
+) -> Result<(), String> {
+    let outcome = async {
+        let output = launch
+            .await
+            .map_err(|error| format!("launch {what}: {error}"))?;
+        check_exit(&format!("/usr/bin/open launching {what}"), &output)?;
+        let report = socket.read_to_close(what).await?;
+        if report.is_empty() {
+            return Err(format!(
+                "{what} exited without reporting how its request ended; it crashed or was killed"
+            ));
+        }
+        match RequestReport::decode(&report) {
+            Ok(RequestReport::Completed) => Ok(()),
+            Ok(RequestReport::Panicked(panic)) => Err(format!("{what} {panic}")),
+            Err(error) => Err(format!(
+                "{what} sent no single request report ({error}): {}",
+                String::from_utf8_lossy(&report)
+            )),
+        }
+    };
+    bounded(outcome, timeout)
+        .await
+        .unwrap_or_else(|| Err(format!("{what} did not report and exit within {timeout:?}")))
+}
+
+/// A socket in a directory of its own that a request instance connects to
+/// and reports through. Dropping it removes both.
+struct ReportSocket {
+    listener: Async<UnixListener>,
+    path: PathBuf,
+    _dir: tempfile::TempDir,
+}
+
+impl ReportSocket {
+    fn bind() -> Result<Self, String> {
+        let dir = tempfile::Builder::new()
+            .prefix("waterkit-")
+            .tempdir()
+            .map_err(|error| {
+                format!("create the directory for the request report socket: {error}")
+            })?;
+        let path = dir.path().join("report");
+        let listener = Async::<UnixListener>::bind(&path).map_err(|error| {
+            format!("bind the request report socket {}: {error}", path.display())
+        })?;
+        Ok(Self {
+            listener,
+            path,
+            _dir: dir,
+        })
+    }
+
+    /// Everything the instance sends on its one connection, up to the close
+    /// its exit causes. `what` names the instance in errors.
+    async fn read_to_close(&self, what: &str) -> Result<Vec<u8>, String> {
+        let (mut stream, _) = self
+            .listener
+            .accept()
+            .await
+            .map_err(|error| format!("accept the report connection of {what}: {error}"))?;
+        let mut report = Vec::new();
+        stream
+            .read_to_end(&mut report)
+            .await
+            .map_err(|error| format!("read the report of {what}: {error}"))?;
+        Ok(report)
+    }
 }
 
 /// `future`'s output, or `None` once `timeout` passes first.
@@ -405,9 +554,154 @@ fn signature_flags(path: &Path) -> Result<SecCodeSignatureFlags, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use async_process::Command;
     use objc2_security::SecCodeSignatureFlags;
 
-    use super::{ENTRY_HINT, fresh_report, signature_flags};
+    use super::{
+        ENTRY_HINT, ReportSocket, Reporter, RequestReport, fresh_report, request_outcome,
+        signature_flags,
+    };
+
+    const INSTANCE: &str = "the screen-recording request instance";
+
+    /// Far more than a report already waiting in the socket takes to read.
+    const TIMEOUT: Duration = Duration::from_secs(2);
+
+    /// The outcome of a launch that succeeds and an instance that does what
+    /// `instance` does with its end of the socket and exits, all before the
+    /// app starts waiting: no instance exits too fast for the app.
+    fn outcome_of(instance: impl FnOnce(Reporter)) -> Result<(), String> {
+        let socket = ReportSocket::bind().unwrap();
+        instance(Reporter::connect(&socket.path));
+        futures::executor::block_on(request_outcome(
+            INSTANCE,
+            Command::new("/usr/bin/true").output(),
+            socket,
+            TIMEOUT,
+        ))
+    }
+
+    #[test]
+    fn a_completed_request_succeeds() {
+        outcome_of(|reporter| reporter.send(&RequestReport::Completed)).unwrap();
+    }
+
+    #[test]
+    fn a_panicked_request_fails_with_the_panic() {
+        let error = outcome_of(|reporter| {
+            reporter.send(&RequestReport::Panicked(
+                "panicked at src/main.rs:3:5:\n画面収録 화면 녹화 屏幕录制".into(),
+            ));
+        })
+        .unwrap_err();
+        assert_eq!(
+            error,
+            format!("{INSTANCE} panicked at src/main.rs:3:5:\n画面収録 화면 녹화 屏幕录制")
+        );
+    }
+
+    #[test]
+    fn an_instance_that_exits_without_a_report_fails() {
+        let error = outcome_of(drop).unwrap_err();
+        assert!(
+            error.starts_with(&format!(
+                "{INSTANCE} exited without reporting how its request ended"
+            )),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_report_followed_by_more_fails() {
+        let error = outcome_of(|reporter| {
+            reporter.send(&RequestReport::Completed);
+            reporter.send(&RequestReport::Panicked("late".into()));
+        })
+        .unwrap_err();
+        assert!(
+            error.starts_with(&format!("{INSTANCE} sent no single request report")),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_instance_that_never_reports_times_out() {
+        let socket = ReportSocket::bind().unwrap();
+        let error = futures::executor::block_on(request_outcome(
+            INSTANCE,
+            Command::new("/usr/bin/true").output(),
+            socket,
+            Duration::from_millis(200),
+        ))
+        .unwrap_err();
+        assert_eq!(
+            error,
+            format!("{INSTANCE} did not report and exit within 200ms")
+        );
+    }
+
+    /// An instance still running after its report holds the app until it
+    /// exits, and then the bound ends the wait.
+    #[test]
+    fn an_instance_that_does_not_exit_times_out() {
+        let socket = ReportSocket::bind().unwrap();
+        let path = socket.path.clone();
+        let (exit, exited) = std::sync::mpsc::channel::<()>();
+        let instance = std::thread::spawn(move || {
+            let reporter = Reporter::connect(&path);
+            reporter.send(&RequestReport::Completed);
+            exited.recv().unwrap_err();
+        });
+        let error = futures::executor::block_on(request_outcome(
+            INSTANCE,
+            Command::new("/usr/bin/true").output(),
+            socket,
+            Duration::from_millis(200),
+        ))
+        .unwrap_err();
+        drop(exit);
+        instance.join().unwrap();
+        assert_eq!(
+            error,
+            format!("{INSTANCE} did not report and exit within 200ms")
+        );
+    }
+
+    #[test]
+    fn a_failed_launch_fails_with_its_error() {
+        let socket = ReportSocket::bind().unwrap();
+        let error = futures::executor::block_on(request_outcome(
+            INSTANCE,
+            Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    "echo '_LSOpenURLsWithCompletionHandler() failed with error -10810.' >&2; \
+                     exit 1",
+                ])
+                .output(),
+            socket,
+            TIMEOUT,
+        ))
+        .unwrap_err();
+        assert_eq!(
+            error,
+            format!(
+                "/usr/bin/open launching {INSTANCE} exited with exit status: 1: \
+                 _LSOpenURLsWithCompletionHandler() failed with error -10810."
+            )
+        );
+    }
+
+    #[test]
+    fn the_socket_and_its_directory_go_with_it() {
+        let socket = ReportSocket::bind().unwrap();
+        let dir = socket.path.parent().unwrap().to_owned();
+        assert!(socket.path.exists());
+        drop(socket);
+        assert!(!dir.exists(), "{}", dir.display());
+    }
 
     /// The libtest harness is an app whose `main` does not wire the entry:
     /// it rejects the helper flag, and the read names what is missing.

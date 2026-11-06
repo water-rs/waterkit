@@ -66,12 +66,17 @@
 //!
 //! # Delivery
 //!
-//! A press goes to the topmost on-screen window under its point that an
-//! application owns. Moves and the release while a button is held go to the
-//! same window, as drags. Key events go to the window the last press landed
-//! on; before any press, to the frontmost application window of the normal
-//! window level on the display. When no window takes an event, the error
-//! carries every window that intersects the display ([`DisplayWindows`]);
+//! A press goes to the window `WindowServer` hands a click at its point to
+//! (`SLSFindWindowAndOwner`): the frontmost window whose shape holds the
+//! point, past windows that ignore mouse events, such as the transparent
+//! overlays system processes keep over the main display. A window no
+//! application owns, such as the menu bar, fails with
+//! [`Error::NotApplicationWindow`]. Moves and the release while a button is
+//! held go to the press's window, as drags. Key events go to the window the
+//! last press landed on; before any press, to the frontmost application
+//! window of the normal window level on the display that does not ignore
+//! mouse events. When no window takes an event, the error carries every
+//! window that intersects the display ([`DisplayWindows`]);
 //! [`Input::windows`] lists them all.
 //!
 //! An application that does not believe it is active drops the key events
@@ -87,7 +92,8 @@
 //! in order. [`Input::post`] then waits, on the application's Accessibility
 //! notifications, until it reports itself active with the window focused
 //! (`AXFrontmost`, `AXFocusedWindow`), and fails with [`Error::NotFocused`]
-//! when it does not in time.
+//! when it does not in time, or with [`Error::NotificationUnsupported`] when
+//! the application does not post the notifications that wait is woken by.
 //!
 //! The events themselves are posted to the owning process with
 //! `SLEventPostToPid`, stamped with the target window and its window-local

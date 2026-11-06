@@ -3,7 +3,7 @@
 use core::fmt;
 
 use objc2_core_foundation::{
-    CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGPoint, CGRect,
+    CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGRect,
 };
 use objc2_core_graphics::{
     CGDirectDisplayID, CGRectMakeWithDictionaryRepresentation, CGWindowListCopyWindowInfo,
@@ -310,12 +310,6 @@ pub fn list(option: CGWindowListOption, relative_to: u32) -> Result<Vec<Window>,
     Ok(windows)
 }
 
-/// Whether `point` lies in `rect`, edges half-open.
-pub fn contains(rect: CGRect, point: CGPoint) -> bool {
-    (rect.origin.x..rect.origin.x + rect.size.width).contains(&point.x)
-        && (rect.origin.y..rect.origin.y + rect.size.height).contains(&point.y)
-}
-
 /// Whether `a` and `b` overlap, edges half-open.
 pub fn intersects(a: CGRect, b: CGRect) -> bool {
     a.origin.x < b.origin.x + b.size.width
@@ -326,7 +320,7 @@ pub fn intersects(a: CGRect, b: CGRect) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use objc2_core_foundation::CGSize;
+    use objc2_core_foundation::{CGPoint, CGSize};
     use objc2_core_graphics::kCGNullWindowID;
 
     use super::*;
@@ -338,8 +332,6 @@ mod tests {
     #[test]
     fn rectangles_are_half_open() {
         let window = rect(10.0, 20.0, 100.0, 50.0);
-        assert!(contains(window, CGPoint::new(10.0, 20.0)));
-        assert!(!contains(window, CGPoint::new(110.0, 20.0)));
         assert!(intersects(window, rect(109.0, 69.0, 5.0, 5.0)));
         assert!(!intersects(window, rect(110.0, 20.0, 5.0, 5.0)));
     }

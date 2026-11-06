@@ -3,7 +3,7 @@ use core::time::Duration;
 
 use keyboard_types::{Code, Modifiers};
 
-use crate::{DisplayWindows, FocusReport, Point};
+use crate::{DisplayWindows, FocusReport, ListedWindow, Point};
 
 /// Failure creating a display or posting input.
 #[derive(Debug, Clone, thiserror::Error)]
@@ -57,13 +57,23 @@ pub enum Error {
         /// The point, in the display's points.
         at: Point,
     },
-    /// No application window is under the point.
-    #[error("no application window is at {at} on {windows}")]
+    /// No window takes a press at the point.
+    #[error("no window takes a press at {at} on {windows}")]
     NoWindow {
         /// The point, in the display's points.
         at: Point,
         /// The display and every window that intersected it.
         windows: DisplayWindows,
+    },
+    /// The window that takes a press at the point belongs to no application,
+    /// such as `WindowServer`'s menu bar, so no process can be handed the
+    /// event.
+    #[error("the window that takes a press at {at} is {window}, which no application owns")]
+    NotApplicationWindow {
+        /// The point, in the display's points.
+        at: Point,
+        /// The window.
+        window: ListedWindow,
     },
     /// No application window is on the display to take key events.
     #[error("no application window can take key events on {0}")]
@@ -84,6 +94,20 @@ pub enum Error {
         timeout: Duration,
         /// What the application reported last.
         report: FocusReport,
+    },
+    /// The application owning the target window does not post an
+    /// Accessibility notification the focus wait is woken by, so it cannot
+    /// tell when the application has focused the window; nothing was sent.
+    #[error(
+        "pid {pid} does not support the Accessibility notification {notification}, which the wait for it to focus window {window} needs"
+    )]
+    NotificationUnsupported {
+        /// The owning process.
+        pid: libc::pid_t,
+        /// The target window.
+        window: u32,
+        /// The notification it refused.
+        notification: &'static str,
     },
     /// `WindowServer` did not route every posted event into the target
     /// process; some of them may have arrived.

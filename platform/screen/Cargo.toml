@@ -121,9 +121,10 @@ winit = "0.30"
 # The display-stream test creates its own `CGVirtualDisplay` to capture.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 futures-timer.workspace = true
+libtest-mimic = "0.8"
 objc2-core-foundation = { workspace = true, features = ["CFDate", "CFRunLoop"] }
 objc2-core-graphics = { workspace = true, features = ["CGDisplayConfiguration"] }
-objc2-foundation = { workspace = true, features = ["NSArray", "NSString"] }
+objc2-foundation = { workspace = true, features = ["NSArray", "NSString", "NSValue"] }
 
 [[example]]
 name = "demo"
@@ -139,6 +140,7 @@ required-features = ["gpu"]
 
 [[test]]
 name = "display_stream"
+harness = false
 required-features = ["display-stream", "gpu"]
 
 # Android helper classes the packager compiles into the application's

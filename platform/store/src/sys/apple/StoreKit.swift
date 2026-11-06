@@ -373,25 +373,49 @@ private actor EventQueue {
     }
 }
 
+/// The finish action of every verified transaction this session handed to
+/// Rust, by id, until Rust finishes it. Each action finishes the very
+/// `Transaction` StoreKit delivered; `Transaction.unfinished` is not
+/// guaranteed to list it yet.
+private actor DeliveredTransactions {
+    private var finishers: [UInt64: @Sendable () async -> Void] = [:]
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func record(_ transaction: StoreKit.Transaction) {
+        finishers[transaction.id] = { await transaction.finish() }
+    }
+
+    func take(_ id: UInt64) -> (@Sendable () async -> Void)? {
+        finishers.removeValue(forKey: id)
+    }
+}
+
 /// The StoreKit session: owns the `Transaction.updates` listener that feeds
 /// the event stream from `connect` until the store drops. Thread-safe by
 /// construction: every mutating call dispatches a `Task`, and the only
-/// mutable state lives in the `EventQueue` actor.
+/// mutable state lives in the `EventQueue` and `DeliveredTransactions`
+/// actors.
 final class AppleStore: @unchecked Sendable {
     private let catalog: [String: String]
     private let queue: EventQueue
+    private let delivered: DeliveredTransactions
     private let updatesTask: Task<Void, Never>
 
     init(catalogJson: String) {
         catalog = AppleStore.decodeCatalog(catalogJson)
         let queue = EventQueue()
         self.queue = queue
+        let delivered = DeliveredTransactions()
+        self.delivered = delivered
         updatesTask = Task {
             guard #available(iOS 15.0, macOS 12.0, *) else {
                 await queue.end()
                 return
             }
             for await result in StoreKit.Transaction.updates {
+                if case .verified(let transaction) = result {
+                    await delivered.record(transaction)
+                }
                 await queue.enqueue(
                     result.unsafePayloadValue.id, json: AppleStore.encodeUpdate(result))
             }
@@ -512,6 +536,7 @@ final class AppleStore: @unchecked Sendable {
             case .success(let verification):
                 switch verification {
                 case .verified(let transaction):
+                    await delivered.record(transaction)
                     return encoded(
                         WireReply(
                             ok: WireOutcome(
@@ -558,6 +583,7 @@ final class AppleStore: @unchecked Sendable {
         for await result in StoreKit.Transaction.currentEntitlements {
             switch result {
             case .verified(let transaction):
+                await delivered.record(transaction)
                 let purchase = wirePurchase(
                     transaction, jws: result.jwsRepresentation)
                 items.append(
@@ -612,6 +638,26 @@ final class AppleStore: @unchecked Sendable {
         let callback = ResponseCallback(callback)
         Task { callback.call(await entitlements()) }
     }
+
+    // Finishes the transaction this session delivered under `transaction_id`
+    // (a purchase result, an update or an entitlement).
+    func store_finish(transaction_id: RustStr, callback: @escaping (String) -> Void) {
+        let callback = ResponseCallback(callback)
+        let transactionId = transaction_id.toString()
+        let delivered = delivered
+        Task {
+            guard let id = UInt64(transactionId), let finish = await delivered.take(id) else {
+                callback.call(
+                    errorReply(
+                        WireError(
+                            "platform",
+                            "no delivered transaction with id \(transactionId)")))
+                return
+            }
+            await finish()
+            callback.call(encoded(WireReply(ok: true)))
+        }
+    }
 }
 
 func store_capabilities() -> RustString {
@@ -624,27 +670,4 @@ func store_capabilities() -> RustString {
 
 func store_connect(catalog_json: RustStr) -> AppleStore {
     AppleStore(catalogJson: catalog_json.toString())
-}
-
-func store_finish(transaction_id: RustStr, callback: @escaping (String) -> Void) {
-    let callback = ResponseCallback(callback)
-    let transactionId = transaction_id.toString()
-    Task {
-        guard #available(iOS 15.0, macOS 12.0, *) else {
-            callback.call(unavailableReply())
-            return
-        }
-        for await result in StoreKit.Transaction.unfinished {
-            if case .verified(let transaction) = result, String(transaction.id) == transactionId {
-                await transaction.finish()
-                callback.call(encoded(WireReply(ok: true)))
-                return
-            }
-        }
-        callback.call(
-            errorReply(
-                WireError(
-                    "platform",
-                    "no unfinished transaction with id \(transactionId)")))
-    }
 }

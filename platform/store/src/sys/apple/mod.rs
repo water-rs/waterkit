@@ -60,10 +60,19 @@ impl Drop for Store {
     }
 }
 
-/// The platform's finish handle: the `StoreKit` transaction id.
-#[derive(Debug)]
+/// The platform's finish handle: the session that delivered the
+/// `StoreKit` transaction, and the transaction's id.
 pub struct Purchase {
+    session: ffi::AppleStore,
     transaction_id: String,
+}
+
+impl std::fmt::Debug for Purchase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Purchase")
+            .field("transaction_id", &self.transaction_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Store {
@@ -97,7 +106,7 @@ impl Store {
         let product_id = product.as_str().to_owned();
         let json = reply(|callback| self.handle.store_purchase(&product_id, callback)).await?;
         let outcome: wire::OutcomeJson = wire::decode_reply(&json)?;
-        outcome.into_outcome(|purchase| build_purchase(purchase, catalog))
+        outcome.into_outcome(|purchase| build_purchase(purchase, catalog, &self.handle))
     }
 
     pub async fn entitlements(&self, catalog: &Catalog) -> Result<Vec<Entitlement>, StoreError> {
@@ -107,7 +116,7 @@ impl Store {
             .into_iter()
             .map(|entitlement| {
                 entitlement.into_entitlement(
-                    |purchase| build_purchase(purchase, catalog),
+                    |purchase| build_purchase(purchase, catalog, &self.handle),
                     |purchase| build_transaction(purchase, catalog),
                 )
             })
@@ -129,7 +138,7 @@ fn event_stream(handle: ffi::AppleStore, catalog: &Arc<Catalog>) -> EventStream 
             let event = next.and_then(|json| wire::decode_reply::<wire::EventJson>(&json));
             match event {
                 Ok(wire::EventJson::Purchase(purchase)) => Some((
-                    build_purchase(*purchase, &catalog),
+                    build_purchase(*purchase, &catalog, &handle),
                     (handle, catalog, false),
                 )),
                 Ok(wire::EventJson::End(ended)) => {
@@ -144,13 +153,19 @@ fn event_stream(handle: ffi::AppleStore, catalog: &Arc<Catalog>) -> EventStream 
 }
 
 pub async fn finish(purchase: Purchase, _kind: ProductKind) -> Result<(), StoreError> {
-    let json = reply(|callback| ffi::store_finish(&purchase.transaction_id, callback)).await?;
+    let json = reply(|callback| {
+        purchase
+            .session
+            .store_finish(&purchase.transaction_id, callback);
+    })
+    .await?;
     wire::decode_reply::<serde::de::IgnoredAny>(&json).map(|_| ())
 }
 
 fn build_purchase(
     wire: wire::PurchaseJson,
     catalog: &Catalog,
+    session: &ffi::AppleStore,
 ) -> Result<crate::Purchase, StoreError> {
     let fields = wire.into_fields(catalog)?;
     Ok(crate::Purchase::new(
@@ -160,6 +175,7 @@ fn build_purchase(
         fields.purchased_at,
         Some(fields.proof),
         Purchase {
+            session: session.store_retain(),
             transaction_id: fields.transaction_id,
         },
     ))

@@ -1,7 +1,7 @@
 //! Platform-specific permission implementations.
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-mod apple;
+pub mod apple;
 
 /// Android platform implementation.
 #[cfg(target_os = "android")]

@@ -4,7 +4,14 @@
 //! image renderer on iOS; brightness goes through `IOKit`'s
 //! `IODisplayConnect` service on macOS and `UIScreen` on iOS. Screen
 //! streaming is macOS-only and owns its `SCStream` through the returned
-//! capturer object — no global state.
+//! capturer object — no global state. The display stream (`display`) is
+//! macOS-only too and delivers `ScreenCaptureKit`'s own pixel buffers.
+
+#[cfg(target_os = "macos")]
+mod display;
+
+#[cfg(target_os = "macos")]
+pub use display::{DisplayStreamInner, PixelBufferInner};
 
 use crate::frame::ScreenFrame;
 use crate::screenshot::ImageFormat;
@@ -189,8 +196,9 @@ mod macos {
     };
     use objc2_io_surface::IOSurfaceRef;
     use objc2_screen_capture_kit::{
-        SCContentFilter, SCScreenshotManager, SCShareableContent, SCStream, SCStreamConfiguration,
-        SCStreamDelegate, SCStreamOutput, SCStreamOutputType,
+        SCContentFilter, SCDisplay, SCScreenshotManager, SCShareableContent, SCStream,
+        SCStreamConfiguration, SCStreamDelegate, SCStreamErrorCode, SCStreamErrorDomain,
+        SCStreamOutput, SCStreamOutputType,
     };
 
     // Not bound by `objc2-core-graphics` 0.3.x: the `CGDirectDisplay.h` vendor /
@@ -217,20 +225,51 @@ mod macos {
         }
     }
 
-    /// Builds the display filter + stream configuration shared by the
-    /// screenshot and streaming paths.
-    fn filter_and_config(
-        display: &objc2_screen_capture_kit::SCDisplay,
-    ) -> (Retained<SCContentFilter>, Retained<SCStreamConfiguration>) {
+    /// Maps a `ScreenCaptureKit` error, reported by the call named
+    /// `context`, to the crate's error: a declined Screen Recording grant is
+    /// [`Error::PermissionDenied`].
+    pub(super) fn capture_error(context: &str, error: &NSError) -> Error {
+        // SAFETY: a constant string ScreenCaptureKit exports.
+        let domain = unsafe { SCStreamErrorDomain };
+        if &*error.domain() == domain && error.code() == SCStreamErrorCode::UserDeclined.0 {
+            return Error::PermissionDenied;
+        }
+        Error::Platform(format!("{context}: {}", error.localizedDescription()))
+    }
+
+    /// The shareable display whose `CGDirectDisplayID` is `display_id`.
+    pub(super) fn find_display(
+        content: &SCShareableContent,
+        display_id: CGDirectDisplayID,
+    ) -> Result<Retained<SCDisplay>, Error> {
+        // SAFETY: `content` is a live SCShareableContent.
+        let displays = unsafe { content.displays() };
+        displays
+            .iter()
+            // SAFETY: `display` is a live SCDisplay.
+            .find(|display| unsafe { display.displayID() } == display_id)
+            .ok_or(Error::MonitorNotFound)
+    }
+
+    /// A filter capturing all of `display`'s content.
+    pub(super) fn display_filter(display: &SCDisplay) -> Retained<SCContentFilter> {
         let empty: Retained<NSArray<objc2_screen_capture_kit::SCWindow>> = NSArray::new();
         // SAFETY: `display` and the (empty) exclusion list are valid objects.
-        let filter = unsafe {
+        unsafe {
             SCContentFilter::initWithDisplay_excludingWindows(
                 SCContentFilter::alloc(),
                 display,
                 &empty,
             )
-        };
+        }
+    }
+
+    /// Builds the display filter + stream configuration shared by the
+    /// screenshot and streaming paths.
+    fn filter_and_config(
+        display: &SCDisplay,
+    ) -> (Retained<SCContentFilter>, Retained<SCStreamConfiguration>) {
+        let filter = display_filter(display);
         // SAFETY: `SCStreamConfiguration` is a plain data object.
         let config = unsafe { SCStreamConfiguration::new() };
         // SAFETY: setters on a live configuration object.
@@ -761,20 +800,12 @@ mod macos {
             show_cursor: bool,
             sender: &StartSender,
         ) {
-            // SAFETY: `content` is a live SCShareableContent.
-            let displays = unsafe { content.displays() };
-            let display = displays
-                .iter()
-                .find(|display| unsafe { display.displayID() } == display_id)
-                .or_else(|| displays.iter().next());
-            let Some(display) = display else {
-                reply_start(
-                    sender,
-                    Err(Error::Platform(
-                        "SCShareableContent reported no displays".into(),
-                    )),
-                );
-                return;
+            let display = match find_display(content, display_id) {
+                Ok(display) => display,
+                Err(error) => {
+                    reply_start(sender, Err(error));
+                    return;
+                }
             };
             let (filter, config) = filter_and_config(&display);
             // SAFETY: setters on a live configuration object; `fps` fits a

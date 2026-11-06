@@ -37,7 +37,7 @@ brightness = { version = "0.8", default-features = false }
 objc2.workspace = true
 objc2-foundation = { workspace = true, features = ["NSArray", "NSError", "NSObject"] }
 objc2-core-foundation = { workspace = true, features = [
-    "CFData", "CFDictionary", "CFNumber", "CFString", "CFCGTypes",
+    "CFArray", "CFData", "CFDictionary", "CFNumber", "CFString", "CFCGTypes",
 ] }
 objc2-core-graphics = { workspace = true, features = ["CGDirectDisplay", "CGImage"] }
 objc2-image-io = { workspace = true, features = ["CGImageDestination", "objc2-core-graphics"] }
@@ -64,7 +64,7 @@ objc2-core-video = { workspace = true, features = [
 objc2-io-kit = { workspace = true, features = ["graphics", "libc"] }
 objc2-io-surface.workspace = true
 objc2-screen-capture-kit = { workspace = true, features = [
-    "SCScreenshotManager", "SCShareableContent", "SCStream",
+    "SCError", "SCScreenshotManager", "SCShareableContent", "SCStream",
     "block2", "dispatch2", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-media",
 ] }
 
@@ -81,6 +81,11 @@ pollster = "1.0"
 # an activity backend; it is desktop-only here.
 [target.'cfg(not(target_os = "android"))'.dev-dependencies]
 winit = "0.30"
+
+# The display-stream test creates its own `CGVirtualDisplay` to capture.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+futures-timer.workspace = true
+objc2-foundation = { workspace = true, features = ["NSArray", "NSString"] }
 
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).

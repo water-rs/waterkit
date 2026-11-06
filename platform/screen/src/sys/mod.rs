@@ -165,6 +165,80 @@ pub async fn screenshot(_display: &ScreenInfo, _format: ImageFormat) -> Result<S
 }
 
 // ============================================================================
+// DisplayStreamInner / PixelBufferInner
+// ============================================================================
+
+#[cfg(target_os = "macos")]
+pub use apple::{DisplayStreamInner, PixelBufferInner};
+
+#[cfg(not(target_os = "macos"))]
+pub use unsupported_display::{DisplayStreamInner, PixelBufferInner};
+
+/// Display streams exist only on macOS; elsewhere neither type can be
+/// constructed.
+#[cfg(not(target_os = "macos"))]
+mod unsupported_display {
+    use core::time::Duration;
+
+    use crate::Error;
+    use crate::display_stream::{DisplayStreamConfig, PixelBuffer, PixelFormat};
+
+    #[derive(Debug)]
+    pub enum DisplayStreamInner {}
+
+    impl DisplayStreamInner {
+        #[expect(
+            clippy::unused_async,
+            reason = "the facade is async; macOS awaits ScreenCaptureKit here"
+        )]
+        pub async fn new(_display_id: u32, _config: DisplayStreamConfig) -> Result<Self, Error> {
+            Err(Error::Unsupported)
+        }
+
+        pub fn frames(&self) -> async_channel::Receiver<PixelBuffer> {
+            match *self {}
+        }
+
+        #[expect(
+            clippy::unused_async,
+            reason = "the facade is async; macOS awaits ScreenCaptureKit here"
+        )]
+        pub async fn resume(&mut self) -> Result<(), Error> {
+            match *self {}
+        }
+
+        #[expect(
+            clippy::unused_async,
+            reason = "the facade is async; macOS awaits ScreenCaptureKit here"
+        )]
+        pub async fn pause(&mut self) -> Result<(), Error> {
+            match *self {}
+        }
+    }
+
+    #[derive(Debug)]
+    pub enum PixelBufferInner {}
+
+    impl PixelBufferInner {
+        pub fn width(&self) -> u32 {
+            match *self {}
+        }
+
+        pub fn height(&self) -> u32 {
+            match *self {}
+        }
+
+        pub fn pixel_format(&self) -> PixelFormat {
+            match *self {}
+        }
+
+        pub const fn presentation_time(&self) -> Duration {
+            match *self {}
+        }
+    }
+}
+
+// ============================================================================
 // ScreenStreamInner
 // ============================================================================
 

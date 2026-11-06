@@ -1,9 +1,11 @@
 //! GPU texture output for screen capture.
 //!
-//! This crate provides two capture modes:
+//! This crate provides three capture modes:
 //!
 //! 1. **Simple Screenshot** - No GPU device required, returns encoded image data (PNG/AVIF/HEIF)
 //! 2. **GPU Streaming** - Screen capture frames uploaded to wgpu textures for real-time processing
+//! 3. **Display Streaming** - Any display by id, frames delivered as the platform's own
+//!    pixel buffers for hardware encoding ([`DisplayStream`], macOS)
 //!
 //! # Simple Screenshot
 //!
@@ -35,11 +37,13 @@
 //! }
 //! ```
 
+mod display_stream;
 mod frame;
 mod screenshot;
 mod stream;
 mod sys;
 
+pub use display_stream::{DisplayStream, DisplayStreamConfig, PixelBuffer, PixelFormat};
 pub use frame::ScreenFrame;
 pub use screenshot::{ImageFormat, Screenshot, screenshot, screenshot_primary};
 pub use stream::{ScreenStream, StreamConfig};

@@ -8855,6 +8855,7 @@ dependencies = [
  "brightness",
  "dispatch2",
  "futures",
+ "futures-timer",
  "jni",
  "libc",
  "ndk-context",

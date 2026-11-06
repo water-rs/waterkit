@@ -4,7 +4,7 @@
 use core::marker::PhantomData;
 
 use objc2_core_foundation::CGPoint;
-use objc2_core_graphics::{CGError, CGEvent};
+use objc2_core_graphics::{CGError, CGEvent, CGWindowListOption};
 
 use crate::error::platform;
 use crate::framework::Framework;
@@ -126,12 +126,25 @@ impl EventSymbols {
 
     /// Whether an application owns `window`: its owner's connection has a
     /// process serial number, which `WindowServer`'s own connection has not.
-    pub fn application_owns(&self, window: u32) -> Result<bool, Error> {
+    /// `None` when the window closed since it was listed, which fails the
+    /// owner lookup.
+    pub fn application_owns(&self, window: u32) -> Result<Option<bool>, Error> {
         let connection = self.main_connection();
         let mut owner = 0_u32;
         // SAFETY: `owner` is a valid out pointer.
         let status = unsafe { (self.window_owner)(connection, window, &raw mut owner) };
         if status != CGError::Success {
+            if crate::window::list(CGWindowListOption::OptionIncludingWindow, window)?
+                .iter()
+                .all(|listed| listed.id != window)
+            {
+                tracing::debug!(
+                    window,
+                    ?status,
+                    "the window closed before its owner was read"
+                );
+                return Ok(None);
+            }
             return Err(platform("SLSGetWindowOwner", status));
         }
         let mut psn = ProcessSerialNumber { high: 0, low: 0 };
@@ -140,9 +153,9 @@ impl EventSymbols {
         let no_process = ProcessSerialNumber { high: 0, low: 0 };
         if status != CGError::Success || psn == no_process {
             tracing::trace!(window, ?status, "window owner has no process serial number");
-            return Ok(false);
+            return Ok(Some(false));
         }
-        Ok(true)
+        Ok(Some(true))
     }
 
     /// The window `WindowServer` hands a press at the global point `point`

@@ -169,13 +169,17 @@ impl Input {
     pub fn windows(&self) -> Result<Vec<ListedWindow>, Error> {
         window::list(CGWindowListOption::OptionAll, kCGNullWindowID)?
             .iter()
-            .map(|window| self.listed(window))
+            .filter_map(|window| self.listed(window).transpose())
             .collect()
     }
 
-    fn listed(&self, window: &Window) -> Result<ListedWindow, Error> {
-        let application = self.symbols.application_owns(window.id)?;
-        Ok(window.listed(application))
+    /// `window` with its ownership, or `None` when it closed since it was
+    /// listed.
+    fn listed(&self, window: &Window) -> Result<Option<ListedWindow>, Error> {
+        Ok(self
+            .symbols
+            .application_owns(window.id)?
+            .map(|application| window.listed(application)))
     }
 
     /// The windows that intersect the display, on screen or not, for an
@@ -185,7 +189,7 @@ impl Input {
         let windows = window::list(CGWindowListOption::OptionAll, kCGNullWindowID)?
             .iter()
             .filter(|window| intersects(window.bounds, bounds))
-            .map(|window| self.listed(window))
+            .filter_map(|window| self.listed(window).transpose())
             .collect::<Result<_, _>>()?;
         Ok(DisplayWindows::new(
             self.display,
@@ -367,12 +371,21 @@ impl Input {
             });
         };
         let window = listed_window(id)?;
-        match self.application_target(&window)? {
-            Some(target) => Ok((window, target)),
-            None => Err(Error::NotApplicationWindow {
+        match self.symbols.application_owns(window.id)? {
+            Some(true) => {
+                let target = Target {
+                    pid: window.pid,
+                    window: window.id,
+                };
+                Ok((window, target))
+            }
+            Some(false) => Err(Error::NotApplicationWindow {
                 at,
                 window: window.listed(false),
             }),
+            None => Err(Error::Platform(format!(
+                "window {id}, which takes a press at {at}, closed before the press"
+            ))),
         }
     }
 
@@ -399,12 +412,15 @@ impl Input {
         Err(Error::NoKeyWindow(self.display_windows()?))
     }
 
-    /// `window` as a delivery target, when an application owns it.
+    /// `window` as a delivery target, when an application owns it and it is
+    /// still open.
     fn application_target(&self, window: &Window) -> Result<Option<Target>, Error> {
-        Ok(self.symbols.application_owns(window.id)?.then_some(Target {
-            pid: window.pid,
-            window: window.id,
-        }))
+        Ok(
+            (self.symbols.application_owns(window.id)? == Some(true)).then_some(Target {
+                pid: window.pid,
+                window: window.id,
+            }),
+        )
     }
 
     /// Makes `target`'s window, whose frame is `bounds`, its application's

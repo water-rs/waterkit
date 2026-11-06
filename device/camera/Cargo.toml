@@ -38,9 +38,6 @@ waterkit-video-core.workspace = true
 
 [features]
 preview-example = []
-# VA-API hardware encoders on Linux; off by default like the codec's own
-# `vaapi` (the software AV1 encoder still covers encoding without it).
-vaapi = ["waterkit-codec/vaapi"]
 
 [[example]]
 name = "preview"
@@ -68,8 +65,7 @@ wasm-bindgen-futures = "0.4"
 # dependency because the public WKRV reader converts NV12 on every platform.
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 nokhwa = { workspace = true, features = ["input-native"] }
-# `software-encode` carries the rav1e AV1 encoder; the `vaapi` feature adds
-# the VA-API hardware encoders via cros-codecs on Linux.
+# `software-encode` carries the rav1e AV1 encoder.
 waterkit-codec = { workspace = true, features = ["software-encode"] }
 waterkit-video-container.workspace = true
 

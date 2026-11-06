@@ -14,11 +14,13 @@
 //! has always just written it. Build and test output still reach the
 //! terminal, so a run can be followed live.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::fmt;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use cargo_metadata::{Message, TargetKind};
 use eyre::{Context, Result};
@@ -412,11 +414,48 @@ trait Destination {
     fn report(&self) -> Result<String>;
 }
 
-/// An iOS simulator as `simctl list` reports it.
+/// A simulator device as `simctl list` reports it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 struct SimulatorDevice {
     udid: String,
     name: String,
     state: String,
+    /// The runtime identifier `simctl` files the device under; filled in from
+    /// the list's keys.
+    #[serde(skip)]
+    runtime: String,
+}
+
+impl SimulatorDevice {
+    fn is_booted(&self) -> bool {
+        self.state == "Booted"
+    }
+
+    fn is_ios(&self) -> bool {
+        self.runtime.contains(".iOS-")
+    }
+}
+
+/// The JSON `simctl list --json devices` prints: devices grouped by runtime.
+#[derive(serde::Deserialize)]
+struct SimctlList {
+    devices: BTreeMap<String, Vec<SimulatorDevice>>,
+}
+
+impl SimctlList {
+    fn parse(json: &[u8]) -> Result<Vec<SimulatorDevice>> {
+        let list: Self = serde_json::from_slice(json).context("simctl printed unexpected JSON")?;
+        Ok(list
+            .devices
+            .into_iter()
+            .flat_map(|(runtime, devices)| {
+                devices.into_iter().map(move |device| SimulatorDevice {
+                    runtime: runtime.clone(),
+                    ..device
+                })
+            })
+            .collect())
+    }
 }
 
 /// Every simulator device `simctl` knows.
@@ -431,26 +470,181 @@ fn simulators() -> Result<Vec<SimulatorDevice>> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let list: serde_json::Value =
-        serde_json::from_slice(&output.stdout).context("simctl printed invalid JSON")?;
-    let devices = list
-        .get("devices")
-        .and_then(|devices| devices.as_object())
-        .ok_or_else(|| eyre::eyre!("simctl list devices reported no devices"))?;
-    let mut simulators = Vec::new();
-    for runtime_devices in devices.values() {
-        for device in runtime_devices.as_array().into_iter().flatten() {
-            let field = |key| device.get(key).and_then(|value| value.as_str());
-            if let (Some(udid), Some(state)) = (field("udid"), field("state")) {
-                simulators.push(SimulatorDevice {
-                    udid: udid.to_owned(),
-                    name: field("name").unwrap_or(udid).to_owned(),
-                    state: state.to_owned(),
-                });
-            }
+    SimctlList::parse(&output.stdout)
+}
+
+/// How many lines of `CoreSimulator.log` a diagnostic report carries.
+const CORE_SIMULATOR_LOG_LINES: usize = 200;
+
+/// How many of a device's newest log files a diagnostic report carries.
+const DEVICE_LOG_FILES: usize = 5;
+
+/// How many trailing lines of each of those files a report carries.
+const DEVICE_LOG_FILE_LINES: usize = 40;
+
+/// What the harness could learn about why a simulator is not booted. What it
+/// could not read is recorded with the reason, never dropped, so the report
+/// can always accompany the original failure.
+struct Diagnostics {
+    /// Every iOS device `simctl` lists.
+    devices: Vec<SimulatorDevice>,
+    /// The tail of `CoreSimulator.log`, or why it could not be read.
+    core_simulator_log: Result<Vec<String>, String>,
+    /// The newest files of each iOS device that is not booted.
+    device_logs: Vec<DeviceLogs>,
+}
+
+/// The newest log files of one device under `~/Library/Logs/CoreSimulator`.
+struct DeviceLogs {
+    device: SimulatorDevice,
+    /// `None` when the device has no log directory.
+    files: Result<Option<Vec<LogFile>>, String>,
+}
+
+/// A device log file and the tail of its content.
+struct LogFile {
+    name: String,
+    age: Duration,
+    /// `None` when the file is not text (a compressed rotation, say).
+    tail: Option<Vec<String>>,
+}
+
+impl Diagnostics {
+    fn gather(devices: &[SimulatorDevice]) -> Self {
+        let devices: Vec<_> = devices
+            .iter()
+            .filter(|device| device.is_ios())
+            .cloned()
+            .collect();
+        let logs = std::env::home_dir()
+            .ok_or_else(|| "the home directory is unknown".to_owned())
+            .map(|home| home.join("Library/Logs/CoreSimulator"));
+        let core_simulator_log = logs.as_ref().map_err(Clone::clone).and_then(|logs| {
+            let path = logs.join("CoreSimulator.log");
+            read_tail(&path, CORE_SIMULATOR_LOG_LINES)
+                .map_err(|error| format!("{} is missing or unreadable: {error}", path.display()))
+        });
+        let device_logs = devices
+            .iter()
+            .filter(|device| !device.is_booted())
+            .map(|device| DeviceLogs {
+                device: device.clone(),
+                files: logs.as_ref().map_err(Clone::clone).and_then(|logs| {
+                    let dir = logs.join(&device.udid);
+                    newest_files(&dir)
+                        .map_err(|error| format!("{} is unreadable: {error}", dir.display()))
+                }),
+            })
+            .collect();
+        Self {
+            devices,
+            core_simulator_log,
+            device_logs,
         }
     }
-    Ok(simulators)
+}
+
+/// The last `count` lines of the file at `path`.
+fn read_tail(path: &Path, count: usize) -> std::io::Result<Vec<String>> {
+    let content = std::fs::read(path)?;
+    Ok(tail_lines(&String::from_utf8_lossy(&content), count))
+}
+
+/// The last `count` lines of `text`.
+fn tail_lines(text: &str, count: usize) -> Vec<String> {
+    let lines: Vec<_> = text.lines().collect();
+    lines[lines.len().saturating_sub(count)..]
+        .iter()
+        .map(|line| (*line).to_owned())
+        .collect()
+}
+
+/// The newest [`DEVICE_LOG_FILES`] files in `dir`, newest first, or `None`
+/// when `dir` does not exist.
+fn newest_files(dir: &Path) -> std::io::Result<Option<Vec<LogFile>>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        if metadata.is_file() {
+            files.push((metadata.modified()?, entry.path()));
+        }
+    }
+    files.sort_by(|a, b| b.cmp(a));
+    files.truncate(DEVICE_LOG_FILES);
+    let now = SystemTime::now();
+    files
+        .into_iter()
+        .map(|(modified, path)| {
+            Ok(LogFile {
+                name: path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                age: now.duration_since(modified).unwrap_or_default(),
+                tail: std::str::from_utf8(&std::fs::read(&path)?)
+                    .ok()
+                    .map(|text| tail_lines(text, DEVICE_LOG_FILE_LINES)),
+            })
+        })
+        .collect::<std::io::Result<_>>()
+        .map(Some)
+}
+
+impl fmt::Display for Diagnostics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "iOS simulators simctl lists ({}):", self.devices.len())?;
+        for device in &self.devices {
+            writeln!(
+                f,
+                "  {} {:?} {} {}",
+                device.udid, device.name, device.runtime, device.state
+            )?;
+        }
+        match &self.core_simulator_log {
+            Ok(lines) => {
+                writeln!(f, "\nlast {} lines of CoreSimulator.log:", lines.len())?;
+                for line in lines {
+                    writeln!(f, "  {line}")?;
+                }
+            }
+            Err(reason) => writeln!(f, "\nCoreSimulator.log: {reason}")?,
+        }
+        for logs in &self.device_logs {
+            let device = &logs.device;
+            write!(
+                f,
+                "\nlogs of {} {:?} ({}): ",
+                device.udid, device.name, device.state
+            )?;
+            match &logs.files {
+                Ok(None) => writeln!(f, "no log directory")?,
+                Ok(Some(files)) if files.is_empty() => writeln!(f, "log directory is empty")?,
+                Ok(Some(files)) => {
+                    writeln!(f, "newest {} files, newest first", files.len())?;
+                    for file in files {
+                        write!(f, "  {} (modified {}s ago)", file.name, file.age.as_secs())?;
+                        match &file.tail {
+                            Some(lines) => {
+                                writeln!(f, ":")?;
+                                for line in lines {
+                                    writeln!(f, "    {line}")?;
+                                }
+                            }
+                            None => writeln!(f, ": not text, content omitted")?,
+                        }
+                    }
+                }
+                Err(reason) => writeln!(f, "{reason}")?,
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The simulator the suite runs on, selected by UDID. `xcodebuild test` needs
@@ -463,15 +657,16 @@ struct Simulator {
 impl Simulator {
     /// Selects the one simulator that is booted now, before the build starts.
     fn booted() -> Result<Self> {
-        let booted: Vec<_> = simulators()?
-            .into_iter()
-            .filter(|device| device.state == "Booted")
-            .collect();
+        let devices = simulators()?;
+        let booted: Vec<_> = devices.iter().filter(|device| device.is_booted()).collect();
         match booted.as_slice() {
             [device] => Ok(Self {
                 udid: device.udid.clone(),
             }),
-            [] => eyre::bail!("no simulator is booted; boot one first"),
+            [] => eyre::bail!(
+                "no simulator is booted; boot one first\n\n{}",
+                Diagnostics::gather(&devices)
+            ),
             many => eyre::bail!(
                 "more than one simulator is booted ({}); keep exactly one booted",
                 many.iter()
@@ -485,16 +680,18 @@ impl Simulator {
     /// Fails when the selected simulator left the booted state after it was
     /// selected, naming the state it is in now.
     fn check_booted(&self) -> Result<()> {
-        let device = simulators()?
-            .into_iter()
+        let devices = simulators()?;
+        let device = devices
+            .iter()
             .find(|device| device.udid == self.udid)
             .ok_or_else(|| eyre::eyre!("simulator {} no longer exists", self.udid))?;
-        if device.state != "Booted" {
+        if !device.is_booted() {
             eyre::bail!(
-                "simulator {} ({}) was booted when the run started and is now {}",
+                "simulator {} ({}) was booted when the run started and is now {}\n\n{}",
                 device.name,
                 self.udid,
-                device.state
+                device.state,
+                Diagnostics::gather(&devices)
             );
         }
         Ok(())
@@ -974,7 +1171,53 @@ fn remote_word(word: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{app_link_flags, remote_word};
+    use super::{Diagnostics, SimctlList, app_link_flags, newest_files, read_tail, remote_word};
+
+    const LIST: &str = r#"{"devices": {
+        "com.apple.CoreSimulator.SimRuntime.iOS-27-2": [
+            {"udid": "A", "name": "iPhone 18 Pro", "state": "Shutdown", "isAvailable": true}
+        ],
+        "com.apple.CoreSimulator.SimRuntime.watchOS-27-0": [
+            {"udid": "W", "name": "Watch", "state": "Shutdown"}
+        ]}}"#;
+
+    #[test]
+    fn parses_simctl_list() {
+        let devices = SimctlList::parse(LIST.as_bytes()).unwrap();
+        assert_eq!(devices.len(), 2);
+        assert!(devices[0].is_ios() && !devices[1].is_ios());
+        assert!(SimctlList::parse(b"{}").is_err());
+        assert!(SimctlList::parse(br#"{"devices": {"r": [{"udid": "A"}]}}"#).is_err());
+    }
+
+    #[test]
+    fn report_lists_ios_devices_and_records_unreadable_logs() {
+        let devices = SimctlList::parse(LIST.as_bytes()).unwrap();
+        let mut report = Diagnostics::gather(&devices);
+        report.core_simulator_log = Err("gone".to_owned());
+        let report = report.to_string();
+        assert!(
+            report.contains(
+                "A \"iPhone 18 Pro\" com.apple.CoreSimulator.SimRuntime.iOS-27-2 Shutdown"
+            )
+        );
+        assert!(!report.contains("Watch"));
+        assert!(report.contains("CoreSimulator.log: gone"));
+        assert!(report.contains("logs of A"));
+    }
+
+    #[test]
+    fn reads_tails_and_newest_files() {
+        let dir = std::env::temp_dir().join(format!("waterkit-ios-diag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("log"), "1\n2\n3\n").unwrap();
+        assert_eq!(read_tail(&dir.join("log"), 2).unwrap(), ["2", "3"]);
+        assert!(read_tail(&dir.join("missing"), 2).is_err());
+        let files = newest_files(&dir).unwrap().unwrap();
+        assert_eq!(files[0].name, "log");
+        assert!(newest_files(&dir.join("missing")).unwrap().is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn quotes_remote_words() {

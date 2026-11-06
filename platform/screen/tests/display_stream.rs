@@ -6,16 +6,20 @@
 
 use core::num::NonZeroU32;
 use core::time::Duration;
-use std::ffi::CStr;
-use std::sync::Arc;
+use std::ffi::{CStr, c_void};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use futures::future::{self, Either};
 use futures::{Stream, StreamExt};
 use objc2::msg_send;
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2_core_foundation::CGSize;
-use objc2_core_graphics::{CGError, CGGetOnlineDisplayList};
+use objc2_core_foundation::{CFRunLoop, CGSize, kCFRunLoopDefaultMode};
+use objc2_core_graphics::{
+    CGDirectDisplayID, CGDisplayChangeSummaryFlags, CGDisplayRegisterReconfigurationCallback,
+    CGDisplayRemoveReconfigurationCallback, CGError, CGGetOnlineDisplayList,
+};
 use objc2_foundation::{NSArray, NSString};
 use waterkit_screen::{
     DisplayStream, DisplayStreamConfig, Error, PixelBuffer, PixelFormat, ScreenInfo, ScreenStream,
@@ -40,6 +44,83 @@ fn online_displays() -> Vec<u32> {
     ids.into_iter().take(count as usize).collect()
 }
 
+/// How long a new virtual display gets to go online.
+const ONLINE_DEADLINE: Duration = Duration::from_secs(5);
+
+/// The displays `CoreGraphics` reported added since `watch`.
+struct DisplayAdditions {
+    added: Box<Mutex<Vec<u32>>>,
+}
+
+unsafe extern "C-unwind" fn record_addition(
+    display: CGDirectDisplayID,
+    flags: CGDisplayChangeSummaryFlags,
+    added: *mut c_void,
+) {
+    if flags.contains(CGDisplayChangeSummaryFlags::AddFlag) {
+        // SAFETY: `added` is the `Mutex` `DisplayAdditions` registered, which
+        // outlives the callback's registration.
+        let added = unsafe { &*added.cast::<Mutex<Vec<u32>>>() };
+        added
+            .lock()
+            .expect("the addition list is not poisoned")
+            .push(display);
+    }
+}
+
+impl DisplayAdditions {
+    fn watch() -> Self {
+        let added = Box::new(Mutex::new(Vec::new()));
+        let info = (&raw const *added).cast_mut().cast::<c_void>();
+        // SAFETY: the callback matches the registered signature and `info`
+        // stays valid until `drop` unregisters it.
+        let status =
+            unsafe { CGDisplayRegisterReconfigurationCallback(Some(record_addition), info) };
+        assert_eq!(
+            status,
+            CGError::Success,
+            "registering the display callback failed"
+        );
+        Self { added }
+    }
+
+    /// Waits for the add event of `id`, or for it to be listed online
+    /// already. The reconfiguration callback is delivered through the run
+    /// loop, which the test thread runs while it waits.
+    fn wait_until_online(&self, id: u32) {
+        let deadline = Instant::now() + ONLINE_DEADLINE;
+        loop {
+            let added = self
+                .added
+                .lock()
+                .expect("the addition list is not poisoned")
+                .contains(&id);
+            let online = online_displays();
+            if added || online.contains(&id) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "CoreGraphics does not list virtual display {id} as online (online: {online:?})"
+            );
+            CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, 0.05, false);
+        }
+    }
+}
+
+impl Drop for DisplayAdditions {
+    fn drop(&mut self) {
+        let info = (&raw const *self.added).cast_mut().cast::<c_void>();
+        // SAFETY: the registration made in `watch` is removed with the same
+        // callback and pointer.
+        let status = unsafe { CGDisplayRemoveReconfigurationCallback(Some(record_addition), info) };
+        assert!(
+            status == CGError::Success || std::thread::panicking(),
+            "unregistering the display callback failed"
+        );
+    }
+}
+
 /// A `CGVirtualDisplay` (private `CoreGraphics` API) of `width`x`height`
 /// points at 2x backing scale. Dropping it removes the display.
 struct VirtualDisplay {
@@ -49,6 +130,9 @@ struct VirtualDisplay {
 
 impl VirtualDisplay {
     fn create(width: u32, height: u32) -> Self {
+        // Registered first: the display goes online asynchronously after
+        // `applySettings:`.
+        let additions = DisplayAdditions::watch();
         // SAFETY: the messages match the private classes' selectors; every
         // object is owned by a `Retained`.
         let (display, id) = unsafe {
@@ -96,11 +180,7 @@ impl VirtualDisplay {
             (display, id)
         };
         assert_ne!(id, 0, "CoreGraphics assigned the virtual display no id");
-        let online = online_displays();
-        assert!(
-            online.contains(&id),
-            "CoreGraphics does not list virtual display {id} as online (online: {online:?})"
-        );
+        additions.wait_until_online(id);
         Self {
             _display: display,
             id,

@@ -224,62 +224,70 @@ pub use unsupported_display::{DisplayStreamInner, PixelBufferInner};
 /// constructed.
 #[cfg(all(feature = "display-stream", not(target_os = "macos")))]
 mod unsupported_display {
+    use core::convert::Infallible;
     use core::time::Duration;
 
     use crate::Error;
     use crate::display_stream::{DisplayStreamConfig, PixelBuffer, PixelFormat};
 
     #[derive(Debug)]
-    pub enum DisplayStreamInner {}
+    pub struct DisplayStreamInner(Infallible);
 
     impl DisplayStreamInner {
         #[expect(
             clippy::unused_async,
             reason = "the facade is async; macOS awaits ScreenCaptureKit here"
         )]
-        pub async fn new(_display_id: u32, _config: DisplayStreamConfig) -> Result<Self, Error> {
+        pub async fn new(_display_id: u32, config: DisplayStreamConfig) -> Result<Self, Error> {
+            // The size, rate and format only matter to a backend that captures.
+            let DisplayStreamConfig {
+                width: _width,
+                height: _height,
+                frame_rate: _frame_rate,
+                pixel_format: _pixel_format,
+            } = config;
             Err(Error::Unsupported)
         }
 
-        pub fn frames(&self) -> async_channel::Receiver<PixelBuffer> {
-            match *self {}
+        pub const fn frames(&self) -> async_channel::Receiver<PixelBuffer> {
+            match self.0 {}
         }
 
         #[expect(
             clippy::unused_async,
             reason = "the facade is async; macOS awaits ScreenCaptureKit here"
         )]
-        pub async fn resume(&mut self) -> Result<(), Error> {
-            match *self {}
+        pub async fn resume(&self) -> Result<(), Error> {
+            match self.0 {}
         }
 
         #[expect(
             clippy::unused_async,
             reason = "the facade is async; macOS awaits ScreenCaptureKit here"
         )]
-        pub async fn pause(&mut self) -> Result<(), Error> {
-            match *self {}
+        pub async fn pause(&self) -> Result<(), Error> {
+            match self.0 {}
         }
     }
 
     #[derive(Debug)]
-    pub enum PixelBufferInner {}
+    pub struct PixelBufferInner(Infallible);
 
     impl PixelBufferInner {
-        pub fn width(&self) -> u32 {
-            match *self {}
+        pub const fn width(&self) -> u32 {
+            match self.0 {}
         }
 
-        pub fn height(&self) -> u32 {
-            match *self {}
+        pub const fn height(&self) -> u32 {
+            match self.0 {}
         }
 
-        pub fn pixel_format(&self) -> PixelFormat {
-            match *self {}
+        pub const fn pixel_format(&self) -> PixelFormat {
+            match self.0 {}
         }
 
         pub const fn presentation_time(&self) -> Duration {
-            match *self {}
+            match self.0 {}
         }
     }
 }

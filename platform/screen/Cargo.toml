@@ -121,6 +121,8 @@ winit = "0.30"
 # The display-stream test creates its own `CGVirtualDisplay` to capture.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 futures-timer.workspace = true
+objc2-core-foundation = { workspace = true, features = ["CFDate", "CFRunLoop"] }
+objc2-core-graphics = { workspace = true, features = ["CGDisplayConfiguration"] }
 objc2-foundation = { workspace = true, features = ["NSArray", "NSString"] }
 
 [[example]]

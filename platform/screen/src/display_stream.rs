@@ -83,6 +83,7 @@ pub struct PixelBuffer {
 }
 
 impl PixelBuffer {
+    #[cfg(target_os = "macos")]
     pub(crate) const fn new(inner: sys::PixelBufferInner) -> Self {
         Self { inner }
     }

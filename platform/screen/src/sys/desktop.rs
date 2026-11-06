@@ -3,17 +3,25 @@
 //! Uses `xcap` for screen capture and PNG encoding.
 //! HEIF/AVIF encoding is not supported on desktop platforms (use macOS native APIs).
 
-use crate::screenshot::ImageFormat;
-use crate::{Error, ScreenInfo, Screenshot};
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+use crate::Error;
+#[cfg(feature = "screens")]
+use crate::ScreenInfo;
+#[cfg(feature = "screenshot")]
+use crate::{Screenshot, screenshot::ImageFormat};
+#[cfg(all(
+    feature = "brightness",
+    any(target_os = "linux", target_os = "windows")
+))]
 use brightness::blocking::{Brightness, brightness_devices};
+#[cfg(feature = "screenshot")]
 use std::io::Cursor;
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "screens", target_os = "linux"))]
 use wayland_sys as _;
 
 // Taking a reference here, as `needless_pass_by_value` suggests, would stop
 // this being usable as `.map_err(map_xcap_error)` — which is its only caller
 // shape, a dozen times over in this file.
+#[cfg(feature = "screens")]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "must own its argument to be passed directly to `Result::map_err`."
@@ -22,10 +30,15 @@ fn map_xcap_error(error: xcap::XCapError) -> Error {
     Error::Platform(error.to_string())
 }
 
+#[cfg(feature = "screens")]
 fn monitors() -> Result<Vec<xcap::Monitor>, Error> {
     xcap::Monitor::all().map_err(map_xcap_error)
 }
 
+#[cfg(any(
+    feature = "screenshot",
+    all(feature = "gpu", any(target_os = "linux", target_os = "windows"))
+))]
 fn monitor_by_id(id: u32) -> Result<xcap::Monitor, Error> {
     for monitor in monitors()? {
         if monitor.id().map_err(map_xcap_error)? == id {
@@ -35,12 +48,18 @@ fn monitor_by_id(id: u32) -> Result<xcap::Monitor, Error> {
     Err(Error::MonitorNotFound)
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(all(
+    feature = "brightness",
+    any(target_os = "linux", target_os = "windows")
+))]
 fn map_brightness_error(error: &brightness::Error) -> Error {
     Error::Platform(format!("brightness backend error: {error}"))
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(all(
+    feature = "brightness",
+    any(target_os = "linux", target_os = "windows")
+))]
 fn first_brightness_device() -> Result<brightness::blocking::BrightnessDevice, Error> {
     let mut first_error = None;
     for device in brightness_devices() {
@@ -57,6 +76,7 @@ fn first_brightness_device() -> Result<brightness::blocking::BrightnessDevice, E
 }
 
 /// Enumerate all screens.
+#[cfg(feature = "screens")]
 pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     let monitors = monitors()?;
     let mut infos = Vec::with_capacity(monitors.len());
@@ -75,6 +95,7 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
 }
 
 /// Returns the maximum refresh rate across connected desktop displays.
+#[cfg(feature = "screens")]
 pub fn max_refresh_rate_hz() -> Result<f32, Error> {
     let mut max_refresh_rate = None;
     for monitor in monitors()? {
@@ -96,6 +117,7 @@ pub fn max_refresh_rate_hz() -> Result<f32, Error> {
     )
 )]
 #[allow(clippy::cast_precision_loss)]
+#[cfg(feature = "brightness")]
 pub async fn get_brightness() -> Result<f32, Error> {
     #[cfg(target_os = "macos")]
     {
@@ -121,6 +143,7 @@ pub async fn get_brightness() -> Result<f32, Error> {
     )
 )]
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[cfg(feature = "brightness")]
 pub async fn set_brightness(val: f32) -> Result<(), Error> {
     #[cfg(target_os = "macos")]
     {
@@ -141,6 +164,7 @@ pub async fn set_brightness(val: f32) -> Result<(), Error> {
 }
 
 /// Capture a screenshot of the specified display.
+#[cfg(feature = "screenshot")]
 pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
     // HEIF/AVIF not supported on desktop (Windows/Linux)
     // macOS uses the Apple module for these formats
@@ -180,19 +204,19 @@ pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Scr
 // macOS uses the apple module for streaming
 // ============================================================================
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "gpu", not(target_os = "macos")))]
 use crate::frame::ScreenFrame;
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "gpu", not(target_os = "macos")))]
 use crate::stream::StreamConfig;
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "gpu", not(target_os = "macos")))]
 use std::sync::Arc;
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "gpu", not(target_os = "macos")))]
 use wgpu::{Device, Extent3d, Queue, TextureDimension, TextureFormat, TextureUsages};
 
 /// Screen stream for Windows/Linux.
 ///
 /// Uses `xcap` for capture with GPU texture upload.
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "gpu", not(target_os = "macos")))]
 pub struct ScreenStreamInner {
     monitor: xcap::Monitor,
     device: Arc<Device>,
@@ -201,7 +225,7 @@ pub struct ScreenStreamInner {
     height: u32,
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "gpu", not(target_os = "macos")))]
 impl ScreenStreamInner {
     /// Create a new screen stream.
     #[cfg_attr(

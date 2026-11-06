@@ -286,6 +286,14 @@ mod mac {
             // SAFETY: the test owns the window through `Retained`; closing it
             // must not release it a second time.
             unsafe { window.setReleasedWhenClosed(false) };
+            // A regular application places the content rect in global
+            // coordinates on the main screen whatever screen it names, so the
+            // window is moved onto `screen` explicitly.
+            let screen_origin = screen.frame().origin;
+            window.setFrameOrigin(NSPoint::new(
+                screen_origin.x + frame.origin.x,
+                screen_origin.y + frame.origin.y,
+            ));
             window
         }
 

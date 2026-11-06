@@ -36,18 +36,39 @@
 //!     // Use view in render pipeline...
 //! }
 //! ```
+//!
+//! # Features
+//!
+//! Every capability is a feature, all on by default:
+//!
+//! - `screens`: [`screens`], [`ScreenInfo`] and [`max_refresh_rate`].
+//! - `screenshot`: [`screenshot`] and [`screenshot_primary`]; implies `screens`.
+//! - `brightness`: [`brightness`] and [`set_brightness`].
+//! - `gpu`: [`ScreenStream`], frames as wgpu textures; implies `screens`.
+//! - `display-stream`: [`DisplayStream`], any display by id as pixel buffers.
 
+#[cfg(feature = "display-stream")]
 mod display_stream;
+#[cfg(feature = "gpu")]
 mod frame;
+#[cfg(feature = "screenshot")]
 mod screenshot;
+#[cfg(feature = "gpu")]
 mod stream;
 mod sys;
 
+#[cfg(feature = "display-stream")]
 pub use display_stream::{DisplayStream, DisplayStreamConfig, PixelBuffer, PixelFormat};
+#[cfg(feature = "gpu")]
 pub use frame::ScreenFrame;
+#[cfg(feature = "screenshot")]
 pub use screenshot::{ImageFormat, Screenshot, screenshot, screenshot_primary};
+#[cfg(feature = "gpu")]
 pub use stream::{ScreenStream, StreamConfig};
-pub use waterkit_core::{Brightness, RefreshRate};
+#[cfg(feature = "brightness")]
+pub use waterkit_core::Brightness;
+#[cfg(feature = "screens")]
+pub use waterkit_core::RefreshRate;
 
 /// Errors returned by screen operations.
 #[derive(Debug, thiserror::Error)]
@@ -94,6 +115,7 @@ impl From<jni::errors::Error> for Error {
 }
 
 /// Information about a display/screen.
+#[cfg(feature = "screens")]
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ScreenInfo {
@@ -105,6 +127,7 @@ pub struct ScreenInfo {
     is_primary: bool,
 }
 
+#[cfg(feature = "screens")]
 impl ScreenInfo {
     /// Create a new `ScreenInfo`.
     #[cfg_attr(
@@ -174,6 +197,7 @@ impl ScreenInfo {
 /// # Errors
 ///
 /// Returns [`Error::Platform`] if screen enumeration fails.
+#[cfg(feature = "screens")]
 pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     sys::screens()
 }
@@ -184,6 +208,7 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
 ///
 /// Returns [`Error::Unsupported`] when the platform cannot report refresh-rate metadata.
 /// Returns [`Error::MonitorNotFound`] when no displays are available.
+#[cfg(feature = "screens")]
 pub fn max_refresh_rate() -> Result<RefreshRate, Error> {
     let raw = sys::max_refresh_rate_hz()?;
     RefreshRate::new(raw).map_err(|error| Error::Platform(error.to_string()))
@@ -194,6 +219,7 @@ pub fn max_refresh_rate() -> Result<RefreshRate, Error> {
 /// # Errors
 ///
 /// Returns [`Error::Platform`] if the brightness cannot be retrieved.
+#[cfg(feature = "brightness")]
 pub async fn brightness() -> Result<Brightness, Error> {
     let raw = sys::get_brightness().await?;
     Brightness::new(raw).map_err(|error| Error::Platform(error.to_string()))
@@ -204,6 +230,7 @@ pub async fn brightness() -> Result<Brightness, Error> {
 /// # Errors
 ///
 /// Returns [`Error::Platform`] if the brightness cannot be set.
+#[cfg(feature = "brightness")]
 pub async fn set_brightness(value: Brightness) -> Result<(), Error> {
     sys::set_brightness(value.get()).await
 }

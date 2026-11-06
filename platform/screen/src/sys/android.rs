@@ -7,25 +7,43 @@
 //! 3. Pass the result to `onPermissionResult()`
 //! 4. Call `startCapture()` to begin screen capture
 
+use crate::Error;
+#[cfg(feature = "screens")]
+use crate::ScreenInfo;
+#[cfg(feature = "gpu")]
 use crate::frame::ScreenFrame;
+#[cfg(feature = "screenshot")]
 use crate::screenshot::{ImageFormat, Screenshot};
+#[cfg(feature = "gpu")]
 use crate::stream::StreamConfig;
-use crate::{Error, ScreenInfo};
-use jni::objects::{JByteArray, JClass, JIntArray, JObject, JValue};
-use jni::{Env, JavaVM, jni_sig, jni_str};
+#[cfg(any(feature = "screens", feature = "brightness"))]
+use jni::JavaVM;
+#[cfg(any(feature = "screenshot", feature = "gpu"))]
+use jni::objects::JByteArray;
+#[cfg(feature = "screens")]
+use jni::objects::JIntArray;
+use jni::objects::{JClass, JObject, JValue};
+use jni::{Env, jni_sig, jni_str};
+#[cfg(feature = "gpu")]
 use std::num::NonZeroU64;
+#[cfg(feature = "gpu")]
 use std::sync::Arc;
+#[cfg(feature = "gpu")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "gpu")]
 use std::time::Duration;
 use waterkit_build::{DexHelper, dex_helper};
+#[cfg(feature = "gpu")]
 use wgpu::{Device, Queue};
 
+#[cfg(feature = "gpu")]
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
 
 /// `waterkit.screen.ScreenHelper`, compiled into the app's DEX by the
 /// packager and resolved through the application's `ClassLoader`.
 static HELPER: DexHelper = dex_helper!("waterkit.screen.ScreenHelper");
 
+#[cfg(any(feature = "screens", feature = "brightness"))]
 fn get_vm() -> Result<JavaVM, Error> {
     let android_context = ndk_context::android_context();
     let raw_vm: *mut jni::sys::JavaVM = android_context.vm().cast();
@@ -35,12 +53,14 @@ fn get_vm() -> Result<JavaVM, Error> {
     Ok(unsafe { JavaVM::from_raw(raw_vm) })
 }
 
+#[cfg(any(feature = "screens", feature = "brightness"))]
 fn with_attached_env<T>(
     operation: impl FnOnce(&mut Env<'_>) -> Result<T, Error>,
 ) -> Result<T, Error> {
     get_vm()?.attach_current_thread(operation)
 }
 
+#[cfg(any(feature = "screens", feature = "brightness"))]
 fn ensure_helper_initialized() -> Result<(), Error> {
     let android_context = ndk_context::android_context();
     let raw_context: jni::sys::jobject = android_context.context().cast();
@@ -93,6 +113,7 @@ pub fn init(env: &mut Env<'_>, context: &JObject) -> Result<(), Error> {
 }
 
 /// Enumerate screens (returns single main screen with actual dimensions).
+#[cfg(feature = "screens")]
 pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
     ensure_helper_initialized()?;
     with_attached_env(|env| {
@@ -143,6 +164,7 @@ pub fn screens() -> Result<Vec<ScreenInfo>, Error> {
 }
 
 /// Return the maximum refresh rate reported by Android display metadata.
+#[cfg(feature = "screens")]
 pub fn max_refresh_rate_hz() -> Result<f32, Error> {
     ensure_helper_initialized()?;
     let refresh_hz = with_attached_env(|env| {
@@ -168,6 +190,7 @@ pub fn max_refresh_rate_hz() -> Result<f32, Error> {
 }
 
 /// Capture a screenshot on Android using `MediaProjection`.
+#[cfg(feature = "screenshot")]
 pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Screenshot, Error> {
     if !matches!(format, ImageFormat::Png) {
         return Err(Error::Unsupported);
@@ -180,6 +203,7 @@ pub async fn screenshot(display: &ScreenInfo, format: ImageFormat) -> Result<Scr
 }
 
 /// Runs the `MediaProjection` screenshot JNI calls off the executor thread.
+#[cfg(feature = "screenshot")]
 fn capture_screenshot_png() -> Result<Vec<u8>, Error> {
     ensure_helper_initialized()?;
     with_attached_env(|env| {
@@ -230,6 +254,7 @@ fn capture_screenshot_png() -> Result<Vec<u8>, Error> {
 }
 
 /// Get screen brightness.
+#[cfg(feature = "brightness")]
 #[expect(
     clippy::unused_async,
     reason = "the public API is async on every platform; the JNI call is synchronous"
@@ -251,6 +276,7 @@ pub async fn get_brightness() -> Result<f32, Error> {
 }
 
 /// Set screen brightness.
+#[cfg(feature = "brightness")]
 #[expect(
     clippy::unused_async,
     reason = "the public API is async on every platform; the JNI call is synchronous"
@@ -279,6 +305,7 @@ pub async fn set_brightness(val: f32) -> Result<(), Error> {
 }
 
 /// Raw frame data from Android `MediaProjection`.
+#[cfg(feature = "gpu")]
 struct RawFrame {
     data: Vec<u8>,
     width: u32,
@@ -286,6 +313,7 @@ struct RawFrame {
     timestamp_ns: u64,
 }
 
+#[cfg(feature = "gpu")]
 fn take_frame_with_context(env: &mut Env<'_>) -> Result<Option<RawFrame>, Error> {
     let helper_class = get_helper_class(env)?;
     let frame_obj = env
@@ -354,6 +382,7 @@ fn take_frame_with_context(env: &mut Env<'_>) -> Result<Option<RawFrame>, Error>
 }
 
 /// Screen stream using `MediaProjection`.
+#[cfg(feature = "gpu")]
 pub struct ScreenStreamInner {
     device: Arc<Device>,
     queue: Arc<Queue>,
@@ -363,6 +392,7 @@ pub struct ScreenStreamInner {
     frame_receiver: async_channel::Receiver<RawFrame>,
 }
 
+#[cfg(feature = "gpu")]
 impl ScreenStreamInner {
     #[expect(
         clippy::unused_async,
@@ -514,6 +544,7 @@ impl ScreenStreamInner {
     }
 }
 
+#[cfg(feature = "gpu")]
 fn frame_interval(target_fps: u32) -> Result<Duration, Error> {
     if target_fps == 0 {
         return Err(Error::Platform(
@@ -526,6 +557,7 @@ fn frame_interval(target_fps: u32) -> Result<Duration, Error> {
         .ok_or_else(|| Error::Platform(format!("target_fps is too high: {target_fps}")))
 }
 
+#[cfg(feature = "gpu")]
 impl Drop for ScreenStreamInner {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);

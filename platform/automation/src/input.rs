@@ -5,7 +5,6 @@ use objc2_core_graphics::{
     CGDirectDisplayID, CGDisplayBounds, CGEvent, CGEventFlags, CGEventType, CGKeyCode,
     CGMouseButton, CGScrollEventUnit, CGWindowListOption, kCGNullWindowID,
 };
-use objc2_foundation::NSProcessInfo;
 
 use crate::keycode::{event_flags, virtual_key};
 use crate::skylight::{EventSymbols, ProcessSerialNumber, RECORD_LEN};
@@ -29,10 +28,6 @@ const FIELD_WINDOW_UNDER_POINTER: u32 = 91;
 /// `kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent`.
 const FIELD_WINDOW_HANDLING_EVENT: u32 = 92;
 
-/// The first macOS release that reads a pid-routed event's window location as
-/// window-local; earlier ones take the global point.
-const WINDOW_LOCAL_SINCE_MAJOR: isize = 27;
-
 /// The most UTF-16 units one keyboard event carries; the system truncates
 /// longer strings on delivery.
 const UNITS_PER_EVENT: usize = 20;
@@ -45,7 +40,6 @@ const UNITS_PER_EVENT: usize = 20;
 pub struct Input {
     symbols: EventSymbols,
     display: CGDirectDisplayID,
-    window_local: bool,
     held: Option<Held>,
     key_target: Option<Target>,
 }
@@ -76,11 +70,9 @@ impl Input {
         if !topology::online()?.contains(&display) {
             return Err(Error::DisplayNotFound(display));
         }
-        let version = NSProcessInfo::processInfo().operatingSystemVersion();
         Ok(Self {
             symbols: EventSymbols::resolve()?,
             display,
-            window_local: version.majorVersion >= WINDOW_LOCAL_SINCE_MAJOR,
             held: None,
             key_target: None,
         })
@@ -329,7 +321,9 @@ impl Input {
     }
 
     /// Stamps the routing of a mouse event to `target`, whose window has the
-    /// frame `window`, and posts it.
+    /// frame `window`, and posts it. The receiving window reads the stamped
+    /// location as its own top-left-origin point, so the stamp is
+    /// window-local.
     fn post_mouse(
         &self,
         event: &CGEvent,
@@ -341,8 +335,7 @@ impl Input {
     ) {
         CGEvent::set_flags(Some(event), flags);
         let local = CGPoint::new(point.x - window.origin.x, point.y - window.origin.y);
-        let location = if self.window_local { local } else { point };
-        self.symbols.set_window_location(event, location);
+        self.symbols.set_window_location(event, local);
         self.symbols
             .set_field(event, FIELD_CLICK_STATE, i64::from(clicks));
         self.stamp_window(event, target);
@@ -360,7 +353,6 @@ impl Input {
             clicks,
             global = ?point,
             window_local = ?local,
-            stamped = if self.window_local { "window-local" } else { "global" },
             "posting a mouse event"
         );
         self.symbols.post_to_pid(target.pid, event);

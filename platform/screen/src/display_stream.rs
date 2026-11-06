@@ -37,6 +37,10 @@ const DEFAULT_FRAME_RATE: NonZeroU32 = NonZeroU32::new(60).expect("60 is non-zer
 /// What a [`DisplayStream`] captures: output size, frame rate and pixel
 /// format.
 #[derive(Debug, Clone)]
+#[cfg_attr(
+    not(target_os = "macos"),
+    expect(dead_code, reason = "only the macOS backend captures")
+)]
 pub struct DisplayStreamConfig {
     pub(crate) width: NonZeroU32,
     pub(crate) height: NonZeroU32,

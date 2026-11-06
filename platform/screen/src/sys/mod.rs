@@ -238,14 +238,7 @@ mod unsupported_display {
             clippy::unused_async,
             reason = "the facade is async; macOS awaits ScreenCaptureKit here"
         )]
-        pub async fn new(_display_id: u32, config: DisplayStreamConfig) -> Result<Self, Error> {
-            // The size, rate and format only matter to a backend that captures.
-            let DisplayStreamConfig {
-                width: _width,
-                height: _height,
-                frame_rate: _frame_rate,
-                pixel_format: _pixel_format,
-            } = config;
+        pub async fn new(_display_id: u32, _config: DisplayStreamConfig) -> Result<Self, Error> {
             Err(Error::Unsupported)
         }
 

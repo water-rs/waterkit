@@ -54,8 +54,8 @@ impl<'a> DisplayLists<'a> {
 
 /// The address `WindowServer` delivers a process's events to.
 #[repr(C)]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct ProcessSerialNumber {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProcessSerialNumber {
     high: u32,
     low: u32,
 }
@@ -63,14 +63,9 @@ pub struct ProcessSerialNumber {
 type MainConnectionFn = unsafe extern "C" fn() -> u32;
 type WindowOwnerFn = unsafe extern "C" fn(u32, u32, *mut u32) -> CGError;
 type ConnectionPsnFn = unsafe extern "C" fn(u32, *mut ProcessSerialNumber) -> CGError;
-type PostRecordFn = unsafe extern "C" fn(*const ProcessSerialNumber, *const u8) -> CGError;
 type PostToPidFn = unsafe extern "C" fn(libc::pid_t, *const CGEvent);
 type SetFieldFn = unsafe extern "C" fn(*const CGEvent, u32, i64);
 type SetWindowLocationFn = unsafe extern "C" fn(*const CGEvent, CGPoint);
-
-/// Length of a `WindowServer` event record, which its own length field
-/// repeats.
-pub const RECORD_LEN: usize = 0xF8;
 
 /// The functions [`Input`](crate::Input) posts through. They hold their own
 /// reference on `SkyLight`.
@@ -79,7 +74,6 @@ pub struct EventSymbols {
     main_connection: MainConnectionFn,
     window_owner: WindowOwnerFn,
     connection_psn: ConnectionPsnFn,
-    post_record: PostRecordFn,
     post_to_pid: PostToPidFn,
     set_field: SetFieldFn,
     set_window_location: SetWindowLocationFn,
@@ -97,7 +91,6 @@ impl EventSymbols {
                 main_connection: skylight.function(c"SLSMainConnectionID")?,
                 window_owner: skylight.function(c"SLSGetWindowOwner")?,
                 connection_psn: skylight.function(c"SLSGetConnectionPSN")?,
-                post_record: skylight.function(c"SLPSPostEventRecordTo")?,
                 post_to_pid: skylight.function(c"SLEventPostToPid")?,
                 set_field: skylight.function(c"SLEventSetIntegerValueField")?,
                 set_window_location: skylight.function(c"CGEventSetWindowLocation")?,
@@ -106,10 +99,9 @@ impl EventSymbols {
         }
     }
 
-    /// The process serial number of the process owning `window`, or `None`
-    /// when its owner is no application: a connection without a process
-    /// serial number, such as `WindowServer`'s own.
-    pub fn application_psn(&self, window: u32) -> Result<Option<ProcessSerialNumber>, Error> {
+    /// Whether an application owns `window`: its owner's connection has a
+    /// process serial number, which `WindowServer`'s own connection has not.
+    pub fn application_owns(&self, window: u32) -> Result<bool, Error> {
         let connection = self.main_connection();
         let mut owner = 0_u32;
         // SAFETY: `owner` is a valid out pointer.
@@ -123,30 +115,15 @@ impl EventSymbols {
         let no_process = ProcessSerialNumber { high: 0, low: 0 };
         if status != CGError::Success || psn == no_process {
             tracing::trace!(window, ?status, "window owner has no process serial number");
-            return Ok(None);
+            return Ok(false);
         }
-        Ok(Some(psn))
+        Ok(true)
     }
 
     /// This process's `WindowServer` connection.
     pub fn main_connection(&self) -> u32 {
         // SAFETY: the function takes no arguments.
         unsafe { (self.main_connection)() }
-    }
-
-    /// Queues `record` in the event queue of the process `psn` names.
-    pub fn post_record(
-        &self,
-        psn: ProcessSerialNumber,
-        record: &[u8; RECORD_LEN],
-    ) -> Result<(), Error> {
-        // SAFETY: `record` is a full-length event record.
-        let status = unsafe { (self.post_record)(&raw const psn, record.as_ptr()) };
-        if status == CGError::Success {
-            Ok(())
-        } else {
-            Err(platform("SLPSPostEventRecordTo", status))
-        }
     }
 
     /// Posts `event` to the process `pid`.

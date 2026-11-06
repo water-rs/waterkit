@@ -9,25 +9,23 @@
 //!
 //! The other process is this binary run again with [`mac::TARGET_DISPLAY`]
 //! set: it opens its window on that display and writes what the window
-//! receives to its standard output, one JSON object per line.
+//! receives to its standard output, one JSON object per line. Its log, on the
+//! standard error it shares with the test, traces every event `AppKit`
+//! dispatches in it and the key state each one meets.
 
 use libtest_mimic::{Arguments, Trial};
 
 fn main() {
     #[cfg(target_os = "macos")]
     if let Some(display) = std::env::var_os(mac::TARGET_DISPLAY) {
+        mac::log_to_stderr("automation=trace");
         mac::serve_target_window(&display);
         return;
     }
     let mut arguments = Arguments::from_args();
     arguments.test_threads = Some(1);
     #[cfg(target_os = "macos")]
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::new(
-            "waterkit_automation=trace",
-        ))
-        .with_writer(std::io::stderr)
-        .init();
+    mac::log_to_stderr("waterkit_automation=trace,automation=trace");
     #[cfg(target_os = "macos")]
     let trials = vec![
         Trial::test(
@@ -88,6 +86,14 @@ mod mac {
     /// display instead of running the tests.
     pub const TARGET_DISPLAY: &str = "WATERKIT_AUTOMATION_TARGET_DISPLAY";
 
+    /// Writes the logs `filter` selects to standard error.
+    pub fn log_to_stderr(filter: &str) {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+            .with_writer(std::io::stderr)
+            .init();
+    }
+
     /// How long each posted event gets to arrive in the window, and the
     /// target application to report the window focused.
     const DELIVERY_DEADLINE: Duration = Duration::from_secs(5);
@@ -138,6 +144,8 @@ mod mac {
             window: u32,
             /// Whether the process believes it is active.
             active: bool,
+            /// Whether the window is its key window.
+            key: bool,
         },
         Press {
             x: f64,
@@ -196,8 +204,14 @@ mod mac {
             }
 
             #[unsafe(method(acceptsFirstMouse:))]
-            fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
-                self.ivars().accepts_first_mouse
+            fn accepts_first_mouse(&self, event: Option<&NSEvent>) -> bool {
+                let accepts = self.ivars().accepts_first_mouse;
+                tracing::debug!(
+                    event = ?event.map(describe_event),
+                    accepts,
+                    "AppKit asked the view whether it takes a press into a window that is not key"
+                );
+                accepts
             }
 
             #[unsafe(method(mouseDown:))]
@@ -252,7 +266,8 @@ mod mac {
 
     define_class!(
         /// A borderless window, which `AppKit` keeps where it is put, that can
-        /// still become key.
+        /// still become key. It traces every event `AppKit` hands it and every
+        /// change of its key state.
         #[unsafe(super(NSWindow))]
         #[thread_kind = MainThreadOnly]
         #[name = "WaterkitAutomationTestWindow"]
@@ -262,6 +277,49 @@ mod mac {
             #[unsafe(method(canBecomeKeyWindow))]
             fn can_become_key_window(&self) -> bool {
                 true
+            }
+
+            #[unsafe(method(sendEvent:))]
+            fn send_event(&self, event: &NSEvent) {
+                let app = NSApplication::sharedApplication(self.mtm());
+                let pointer = matches!(
+                    event.r#type(),
+                    NSEventType::LeftMouseDown | NSEventType::LeftMouseUp
+                );
+                let hits_view = pointer.then(|| {
+                    self.contentView()
+                        .and_then(|view| view.hitTest(event.locationInWindow()))
+                        .is_some()
+                });
+                tracing::debug!(
+                    event = %describe_event(event),
+                    app_active = app.isActive(),
+                    window_key = self.isKeyWindow(),
+                    ?hits_view,
+                    "the window received an event"
+                );
+                // SAFETY: `sendEvent:` is NSWindow's dispatch of `event`.
+                let () = unsafe { msg_send![super(self), sendEvent: event] };
+                tracing::debug!(
+                    event = %describe_event(event),
+                    app_active = app.isActive(),
+                    window_key = self.isKeyWindow(),
+                    "the window handled the event"
+                );
+            }
+
+            #[unsafe(method(becomeKeyWindow))]
+            fn become_key_window(&self) {
+                tracing::debug!(window = self.windowNumber(), "the window becomes key");
+                // SAFETY: NSWindow's own `becomeKeyWindow`.
+                let () = unsafe { msg_send![super(self), becomeKeyWindow] };
+            }
+
+            #[unsafe(method(resignKeyWindow))]
+            fn resign_key_window(&self) {
+                tracing::debug!(window = self.windowNumber(), "the window resigns key");
+                // SAFETY: NSWindow's own `resignKeyWindow`.
+                let () = unsafe { msg_send![super(self), resignKeyWindow] };
             }
         }
     );
@@ -302,20 +360,15 @@ mod mac {
         }
     }
 
-    /// Every event `NSApp` dispatches, as a local event monitor sees it.
-    struct EventLog {
-        monitor: Retained<AnyObject>,
-        events: Rc<RefCell<Vec<String>>>,
-    }
+    /// A local event monitor: `NSApp` hands it every event it dispatches,
+    /// before dispatching it, until it drops.
+    struct EventMonitor(Retained<AnyObject>);
 
-    impl EventLog {
-        fn install() -> Self {
-            let events = Rc::new(RefCell::new(Vec::new()));
-            let seen = Rc::clone(&events);
+    impl EventMonitor {
+        fn install(on_event: impl Fn(&NSEvent) + 'static) -> Self {
             let handler = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
                 // SAFETY: `AppKit` hands the monitor a live event.
-                let described = describe_event(unsafe { event.as_ref() });
-                seen.borrow_mut().push(described);
+                on_event(unsafe { event.as_ref() });
                 event.as_ptr()
             });
             // SAFETY: the handler returns the event it is given, so dispatch
@@ -324,7 +377,36 @@ mod mac {
                 NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::Any, &handler)
             }
             .expect("AppKit installs a local event monitor");
-            Self { monitor, events }
+            Self(monitor)
+        }
+    }
+
+    impl Drop for EventMonitor {
+        fn drop(&mut self) {
+            // SAFETY: the monitor came from
+            // `addLocalMonitorForEventsMatchingMask:handler:` and is removed
+            // once.
+            unsafe { NSEvent::removeMonitor(&self.0) };
+        }
+    }
+
+    /// Every event `NSApp` dispatches, as a local event monitor sees it.
+    struct EventLog {
+        _monitor: EventMonitor,
+        events: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl EventLog {
+        fn install() -> Self {
+            let events = Rc::new(RefCell::new(Vec::new()));
+            let seen = Rc::clone(&events);
+            let monitor = EventMonitor::install(move |event| {
+                seen.borrow_mut().push(describe_event(event));
+            });
+            Self {
+                _monitor: monitor,
+                events,
+            }
         }
 
         fn describe(&self) -> String {
@@ -334,15 +416,6 @@ mod mac {
             } else {
                 format!("NSApp dispatched, in order: {}", events.join("; "))
             }
-        }
-    }
-
-    impl Drop for EventLog {
-        fn drop(&mut self) {
-            // SAFETY: the monitor came from
-            // `addLocalMonitorForEventsMatchingMask:handler:` and is removed
-            // once.
-            unsafe { NSEvent::removeMonitor(&self.monitor) };
         }
     }
 
@@ -776,16 +849,27 @@ mod mac {
     /// [`a_click_and_keys_reach_a_window_of_another_process`]: a regular
     /// application, as `TextEdit` is, whose view refuses a first click as a
     /// text view does. It reports when its window is on screen, then every
-    /// event the window receives, until it is killed.
+    /// event the window receives, until it is killed. Its log traces every
+    /// event `NSApp` dispatches, with the active and key state it meets.
     pub fn serve_target_window(display: &OsStr) {
         let display: u32 = display
             .to_str()
             .and_then(|display| display.parse().ok())
             .expect("the target display is a display id");
+        let _span = tracing::debug_span!("target", pid = std::process::id()).entered();
         let mtm = MainThreadMarker::new().expect("the target runs on the main thread");
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
         app.finishLaunching();
+        let _monitor = EventMonitor::install(move |event| {
+            let app = NSApplication::sharedApplication(mtm);
+            tracing::debug!(
+                event = %describe_event(event),
+                app_active = app.isActive(),
+                key_window = ?app.keyWindow().map(|key| key.windowNumber()),
+                "NSApp is dispatching an event"
+            );
+        });
         let (window, _recorder) = open_window(mtm, display, false, true);
         let inspector = Input::new(display).expect("the target sees the virtual display");
         let number = window.number();
@@ -803,6 +887,7 @@ mod mac {
             pid: std::process::id(),
             window: number,
             active: app.isActive(),
+            key: window.isKeyWindow(),
         });
         app.run();
     }
@@ -831,6 +916,7 @@ mod mac {
                     let line = line.expect("the target's output reads");
                     let report = serde_json::from_str(&line)
                         .unwrap_or_else(|error| panic!("the target wrote {line:?}: {error}"));
+                    tracing::debug!(?report, "the target reported");
                     if sender.send(report).is_err() {
                         return;
                     }
@@ -876,25 +962,23 @@ mod mac {
         let display = create_display(mtm);
         let mut target = TargetProcess::spawn(display.id());
         // Ready comes first: a report before it would fail the match below.
-        let (pid, number, active) = match target.next(TARGET_READY_DEADLINE) {
+        let (pid, number, active, key) = match target.next(TARGET_READY_DEADLINE) {
             Some(Report::Ready {
                 pid,
                 window,
                 active,
-            }) => (pid, window, active),
+                key,
+            }) => (pid, window, active, key),
             other => panic!(
                 "the target process did not report its window within {TARGET_READY_DEADLINE:?}, got {other:?}"
             ),
         };
-        eprintln!(
-            "target process {pid} opened window {number}; it reports itself active: {active}"
-        );
         let cursor_before = cursor();
         let mut input = open_input(display.id());
         let at = click_point();
         let describe = |input: &Input, observed: &Observed| {
             format!(
-                "the target received {observed:?}; WindowServer lists its window as {}\n{}\nThe crate's log above lists what Input posted and what the target reported.",
+                "the target received {observed:?}; when its window {number} came on screen, process {pid} reported itself active {active}, with the window key {key}; WindowServer lists the window as {}\n{}\nThe log above lists what Input posted, and under target{{pid={pid}}} every event AppKit dispatched in the target.",
                 describe_listed(input, number),
                 describe_screens(mtm),
             )

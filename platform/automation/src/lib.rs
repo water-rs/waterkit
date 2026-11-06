@@ -75,23 +75,28 @@
 //! [`Input::windows`] lists them all.
 //!
 //! An application that does not believe it is active drops the key events
-//! posted to it, and its views refuse a first click they do not accept. So
-//! before a press or a key event, the target application is made to report
-//! itself active with the target window focused, without raising the window
-//! or changing `WindowServer`'s front process, which stays the user's: an
-//! inactive application gets the application-activated event `AppKit` builds
-//! for a real activation, and a window that is not focused gets the focus
-//! record and the make-key record pair `SLPSPostEventRecordTo` takes.
-//! [`Input::post`] then waits, on the application's Accessibility
-//! notifications, until it reports both (`AXFrontmost`, `AXFocusedWindow`),
-//! and fails with [`Error::NotFocused`] when it does not in time.
+//! posted to it, and `AppKit` hands the press that makes a window key only to
+//! a view that accepts first mouse, which a text view does not. So before a
+//! press or a key event, the target window is made its application's key
+//! window in an application that believes it is active, without changing
+//! `WindowServer`'s front process, which stays the user's: an inactive
+//! application gets the application-activated event `AppKit` builds for a
+//! real activation, and the window gets a press and release just outside its
+//! frame, which make it key and reach no view. Both go through the
+//! per-process queue the input follows them through, which `AppKit` handles
+//! in order. [`Input::post`] then waits, on the application's Accessibility
+//! notifications, until it reports itself active with the window focused
+//! (`AXFrontmost`, `AXFocusedWindow`), and fails with [`Error::NotFocused`]
+//! when it does not in time.
 //!
 //! The events themselves are posted to the owning process with
 //! `SLEventPostToPid`, stamped with the target window and its window-local
 //! location. For the length of the call, an event tap on that process sees
 //! each of them arrive; [`Input::post`] returns once all have, and fails with
 //! [`Error::NotDelivered`] when one has not in time. Both waits end after
-//! [`Input::confirm_timeout`].
+//! [`Input::confirm_timeout`]. Arrival in the process is the last step the
+//! system reports on: no interface tells another process whether the
+//! application then dispatched an event to a view.
 
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]

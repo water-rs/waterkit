@@ -70,7 +70,8 @@ pub enum Error {
     NoKeyWindow(DisplayWindows),
     /// The application owning the target window did not come to report
     /// itself active with that window focused, so it would drop the input;
-    /// nothing but the activation and focus requests was sent.
+    /// nothing but the activation event and the press that makes the window
+    /// key was sent.
     #[error(
         "pid {pid} did not make window {window} its focused window within {timeout:?}: it {report}"
     )]

@@ -1,11 +1,12 @@
 use core::fmt;
 use core::time::Duration;
+use std::path::PathBuf;
 
 use keyboard_types::{Code, Modifiers};
 
-use crate::{DisplayWindows, FocusReport, ListedWindow, Point};
+use crate::{DisplayWindows, FocusReport, ListedWindow, Point, Rect};
 
-/// Failure creating a display or posting input.
+/// Failure creating a display, posting input or launching an application.
 #[derive(Debug, Clone, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -132,6 +133,65 @@ pub enum Error {
     /// Some of the modifiers have no macOS event flag; the value holds them.
     #[error("modifiers {0:?} have no macOS event flag")]
     UnmappableModifiers(Modifiers),
+    /// `LaunchServices` knows no application with this bundle id.
+    #[error("no application with bundle id {0} is installed")]
+    AppNotFound(String),
+    /// The path names no bundle with a bundle identifier, so it is not an
+    /// application bundle.
+    #[error("{} is not an application bundle", .0.display())]
+    NotAnAppBundle(PathBuf),
+    /// A file to launch or to hand to the application does not exist.
+    #[error("{} does not exist", .0.display())]
+    FileNotFound(PathBuf),
+    /// A URL to hand to the application does not parse or has no scheme.
+    #[error("{0:?} is not an absolute URL")]
+    InvalidUrl(String),
+    /// `LaunchServices` reported the launch failed.
+    #[error("launching {bundle_id} failed: {reason}")]
+    LaunchFailed {
+        /// The application.
+        bundle_id: String,
+        /// What `LaunchServices` reported.
+        reason: String,
+    },
+    /// `LaunchServices` neither reported the launch done nor showed a process
+    /// of the application in time; the launch may still be under way.
+    #[error("{bundle_id} neither reported its launch nor started a process within {timeout:?}")]
+    LaunchTimedOut {
+        /// The application.
+        bundle_id: String,
+        /// How long the launch was given.
+        timeout: Duration,
+    },
+    /// The application is running but reported no window on screen in time.
+    #[error("{bundle_id} (pid {pid}) showed no new window on screen within {timeout:?}")]
+    NoAppWindow {
+        /// The application's process.
+        pid: libc::pid_t,
+        /// The application.
+        bundle_id: String,
+        /// How long the launch was given.
+        timeout: Duration,
+    },
+    /// A window that was moved onto a display is not listed within its
+    /// bounds.
+    #[error(
+        "window {window} of pid {pid} {} rather than within display {display} ({bounds})",
+        .frame.map_or_else(|| "is no longer listed".to_owned(), |frame| format!("lies at {frame}"))
+    )]
+    NotPlaced {
+        /// The application's process.
+        pid: libc::pid_t,
+        /// The window.
+        window: u32,
+        /// Where `WindowServer` lists it last, or `None` when it no longer
+        /// lists it.
+        frame: Option<Rect>,
+        /// The display.
+        display: u32,
+        /// The display's bounds.
+        bounds: Rect,
+    },
     /// A platform call failed; the message names it and its status.
     #[error("platform error: {0}")]
     Platform(String),

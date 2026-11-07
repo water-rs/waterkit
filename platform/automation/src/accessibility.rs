@@ -1,15 +1,16 @@
 //! What an application reports through Accessibility about where its input
 //! goes: whether it believes it is active, and which window is its key
-//! window.
+//! window; and its windows, which Accessibility can move.
 
 use core::ffi::c_void;
 use core::fmt;
 use core::ptr::{self, NonNull};
 use core::time::Duration;
 
-use objc2_application_services::{AXError, AXObserver, AXUIElement};
+use objc2_application_services::{AXError, AXObserver, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{
-    CFBoolean, CFRetained, CFRunLoop, CFRunLoopMode, CFRunLoopSource, CFString, CFType, Type,
+    CFArray, CFBoolean, CFRetained, CFRunLoop, CFRunLoopMode, CFRunLoopSource, CFString, CFType,
+    CGPoint, CGRect, CGSize, Type,
 };
 
 use crate::Error;
@@ -146,26 +147,30 @@ impl<'a> Application<'a> {
     /// The value of `name`, or `None` when the application has none or does
     /// not answer in time.
     fn attribute(&self, name: &'static str) -> Result<Option<CFRetained<CFType>>, Error> {
-        let name = CFString::from_static_str(name);
-        let mut value: *const CFType = ptr::null();
-        // SAFETY: `value` is a valid out pointer; on success it holds a +1
-        // reference the caller owns.
-        let status = unsafe {
-            self.element
-                .copy_attribute_value(&name, NonNull::from(&mut value))
+        attribute(&self.element, self.pid, name)
+    }
+
+    /// The windows the application reports (`AXWindows`), with their window
+    /// numbers; none while it does not answer.
+    pub fn windows(&self) -> Result<Vec<Window>, Error> {
+        let Some(windows) = self
+            .attribute("AXWindows")?
+            .and_then(|value| value.downcast::<CFArray>().ok())
+        else {
+            return Ok(Vec::new());
         };
-        match status {
-            // SAFETY: the copied value is +1 and owned here.
-            AXError::Success => {
-                Ok(NonNull::new(value.cast_mut())
-                    .map(|value| unsafe { CFRetained::from_raw(value) }))
-            }
-            AXError::NoValue | AXError::AttributeUnsupported | AXError::CannotComplete => {
-                tracing::trace!(pid = self.pid, %name, ?status, "no answer for the attribute");
-                Ok(None)
-            }
-            status => Err(platform("AXUIElementCopyAttributeValue", status)),
-        }
+        // SAFETY: `AXWindows` is an array of window elements.
+        let windows: &CFArray<AXUIElement> = unsafe { windows.cast_unchecked() };
+        windows
+            .iter()
+            .map(|element| {
+                Ok(Window {
+                    id: self.lookup.window_number(&element)?,
+                    pid: self.pid,
+                    element,
+                })
+            })
+            .collect()
     }
 
     /// Wakes `run_loop` in `mode` whenever the application changes its
@@ -215,6 +220,104 @@ impl<'a> Application<'a> {
             run_loop: run_loop.retain(),
             mode: mode.retain(),
         })
+    }
+}
+
+/// The value of `name` on `element` of `pid`, or `None` when the element has
+/// none or its application does not answer in time.
+fn attribute(
+    element: &AXUIElement,
+    pid: libc::pid_t,
+    name: &'static str,
+) -> Result<Option<CFRetained<CFType>>, Error> {
+    let name = CFString::from_static_str(name);
+    let mut value: *const CFType = ptr::null();
+    // SAFETY: `value` is a valid out pointer; on success it holds a +1
+    // reference the caller owns.
+    let status = unsafe { element.copy_attribute_value(&name, NonNull::from(&mut value)) };
+    match status {
+        // SAFETY: the copied value is +1 and owned here.
+        AXError::Success => {
+            Ok(NonNull::new(value.cast_mut()).map(|value| unsafe { CFRetained::from_raw(value) }))
+        }
+        AXError::NoValue | AXError::AttributeUnsupported | AXError::CannotComplete => {
+            tracing::trace!(pid, %name, ?status, "no answer for the attribute");
+            Ok(None)
+        }
+        status => Err(platform("AXUIElementCopyAttributeValue", status)),
+    }
+}
+
+/// One window of an application as Accessibility sees it.
+pub struct Window {
+    id: u32,
+    pid: libc::pid_t,
+    element: CFRetained<AXUIElement>,
+}
+
+impl Window {
+    /// The window's `WindowServer` number.
+    pub const fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// The window's frame (`AXPosition`, `AXSize`), in global display
+    /// coordinates.
+    pub fn frame(&self) -> Result<CGRect, Error> {
+        let origin = self.value("AXPosition", AXValueType::CGPoint, CGPoint::ZERO)?;
+        let size = self.value("AXSize", AXValueType::CGSize, CGSize::ZERO)?;
+        Ok(CGRect::new(origin, size))
+    }
+
+    /// Moves the window's top-left corner to `origin`.
+    pub fn set_origin(&self, origin: CGPoint) -> Result<(), Error> {
+        self.set_value("AXPosition", AXValueType::CGPoint, &origin)
+    }
+
+    /// Resizes the window to `size`.
+    pub fn set_size(&self, size: CGSize) -> Result<(), Error> {
+        self.set_value("AXSize", AXValueType::CGSize, &size)
+    }
+
+    /// The `kind` value of `name`, decoded over `empty`.
+    fn value<T: Copy>(&self, name: &'static str, kind: AXValueType, empty: T) -> Result<T, Error> {
+        let value = attribute(&self.element, self.pid, name)?
+            .and_then(|value| value.downcast::<AXValue>().ok())
+            .ok_or_else(|| {
+                Error::Platform(format!(
+                    "window {} of pid {} reports no {name}",
+                    self.id, self.pid
+                ))
+            })?;
+        let mut decoded = empty;
+        // SAFETY: `decoded` is the structure `kind` encodes.
+        if unsafe { value.value(kind, NonNull::from(&mut decoded).cast()) } {
+            Ok(decoded)
+        } else {
+            Err(Error::Platform(format!(
+                "window {} of pid {} reports {name} of another type",
+                self.id, self.pid
+            )))
+        }
+    }
+
+    /// Sets `name` to `value`, a structure of kind `kind`.
+    fn set_value<T>(&self, name: &'static str, kind: AXValueType, value: &T) -> Result<(), Error> {
+        // SAFETY: `value` is the structure `kind` encodes; `AXValueCreate`
+        // only reads it.
+        let encoded = unsafe { AXValue::new(kind, NonNull::from(value).cast()) }
+            .ok_or_else(|| Error::Platform("AXValueCreate returned NULL".to_owned()))?;
+        let attribute = CFString::from_static_str(name);
+        // SAFETY: `encoded` holds the type the attribute takes.
+        let status = unsafe { self.element.set_attribute_value(&attribute, &encoded) };
+        if status == AXError::Success {
+            Ok(())
+        } else {
+            Err(Error::Platform(format!(
+                "setting {name} of window {} of pid {} failed with {status:?}",
+                self.id, self.pid
+            )))
+        }
     }
 }
 

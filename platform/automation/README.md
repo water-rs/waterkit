@@ -18,6 +18,13 @@ user's. macOS only; on every other platform the crate is empty.
   press. `post` returns once the target process has every event, and fails
   when the app does not take focus or an event does not arrive within
   `Input::confirm_timeout`.
+- `LaunchedApplication::launch` starts the app a `LaunchConfig` names, by
+  bundle id or bundle path and optionally with URLs and files to open,
+  through `NSWorkspace` without activating it, and returns its pid, bundle id
+  and windows once it shows one. With `LaunchConfig::display` set, the app's
+  windows are moved onto that display through Accessibility first. A launch
+  that fails, wedges or shows no window within `LaunchConfig::timeout` is an
+  error.
 
 Posting to another process needs the Accessibility grant: request
 `Permission::Accessibility` through `waterkit-permission` first.

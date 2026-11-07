@@ -1,7 +1,9 @@
 //! Input posted through the crate reaches windows on a virtual display the
 //! test creates, one opened by the test process itself and one opened by
 //! another process, also under a transparent window of a third process that
-//! ignores mouse events, and the user's cursor stays where it was.
+//! ignores mouse events, and the user's cursor stays where it was. A stock
+//! application launched through the crate opens in the background with its
+//! window on the virtual display.
 //!
 //! The test owns the process main thread (`harness = false`, one test
 //! thread): the display is created there, and `AppKit` events are pumped
@@ -60,6 +62,13 @@ fn main() {
             mac::input_needs_an_online_display();
             Ok(())
         }),
+        Trial::test(
+            "an_app_launches_in_the_background_onto_a_virtual_display",
+            || {
+                mac::an_app_launches_in_the_background_onto_a_virtual_display();
+                Ok(())
+            },
+        ),
     ];
     #[cfg(not(target_os = "macos"))]
     let trials: Vec<Trial> = Vec::new();
@@ -88,8 +97,8 @@ mod mac {
     use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
     use objc2_app_kit::{
         NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSEvent,
-        NSEventMask, NSEventType, NSFloatingWindowLevel, NSScreen, NSView, NSWindow,
-        NSWindowStyleMask,
+        NSEventMask, NSEventType, NSFloatingWindowLevel, NSRunningApplication, NSScreen, NSView,
+        NSWindow, NSWindowStyleMask, NSWorkspace,
     };
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
     use objc2_core_graphics::{CGDisplayBounds, CGEvent, CGMainDisplayID};
@@ -99,8 +108,8 @@ mod mac {
     use serde::de::DeserializeOwned;
     use serde::{Deserialize, Serialize};
     use waterkit_automation::{
-        Code, Error, Input, KeyDown, KeyUp, ListedWindow, MouseButton, MouseDown, MouseUp, Point,
-        Rect, Text, VirtualDisplay, VirtualDisplayConfig,
+        Code, Error, Input, KeyDown, KeyUp, LaunchConfig, LaunchedApplication, ListedWindow,
+        MouseButton, MouseDown, MouseUp, Point, Rect, Text, VirtualDisplay, VirtualDisplayConfig,
     };
 
     /// Set to a display id, this binary opens the target window on that
@@ -1371,5 +1380,106 @@ mod mac {
             matches!(result, Err(Error::DisplayNotFound(u32::MAX))),
             "an unknown display is refused, got {result:?}"
         );
+    }
+
+    /// The stock application the launch case starts: one window, which it
+    /// opens on launch.
+    const LAUNCHED_APP: &str = "com.apple.calculator";
+
+    /// The application a launch started, force-quit on drop.
+    struct Launched(Retained<NSRunningApplication>);
+
+    impl Drop for Launched {
+        fn drop(&mut self) {
+            if !self.0.isTerminated() {
+                assert!(
+                    self.0.forceTerminate() || thread::panicking(),
+                    "the launched application is force-quit"
+                );
+            }
+        }
+    }
+
+    /// The front application's process, as `NSWorkspace` reports it once
+    /// the main run loop has handled what was queued for it.
+    fn frontmost_pid(mtm: MainThreadMarker) -> Option<i32> {
+        dispatch_queued(mtm);
+        NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .map(|application| application.processIdentifier())
+    }
+
+    /// A new instance of a stock application launches in the background with
+    /// its window on the virtual display: the front application stays the
+    /// same, the launched one never becomes active, and the cursor stays.
+    pub fn an_app_launches_in_the_background_onto_a_virtual_display() {
+        let mtm = MainThreadMarker::new().expect("libtest-mimic runs one thread on main");
+        log_macos_version();
+        // `AppKit` dispatches the events this case pumps; an accessory
+        // application never becomes the front one itself.
+        let app = NSApplication::sharedApplication(mtm);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        app.finishLaunching();
+        let display = create_display(mtm);
+        let front_before = frontmost_pid(mtm);
+        let cursor_before = cursor();
+
+        let config = LaunchConfig::bundle_id(LAUNCHED_APP)
+            .new_instance(true)
+            .display(display.id());
+        let launched = LaunchedApplication::launch(&config)
+            .unwrap_or_else(|error| panic!("{LAUNCHED_APP} does not launch: {error}"));
+        let running = NSRunningApplication::runningApplicationWithProcessIdentifier(launched.pid())
+            .expect("the launched application is running");
+        let running = Launched(running);
+        assert_eq!(launched.bundle_id(), LAUNCHED_APP);
+
+        // An application that activates itself does so while it finishes
+        // launching.
+        assert!(
+            pump_until(mtm, TARGET_READY_DEADLINE, || running
+                .0
+                .isFinishedLaunching()),
+            "{LAUNCHED_APP} (pid {}) did not finish launching within {TARGET_READY_DEADLINE:?}",
+            launched.pid()
+        );
+        assert_eq!(
+            frontmost_pid(mtm),
+            front_before,
+            "the front application changed when {LAUNCHED_APP} (pid {}) launched",
+            launched.pid()
+        );
+        assert!(
+            !running.0.isActive(),
+            "{LAUNCHED_APP} (pid {}) became active",
+            launched.pid()
+        );
+
+        let bounds = CGDisplayBounds(display.id());
+        let right = bounds.origin.x + bounds.size.width;
+        let bottom = bounds.origin.y + bounds.size.height;
+        assert!(
+            !launched.windows().is_empty(),
+            "{LAUNCHED_APP} returned no window"
+        );
+        for window in launched.windows() {
+            let frame = window.bounds();
+            let inside = frame.x() >= bounds.origin.x
+                && frame.y() >= bounds.origin.y
+                && frame.x() + frame.width() <= right
+                && frame.y() + frame.height() <= bottom;
+            assert!(
+                inside,
+                "{window} does not lie within display {} {bounds:?}",
+                display.id()
+            );
+            assert_eq!(
+                window.pid(),
+                launched.pid(),
+                "{window} is the launched app's"
+            );
+        }
+        assert_cursor_unchanged(cursor_before);
+        drop(running);
     }
 }

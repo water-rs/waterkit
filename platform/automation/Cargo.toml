@@ -23,15 +23,20 @@ libc = "0.2"
 block2.workspace = true
 dispatch2.workspace = true
 objc2.workspace = true
+objc2-app-kit = { workspace = true, features = [
+    "NSRunningApplication", "NSWorkspace", "block2", "libc",
+] }
+objc2-core-services = { workspace = true, features = ["AE", "AEDataModel", "AppleEvents"] }
 objc2-foundation = { workspace = true, features = [
-    "NSArray", "NSProcessInfo", "NSString", "NSValue",
+    "NSAppleEventDescriptor", "NSArray", "NSBundle", "NSError", "NSProcessInfo", "NSString",
+    "NSURL", "NSValue", "objc2-core-services",
 ] }
 objc2-core-foundation = { workspace = true, features = [
     "CFArray", "CFCGTypes", "CFDate", "CFDictionary", "CFMachPort", "CFNumber", "CFRunLoop",
     "CFString",
 ] }
 objc2-application-services = { workspace = true, features = [
-    "std", "AXError", "AXUIElement", "HIServices", "libc",
+    "std", "AXError", "AXUIElement", "AXValue", "HIServices", "libc",
 ] }
 objc2-core-graphics = { workspace = true, features = [
     "CGDirectDisplay", "CGDisplayConfiguration", "CGError", "CGEvent", "CGEventTypes",

@@ -750,19 +750,22 @@ mod mac {
         CGPoint::new(origin.x + at.x(), origin.y + at.y())
     }
 
-    /// Whether `WindowServer` lists window `number` on screen under `at` on
-    /// `display`, as an application window.
-    fn listed_under(inspector: &Input, display: u32, number: u32, at: Point) -> bool {
-        let point = global(display, at);
+    /// Whether `WindowServer` lists window `number` on screen as an
+    /// application window at exactly `frame`, in global display coordinates.
+    fn listed_at(inspector: &Input, number: u32, frame: CGRect) -> bool {
         inspector
             .windows()
             .expect("the window list reads")
             .iter()
             .any(|listed| {
+                let bounds = listed.bounds();
                 listed.id() == number
                     && listed.on_screen()
                     && listed.application()
-                    && holds(listed.bounds(), point)
+                    && bounds.x().total_cmp(&frame.origin.x).is_eq()
+                    && bounds.y().total_cmp(&frame.origin.y).is_eq()
+                    && bounds.width().total_cmp(&frame.size.width).is_eq()
+                    && bounds.height().total_cmp(&frame.size.height).is_eq()
             })
     }
 
@@ -834,6 +837,35 @@ mod mac {
             let origin = screen.frame().origin;
             window.setFrameOrigin(NSPoint::new(origin.x + offset.x, origin.y + offset.y));
         }
+    }
+
+    /// One turn of a helper's wait for `window` to settle: places it again
+    /// with [`follow_display`], then reports whether the display's bounds
+    /// were the same before and after, and `WindowServer` lists the window at
+    /// the frame that placement gives it, `size` points at `offset` from the
+    /// bottom-left corner of the display. A window one or two points from
+    /// that frame still covers the click point, so covering it is not enough:
+    /// input posted then lands relative to a window that is still moving.
+    fn settled(
+        mtm: MainThreadMarker,
+        window: &NSWindow,
+        inspector: &Input,
+        display: u32,
+        offset: CGPoint,
+        size: CGSize,
+    ) -> bool {
+        let before = CGDisplayBounds(display);
+        follow_display(mtm, window, display, offset);
+        let bounds = CGDisplayBounds(display);
+        let number = u32::try_from(window.windowNumber()).expect("window numbers are 32-bit");
+        let frame = CGRect::new(
+            CGPoint::new(
+                bounds.origin.x + offset.x,
+                bounds.origin.y + bounds.size.height - offset.y - size.height,
+            ),
+            size,
+        );
+        before == bounds && listed_at(inspector, number, frame)
     }
 
     /// Where [`open_window`] puts its window relative to the bottom-left
@@ -927,14 +959,15 @@ mod mac {
         let input = open_input(display.id());
         let at = click_point();
 
-        // `WindowServer` lists the window once it has ordered it in.
-        let number = window.number();
+        // `WindowServer` lists the window at its final frame once it has
+        // ordered it in and the display has stopped moving.
+        let offset = window_offset(CGDisplayBounds(display.id()).size.height);
         let listed = pump_until(mtm, DELIVERY_DEADLINE, || {
-            listed_under(&inspector, display.id(), number, at)
+            settled(mtm, &window, &inspector, display.id(), offset, WINDOW_SIZE)
         });
         assert!(
             listed,
-            "WindowServer never listed the test window on screen under {at}\n{}\n{}",
+            "WindowServer never settled the test window at its frame for {at}\n{}\n{}",
             describe_window(&window, &inspector),
             describe_screens(mtm)
         );
@@ -1020,10 +1053,9 @@ mod mac {
         let offset = window_offset(CGDisplayBounds(display).size.height);
         assert!(
             pump_until(mtm, DELIVERY_DEADLINE, || {
-                follow_display(mtm, &window, display, offset);
-                listed_under(&inspector, display, number, click_point())
+                settled(mtm, &window, &inspector, display, offset, WINDOW_SIZE)
             }),
-            "WindowServer never listed the target window on screen under {:?} of display {display} {:?}: {}; {}",
+            "WindowServer never settled the target window at its frame for {:?} of display {display} {:?}: {}; {}",
             click_point(),
             CGDisplayBounds(display),
             describe_window(&window, &inspector),
@@ -1091,10 +1123,10 @@ mod mac {
         let number = u32::try_from(window.windowNumber()).expect("window numbers are 32-bit");
         assert!(
             pump_until(mtm, DELIVERY_DEADLINE, || {
-                follow_display(mtm, &window, display, CGPoint::ZERO);
-                listed_under(&inspector, display, number, click_point())
+                let size = CGDisplayBounds(display).size;
+                settled(mtm, &window, &inspector, display, CGPoint::ZERO, size)
             }),
-            "WindowServer never listed the overlay window on screen under {:?} of display {display} {:?}: {}; {}",
+            "WindowServer never settled the overlay window at its frame for {:?} of display {display} {:?}: {}; {}",
             click_point(),
             CGDisplayBounds(display),
             describe_listed(&inspector, number),

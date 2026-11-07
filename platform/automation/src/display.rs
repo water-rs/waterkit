@@ -5,16 +5,13 @@ use core::num::NonZeroU32;
 use core::ptr;
 use core::time::Duration;
 use std::sync::mpsc;
-use std::time::Instant;
 
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
 use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyClass, AnyObject, Method};
 use objc2::{MainThreadMarker, msg_send, sel};
-use objc2_core_foundation::{
-    CFAbsoluteTimeGetCurrent, CFRunLoop, CFRunLoopTimer, CGSize, kCFRunLoopDefaultMode,
-};
+use objc2_core_foundation::{CFRunLoop, CGSize};
 use objc2_core_graphics::{
     CGBeginDisplayConfiguration, CGCancelDisplayConfiguration, CGCompleteDisplayConfiguration,
     CGConfigureDisplayMirrorOfDisplay, CGConfigureOption, CGDirectDisplayID,
@@ -26,6 +23,7 @@ use waterkit_core::RefreshRate;
 
 use crate::error::platform;
 use crate::framework::Framework;
+use crate::run_loop;
 use crate::skylight::DisplayLists;
 use crate::topology::Presence;
 use crate::{DisplayState, Error};
@@ -476,39 +474,7 @@ impl Reconfigurations {
         timeout: Duration,
         mut done: impl FnMut(&mut Self) -> Result<bool, Error>,
     ) -> Result<(), Error> {
-        let deadline = Instant::now() + timeout;
-        let main = CFRunLoop::main().expect("the process has a main run loop");
-        // A mode with no source or timer makes the loop return at once; the
-        // timer keeps it waiting until the deadline.
-        // SAFETY: the timer has no callout and no context.
-        let timer = unsafe {
-            CFRunLoopTimer::new(
-                None,
-                CFAbsoluteTimeGetCurrent() + timeout.as_secs_f64(),
-                0.0,
-                0,
-                0,
-                None,
-                ptr::null_mut(),
-            )
-        }
-        .expect("CoreFoundation creates a timer");
-        // SAFETY: the default mode is an immutable constant.
-        let mode = unsafe { kCFRunLoopDefaultMode };
-        main.add_timer(Some(&timer), mode);
-        let outcome = loop {
-            match done(self) {
-                Ok(false) => {}
-                finished => break finished.map(drop),
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                break Ok(());
-            }
-            CFRunLoop::run_in_mode(mode, remaining.as_secs_f64(), true);
-        };
-        timer.invalidate();
-        outcome
+        run_loop::spin(timeout, timeout, || done(self)).map(drop)
     }
 }
 

@@ -10,6 +10,10 @@
 //!   that owns the window under the point, never through the HID event tap,
 //!   so the user's cursor never moves and the user's front app keeps its
 //!   focus.
+//! - [`LaunchedApplication::launch`] starts an application a
+//!   [`LaunchConfig`] names, by bundle id or bundle path and optionally with
+//!   URLs and files to open, in the background, and moves its windows onto a
+//!   display, such as a [`VirtualDisplay`].
 //!
 //! The crate is macOS-only; on every other platform it is empty, so code that
 //! uses it fails to compile there.
@@ -17,8 +21,9 @@
 //! # Permissions
 //!
 //! Posting events to another process, reading what it reports about its
-//! focus and tapping the events routed to it need the Accessibility grant
-//! (`Permission::Accessibility`). Request it with
+//! focus and windows, moving its windows and tapping the events routed to it
+//! need the Accessibility grant (`Permission::Accessibility`), so launching
+//! needs it too. Request it with
 //! `waterkit_permission::request(Permission::Accessibility)` before posting.
 //!
 //! # Threads and the run loop
@@ -42,6 +47,33 @@
 //! run meanwhile. Input into a window of the calling process must come from
 //! a thread other than the one running that window's event loop, which has
 //! to answer the wait.
+//!
+//! [`LaunchedApplication::launch`] may be called from any thread. While it
+//! waits, it runs the calling thread's run loop in its default mode, waking
+//! every 50 ms to look at the application again, so sources the caller
+//! registered in that mode run meanwhile; on the main thread that keeps this
+//! process's view of the display topology current, which placement reads.
+//!
+//! # Launching
+//!
+//! [`LaunchedApplication::launch`] asks `NSWorkspace` to open the
+//! application without activating it or adding it to the recent items, and
+//! with an open-application Apple event (`aevt/oapp`), after which an
+//! application launched cold or restoring its state still opens a window.
+//! `LaunchServices` can start the application without ever delivering the
+//! launch's completion to a process that runs no main run loop, so the wait
+//! for the launch also ends when a process of the application shows up: any,
+//! or with [`new_instance`](LaunchConfig::new_instance) one that was not
+//! running before.
+//!
+//! The launch returns once `WindowServer` lists on screen a window the
+//! application reports through Accessibility (`AXWindows`). With a
+//! [`display`](LaunchConfig::display) set, each of those windows is first
+//! moved through Accessibility (`AXSize`, `AXPosition`) to the centre of the
+//! display, shrunk to fit it, and the launch returns once `WindowServer`
+//! lists them all within it. Neither the application's activation state nor
+//! the cursor changes. The application opens its first window where the
+//! system puts it, on one of the user's displays, until it is moved.
 //!
 //! # Display creation
 //!
@@ -124,6 +156,12 @@ mod input;
 #[cfg(target_os = "macos")]
 mod keycode;
 #[cfg(target_os = "macos")]
+mod launch;
+#[cfg(target_os = "macos")]
+mod placement;
+#[cfg(target_os = "macos")]
+mod run_loop;
+#[cfg(target_os = "macos")]
 mod skylight;
 #[cfg(target_os = "macos")]
 mod topology;
@@ -144,6 +182,8 @@ pub use event::{
 pub use input::Input;
 #[cfg(target_os = "macos")]
 pub use keyboard_types::{Code, Modifiers};
+#[cfg(target_os = "macos")]
+pub use launch::{LaunchConfig, LaunchedApplication};
 #[cfg(target_os = "macos")]
 pub use objc2::MainThreadMarker;
 #[cfg(target_os = "macos")]

@@ -11,12 +11,13 @@ use dispatch2::DispatchQueue;
 use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyClass, AnyObject, Method};
 use objc2::{MainThreadMarker, msg_send, sel};
-use objc2_core_foundation::{CFRunLoop, CGSize};
+use objc2_core_foundation::{CFRunLoop, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGBeginDisplayConfiguration, CGCancelDisplayConfiguration, CGCompleteDisplayConfiguration,
-    CGConfigureDisplayMirrorOfDisplay, CGConfigureOption, CGDirectDisplayID,
-    CGDisplayChangeSummaryFlags, CGDisplayConfigRef, CGDisplayRegisterReconfigurationCallback,
-    CGDisplayRemoveReconfigurationCallback, CGError, kCGNullDirectDisplay,
+    CGConfigureDisplayMirrorOfDisplay, CGConfigureDisplayOrigin, CGConfigureOption,
+    CGDirectDisplayID, CGDisplayBounds, CGDisplayChangeSummaryFlags, CGDisplayConfigRef,
+    CGDisplayRegisterReconfigurationCallback, CGDisplayRemoveReconfigurationCallback, CGError,
+    kCGNullDirectDisplay,
 };
 use objc2_foundation::{NSArray, NSNumber, NSString};
 use waterkit_core::RefreshRate;
@@ -25,8 +26,8 @@ use crate::error::platform;
 use crate::framework::Framework;
 use crate::run_loop;
 use crate::skylight::DisplayLists;
-use crate::topology::Presence;
-use crate::{DisplayState, Error};
+use crate::topology::{self, Presence};
+use crate::{DisplayState, Error, Rect};
 
 /// Vendor id the displays carry: outside the ids assigned to real vendors.
 const VENDOR_ID: u32 = 0xF0F0;
@@ -80,9 +81,10 @@ impl VirtualDisplayConfig {
     /// A display called `name`, `width`x`height` points at 2x backing scale
     /// and 60 Hz.
     ///
-    /// The system keeps a display's arrangement and settings by its serial
-    /// number: reusing `serial` brings a display back where it was, a new one
-    /// introduces a display the system has not seen.
+    /// The system keeps a display's settings by its serial number: reusing
+    /// `serial` brings a display back with them, a new one introduces a
+    /// display the system has not seen. Wherever the system would arrange it,
+    /// [`VirtualDisplay::new`] places it itself.
     #[must_use]
     pub fn new(
         name: impl Into<String>,
@@ -116,8 +118,9 @@ impl VirtualDisplayConfig {
     }
 
     /// How long each step of bringing the display up may take: the display
-    /// appearing, and, when they are needed, extending it into the topology
-    /// and taking it out of a mirror set. Three seconds by default.
+    /// appearing; extending it into the topology when that is needed; a
+    /// display reconfiguration already under way finishing; and the display
+    /// coming to rest where it is placed. Three seconds by default.
     #[must_use]
     pub const fn online_timeout(mut self, timeout: Duration) -> Self {
         self.online_timeout = timeout;
@@ -153,8 +156,18 @@ pub struct VirtualDisplay {
 }
 
 impl VirtualDisplay {
-    /// Creates the display and waits until it is online, active and outside
-    /// any mirror set.
+    /// Creates the display and waits until it is online, active, outside any
+    /// mirror set and at rest where it is placed.
+    ///
+    /// Once the display is online and no display reconfiguration is under
+    /// way, it is placed for the login session at the right edge of the other
+    /// active displays, top-aligned with the rightmost of them, and taken out
+    /// of its mirror set when it is in one. That origin overlaps no display
+    /// and leaves no gap, the two things a configuration adjusts, so the
+    /// configuration keeps it there and every other display in place. `new`
+    /// returns once that configuration has finished, with no other under
+    /// way, and `CoreGraphics` reports the display at that origin with its
+    /// size in points.
     ///
     /// # Errors
     ///
@@ -167,6 +180,10 @@ impl VirtualDisplay {
     ///   and `SLWindowMirroringManager` refuses to bring it in;
     /// - [`Error::NotReady`] when the display is still not online, active
     ///   and unmirrored after the timeouts;
+    /// - [`Error::Reconfiguring`] when a display reconfiguration is still
+    ///   under way after the timeout;
+    /// - [`Error::Unsettled`] when the display is not at the frame it was
+    ///   placed at after the timeout;
     /// - [`Error::Platform`] when a display configuration call fails.
     pub fn new(config: &VirtualDisplayConfig, _mtm: MainThreadMarker) -> Result<Self, Error> {
         let skylight = Framework::skylight()?;
@@ -197,14 +214,38 @@ impl VirtualDisplay {
             extended = true;
             changes.wait(timeout, |_| Ok(Presence::of(id)?.online))?;
         }
-        if Presence::of(id)?.mirrored {
-            unmirror(id)?;
-            changes.wait(timeout, |_| Ok(!Presence::of(id)?.mirrored))?;
+        let presence = Presence::of(id)?;
+        if !presence.online {
+            return Err(not_ready(id, &mut changes, &lists, presence, extended)?);
         }
 
-        let presence = Presence::of(id)?;
-        if presence.ready() {
-            tracing::debug!(id, extended, "virtual display online");
+        // Between a reconfiguration's begin and end callbacks this process
+        // still reports the arrangement before it, which the placement is
+        // computed from.
+        if !changes.wait(timeout, |changes| Ok(!changes.configuring()))? {
+            return Err(Error::Reconfiguring {
+                display: id,
+                timeout,
+            });
+        }
+        let others = topology::active()?
+            .into_iter()
+            .filter(|&other| other != id)
+            .map(|other| CGDisplayBounds(other));
+        let frame = CGRect::new(
+            beside(others),
+            CGSize::new(
+                f64::from(config.width.get()),
+                f64::from(config.height.get()),
+            ),
+        );
+        arrange(id, Presence::of(id)?.mirrored, frame.origin)?;
+        let settled = changes.wait(timeout, |changes| {
+            Ok(!changes.configuring() && Presence::of(id)?.ready() && CGDisplayBounds(id) == frame)
+        })?;
+
+        if settled {
+            tracing::debug!(id, extended, origin = ?frame.origin, "virtual display online");
             return Ok(Self {
                 _display: display,
                 id,
@@ -213,17 +254,21 @@ impl VirtualDisplay {
                 scale: config.scale,
             });
         }
-        let state = DisplayState::new(
-            id,
-            changes.added(id),
-            lists.registered()?.contains(&id),
-            lists.online()?.contains(&id),
-            presence.online,
-            presence.active,
-            presence.mirrored,
-            extended,
-        );
-        Err(Error::NotReady(state))
+        if changes.configuring() {
+            return Err(Error::Reconfiguring {
+                display: id,
+                timeout,
+            });
+        }
+        let presence = Presence::of(id)?;
+        if !presence.ready() {
+            return Err(not_ready(id, &mut changes, &lists, presence, extended)?);
+        }
+        Err(Error::Unsettled {
+            display: id,
+            placed: Rect::from_cg(frame),
+            bounds: Rect::from_cg(CGDisplayBounds(id)),
+        })
     }
 
     /// The display's `CGDirectDisplayID`.
@@ -386,39 +431,114 @@ fn extend(id: CGDirectDisplayID) -> Result<(), Error> {
     }
 }
 
-/// Takes the display out of its mirror set for the login session; virtual
-/// displays refuse a permanent configuration.
-fn unmirror(id: CGDirectDisplayID) -> Result<(), Error> {
+/// The [`Error::NotReady`] for display `id`, with the state observed of it.
+fn not_ready(
+    id: CGDirectDisplayID,
+    changes: &mut Reconfigurations,
+    lists: &DisplayLists,
+    presence: Presence,
+    extended: bool,
+) -> Result<Error, Error> {
+    Ok(Error::NotReady(DisplayState::new(
+        id,
+        changes.added(id),
+        lists.registered()?.contains(&id),
+        lists.online()?.contains(&id),
+        presence.online,
+        presence.active,
+        presence.mirrored,
+        extended,
+    )))
+}
+
+/// The origin, in whole points, that puts a display at the right edge of the
+/// displays with bounds `others`, top-aligned with the rightmost of them, or
+/// the topmost of those when several end at that edge: it overlaps none of
+/// them and shares an edge with that one, so it leaves no gap. The global
+/// origin when there are none, where the only display is.
+fn beside(others: impl IntoIterator<Item = CGRect>) -> CGPoint {
+    let right = |rect: &CGRect| rect.origin.x + rect.size.width;
+    others
+        .into_iter()
+        .max_by(|a, b| {
+            right(a)
+                .total_cmp(&right(b))
+                .then(b.origin.y.total_cmp(&a.origin.y))
+        })
+        .map_or(CGPoint::ZERO, |rightmost| {
+            CGPoint::new(right(&rightmost).round(), rightmost.origin.y.round())
+        })
+}
+
+/// A display configuration call's status as a result.
+fn configured(call: &str, status: CGError) -> Result<(), Error> {
+    if status == CGError::Success {
+        Ok(())
+    } else {
+        Err(platform(call, status))
+    }
+}
+
+/// Places the display at `origin`, in whole points, for the login session,
+/// taking it out of its mirror set when it is `mirrored`; virtual displays
+/// refuse a permanent configuration. `CoreGraphics` invokes the driving
+/// program's reconfiguration callbacks from within the call that completes
+/// the configuration.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the origin is whole points of the 32-bit global display space"
+)]
+fn arrange(id: CGDirectDisplayID, mirrored: bool, origin: CGPoint) -> Result<(), Error> {
     let mut configuration: CGDisplayConfigRef = ptr::null_mut();
     // SAFETY: `configuration` is a valid out pointer.
     let status = unsafe { CGBeginDisplayConfiguration(&raw mut configuration) };
-    if status != CGError::Success {
-        return Err(platform("CGBeginDisplayConfiguration", status));
-    }
-    // SAFETY: `configuration` was just begun.
-    let status =
-        unsafe { CGConfigureDisplayMirrorOfDisplay(configuration, id, kCGNullDirectDisplay) };
-    if status != CGError::Success {
+    configured("CGBeginDisplayConfiguration", status)?;
+    let changes = (|| {
+        if mirrored {
+            // SAFETY: `configuration` is begun and not completed.
+            let status = unsafe {
+                CGConfigureDisplayMirrorOfDisplay(configuration, id, kCGNullDirectDisplay)
+            };
+            configured("CGConfigureDisplayMirrorOfDisplay", status)?;
+        }
+        // SAFETY: as above.
+        let status = unsafe {
+            CGConfigureDisplayOrigin(configuration, id, origin.x as i32, origin.y as i32)
+        };
+        configured("CGConfigureDisplayOrigin", status)
+    })();
+    if let Err(error) = changes {
         // SAFETY: the configuration is begun and not completed.
         unsafe { CGCancelDisplayConfiguration(configuration) };
-        return Err(platform("CGConfigureDisplayMirrorOfDisplay", status));
+        return Err(error);
     }
     // SAFETY: `configuration` is begun; completing consumes it.
     let status =
         unsafe { CGCompleteDisplayConfiguration(configuration, CGConfigureOption::ForSession) };
-    if status == CGError::Success {
-        Ok(())
-    } else {
-        Err(platform("CGCompleteDisplayConfiguration", status))
-    }
+    configured("CGCompleteDisplayConfiguration", status)
 }
 
-/// The displays `CoreGraphics` reports added while registered, delivered on
-/// the main run loop.
+/// One reconfiguration callback.
+struct Change {
+    display: CGDirectDisplayID,
+    flags: CGDisplayChangeSummaryFlags,
+}
+
+/// What the reconfiguration callbacks `CoreGraphics` invoked while
+/// registered report, delivered on the main run loop: the displays added, and
+/// whether a reconfiguration is under way.
+///
+/// Before a reconfiguration a callback with only
+/// `kCGDisplayBeginConfigurationFlag` runs for each online display; after
+/// it, one runs for each added, removed and online display, by when every
+/// display state `CoreGraphics` reports is current (`CGDisplayConfiguration.h`).
+/// A reconfiguration is under way from a begin callback to the next callback
+/// without that flag.
 struct Reconfigurations {
-    sender: Box<mpsc::Sender<CGDirectDisplayID>>,
-    receiver: mpsc::Receiver<CGDirectDisplayID>,
+    sender: Box<mpsc::Sender<Change>>,
+    receiver: mpsc::Receiver<Change>,
     added: Vec<CGDirectDisplayID>,
+    configuring: bool,
 }
 
 unsafe extern "C-unwind" fn on_reconfiguration(
@@ -426,14 +546,12 @@ unsafe extern "C-unwind" fn on_reconfiguration(
     flags: CGDisplayChangeSummaryFlags,
     sender: *mut c_void,
 ) {
-    if flags.contains(CGDisplayChangeSummaryFlags::AddFlag) {
-        // SAFETY: `sender` is the boxed sender `Reconfigurations` registered,
-        // which outlives its registration.
-        let sender = unsafe { &*sender.cast::<mpsc::Sender<CGDirectDisplayID>>() };
-        sender
-            .send(display)
-            .expect("the receiver outlives the callback's registration");
-    }
+    // SAFETY: `sender` is the boxed sender `Reconfigurations` registered,
+    // which outlives its registration.
+    let sender = unsafe { &*sender.cast::<mpsc::Sender<Change>>() };
+    sender
+        .send(Change { display, flags })
+        .expect("the receiver outlives the callback's registration");
     // Every callback ends the current wait so it re-checks the display.
     CFRunLoop::main()
         .expect("the process has a main run loop")
@@ -456,25 +574,43 @@ impl Reconfigurations {
             sender,
             receiver,
             added: Vec::new(),
+            configuring: false,
         })
+    }
+
+    /// Takes in the callbacks delivered since the last call, in order.
+    fn receive(&mut self) {
+        for change in self.receiver.try_iter() {
+            self.configuring = change
+                .flags
+                .contains(CGDisplayChangeSummaryFlags::BeginConfigurationFlag);
+            if change.flags.contains(CGDisplayChangeSummaryFlags::AddFlag) {
+                self.added.push(change.display);
+            }
+        }
     }
 
     /// Whether a callback reported `id` added.
     fn added(&mut self, id: CGDirectDisplayID) -> bool {
-        self.added.extend(self.receiver.try_iter());
+        self.receive();
         self.added.contains(&id)
     }
 
-    /// Spins the main run loop until `done` holds or `timeout` passes; the
-    /// caller then reads the state it waited for. Each reconfiguration
-    /// callback, and each other source the loop handles, ends one spin so
-    /// `done` is re-checked.
+    /// Whether a reconfiguration has begun and not yet ended.
+    fn configuring(&mut self) -> bool {
+        self.receive();
+        self.configuring
+    }
+
+    /// Spins the main run loop until `done` holds or `timeout` passes;
+    /// whether `done` held. Each reconfiguration callback, and each other
+    /// source the loop handles, ends one spin so `done` is re-checked.
     fn wait(
         &mut self,
         timeout: Duration,
         mut done: impl FnMut(&mut Self) -> Result<bool, Error>,
-    ) -> Result<(), Error> {
-        run_loop::spin(timeout, timeout, || done(self)).map(drop)
+    ) -> Result<bool, Error> {
+        run_loop::spin(timeout, timeout, || done(self))
     }
 }
 
@@ -534,6 +670,66 @@ mod tests {
             pixels(&config(1280, 800).scale(BackingScale::X1)),
             Some((1280, 800))
         );
+    }
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
+        CGRect::new(CGPoint::new(x, y), CGSize::new(width, height))
+    }
+
+    #[test]
+    fn a_display_goes_at_the_right_edge_top_aligned_with_the_rightmost() {
+        let main = rect(0.0, 0.0, 1512.0, 982.0);
+        assert_eq!(beside([main]), CGPoint::new(1512.0, 0.0));
+        let right = rect(1512.0, -200.0, 1920.0, 1080.0);
+        assert_eq!(beside([main, right]), CGPoint::new(3432.0, -200.0));
+        let left = rect(-1280.0, 0.0, 1280.0, 800.0);
+        assert_eq!(beside([left, right, main]), CGPoint::new(3432.0, -200.0));
+    }
+
+    #[test]
+    fn of_displays_ending_at_one_edge_the_topmost_aligns() {
+        let lower = rect(0.0, 982.0, 1512.0, 900.0);
+        let main = rect(0.0, 0.0, 1512.0, 982.0);
+        assert_eq!(beside([lower, main]), CGPoint::new(1512.0, 0.0));
+        assert_eq!(beside([main, lower]), CGPoint::new(1512.0, 0.0));
+    }
+
+    #[test]
+    fn a_display_alone_goes_at_the_global_origin() {
+        assert_eq!(beside([]), CGPoint::ZERO);
+    }
+
+    #[test]
+    fn the_origin_is_in_whole_points() {
+        assert_eq!(
+            beside([rect(0.0, 158.5, 1727.6, 800.0)]),
+            CGPoint::new(1728.0, 159.0)
+        );
+    }
+
+    /// Feeds callbacks through the channel the registered callback sends on;
+    /// registering creates and shows nothing.
+    #[test]
+    fn a_reconfiguration_is_under_way_from_its_begin_to_its_end() {
+        let mut changes = Reconfigurations::watch().expect("the callback registers");
+        let send = |changes: &Reconfigurations, display, flags| {
+            changes
+                .sender
+                .send(Change { display, flags })
+                .expect("the receiver is alive");
+        };
+        let begin = CGDisplayChangeSummaryFlags::BeginConfigurationFlag;
+        assert!(!changes.configuring());
+        send(&changes, 1, begin);
+        send(&changes, 2, begin);
+        assert!(changes.configuring());
+        assert!(!changes.added(7));
+        send(&changes, 7, CGDisplayChangeSummaryFlags::AddFlag);
+        send(&changes, 1, CGDisplayChangeSummaryFlags::MovedFlag);
+        assert!(!changes.configuring());
+        assert!(changes.added(7));
+        send(&changes, 1, begin);
+        assert!(changes.configuring());
     }
 
     #[test]

@@ -750,22 +750,19 @@ mod mac {
         CGPoint::new(origin.x + at.x(), origin.y + at.y())
     }
 
-    /// Whether `WindowServer` lists window `number` on screen as an
-    /// application window at exactly `frame`, in global display coordinates.
-    fn listed_at(inspector: &Input, number: u32, frame: CGRect) -> bool {
+    /// Whether `WindowServer` lists window `number` on screen under `at` on
+    /// `display`, as an application window.
+    fn listed_under(inspector: &Input, display: u32, number: u32, at: Point) -> bool {
+        let point = global(display, at);
         inspector
             .windows()
             .expect("the window list reads")
             .iter()
             .any(|listed| {
-                let bounds = listed.bounds();
                 listed.id() == number
                     && listed.on_screen()
                     && listed.application()
-                    && bounds.x().total_cmp(&frame.origin.x).is_eq()
-                    && bounds.y().total_cmp(&frame.origin.y).is_eq()
-                    && bounds.width().total_cmp(&frame.size.width).is_eq()
-                    && bounds.height().total_cmp(&frame.size.height).is_eq()
+                    && holds(listed.bounds(), point)
             })
     }
 
@@ -825,47 +822,6 @@ mod mac {
             describe_screens(mtm)
         );
         screen.expect("the wait ends once the screen is listed")
-    }
-
-    /// Moves `window` to `offset` from the bottom-left corner of `display`
-    /// where it is now. macOS can move a display that just came online after
-    /// a process first sees it, and a window placed before the move stays at
-    /// its old global position, so a helper places its window again on every
-    /// turn of its wait for `WindowServer` to list it under the click point.
-    fn follow_display(mtm: MainThreadMarker, window: &NSWindow, display: u32, offset: CGPoint) {
-        if let Some(screen) = appkit_screen(mtm, display) {
-            let origin = screen.frame().origin;
-            window.setFrameOrigin(NSPoint::new(origin.x + offset.x, origin.y + offset.y));
-        }
-    }
-
-    /// One turn of a helper's wait for `window` to settle: places it again
-    /// with [`follow_display`], then reports whether the display's bounds
-    /// were the same before and after, and `WindowServer` lists the window at
-    /// the frame that placement gives it, `size` points at `offset` from the
-    /// bottom-left corner of the display. A window one or two points from
-    /// that frame still covers the click point, so covering it is not enough:
-    /// input posted then lands relative to a window that is still moving.
-    fn settled(
-        mtm: MainThreadMarker,
-        window: &NSWindow,
-        inspector: &Input,
-        display: u32,
-        offset: CGPoint,
-        size: CGSize,
-    ) -> bool {
-        let before = CGDisplayBounds(display);
-        follow_display(mtm, window, display, offset);
-        let bounds = CGDisplayBounds(display);
-        let number = u32::try_from(window.windowNumber()).expect("window numbers are 32-bit");
-        let frame = CGRect::new(
-            CGPoint::new(
-                bounds.origin.x + offset.x,
-                bounds.origin.y + bounds.size.height - offset.y - size.height,
-            ),
-            size,
-        );
-        before == bounds && listed_at(inspector, number, frame)
     }
 
     /// Where [`open_window`] puts its window relative to the bottom-left
@@ -959,15 +915,14 @@ mod mac {
         let input = open_input(display.id());
         let at = click_point();
 
-        // `WindowServer` lists the window at its final frame once it has
-        // ordered it in and the display has stopped moving.
-        let offset = window_offset(CGDisplayBounds(display.id()).size.height);
+        // `WindowServer` lists the window once it has ordered it in.
+        let number = window.number();
         let listed = pump_until(mtm, DELIVERY_DEADLINE, || {
-            settled(mtm, &window, &inspector, display.id(), offset, WINDOW_SIZE)
+            listed_under(&inspector, display.id(), number, at)
         });
         assert!(
             listed,
-            "WindowServer never settled the test window at its frame for {at}\n{}\n{}",
+            "WindowServer never listed the test window on screen under {at}\n{}\n{}",
             describe_window(&window, &inspector),
             describe_screens(mtm)
         );
@@ -1050,12 +1005,11 @@ mod mac {
         let (window, _recorder) = open_window(mtm, display, false, true);
         let inspector = Input::new(display).expect("the target sees the virtual display");
         let number = window.number();
-        let offset = window_offset(CGDisplayBounds(display).size.height);
         assert!(
             pump_until(mtm, DELIVERY_DEADLINE, || {
-                settled(mtm, &window, &inspector, display, offset, WINDOW_SIZE)
+                listed_under(&inspector, display, number, click_point())
             }),
-            "WindowServer never settled the target window at its frame for {:?} of display {display} {:?}: {}; {}",
+            "WindowServer never listed the target window on screen under {:?} of display {display} {:?}: {}; {}",
             click_point(),
             CGDisplayBounds(display),
             describe_window(&window, &inspector),
@@ -1123,10 +1077,9 @@ mod mac {
         let number = u32::try_from(window.windowNumber()).expect("window numbers are 32-bit");
         assert!(
             pump_until(mtm, DELIVERY_DEADLINE, || {
-                let size = CGDisplayBounds(display).size;
-                settled(mtm, &window, &inspector, display, CGPoint::ZERO, size)
+                listed_under(&inspector, display, number, click_point())
             }),
-            "WindowServer never settled the overlay window at its frame for {:?} of display {display} {:?}: {}; {}",
+            "WindowServer never listed the overlay window on screen under {:?} of display {display} {:?}: {}; {}",
             click_point(),
             CGDisplayBounds(display),
             describe_listed(&inspector, number),

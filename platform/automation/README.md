@@ -6,11 +6,9 @@ user's. macOS only; on every other platform the crate is empty.
 - `VirtualDisplay` creates a private-API `CGVirtualDisplay` of a chosen size
   in points, backing scale and refresh rate. It exists on none of the user's
   monitors and is removed when dropped. Creation takes a `MainThreadMarker`
-  and services the main run loop until the display is online, bringing a
-  display `WindowServer` left offline into the topology with
-  `SLWindowMirroringManager` when it has to. It then places the display at
-  the right edge of the other displays, out of any mirror set, and returns
-  once it is at rest there with no display reconfiguration under way.
+  and services the main run loop until the display is online, active and
+  outside any mirror set, bringing a display `WindowServer` left offline into
+  the topology with `SLWindowMirroringManager` when it has to.
 - `Input` posts typed events (`MouseDown`, `MouseUp`, `MouseMove`, `Scroll`,
   `KeyDown`, `KeyUp`, `Text`) to the application that owns the window under a
   point on one display, never through the HID event tap: the user's cursor

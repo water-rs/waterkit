@@ -34,11 +34,10 @@
 //! created anywhere else never becomes usable by the process that made it.
 //! Since a library cannot assume the main thread runs a run loop, `new`
 //! services one itself: it spins the main run loop in its default mode until
-//! `CoreGraphics` reports the display added, and later at rest where `new`
-//! places it (each reconfiguration callback stops the spin, so each wait ends
-//! as soon as what it waits for is reported), or the configured
-//! [`online_timeout`](VirtualDisplayConfig::online_timeout) passes. Sources
-//! the caller registered in that mode run during the waits.
+//! `CoreGraphics` reports the display added (each reconfiguration callback
+//! stops the spin, so the wait ends as soon as the display appears) or the
+//! configured [`online_timeout`](VirtualDisplayConfig::online_timeout)
+//! passes. Sources the caller registered in that mode run during the wait.
 //! The display's own queue is the main queue, so its termination handler,
 //! which logs through `tracing`, runs on the main thread too.
 //!
@@ -81,21 +80,10 @@
 //! A new display can stay out of the topology: `WindowServer` registers it,
 //! but Control Center may hold it as a pending mirroring target. When the
 //! display is registered but not online after the timeout, `new` brings it in
-//! with `-[SLWindowMirroringManager extend:]`. A display that is not online
-//! afterwards fails with [`Error::NotReady`], which carries the state that
-//! was observed.
-//!
-//! The system arranges a display that comes online itself, and can move it
-//! again after a process first sees it. So once no display reconfiguration
-//! is under way (one that stays under way fails with
-//! [`Error::Reconfiguring`]), `new` places the display for the session at
-//! the right edge of the other active displays, top-aligned with the
-//! rightmost, and takes it out of its mirror set when it landed in one. An
-//! origin that overlaps no display and leaves no gap is kept as given, and
-//! every other display keeps its place. `new` returns once `CoreGraphics`
-//! reports the display there, online, active and unmirrored, with no
-//! reconfiguration under way; a display elsewhere fails with
-//! [`Error::Unsettled`], one not ready with [`Error::NotReady`].
+//! with `-[SLWindowMirroringManager extend:]`; when it lands in a mirror set,
+//! `new` takes it out for the session. A display that is not online, active
+//! and unmirrored afterwards fails with [`Error::NotReady`], which carries
+//! the state that was observed.
 //!
 //! # Private API binding
 //!

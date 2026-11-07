@@ -47,29 +47,6 @@ pub enum Error {
     /// The display did not end up online, active and outside any mirror set.
     #[error("virtual display is not online, active and unmirrored: {0}")]
     NotReady(DisplayState),
-    /// A display reconfiguration was still under way when the display came
-    /// up: `CoreGraphics` invoked a callback for its beginning and none for
-    /// its end.
-    #[error(
-        "a display reconfiguration was still under way after {timeout:?} for display {display}"
-    )]
-    Reconfiguring {
-        /// The virtual display.
-        display: u32,
-        /// How long the reconfiguration was given to end.
-        timeout: Duration,
-    },
-    /// With no reconfiguration under way, the display is not at the frame it
-    /// was placed at.
-    #[error("virtual display {display} lies at {bounds}, not at {placed} where it was placed")]
-    Unsettled {
-        /// The virtual display.
-        display: u32,
-        /// The frame it was placed at, in global display coordinates.
-        placed: Rect,
-        /// Its bounds, in global display coordinates.
-        bounds: Rect,
-    },
     /// No display with this id is online.
     #[error("display {0} is not online")]
     DisplayNotFound(u32),

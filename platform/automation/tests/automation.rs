@@ -98,7 +98,7 @@ mod mac {
     use objc2_app_kit::{
         NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSEvent,
         NSEventMask, NSEventType, NSFloatingWindowLevel, NSRunningApplication, NSScreen, NSView,
-        NSWindow, NSWindowStyleMask, NSWorkspace,
+        NSWindow, NSWindowAnimationBehavior, NSWindowStyleMask, NSWorkspace,
     };
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
     use objc2_core_graphics::{CGDisplayBounds, CGEvent, CGMainDisplayID};
@@ -395,6 +395,11 @@ mod mac {
             // SAFETY: the test owns the window through `Retained`; closing it
             // must not release it a second time.
             unsafe { window.setReleasedWhenClosed(false) };
+            // Ordered in with the system's open animation, the window's
+            // frame moves by a few points for a moment after `WindowServer`
+            // first lists it, and input posted meanwhile lands relative to
+            // the moving frame.
+            window.setAnimationBehavior(NSWindowAnimationBehavior::None);
             // A regular application places the content rect in global
             // coordinates on the main screen whatever screen it names, so the
             // window is moved onto `screen` explicitly.
@@ -1078,7 +1083,9 @@ mod mac {
         // SAFETY: the overlay owns the window through `Retained`; closing it
         // must not release it a second time.
         unsafe { window.setReleasedWhenClosed(false) };
-        // As in `KeyableWindow::new`, the window is moved onto `screen`.
+        // As in `KeyableWindow::new`, the window opens without animation and
+        // is moved onto `screen`.
+        window.setAnimationBehavior(NSWindowAnimationBehavior::None);
         window.setFrameOrigin(screen.frame().origin);
         window.setOpaque(false);
         window.setBackgroundColor(Some(&NSColor::clearColor()));

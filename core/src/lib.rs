@@ -28,7 +28,7 @@ pub use id::Uuid;
 pub use orientation::Orientation;
 pub use permission::{HealthDataKind, Permission, PermissionError, PermissionStatus};
 pub use subscribed::{Subscribed, SubscribedSink, subscribed, subscribed_with_executor};
-pub use time::{Duration, Timestamp};
+pub use time::{Duration, MicrosecondTimestampError, MicrosecondTimestamps, Timestamp};
 pub use units::{
     Brightness, Latitude, Longitude, OutOfRange, Pan, Pitch, PlaybackRate, RefreshRate, Volume,
     Zoom,

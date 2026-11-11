@@ -25,6 +25,7 @@ playback = [
 ]
 recording = ["dep:cpal", "dep:tracing"]
 streaming = [
+    "dep:waterkit-core",
     "dep:rodio",
     "dep:timestretch",
     "dep:tracing",
@@ -157,6 +158,7 @@ zenwave = { version = "0.7.1", default-features = false, features = ["hyper-nati
 
 # Android - use rustls with ring backend (avoids aws-lc-rs CMake issues)
 [target.'cfg(target_os = "android")'.dependencies]
+waterkit-core = { workspace = true, optional = true }
 jni = { workspace = true, optional = true }
 waterkit-build = { workspace = true, optional = true }
 ndk-context = { workspace = true, optional = true }

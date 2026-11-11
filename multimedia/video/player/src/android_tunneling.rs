@@ -8,6 +8,7 @@ use jni::{
     strings::JNIStr,
 };
 use waterkit_codec::NalStreamConverter;
+use waterkit_core::MicrosecondTimestamps;
 use waterkit_video_container::{Codec, EncodedSample, TrackInfo, TrackKind};
 use waterkit_video_core::Error;
 
@@ -127,6 +128,9 @@ struct AndroidTunneledVideoDecoder {
     codec: GlobalObjectRef,
     track: TrackInfo,
     converter: Option<NalStreamConverter>,
+    /// `MediaCodec` keeps whole microseconds; this restores the exact sample
+    /// timestamps on output.
+    timestamps: MicrosecondTimestamps,
     input_finished: bool,
 }
 
@@ -187,6 +191,7 @@ impl AndroidTunneledVideoDecoder {
             codec: retained_codec,
             track,
             converter: converter.take(),
+            timestamps: MicrosecondTimestamps::new(),
             input_finished: false,
         })
     }
@@ -225,9 +230,12 @@ impl AndroidTunneledVideoDecoder {
                     .map_err(|error| Error::Codec(error.to_string()))
             },
         )?;
-        let presentation_time = sample.presentation_time().to_duration()?;
+        let presentation_time_micros = self
+            .timestamps
+            .submit(sample.presentation_time().to_duration()?)
+            .map_err(|error| Error::Codec(error.to_string()))?;
         self.with_env(|env, codec| {
-            queue_clear_codec_input(env, codec, &data, presentation_time, 0)
+            queue_clear_codec_input(env, codec, &data, presentation_time_micros, 0)
         })?;
         self.drain_available_outputs()
     }
@@ -237,13 +245,7 @@ impl AndroidTunneledVideoDecoder {
             return Ok(Vec::new());
         }
         self.with_env(|env, codec| {
-            queue_clear_codec_input(
-                env,
-                codec,
-                &[],
-                Duration::ZERO,
-                MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM,
-            )
+            queue_clear_codec_input(env, codec, &[], 0, MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM)
         })?;
         self.input_finished = true;
         let mut outputs = Vec::new();
@@ -252,7 +254,7 @@ impl AndroidTunneledVideoDecoder {
                 if output.end_of_stream {
                     return Ok(outputs);
                 }
-                outputs.push(output.presentation_time);
+                outputs.push(self.restore_timestamp(output.presentation_time_micros)?);
             }
         }
     }
@@ -264,14 +266,21 @@ impl AndroidTunneledVideoDecoder {
             Ok(())
         })?;
         self.input_finished = false;
+        self.timestamps.clear();
         Ok(())
     }
 
-    fn drain_available_outputs(&self) -> Result<Vec<Duration>, Error> {
+    fn restore_timestamp(&mut self, micros: i64) -> Result<Duration, Error> {
+        self.timestamps
+            .restore(micros)
+            .map_err(|error| Error::Codec(error.to_string()))
+    }
+
+    fn drain_available_outputs(&mut self) -> Result<Vec<Duration>, Error> {
         let mut outputs = Vec::new();
         while let Some(output) = self.dequeue_and_release_output(0)? {
             if !output.end_of_stream {
-                outputs.push(output.presentation_time);
+                outputs.push(self.restore_timestamp(output.presentation_time_micros)?);
             }
         }
         Ok(outputs)
@@ -282,10 +291,21 @@ impl AndroidTunneledVideoDecoder {
         timeout_micros: i64,
     ) -> Result<Option<TunneledVideoOutput>, Error> {
         self.with_env(|env, codec| {
-            let info = env.new_object(jni_str!("android/media/MediaCodec$BufferInfo"), jni_sig!("()V"), &[])
+            let info = env
+                .new_object(
+                    jni_str!("android/media/MediaCodec$BufferInfo"),
+                    jni_sig!("()V"),
+                    &[],
+                )
                 .map_err(|error| jni_error(env, "create tunneled BufferInfo", error))?;
             loop {
-                let index = env.call_method(codec, jni_str!("dequeueOutputBuffer"), jni_sig!("(Landroid/media/MediaCodec$BufferInfo;J)I"), &[JValue::Object(&info), JValue::Long(timeout_micros)])
+                let index = env
+                    .call_method(
+                        codec,
+                        jni_str!("dequeueOutputBuffer"),
+                        jni_sig!("(Landroid/media/MediaCodec$BufferInfo;J)I"),
+                        &[JValue::Object(&info), JValue::Long(timeout_micros)],
+                    )
                     .and_then(jni::objects::JValueOwned::i)
                     .map_err(|error| jni_error(env, "dequeue tunneled output", error))?;
                 match index {
@@ -293,22 +313,23 @@ impl AndroidTunneledVideoDecoder {
                     MEDIA_CODEC_INFO_OUTPUT_FORMAT_CHANGED
                     | MEDIA_CODEC_INFO_OUTPUT_BUFFERS_CHANGED => {}
                     index if index >= 0 => {
-                        let flags = env.get_field(&info, jni_str!("flags"), jni_sig!("I"))
+                        let flags = env
+                            .get_field(&info, jni_str!("flags"), jni_sig!("I"))
                             .and_then(jni::objects::JValueOwned::i)
                             .map_err(|error| jni_error(env, "read tunneled output flags", error))?;
-                        let presentation_time_micros = env.get_field(&info, jni_str!("presentationTimeUs"), jni_sig!("J"))
+                        let presentation_time_micros = env
+                            .get_field(&info, jni_str!("presentationTimeUs"), jni_sig!("J"))
                             .and_then(jni::objects::JValueOwned::j)
                             .map_err(|error| jni_error(env, "read tunneled output PTS", error))?;
-                        let presentation_time_micros =
-                            u64::try_from(presentation_time_micros).map_err(|_| {
-                                Error::Codec(format!(
-                                    "MediaCodec returned negative tunneled output PTS {presentation_time_micros}"
-                                ))
-                            })?;
-                        env.call_method(codec, jni_str!("releaseOutputBuffer"), jni_sig!("(IZ)V"), &[JValue::Int(index), JValue::Bool(true)])
+                        env.call_method(
+                            codec,
+                            jni_str!("releaseOutputBuffer"),
+                            jni_sig!("(IZ)V"),
+                            &[JValue::Int(index), JValue::Bool(true)],
+                        )
                         .map_err(|error| jni_error(env, "release tunneled output", error))?;
                         return Ok(Some(TunneledVideoOutput {
-                            presentation_time: Duration::from_micros(presentation_time_micros),
+                            presentation_time_micros,
                             end_of_stream: flags & MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM != 0,
                         }));
                     }
@@ -333,7 +354,8 @@ impl AndroidTunneledVideoDecoder {
 }
 
 struct TunneledVideoOutput {
-    presentation_time: Duration,
+    /// The microsecond value `MediaCodec` returned, before restoration.
+    presentation_time_micros: i64,
     end_of_stream: bool,
 }
 
@@ -495,7 +517,7 @@ fn queue_clear_codec_input(
     env: &mut Env<'_>,
     codec: &JObject<'_>,
     data: &[u8],
-    presentation_time: Duration,
+    presentation_time_micros: i64,
     flags: i32,
 ) -> Result<(), Error> {
     let index = env
@@ -517,8 +539,6 @@ fn queue_clear_codec_input(
     }
     let size = i32::try_from(data.len())
         .map_err(|_| Error::Codec(String::from("tunneled access unit exceeds Android jint")))?;
-    let pts = i64::try_from(presentation_time.as_micros())
-        .map_err(|_| Error::Codec(String::from("tunneled video PTS exceeds Android jlong")))?;
     env.call_method(
         codec,
         jni_str!("queueInputBuffer"),
@@ -527,7 +547,7 @@ fn queue_clear_codec_input(
             JValue::Int(index),
             JValue::Int(0),
             JValue::Int(size),
-            JValue::Long(pts),
+            JValue::Long(presentation_time_micros),
             JValue::Int(flags),
         ],
     )

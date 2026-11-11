@@ -27,7 +27,7 @@ pub(super) struct AndroidAacDecoder {
     channels: NonZeroU16,
     sample_rate: std::num::NonZeroU32,
     pcm_encoding: i32,
-    /// MediaCodec keeps whole microseconds; this restores the exact packet
+    /// `MediaCodec` keeps whole microseconds; this restores the exact packet
     /// timestamps on output.
     timestamps: MicrosecondTimestamps,
 }

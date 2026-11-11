@@ -128,7 +128,7 @@ struct AndroidTunneledVideoDecoder {
     codec: GlobalObjectRef,
     track: TrackInfo,
     converter: Option<NalStreamConverter>,
-    /// MediaCodec keeps whole microseconds; this restores the exact sample
+    /// `MediaCodec` keeps whole microseconds; this restores the exact sample
     /// timestamps on output.
     timestamps: MicrosecondTimestamps,
     input_finished: bool,
@@ -354,7 +354,7 @@ impl AndroidTunneledVideoDecoder {
 }
 
 struct TunneledVideoOutput {
-    /// The microsecond value MediaCodec returned, before restoration.
+    /// The microsecond value `MediaCodec` returned, before restoration.
     presentation_time_micros: i64,
     end_of_stream: bool,
 }

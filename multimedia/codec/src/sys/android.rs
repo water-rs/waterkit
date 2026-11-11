@@ -54,7 +54,7 @@ pub struct AndroidDecoder {
     output_layout: DecodedPixelLayout,
     input_bitstream: NalStreamConverter,
     last_presentation_time_us: u64,
-    /// MediaCodec keeps whole microseconds; this restores the exact packet
+    /// `MediaCodec` keeps whole microseconds; this restores the exact packet
     /// timestamps on output.
     timestamps: MicrosecondTimestamps,
     ended: bool,

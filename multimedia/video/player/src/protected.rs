@@ -1070,7 +1070,7 @@ pub struct AndroidProtectedVideoDecoder {
     container_mime: &'static str,
     outstanding_output: Option<(u64, i32)>,
     next_output_sequence: u64,
-    /// MediaCodec keeps whole microseconds; this restores the exact sample
+    /// `MediaCodec` keeps whole microseconds; this restores the exact sample
     /// timestamps on output.
     timestamps: MicrosecondTimestamps,
     input_finished: bool,
@@ -1431,7 +1431,7 @@ pub struct AndroidProtectedAudioDecoder {
     channels: std::num::NonZeroU16,
     sample_rate: std::num::NonZeroU32,
     pcm_encoding: i32,
-    /// MediaCodec keeps whole microseconds; this restores the exact sample
+    /// `MediaCodec` keeps whole microseconds; this restores the exact sample
     /// timestamps on output.
     timestamps: MicrosecondTimestamps,
     input_finished: bool,
@@ -1630,7 +1630,7 @@ enum AndroidAudioOutput {
         pcm_encoding: i32,
     },
     Buffer {
-        /// The microsecond value MediaCodec returned, before restoration.
+        /// The microsecond value `MediaCodec` returned, before restoration.
         presentation_time_micros: i64,
         bytes: Vec<u8>,
         end_of_stream: bool,

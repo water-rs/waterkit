@@ -70,6 +70,8 @@ objc2-metal = { workspace = true, features = ["MTLBlitCommandEncoder", "MTLComma
 wgpu-hal = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
+# `MicrosecondTimestamps` carries exact packet timestamps through MediaCodec.
+waterkit-core.workspace = true
 # `bitmap` wraps `AndroidBitmap_lockPixels`; `api-level-30` only gates the Rust
 # `BitmapInfo::flags` accessor (no API-30-only NDK call is made — the alpha
 # flags are read only when `Build$VERSION.SDK_INT >= 30` at runtime).

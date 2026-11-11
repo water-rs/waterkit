@@ -2,6 +2,8 @@
 
 use std::{mem::MaybeUninit, num::NonZeroU16, time::Duration};
 
+use waterkit_core::MicrosecondTimestamps;
+
 use ndk::media::{
     media_codec::{
         DequeuedInputBufferResult, DequeuedOutputBufferInfoResult, MediaCodec, MediaCodecDirection,
@@ -25,6 +27,9 @@ pub(super) struct AndroidAacDecoder {
     channels: NonZeroU16,
     sample_rate: std::num::NonZeroU32,
     pcm_encoding: i32,
+    /// MediaCodec keeps whole microseconds; this restores the exact packet
+    /// timestamps on output.
+    timestamps: MicrosecondTimestamps,
 }
 
 impl std::fmt::Debug for AndroidAacDecoder {
@@ -74,6 +79,7 @@ impl AndroidAacDecoder {
             channels,
             sample_rate,
             pcm_encoding: PCM_16_BIT,
+            timestamps: MicrosecondTimestamps::new(),
         })
     }
 
@@ -111,15 +117,13 @@ impl AndroidAacDecoder {
         for (destination, source) in input.buffer_mut().iter_mut().zip(packet.data()) {
             *destination = MaybeUninit::new(*source);
         }
+        let presentation_time_micros = self
+            .timestamps
+            .submit(presentation_time)
+            .map_err(|error| decode_error(presentation_time, error))?
+            .cast_unsigned();
         self.codec
-            .queue_input_buffer(
-                input,
-                0,
-                packet.data().len(),
-                u64::try_from(presentation_time.as_micros())
-                    .expect("AAC presentation timestamp must fit Android MediaCodec u64"),
-                0,
-            )
+            .queue_input_buffer(input, 0, packet.data().len(), presentation_time_micros, 0)
             .map_err(|error| decode_error(presentation_time, error))?;
 
         self.collect_output(Duration::ZERO, false, presentation_time)
@@ -161,14 +165,7 @@ impl AndroidAacDecoder {
             {
                 DequeuedOutputBufferInfoResult::Buffer(output) => {
                     let flags = output.info().flags();
-                    let output_time = Duration::from_micros(
-                        u64::try_from(output.info().presentation_time_us()).map_err(|_| {
-                            decode_message(
-                                submitted_time,
-                                "MediaCodec emitted a negative AAC presentation timestamp",
-                            )
-                        })?,
-                    );
+                    let output_micros = output.info().presentation_time_us();
                     let offset = usize::try_from(output.info().offset())
                         .expect("MediaCodec AAC output offset must be non-negative");
                     let size = usize::try_from(output.info().size())
@@ -179,6 +176,10 @@ impl AndroidAacDecoder {
                         .release_output_buffer(output, false)
                         .map_err(|error| decode_error(submitted_time, error))?;
                     if !samples.is_empty() {
+                        let output_time = self
+                            .timestamps
+                            .restore(output_micros)
+                            .map_err(|error| decode_error(submitted_time, error))?;
                         frames.push(
                             DecodedAudioFrame::from_interleaved_pcm(
                                 output_time,
@@ -210,10 +211,11 @@ impl AndroidAacDecoder {
         }
     }
 
-    pub(super) fn reset(&self) {
+    pub(super) fn reset(&mut self) {
         self.codec
             .flush()
             .expect("Android MediaCodec AAC flush must succeed");
+        self.timestamps.clear();
     }
 
     fn apply_output_format(&mut self, presentation_time: Duration) -> Result<(), PacketAudioError> {

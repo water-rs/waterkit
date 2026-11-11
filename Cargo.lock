@@ -8351,6 +8351,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "waterkit-build",
+ "waterkit-core",
  "waterkit-video-core",
  "wgpu",
  "wgpu-hal",

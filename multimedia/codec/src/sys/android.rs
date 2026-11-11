@@ -9,6 +9,7 @@ use ndk::media::media_format::MediaFormat;
 use std::fmt;
 use std::mem::MaybeUninit;
 use std::time::Duration;
+use waterkit_core::MicrosecondTimestamps;
 use waterkit_video_core::{
     ColorPrimaries, ColorRange, MatrixCoefficients, TransferFunction, VideoColorInfo,
 };
@@ -53,6 +54,9 @@ pub struct AndroidDecoder {
     output_layout: DecodedPixelLayout,
     input_bitstream: NalStreamConverter,
     last_presentation_time_us: u64,
+    /// MediaCodec keeps whole microseconds; this restores the exact packet
+    /// timestamps on output.
+    timestamps: MicrosecondTimestamps,
     ended: bool,
 }
 
@@ -160,6 +164,7 @@ impl AndroidDecoder {
             output_layout,
             input_bitstream,
             last_presentation_time_us: 0,
+            timestamps: MicrosecondTimestamps::new(),
             ended: false,
         })
     }
@@ -205,8 +210,11 @@ impl AndroidDecoder {
         }
 
         // Queue the input buffer
-        let presentation_time_us = u64::try_from(packet.presentation_time().as_micros())
-            .map_err(|_| CodecError::DecodingFailed("presentation timestamp exceeds u64".into()))?;
+        let presentation_time_us = self
+            .timestamps
+            .submit(packet.presentation_time())
+            .map_err(|error| CodecError::DecodingFailed(error.to_string()))?
+            .cast_unsigned();
         self.last_presentation_time_us = presentation_time_us;
         self.codec
             .queue_input_buffer(input_buffer, 0, copy_len, presentation_time_us, 0)
@@ -223,7 +231,12 @@ impl AndroidDecoder {
 
             match output_result {
                 DequeuedOutputBufferInfoResult::Buffer(output_buffer) => {
-                    let frame = self.copy_output_frame(&output_buffer);
+                    let timestamp = self
+                        .timestamps
+                        .restore(output_buffer.info().presentation_time_us())
+                        .map_err(|error| CodecError::DecodingFailed(error.to_string()));
+                    let frame = timestamp
+                        .and_then(|timestamp| self.copy_output_frame(&output_buffer, timestamp));
                     self.codec
                         .release_output_buffer(output_buffer, false)
                         .map_err(|error| {
@@ -282,8 +295,15 @@ impl AndroidDecoder {
                 DequeuedOutputBufferInfoResult::Buffer(output_buffer) => {
                     let end_of_stream =
                         output_buffer.info().flags() & BUFFER_FLAG_END_OF_STREAM != 0;
-                    let frame = (output_buffer.info().size() > 0)
-                        .then(|| self.copy_output_frame(&output_buffer));
+                    let timestamp = (output_buffer.info().size() > 0).then(|| {
+                        self.timestamps
+                            .restore(output_buffer.info().presentation_time_us())
+                            .map_err(|error| CodecError::DecodingFailed(error.to_string()))
+                    });
+                    let frame = timestamp.map(|timestamp| {
+                        timestamp
+                            .and_then(|timestamp| self.copy_output_frame(&output_buffer, timestamp))
+                    });
                     self.codec
                         .release_output_buffer(output_buffer, false)
                         .map_err(|error| {
@@ -310,6 +330,7 @@ impl AndroidDecoder {
     fn copy_output_frame(
         &self,
         output_buffer: &ndk::media::media_codec::OutputBuffer<'_>,
+        timestamp: Duration,
     ) -> Result<AndroidFrame, CodecError> {
         let info = output_buffer.info();
         let buffer_data = output_buffer.buffer();
@@ -405,11 +426,9 @@ impl AndroidDecoder {
             data,
             width,
             height,
-            timestamp_ns: u64::try_from(info.presentation_time_us())
-                .map_err(|_| {
-                    CodecError::DecodingFailed("MediaCodec returned a negative PTS".into())
-                })?
-                .saturating_mul(1_000),
+            timestamp_ns: u64::try_from(timestamp.as_nanos()).map_err(|_| {
+                CodecError::DecodingFailed("presentation timestamp exceeds u64 nanoseconds".into())
+            })?,
             layout: self.output_layout,
         })
     }

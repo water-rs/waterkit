@@ -136,6 +136,24 @@ pub enum Error {
     /// `LaunchServices` knows no application with this bundle id.
     #[error("no application with bundle id {0} is installed")]
     AppNotFound(String),
+    /// No installed application ships this name.
+    #[error("no installed application is named {name:?}{}", suggested(.suggestions))]
+    AppNameNotFound {
+        /// The name that was looked up.
+        name: String,
+        /// The closest names of installed applications, best first, at most
+        /// five; empty when none comes close.
+        suggestions: Vec<String>,
+    },
+    /// Several installed applications match this name equally well.
+    #[error("{name:?} matches several installed applications{}", suggested(.suggestions))]
+    AppNameAmbiguous {
+        /// The name that was looked up.
+        name: String,
+        /// The names of the applications that match, best first, at most
+        /// five.
+        suggestions: Vec<String>,
+    },
     /// The path names no bundle with a bundle identifier, so it is not an
     /// application bundle.
     #[error("{} is not an application bundle", .0.display())]
@@ -308,6 +326,16 @@ impl fmt::Display for DisplayState {
             self.mirrored,
             self.extended,
         )
+    }
+}
+
+/// The closest names, as a suffix of an error message; nothing when there
+/// are none.
+fn suggested(suggestions: &[String]) -> String {
+    if suggestions.is_empty() {
+        String::new()
+    } else {
+        format!(": {}", suggestions.join(", "))
     }
 }
 

@@ -19,6 +19,7 @@ waterkit-core.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 keyboard-types.workspace = true
+icu_normalizer.workspace = true
 libc = "0.2"
 block2.workspace = true
 dispatch2.workspace = true
@@ -28,8 +29,9 @@ objc2-app-kit = { workspace = true, features = [
 ] }
 objc2-core-services = { workspace = true, features = ["AE", "AEDataModel", "AppleEvents"] }
 objc2-foundation = { workspace = true, features = [
-    "NSAppleEventDescriptor", "NSArray", "NSBundle", "NSError", "NSProcessInfo", "NSString",
-    "NSURL", "NSValue", "objc2-core-services",
+    "NSAppleEventDescriptor", "NSArray", "NSBundle", "NSData", "NSDictionary", "NSError",
+    "NSLocale", "NSPathUtilities", "NSProcessInfo", "NSPropertyList", "NSString", "NSURL",
+    "NSValue", "objc2-core-services",
 ] }
 objc2-core-foundation = { workspace = true, features = [
     "CFArray", "CFCGTypes", "CFDate", "CFDictionary", "CFMachPort", "CFNumber", "CFRunLoop",
@@ -54,6 +56,7 @@ libtest-mimic = "0.8"
 objc2-app-kit.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 tracing-subscriber.workspace = true
 
 [[test]]

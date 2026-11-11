@@ -349,6 +349,9 @@ icu_locale_core = { version = "2.3", features = ["alloc"] }
 # Likely-subtags expansion (`LocaleExpander`), for routing languages to the
 # scripts a recognizer serves.
 icu_locale = "2.3"
+# Canonical decomposition, so application names compare as one text however
+# the file system or a bundle encoded them.
+icu_normalizer = { version = "2.4", default-features = false, features = ["compiled_data"] }
 url = "2.5"
 zenwave = { version = "0.7.1", default-features = false, features = ["hyper-backend"] }
 

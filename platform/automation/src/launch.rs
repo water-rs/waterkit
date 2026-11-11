@@ -45,7 +45,7 @@ use objc2_foundation::{NSAppleEventDescriptor, NSArray, NSBundle, NSError, NSStr
 use crate::accessibility::{Application, WindowLookup};
 use crate::skylight::EventSymbols;
 use crate::window::{self, ListedWindow};
-use crate::{Error, placement, run_loop, topology};
+use crate::{Error, bundle_names, placement, run_loop, topology};
 
 /// The default for [`LaunchConfig::timeout`]: how long `LaunchServices` may
 /// take to deliver a launch's completion before a wedged launch is reported.
@@ -66,6 +66,7 @@ pub struct LaunchConfig {
 enum App {
     BundleId(String),
     Bundle(PathBuf),
+    Name(String),
 }
 
 /// One item the application is asked to open.
@@ -89,6 +90,27 @@ impl LaunchConfig {
     #[must_use]
     pub fn bundle(path: impl Into<PathBuf>) -> Self {
         Self::new(App::Bundle(path.into()))
+    }
+
+    /// The installed application known by `name`, such as `Google Chrome`
+    /// or a localized name such as `Échecs`.
+    ///
+    /// The name is matched, without case, against every name the installed
+    /// applications ship: the bundle's file name, `CFBundleDisplayName` and
+    /// `CFBundleName`, and their localizations. The applications searched
+    /// are those in `/Applications`, `/System/Applications`, their
+    /// `Utilities` folders, `~/Applications` and Finder, one folder down
+    /// included. An exact name beats a name that starts with the given one,
+    /// and a name in one of the user's preferred languages beats the same
+    /// match in another language. Accents and spaces are compared as
+    /// shipped. A trailing `.app` is ignored.
+    ///
+    /// A name that matches nothing, or matches several applications equally
+    /// well, fails the launch with [`Error::AppNameNotFound`] or
+    /// [`Error::AppNameAmbiguous`] carrying the closest names.
+    #[must_use]
+    pub fn name(name: impl Into<String>) -> Self {
+        Self::new(App::Name(name.into()))
     }
 
     const fn new(app: App) -> Self {
@@ -174,6 +196,9 @@ impl LaunchedApplication {
     /// # Errors
     ///
     /// - [`Error::AppNotFound`] when no application has the bundle id;
+    /// - [`Error::AppNameNotFound`] when no installed application ships the
+    ///   name, and [`Error::AppNameAmbiguous`] when several match it
+    ///   equally well, each with the closest names;
     /// - [`Error::NotAnAppBundle`] when the path names no application
     ///   bundle;
     /// - [`Error::FileNotFound`] when the bundle or a file to open does not
@@ -282,6 +307,11 @@ impl ResolvedApp {
                 .URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle_id))
                 .ok_or_else(|| Error::AppNotFound(bundle_id.clone()))?,
             App::Bundle(path) => file_url(path)?,
+            App::Name(name) => file_url(&named_bundle(
+                name,
+                &bundle_names::app_roots(),
+                &bundle_names::preferred_languages(),
+            )?)?,
         };
         // The bundle states its identifier in the case LaunchServices
         // matches running applications by.
@@ -293,6 +323,9 @@ impl ResolvedApp {
             (None, App::Bundle(path)) => Err(Error::NotAnAppBundle(path.clone())),
             (None, App::BundleId(bundle_id)) => Err(Error::Platform(format!(
                 "LaunchServices locates {bundle_id} at {url:?}, which has no bundle identifier"
+            ))),
+            (None, App::Name(name)) => Err(Error::Platform(format!(
+                "the application named {name:?} is at {url:?}, which has no bundle identifier"
             ))),
         }
     }
@@ -366,6 +399,20 @@ impl Open {
                 .ok_or_else(|| Error::InvalidUrl(url.clone())),
         }
     }
+}
+
+/// The bundle among `roots` that `name` names, or the refusal with the
+/// closest names.
+fn named_bundle(name: &str, roots: &[PathBuf], languages: &[String]) -> Result<PathBuf, Error> {
+    bundle_names::find(name, roots, languages).map_err(|miss| {
+        let name = name.to_owned();
+        let suggestions = miss.suggestions;
+        if miss.ambiguous {
+            Error::AppNameAmbiguous { name, suggestions }
+        } else {
+            Error::AppNameNotFound { name, suggestions }
+        }
+    })
 }
 
 /// The file URL of `path`, made absolute against the current directory,
@@ -562,6 +609,70 @@ mod tests {
         )))
         .expect("TextEdit's bundle resolves");
         assert_eq!(by_path.bundle_id, "com.apple.TextEdit");
+    }
+
+    /// Reads the installed applications; nothing launches.
+    #[test]
+    fn an_app_resolves_by_name_to_its_bundle_id() {
+        for name in ["Finder", "finder", "FINDER"] {
+            let app =
+                ResolvedApp::resolve(&App::Name(name.to_owned())).expect("Finder is installed");
+            assert_eq!(app.bundle_id, "com.apple.finder", "{name}");
+        }
+        let calculator = ResolvedApp::resolve(&App::Name("Calculator".to_owned()))
+            .expect("Calculator is installed");
+        assert_eq!(calculator.bundle_id, "com.apple.calculator");
+    }
+
+    #[test]
+    fn an_unknown_name_is_refused_with_the_closest_names() {
+        let unknown = "zzz-not-an-installed-app";
+        assert!(matches!(
+            ResolvedApp::resolve(&App::Name(unknown.to_owned())),
+            Err(Error::AppNameNotFound { name, suggestions })
+                if name == unknown && suggestions.is_empty()
+        ));
+        // A name found only inside others suggests them without matching.
+        let Err(Error::AppNameNotFound { suggestions, .. }) =
+            ResolvedApp::resolve(&App::Name("inder".to_owned()))
+        else {
+            panic!("a name inside another is not a match");
+        };
+        assert!(suggestions.len() <= crate::app_names::SUGGESTION_LIMIT);
+    }
+
+    #[test]
+    fn equally_good_names_are_refused_as_ambiguous() {
+        let root = tempfile::tempdir().expect("a temporary directory");
+        for name in ["Notes One", "Notes Two"] {
+            let contents = root.path().join(format!("{name}.app/Contents"));
+            std::fs::create_dir_all(&contents).expect("the bundle directory");
+            std::fs::write(
+                contents.join("Info.plist"),
+                format!(
+                    r#"<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>test.{}</string></dict></plist>"#,
+                    name.replace(' ', "-")
+                ),
+            )
+            .expect("the Info.plist");
+        }
+        let roots = [root.path().to_path_buf()];
+        assert!(matches!(
+            named_bundle("notes", &roots, &[]),
+            Err(Error::AppNameAmbiguous { name, suggestions })
+                if name == "notes" && suggestions == ["Notes One", "Notes Two"]
+        ));
+        assert_eq!(
+            named_bundle("Notes Two", &roots, &[]).expect("an exact name resolves"),
+            root.path().join("Notes Two.app")
+        );
+    }
+
+    #[test]
+    fn the_name_form_is_collected_by_the_config() {
+        let config = LaunchConfig::name("Google Chrome").url("https://example.com/");
+        assert_eq!(config.app, App::Name("Google Chrome".to_owned()));
+        assert_eq!(config.open, [Open::Url("https://example.com/".to_owned())]);
     }
 
     #[test]

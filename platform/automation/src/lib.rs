@@ -11,7 +11,8 @@
 //!   so the user's cursor never moves and the user's front app keeps its
 //!   focus.
 //! - [`LaunchedApplication::launch`] starts an application a
-//!   [`LaunchConfig`] names, by bundle id or bundle path and optionally with
+//!   [`LaunchConfig`] names, by bundle id, bundle path or application name
+//!   (in any language it ships), and optionally with
 //!   URLs and files to open, in the background, and moves its windows onto a
 //!   display, such as a [`VirtualDisplay`].
 //!
@@ -141,6 +142,10 @@
 
 #[cfg(target_os = "macos")]
 mod accessibility;
+#[cfg(target_os = "macos")]
+mod app_names;
+#[cfg(target_os = "macos")]
+mod bundle_names;
 #[cfg(target_os = "macos")]
 mod delivery;
 #[cfg(target_os = "macos")]

@@ -403,12 +403,10 @@ mod mac {
                 let _: () = msg_send![&descriptor, setSizeInMillimeters: millimetres];
                 let _: () = msg_send![&descriptor, setVendorID: 0xF0F0_u32];
                 let _: () = msg_send![&descriptor, setProductID: 0xF0F1_u32];
-                let serial = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("the clock is past the epoch")
-                    .subsec_nanos()
-                    | 1;
-                let _: () = msg_send![&descriptor, setSerialNum: serial];
+                // WindowServer refuses a display matching an existing one's
+                // vendor, product and serial; the process id keeps this one
+                // apart from the displays other test processes create.
+                let _: () = msg_send![&descriptor, setSerialNum: std::process::id()];
 
                 let allocated: Allocated<AnyObject> = msg_send![class(c"CGVirtualDisplay"), alloc];
                 let display: Retained<AnyObject> =

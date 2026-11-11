@@ -88,7 +88,7 @@ mod mac {
     use std::rc::Rc;
     use std::sync::mpsc;
     use std::thread;
-    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+    use std::time::Instant;
 
     use block2::RcBlock;
     use dispatch2::DispatchQueue;
@@ -791,13 +791,13 @@ mod mac {
             .map(ListedWindow::layer)
     }
 
-    /// A 1280x800-point display at 2x with a serial the system has not seen.
+    /// A 1280x800-point display at 2x. `WindowServer` refuses a display whose
+    /// vendor, product and serial match one that exists, and every test
+    /// display shares the vendor and product, so the serial is the process
+    /// id: unique among the test processes running at once, each of which
+    /// creates one display.
     fn create_display(mtm: MainThreadMarker) -> VirtualDisplay {
-        let serial = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("the clock is past the epoch")
-            .subsec_nanos()
-            | 1;
+        let serial = std::process::id();
         let config = VirtualDisplayConfig::new(
             "waterkit automation test",
             NonZeroU32::new(1280).expect("non-zero"),

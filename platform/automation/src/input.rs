@@ -160,6 +160,15 @@ impl Input {
         event.deliver(self)
     }
 
+    /// The display's current bounds in global display coordinates. A point
+    /// [`post`](Self::post) takes is relative to their origin, so a listed
+    /// window's [`bounds`](ListedWindow::bounds) minus that origin is where
+    /// the window lies in the points events take.
+    #[must_use]
+    pub fn bounds(&self) -> Rect {
+        Rect::from_cg(CGDisplayBounds(self.display))
+    }
+
     /// Every window `WindowServer` lists, on any display and on screen or
     /// not, front to back.
     ///

@@ -10,6 +10,11 @@
 //!   that owns the window under the point, never through the HID event tap,
 //!   so the user's cursor never moves and the user's front app keeps its
 //!   focus.
+//! - [`Input::elements`] lists the controls of the application windows on
+//!   the display through Accessibility, each with an [`ElementRef`];
+//!   [`Input::press`], [`Input::focus`] and [`Input::set_value`] act on one
+//!   by that reference, so input aimed at a control needs no position read
+//!   off a screenshot.
 //! - [`LaunchedApplication::launch`] starts an application a
 //!   [`LaunchConfig`] names, by bundle id, bundle path or application name
 //!   (in any language it ships), and optionally with
@@ -145,6 +150,46 @@
 //! [`Input::confirm_timeout`]. Arrival in the process is the last step the
 //! system reports on: no interface tells another process whether the
 //! application then dispatched an event to a view.
+//!
+//! # Elements
+//!
+//! [`Input::elements`] walks the Accessibility tree of every application
+//! window on screen on the display, front window first, and lists each
+//! element an agent can act on: one that advertises an action other than the
+//! two every web element carries (`AXShowMenu`, `AXScrollToVisible`), or a
+//! value control (a text field, a slider, a checkbox) whose value can be
+//! set. Each comes with its role, title, label, value, placeholder, whether
+//! it is enabled, and its [`Frame`] in the display's points. The walk visits
+//! at most [`Input::element_budget`] nodes. A read that one node fails, as
+//! a live application's nodes can, leaves that node out or counts it as
+//! having nothing there, and is listed in [`Elements::skipped`]; it never
+//! fails the listing. Only an application that cannot be reached, one that
+//! does not answer within the confirm timeout or a process without
+//! Accessibility access, has the rest of it left out, and
+//! [`Elements::truncated`] says so.
+//!
+//! A Chromium-based application, Chrome or an Electron shell, builds the
+//! tree of its web content only when an assistive application asks for it,
+//! so the first listing that meets one of its processes asks
+//! (`AXManualAccessibility`) and waits, up to the confirm timeout, for a web
+//! area with content to appear.
+//!
+//! The references of a listing stay valid until the same [`Input`] lists
+//! the elements again. A reference from an earlier listing, or from another
+//! input, fails with [`Error::StaleElement`]; one past the end of its
+//! listing with [`Error::UnknownElement`]; one whose element its application
+//! has since removed with [`Error::ElementGone`]. None of them acts on
+//! anything.
+//!
+//! [`Input::press`] performs `AXPress` when the element advertises it, after
+//! making its window key as a press would, and otherwise posts a click at
+//! the centre of its frame, which fails with [`Error::ElementObscured`] when
+//! another window takes a press there. [`Input::focus`] sets `AXFocused`
+//! where the element allows it and waits for it to report itself focused,
+//! and otherwise clicks it; text posted next goes to it. [`Input::set_value`]
+//! writes `AXValue` and reads it back. Web content can echo a written value
+//! without the page seeing it, so text for a web field is typed after
+//! [`Input::focus`] instead.
 
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
@@ -154,11 +199,15 @@ mod accessibility;
 #[cfg(target_os = "macos")]
 mod app_names;
 #[cfg(target_os = "macos")]
+mod ax_tree;
+#[cfg(target_os = "macos")]
 mod bundle_names;
 #[cfg(target_os = "macos")]
 mod delivery;
 #[cfg(target_os = "macos")]
 mod display;
+#[cfg(target_os = "macos")]
+mod element;
 #[cfg(target_os = "macos")]
 mod error;
 #[cfg(target_os = "macos")]
@@ -188,6 +237,8 @@ mod window;
 pub use accessibility::FocusReport;
 #[cfg(target_os = "macos")]
 pub use display::{BackingScale, DisplayHost, VirtualDisplay, VirtualDisplayConfig};
+#[cfg(target_os = "macos")]
+pub use element::{Element, ElementRef, Elements, Frame, ParseElementRefError, SkippedRead};
 #[cfg(target_os = "macos")]
 pub use error::{DisplayState, Error};
 #[cfg(target_os = "macos")]

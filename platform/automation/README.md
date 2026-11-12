@@ -22,6 +22,14 @@ user's. macOS only; on every other platform the crate is empty.
   press. `post` returns once the target process has every event, and fails
   when the app does not take focus or an event does not arrive within
   `Input::confirm_timeout`.
+- `Input::elements` lists the controls of the application windows on the
+  display through Accessibility (role, title, label, value, placeholder and
+  frame in the display's points), each with an `ElementRef` that stays valid
+  until the next listing. `Input::press`, `Input::focus` and
+  `Input::set_value` act on one by that reference: through its
+  Accessibility action where it has one, otherwise with a click at its
+  centre. A reference from an earlier listing or another input is refused
+  as stale, and nothing is acted on.
 - `LaunchedApplication::launch` starts the app a `LaunchConfig` names, by
   bundle id or bundle path and optionally with URLs and files to open,
   through `NSWorkspace` without activating it, and returns its pid, bundle id

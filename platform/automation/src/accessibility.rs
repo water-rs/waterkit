@@ -47,15 +47,27 @@ impl WindowLookup {
         })
     }
 
-    fn window_number(&self, window: &AXUIElement) -> Result<u32, Error> {
+    /// What `_AXUIElementGetWindow` answers for `window`: its status and the
+    /// number it wrote.
+    fn lookup(&self, window: &AXUIElement) -> (AXError, u32) {
         let mut number = 0_u32;
         // SAFETY: `window` is a live element and `number` a valid out pointer.
         let status = unsafe { (self.get_window)(window, &raw mut number) };
-        if status == AXError::Success {
-            Ok(number)
-        } else {
-            Err(platform("_AXUIElementGetWindow", status))
-        }
+        (status, number)
+    }
+}
+
+/// What `_AXUIElementGetWindow` answering `status` with `number` says: the
+/// window's number; `None` when it refused the element as no composited
+/// window (`kAXErrorIllegalArgument`, which an Accessibility window without
+/// a `WindowServer` window gets), an element gone since
+/// (`kAXErrorInvalidUIElement`), or answered window 0, which
+/// `kCGNullWindowID` reserves; an error for any other failure.
+fn window_number(status: AXError, number: u32) -> Result<Option<u32>, Error> {
+    match status {
+        AXError::Success => Ok((number != 0).then_some(number)),
+        AXError::IllegalArgument | AXError::InvalidUIElement => Ok(None),
+        status => Err(platform("_AXUIElementGetWindow", status)),
     }
 }
 
@@ -115,19 +127,39 @@ impl<'a> Application<'a> {
         lookup: &'a WindowLookup,
         timeout: Duration,
     ) -> Result<Self, Error> {
+        Self::open(pid, lookup, timeout)
+            .map_err(|status| platform("AXUIElementSetMessagingTimeout", status))
+    }
+
+    /// [`new`](Self::new), failing with the status of the call that failed.
+    pub fn open(
+        pid: libc::pid_t,
+        lookup: &'a WindowLookup,
+        timeout: Duration,
+    ) -> Result<Self, AXError> {
         // SAFETY: any pid names an application element; a pid without one
         // fails the reads below instead.
         let element = unsafe { AXUIElement::new_application(pid) };
         // SAFETY: `element` is a live application element.
         let status = unsafe { element.set_messaging_timeout(timeout.as_secs_f32()) };
         if status != AXError::Success {
-            return Err(platform("AXUIElementSetMessagingTimeout", status));
+            return Err(status);
         }
         Ok(Self {
             pid,
             element,
             lookup,
         })
+    }
+
+    /// The application's process.
+    pub const fn pid(&self) -> libc::pid_t {
+        self.pid
+    }
+
+    /// The application's own element.
+    pub fn element(&self) -> &AXUIElement {
+        &self.element
     }
 
     /// What the application reports now.
@@ -139,8 +171,12 @@ impl<'a> Application<'a> {
         let key_window = self
             .attribute("AXFocusedWindow")?
             .and_then(|value| value.downcast::<AXUIElement>().ok())
-            .map(|window| self.lookup.window_number(&window))
-            .transpose()?;
+            .map(|window| {
+                let (status, number) = self.lookup.lookup(&window);
+                window_number(status, number)
+            })
+            .transpose()?
+            .flatten();
         Ok(FocusReport { active, key_window })
     }
 
@@ -151,7 +187,8 @@ impl<'a> Application<'a> {
     }
 
     /// The windows the application reports (`AXWindows`), with their window
-    /// numbers; none while it does not answer.
+    /// numbers; none while it does not answer. One that has no
+    /// `WindowServer` window is left out.
     pub fn windows(&self) -> Result<Vec<Window>, Error> {
         let Some(windows) = self
             .attribute("AXWindows")?
@@ -159,16 +196,62 @@ impl<'a> Application<'a> {
         else {
             return Ok(Vec::new());
         };
+        Ok(self.resolved(&windows, |_| {}))
+    }
+
+    /// The windows the application reports, for a listing of its elements:
+    /// a window whose number cannot be looked up is left out and handed to
+    /// `refused` with the lookup's status, and the read of `AXWindows`
+    /// itself fails with its status.
+    pub fn listed_windows(&self, refused: impl FnMut(AXError)) -> Result<Vec<Window>, AXError> {
+        let name = CFString::from_static_str("AXWindows");
+        let mut value: *const CFType = ptr::null();
+        // SAFETY: `value` is a valid out pointer; on success it holds a +1
+        // reference the caller owns.
+        let status = unsafe {
+            self.element
+                .copy_attribute_value(&name, NonNull::from(&mut value))
+        };
+        match status {
+            AXError::Success => {}
+            AXError::NoValue | AXError::AttributeUnsupported => return Ok(Vec::new()),
+            status => return Err(status),
+        }
+        // SAFETY: the copied value is +1 and owned here.
+        let Some(windows) = NonNull::new(value.cast_mut())
+            .map(|value| unsafe { CFRetained::<CFType>::from_raw(value) })
+            .and_then(|value| value.downcast::<CFArray>().ok())
+        else {
+            return Ok(Vec::new());
+        };
+        Ok(self.resolved(&windows, refused))
+    }
+
+    /// The windows of `windows`, an `AXWindows` array, whose number the
+    /// lookup resolves; each other one goes to `refused` with the lookup's
+    /// status.
+    fn resolved(&self, windows: &CFArray, mut refused: impl FnMut(AXError)) -> Vec<Window> {
         // SAFETY: `AXWindows` is an array of window elements.
         let windows: &CFArray<AXUIElement> = unsafe { windows.cast_unchecked() };
         windows
             .iter()
-            .map(|element| {
-                Ok(Window {
-                    id: self.lookup.window_number(&element)?,
-                    pid: self.pid,
-                    element,
-                })
+            .filter_map(|element| {
+                let (status, number) = self.lookup.lookup(&element);
+                if status == AXError::Success && number != 0 {
+                    return Some(Window {
+                        id: number,
+                        pid: self.pid,
+                        element,
+                    });
+                }
+                tracing::debug!(
+                    pid = self.pid,
+                    ?status,
+                    number,
+                    "an Accessibility window has no WindowServer window; it is skipped"
+                );
+                refused(status);
+                None
             })
             .collect()
     }
@@ -261,6 +344,11 @@ impl Window {
         self.id
     }
 
+    /// The window's element.
+    pub fn element(&self) -> &AXUIElement {
+        &self.element
+    }
+
     /// The window's frame (`AXPosition`, `AXSize`), in global display
     /// coordinates.
     pub fn frame(&self) -> Result<CGRect, Error> {
@@ -289,16 +377,12 @@ impl Window {
                     self.id, self.pid
                 ))
             })?;
-        let mut decoded = empty;
-        // SAFETY: `decoded` is the structure `kind` encodes.
-        if unsafe { value.value(kind, NonNull::from(&mut decoded).cast()) } {
-            Ok(decoded)
-        } else {
-            Err(Error::Platform(format!(
+        decode(&value, kind, empty).ok_or_else(|| {
+            Error::Platform(format!(
                 "window {} of pid {} reports {name} of another type",
                 self.id, self.pid
-            )))
-        }
+            ))
+        })
     }
 
     /// Sets `name` to `value`, a structure of kind `kind`.
@@ -319,6 +403,15 @@ impl Window {
             )))
         }
     }
+}
+
+/// The structure of kind `kind` that `value` holds, decoded over `empty`;
+/// `None` when it holds another kind.
+pub fn decode<T: Copy>(value: &AXValue, kind: AXValueType, empty: T) -> Option<T> {
+    let mut decoded = empty;
+    // SAFETY: `decoded` is the structure `kind` encodes, and
+    // `AXValueGetValue` writes it only when the value holds that kind.
+    unsafe { value.value(kind, NonNull::from(&mut decoded).cast()) }.then_some(decoded)
 }
 
 /// An application's notifications waking a run loop mode.
@@ -353,6 +446,24 @@ mod tests {
     #[test]
     fn the_window_lookup_resolves() {
         WindowLookup::resolve().expect("_AXUIElementGetWindow resolves");
+    }
+
+    /// The status the Mac mini's listing met: `_AXUIElementGetWindow`
+    /// refused an application's Accessibility window with
+    /// `kAXErrorIllegalArgument` (-25201).
+    #[test]
+    fn a_refused_window_lookup_is_no_window_and_other_failures_are_errors() {
+        assert!(matches!(window_number(AXError::Success, 58), Ok(Some(58))));
+        assert!(matches!(window_number(AXError::Success, 0), Ok(None)));
+        assert!(matches!(window_number(AXError(-25201), 0), Ok(None)));
+        assert!(matches!(
+            window_number(AXError::InvalidUIElement, 0),
+            Ok(None)
+        ));
+        assert!(matches!(
+            window_number(AXError::CannotComplete, 0),
+            Err(Error::Platform(message)) if message.contains("_AXUIElementGetWindow")
+        ));
     }
 
     #[test]

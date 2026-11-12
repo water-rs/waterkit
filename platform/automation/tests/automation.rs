@@ -69,6 +69,13 @@ fn main() {
                 Ok(())
             },
         ),
+        Trial::test(
+            "an_app_that_activates_itself_does_not_take_the_front",
+            || {
+                mac::an_app_that_activates_itself_does_not_take_the_front();
+                Ok(())
+            },
+        ),
     ];
     #[cfg(not(target_os = "macos"))]
     let trials: Vec<Trial> = Vec::new();
@@ -99,11 +106,12 @@ mod mac {
         NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSEvent,
         NSEventMask, NSEventType, NSFloatingWindowLevel, NSRunningApplication, NSScreen, NSView,
         NSWindow, NSWindowAnimationBehavior, NSWindowStyleMask, NSWorkspace,
+        NSWorkspaceOpenConfiguration,
     };
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
     use objc2_core_graphics::{CGDisplayBounds, CGEvent, CGMainDisplayID};
     use objc2_foundation::{
-        NSDate, NSDefaultRunLoopMode, NSNumber, NSPoint, NSProcessInfo, ns_string,
+        NSDate, NSDefaultRunLoopMode, NSNumber, NSPoint, NSProcessInfo, NSString, ns_string,
     };
     use serde::de::DeserializeOwned;
     use serde::{Deserialize, Serialize};
@@ -1487,6 +1495,83 @@ mod mac {
             );
         }
         assert_cursor_unchanged(cursor_before);
+        drop(running);
+    }
+
+    /// The stock application a launch case puts in front first: Finder is
+    /// always running.
+    const FRONT_APP: &str = "com.apple.finder";
+
+    /// Makes `FRONT_APP` the front application, through `LaunchServices` as
+    /// a user opening it would, and returns its process.
+    fn front_the_finder(mtm: MainThreadMarker) -> i32 {
+        let workspace = NSWorkspace::sharedWorkspace();
+        let url = workspace
+            .URLForApplicationWithBundleIdentifier(&NSString::from_str(FRONT_APP))
+            .expect("Finder is installed");
+        let configuration = NSWorkspaceOpenConfiguration::configuration();
+        configuration.setActivates(true);
+        workspace.openApplicationAtURL_configuration_completionHandler(&url, &configuration, None);
+        let finder = NSRunningApplication::runningApplicationsWithBundleIdentifier(
+            &NSString::from_str(FRONT_APP),
+        )
+        .firstObject()
+        .expect("Finder is running")
+        .processIdentifier();
+        assert!(
+            pump_until(mtm, TARGET_READY_DEADLINE, || frontmost_pid(mtm)
+                == Some(finder)),
+            "Finder (pid {finder}) did not become the front application within \
+             {TARGET_READY_DEADLINE:?}; the front one is {:?}",
+            frontmost_pid(mtm)
+        );
+        finder
+    }
+
+    /// An application that activates itself while it launches, with another
+    /// application in front, is put back behind it: Calculator activates
+    /// itself when it finishes launching, and the front application is still
+    /// Finder once it has, and when the launch returns.
+    pub fn an_app_that_activates_itself_does_not_take_the_front() {
+        let mtm = MainThreadMarker::new().expect("libtest-mimic runs one thread on main");
+        log_macos_version();
+        let app = NSApplication::sharedApplication(mtm);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        app.finishLaunching();
+        let display = create_display(mtm);
+        let finder = front_the_finder(mtm);
+
+        let config = LaunchConfig::bundle_id(LAUNCHED_APP)
+            .new_instance(true)
+            .display(display.id());
+        let launched = LaunchedApplication::launch(&config)
+            .unwrap_or_else(|error| panic!("{LAUNCHED_APP} does not launch: {error}"));
+        let running = NSRunningApplication::runningApplicationWithProcessIdentifier(launched.pid())
+            .expect("the launched application is running");
+        let running = Launched(running);
+        assert_ne!(launched.pid(), finder, "the launched app is not Finder");
+        assert_eq!(
+            frontmost_pid(mtm),
+            Some(finder),
+            "{LAUNCHED_APP} (pid {}) took the front when the launch returned",
+            launched.pid()
+        );
+
+        // An application that activates itself does so while it finishes
+        // launching; the guard has to have held through it.
+        assert!(
+            pump_until(mtm, TARGET_READY_DEADLINE, || running
+                .0
+                .isFinishedLaunching()),
+            "{LAUNCHED_APP} (pid {}) did not finish launching within {TARGET_READY_DEADLINE:?}",
+            launched.pid()
+        );
+        assert_eq!(
+            frontmost_pid(mtm),
+            Some(finder),
+            "{LAUNCHED_APP} (pid {}) took the front from Finder",
+            launched.pid()
+        );
         drop(running);
     }
 }

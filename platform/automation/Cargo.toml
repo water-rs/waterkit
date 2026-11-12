@@ -30,7 +30,8 @@ objc2-app-kit = { workspace = true, features = [
 objc2-core-services = { workspace = true, features = ["AE", "AEDataModel", "AppleEvents"] }
 objc2-foundation = { workspace = true, features = [
     "NSAppleEventDescriptor", "NSArray", "NSBundle", "NSData", "NSDictionary", "NSError",
-    "NSLocale", "NSPathUtilities", "NSProcessInfo", "NSPropertyList", "NSString", "NSURL",
+    "NSLocale", "NSNotification", "NSOperation", "NSPathUtilities", "NSProcessInfo",
+    "NSPropertyList", "NSString", "NSURL",
     "NSValue", "objc2-core-services",
 ] }
 objc2-core-foundation = { workspace = true, features = [
@@ -41,7 +42,8 @@ objc2-application-services = { workspace = true, features = [
     "std", "AXError", "AXUIElement", "AXValue", "HIServices", "libc",
 ] }
 objc2-core-graphics = { workspace = true, features = [
-    "CGDirectDisplay", "CGDisplayConfiguration", "CGError", "CGEvent", "CGEventTypes",
+    "CGDirectDisplay", "CGDisplayConfiguration", "CGError", "CGEvent", "CGEventSource",
+    "CGEventTypes",
     "CGGeometry", "CGRemoteOperation", "CGWindow", "libc",
 ] }
 

@@ -3,22 +3,22 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::time::Duration;
 
-use objc2_core_foundation::{CFRetained, CGPoint, CGRect};
+use objc2_core_foundation::{CFRetained, CFString, CGPoint, CGRect};
 use objc2_core_graphics::{
     CGDirectDisplayID, CGDisplayBounds, CGEvent, CGEventFlags, CGEventType, CGKeyCode,
     CGMouseButton, CGScrollEventUnit, CGWindowListOption, kCGNullWindowID,
 };
 
 use crate::accessibility::{Application, WindowLookup};
-use crate::delivery::{APPKIT_DEFINED, Watch};
+use crate::delivery::{self, APPKIT_DEFINED, Watch};
 use crate::keycode::{event_flags, virtual_key};
 use crate::skylight::EventSymbols;
-use crate::topology;
 use crate::window::{self, DisplayWindows, ListedWindow, Rect, Window, intersects};
 use crate::{
     Error, InputEvent, KeyDown, KeyUp, MouseButton, MouseDown, MouseMove, MouseUp, Point, Scroll,
     Text,
 };
+use crate::{placement, run_loop, topology};
 
 /// `kCGMouseEventClickState`.
 const FIELD_CLICK_STATE: u32 = 1;
@@ -85,6 +85,25 @@ struct Target {
     window: u32,
 }
 
+/// One reading of a mouse event's point and the window under it.
+#[derive(Debug)]
+struct Reading {
+    /// The point in global display coordinates.
+    point: CGPoint,
+    /// The window the hit test hands a press at the point to, as the window
+    /// list has it.
+    hit: Option<Window>,
+}
+
+/// Where a mouse event goes: its global point, and the target window with
+/// the frame it had when the point was read.
+#[derive(Debug, Clone, Copy)]
+struct Located {
+    point: CGPoint,
+    frame: CGRect,
+    target: Target,
+}
+
 /// The button a press holds down, and the window it landed on.
 #[derive(Debug, Clone, Copy)]
 struct Held {
@@ -115,8 +134,9 @@ impl Input {
     }
 
     /// How long a target application gets to report the target window
-    /// focused, and `WindowServer` to route each posted event into it,
-    /// before [`post`](Self::post) fails. One second unless set.
+    /// focused, `WindowServer` to route each posted event into it, and the
+    /// display and the window under a mouse event's point to hold still for
+    /// one reading, before [`post`](Self::post) fails. One second unless set.
     #[must_use]
     pub const fn confirm_timeout(&self) -> Duration {
         self.confirm_timeout
@@ -140,6 +160,8 @@ impl Input {
     ///
     /// - [`Error::OutsideDisplay`] when a mouse event's point lies outside
     ///   the display;
+    /// - [`Error::Unsettled`] when the display, or the window under a mouse
+    ///   event's point, keeps moving for the confirm timeout;
     /// - [`Error::NoWindow`] when no window takes a press at it;
     /// - [`Error::NoKeyWindow`] when a key event has no window to go to;
     ///   both carry every window that intersects the display;
@@ -209,21 +231,42 @@ impl Input {
 
     pub(crate) fn mouse_down(&mut self, event: MouseDown) -> Result<(), Error> {
         let flags = event_flags(event.modifiers)?;
-        let point = self.global(event.at)?;
-        let (window, target) = self.window_at(event.at, point)?;
-        let mut watch = Watch::open(target.pid, self.confirm_timeout)?;
-        self.focus(&mut watch, target, window.bounds)?;
+        let mut located = self.locate(event.at)?;
+        let (mut watch, pressed) = loop {
+            let mut watch = Watch::open(located.target.pid, self.confirm_timeout)?;
+            self.focus(&mut watch, located.target, located.frame)?;
+            // Focusing waits on the application, and the display can move
+            // meanwhile, taking the window with it: the press is converted
+            // with the window's frame as of now.
+            let now = self.locate(event.at)?;
+            if now.target == located.target {
+                break (watch, now);
+            }
+            tracing::debug!(
+                focused = located.target.window,
+                now = now.target.window,
+                %event.at,
+                "another window took the point while the first was focused"
+            );
+            watch.confirm(located.target.window)?;
+            located = now;
+        };
+        let Located {
+            point,
+            frame,
+            target,
+        } = pressed;
         // A move first: AppKit hit-tests a press against the tracking state
         // the window last saw.
         let moved = mouse_event(CGEventType::MouseMoved, point, MouseButton::Left)?;
-        self.post_mouse(&mut watch, &moved, target, window.bounds, point, flags, 0);
+        self.post_mouse(&mut watch, &moved, target, frame, point, flags, 0);
 
         let down = mouse_event(down_type(event.button), point, event.button)?;
         self.post_mouse(
             &mut watch,
             &down,
             target,
-            window.bounds,
+            frame,
             point,
             flags,
             event.clicks.get(),
@@ -238,15 +281,14 @@ impl Input {
 
     pub(crate) fn mouse_up(&mut self, event: MouseUp) -> Result<(), Error> {
         let flags = event_flags(event.modifiers)?;
-        let point = self.global(event.at)?;
-        let (bounds, target) = match self.held {
-            Some(held) if held.button == event.button => {
-                (window_bounds(held.target.window)?, held.target)
-            }
-            _ => {
-                let (window, target) = self.window_at(event.at, point)?;
-                (window.bounds, target)
-            }
+        let held = self.held.filter(|held| held.button == event.button);
+        let Located {
+            point,
+            frame,
+            target,
+        } = match held {
+            Some(held) => self.locate_held(event.at, held.target)?,
+            None => self.locate(event.at)?,
         };
         let mut watch = Watch::open(target.pid, self.confirm_timeout)?;
         let up = mouse_event(up_type(event.button), point, event.button)?;
@@ -254,12 +296,12 @@ impl Input {
             &mut watch,
             &up,
             target,
-            bounds,
+            frame,
             point,
             flags,
             event.clicks.get(),
         );
-        if self.held.is_some_and(|held| held.button == event.button) {
+        if held.is_some() {
             self.held = None;
         }
         watch.confirm(target.window)
@@ -267,24 +309,36 @@ impl Input {
 
     pub(crate) fn mouse_move(&self, event: MouseMove) -> Result<(), Error> {
         let flags = event_flags(event.modifiers)?;
-        let point = self.global(event.at)?;
-        let (moved, bounds, target) = if let Some(held) = self.held {
-            let dragged = mouse_event(drag_type(held.button), point, held.button)?;
-            (dragged, window_bounds(held.target.window)?, held.target)
-        } else {
-            let (window, target) = self.window_at(event.at, point)?;
-            let moved = mouse_event(CGEventType::MouseMoved, point, MouseButton::Left)?;
-            (moved, window.bounds, target)
+        let (located, kind, button) = match self.held {
+            Some(held) => (
+                self.locate_held(event.at, held.target)?,
+                drag_type(held.button),
+                held.button,
+            ),
+            None => (
+                self.locate(event.at)?,
+                CGEventType::MouseMoved,
+                MouseButton::Left,
+            ),
         };
+        let Located {
+            point,
+            frame,
+            target,
+        } = located;
+        let moved = mouse_event(kind, point, button)?;
         let mut watch = Watch::open(target.pid, self.confirm_timeout)?;
-        self.post_mouse(&mut watch, &moved, target, bounds, point, flags, 0);
+        self.post_mouse(&mut watch, &moved, target, frame, point, flags, 0);
         watch.confirm(target.window)
     }
 
     pub(crate) fn scroll(&self, event: Scroll) -> Result<(), Error> {
         let flags = event_flags(event.modifiers)?;
-        let point = self.global(event.at)?;
-        let (window, target) = self.window_at(event.at, point)?;
+        let Located {
+            point,
+            frame,
+            target,
+        } = self.locate(event.at)?;
         // A wheel turned up is positive; moving down through content is a
         // negative wheel delta.
         let scrolled = CGEvent::new_scroll_wheel_event2(
@@ -298,15 +352,7 @@ impl Input {
         .ok_or_else(|| null_event("CGEventCreateScrollWheelEvent2"))?;
         CGEvent::set_location(Some(&scrolled), point);
         let mut watch = Watch::open(target.pid, self.confirm_timeout)?;
-        self.post_mouse(
-            &mut watch,
-            &scrolled,
-            target,
-            window.bounds,
-            point,
-            flags,
-            0,
-        );
+        self.post_mouse(&mut watch, &scrolled, target, frame, point, flags, 0);
         watch.confirm(target.window)
     }
 
@@ -350,52 +396,111 @@ impl Input {
         watch.confirm(target.window)
     }
 
-    /// `at` in global display coordinates, checked to lie on the display.
-    fn global(&self, at: Point) -> Result<CGPoint, Error> {
-        let bounds = CGDisplayBounds(self.display);
-        let inside = (0.0..bounds.size.width).contains(&at.x())
-            && (0.0..bounds.size.height).contains(&at.y());
-        if !inside {
-            return Err(Error::OutsideDisplay {
+    /// The point `at` on the display, and the window `WindowServer` hands a
+    /// press there to, read from one geometry.
+    ///
+    /// The display's position (`CGDisplayBounds`), the hit test and the
+    /// window list are separate reads, and the system moves a display, and
+    /// every window on it, when the arrangement changes, such as when
+    /// another display goes away. A reading counts only when the display
+    /// stayed put across it and the window list has the hit window where
+    /// the hit test found it, around the point; until one does, the reads
+    /// are taken again. A frame from a reading that disagrees would put the
+    /// window-local point outside the window, where no view takes it.
+    fn read(&self, at: Point) -> Result<Reading, Error> {
+        let mode = CFString::from_static_str(delivery::MODE);
+        let mut reading = None;
+        let settled = run_loop::spin_in(
+            Some(&mode),
+            self.confirm_timeout,
+            placement::RECHECK,
+            || {
+                let before = CGDisplayBounds(self.display);
+                let point = global(before, at).ok_or(Error::OutsideDisplay {
+                    display: self.display,
+                    at,
+                })?;
+                let hit = self
+                    .symbols
+                    .window_at(point)?
+                    .map(listed_window)
+                    .transpose()?;
+                let after = CGDisplayBounds(self.display);
+                let frame = hit.as_ref().map(|window| window.bounds);
+                let agrees = one_geometry(before, after, frame, point);
+                if !agrees {
+                    tracing::debug!(
+                        display = self.display,
+                        %at,
+                        ?before,
+                        ?after,
+                        window = hit.as_ref().map(|window| window.id),
+                        ?frame,
+                        "the display or the window under the point moved during the reading"
+                    );
+                }
+                reading = Some(Reading { point, hit });
+                Ok(agrees)
+            },
+        )?;
+        if !settled {
+            return Err(Error::Unsettled {
                 display: self.display,
                 at,
+                timeout: self.confirm_timeout,
             });
         }
-        Ok(CGPoint::new(
-            bounds.origin.x + at.x(),
-            bounds.origin.y + at.y(),
-        ))
+        Ok(reading.expect("a settled wait read the geometry"))
     }
 
-    /// The window `WindowServer` hands a press at `point` to, as a delivery
-    /// target. Its hit test follows each window's shape and passes through
-    /// windows that ignore mouse events, which on the main display include
-    /// system overlays the size of the display.
-    fn window_at(&self, at: Point, point: CGPoint) -> Result<(Window, Target), Error> {
-        let Some(id) = self.symbols.window_at(point)? else {
+    /// The window `WindowServer` hands a press at `at` to, as a delivery
+    /// target, with its frame as of the reading ([`read`](Self::read)). Its
+    /// hit test follows each window's shape and passes through windows that
+    /// ignore mouse events, which on the main display include system
+    /// overlays the size of the display.
+    fn locate(&self, at: Point) -> Result<Located, Error> {
+        let Reading { point, hit } = self.read(at)?;
+        let Some(window) = hit else {
             tracing::debug!(display = self.display, %at, "no window takes a press at the point");
             return Err(Error::NoWindow {
                 at,
                 windows: self.display_windows()?,
             });
         };
-        let window = listed_window(id)?;
         match self.symbols.application_owns(window.id)? {
-            Some(true) => {
-                let target = Target {
+            Some(true) => Ok(Located {
+                point,
+                frame: window.bounds,
+                target: Target {
                     pid: window.pid,
                     window: window.id,
-                };
-                Ok((window, target))
-            }
+                },
+            }),
             Some(false) => Err(Error::NotApplicationWindow {
                 at,
                 window: window.listed(false),
             }),
             None => Err(Error::Platform(format!(
-                "window {id}, which takes a press at {at}, closed before the press"
+                "window {}, which takes a press at {at}, closed before the press",
+                window.id
             ))),
         }
+    }
+
+    /// The point `at` for an event that goes to `held`, the window a held
+    /// button pressed, wherever the point lies. While the point is over that
+    /// window, its frame is the reading's; past its edge, the window list's.
+    fn locate_held(&self, at: Point, held: Target) -> Result<Located, Error> {
+        let Reading { point, hit } = self.read(at)?;
+        let frame = match hit {
+            Some(window) if window.id == held.window => window.bounds,
+            _ => window_bounds(held.window)?,
+        };
+        Ok(Located {
+            point,
+            frame,
+            target: held,
+        })
     }
 
     /// The window key events go to: the last press's, else the frontmost
@@ -678,6 +783,22 @@ fn on_screen_windows() -> Result<Vec<Window>, Error> {
     Ok(windows)
 }
 
+/// `at`, a point on a display whose bounds are `display`, in global display
+/// coordinates; `None` when it lies outside the display.
+fn global(display: CGRect, at: Point) -> Option<CGPoint> {
+    let inside =
+        (0.0..display.size.width).contains(&at.x()) && (0.0..display.size.height).contains(&at.y());
+    inside.then(|| CGPoint::new(display.origin.x + at.x(), display.origin.y + at.y()))
+}
+
+/// Whether the reads of one reading saw one geometry: the display stayed at
+/// `before` until `after`, and the window the hit test handed `point` to,
+/// listed at `frame`, lies under the point, as every window the hit test
+/// finds does.
+fn one_geometry(before: CGRect, after: CGRect, frame: Option<CGRect>, point: CGPoint) -> bool {
+    before == after && frame.is_none_or(|frame| window::contains(frame, point))
+}
+
 /// How `WindowServer` lists `window` now.
 fn listed_window(window: u32) -> Result<Window, Error> {
     window::list(CGWindowListOption::OptionIncludingWindow, window)?
@@ -737,6 +858,55 @@ mod tests {
         assert_eq!(
             String::from_utf16(&chunks[1]).ok().as_deref(),
             Some("\u{1F600}")
+        );
+    }
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> CGRect {
+        CGRect::new(
+            CGPoint::new(x, y),
+            objc2_core_foundation::CGSize::new(width, height),
+        )
+    }
+
+    #[test]
+    fn a_point_is_global_only_on_its_display() {
+        let display = rect(-1280.0, 0.0, 1280.0, 800.0);
+        assert_eq!(
+            global(display, Point::new(140.0, 130.0)),
+            Some(CGPoint::new(-1140.0, 130.0))
+        );
+        assert_eq!(global(display, Point::new(1280.0, 0.0)), None);
+        assert_eq!(global(display, Point::new(0.0, -1.0)), None);
+    }
+
+    /// The reading of water-rs/waterkit#424: the display had moved from
+    /// x = -2560 to -1280, the hit test found the window at its new place,
+    /// and the window list still had it at the old one, which put the
+    /// window-local point 1280 points right of the 400x300 window.
+    #[test]
+    fn a_reading_counts_only_when_its_reads_agree() {
+        let display = rect(-1280.0, 0.0, 1280.0, 800.0);
+        let point = global(display, Point::new(140.0, 130.0)).expect("on the display");
+        let moved_window = rect(-1180.0, 100.0, 400.0, 300.0);
+        let stale_window = rect(-2460.0, 100.0, 400.0, 300.0);
+
+        assert!(one_geometry(display, display, Some(moved_window), point));
+        assert!(
+            !one_geometry(display, display, Some(stale_window), point),
+            "a frame that does not hold the hit point is from another geometry"
+        );
+        assert!(
+            !one_geometry(
+                rect(-2560.0, 0.0, 1280.0, 800.0),
+                display,
+                Some(moved_window),
+                point
+            ),
+            "the display moved during the reading"
+        );
+        assert!(
+            one_geometry(display, display, None, point),
+            "no window under the point is a reading too"
         );
     }
 

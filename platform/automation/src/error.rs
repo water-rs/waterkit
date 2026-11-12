@@ -47,6 +47,43 @@ pub enum Error {
     /// The display did not end up online, active and outside any mirror set.
     #[error("virtual display is not online, active and unmirrored: {0}")]
     NotReady(DisplayState),
+    /// The system's headless fallback display runs a mode a virtual display
+    /// cannot reproduce, so no stand-in can take its place.
+    #[error(
+        "the headless fallback display {display} runs {width}x{height} points on {pixels_wide}x{pixels_high} pixels at {refresh_rate} Hz, which no virtual display reproduces"
+    )]
+    UnmatchableMode {
+        /// The fallback display.
+        display: u32,
+        /// Width in points.
+        width: usize,
+        /// Height in points.
+        height: usize,
+        /// Width in pixels.
+        pixels_wide: usize,
+        /// Height in pixels.
+        pixels_high: usize,
+        /// Refresh rate in hertz.
+        refresh_rate: f64,
+    },
+    /// The system kept its headless fallback display online after the
+    /// stand-in that replaces it came up.
+    #[error("the headless fallback display {fallback} stayed online beside stand-in {stand_in}")]
+    FallbackStayed {
+        /// The fallback display.
+        fallback: u32,
+        /// The stand-in display.
+        stand_in: u32,
+    },
+    /// The display that is to stay the user's main display while a virtual
+    /// display comes up did not become main.
+    #[error("display {display} did not become the main display; display {main} is")]
+    NotMain {
+        /// The display that is to be main.
+        display: u32,
+        /// The display that is main.
+        main: u32,
+    },
     /// No display with this id is online.
     #[error("display {0} is not online")]
     DisplayNotFound(u32),

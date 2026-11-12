@@ -58,6 +58,20 @@ fn main() {
                 Ok(())
             },
         ),
+        Trial::test(
+            "a_virtual_display_leaves_the_main_display_to_the_user",
+            || {
+                mac::a_virtual_display_leaves_the_main_display_to_the_user();
+                Ok(())
+            },
+        ),
+        Trial::test(
+            "displays_back_to_back_each_leave_the_main_display_to_the_user",
+            || {
+                mac::displays_back_to_back_each_leave_the_main_display_to_the_user();
+                Ok(())
+            },
+        ),
         Trial::test("input_needs_an_online_display", || {
             mac::input_needs_an_online_display();
             Ok(())
@@ -109,15 +123,19 @@ mod mac {
         NSWorkspaceOpenConfiguration,
     };
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-    use objc2_core_graphics::{CGDisplayBounds, CGEvent, CGMainDisplayID};
+    use objc2_core_graphics::{
+        CGDisplayBounds, CGDisplayModelNumber, CGDisplayVendorNumber, CGError, CGEvent,
+        CGGetOnlineDisplayList, CGMainDisplayID,
+    };
     use objc2_foundation::{
         NSDate, NSDefaultRunLoopMode, NSNumber, NSPoint, NSProcessInfo, NSString, ns_string,
     };
     use serde::de::DeserializeOwned;
     use serde::{Deserialize, Serialize};
     use waterkit_automation::{
-        Code, Error, Input, KeyDown, KeyUp, LaunchConfig, LaunchedApplication, ListedWindow,
-        MouseButton, MouseDown, MouseUp, Point, Rect, Text, VirtualDisplay, VirtualDisplayConfig,
+        Code, DisplayHost, Error, Input, KeyDown, KeyUp, LaunchConfig, LaunchedApplication,
+        ListedWindow, MouseButton, MouseDown, MouseUp, Point, Rect, Text, VirtualDisplay,
+        VirtualDisplayConfig,
     };
 
     /// Set to a display id, this binary opens the target window on that
@@ -804,6 +822,7 @@ mod mac {
     /// display shares the vendor and product, so the serial is the process
     /// id: unique among the test processes running at once, each of which
     /// creates one display.
+    /// The display is never the main one: that stays the user's.
     fn create_display(mtm: MainThreadMarker) -> VirtualDisplay {
         let serial = std::process::id();
         let config = VirtualDisplayConfig::new(
@@ -812,14 +831,129 @@ mod mac {
             NonZeroU32::new(800).expect("non-zero"),
             serial,
         );
-        let display = VirtualDisplay::new(&config, mtm).expect("the virtual display comes up");
+        let display = VirtualDisplay::new(&config, &mut DisplayHost::new(mtm))
+            .expect("the virtual display comes up");
         let bounds = CGDisplayBounds(display.id());
         assert_eq!(
             (bounds.size.width, bounds.size.height),
             (1280.0, 800.0),
             "the display is 1280x800 points"
         );
+        assert_ne!(
+            CGMainDisplayID(),
+            display.id(),
+            "the virtual display took the main display: {}",
+            describe_screens(mtm)
+        );
         display
+    }
+
+    /// One online display as `CoreGraphics` reports it.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct OnlineDisplay {
+        id: u32,
+        vendor: u32,
+        model: u32,
+        bounds: CGRect,
+    }
+
+    impl OnlineDisplay {
+        /// The display macOS runs with no monitor connected: vendor
+        /// `kDisplayVendorIDUnknown` (`'unkn'`), model `'virt'`.
+        const fn is_headless_fallback(&self) -> bool {
+            self.vendor == u32::from_be_bytes(*b"unkn")
+                && self.model == u32::from_be_bytes(*b"virt")
+        }
+    }
+
+    fn online_displays() -> Vec<OnlineDisplay> {
+        let mut ids = [0_u32; 32];
+        let mut count = 0_u32;
+        // SAFETY: `ids` holds the maximum passed; `count` is a valid out
+        // pointer.
+        let status = unsafe { CGGetOnlineDisplayList(32, ids.as_mut_ptr(), &raw mut count) };
+        assert_eq!(status, CGError::Success, "the online display list reads");
+        ids[..count as usize]
+            .iter()
+            .map(|&id| OnlineDisplay {
+                id,
+                vendor: CGDisplayVendorNumber(id),
+                model: CGDisplayModelNumber(id),
+                bounds: CGDisplayBounds(id),
+            })
+            .collect()
+    }
+
+    /// While a virtual display is up the user's main display stays main and
+    /// where it was; on a Mac with no monitor that is the stand-in that took
+    /// the headless fallback's place, in the fallback's frame. Once the
+    /// display is gone the user's displays are as they were: the same ones,
+    /// or with no monitor one headless fallback in the same frame, which
+    /// macOS brings back under a new id.
+    pub fn a_virtual_display_leaves_the_main_display_to_the_user() {
+        leaves_the_main_display_to_the_user(1);
+    }
+
+    /// The same, for two displays created one right after the other, each
+    /// through a fresh host: the first one's removal has settled when its
+    /// drop returns, so the second finds the user's displays as they were.
+    pub fn displays_back_to_back_each_leave_the_main_display_to_the_user() {
+        leaves_the_main_display_to_the_user(2);
+    }
+
+    fn leaves_the_main_display_to_the_user(rounds: usize) {
+        let mtm = MainThreadMarker::new().expect("libtest-mimic runs one thread on main");
+        log_macos_version();
+        let before = online_displays();
+        let main_before = CGMainDisplayID();
+        let main_frame = CGDisplayBounds(main_before);
+        let headless = before.iter().all(OnlineDisplay::is_headless_fallback);
+        tracing::info!(?before, main_before, headless, "displays before");
+        let restored = |after: &[OnlineDisplay]| {
+            if headless {
+                matches!(after, [only] if only.is_headless_fallback() && only.bounds == main_frame)
+            } else {
+                after == before.as_slice()
+            }
+        };
+
+        for round in 1..=rounds {
+            let display = create_display(mtm);
+            let during = online_displays();
+            let main = CGMainDisplayID();
+            tracing::info!(
+                round,
+                ?during,
+                main,
+                "displays while the virtual display is up"
+            );
+            assert_eq!(
+                CGDisplayBounds(main),
+                main_frame,
+                "round {round}: the main display moved or changed size: {}",
+                describe_screens(mtm)
+            );
+            if headless {
+                assert!(
+                    during.iter().all(|online| !online.is_headless_fallback()),
+                    "round {round}: the headless fallback stayed online: {during:?}"
+                );
+            } else {
+                assert_eq!(
+                    main, main_before,
+                    "round {round}: the main display changed: {during:?}"
+                );
+            }
+
+            // No wait here: the drop returns once the removal has settled.
+            drop(display);
+            let after = online_displays();
+            tracing::info!(round, ?after, main = CGMainDisplayID(), "displays after");
+            assert!(
+                restored(&after),
+                "round {round}: the displays had not come back when the drop returned: before {before:?}, after {after:?}"
+            );
+        }
     }
 
     /// `AppKit`'s screen for `display`, once it lists one.

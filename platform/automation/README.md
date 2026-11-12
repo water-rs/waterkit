@@ -5,10 +5,14 @@ user's. macOS only; on every other platform the crate is empty.
 
 - `VirtualDisplay` creates a private-API `CGVirtualDisplay` of a chosen size
   in points, backing scale and refresh rate. It exists on none of the user's
-  monitors and is removed when dropped. Creation takes a `MainThreadMarker`
-  and services the main run loop until the display is online, active and
-  outside any mirror set, bringing a display `WindowServer` left offline into
-  the topology with `SLWindowMirroringManager` when it has to.
+  monitors and is removed when dropped. Creation goes through a
+  `DisplayHost`, made on the main thread, and services the main run loop
+  until the display is online, active and outside any mirror set, bringing a
+  display `WindowServer` left offline into the topology with
+  `SLWindowMirroringManager` when it has to. The user's main display stays
+  main; on a Mac with no monitor the host first replaces the system's
+  headless fallback display with a stand-in of the same mode, which keeps the
+  user's desktop and is removed with the host's last display.
 - `Input` posts typed events (`MouseDown`, `MouseUp`, `MouseMove`, `Scroll`,
   `KeyDown`, `KeyUp`, `Text`) to the application that owns the window under a
   point on one display, never through the HID event tap: the user's cursor
@@ -36,18 +40,18 @@ private API is an error at the call that needs it.
 ```rust,ignore
 use std::num::NonZeroU32;
 use waterkit_automation::{
-    Input, MainThreadMarker, MouseButton, MouseDown, MouseUp, Point, Text, VirtualDisplay,
-    VirtualDisplayConfig,
+    DisplayHost, Input, MainThreadMarker, MouseButton, MouseDown, MouseUp, Point, Text,
+    VirtualDisplay, VirtualDisplayConfig,
 };
 
-let mtm = MainThreadMarker::new().expect("on the main thread");
+let mut host = DisplayHost::new(MainThreadMarker::new().expect("on the main thread"));
 let config = VirtualDisplayConfig::new(
     "Agent desktop",
     NonZeroU32::new(1280).unwrap(),
     NonZeroU32::new(800).unwrap(),
     0x5EED,
 );
-let display = VirtualDisplay::new(&config, mtm)?;
+let display = VirtualDisplay::new(&config, &mut host)?;
 let mut input = Input::new(display.id())?;
 let at = Point::new(200.0, 120.0);
 input.post(MouseDown::new(at, MouseButton::Left))?;

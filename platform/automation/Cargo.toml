@@ -28,6 +28,8 @@ objc2-app-kit = { workspace = true, features = [
     "NSRunningApplication", "NSWorkspace", "block2", "libc",
 ] }
 objc2-core-services = { workspace = true, features = ["AE", "AEDataModel", "AppleEvents"] }
+# `kDisplayVendorIDUnknown`, the vendor of the system's headless fallback display.
+objc2-io-kit = { workspace = true, features = ["graphics"] }
 objc2-foundation = { workspace = true, features = [
     "NSAppleEventDescriptor", "NSArray", "NSBundle", "NSData", "NSDictionary", "NSError",
     "NSLocale", "NSNotification", "NSOperation", "NSPathUtilities", "NSProcessInfo",

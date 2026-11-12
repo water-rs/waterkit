@@ -29,7 +29,8 @@
 //!
 //! # Threads and the run loop
 //!
-//! [`VirtualDisplay::new`] takes a [`MainThreadMarker`]: `CoreGraphics`
+//! [`VirtualDisplay::new`] takes a [`DisplayHost`], which holds a
+//! [`MainThreadMarker`]: `CoreGraphics`
 //! updates a process's view of the display topology only while
 //! reconfiguration callbacks are serviced on the main thread, so a display
 //! created anywhere else never becomes usable by the process that made it.
@@ -85,6 +86,14 @@
 //! `new` takes it out for the session. A display that is not online, active
 //! and unmirrored afterwards fails with [`Error::NotReady`], which carries
 //! the state that was observed.
+//!
+//! A new display never takes the main display from the user: when the main
+//! display changed while it came up, `new` moves the user's main display back
+//! to the origin of the global display space, where the main display sits
+//! (`CGConfigureDisplayOrigin`, for the session). On a Mac with no monitor,
+//! where the only display is the fallback macOS removes once another display
+//! comes online, the [`DisplayHost`] first puts a stand-in display in the
+//! fallback's place; see its documentation.
 //!
 //! # Private API binding
 //!
@@ -178,7 +187,7 @@ mod window;
 #[cfg(target_os = "macos")]
 pub use accessibility::FocusReport;
 #[cfg(target_os = "macos")]
-pub use display::{BackingScale, VirtualDisplay, VirtualDisplayConfig};
+pub use display::{BackingScale, DisplayHost, VirtualDisplay, VirtualDisplayConfig};
 #[cfg(target_os = "macos")]
 pub use error::{DisplayState, Error};
 #[cfg(target_os = "macos")]

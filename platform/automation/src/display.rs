@@ -4,6 +4,7 @@ use core::ffi::{CStr, c_char, c_void};
 use core::num::NonZeroU32;
 use core::ptr;
 use core::time::Duration;
+use std::rc::{Rc, Weak};
 use std::sync::mpsc;
 
 use block2::RcBlock;
@@ -11,27 +12,42 @@ use dispatch2::DispatchQueue;
 use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{AnyClass, AnyObject, Method};
 use objc2::{MainThreadMarker, msg_send, sel};
-use objc2_core_foundation::{CFRunLoop, CGSize};
+use objc2_core_foundation::{CFRunLoop, CGRect, CGSize};
 use objc2_core_graphics::{
     CGBeginDisplayConfiguration, CGCancelDisplayConfiguration, CGCompleteDisplayConfiguration,
-    CGConfigureDisplayMirrorOfDisplay, CGConfigureOption, CGDirectDisplayID,
-    CGDisplayChangeSummaryFlags, CGDisplayConfigRef, CGDisplayRegisterReconfigurationCallback,
-    CGDisplayRemoveReconfigurationCallback, CGError, kCGNullDirectDisplay,
+    CGConfigureDisplayMirrorOfDisplay, CGConfigureDisplayOrigin, CGConfigureOption,
+    CGDirectDisplayID, CGDisplayBounds, CGDisplayChangeSummaryFlags, CGDisplayConfigRef,
+    CGDisplayCopyDisplayMode, CGDisplayMode, CGDisplayModelNumber,
+    CGDisplayRegisterReconfigurationCallback, CGDisplayRemoveReconfigurationCallback,
+    CGDisplayVendorNumber, CGError, CGMainDisplayID, kCGNullDirectDisplay,
 };
 use objc2_foundation::{NSArray, NSNumber, NSString};
+use objc2_io_kit::kDisplayVendorIDUnknown;
 use waterkit_core::RefreshRate;
 
 use crate::error::platform;
 use crate::framework::Framework;
-use crate::run_loop;
 use crate::skylight::DisplayLists;
-use crate::topology::Presence;
-use crate::{DisplayState, Error};
+use crate::topology::{self, Presence};
+use crate::{DisplayState, Error, run_loop};
 
 /// Vendor id the displays carry: outside the ids assigned to real vendors.
 const VENDOR_ID: u32 = 0xF0F0;
-/// Product id the displays carry.
+/// Product id of the displays callers ask for.
 const PRODUCT_ID: u32 = 0xF0F1;
+/// Product id of the stand-in a [`DisplayHost`] puts in place of the
+/// system's headless fallback display.
+const STAND_IN_PRODUCT_ID: u32 = 0xF0F2;
+/// The stand-in's serial. Only one stand-in is up at a time, and the same
+/// serial each time brings back the arrangement the system keeps for it.
+const STAND_IN_SERIAL: u32 = 1;
+/// The stand-in's name in the display lists.
+const STAND_IN_NAME: &str = "Headless Display";
+/// The model number of the display macOS runs when no monitor is connected:
+/// `'virt'`. No header publishes it; it is what that display reports on
+/// macOS 27, and what Vuo (`library/VuoScreenCommon.mm`) recognises the
+/// display by, beside the published vendor `kDisplayVendorIDUnknown`.
+const FALLBACK_MODEL: u32 = u32::from_be_bytes(*b"virt");
 /// Panel density the physical size is derived from, in points per inch: a
 /// typical desktop panel's.
 const POINTS_PER_INCH: f64 = 110.0;
@@ -117,7 +133,8 @@ impl VirtualDisplayConfig {
 
     /// How long each step of bringing the display up may take: the display
     /// appearing, and, when they are needed, extending it into the topology
-    /// and taking it out of a mirror set. Three seconds by default.
+    /// and taking it out of a mirror set; and how long dropping it waits for
+    /// it to go offline. Three seconds by default.
     #[must_use]
     pub const fn online_timeout(mut self, timeout: Duration) -> Self {
         self.online_timeout = timeout;
@@ -139,14 +156,170 @@ impl VirtualDisplayConfig {
     }
 }
 
+/// Where a process creates its [`VirtualDisplay`]s: on the main thread,
+/// beside a main display that stays the user's.
+///
+/// With no monitor connected, macOS runs a fallback display of its own
+/// (vendor `kDisplayVendorIDUnknown`, model `'virt'`) and removes it as soon
+/// as another display comes online, which would leave the new display the
+/// only one and move the user's desktop onto it. So while the only online
+/// displays are that fallback, the host first brings up a stand-in display
+/// in the fallback's mode, which takes over the user's desktop as the
+/// fallback goes and stays the main display. Every display created through
+/// the host holds the stand-in; it is removed with the last of them, and the
+/// system brings its fallback back. Displays created through different hosts
+/// do not share a stand-in, so a process keeps one host for all of them.
+#[derive(Debug)]
+pub struct DisplayHost {
+    stand_in: Weak<Created>,
+    _mtm: MainThreadMarker,
+}
+
+impl DisplayHost {
+    /// A host with no display up yet.
+    #[must_use]
+    pub const fn new(mtm: MainThreadMarker) -> Self {
+        Self {
+            stand_in: Weak::new(),
+            _mtm: mtm,
+        }
+    }
+
+    /// The stand-in the displays of this host share: the live one, or a new
+    /// one when the only online displays are the system's headless fallback;
+    /// `None` when the user has displays of their own.
+    fn stand_in(
+        &mut self,
+        classes: &Classes,
+        lists: &DisplayLists<'_>,
+        changes: &mut Reconfigurations,
+        config: &VirtualDisplayConfig,
+    ) -> Result<Option<Rc<Created>>, Error> {
+        if let Some(stand_in) = self.stand_in.upgrade() {
+            return Ok(Some(stand_in));
+        }
+        let online = topology::online()?;
+        if online.is_empty() || !online.iter().all(|&id| is_headless_fallback(id)) {
+            return Ok(None);
+        }
+        let fallback = CGMainDisplayID();
+        let stand_in = bring_up(
+            classes,
+            lists,
+            changes,
+            &stand_in_config(fallback, config)?,
+            STAND_IN_PRODUCT_ID,
+            None,
+        )?;
+        let still_online = || {
+            Ok::<_, Error>(
+                topology::online()?
+                    .into_iter()
+                    .find(|id| online.contains(id)),
+            )
+        };
+        changes.wait(config.online_timeout, |_| Ok(still_online()?.is_none()))?;
+        if let Some(fallback) = still_online()? {
+            return Err(Error::FallbackStayed {
+                fallback,
+                stand_in: stand_in.id,
+            });
+        }
+        keep_main(stand_in.id, changes, config.online_timeout)?;
+        tracing::debug!(
+            stand_in = stand_in.id,
+            ?online,
+            "a stand-in display replaced the headless fallback as the main display"
+        );
+        let stand_in = Rc::new(stand_in);
+        self.stand_in = Rc::downgrade(&stand_in);
+        Ok(Some(stand_in))
+    }
+}
+
+/// Whether `id` is the display macOS runs when no monitor is connected.
+fn is_headless_fallback(id: CGDirectDisplayID) -> bool {
+    CGDisplayVendorNumber(id) == kDisplayVendorIDUnknown
+        && CGDisplayModelNumber(id) == FALLBACK_MODEL
+}
+
+/// The stand-in for the display `fallback`: its mode, and `config`'s
+/// timeout. A mode that reports no refresh rate takes `config`'s.
+fn stand_in_config(
+    fallback: CGDirectDisplayID,
+    config: &VirtualDisplayConfig,
+) -> Result<VirtualDisplayConfig, Error> {
+    let mode = CGDisplayCopyDisplayMode(fallback).ok_or_else(|| {
+        Error::Platform(format!(
+            "CGDisplayCopyDisplayMode returned NULL for display {fallback}"
+        ))
+    })?;
+    let mode = Some(&*mode);
+    let (width, height) = (CGDisplayMode::width(mode), CGDisplayMode::height(mode));
+    let (pixels_wide, pixels_high) = (
+        CGDisplayMode::pixel_width(mode),
+        CGDisplayMode::pixel_height(mode),
+    );
+    let hertz = CGDisplayMode::refresh_rate(mode);
+    let unmatchable = || Error::UnmatchableMode {
+        display: fallback,
+        width,
+        height,
+        pixels_wide,
+        pixels_high,
+        refresh_rate: hertz,
+    };
+    let points = |extent: usize| {
+        u32::try_from(extent)
+            .ok()
+            .and_then(NonZeroU32::new)
+            .ok_or_else(unmatchable)
+    };
+    let scale = [BackingScale::X1, BackingScale::X2]
+        .into_iter()
+        .find(|scale| {
+            let factor = scale.factor() as usize;
+            width.checked_mul(factor) == Some(pixels_wide)
+                && height.checked_mul(factor) == Some(pixels_high)
+        })
+        .ok_or_else(unmatchable)?;
+    // `CGDisplayModeGetRefreshRate` reports 0 for a display that states no
+    // rate.
+    let refresh_rate = if hertz == 0.0 {
+        config.refresh_rate
+    } else {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "refresh rates are far inside f32's range and precision"
+        )]
+        let hertz = hertz as f32;
+        RefreshRate::new(hertz).map_err(|_| unmatchable())?
+    };
+    Ok(VirtualDisplayConfig::new(
+        STAND_IN_NAME,
+        points(width)?,
+        points(height)?,
+        STAND_IN_SERIAL,
+    )
+    .scale(scale)
+    .refresh_rate(refresh_rate)
+    .online_timeout(config.online_timeout))
+}
+
 /// A display on none of the user's monitors, removed when dropped.
 ///
-/// Created and dropped on the main thread; see the crate documentation for
-/// how creation services the main run loop.
+/// Created through a [`DisplayHost`] and dropped on the main thread; see the
+/// crate documentation for how creation services the main run loop. Dropping
+/// services it the same way until the display is offline and the displays it
+/// was created beside are back in the frames they had (the system's headless
+/// fallback under a new id, when the host's stand-in goes with it), at most
+/// [`online_timeout`](VirtualDisplayConfig::online_timeout) for each.
 #[derive(Debug)]
 pub struct VirtualDisplay {
-    _display: Retained<AnyObject>,
-    id: CGDirectDisplayID,
+    // Declared before the stand-in: the display goes first, so the stand-in
+    // is never removed while this display is the one left.
+    display: Created,
+    _stand_in: Option<Rc<Created>>,
     width: NonZeroU32,
     height: NonZeroU32,
     scale: BackingScale,
@@ -154,7 +327,9 @@ pub struct VirtualDisplay {
 
 impl VirtualDisplay {
     /// Creates the display and waits until it is online, active and outside
-    /// any mirror set.
+    /// any mirror set, with the user's main display still main; on a Mac
+    /// whose only display is the system's headless fallback, `host` first
+    /// puts its stand-in in the fallback's place.
     ///
     /// # Errors
     ///
@@ -162,74 +337,61 @@ impl VirtualDisplay {
     ///   private API this needs is missing or changed;
     /// - [`Error::SizeOverflow`] when the size in pixels does not fit in 32
     ///   bits;
-    /// - [`Error::Refused`] when `CoreGraphics` refuses the display;
-    /// - [`Error::ExtendRefused`] when the display stays out of the topology
-    ///   and `SLWindowMirroringManager` refuses to bring it in;
-    /// - [`Error::NotReady`] when the display is still not online, active
-    ///   and unmirrored after the timeouts;
+    /// - [`Error::Refused`] when `CoreGraphics` refuses the display or the
+    ///   stand-in;
+    /// - [`Error::ExtendRefused`] when the display or the stand-in stays out
+    ///   of the topology and `SLWindowMirroringManager` refuses to bring it
+    ///   in;
+    /// - [`Error::NotReady`] when the display or the stand-in is still not
+    ///   online, active and unmirrored after the timeouts;
+    /// - [`Error::UnmatchableMode`] when no stand-in can reproduce the
+    ///   fallback's mode, and [`Error::FallbackStayed`] when the fallback
+    ///   stays online beside the stand-in;
+    /// - [`Error::NotMain`] when the user's main display, or the stand-in,
+    ///   does not stay or become main;
     /// - [`Error::Platform`] when a display configuration call fails.
-    pub fn new(config: &VirtualDisplayConfig, _mtm: MainThreadMarker) -> Result<Self, Error> {
+    pub fn new(config: &VirtualDisplayConfig, host: &mut DisplayHost) -> Result<Self, Error> {
         let skylight = Framework::skylight()?;
         let lists = DisplayLists::resolve(&skylight)?;
         let classes = Classes::get()?;
-        let (pixels_wide, pixels_high) = config.pixels()?;
+        // Checked before a stand-in is brought up for a display that cannot
+        // be made.
+        config.pixels()?;
 
-        // Registered before the display exists: it is added asynchronously
+        // Registered before any display exists: each is added asynchronously
         // after `applySettings:`.
         let mut changes = Reconfigurations::watch()?;
-        let display = autoreleasepool(|_| classes.create(config, pixels_wide, pixels_high))?;
-        // SAFETY: `displayID` takes nothing and returns the display's id.
-        let id: CGDirectDisplayID = unsafe { msg_send![&display, displayID] };
-        if id == kCGNullDirectDisplay {
-            return Err(Error::Refused("displayID is null"));
-        }
-
-        let timeout = config.online_timeout;
-        changes.wait(timeout, |changes| {
-            Ok(changes.added(id) || Presence::of(id)?.online)
-        })?;
-        let mut extended = false;
-        if !Presence::of(id)?.online
-            && lists.registered()?.contains(&id)
-            && !lists.online()?.contains(&id)
-        {
-            extend(id)?;
-            extended = true;
-            changes.wait(timeout, |_| Ok(Presence::of(id)?.online))?;
-        }
-        if Presence::of(id)?.mirrored {
-            unmirror(id)?;
-            changes.wait(timeout, |_| Ok(!Presence::of(id)?.mirrored))?;
-        }
-
-        let presence = Presence::of(id)?;
-        if presence.ready() {
-            tracing::debug!(id, extended, "virtual display online");
-            return Ok(Self {
-                _display: display,
-                id,
-                width: config.width,
-                height: config.height,
-                scale: config.scale,
-            });
-        }
-        let state = DisplayState::new(
+        let stand_in = host.stand_in(&classes, &lists, &mut changes, config)?;
+        let main = CGMainDisplayID();
+        let display = bring_up(
+            &classes,
+            &lists,
+            &mut changes,
+            config,
+            PRODUCT_ID,
+            stand_in.as_ref().map(|stand_in| stand_in.id),
+        )?;
+        keep_main(main, &mut changes, config.online_timeout)?;
+        let id = display.id;
+        tracing::debug!(
             id,
-            changes.added(id),
-            lists.registered()?.contains(&id),
-            lists.online()?.contains(&id),
-            presence.online,
-            presence.active,
-            presence.mirrored,
-            extended,
+            main,
+            stand_in = stand_in.as_ref().map(|stand_in| stand_in.id),
+            "virtual display up beside the main display"
         );
-        Err(Error::NotReady(state))
+        Ok(Self {
+            display,
+            _stand_in: stand_in,
+            width: config.width,
+            height: config.height,
+            scale: config.scale,
+        })
     }
 
     /// The display's `CGDirectDisplayID`.
     #[must_use]
     pub const fn id(&self) -> CGDirectDisplayID {
-        self.id
+        self.display.id
     }
 
     /// Width in points.
@@ -248,6 +410,203 @@ impl VirtualDisplay {
     #[must_use]
     pub const fn scale(&self) -> BackingScale {
         self.scale
+    }
+}
+
+/// The displays a new display must leave as it found them, read just before
+/// it is created.
+#[derive(Debug, Clone, PartialEq)]
+struct Arrangement {
+    /// The frames of the user's displays: every online display this crate
+    /// did not create. They are matched by frame, not id, because the system
+    /// brings its headless fallback back under a new id.
+    users: Vec<CGRect>,
+    /// The host's stand-in and its frame, when the new display has one: the
+    /// user's desktop on a Mac with no monitor, though this crate made it.
+    stand_in: Option<(CGDirectDisplayID, CGRect)>,
+}
+
+impl Arrangement {
+    fn read(stand_in: Option<CGDirectDisplayID>) -> Result<Self, Error> {
+        Ok(Self {
+            users: user_frames(&topology::online()?),
+            stand_in: stand_in.map(|id| (id, CGDisplayBounds(id))),
+        })
+    }
+
+    /// Whether `gone` is offline and every display is back in its frame.
+    fn restored(&self, gone: CGDirectDisplayID) -> Result<bool, Error> {
+        let online = topology::online()?;
+        Ok(!online.contains(&gone)
+            && same_frames(&self.users, &user_frames(&online))
+            && self
+                .stand_in
+                .is_none_or(|(id, frame)| online.contains(&id) && CGDisplayBounds(id) == frame))
+    }
+}
+
+/// The frames of the displays in `online` this crate did not create.
+fn user_frames(online: &[CGDirectDisplayID]) -> Vec<CGRect> {
+    online
+        .iter()
+        .filter(|&&id| CGDisplayVendorNumber(id) != VENDOR_ID)
+        .map(|&id| CGDisplayBounds(id))
+        .collect()
+}
+
+/// Whether `a` and `b` hold the same frames, in any order.
+fn same_frames(a: &[CGRect], b: &[CGRect]) -> bool {
+    let mut unmatched = b.to_vec();
+    a.len() == b.len()
+        && a.iter().all(|frame| {
+            unmatched
+                .iter()
+                .position(|other| other == frame)
+                .map(|at| unmatched.swap_remove(at))
+                .is_some()
+        })
+}
+
+/// A virtual display the system has assigned an id, removed when dropped.
+///
+/// Removal is asynchronous: releasing the display returns before
+/// `WindowServer` takes it offline, before the user's displays are back in
+/// the modes they had (a display can pass through another mode as an extra
+/// one leaves), and, when it was the last display, before the system brings
+/// its headless fallback back. So dropping it waits, servicing the main run
+/// loop as creation does, until the display is offline and the
+/// [`Arrangement`] it found is back; a later creation then never reads a
+/// display on its way out, or a mode in passing, for the user's.
+#[derive(Debug)]
+struct Created {
+    object: Option<Retained<AnyObject>>,
+    id: CGDirectDisplayID,
+    found: Arrangement,
+    timeout: Duration,
+}
+
+impl Drop for Created {
+    fn drop(&mut self) {
+        let id = self.id;
+        // Registered before the release, so the removal ends the wait.
+        let changes = match Reconfigurations::watch() {
+            Ok(changes) => changes,
+            Err(error) => {
+                drop(self.object.take());
+                tracing::warn!(id, %error, "the virtual display's removal cannot be awaited");
+                return;
+            }
+        };
+        drop(self.object.take());
+        let settled = run_loop::spin(self.timeout, self.timeout, || self.found.restored(id));
+        drop(changes);
+        match settled {
+            Ok(true) => tracing::debug!(id, "virtual display offline, the displays it found back"),
+            Ok(false) => tracing::warn!(
+                id,
+                found = ?self.found,
+                now = ?topology::online().map(|online| user_frames(&online)),
+                timeout = ?self.timeout,
+                "the virtual display is still online, or the displays it found are not back, after its removal"
+            ),
+            Err(error) => {
+                tracing::warn!(id, %error, "the virtual display's removal could not be awaited");
+            }
+        }
+    }
+}
+
+/// Creates a display with product id `product`, beside the host's stand-in
+/// `stand_in` when there is one, and waits until it is online, active and
+/// outside any mirror set.
+fn bring_up(
+    classes: &Classes,
+    lists: &DisplayLists<'_>,
+    changes: &mut Reconfigurations,
+    config: &VirtualDisplayConfig,
+    product: u32,
+    stand_in: Option<CGDirectDisplayID>,
+) -> Result<Created, Error> {
+    let (pixels_wide, pixels_high) = config.pixels()?;
+    let found = Arrangement::read(stand_in)?;
+    let object = autoreleasepool(|_| classes.create(config, product, pixels_wide, pixels_high))?;
+    // SAFETY: `displayID` takes nothing and returns the display's id.
+    let id: CGDirectDisplayID = unsafe { msg_send![&object, displayID] };
+    if id == kCGNullDirectDisplay {
+        return Err(Error::Refused("displayID is null"));
+    }
+    let timeout = config.online_timeout;
+    // From here every way out removes the display and waits for it to go.
+    let created = Created {
+        object: Some(object),
+        id,
+        found,
+        timeout,
+    };
+
+    changes.wait(timeout, |changes| {
+        Ok(changes.added(id) || Presence::of(id)?.online)
+    })?;
+    let mut extended = false;
+    if !Presence::of(id)?.online
+        && lists.registered()?.contains(&id)
+        && !lists.online()?.contains(&id)
+    {
+        extend(id)?;
+        extended = true;
+        changes.wait(timeout, |_| Ok(Presence::of(id)?.online))?;
+    }
+    if Presence::of(id)?.mirrored {
+        unmirror(id)?;
+        changes.wait(timeout, |_| Ok(!Presence::of(id)?.mirrored))?;
+    }
+
+    let presence = Presence::of(id)?;
+    if presence.ready() {
+        tracing::debug!(id, product, extended, "virtual display online");
+        return Ok(created);
+    }
+    let state = DisplayState::new(
+        id,
+        changes.added(id),
+        lists.registered()?.contains(&id),
+        lists.online()?.contains(&id),
+        presence.online,
+        presence.active,
+        presence.mirrored,
+        extended,
+    );
+    Err(Error::NotReady(state))
+}
+
+/// Makes `main` the main display, unless it is, by moving it to the origin
+/// of the global display space, where the main display sits.
+fn keep_main(
+    main: CGDirectDisplayID,
+    changes: &mut Reconfigurations,
+    timeout: Duration,
+) -> Result<(), Error> {
+    if CGMainDisplayID() == main {
+        return Ok(());
+    }
+    let taken_by = CGMainDisplayID();
+    // SAFETY: `configure` passes a begun configuration.
+    configure(|configuration| unsafe {
+        (
+            "CGConfigureDisplayOrigin",
+            CGConfigureDisplayOrigin(configuration, main, 0, 0),
+        )
+    })?;
+    changes.wait(timeout, |_| Ok(CGMainDisplayID() == main))?;
+    let now = CGMainDisplayID();
+    if now == main {
+        tracing::debug!(main, taken_by, "the main display was made main again");
+        Ok(())
+    } else {
+        Err(Error::NotMain {
+            display: main,
+            main: now,
+        })
     }
 }
 
@@ -278,6 +637,7 @@ impl Classes {
     fn create(
         &self,
         config: &VirtualDisplayConfig,
+        product: u32,
         pixels_wide: NonZeroU32,
         pixels_high: NonZeroU32,
     ) -> Result<Retained<AnyObject>, Error> {
@@ -303,7 +663,7 @@ impl Classes {
             let _: () = msg_send![&descriptor, setMaxPixelsHigh: pixels_high.get()];
             let _: () = msg_send![&descriptor, setSizeInMillimeters: millimetres];
             let _: () = msg_send![&descriptor, setVendorID: VENDOR_ID];
-            let _: () = msg_send![&descriptor, setProductID: PRODUCT_ID];
+            let _: () = msg_send![&descriptor, setProductID: product];
             let _: () = msg_send![&descriptor, setSerialNum: config.serial];
             let _: () = msg_send![&descriptor, setTerminationHandler: &*termination];
 
@@ -389,19 +749,31 @@ fn extend(id: CGDirectDisplayID) -> Result<(), Error> {
 /// Takes the display out of its mirror set for the login session; virtual
 /// displays refuse a permanent configuration.
 fn unmirror(id: CGDirectDisplayID) -> Result<(), Error> {
+    // SAFETY: `configure` passes a begun configuration.
+    configure(|configuration| unsafe {
+        (
+            "CGConfigureDisplayMirrorOfDisplay",
+            CGConfigureDisplayMirrorOfDisplay(configuration, id, kCGNullDirectDisplay),
+        )
+    })
+}
+
+/// Applies the one change `step` makes to a begun configuration, for the
+/// login session; `step` returns the call it made and its status.
+fn configure(
+    step: impl FnOnce(CGDisplayConfigRef) -> (&'static str, CGError),
+) -> Result<(), Error> {
     let mut configuration: CGDisplayConfigRef = ptr::null_mut();
     // SAFETY: `configuration` is a valid out pointer.
     let status = unsafe { CGBeginDisplayConfiguration(&raw mut configuration) };
     if status != CGError::Success {
         return Err(platform("CGBeginDisplayConfiguration", status));
     }
-    // SAFETY: `configuration` was just begun.
-    let status =
-        unsafe { CGConfigureDisplayMirrorOfDisplay(configuration, id, kCGNullDirectDisplay) };
+    let (call, status) = step(configuration);
     if status != CGError::Success {
         // SAFETY: the configuration is begun and not completed.
         unsafe { CGCancelDisplayConfiguration(configuration) };
-        return Err(platform("CGConfigureDisplayMirrorOfDisplay", status));
+        return Err(platform(call, status));
     }
     // SAFETY: `configuration` is begun; completing consumes it.
     let status =
@@ -534,6 +906,40 @@ mod tests {
             pixels(&config(1280, 800).scale(BackingScale::X1)),
             Some((1280, 800))
         );
+    }
+
+    /// A stand-in made from the main display's mode has that display's size
+    /// in points; reading a mode creates and shows nothing.
+    #[test]
+    fn a_stand_in_reproduces_a_display_mode() {
+        let main = CGMainDisplayID();
+        let stand_in = stand_in_config(main, &config(1280, 800)).expect("the main mode matches");
+        let bounds = objc2_core_graphics::CGDisplayBounds(main);
+        assert_eq!(
+            (
+                f64::from(stand_in.width.get()),
+                f64::from(stand_in.height.get())
+            ),
+            (bounds.size.width, bounds.size.height)
+        );
+        assert_eq!(stand_in.serial, STAND_IN_SERIAL);
+    }
+
+    #[test]
+    fn frames_match_in_any_order_and_count() {
+        let frame = |x: f64, width: f64| {
+            CGRect::new(
+                objc2_core_foundation::CGPoint::new(x, 0.0),
+                CGSize::new(width, 1080.0),
+            )
+        };
+        let wide = frame(0.0, 1920.0);
+        let side = frame(1920.0, 1280.0);
+        assert!(same_frames(&[wide, side], &[side, wide]));
+        assert!(same_frames(&[], &[]));
+        assert!(!same_frames(&[wide], &[frame(0.0, 1024.0)]));
+        assert!(!same_frames(&[wide, wide], &[wide, side]));
+        assert!(!same_frames(&[wide], &[wide, side]));
     }
 
     #[test]

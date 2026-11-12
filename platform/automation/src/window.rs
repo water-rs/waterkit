@@ -324,6 +324,34 @@ pub fn intersects(a: CGRect, b: CGRect) -> bool {
         && b.origin.y < a.origin.y + a.size.height
 }
 
+/// The display, among `displays` with their bounds, that `window` lies on:
+/// the one holding the largest part of it, the earliest on a tie, as `AppKit`
+/// picks a window's screen; `None` when it lies on none. A window spanning
+/// several displays, such as a system overlay over the whole desktop, lies
+/// on one of them only.
+pub fn display_of(
+    window: CGRect,
+    displays: impl IntoIterator<Item = (CGDirectDisplayID, CGRect)>,
+) -> Option<CGDirectDisplayID> {
+    let mut best: Option<(CGDirectDisplayID, f64)> = None;
+    for (display, bounds) in displays {
+        let area = overlap(window, bounds);
+        if area > 0.0 && best.is_none_or(|(_, most)| area > most) {
+            best = Some((display, area));
+        }
+    }
+    best.map(|(display, _)| display)
+}
+
+/// The area `a` and `b` share.
+fn overlap(a: CGRect, b: CGRect) -> f64 {
+    let width =
+        (a.origin.x + a.size.width).min(b.origin.x + b.size.width) - a.origin.x.max(b.origin.x);
+    let height =
+        (a.origin.y + a.size.height).min(b.origin.y + b.size.height) - a.origin.y.max(b.origin.y);
+    width.max(0.0) * height.max(0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use objc2_core_foundation::{CGPoint, CGSize};
@@ -344,6 +372,30 @@ mod tests {
         assert!(contains(window, CGPoint::new(109.5, 69.5)));
         assert!(!contains(window, CGPoint::new(110.0, 20.0)));
         assert!(!contains(window, CGPoint::new(10.0, 70.0)));
+    }
+
+    /// A main display with a virtual display to its right, as on the Mac
+    /// mini: a window on either lies on that one, a window straddling them
+    /// on the one holding more of it, and one spanning the whole desktop,
+    /// as a system overlay does, on the main display only.
+    #[test]
+    fn a_window_lies_on_the_display_holding_most_of_it() {
+        let main = (1, rect(0.0, 0.0, 1920.0, 1080.0));
+        let virtual_display = (5, rect(1920.0, 0.0, 1280.0, 800.0));
+        let on = |window| display_of(window, [main, virtual_display]);
+        assert_eq!(on(rect(2020.0, 100.0, 400.0, 300.0)), Some(5));
+        assert_eq!(on(rect(100.0, 100.0, 400.0, 300.0)), Some(1));
+        assert_eq!(on(rect(1820.0, 100.0, 400.0, 300.0)), Some(5));
+        assert_eq!(on(rect(1720.0, 100.0, 400.0, 300.0)), Some(1));
+        assert_eq!(on(rect(0.0, 0.0, 3200.0, 1080.0)), Some(1));
+        assert_eq!(on(rect(-500.0, 0.0, 100.0, 100.0)), None);
+        // Touching an edge is no overlap; an even split goes to the earlier.
+        assert_eq!(on(rect(1920.0, 900.0, 100.0, 100.0)), None);
+        let twin = (5, rect(1920.0, 0.0, 1920.0, 1080.0));
+        assert_eq!(
+            display_of(rect(1820.0, 0.0, 200.0, 100.0), [main, twin]),
+            Some(1)
+        );
     }
 
     /// Reads the window list only; nothing is created or shown.

@@ -17,7 +17,9 @@
 //! dispatches in it and the key state each one meets. Run with
 //! [`mac::OVERLAY_DISPLAY`] set instead, it covers that display with a
 //! transparent window above the normal level that ignores mouse events, and
-//! writes every input event it dispatches the same way.
+//! writes every input event it dispatches the same way. Run with
+//! [`mac::FORM_DISPLAY`] set, it opens a form on that display, a button and
+//! two text fields, which the element cases list and drive by reference.
 
 use libtest_mimic::{Arguments, Trial};
 
@@ -32,6 +34,12 @@ fn main() {
     if let Some(display) = std::env::var_os(mac::OVERLAY_DISPLAY) {
         mac::log_to_stderr("automation=trace");
         mac::serve_overlay_window(&display);
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(display) = std::env::var_os(mac::FORM_DISPLAY) {
+        mac::log_to_stderr("automation=trace");
+        mac::serve_form_window(&display);
         return;
     }
     let mut arguments = Arguments::from_args();
@@ -76,6 +84,14 @@ fn main() {
                 Ok(())
             },
         ),
+        Trial::test("a_window_is_driven_by_element_reference", || {
+            mac::a_window_is_driven_by_element_reference();
+            Ok(())
+        }),
+        Trial::test("a_stale_or_unknown_element_reference_is_refused", || {
+            mac::a_stale_or_unknown_element_reference_is_refused();
+            Ok(())
+        }),
     ];
     #[cfg(not(target_os = "macos"))]
     let trials: Vec<Trial> = Vec::new();
@@ -100,12 +116,12 @@ mod mac {
     use block2::RcBlock;
     use dispatch2::DispatchQueue;
     use objc2::rc::Retained;
-    use objc2::runtime::AnyObject;
-    use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+    use objc2::runtime::{AnyObject, NSObject};
+    use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
     use objc2_app_kit::{
-        NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSEvent,
-        NSEventMask, NSEventType, NSFloatingWindowLevel, NSRunningApplication, NSScreen, NSView,
-        NSWindow, NSWindowAnimationBehavior, NSWindowStyleMask, NSWorkspace,
+        NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSButton, NSColor,
+        NSEvent, NSEventMask, NSEventType, NSFloatingWindowLevel, NSRunningApplication, NSScreen,
+        NSTextField, NSView, NSWindow, NSWindowAnimationBehavior, NSWindowStyleMask, NSWorkspace,
         NSWorkspaceOpenConfiguration,
     };
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
@@ -116,8 +132,9 @@ mod mac {
     use serde::de::DeserializeOwned;
     use serde::{Deserialize, Serialize};
     use waterkit_automation::{
-        Code, Error, Input, KeyDown, KeyUp, LaunchConfig, LaunchedApplication, ListedWindow,
-        MouseButton, MouseDown, MouseUp, Point, Rect, Text, VirtualDisplay, VirtualDisplayConfig,
+        Code, Element, ElementRef, Elements, Error, Input, KeyDown, KeyUp, LaunchConfig,
+        LaunchedApplication, ListedWindow, MouseButton, MouseDown, MouseUp, Point, Rect, Text,
+        VirtualDisplay, VirtualDisplayConfig,
     };
 
     /// Set to a display id, this binary opens the target window on that
@@ -128,8 +145,12 @@ mod mac {
     /// that ignores mouse events instead of running the tests.
     pub const OVERLAY_DISPLAY: &str = "WATERKIT_AUTOMATION_OVERLAY_DISPLAY";
 
-    /// The line the test writes to the overlay's standard input to learn
-    /// what it has received.
+    /// Set to a display id, this binary opens the form window on that
+    /// display instead of running the tests.
+    pub const FORM_DISPLAY: &str = "WATERKIT_AUTOMATION_FORM_DISPLAY";
+
+    /// The line the test writes to the overlay's or the form's standard
+    /// input to learn what it has received.
     const SYNC_REQUEST: &str = "sync";
 
     /// Writes the logs `filter` selects to standard error.
@@ -219,6 +240,20 @@ mod mac {
         /// Every event that reached the overlay before the last sync request
         /// has been dispatched.
         Synced,
+    }
+
+    /// One line the form process writes.
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    enum FormReport {
+        /// The form's window is on screen where `WindowServer` lists it.
+        Ready { pid: i32, window: u32 },
+        /// The button's action ran.
+        Pressed,
+        /// What each text field holds, keyed by its placeholder, once every
+        /// event that reached the form before the last sync request has been
+        /// dispatched.
+        Fields { fields: Vec<(String, String)> },
     }
 
     fn write_report(report: &impl Serialize) {
@@ -1573,5 +1608,390 @@ mod mac {
             launched.pid()
         );
         drop(running);
+    }
+
+    /// The form's button title.
+    const SUBMIT: &str = "Submit";
+    /// The placeholders of the form's text fields.
+    const NAME_FIELD: &str = "Name";
+    const NOTE_FIELD: &str = "Note";
+    /// What the element case writes into the name field and types into the
+    /// note field: a name and a machine as written in English, Chinese,
+    /// Japanese and Korean.
+    const NAME: &str = "Ada Lovelace 艾达·洛夫莱斯 エイダ・ラブレス 에이다 러브레이스";
+    const NOTE: &str = "Analytical Engine 分析机 解析機関 해석기관";
+
+    define_class!(
+        /// The form button's target: reports each press.
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[name = "WaterkitAutomationTestFormTarget"]
+        struct FormTarget;
+
+        impl FormTarget {
+            #[unsafe(method(submit:))]
+            fn submit(&self, _sender: Option<&AnyObject>) {
+                tracing::debug!("the form's button was pressed");
+                write_report(&FormReport::Pressed);
+            }
+        }
+    );
+
+    impl FormTarget {
+        fn new(mtm: MainThreadMarker) -> Retained<Self> {
+            let this = Self::alloc(mtm).set_ivars(());
+            // SAFETY: `init` is NSObject's designated initializer.
+            unsafe { msg_send![super(this), init] }
+        }
+    }
+
+    /// What every text field of this process's windows holds, keyed by its
+    /// placeholder, with any edit in progress committed first.
+    fn form_fields(mtm: MainThreadMarker) -> Vec<(String, String)> {
+        let mut fields = Vec::new();
+        for window in NSApplication::sharedApplication(mtm).windows() {
+            let Some(content) = window.contentView() else {
+                continue;
+            };
+            for view in content.subviews() {
+                if let Ok(field) = view.downcast::<NSTextField>() {
+                    field.validateEditing();
+                    let placeholder = field
+                        .placeholderString()
+                        .map(|placeholder| placeholder.to_string())
+                        .unwrap_or_default();
+                    fields.push((placeholder, field.stringValue().to_string()));
+                }
+            }
+        }
+        fields
+    }
+
+    /// The form side of the element cases: a regular application whose
+    /// titled window holds a [`SUBMIT`] button and two empty text fields,
+    /// [`NAME_FIELD`] and [`NOTE_FIELD`]. It reports when its window is on
+    /// screen, then each press of the button, and answers each
+    /// [`SYNC_REQUEST`] on its standard input with what the fields hold
+    /// once it has dispatched every event queued for it, until it is killed.
+    pub fn serve_form_window(display: &OsStr) {
+        let display = display_id(display);
+        let _span = tracing::debug_span!("form", pid = std::process::id()).entered();
+        let mtm = MainThreadMarker::new().expect("the form runs on the main thread");
+        let app = NSApplication::sharedApplication(mtm);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+        app.finishLaunching();
+        let screen = wait_for_screen(mtm, display);
+        let offset = window_offset(screen.frame().size.height);
+        let frame = CGRect::new(offset, WINDOW_SIZE);
+        // SAFETY: an initializer of NSWindow, with a valid style, backing and
+        // screen.
+        let window = unsafe {
+            NSWindow::initWithContentRect_styleMask_backing_defer_screen(
+                NSWindow::alloc(mtm),
+                frame,
+                NSWindowStyleMask::Titled,
+                NSBackingStoreType::Buffered,
+                false,
+                Some(&screen),
+            )
+        };
+        // SAFETY: the form owns the window through `Retained`; closing it
+        // must not release it a second time.
+        unsafe { window.setReleasedWhenClosed(false) };
+        // As in `KeyableWindow::new`, the window opens without animation and
+        // is moved onto `screen`.
+        window.setAnimationBehavior(NSWindowAnimationBehavior::None);
+        window.setTitle(ns_string!("Order"));
+
+        let target = FormTarget::new(mtm);
+        // SAFETY: the target answers `submit:`, and outlives the button: both
+        // live until the process is killed.
+        let button = unsafe {
+            NSButton::buttonWithTitle_target_action(
+                &NSString::from_str(SUBMIT),
+                Some(&target),
+                Some(sel!(submit:)),
+                mtm,
+            )
+        };
+        button.setFrame(CGRect::new(
+            CGPoint::new(20.0, 20.0),
+            CGSize::new(120.0, 32.0),
+        ));
+        let content = window.contentView().expect("a window has a content view");
+        content.addSubview(&button);
+        for (placeholder, y) in [(NAME_FIELD, 220.0), (NOTE_FIELD, 180.0)] {
+            let field = NSTextField::textFieldWithString(ns_string!(""), mtm);
+            field.setPlaceholderString(Some(&NSString::from_str(placeholder)));
+            field.setFrame(CGRect::new(CGPoint::new(20.0, y), CGSize::new(360.0, 24.0)));
+            content.addSubview(&field);
+        }
+        window.orderFrontRegardless();
+
+        let inspector = Input::new(display).expect("the form sees the virtual display");
+        let number = u32::try_from(window.windowNumber()).expect("window numbers are 32-bit");
+        assert!(
+            pump_until(mtm, DELIVERY_DEADLINE, || {
+                follow_display(mtm, &window, display, offset);
+                listed_under(&inspector, display, number, click_point())
+            }),
+            "WindowServer never listed the form window on screen under {:?} of display {display} {:?}: {}; {}",
+            click_point(),
+            CGDisplayBounds(display),
+            describe_listed(&inspector, number),
+            describe_screens(mtm)
+        );
+        write_report(&FormReport::Ready {
+            pid: i32::try_from(std::process::id()).expect("pids fit in pid_t"),
+            window: number,
+        });
+        thread::spawn(|| {
+            for line in std::io::stdin().lines() {
+                let line = line.expect("the form's input reads");
+                assert_eq!(line, SYNC_REQUEST, "the test sends only sync requests");
+                DispatchQueue::main().exec_async(|| {
+                    let mtm = MainThreadMarker::new().expect("the main queue runs on main");
+                    dispatch_queued(mtm);
+                    write_report(&FormReport::Fields {
+                        fields: form_fields(mtm),
+                    });
+                });
+            }
+        });
+        app.run();
+    }
+
+    /// The form process's window, and how often its button was pressed.
+    struct FormProcess {
+        process: Helper<FormReport>,
+        pid: i32,
+        window: u32,
+        presses: usize,
+    }
+
+    impl FormProcess {
+        /// The form process, once its window is on screen.
+        fn spawn(display: u32) -> Self {
+            let process = Helper::spawn(FORM_DISPLAY, display);
+            match process.next(TARGET_READY_DEADLINE) {
+                Some(FormReport::Ready { pid, window }) => Self {
+                    process,
+                    pid,
+                    window,
+                    presses: 0,
+                },
+                other => panic!(
+                    "the form process did not report its window within {TARGET_READY_DEADLINE:?}, got {other:?}"
+                ),
+            }
+        }
+
+        /// What the form's fields hold, keyed by placeholder, once it has
+        /// dispatched every event queued for it; the presses reported
+        /// meanwhile are counted.
+        fn fields(&mut self) -> Vec<(String, String)> {
+            writeln!(self.process.stdin, "{SYNC_REQUEST}")
+                .and_then(|()| self.process.stdin.flush())
+                .expect("the form reads its requests");
+            loop {
+                match self.process.next(DELIVERY_DEADLINE) {
+                    Some(FormReport::Fields { fields }) => return fields,
+                    Some(FormReport::Pressed) => self.presses += 1,
+                    other => panic!(
+                        "the form did not answer a sync request within {DELIVERY_DEADLINE:?}, got {other:?}"
+                    ),
+                }
+            }
+        }
+
+        /// What the field with `placeholder` holds, once `done` holds of it
+        /// or [`DELIVERY_DEADLINE`] passes.
+        fn field_until(&mut self, placeholder: &str, mut done: impl FnMut(&str) -> bool) -> String {
+            let deadline = Instant::now() + DELIVERY_DEADLINE;
+            loop {
+                let value = self
+                    .fields()
+                    .into_iter()
+                    .find(|(name, _)| name == placeholder)
+                    .unwrap_or_else(|| panic!("the form has no {placeholder:?} field"))
+                    .1;
+                if done(&value) || Instant::now() >= deadline {
+                    return value;
+                }
+            }
+        }
+
+        /// The listed element of the form's window that `matches` picks.
+        fn element<'a>(
+            &self,
+            elements: &'a Elements,
+            what: &str,
+            matches: impl Fn(&Element) -> bool,
+        ) -> &'a Element {
+            elements
+                .elements()
+                .iter()
+                .find(|element| element.pid() == self.pid && matches(element))
+                .unwrap_or_else(|| {
+                    let skipped: Vec<String> =
+                        elements.skipped().iter().map(ToString::to_string).collect();
+                    panic!(
+                        "no element of the form process {} (window {}) is {what}; the listing (truncated {}) holds {:#?}\nand skipped {} reads: {skipped:#?}",
+                        self.pid,
+                        self.window,
+                        elements.truncated(),
+                        elements.elements(),
+                        skipped.len(),
+                    )
+                })
+        }
+
+        fn submit<'a>(&self, elements: &'a Elements) -> &'a Element {
+            self.element(elements, "the Submit button", |element| {
+                element.role() == "AXButton" && element.title() == Some(SUBMIT)
+            })
+        }
+
+        fn field<'a>(&self, elements: &'a Elements, placeholder: &str) -> &'a Element {
+            self.element(elements, placeholder, |element| {
+                element.role() == "AXTextField" && element.placeholder() == Some(placeholder)
+            })
+        }
+    }
+
+    /// The form's window on a virtual display is listed through
+    /// Accessibility: its button and both fields, each in that window with a
+    /// frame on the display. The button is pressed, the name field given a
+    /// value and the note field focused and typed into, all by reference
+    /// without a coordinate, and the user's cursor stays where it was.
+    pub fn a_window_is_driven_by_element_reference() {
+        let mtm = MainThreadMarker::new().expect("libtest-mimic runs one thread on main");
+        log_macos_version();
+        let display = create_display(mtm);
+        let mut form = FormProcess::spawn(display.id());
+        let cursor_before = cursor();
+        let mut input = open_input(display.id());
+
+        let elements = input.elements().expect("the display's elements are listed");
+        for skipped in elements.skipped() {
+            tracing::info!(%skipped, "the listing skipped a read");
+        }
+        let submit = form.submit(&elements).clone();
+        let name = form.field(&elements, NAME_FIELD).clone();
+        let note = form.field(&elements, NOTE_FIELD).clone();
+        let bounds = CGDisplayBounds(display.id());
+        for element in [&submit, &name, &note] {
+            assert_eq!(
+                element.window(),
+                form.window,
+                "{element:?} is not listed in the form's window"
+            );
+            let frame = element
+                .frame()
+                .unwrap_or_else(|| panic!("{element:?} has no frame"));
+            let center = frame.center();
+            assert!(
+                (0.0..bounds.size.width).contains(&center.x())
+                    && (0.0..bounds.size.height).contains(&center.y()),
+                "{element:?} does not lie on the display {bounds:?}"
+            );
+            assert!(element.enabled(), "{element:?} is disabled");
+        }
+
+        input
+            .press(submit.reference())
+            .unwrap_or_else(|error| panic!("pressing {submit:?} fails: {error}"));
+        assert_eq!(
+            form.fields().len(),
+            2,
+            "the form reports both of its fields"
+        );
+        assert_eq!(form.presses, 1, "the Submit button was pressed once");
+
+        input
+            .set_value(name.reference(), NAME)
+            .unwrap_or_else(|error| panic!("setting the value of {name:?} fails: {error}"));
+        let written = form.field_until(NAME_FIELD, |value| value == NAME);
+        assert_eq!(written, NAME, "the name field holds the value set");
+
+        input
+            .focus(note.reference())
+            .unwrap_or_else(|error| panic!("focusing {note:?} fails: {error}"));
+        input
+            .post(Text::new(NOTE))
+            .unwrap_or_else(|error| panic!("typing into {note:?} fails: {error}"));
+        let typed = form.field_until(NOTE_FIELD, |value| value == NOTE);
+        assert_eq!(typed, NOTE, "the note field holds the text typed");
+        assert_eq!(
+            form.field_until(NAME_FIELD, |_| true),
+            NAME,
+            "typing into the note field left the name field alone"
+        );
+        assert_eq!(
+            form.presses, 1,
+            "nothing but the first press pressed Submit"
+        );
+        assert_cursor_unchanged(cursor_before);
+    }
+
+    /// A reference from a listing the input has since replaced, one past the
+    /// end of the latest listing, and one another input never listed are
+    /// each refused with their own error, and none of them presses anything.
+    pub fn a_stale_or_unknown_element_reference_is_refused() {
+        let mtm = MainThreadMarker::new().expect("libtest-mimic runs one thread on main");
+        log_macos_version();
+        let display = create_display(mtm);
+        let mut form = FormProcess::spawn(display.id());
+        let mut input = open_input(display.id());
+
+        let first = input.elements().expect("the display's elements are listed");
+        let stale = form.submit(&first).reference();
+        let latest = input
+            .elements()
+            .expect("the display's elements are listed again");
+        let current = form.submit(&latest).reference();
+        assert_ne!(
+            first.listing(),
+            latest.listing(),
+            "each listing has its own id"
+        );
+        assert_eq!(current.listing(), latest.listing());
+
+        let refused = input.press(stale);
+        assert!(
+            matches!(
+                refused,
+                Err(Error::StaleElement { element, current: Some(current) })
+                    if element == stale && current == latest.listing()
+            ),
+            "pressing {stale} from the replaced listing was not refused as stale: {refused:?}"
+        );
+
+        let count = u32::try_from(latest.elements().len()).expect("a listing fits in u32");
+        let unknown: ElementRef = format!("{:08x}:{count}", latest.listing())
+            .parse()
+            .expect("the text form parses");
+        let refused = input.press(unknown);
+        assert!(
+            matches!(
+                refused,
+                Err(Error::UnknownElement { element, count: listed })
+                    if element == unknown && listed == count
+            ),
+            "pressing {unknown}, past the end of its listing, was not refused as unknown: {refused:?}"
+        );
+
+        let mut other = open_input(display.id());
+        let refused = other.press(current);
+        assert!(
+            matches!(
+                refused,
+                Err(Error::StaleElement { element, current: None }) if element == current
+            ),
+            "pressing {current} through an input that listed nothing was not refused as stale: {refused:?}"
+        );
+
+        form.fields();
+        assert_eq!(form.presses, 0, "a refused reference pressed the button");
     }
 }

@@ -315,9 +315,9 @@ pub enum Error {
         /// The window that takes a press there.
         window: u32,
     },
-    /// The element took the request for keyboard focus but did not report
-    /// itself focused in time.
-    #[error("element {element} did not report itself focused within {timeout:?}")]
+    /// The element took the request for keyboard focus but its application's
+    /// focus did not come to it or one of its descendants in time.
+    #[error("focus did not come to element {element} or its descendants within {timeout:?}")]
     ElementNotFocused {
         /// The reference.
         element: ElementRef,

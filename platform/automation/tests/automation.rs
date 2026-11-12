@@ -102,6 +102,17 @@ fn main() {
             mac::a_window_is_driven_by_element_reference();
             Ok(())
         }),
+        Trial::test(
+            "a_compound_control_is_focused_when_its_focus_lands_on_a_child",
+            || {
+                mac::a_compound_control_is_focused_when_its_focus_lands_on_a_child();
+                Ok(())
+            },
+        ),
+        Trial::test("a_focus_that_lands_elsewhere_is_refused", || {
+            mac::a_focus_that_lands_elsewhere_is_refused();
+            Ok(())
+        }),
         Trial::test("a_stale_or_unknown_element_reference_is_refused", || {
             mac::a_stale_or_unknown_element_reference_is_refused();
             Ok(())
@@ -114,6 +125,7 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 mod mac {
+    use core::cell::Cell;
     use core::fmt;
     use core::num::NonZeroU32;
     use core::ptr::NonNull;
@@ -133,10 +145,10 @@ mod mac {
     use objc2::runtime::{AnyObject, NSObject};
     use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
     use objc2_app_kit::{
-        NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSButton, NSColor,
-        NSEvent, NSEventMask, NSEventType, NSFloatingWindowLevel, NSRunningApplication, NSScreen,
-        NSTextField, NSView, NSWindow, NSWindowAnimationBehavior, NSWindowStyleMask, NSWorkspace,
-        NSWorkspaceOpenConfiguration,
+        NSAccessibilityElement, NSApplication, NSApplicationActivationPolicy, NSBackingStoreType,
+        NSButton, NSColor, NSEvent, NSEventMask, NSEventType, NSFloatingWindowLevel,
+        NSRunningApplication, NSScreen, NSTextField, NSView, NSWindow, NSWindowAnimationBehavior,
+        NSWindowStyleMask, NSWorkspace, NSWorkspaceOpenConfiguration,
     };
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
     use objc2_core_graphics::{
@@ -144,7 +156,8 @@ mod mac {
         CGGetOnlineDisplayList, CGMainDisplayID,
     };
     use objc2_foundation::{
-        NSDate, NSDefaultRunLoopMode, NSNumber, NSPoint, NSProcessInfo, NSString, ns_string,
+        NSArray, NSDate, NSDefaultRunLoopMode, NSNumber, NSPoint, NSProcessInfo, NSString,
+        ns_string,
     };
     use serde::de::DeserializeOwned;
     use serde::{Deserialize, Serialize};
@@ -1810,6 +1823,150 @@ mod mac {
         }
     }
 
+    /// The label of the form's compound control, which reports what it was
+    /// typed among the fields.
+    const COMPOUND: &str = "Compound";
+    /// The label of the control that takes a request for focus and gives it
+    /// to the name field instead.
+    const DECOY: &str = "Decoy";
+
+    /// What a [`CompoundControl`] does when asked for focus.
+    enum Focus {
+        /// It becomes the first responder and reports its child as the
+        /// element with focus, as `Chrome`'s `<input type="time">` does with
+        /// its hours segment.
+        OnChild,
+        /// It makes this view the first responder instead.
+        Elsewhere(Retained<NSView>),
+    }
+
+    struct CompoundState {
+        label: &'static str,
+        focus: Focus,
+        /// What the control received as key events.
+        typed: RefCell<String>,
+        /// Its accessibility child.
+        child: RefCell<Option<Retained<AnyObject>>>,
+        /// Whether it is the first responder.
+        focused: Cell<bool>,
+    }
+
+    define_class!(
+        /// A group that takes keys, has one accessibility child, a settable
+        /// `AXFocused` and an `AXPress`, so a listing holds it.
+        #[unsafe(super(NSView))]
+        #[thread_kind = MainThreadOnly]
+        #[name = "WaterkitAutomationTestCompound"]
+        #[ivars = CompoundState]
+        struct CompoundControl;
+
+        impl CompoundControl {
+            #[unsafe(method(acceptsFirstResponder))]
+            fn accepts_first_responder(&self) -> bool {
+                true
+            }
+
+            #[unsafe(method(becomeFirstResponder))]
+            fn become_first_responder(&self) -> bool {
+                self.ivars().focused.set(true);
+                true
+            }
+
+            #[unsafe(method(resignFirstResponder))]
+            fn resign_first_responder(&self) -> bool {
+                self.ivars().focused.set(false);
+                true
+            }
+
+            #[unsafe(method(keyDown:))]
+            fn key_down(&self, event: &NSEvent) {
+                if let Some(characters) = event.characters() {
+                    self.ivars()
+                        .typed
+                        .borrow_mut()
+                        .push_str(&characters.to_string());
+                }
+            }
+
+            #[unsafe(method(isAccessibilityElement))]
+            fn is_accessibility_element(&self) -> bool {
+                true
+            }
+
+            #[unsafe(method_id(accessibilityRole))]
+            fn accessibility_role(&self) -> Option<Retained<NSString>> {
+                Some(NSString::from_str("AXGroup"))
+            }
+
+            #[unsafe(method_id(accessibilityLabel))]
+            fn accessibility_label(&self) -> Option<Retained<NSString>> {
+                Some(NSString::from_str(self.ivars().label))
+            }
+
+            #[unsafe(method_id(accessibilityChildren))]
+            fn accessibility_children(&self) -> Option<Retained<NSArray<AnyObject>>> {
+                let children: Vec<_> = self.ivars().child.borrow().iter().cloned().collect();
+                Some(NSArray::from_retained_slice(&children))
+            }
+
+            #[unsafe(method_id(accessibilityFocusedUIElement))]
+            fn accessibility_focused_ui_element(&self) -> Option<Retained<AnyObject>> {
+                let child = self.ivars().child.borrow().clone();
+                child.filter(|_| self.ivars().focused.get())
+            }
+
+            #[unsafe(method(setAccessibilityFocused:))]
+            fn set_accessibility_focused(&self, focused: bool) {
+                if !focused {
+                    return;
+                }
+                let Some(window) = self.window() else {
+                    return;
+                };
+                match &self.ivars().focus {
+                    Focus::OnChild => window.makeFirstResponder(Some(self)),
+                    Focus::Elsewhere(view) => window.makeFirstResponder(Some(view)),
+                };
+            }
+
+            #[unsafe(method(accessibilityPerformPress))]
+            fn accessibility_perform_press(&self) -> bool {
+                true
+            }
+        }
+    );
+
+    impl CompoundControl {
+        fn new(
+            mtm: MainThreadMarker,
+            frame: CGRect,
+            label: &'static str,
+            focus: Focus,
+        ) -> Retained<Self> {
+            let this = Self::alloc(mtm).set_ivars(CompoundState {
+                label,
+                focus,
+                typed: RefCell::default(),
+                child: RefCell::new(None),
+                focused: Cell::new(false),
+            });
+            // SAFETY: `initWithFrame:` is NSView's designated initializer.
+            let control: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+            // SAFETY: the role, frame and label are of the types the
+            // constructor takes, and the parent is a live view.
+            let child = unsafe {
+                NSAccessibilityElement::accessibilityElementWithRole_frame_label_parent(
+                    ns_string!("AXIncrementor"),
+                    frame,
+                    Some(&NSString::from_str(label)),
+                    Some(&control),
+                )
+            };
+            *control.ivars().child.borrow_mut() = Some(child);
+            control
+        }
+    }
+
     /// What every text field of this process's windows holds, keyed by its
     /// placeholder, with any edit in progress committed first.
     fn form_fields(mtm: MainThreadMarker) -> Vec<(String, String)> {
@@ -1819,7 +1976,10 @@ mod mac {
                 continue;
             };
             for view in content.subviews() {
-                if let Ok(field) = view.downcast::<NSTextField>() {
+                if let Ok(control) = view.clone().downcast::<CompoundControl>() {
+                    let ivars = control.ivars();
+                    fields.push((ivars.label.to_owned(), ivars.typed.borrow().clone()));
+                } else if let Ok(field) = view.downcast::<NSTextField>() {
                     field.validateEditing();
                     let placeholder = field
                         .placeholderString()
@@ -1885,11 +2045,30 @@ mod mac {
         ));
         let content = window.contentView().expect("a window has a content view");
         content.addSubview(&button);
+        let mut name_field = None;
         for (placeholder, y) in [(NAME_FIELD, 220.0), (NOTE_FIELD, 180.0)] {
             let field = NSTextField::textFieldWithString(ns_string!(""), mtm);
             field.setPlaceholderString(Some(&NSString::from_str(placeholder)));
             field.setFrame(CGRect::new(CGPoint::new(20.0, y), CGSize::new(360.0, 24.0)));
             content.addSubview(&field);
+            name_field.get_or_insert(field);
+        }
+        let name_field = name_field.expect("the form has a name field");
+        for (label, y, focus) in [
+            (COMPOUND, 140.0, Focus::OnChild),
+            (
+                DECOY,
+                100.0,
+                Focus::Elsewhere(Retained::into_super(Retained::into_super(name_field))),
+            ),
+        ] {
+            let control = CompoundControl::new(
+                mtm,
+                CGRect::new(CGPoint::new(20.0, y), CGSize::new(360.0, 24.0)),
+                label,
+                focus,
+            );
+            content.addSubview(&control);
         }
         window.orderFrontRegardless();
 
@@ -2022,6 +2201,13 @@ mod mac {
                 element.role() == "AXTextField" && element.placeholder() == Some(placeholder)
             })
         }
+
+        /// The listed compound control labelled `label`.
+        fn compound<'a>(&self, elements: &'a Elements, label: &str) -> &'a Element {
+            self.element(elements, label, |element| {
+                element.role() == "AXGroup" && element.title() == Some(label)
+            })
+        }
     }
 
     /// The form's window on a virtual display is listed through
@@ -2068,8 +2254,8 @@ mod mac {
             .unwrap_or_else(|error| panic!("pressing {submit:?} fails: {error}"));
         assert_eq!(
             form.fields().len(),
-            2,
-            "the form reports both of its fields"
+            4,
+            "the form reports its two fields and its two compound controls"
         );
         assert_eq!(form.presses, 1, "the Submit button was pressed once");
 
@@ -2097,6 +2283,53 @@ mod mac {
             "nothing but the first press pressed Submit"
         );
         assert_cursor_unchanged(cursor_before);
+    }
+
+    /// A compound control whose `AXFocused` hands focus to its child is
+    /// focused by reference, and text posted next reaches it.
+    pub fn a_compound_control_is_focused_when_its_focus_lands_on_a_child() {
+        let mtm = MainThreadMarker::new().expect("libtest-mimic runs one thread on main");
+        log_macos_version();
+        let display = create_display(mtm);
+        let mut form = FormProcess::spawn(display.id());
+        let mut input = open_input(display.id());
+
+        let elements = input.elements().expect("the display's elements are listed");
+        let compound = form.compound(&elements, COMPOUND).clone();
+        input
+            .focus(compound.reference())
+            .unwrap_or_else(|error| panic!("focusing {compound:?} fails: {error}"));
+        input
+            .post(Text::new(NOTE))
+            .unwrap_or_else(|error| panic!("typing into {compound:?} fails: {error}"));
+        let typed = form.field_until(COMPOUND, |value| value == NOTE);
+        assert_eq!(typed, NOTE, "the compound control holds the text typed");
+        assert_eq!(
+            form.field_until(NOTE_FIELD, |_| true),
+            "",
+            "the text did not go to a text field"
+        );
+    }
+
+    /// A control that takes a request for focus but gives it to another
+    /// view is still refused with [`Error::ElementNotFocused`].
+    pub fn a_focus_that_lands_elsewhere_is_refused() {
+        let mtm = MainThreadMarker::new().expect("libtest-mimic runs one thread on main");
+        log_macos_version();
+        let display = create_display(mtm);
+        let form = FormProcess::spawn(display.id());
+        let mut input = open_input(display.id());
+
+        let elements = input.elements().expect("the display's elements are listed");
+        let decoy = form.compound(&elements, DECOY).clone();
+        let refused = input.focus(decoy.reference());
+        assert!(
+            matches!(
+                refused,
+                Err(Error::ElementNotFocused { element, .. }) if element == decoy.reference()
+            ),
+            "focusing {decoy:?}, whose focus goes to another field, was not refused: {refused:?}"
+        );
     }
 
     /// A reference from a listing the input has since replaced, one past the

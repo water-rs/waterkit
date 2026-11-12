@@ -977,13 +977,24 @@ mod mac {
                 main,
                 "displays while the virtual display is up"
             );
+            // The main display stays at the origin. Its size is the system's
+            // to choose with a monitor connected (a virtual machine's display
+            // switches mode as displays come and go); with none, the stand-in
+            // reproduces the fallback's mode, so it keeps the size too.
+            let frame = CGDisplayBounds(main);
             assert_eq!(
-                CGDisplayBounds(main),
-                main_frame,
-                "round {round}: the main display moved or changed size: {}",
+                frame.origin,
+                main_frame.origin,
+                "round {round}: the main display moved: {}",
                 describe_screens(mtm)
             );
             if headless {
+                assert_eq!(
+                    frame.size,
+                    main_frame.size,
+                    "round {round}: the stand-in's size differs from the fallback's: {}",
+                    describe_screens(mtm)
+                );
                 assert!(
                     during.iter().all(|online| !online.is_headless_fallback()),
                     "round {round}: the headless fallback stayed online: {during:?}"

@@ -27,7 +27,7 @@ use crate::Error;
 use crate::skylight::EventSymbols;
 
 /// The run loop mode a post waits in: only its own tap and observers run.
-const MODE: &str = "dev.waterkit.automation.delivery";
+pub const MODE: &str = "dev.waterkit.automation.delivery";
 
 /// Every event type [`Input`](crate::Input) posts.
 const POSTED_TYPES: [CGEventType; 15] = [

@@ -66,6 +66,18 @@ pub enum Error {
         /// The display and every window that intersected it.
         windows: DisplayWindows,
     },
+    /// The display, or the window under the point, kept moving: no reading
+    /// within the timeout saw the display stay put while `WindowServer`
+    /// listed the window that takes a press at the point around it.
+    #[error("display {display} or the window under {at} on it kept moving for {timeout:?}")]
+    Unsettled {
+        /// The display.
+        display: u32,
+        /// The point, in the display's points.
+        at: Point,
+        /// How long the geometry was given to settle.
+        timeout: Duration,
+    },
     /// The window that takes a press at the point belongs to no application,
     /// such as `WindowServer`'s menu bar, so no process can be handed the
     /// event.

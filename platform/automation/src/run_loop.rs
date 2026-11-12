@@ -1,11 +1,11 @@
-//! Waits that service the calling thread's run loop in its default mode.
+//! Waits that service the calling thread's run loop.
 
 use core::ptr;
 use core::time::Duration;
 use std::time::Instant;
 
 use objc2_core_foundation::{
-    CFAbsoluteTimeGetCurrent, CFRunLoop, CFRunLoopTimer, kCFRunLoopDefaultMode,
+    CFAbsoluteTimeGetCurrent, CFRunLoop, CFRunLoopMode, CFRunLoopTimer, kCFRunLoopDefaultMode,
 };
 
 use crate::Error;
@@ -17,6 +17,19 @@ use crate::Error;
 /// source it handles, a stop, or at the latest every `recheck`. A wait that
 /// is only woken by sources passes its whole timeout as `recheck`.
 pub fn spin(
+    timeout: Duration,
+    recheck: Duration,
+    done: impl FnMut() -> Result<bool, Error>,
+) -> Result<bool, Error> {
+    // SAFETY: the default mode is an immutable constant.
+    let mode = unsafe { kCFRunLoopDefaultMode };
+    spin_in(mode, timeout, recheck, done)
+}
+
+/// [`spin`] in the run loop mode `mode`, where only the sources registered
+/// in that mode run.
+pub fn spin_in(
+    mode: Option<&CFRunLoopMode>,
     timeout: Duration,
     recheck: Duration,
     mut done: impl FnMut() -> Result<bool, Error>,
@@ -39,8 +52,6 @@ pub fn spin(
         )
     }
     .ok_or_else(|| Error::Platform("CFRunLoopTimerCreate returned NULL".to_owned()))?;
-    // SAFETY: the default mode is an immutable constant.
-    let mode = unsafe { kCFRunLoopDefaultMode };
     run_loop.add_timer(Some(&timer), mode);
     let outcome = loop {
         match done() {

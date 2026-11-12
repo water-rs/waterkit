@@ -4,9 +4,10 @@ use std::path::PathBuf;
 
 use keyboard_types::{Code, Modifiers};
 
-use crate::{DisplayWindows, FocusReport, ListedWindow, Point, Rect};
+use crate::{DisplayWindows, ElementRef, FocusReport, ListedWindow, Point, Rect};
 
-/// Failure creating a display, posting input or launching an application.
+/// Failure creating a display, posting input, acting on an element or
+/// launching an application.
 #[derive(Debug, Clone, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -221,6 +222,85 @@ pub enum Error {
         display: u32,
         /// The display's bounds.
         bounds: Rect,
+    },
+    /// The element reference is not from the input's latest listing: it is
+    /// from an earlier one or another input's, or the input has listed no
+    /// elements yet. Nothing was acted on; list the elements again.
+    #[error(
+        "element {element} is not from the latest listing ({}); list the elements again",
+        .current.map_or_else(|| "there is none yet".to_owned(), |current| format!("{current:08x}"))
+    )]
+    StaleElement {
+        /// The reference.
+        element: ElementRef,
+        /// The latest listing, if there is one.
+        current: Option<u32>,
+    },
+    /// The reference names the latest listing but no element in it.
+    #[error("element {element} is not in its listing, which holds {count} elements")]
+    UnknownElement {
+        /// The reference.
+        element: ElementRef,
+        /// How many elements the listing holds.
+        count: u32,
+    },
+    /// The element's application no longer has it, such as when its window
+    /// closed or its page changed.
+    #[error("element {0} no longer exists in its application")]
+    ElementGone(ElementRef),
+    /// The element reports itself disabled, so it takes no input; nothing
+    /// was acted on.
+    #[error("element {0} is disabled")]
+    ElementDisabled(ElementRef),
+    /// The element's application did not answer an Accessibility call in
+    /// time. A press that runs a modal loop, such as one that opens a menu
+    /// or a dialog, answers only once that ends, so the action may have
+    /// run.
+    #[error("the application of element {element} did not answer within {timeout:?}")]
+    ElementNotAnswering {
+        /// The reference.
+        element: ElementRef,
+        /// How long each call waits for the application.
+        timeout: Duration,
+    },
+    /// The element has no action for the request and reports no frame to
+    /// press at.
+    #[error("element {0} reports no frame to press at")]
+    ElementHasNoFrame(ElementRef),
+    /// Another window takes a press at the element's centre, so a press
+    /// there would land on it; nothing was pressed.
+    #[error("window {window} takes a press at {at}, the centre of element {element}")]
+    ElementObscured {
+        /// The reference.
+        element: ElementRef,
+        /// The element's centre, in the display's points.
+        at: Point,
+        /// The window that takes a press there.
+        window: u32,
+    },
+    /// The element took the request for keyboard focus but did not report
+    /// itself focused in time.
+    #[error("element {element} did not report itself focused within {timeout:?}")]
+    ElementNotFocused {
+        /// The reference.
+        element: ElementRef,
+        /// How long it was given.
+        timeout: Duration,
+    },
+    /// The element has no value text can be written to: its value cannot be
+    /// set, or is not text; nothing was written.
+    #[error("element {0} has no value that text can be written to")]
+    ValueNotSettable(ElementRef),
+    /// The element took the value but reports another one after it.
+    #[error(
+        "element {element} reports {} after its value was set",
+        .found.as_deref().map_or_else(|| "no value".to_owned(), |found| format!("{found:?}"))
+    )]
+    ValueNotApplied {
+        /// The reference.
+        element: ElementRef,
+        /// The value it reports now.
+        found: Option<String>,
     },
     /// A platform call failed; the message names it and its status.
     #[error("platform error: {0}")]

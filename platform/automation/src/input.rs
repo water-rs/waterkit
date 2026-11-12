@@ -3,22 +3,25 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::time::Duration;
 
-use objc2_core_foundation::{CFRetained, CFString, CGPoint, CGRect};
+use objc2_core_foundation::{CFBoolean, CFRetained, CFString, CGPoint, CGRect};
 use objc2_core_graphics::{
     CGDirectDisplayID, CGDisplayBounds, CGEvent, CGEventFlags, CGEventType, CGKeyCode,
     CGMouseButton, CGScrollEventUnit, CGWindowListOption, kCGNullWindowID,
 };
 
-use crate::accessibility::{Application, WindowLookup};
+use crate::accessibility::{self, Application, WindowLookup};
+use crate::ax_tree::{self, OptIn, Process, Tree, Walked};
 use crate::delivery::{self, APPKIT_DEFINED, Watch};
+use crate::element::{FOCUSED, Handle, Listing, PRESS, VALUE};
 use crate::keycode::{event_flags, virtual_key};
 use crate::skylight::EventSymbols;
 use crate::window::{self, DisplayWindows, ListedWindow, Rect, Window, intersects};
 use crate::{
-    Error, InputEvent, KeyDown, KeyUp, MouseButton, MouseDown, MouseMove, MouseUp, Point, Scroll,
-    Text,
+    Element, ElementRef, Elements, Error, Frame, InputEvent, KeyDown, KeyUp, MouseButton,
+    MouseDown, MouseMove, MouseUp, Point, Scroll, SkippedRead, Text,
 };
 use crate::{placement, run_loop, topology};
+use objc2_application_services::AXError;
 
 /// `kCGMouseEventClickState`.
 const FIELD_CLICK_STATE: u32 = 1;
@@ -76,6 +79,15 @@ pub struct Input {
     /// The window this input last made its application's key window, where
     /// key events go.
     key_target: Option<Target>,
+    /// How many nodes a listing of elements visits at most.
+    element_budget: u32,
+    /// The latest listing of elements, which its references resolve in.
+    listing: Option<Listing>,
+    /// The id the next listing takes.
+    next_listing: u32,
+    /// The processes asked to build their Accessibility tree, whether or not
+    /// they took the request.
+    opted_in: Vec<Process>,
 }
 
 /// An application window events are delivered to.
@@ -130,6 +142,10 @@ impl Input {
             markers: AtomicU32::new(0),
             held: None,
             key_target: None,
+            element_budget: ax_tree::DEFAULT_BUDGET,
+            listing: None,
+            next_listing: first_listing(),
+            opted_in: Vec::new(),
         })
     }
 
@@ -204,6 +220,327 @@ impl Input {
             .collect()
     }
 
+    /// How many Accessibility nodes [`elements`](Self::elements) visits at
+    /// most, across every window; 2000 unless set.
+    #[must_use]
+    pub const fn element_budget(&self) -> u32 {
+        self.element_budget
+    }
+
+    /// Sets [`element_budget`](Self::element_budget).
+    pub const fn set_element_budget(&mut self, nodes: u32) {
+        self.element_budget = nodes;
+    }
+
+    /// Lists the elements an agent can act on in the application windows on
+    /// screen on the display, front window first, and makes them the
+    /// listing their references resolve in until the next call.
+    ///
+    /// See the crate documentation for which elements are listed and how a
+    /// Chromium-based application is asked to report its web content.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Platform`] when `CoreGraphics`, `SkyLight` or Accessibility
+    /// fails a call. An application that does not answer is not an error:
+    /// its remaining elements are left out and the listing is
+    /// [`truncated`](Elements::truncated).
+    pub fn elements(&mut self) -> Result<Elements, Error> {
+        let display = CGDisplayBounds(self.display);
+        let tree = Tree::new(self.confirm_timeout);
+        let mut budget = self.element_budget;
+        let mut complete = true;
+        let mut found = Vec::new();
+        let mut skipped = Vec::new();
+        // Each application's windows, or `None` once it cannot be reached.
+        let mut applications: Vec<(libc::pid_t, Option<Vec<accessibility::Window>>)> = Vec::new();
+        for target in self.element_windows()? {
+            let known = applications.iter().position(|(pid, _)| *pid == target.pid);
+            let at = if let Some(at) = known {
+                at
+            } else {
+                let windows = self.application_windows(target.pid, &mut skipped)?;
+                complete &= windows.is_some();
+                applications.push((target.pid, windows));
+                applications.len() - 1
+            };
+            let Some(windows) = &applications[at].1 else {
+                continue;
+            };
+            let Some(window) = windows.iter().find(|window| window.id() == target.window) else {
+                tracing::debug!(
+                    pid = target.pid,
+                    window = target.window,
+                    "the application does not report the window through Accessibility"
+                );
+                continue;
+            };
+            tracing::debug!(
+                pid = target.pid,
+                window = target.window,
+                "walking the window's Accessibility tree"
+            );
+            let mut walked = Vec::new();
+            let mut skips = ax_tree::Skips::new(target.pid, target.window, &mut skipped);
+            match tree.walk(window.element(), &mut budget, &mut walked, &mut skips) {
+                Walked::Complete => {}
+                Walked::OutOfBudget => complete = false,
+                Walked::Unreachable(unreachable) => {
+                    tracing::warn!(
+                        pid = target.pid,
+                        window = target.window,
+                        read = unreachable.read,
+                        status = ?unreachable.status,
+                        "the application cannot be reached; the rest of it is not listed"
+                    );
+                    skipped.push(SkippedRead::new(
+                        target.pid,
+                        Some(target.window),
+                        None,
+                        unreachable.read,
+                        unreachable.status,
+                    ));
+                    applications[at].1 = None;
+                    complete = false;
+                }
+            }
+            found.extend(walked.into_iter().map(|walked| (walked, target)));
+        }
+
+        let id = self.next_listing;
+        self.next_listing = id.wrapping_add(1);
+        let mut handles = Vec::with_capacity(found.len());
+        let elements = found
+            .into_iter()
+            .zip(0_u32..)
+            .map(|((found, target), index)| {
+                let reference = ElementRef::new(id, index);
+                let handle = Handle::new(
+                    found.element,
+                    reference,
+                    target.pid,
+                    target.window,
+                    self.confirm_timeout,
+                );
+                let element = Element::new(reference, &handle, found.reported, display.origin);
+                handles.push(handle);
+                element
+            })
+            .collect();
+        tracing::debug!(
+            display = self.display,
+            listing = id,
+            elements = handles.len(),
+            skipped = skipped.len(),
+            complete,
+            "listed the elements on the display"
+        );
+        self.listing = Some(Listing { id, handles });
+        Ok(Elements::new(id, elements, skipped, !complete))
+    }
+
+    /// The windows application `pid` reports, after asking it to build its
+    /// tree ([`opt_in`]); `None`, recorded in `skipped`, when it cannot be
+    /// read. A window whose number the lookup refuses is left out and
+    /// recorded.
+    fn application_windows(
+        &mut self,
+        pid: libc::pid_t,
+        skipped: &mut Vec<SkippedRead>,
+    ) -> Result<Option<Vec<accessibility::Window>>, Error> {
+        let refused = |read: &'static str, status: AXError| {
+            tracing::warn!(
+                pid,
+                read,
+                ?status,
+                "the application's windows cannot be read; it is not listed"
+            );
+            SkippedRead::new(pid, None, None, read, status)
+        };
+        let app = match Application::open(pid, &self.windows, self.confirm_timeout) {
+            Ok(app) => app,
+            Err(status) => {
+                skipped.push(refused("messaging timeout", status));
+                return Ok(None);
+            }
+        };
+        let windows = app.listed_windows(|status| {
+            skipped.push(SkippedRead::new(pid, None, None, "window number", status));
+        });
+        match windows {
+            Ok(windows) => {
+                opt_in(&mut self.opted_in, &app, &windows, self.confirm_timeout)?;
+                Ok(Some(windows))
+            }
+            Err(status) => {
+                skipped.push(refused("AXWindows", status));
+                Ok(None)
+            }
+        }
+    }
+
+    /// Presses `element`: with `AXPress` when it advertises it, after
+    /// making its window its application's key window as a press would, and
+    /// otherwise with a click at the centre of its frame. Either way, key
+    /// events go to its window next.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::StaleElement`] or [`Error::UnknownElement`] when the
+    ///   reference is not one of the latest listing's;
+    /// - [`Error::ElementGone`] when its application no longer has it;
+    /// - [`Error::ElementDisabled`] when it reports itself disabled;
+    /// - [`Error::ElementNotAnswering`] when its application does not answer
+    ///   in time, which a press that opens a modal loop does not;
+    /// - [`Error::ElementHasNoFrame`] or [`Error::ElementObscured`] when it
+    ///   has no `AXPress` and no frame, or another window takes a press at
+    ///   its centre;
+    /// - any error of [`post`](Self::post) for the focus change or the
+    ///   click.
+    pub fn press(&mut self, element: ElementRef) -> Result<(), Error> {
+        let handle = self.resolve(element)?;
+        if !handle.advertises(PRESS)? {
+            return self.click(&handle);
+        }
+        self.focused(handle_target(&handle), |_, _, _| Ok(()))?;
+        tracing::debug!(
+            %element,
+            pid = handle.pid(),
+            window = handle.window(),
+            "pressing the element through Accessibility"
+        );
+        handle.perform(PRESS)
+    }
+
+    /// Gives `element` keyboard focus, so the text and keys posted next go
+    /// to it: by setting `AXFocused` where it allows that, in its window made
+    /// its application's key window, and waiting for it to report itself
+    /// focused; otherwise with a click at the centre of its frame.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`press`](Self::press), and [`Error::ElementNotFocused`]
+    /// when it does not report itself focused within the confirm timeout.
+    pub fn focus(&mut self, element: ElementRef) -> Result<(), Error> {
+        let handle = self.resolve(element)?;
+        if !handle.settable(FOCUSED)? {
+            return self.click(&handle);
+        }
+        self.focused(handle_target(&handle), |_, _, _| Ok(()))?;
+        handle.set(FOCUSED, CFBoolean::new(true))?;
+        let mode = CFString::from_static_str(delivery::MODE);
+        let focused = run_loop::spin_in(
+            Some(&mode),
+            self.confirm_timeout,
+            placement::RECHECK,
+            || handle.focused(),
+        )?;
+        if focused {
+            Ok(())
+        } else {
+            Err(Error::ElementNotFocused {
+                element,
+                timeout: self.confirm_timeout,
+            })
+        }
+    }
+
+    /// Writes `value` into `element`'s value (`AXValue`) and reads it back.
+    /// Focus does not move.
+    ///
+    /// Web content can report a written value that the page never saw;
+    /// [`focus`](Self::focus) a web field and post [`Text`] instead.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::StaleElement`], [`Error::UnknownElement`],
+    ///   [`Error::ElementGone`], [`Error::ElementDisabled`] and
+    ///   [`Error::ElementNotAnswering`] as for [`press`](Self::press);
+    /// - [`Error::ValueNotSettable`] when its value cannot be set or is not
+    ///   text;
+    /// - [`Error::ValueNotApplied`] when it reports another value after.
+    pub fn set_value(&mut self, element: ElementRef, value: &str) -> Result<(), Error> {
+        let handle = self.resolve(element)?;
+        if !handle.settable(VALUE)? || !handle.holds_text()? {
+            return Err(Error::ValueNotSettable(element));
+        }
+        handle.set(VALUE, &CFString::from_str(value))?;
+        let found = handle.text()?;
+        // An empty value reads back as none.
+        if found.as_deref().unwrap_or_default() == value {
+            Ok(())
+        } else {
+            Err(Error::ValueNotApplied { element, found })
+        }
+    }
+
+    /// The element `reference` names in the latest listing, when it takes
+    /// input.
+    fn resolve(&self, reference: ElementRef) -> Result<Handle, Error> {
+        let handle = Listing::resolve(self.listing.as_ref(), reference)?;
+        if handle.enabled()? {
+            Ok(handle)
+        } else {
+            Err(Error::ElementDisabled(reference))
+        }
+    }
+
+    /// Clicks the centre of `handle`'s element, when its window is the one
+    /// that takes a press there.
+    fn click(&mut self, handle: &Handle) -> Result<(), Error> {
+        let element = handle.reference();
+        let frame = handle.frame()?.ok_or(Error::ElementHasNoFrame(element))?;
+        let at = Frame::on_display(frame, CGDisplayBounds(self.display).origin).center();
+        let located = self.locate(at)?;
+        if located.target.window != handle.window() {
+            return Err(Error::ElementObscured {
+                element,
+                at,
+                window: located.target.window,
+            });
+        }
+        tracing::debug!(%element, %at, "clicking the element's centre");
+        self.mouse_down(MouseDown::new(at, MouseButton::Left))?;
+        self.mouse_up(MouseUp::new(at, MouseButton::Left))
+    }
+
+    /// The on-screen application windows on the display whose elements a
+    /// listing walks, front to back: those a press can reach that lie on
+    /// this display rather than another ([`window::display_of`]).
+    fn element_windows(&self) -> Result<Vec<Target>, Error> {
+        let displays: Vec<_> = topology::online()?
+            .into_iter()
+            .map(|display| (display, CGDisplayBounds(display)))
+            .collect();
+        let mut targets = Vec::new();
+        for window in on_screen_windows()? {
+            let on = window::display_of(window.bounds, displays.iter().copied());
+            if on != Some(self.display) {
+                if intersects(window.bounds, CGDisplayBounds(self.display)) {
+                    tracing::trace!(
+                        window = window.id,
+                        pid = window.pid,
+                        bounds = ?window.bounds,
+                        layer = window.layer,
+                        display = ?on,
+                        "the window reaches into the display but lies on another; its elements are not listed"
+                    );
+                }
+                continue;
+            }
+            if !self.symbols.ignores_mouse_events(window.id)?
+                && let Some(target) = self.application_target(&window)?
+            {
+                tracing::debug!(
+                    window = %window.listed(true),
+                    "the window lies on the display; its elements are listed"
+                );
+                targets.push(target);
+            }
+        }
+        Ok(targets)
+    }
+
     /// `window` with its ownership, or `None` when it closed since it was
     /// listed.
     fn listed(&self, window: &Window) -> Result<Option<ListedWindow>, Error> {
@@ -234,7 +571,7 @@ impl Input {
         let mut located = self.locate(event.at)?;
         let (mut watch, pressed) = loop {
             let mut watch = Watch::open(located.target.pid, self.confirm_timeout)?;
-            self.focus(&mut watch, located.target, located.frame)?;
+            self.focus_window(&mut watch, located.target, located.frame)?;
             // Focusing waits on the application, and the display can move
             // meanwhile, taking the window with it: the press is converted
             // with the window's frame as of now.
@@ -389,9 +726,19 @@ impl Input {
         post: impl FnOnce(&Self, &mut Watch, Target) -> Result<(), Error>,
     ) -> Result<(), Error> {
         let target = self.key_target()?;
+        self.focused(target, post)
+    }
+
+    /// Makes `target`'s window its application's key window, posts events
+    /// with `post`, and confirms everything posted reached it.
+    fn focused(
+        &mut self,
+        target: Target,
+        post: impl FnOnce(&Self, &mut Watch, Target) -> Result<(), Error>,
+    ) -> Result<(), Error> {
         let bounds = window_bounds(target.window)?;
         let mut watch = Watch::open(target.pid, self.confirm_timeout)?;
-        self.focus(&mut watch, target, bounds)?;
+        self.focus_window(&mut watch, target, bounds)?;
         post(self, &mut watch, target)?;
         watch.confirm(target.window)
     }
@@ -556,7 +903,12 @@ impl Input {
     /// not make key, so the press is skipped only for the window this input
     /// made key last, while the application still reports it focused and
     /// itself active.
-    fn focus(&mut self, watch: &mut Watch, target: Target, bounds: CGRect) -> Result<(), Error> {
+    fn focus_window(
+        &mut self,
+        watch: &mut Watch,
+        target: Target,
+        bounds: CGRect,
+    ) -> Result<(), Error> {
         let app = Application::new(target.pid, &self.windows, self.confirm_timeout)?;
         // Before anything is sent, so no change goes unnoticed.
         let _observation = app.observe(target.window, watch.run_loop(), watch.mode())?;
@@ -720,6 +1072,61 @@ impl Input {
         watch.post(&self.symbols, &event, self.marker());
         Ok(())
     }
+}
+
+/// The id of an input's first listing: random, so a reference from another
+/// input, such as one made for the same display before it, names no listing
+/// of this one.
+fn first_listing() -> u32 {
+    // SAFETY: `arc4random` has no preconditions.
+    unsafe { libc::arc4random() }
+}
+
+/// The window `handle`'s element was listed in, as a delivery target.
+const fn handle_target(handle: &Handle) -> Target {
+    Target {
+        pid: handle.pid(),
+        window: handle.window(),
+    }
+}
+
+/// Asks `app`, once per process lifetime, to build its Accessibility tree
+/// for assistive applications, and when it takes the request, waits up to
+/// `timeout` for one of `windows` to show a web area with content. A
+/// process that does not answer is asked again by the next listing.
+fn opt_in(
+    opted_in: &mut Vec<Process>,
+    app: &Application<'_>,
+    windows: &[accessibility::Window],
+    timeout: Duration,
+) -> Result<(), Error> {
+    let Some(process) = Process::of(app.pid()) else {
+        return Ok(());
+    };
+    if opted_in.contains(&process) {
+        return Ok(());
+    }
+    match ax_tree::opt_in(app.element()) {
+        OptIn::Unanswered => return Ok(()),
+        OptIn::Refused => {}
+        OptIn::Accepted => {
+            let mode = CFString::from_static_str(delivery::MODE);
+            let shown = run_loop::spin_in(Some(&mode), timeout, placement::RECHECK, || {
+                Ok(windows
+                    .iter()
+                    .any(|window| ax_tree::holds_web_content(window.element())))
+            })?;
+            tracing::debug!(
+                pid = app.pid(),
+                shown,
+                "the application took the request to build its Accessibility tree"
+            );
+        }
+    }
+    // Processes that exited since are forgotten.
+    opted_in.retain(|known| Process::of(known.pid()) == Some(*known));
+    opted_in.push(process);
+    Ok(())
 }
 
 fn null_event(call: &str) -> Error {
@@ -922,6 +1329,10 @@ mod tests {
             markers: AtomicU32::new(0),
             held: None,
             key_target: None,
+            element_budget: ax_tree::DEFAULT_BUDGET,
+            listing: None,
+            next_listing: first_listing(),
+            opted_in: Vec::new(),
         };
         let target = Target { pid: 42, window: 7 };
         let event = input.activation(target).expect("the event is built");

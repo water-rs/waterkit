@@ -2205,7 +2205,7 @@ mod mac {
         /// The listed compound control labelled `label`.
         fn compound<'a>(&self, elements: &'a Elements, label: &str) -> &'a Element {
             self.element(elements, label, |element| {
-                element.role() == "AXGroup" && element.title() == Some(label)
+                element.role() == "AXGroup" && element.label() == Some(label)
             })
         }
     }

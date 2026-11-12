@@ -185,8 +185,10 @@
 //! making its window key as a press would, and otherwise posts a click at
 //! the centre of its frame, which fails with [`Error::ElementObscured`] when
 //! another window takes a press there. [`Input::focus`] sets `AXFocused`
-//! where the element allows it and waits for it to report itself focused,
-//! and otherwise clicks it; text posted next goes to it. [`Input::set_value`]
+//! where the element allows it and waits for its application's focused
+//! element (`AXFocusedUIElement`) to be the element or one of its
+//! descendants, as the focus of a compound control lands on a child, and
+//! otherwise clicks it; text posted next goes to it. [`Input::set_value`]
 //! writes `AXValue` and reads it back. Web content can echo a written value
 //! without the page seeing it, so text for a web field is typed after
 //! [`Input::focus`] instead.

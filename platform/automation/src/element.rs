@@ -19,6 +19,14 @@ use crate::{Error, Point};
 pub const VALUE: &str = "AXValue";
 /// The attribute that says whether an element has keyboard focus.
 pub const FOCUSED: &str = "AXFocused";
+/// The attribute of an application that names the element with keyboard
+/// focus.
+const FOCUSED_ELEMENT: &str = "AXFocusedUIElement";
+/// How many ancestors the walk up from the focused element visits: far
+/// deeper than any tree an application builds (a web page nests a few
+/// hundred levels at most), so it ends at the root, and only a cyclic
+/// `AXParent` chain runs it out.
+const MAX_ANCESTORS: usize = 1024;
 /// The action that presses a control.
 pub const PRESS: &str = "AXPress";
 
@@ -510,14 +518,22 @@ impl Handle {
 
     /// The value of `name`, or `None` when the element has none.
     pub fn read(&self, name: &'static str) -> Result<Option<CFRetained<CFType>>, Error> {
+        self.read_of(&self.element, name)
+    }
+
+    /// The value of `name` on `element`, which is the handle's element or
+    /// another of its application, or `None` when it has none; failures
+    /// are the handle's.
+    fn read_of(
+        &self,
+        element: &AXUIElement,
+        name: &'static str,
+    ) -> Result<Option<CFRetained<CFType>>, Error> {
         let attribute = CFString::from_static_str(name);
         let mut value: *const CFType = ptr::null();
         // SAFETY: `value` is a valid out pointer; on success it holds a +1
         // reference the caller owns.
-        let status = unsafe {
-            self.element
-                .copy_attribute_value(&attribute, NonNull::from(&mut value))
-        };
+        let status = unsafe { element.copy_attribute_value(&attribute, NonNull::from(&mut value)) };
         match status {
             AXError::NoValue | AXError::AttributeUnsupported => Ok(None),
             status => {
@@ -610,12 +626,39 @@ impl Handle {
             .is_none_or(|enabled| enabled.as_bool()))
     }
 
-    /// Whether the element reports itself focused.
-    pub fn focused(&self) -> Result<bool, Error> {
-        Ok(self
-            .read(FOCUSED)?
-            .and_then(|value| value.downcast::<CFBoolean>().ok())
-            .is_some_and(|focused| focused.as_bool()))
+    /// Whether its application's focused element (`AXFocusedUIElement`) is
+    /// the element or one of its descendants, found by walking up
+    /// `AXParent` from the focused element. A compound control passes
+    /// focus on to a child, which still counts as the control focused.
+    pub fn holds_focus(&self) -> Result<bool, Error> {
+        // SAFETY: any pid names an application element; a pid without one
+        // fails the read below instead.
+        let application = unsafe { AXUIElement::new_application(self.pid) };
+        // SAFETY: `application` is a live application element.
+        let status = unsafe { application.set_messaging_timeout(self.timeout.as_secs_f32()) };
+        self.check("AXUIElementSetMessagingTimeout", status)?;
+        let Some(mut current) = self
+            .read_of(&application, FOCUSED_ELEMENT)?
+            .and_then(|value| value.downcast::<AXUIElement>().ok())
+        else {
+            return Ok(false);
+        };
+        for _ in 0..MAX_ANCESTORS {
+            if *current == *self.element {
+                return Ok(true);
+            }
+            // SAFETY: `current` is a live element.
+            let status = unsafe { current.set_messaging_timeout(self.timeout.as_secs_f32()) };
+            self.check("AXUIElementSetMessagingTimeout", status)?;
+            let Some(parent) = self
+                .read_of(&current, "AXParent")?
+                .and_then(|value| value.downcast::<AXUIElement>().ok())
+            else {
+                return Ok(false);
+            };
+            current = parent;
+        }
+        Ok(false)
     }
 
     /// Whether the element's value is text, or it has none.

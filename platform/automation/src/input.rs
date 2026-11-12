@@ -414,13 +414,16 @@ impl Input {
 
     /// Gives `element` keyboard focus, so the text and keys posted next go
     /// to it: by setting `AXFocused` where it allows that, in its window made
-    /// its application's key window, and waiting for it to report itself
-    /// focused; otherwise with a click at the centre of its frame.
+    /// its application's key window, and waiting for its application's
+    /// focused element (`AXFocusedUIElement`) to be the element or one of
+    /// its descendants, as a compound control's focus lands on a child;
+    /// otherwise with a click at the centre of its frame.
     ///
     /// # Errors
     ///
     /// Those of [`press`](Self::press), and [`Error::ElementNotFocused`]
-    /// when it does not report itself focused within the confirm timeout.
+    /// when the focus is not in the element or its descendants within the
+    /// confirm timeout.
     pub fn focus(&mut self, element: ElementRef) -> Result<(), Error> {
         let handle = self.resolve(element)?;
         if !handle.settable(FOCUSED)? {
@@ -433,7 +436,7 @@ impl Input {
             Some(&mode),
             self.confirm_timeout,
             placement::RECHECK,
-            || handle.focused(),
+            || handle.holds_focus(),
         )?;
         if focused {
             Ok(())

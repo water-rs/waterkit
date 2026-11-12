@@ -155,6 +155,8 @@ mod error;
 #[cfg(target_os = "macos")]
 mod event;
 #[cfg(target_os = "macos")]
+mod focus_guard;
+#[cfg(target_os = "macos")]
 mod framework;
 #[cfg(target_os = "macos")]
 mod input;

@@ -43,6 +43,7 @@ use objc2_core_services::{
 use objc2_foundation::{NSAppleEventDescriptor, NSArray, NSBundle, NSError, NSString, NSURL};
 
 use crate::accessibility::{Application, WindowLookup};
+use crate::focus_guard::FocusGuard;
 use crate::skylight::EventSymbols;
 use crate::window::{self, ListedWindow};
 use crate::{Error, bundle_names, placement, run_loop, topology};
@@ -50,6 +51,17 @@ use crate::{Error, bundle_names, placement, run_loop, topology};
 /// The default for [`LaunchConfig::timeout`]: how long `LaunchServices` may
 /// take to deliver a launch's completion before a wedged launch is reported.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long after its window shows a launch keeps the application that was in
+/// front in front: the span cua-driver watches for an application's own
+/// activation when it only starts.
+const SETTLE: Duration = Duration::from_millis(500);
+
+/// [`SETTLE`] for a launch that hands the application something to open or
+/// starts a new instance, which activates again once it handles the open;
+/// cua-driver measured Electron applications doing so up to about two seconds
+/// after the open returns.
+const SETTLE_OPENING: Duration = Duration::from_millis(2500);
 
 /// An application to launch, and what to hand it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,7 +200,12 @@ impl LaunchedApplication {
     /// returns once `WindowServer` lists them all within it.
     ///
     /// The launch does not activate the application or add it to the recent
-    /// items, and it sends the application an open-application Apple event
+    /// items. An application that activates itself anyway, while it launches
+    /// or within half a second of its windows being placed (two and a half
+    /// seconds when the launch opens something or starts a new instance), is
+    /// put back behind the application that was in front when the launch
+    /// began, unless the user pressed a mouse button or a modifier key just
+    /// before. The launch sends the application an open-application Apple event
     /// (`aevt/oapp`), so an application launched cold or restoring its state
     /// still opens a window. See the crate documentation for how the waits
     /// service the calling thread's run loop.
@@ -241,8 +258,19 @@ impl LaunchedApplication {
             .filter(|window| running.contains(&window.pid))
             .map(|window| window.id)
             .collect();
+        // The application that is in front stays in front, whatever the
+        // launched one does to itself.
+        let settle = if open.is_empty() && !config.new_instance {
+            SETTLE
+        } else {
+            SETTLE_OPENING
+        };
+        let focus = FocusGuard::arm(config.timeout + settle);
         let pid = app.open(&open, config.new_instance, config.timeout)?;
         tracing::debug!(pid, bundle_id = %app.bundle_id, "launched");
+        if let Some(focus) = &focus {
+            focus.follow(pid);
+        }
         let accessibility = Application::new(pid, &lookup, remaining())?;
         let shown = placement::shown_windows(&accessibility, &existing, remaining())?;
         if shown.is_empty() {
@@ -254,6 +282,9 @@ impl LaunchedApplication {
         }
         if let Some(display) = config.display {
             placement::place(pid, &shown, display, remaining())?;
+        }
+        if let Some(focus) = &focus {
+            focus.settle(settle)?;
         }
 
         let listed = window::list(CGWindowListOption::OptionAll, kCGNullWindowID)?;

@@ -864,6 +864,22 @@ mod mac {
             self.vendor == u32::from_be_bytes(*b"unkn")
                 && self.model == u32::from_be_bytes(*b"virt")
         }
+
+        /// Whether `waterkit-automation` created the display: its virtual
+        /// displays carry vendor `0xF0F0` (`VENDOR_ID` in `display.rs`).
+        /// Other test processes create such displays while this one runs.
+        const fn is_automations(&self) -> bool {
+            self.vendor == 0xF0F0
+        }
+    }
+
+    /// The online displays `waterkit-automation` did not create: the
+    /// user's, which the test processes running beside this one leave alone.
+    fn user_displays() -> Vec<OnlineDisplay> {
+        online_displays()
+            .into_iter()
+            .filter(|online| !online.is_automations())
+            .collect()
     }
 
     fn online_displays() -> Vec<OnlineDisplay> {
@@ -904,7 +920,7 @@ mod mac {
     fn leaves_the_main_display_to_the_user(rounds: usize) {
         let mtm = MainThreadMarker::new().expect("libtest-mimic runs one thread on main");
         log_macos_version();
-        let before = online_displays();
+        let before = user_displays();
         let main_before = CGMainDisplayID();
         let main_frame = CGDisplayBounds(main_before);
         let headless = before.iter().all(OnlineDisplay::is_headless_fallback);
@@ -946,8 +962,13 @@ mod mac {
             }
 
             // No wait here: the drop returns once the removal has settled.
+            let id = display.id();
             drop(display);
-            let after = online_displays();
+            assert!(
+                online_displays().iter().all(|online| online.id != id),
+                "round {round}: display {id} was still online when the drop returned"
+            );
+            let after = user_displays();
             tracing::info!(round, ?after, main = CGMainDisplayID(), "displays after");
             assert!(
                 restored(&after),

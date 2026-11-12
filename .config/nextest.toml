@@ -1,8 +1,10 @@
-# The frontmost application is one state for the whole system: the tests
-# that change it or assert it unchanged run one at a time.
+# The automation tests share the system's display arrangement and its
+# frontmost application: a display one test brings online can move another
+# test's display and the window it is about to press, and some tests change
+# or assert the frontmost application. They run one at a time.
 [test-groups]
-front-application = { max-threads = 1 }
+automation-display = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'binary_id(waterkit-automation::automation) & (test(=an_app_launches_in_the_background_onto_a_virtual_display) | test(=an_app_that_activates_itself_does_not_take_the_front))'
-test-group = 'front-application'
+filter = 'binary_id(waterkit-automation::automation)'
+test-group = 'automation-display'

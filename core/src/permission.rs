@@ -55,6 +55,16 @@ pub enum Permission {
     HealthRead(HealthDataKind),
     /// `HealthKit` / Health Connect write access for a data type.
     HealthWrite(HealthDataKind),
+    /// Reading the pixels of other apps' windows and of whole displays
+    /// (macOS Screen Recording).
+    ScreenRecording,
+    /// Driving other apps' UI: synthesized input and the accessibility
+    /// API (macOS Accessibility).
+    Accessibility,
+    /// Capturing the screen without the system's window picker (the
+    /// one-time consent macOS 15 and later asks for at an app's first such
+    /// capture). It builds on [`Permission::ScreenRecording`].
+    DirectScreenCapture,
 }
 
 /// Discriminator for [`Permission::HealthRead`] / [`Permission::HealthWrite`].
@@ -91,6 +101,12 @@ pub enum PermissionStatus {
     Restricted,
     /// User has not been prompted yet.
     NotDetermined,
+    /// The permission is not granted, and the platform does not say whether
+    /// the user declined it or was never asked.
+    NotGranted,
+    /// The platform keeps the answer where the app cannot read it; only the
+    /// operation the permission guards reveals whether it is allowed.
+    Unknown,
 }
 
 /// Errors returned from permission operations.
@@ -100,6 +116,9 @@ pub enum PermissionError {
     /// Permission kind has no platform mapping.
     #[error("permission not supported on this platform")]
     Unsupported,
+    /// The permission can be requested only once this other one is granted.
+    #[error("{0:?} must be granted first")]
+    Prerequisite(Permission),
     /// Platform-level failure with a message from the OS.
     #[error("platform error: {0}")]
     Platform(String),

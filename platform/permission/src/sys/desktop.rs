@@ -59,6 +59,9 @@ mod tests {
             Permission::Tracking,
             Permission::MediaLibrary,
             Permission::BodySensors,
+            Permission::ScreenRecording,
+            Permission::Accessibility,
+            Permission::DirectScreenCapture,
         ];
 
         for permission in not_granted {

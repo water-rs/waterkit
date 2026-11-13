@@ -66,6 +66,7 @@ waterkit-menu = { workspace = true, optional = true }
 waterkit-otp = { workspace = true, optional = true }
 waterkit-wallet = { workspace = true, optional = true }
 waterkit-store = { workspace = true, optional = true }
+waterkit-automation = { workspace = true, optional = true }
 
 [dev-dependencies]
 toml = { workspace = true }
@@ -106,6 +107,7 @@ full = [
     "otp",
     "wallet",
     "store",
+    "automation",
 ]
 permission = ["dep:waterkit-permission"]
 location = ["dep:waterkit-location", "permission"]
@@ -122,9 +124,6 @@ camera = ["dep:waterkit-camera", "waterkit-vision?/camera"]
 vision = ["dep:waterkit-vision", "waterkit-vision?/barcode", "waterkit-vision?/text", "waterkit-vision?/document", "waterkit-vision?/scanner", "waterkit-vision?/document-scanner"]
 sensor = ["dep:waterkit-sensor"]
 codec = ["dep:waterkit-codec"]
-# VA-API hardware video decode/encode on Linux. A still-image consumer keeps
-# `codec` alone; a video consumer that wants the hardware path opts in here.
-vaapi = ["codec", "waterkit-codec/vaapi"]
 screen = ["dep:waterkit-screen"]
 system = ["dep:waterkit-system"]
 video = ["dep:waterkit-video"]
@@ -143,6 +142,7 @@ menu = ["dep:waterkit-menu"]
 otp = ["dep:waterkit-otp"]
 wallet = ["dep:waterkit-wallet"]
 store = ["dep:waterkit-store"]
+automation = ["dep:waterkit-automation"]
 
 
 [workspace.dependencies]
@@ -172,8 +172,8 @@ waterkit-camera = { path = "device/camera", version = "0.2.0" }
 waterkit-vision = { path = "device/vision", version = "0.2.0" }
 waterkit-sensor = { path = "device/sensor", version = "0.2.0" }
 # No default features: consumers opt into `gpu` (decoded-frame upload),
-# `software-decode` (rav1d + image decoding), `software-encode` (adds rav1e)
-# and `vaapi` explicitly.
+# `software-decode` (rav1d + image decoding) and `software-encode` (adds rav1e)
+# explicitly.
 waterkit-codec = { path = "multimedia/codec", version = "0.2.0", default-features = false }
 shaderloom = { version = "0.2.1", default-features = false }
 waterkit-screen = { path = "platform/screen", version = "0.2.0" }
@@ -199,6 +199,7 @@ waterkit-menu = { path = "platform/menu", version = "0.2.0" }
 waterkit-otp = { path = "identity/otp", version = "0.2.0" }
 waterkit-wallet = { path = "platform/wallet", version = "0.2.0" }
 waterkit-store = { path = "platform/store", version = "0.2.0" }
+waterkit-automation = { path = "platform/automation", version = "0.2.0" }
 
 # Cross-platform
 enumset = "1.1"
@@ -248,6 +249,8 @@ objc2-photos = { version = "0.3", default-features = false }
 dispatch2 = "0.3"
 objc2-core-media = "0.3"
 objc2-app-kit = "0.3"
+objc2-application-services = { version = "0.3", default-features = false }
+objc2-security = { version = "0.3", default-features = false }
 objc2-authentication-services = { version = "0.3", default-features = false }
 objc2-background-tasks = { version = "0.3", default-features = false }
 # W3C KeyboardEvent key/modifier vocabulary.
@@ -346,6 +349,9 @@ icu_locale_core = { version = "2.3", features = ["alloc"] }
 # Likely-subtags expansion (`LocaleExpander`), for routing languages to the
 # scripts a recognizer serves.
 icu_locale = "2.3"
+# Canonical decomposition, so application names compare as one text however
+# the file system or a bundle encoded them.
+icu_normalizer = { version = "2.4", default-features = false, features = ["compiled_data"] }
 url = "2.5"
 zenwave = { version = "0.7.1", default-features = false, features = ["hyper-backend"] }
 
@@ -355,6 +361,7 @@ dirs = "7.0"
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 wl-clipboard-rs = "0.9.4"
 rustix = "1.1"
+tempfile = { version = "3.27", default-features = false }
 x11rb = "0.14"
 clipboard-rs = { version = "0.3", features = ["image"] }
 wayland-sys = { version = "0.31.11", features = ["dlopen"] }

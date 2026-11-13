@@ -21,7 +21,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 waterkit-core.workspace = true
-zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "9.4.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true

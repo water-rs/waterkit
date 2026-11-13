@@ -910,7 +910,7 @@ impl StreamingAudioPlayer {
     ///
     /// # Errors
     ///
-    /// Returns an error for an out-of-order frame, a timeline outside the
+    /// Returns an error for a frame wholly before the queued end, a timeline outside the
     /// representable audio clock range, or an unavailable output thread.
     pub fn enqueue(&self, frame: DecodedAudioFrame) -> Result<(), PlayerError> {
         self.control.enqueue(frame)
@@ -1019,7 +1019,7 @@ impl StreamingAudioProducer {
     ///
     /// # Errors
     ///
-    /// Returns an error for an out-of-order frame, an overflowing timeline, or
+    /// Returns an error for a frame wholly before the queued end, an overflowing timeline, or
     /// an unavailable output owner.
     pub fn enqueue(&self, frame: DecodedAudioFrame) -> Result<(), PlayerError> {
         self.control.enqueue(frame)
@@ -1051,6 +1051,14 @@ impl StreamingAudioProducer {
 }
 
 impl StreamingAudioControl {
+    /// The output appends PCM back to back and interpolates the audio clock
+    /// inside each frame's presentation range, so the queued timeline is
+    /// sample-continuous. A frame that starts before the queued end by less
+    /// than its own duration is container timestamp jitter and is rebased to
+    /// start exactly at the queued end; a frame wholly before the queued end
+    /// cannot be jitter and is rejected. A frame that starts after the queued
+    /// end keeps its timestamp, and the clock jumps forward to it when
+    /// playback reaches the frame.
     fn enqueue(&self, frame: DecodedAudioFrame) -> Result<(), PlayerError> {
         let start = duration_to_nanos(frame.presentation_time())?;
         let end = duration_to_nanos(
@@ -1060,13 +1068,27 @@ impl StreamingAudioControl {
                 .ok_or_else(|| timeline_overflow_error("decoded audio presentation range"))?,
         )?;
         let queued_end = self.queued_end_nanos.load(Ordering::Acquire);
-        if start < queued_end {
-            return Err(PlayerError::PlaybackFailed(format!(
-                "decoded audio frame at {:?} precedes queued end {:?}",
-                frame.presentation_time(),
+        let (frame, end) = if start < queued_end {
+            if end <= queued_end {
+                return Err(PlayerError::PlaybackFailed(format!(
+                    "decoded audio frame at {:?} precedes queued end {:?} by at least its duration {:?}",
+                    frame.presentation_time(),
+                    Duration::from_nanos(queued_end),
+                    frame.duration()
+                )));
+            }
+            let rebased_end = duration_to_nanos(
                 Duration::from_nanos(queued_end)
-            )));
-        }
+                    .checked_add(frame.duration())
+                    .ok_or_else(|| timeline_overflow_error("decoded audio presentation range"))?,
+            )?;
+            (
+                frame.rebased_to(Duration::from_nanos(queued_end)),
+                rebased_end,
+            )
+        } else {
+            (frame, end)
+        };
         self.send(OutputCommand::Enqueue(frame))?;
         self.queued_end_nanos.store(end, Ordering::Release);
         Ok(())
@@ -1226,12 +1248,13 @@ fn duration_to_nanos(duration: Duration) -> Result<u64, PlayerError> {
 mod tests {
     use std::num::{NonZeroU16, NonZeroU32};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::mpsc;
     use std::time::Duration;
 
     use super::{
-        PresentationClockSource, SilenceOutput, SilenceSkipping, SilenceSkippingProcessor,
-        StreamingRateProcessor,
+        OutputCommand, PresentationClockSource, SilenceOutput, SilenceSkipping,
+        SilenceSkippingProcessor, StreamingAudioControl, StreamingRateProcessor,
     };
     use crate::DecodedAudioFrame;
     use crate::playback_rate::PlaybackParams;
@@ -1244,6 +1267,64 @@ mod tests {
             vec![0.0; 8],
         )
         .expect("aligned PCM fixture must be valid")
+    }
+
+    fn control_fixture() -> (StreamingAudioControl, mpsc::Receiver<OutputCommand>) {
+        let (commands, receiver) = mpsc::channel();
+        let control = StreamingAudioControl {
+            commands,
+            generation: Arc::new(AtomicU64::new(0)),
+            position_nanos: Arc::new(AtomicU64::new(0)),
+            queued_end_nanos: Arc::new(AtomicU64::new(0)),
+            paused: Arc::new(AtomicBool::new(true)),
+        };
+        (control, receiver)
+    }
+
+    fn grid_frame(start_sample: u64) -> DecodedAudioFrame {
+        DecodedAudioFrame::from_interleaved_pcm(
+            Duration::from_nanos(start_sample * 1_000_000_000 / 44_100),
+            NonZeroU16::MIN,
+            NonZeroU32::new(44_100).expect("sample rate must be non-zero"),
+            vec![0.0; 1024],
+        )
+        .expect("mono PCM fixture must be aligned")
+    }
+
+    #[test]
+    fn enqueue_absorbs_timestamp_jitter_into_a_contiguous_timeline() {
+        let (control, receiver) = control_fixture();
+        for index in 0..49 {
+            control
+                .enqueue(grid_frame(index * 1024))
+                .expect("grid frame must queue");
+        }
+        let queued_end = control.queued_end_nanos.load(Ordering::Acquire);
+        // Two samples before the sample 50176 that 49 frames of 1024 reach.
+        let jittered = grid_frame(50_174);
+        assert!(jittered.presentation_time() < Duration::from_nanos(queued_end));
+        let duration = jittered.duration();
+        control.enqueue(jittered).expect("jitter must be absorbed");
+
+        let Some(OutputCommand::Enqueue(frame)) = receiver.try_iter().last() else {
+            panic!("enqueue must send an Enqueue command");
+        };
+        assert_eq!(frame.presentation_time(), Duration::from_nanos(queued_end));
+        assert_eq!(
+            Duration::from_nanos(control.queued_end_nanos.load(Ordering::Acquire)),
+            Duration::from_nanos(queued_end) + duration
+        );
+    }
+
+    #[test]
+    fn enqueue_rejects_a_frame_wholly_before_the_queued_end() {
+        let (control, _receiver) = control_fixture();
+        control
+            .enqueue(grid_frame(4096))
+            .expect("first frame must queue");
+        control
+            .enqueue(grid_frame(0))
+            .expect_err("a frame wholly in the past is not jitter");
     }
 
     fn mono_frame(index: u32, amplitude: f32) -> DecodedAudioFrame {

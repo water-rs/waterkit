@@ -9,6 +9,7 @@ Waterkit is organized into focused, independent crates. You can use the main `wa
 | Feature / Crate | Description |
 | :--- | :--- |
 | **[Audio](audio)** | Cross-platform audio playback and recording. |
+| **[Automation](automation)** | Virtual displays and cursor-free input for driving a desktop (macOS). |
 | **[Background](background)** | Background refresh and heavy background task scheduling APIs. |
 | **[Biometric](biometric)** | TouchID, FaceID, Windows Hello, and native biometric authentication. |
 | **[Bluetooth](bluetooth)** | BLE scanning, device discovery, and connection management. |

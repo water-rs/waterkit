@@ -1,0 +1,68 @@
+[package]
+name = "waterkit-automation"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+description = "Virtual displays and cursor-free input for desktop automation"
+keywords = ["automation", "virtual-display", "input", "macos"]
+categories = ["os", "gui"]
+
+[lints]
+workspace = true
+
+# The whole API is macOS-only; on every other target the crate is empty.
+[target.'cfg(target_os = "macos")'.dependencies]
+waterkit-core.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+keyboard-types.workspace = true
+icu_normalizer.workspace = true
+libc = "0.2"
+block2.workspace = true
+dispatch2.workspace = true
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = [
+    "NSRunningApplication", "NSWorkspace", "block2", "libc",
+] }
+objc2-core-services = { workspace = true, features = ["AE", "AEDataModel", "AppleEvents"] }
+# `kDisplayVendorIDUnknown`, the vendor of the system's headless fallback display.
+objc2-io-kit = { workspace = true, features = ["graphics"] }
+objc2-foundation = { workspace = true, features = [
+    "NSAppleEventDescriptor", "NSArray", "NSBundle", "NSData", "NSDictionary", "NSError",
+    "NSLocale", "NSNotification", "NSOperation", "NSPathUtilities", "NSProcessInfo",
+    "NSPropertyList", "NSString", "NSURL",
+    "NSValue", "objc2-core-services",
+] }
+objc2-core-foundation = { workspace = true, features = [
+    "CFArray", "CFCGTypes", "CFDate", "CFDictionary", "CFMachPort", "CFNumber", "CFRunLoop",
+    "CFString",
+] }
+objc2-application-services = { workspace = true, features = [
+    "std", "AXError", "AXUIElement", "AXValue", "HIServices", "libc",
+] }
+objc2-core-graphics = { workspace = true, features = [
+    "CGDirectDisplay", "CGDisplayConfiguration", "CGError", "CGEvent", "CGEventSource",
+    "CGEventTypes",
+    "CGGeometry", "CGRemoteOperation", "CGWindow", "libc",
+] }
+
+[dev-dependencies]
+# The automation test runs its own harness on every target.
+libtest-mimic = "0.8"
+
+# The automation test opens windows on the virtual display it creates, in its
+# own process and in a child that reports what it receives as JSON lines, and
+# prints the crate's logs.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-app-kit.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tracing-subscriber.workspace = true
+
+[[test]]
+name = "automation"
+harness = false

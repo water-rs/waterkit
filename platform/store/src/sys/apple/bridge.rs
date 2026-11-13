@@ -25,6 +25,7 @@ pub mod ffi {
         fn store_purchase(&self, product_id: &str, callback: Box<dyn FnOnce(String) -> ()>);
         fn store_next_event(&self, callback: Box<dyn FnOnce(String) -> ()>);
         fn store_entitlements(&self, callback: Box<dyn FnOnce(String) -> ()>);
-        fn store_finish(transaction_id: &str, callback: Box<dyn FnOnce(String) -> ()>);
+        // Finishes the transaction this session delivered under that id.
+        fn store_finish(&self, transaction_id: &str, callback: Box<dyn FnOnce(String) -> ()>);
     }
 }

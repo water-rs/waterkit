@@ -13,10 +13,44 @@ categories = ["os", "gui", "multimedia"]
 [lints]
 workspace = true
 
+[features]
+default = ["screens", "screenshot", "brightness", "gpu", "display-stream"]
+# `screens()`, `ScreenInfo` and `max_refresh_rate()`: the display list.
+screens = ["dep:xcap", "dep:wayland-sys"]
+# `screenshot()` / `screenshot_primary()`: encoded captures of a listed display.
+screenshot = [
+    "screens",
+    "dep:objc2-core-image",
+    "dep:objc2-core-media",
+    "dep:objc2-core-video",
+    "dep:objc2-image-io",
+    "dep:objc2-io-surface",
+    "dep:objc2-screen-capture-kit",
+    "dep:objc2-ui-kit",
+]
+# `brightness()` / `set_brightness()`.
+brightness = ["dep:brightness", "dep:libc", "dep:objc2-io-kit", "dep:objc2-ui-kit"]
+# `ScreenStream`: a listed display's frames as wgpu textures.
+gpu = [
+    "screens",
+    "dep:wgpu",
+    "dep:objc2-core-media",
+    "dep:objc2-core-video",
+    "dep:objc2-io-surface",
+    "dep:objc2-screen-capture-kit",
+]
+# `DisplayStream`: any display by id, frames as the platform's pixel buffers.
+display-stream = [
+    "dep:objc2-core-media",
+    "dep:objc2-core-video",
+    "dep:objc2-io-surface",
+    "dep:objc2-screen-capture-kit",
+]
+
 [dependencies]
 waterkit-core = { workspace = true }
 thiserror.workspace = true
-wgpu.workspace = true
+wgpu = { workspace = true, optional = true }
 async-channel.workspace = true
 blocking.workspace = true
 futures.workspace = true
@@ -24,28 +58,30 @@ tracing.workspace = true
 
 # Desktop screen capture
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
-xcap.workspace = true
+xcap = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-wayland-sys.workspace = true
+wayland-sys = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
-brightness = { version = "0.8", default-features = false }
+brightness = { version = "0.8", default-features = false, optional = true }
 
 # Apple platforms (iOS, macOS)
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 objc2.workspace = true
 objc2-foundation = { workspace = true, features = ["NSArray", "NSError", "NSObject"] }
 objc2-core-foundation = { workspace = true, features = [
-    "CFData", "CFDictionary", "CFNumber", "CFString", "CFCGTypes",
+    "CFArray", "CFData", "CFDictionary", "CFNumber", "CFString", "CFCGTypes",
 ] }
 objc2-core-graphics = { workspace = true, features = ["CGDirectDisplay", "CGImage"] }
-objc2-image-io = { workspace = true, features = ["CGImageDestination", "objc2-core-graphics"] }
+objc2-image-io = { workspace = true, optional = true, features = [
+    "CGImageDestination", "objc2-core-graphics",
+] }
 block2.workspace = true
 dispatch2.workspace = true
 
 [target.'cfg(target_os = "ios")'.dependencies]
-objc2-ui-kit = { workspace = true, features = [
+objc2-ui-kit = { workspace = true, optional = true, features = [
     "UIApplication", "UIGraphicsImageRenderer", "UIGraphicsRenderer", "UIImage",
     "UIResponder", "UIScreen", "UIView", "UIWindow",
     "block2", "objc2-core-foundation", "objc2-core-graphics",
@@ -53,18 +89,18 @@ objc2-ui-kit = { workspace = true, features = [
 objc2-foundation = { workspace = true, features = ["NSData"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"
-objc2-core-image = { workspace = true, features = [
+libc = { version = "0.2", optional = true }
+objc2-core-image = { workspace = true, optional = true, features = [
     "CIContext", "CIImage", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-video",
 ] }
-objc2-core-media = { workspace = true, features = ["CMSampleBuffer", "CMTime"] }
-objc2-core-video = { workspace = true, features = [
+objc2-core-media = { workspace = true, optional = true, features = ["CMSampleBuffer", "CMTime"] }
+objc2-core-video = { workspace = true, optional = true, features = [
     "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVPixelBufferIOSurface", "objc2-io-surface",
 ] }
-objc2-io-kit = { workspace = true, features = ["graphics", "libc"] }
-objc2-io-surface.workspace = true
-objc2-screen-capture-kit = { workspace = true, features = [
-    "SCScreenshotManager", "SCShareableContent", "SCStream",
+objc2-io-kit = { workspace = true, optional = true, features = ["graphics", "libc"] }
+objc2-io-surface = { workspace = true, optional = true }
+objc2-screen-capture-kit = { workspace = true, optional = true, features = [
+    "SCError", "SCScreenshotManager", "SCShareableContent", "SCStream",
     "block2", "dispatch2", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-media",
 ] }
 
@@ -75,12 +111,38 @@ ndk-context.workspace = true
 waterkit-build.workspace = true
 
 [dev-dependencies]
+# The display-stream test runs its own harness on every target.
+libtest-mimic = "0.8"
 pollster = "1.0"
 
 # winit pulls in `android-activity`, which only builds once an application picks
 # an activity backend; it is desktop-only here.
 [target.'cfg(not(target_os = "android"))'.dev-dependencies]
 winit = "0.30"
+
+# The display-stream test creates its own `CGVirtualDisplay` to capture.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+futures-timer.workspace = true
+objc2-core-foundation = { workspace = true, features = ["CFDate", "CFRunLoop"] }
+objc2-core-graphics = { workspace = true, features = ["CGDisplayConfiguration"] }
+objc2-foundation = { workspace = true, features = ["NSArray", "NSString", "NSValue"] }
+
+[[example]]
+name = "demo"
+required-features = ["screenshot", "brightness"]
+
+[[example]]
+name = "screenshot"
+required-features = ["screenshot"]
+
+[[example]]
+name = "stream_preview"
+required-features = ["gpu"]
+
+[[test]]
+name = "display_stream"
+harness = false
+required-features = ["display-stream", "gpu"]
 
 # Android helper classes the packager compiles into the application's
 # classpath (see water-rs/cli's android backend).

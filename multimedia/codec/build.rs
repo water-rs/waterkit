@@ -15,7 +15,6 @@ fn main() {
         waterkit_hw_codec_apple: { target_vendor = "apple" },
         waterkit_hw_codec_android: { target_os = "android" },
         waterkit_hw_codec_windows: { target_os = "windows" },
-        waterkit_hw_codec_vaapi: { all(target_os = "linux", feature = "vaapi") },
         waterkit_av1_software: { all(
             feature = "software-decode",
             not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
@@ -27,14 +26,12 @@ fn main() {
         waterkit_hw_codec: { any(
             target_vendor = "apple",
             target_os = "android",
-            target_os = "windows",
-            all(target_os = "linux", feature = "vaapi")
+            target_os = "windows"
         ) },
         waterkit_any_codec: { any(
             target_vendor = "apple",
             target_os = "android",
             target_os = "windows",
-            all(target_os = "linux", feature = "vaapi"),
             all(
                 any(feature = "software-decode", feature = "software-encode"),
                 not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))
@@ -43,7 +40,6 @@ fn main() {
         waterkit_software_frames: { any(
             target_os = "android",
             target_os = "windows",
-            all(target_os = "linux", feature = "vaapi"),
             all(
                 any(feature = "software-decode", feature = "software-encode"),
                 not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))

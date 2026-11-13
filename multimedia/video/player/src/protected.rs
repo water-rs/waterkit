@@ -11,6 +11,7 @@ use jni::{
 };
 use waterkit_audio::DecodedAudioFrame;
 use waterkit_codec::NalStreamConverter;
+use waterkit_core::{MicrosecondTimestampError, MicrosecondTimestamps};
 use waterkit_video_container::{Codec, EncodedSample, TrackInfo, TrackKind};
 use waterkit_video_core::{CommonEncryptionScheme, Error, ProtectionInitData, TrackProtection};
 use waterkit_video_streaming::{LicenseRequest, LicenseResponse, LicenseServer, Url};
@@ -1069,6 +1070,9 @@ pub struct AndroidProtectedVideoDecoder {
     container_mime: &'static str,
     outstanding_output: Option<(u64, i32)>,
     next_output_sequence: u64,
+    /// `MediaCodec` keeps whole microseconds; this restores the exact sample
+    /// timestamps on output.
+    timestamps: MicrosecondTimestamps,
     input_finished: bool,
     secure_decoder: bool,
 }
@@ -1163,7 +1167,18 @@ impl AndroidProtectedVideoDecoder {
             .convert_protected_sample(sample.data(), encryption.subsamples())
             .map_err(|error| Error::Codec(error.to_string()))?;
         let (data, subsamples) = converted.into_parts();
-        queue_secure_sample(&self.resources, &self.track, sample, &data, &subsamples)
+        let presentation_time_micros = self
+            .timestamps
+            .submit(sample.presentation_time().to_duration()?)
+            .map_err(|error| Error::Codec(error.to_string()))?;
+        queue_secure_sample(
+            &self.resources,
+            &self.track,
+            sample,
+            &data,
+            &subsamples,
+            presentation_time_micros,
+        )
     }
 
     /// Signals end-of-stream to the secure decoder.
@@ -1221,41 +1236,43 @@ impl AndroidProtectedVideoDecoder {
             )));
         }
         let result = self.with_env(|env, codec| {
-            let buffer_info = env.new_object(jni_str!("android/media/MediaCodec$BufferInfo"), jni_sig!("()V"), &[])
+            let buffer_info = env
+                .new_object(
+                    jni_str!("android/media/MediaCodec$BufferInfo"),
+                    jni_sig!("()V"),
+                    &[],
+                )
                 .map_err(|error| platform_jni_error(env, "create BufferInfo", error))?;
             loop {
-                let index = env.call_method(codec, jni_str!("dequeueOutputBuffer"), jni_sig!("(Landroid/media/MediaCodec$BufferInfo;J)I"), &[
-                    JValue::Object(&buffer_info),
-                    JValue::Long(timeout_micros),
-                ])
+                let index = env
+                    .call_method(
+                        codec,
+                        jni_str!("dequeueOutputBuffer"),
+                        jni_sig!("(Landroid/media/MediaCodec$BufferInfo;J)I"),
+                        &[JValue::Object(&buffer_info), JValue::Long(timeout_micros)],
+                    )
                     .and_then(jni::objects::JValueOwned::i)
-                    .map_err(|error| {
-                        platform_jni_error(env, "dequeue protected output", error)
-                    })?;
+                    .map_err(|error| platform_jni_error(env, "dequeue protected output", error))?;
                 match index {
                     MEDIA_CODEC_INFO_TRY_AGAIN_LATER => return Ok(None),
                     MEDIA_CODEC_INFO_OUTPUT_FORMAT_CHANGED
                     | MEDIA_CODEC_INFO_OUTPUT_BUFFERS_CHANGED => {}
                     index if index >= 0 => {
-                        let presentation_time_micros = env.get_field(&buffer_info, jni_str!("presentationTimeUs"), jni_sig!("J"))
+                        let presentation_time_micros = env
+                            .get_field(&buffer_info, jni_str!("presentationTimeUs"), jni_sig!("J"))
                             .and_then(jni::objects::JValueOwned::j)
                             .map_err(|error| {
                                 platform_jni_error(env, "read protected output PTS", error)
                             })?;
-                        let flags = env.get_field(&buffer_info, jni_str!("flags"), jni_sig!("I"))
+                        let flags = env
+                            .get_field(&buffer_info, jni_str!("flags"), jni_sig!("I"))
                             .and_then(jni::objects::JValueOwned::i)
                             .map_err(|error| {
                                 platform_jni_error(env, "read protected output flags", error)
                             })?;
-                        let presentation_time_micros =
-                            u64::try_from(presentation_time_micros).map_err(|_| {
-                                Error::Codec(format!(
-                                    "MediaCodec returned negative protected output PTS {presentation_time_micros}"
-                                ))
-                            })?;
                         return Ok(Some((
                             index,
-                            Duration::from_micros(presentation_time_micros),
+                            presentation_time_micros,
                             flags & MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM != 0,
                         )));
                     }
@@ -1267,9 +1284,14 @@ impl AndroidProtectedVideoDecoder {
                 }
             }
         })?;
-        let Some((index, presentation_time, end_of_stream)) = result else {
+        let Some((index, presentation_time_micros, end_of_stream)) = result else {
             return Ok(None);
         };
+        let presentation_time = restore_output_timestamp(
+            &mut self.timestamps,
+            presentation_time_micros,
+            end_of_stream,
+        )?;
         let output = AndroidProtectedVideoOutput {
             index,
             sequence: self.next_output_sequence,
@@ -1357,6 +1379,7 @@ impl AndroidProtectedVideoDecoder {
     /// Returns an error when Android rejects the flush.
     pub fn flush(&mut self) -> Result<(), Error> {
         flush_codec(&self.resources)?;
+        self.timestamps.clear();
         self.outstanding_output = None;
         self.input_finished = false;
         Ok(())
@@ -1408,6 +1431,9 @@ pub struct AndroidProtectedAudioDecoder {
     channels: std::num::NonZeroU16,
     sample_rate: std::num::NonZeroU32,
     pcm_encoding: i32,
+    /// `MediaCodec` keeps whole microseconds; this restores the exact sample
+    /// timestamps on output.
+    timestamps: MicrosecondTimestamps,
     input_finished: bool,
     secure_decoder: bool,
 }
@@ -1478,6 +1504,10 @@ impl AndroidProtectedAudioDecoder {
                 "cannot queue protected audio after end of stream",
             )));
         }
+        let presentation_time_micros = self
+            .timestamps
+            .submit(sample.presentation_time().to_duration()?)
+            .map_err(|error| Error::Codec(error.to_string()))?;
         queue_secure_sample(
             &self.resources,
             &self.track,
@@ -1492,6 +1522,7 @@ impl AndroidProtectedAudioDecoder {
                     ))
                 })?
                 .subsamples(),
+            presentation_time_micros,
         )?;
         self.collect_output(0, false)
     }
@@ -1516,6 +1547,7 @@ impl AndroidProtectedAudioDecoder {
     /// Returns an error when Android rejects the flush.
     pub fn flush(&mut self) -> Result<(), Error> {
         flush_codec(&self.resources)?;
+        self.timestamps.clear();
         self.input_finished = false;
         Ok(())
     }
@@ -1548,11 +1580,16 @@ impl AndroidProtectedAudioDecoder {
                     self.pcm_encoding = pcm_encoding;
                 }
                 AndroidAudioOutput::Buffer {
-                    presentation_time,
+                    presentation_time_micros,
                     bytes,
                     end_of_stream,
                 } => {
                     if !bytes.is_empty() {
+                        let presentation_time = restore_output_timestamp(
+                            &mut self.timestamps,
+                            presentation_time_micros,
+                            end_of_stream,
+                        )?;
                         frames.push(
                             DecodedAudioFrame::from_interleaved_pcm(
                                 presentation_time,
@@ -1593,7 +1630,8 @@ enum AndroidAudioOutput {
         pcm_encoding: i32,
     },
     Buffer {
-        presentation_time: Duration,
+        /// The microsecond value `MediaCodec` returned, before restoration.
+        presentation_time_micros: i64,
         bytes: Vec<u8>,
         end_of_stream: bool,
     },
@@ -2300,6 +2338,7 @@ impl AndroidDecoderBootstrap {
             container_mime: self.container_mime,
             outstanding_output: None,
             next_output_sequence: 0,
+            timestamps: MicrosecondTimestamps::new(),
             input_finished: false,
             secure_decoder,
         })
@@ -2368,6 +2407,7 @@ impl AndroidDecoderBootstrap {
             channels,
             sample_rate: layout.sample_rate,
             pcm_encoding: MEDIA_CODEC_PCM_16_BIT,
+            timestamps: MicrosecondTimestamps::new(),
             input_finished: false,
             secure_decoder,
         })
@@ -3065,6 +3105,7 @@ fn queue_secure_sample(
     sample: &EncodedSample,
     data: &[u8],
     subsamples: &[waterkit_video_core::EncryptionSubsample],
+    presentation_time_micros: i64,
 ) -> Result<(), Error> {
     if sample.track_id() != track.id() {
         return Err(Error::Codec(format!(
@@ -3089,10 +3130,6 @@ fn queue_secure_sample(
         encryption.initialization_vector(),
         protection.constant_iv(),
     )?;
-    let presentation_time_micros =
-        i64::try_from(sample.presentation_time().to_duration()?.as_micros()).map_err(|_| {
-            Error::Codec(String::from("protected sample PTS exceeds Android jlong"))
-        })?;
     resources.with_env(|env, codec| {
         let input_index = env
             .call_method(
@@ -3165,6 +3202,24 @@ fn queue_end_of_stream(resources: &AndroidCodecResources) -> Result<(), Error> {
         .map_err(|error| platform_jni_error(env, "queue secure EOS", error))?;
         Ok(())
     })
+}
+
+/// Restores the exact timestamp of a decoded output.
+///
+/// The output flagged end of stream may carry the marker `finish_input` queued
+/// instead of a sample timestamp; that one is reported as the platform's value.
+fn restore_output_timestamp(
+    timestamps: &mut MicrosecondTimestamps,
+    micros: i64,
+    end_of_stream: bool,
+) -> Result<Duration, Error> {
+    match timestamps.restore(micros) {
+        Ok(exact) => Ok(exact),
+        Err(MicrosecondTimestampError::Unknown(_)) if end_of_stream => {
+            Ok(Duration::from_micros(micros.unsigned_abs()))
+        }
+        Err(error) => Err(Error::Codec(error.to_string())),
+    }
 }
 
 fn flush_codec(resources: &AndroidCodecResources) -> Result<(), Error> {
@@ -3289,13 +3344,8 @@ fn read_audio_output_buffer(
         )
         .map_err(|error| platform_jni_error(env, "release protected audio output", error));
     released?;
-    let presentation_time_micros = u64::try_from(presentation_time_micros).map_err(|_| {
-        Error::Codec(format!(
-            "MediaCodec returned negative protected audio PTS {presentation_time_micros}"
-        ))
-    })?;
     Ok(AndroidAudioOutput::Buffer {
-        presentation_time: Duration::from_micros(presentation_time_micros),
+        presentation_time_micros,
         bytes: bytes?,
         end_of_stream: flags & MEDIA_CODEC_BUFFER_FLAG_END_OF_STREAM != 0,
     })

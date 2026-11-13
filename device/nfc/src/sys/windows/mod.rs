@@ -54,8 +54,7 @@ impl NfcReaderInner {
                     };
                     let data_string = message
                         .DataAsString()
-                        .map(|value| value.to_string())
-                        .unwrap_or_default();
+                        .map_or_else(|_| String::new(), |value| value.to_string());
                     let ndef_message = if data_string.is_empty() {
                         None
                     } else {

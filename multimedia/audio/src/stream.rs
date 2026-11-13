@@ -233,6 +233,12 @@ impl DecodedAudioFrame {
         self.presentation_time
     }
 
+    /// Moves the frame's first sample to `presentation_time`, keeping its PCM.
+    pub(crate) const fn rebased_to(mut self, presentation_time: Duration) -> Self {
+        self.presentation_time = presentation_time;
+        self
+    }
+
     /// Returns the decoded PCM duration.
     #[must_use]
     pub const fn duration(&self) -> Duration {

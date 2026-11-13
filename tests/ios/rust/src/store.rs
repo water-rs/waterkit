@@ -162,16 +162,30 @@ async fn subscribe(store: &Store, products: &[Product], report: &mut TestReport)
 async fn entitlements(store: &Store, report: &mut TestReport) {
     match store.entitlements().await {
         Ok(entitlements) => {
-            let owned = entitlements
+            // `Some(finished)` for the subscription's entitlement.
+            let subscription = entitlements
                 .iter()
-                .any(|entitlement| matches!(entitlement, Entitlement::Finished(transaction) if transaction.product_id().as_str() == SUB));
-            if owned {
-                report.push(TestCase::passed("store.entitlements"));
-            } else {
-                report.push(TestCase::failed(
+                .find_map(|entitlement| match entitlement {
+                    Entitlement::Finished(transaction)
+                        if transaction.product_id().as_str() == SUB =>
+                    {
+                        Some(true)
+                    }
+                    Entitlement::Unfinished(purchase) if purchase.product_id().as_str() == SUB => {
+                        Some(false)
+                    }
+                    _ => None,
+                });
+            match subscription {
+                Some(true) => report.push(TestCase::passed("store.entitlements")),
+                Some(false) => report.push(TestCase::failed(
                     "store.entitlements",
-                    "the finished subscription is missing from entitlements",
-                ));
+                    "the finished subscription is listed as unfinished",
+                )),
+                None => report.push(TestCase::failed(
+                    "store.entitlements",
+                    "the subscription is missing from entitlements",
+                )),
             }
         }
         Err(error) => report.push(TestCase::failed("store.entitlements", format!("{error}"))),

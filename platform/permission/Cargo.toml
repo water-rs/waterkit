@@ -44,6 +44,50 @@ objc2-core-location = { workspace = true, features = [
 ] }
 objc2-photos = { workspace = true, features = ["PHPhotoLibrary", "block2"] }
 
+# macOS privacy grants: Screen Recording, Accessibility, direct capture.
+[target.'cfg(target_os = "macos")'.dependencies]
+async-io.workspace = true
+async-process.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+objc2-foundation = { workspace = true, features = [
+    "NSArray",
+    "NSBundle",
+    "NSError",
+    "NSString",
+] }
+objc2-screen-capture-kit = { workspace = true, features = [
+    "SCScreenshotManager",
+    "SCShareableContent",
+    "SCStream",
+    "block2",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+] }
+objc2-application-services = { workspace = true, features = [
+    "std",
+    "HIServices",
+    "AXUIElement",
+] }
+objc2-core-foundation = { workspace = true, features = [
+    "CFDictionary",
+    "CFNumber",
+    "CFString",
+    "CFURL",
+] }
+objc2-core-graphics = { workspace = true, features = [
+    "CGDirectDisplay",
+    "CGImage",
+    "CGWindow",
+] }
+objc2-security = { workspace = true, features = [
+    "std",
+    "CSCommon",
+    "SecCode",
+    "SecStaticCode",
+] }
+
 # Android
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
@@ -81,3 +125,11 @@ web-sys = { version = "0.3", features = [
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/PermissionHelper.kt"]
+
+[dev-dependencies]
+libtest-mimic = "0.8"
+
+# Its `main` wires the helper entry the way an app does.
+[[test]]
+name = "helper_entry"
+harness = false

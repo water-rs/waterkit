@@ -70,7 +70,7 @@ windows = { workspace = true, optional = true, features = [
 ] }
 
 [build-dependencies]
-waterkit-build.workspace = true
+waterkit-build = { workspace = true, features = ["swift-bridge"] }
 
 [features]
 # The `DetectBarcodes` request: Apple Vision's `DetectBarcodesRequest` on

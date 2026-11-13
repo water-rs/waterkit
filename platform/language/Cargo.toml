@@ -31,7 +31,7 @@ jni.workspace = true
 ndk-context.workspace = true
 
 [build-dependencies]
-waterkit-build = { workspace = true, features = ["native-callback"] }
+waterkit-build = { workspace = true, features = ["native-callback", "swift-bridge"] }
 
 [dev-dependencies]
 futures.workspace = true

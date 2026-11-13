@@ -6,7 +6,7 @@ use std::io::Write as _;
 const CONVERTER_COMMON: &str = "src/shaders/frame_converter.wgsl";
 
 /// One converter entry point: its source, the artifact it compiles to, and
-/// whether it needs the YCbCr fragment from `waterkit-video-core`.
+/// whether it needs the YCbCr fragment from `mediax-core`.
 const CONVERTER_ENTRIES: [(&str, &str, bool); 3] = [
     ("src/shaders/convert_rgb.wgsl", "frame_convert_rgb", false),
     (
@@ -35,7 +35,7 @@ fn compile_frame_converter() {
     for (path, artifact, uses_ycbcr) in CONVERTER_ENTRIES {
         let entry = read_tracked(path);
         let prelude = if uses_ycbcr {
-            waterkit_video_core::YCBCR_WGSL
+            mediax_core::YCBCR_WGSL
         } else {
             ""
         };

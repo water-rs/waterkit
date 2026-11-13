@@ -24,8 +24,6 @@ mod recorder;
 #[cfg(feature = "playback")]
 mod shutdown;
 #[cfg(feature = "streaming")]
-mod stream;
-#[cfg(feature = "streaming")]
 mod stream_output;
 #[cfg(any(feature = "media-session", feature = "recording"))]
 mod sys;
@@ -40,11 +38,6 @@ pub use player::{AudioPlayer, ListenerPose, PlaybackMode, SpatialPosition, Spati
 pub use recorder::{AudioBuffer, AudioFormat, AudioRecorder, AudioRecorderBuilder, RecordError};
 #[cfg(feature = "playback")]
 pub use shutdown::{ShutdownHandle, ShutdownReceiver};
-#[cfg(feature = "streaming")]
-pub use stream::{
-    AacDecoderConfig, AacPacketDecoder, DecodedAudioFrame, EncodedAudioPacket, PacketAudioDecoder,
-    PacketAudioError, PcmFrameError,
-};
 #[cfg(feature = "streaming")]
 pub use stream_output::{
     SilenceSkipping, StreamingAudioControl, StreamingAudioPlayer, StreamingAudioProducer,

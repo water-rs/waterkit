@@ -5,8 +5,8 @@ use std::io::{self, Read};
 use std::path::Path;
 use std::time::Duration;
 
+use mediax_core::{ColorRange, MatrixCoefficients};
 use thiserror::Error;
-use waterkit_video_core::{ColorRange, MatrixCoefficients};
 use yuv::{YuvBiPlanarImage, YuvConversionMode, YuvRange, YuvStandardMatrix};
 
 const MAGIC: &[u8; 4] = b"WKRV";

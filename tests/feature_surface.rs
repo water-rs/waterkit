@@ -1,7 +1,7 @@
 //! Checks that the facade's feature set, its optional dependencies and its
 //! re-exports stay in step with each other.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 fn read_root_file(path: &str) -> String {
@@ -45,16 +45,18 @@ fn feature_values(manifest: &toml::Value, feature: &str) -> BTreeSet<String> {
         .collect()
 }
 
-fn optional_feature_names(manifest: &toml::Value) -> BTreeSet<String> {
+/// Maps each public feature to the optional dependency it enables. Facade
+/// crates named `waterkit-*` and `mediax-*` both qualify.
+fn optional_features_by_name(manifest: &toml::Value) -> BTreeMap<String, String> {
     manifest
         .get("dependencies")
         .and_then(toml::Value::as_table)
         .unwrap_or_else(|| panic!("missing `[dependencies]` section in root Cargo.toml"))
         .iter()
         .filter_map(|(dependency, value)| {
-            if !dependency.starts_with("waterkit-") {
-                return None;
-            }
+            let feature = dependency
+                .strip_prefix("waterkit-")
+                .or_else(|| dependency.strip_prefix("mediax-"))?;
 
             let table = value.as_table().unwrap_or_else(|| {
                 panic!("dependency `{dependency}` must be defined with an inline table")
@@ -66,12 +68,16 @@ fn optional_feature_names(manifest: &toml::Value) -> BTreeSet<String> {
                 .unwrap_or(false);
 
             if is_optional {
-                Some(dependency.trim_start_matches("waterkit-").to_owned())
+                Some((feature.to_owned(), dependency.clone()))
             } else {
                 None
             }
         })
         .collect()
+}
+
+fn optional_feature_names(manifest: &toml::Value) -> BTreeSet<String> {
+    optional_features_by_name(manifest).into_keys().collect()
 }
 
 fn as_sorted_list(values: &BTreeSet<String>) -> String {
@@ -108,10 +114,10 @@ fn full_feature_covers_all_optional_feature_crates() {
 #[test]
 fn each_public_feature_binds_its_optional_dependency() {
     let manifest = parse_manifest();
-    let optional_features = optional_feature_names(&manifest);
+    let optional_features = optional_features_by_name(&manifest);
 
-    for feature in &optional_features {
-        let expected_dependency = format!("dep:waterkit-{feature}");
+    for (feature, dependency) in &optional_features {
+        let expected_dependency = format!("dep:{dependency}");
         let mappings = feature_values(&manifest, feature);
 
         assert!(
@@ -125,17 +131,17 @@ fn each_public_feature_binds_its_optional_dependency() {
 #[test]
 fn lib_rs_reexports_every_public_feature() {
     let manifest = parse_manifest();
-    let optional_features = optional_feature_names(&manifest);
+    let optional_features = optional_features_by_name(&manifest);
     let lib_source = read_root_file("src/lib.rs");
 
-    for feature in &optional_features {
+    for (feature, dependency) in &optional_features {
         let cfg_marker = format!("#[cfg(feature = \"{feature}\")]");
         assert!(
             lib_source.contains(&cfg_marker),
             "`src/lib.rs` is missing cfg gate for feature `{feature}`"
         );
 
-        let use_marker = format!("pub use waterkit_{feature} as {feature};");
+        let use_marker = format!("pub use {} as {feature};", dependency.replace('-', "_"));
         assert!(
             lib_source.contains(&use_marker),
             "`src/lib.rs` is missing re-export `{use_marker}`"

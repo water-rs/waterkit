@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/codec", "tests/macos/notification", "tests/macos/passkey", "tests/macos/menu", "tests/macos/vision", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "multimedia/video/core", "multimedia/video/container", "multimedia/video/streaming", "multimedia/video/processing", "multimedia/video/player", "multimedia/video/cli", "identity/*", "sharing/*", "utils/build"]
+members = ["tests/shared/dialog_demo", "tests/android/rust", "tests/ios/rust", "tests/windows/rust", "tests/linux/rust", "tests/macos/location", "tests/macos/audio", "tests/macos/dialog", "tests/macos/biometric", "tests/macos/camera", "tests/macos/sensor", "tests/macos/capture", "tests/macos/notification", "tests/macos/passkey", "tests/macos/menu", "tests/macos/vision", "utils/test", "utils/test-report", "core", "platform/*", "device/*", "multimedia/*", "multimedia/video/player", "identity/*", "sharing/*", "utils/build"]
 
 
 [workspace.package]
@@ -47,7 +47,7 @@ waterkit-secret = { workspace = true, optional = true }
 waterkit-camera = { workspace = true, optional = true }
 waterkit-vision = { workspace = true, optional = true }
 waterkit-sensor = { workspace = true, optional = true }
-waterkit-codec = { workspace = true, features = ["gpu", "software-encode"], optional = true }
+mediax-codec = { workspace = true, features = ["gpu", "software-encode"], optional = true }
 waterkit-screen = { workspace = true, optional = true }
 waterkit-system = { workspace = true, optional = true }
 waterkit-video = { workspace = true, optional = true }
@@ -121,10 +121,10 @@ secret = ["dep:waterkit-secret"]
 camera = ["dep:waterkit-camera", "waterkit-vision?/camera"]
 vision = ["dep:waterkit-vision", "waterkit-vision?/barcode", "waterkit-vision?/text", "waterkit-vision?/document", "waterkit-vision?/scanner", "waterkit-vision?/document-scanner"]
 sensor = ["dep:waterkit-sensor"]
-codec = ["dep:waterkit-codec"]
+codec = ["dep:mediax-codec"]
 # VA-API hardware video decode/encode on Linux. A still-image consumer keeps
 # `codec` alone; a video consumer that wants the hardware path opts in here.
-vaapi = ["codec", "waterkit-codec/vaapi"]
+vaapi = ["codec", "mediax-codec/vaapi"]
 screen = ["dep:waterkit-screen"]
 system = ["dep:waterkit-system"]
 video = ["dep:waterkit-video"]
@@ -171,18 +171,17 @@ waterkit-secret = { path = "platform/secret", version = "0.2.0" }
 waterkit-camera = { path = "device/camera", version = "0.2.0" }
 waterkit-vision = { path = "device/vision", version = "0.2.0" }
 waterkit-sensor = { path = "device/sensor", version = "0.2.0" }
-# No default features: consumers opt into `gpu` (decoded-frame upload),
-# `software-decode` (rav1d + image decoding), `software-encode` (adds rav1e)
-# and `vaapi` explicitly.
-waterkit-codec = { path = "multimedia/codec", version = "0.2.0", default-features = false }
 shaderloom = { version = "0.2.1", default-features = false }
 waterkit-screen = { path = "platform/screen", version = "0.2.0" }
 waterkit-system = { path = "platform/system", version = "0.2.0" }
 waterkit-video = { path = "multimedia/video", version = "0.2.0" }
-waterkit-video-core = { path = "multimedia/video/core", version = "0.2.0" }
-waterkit-video-container = { path = "multimedia/video/container", version = "0.2.0" }
-waterkit-video-streaming = { path = "multimedia/video/streaming", version = "0.2.0" }
-waterkit-video-processing = { path = "multimedia/video/processing", version = "0.1.4" }
+# The media-processing crates live in water-rs/mediax, which has no crates.io
+# release yet. Consumers opt into codec features explicitly.
+mediax-core = { git = "https://github.com/water-rs/mediax", branch = "dev" }
+mediax-codec = { git = "https://github.com/water-rs/mediax", branch = "dev", default-features = false }
+mediax-container = { git = "https://github.com/water-rs/mediax", branch = "dev" }
+mediax-streaming = { git = "https://github.com/water-rs/mediax", branch = "dev" }
+mediax-processing = { git = "https://github.com/water-rs/mediax", branch = "dev" }
 waterkit-video-player = { path = "multimedia/video/player", version = "0.2.0" }
 waterkit-regional = { path = "platform/regional", version = "0.2.0" }
 waterkit-bluetooth = { path = "device/bluetooth", version = "0.2.0" }
@@ -225,7 +224,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "1.1"
 # Decoders only. `default-formats` also pulls `image`'s AVIF *encoder*
-# (ravif -> rav1e); the one place that encodes AVIF is a `waterkit-codec` test,
+# (ravif -> rav1e); the one place that encodes AVIF is a `mediax-codec` test,
 # which asks for that feature itself as a dev-dependency.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
 
@@ -317,22 +316,11 @@ rodio = { version = "0.23", default-features = false }
 # `wasm-bindgen` `SampleFormat`, so a wasm32 build that links both fails.
 # Move this together with rodio.
 cpal = "0.18"
-symphonia-core = "0.6.1"
-symphonia-codec-aac = "0.6.1"
-symphonia-adapter-fdk-aac = "0.2.0"
-mp4 = "0.14"
-byteorder = "1.5"
 bytes = "1.12"
-broadcast-common = { version = "9.4", default-features = false, features = ["std"] }
 transmux = { version = "0.26", default-features = false, features = ["std"] }
-quick-xml = "0.42"
-subtp = "0.2"
 winit = "0.30"
 pollster = "1.0"
 nokhwa = "0.10"
-rav1e = { version = "0.8", default-features = false, features = ["threading"] }
-rav1d = { version = "1.1", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
-media-codec = "0.9"
 timestretch = "0.15"
 
 # Time

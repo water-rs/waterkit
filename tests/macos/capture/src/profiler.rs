@@ -4,9 +4,9 @@
 
 mod common;
 
+use mediax_codec::{CodecType, Encoder, EncoderProfile};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use waterkit_codec::{CodecType, Encoder, EncoderProfile};
 use waterkit_screen::{ImageFormat, ScreenInfo, ScreenStream, StreamConfig, screens, screenshot};
 
 const ITERATIONS: u32 = 100;

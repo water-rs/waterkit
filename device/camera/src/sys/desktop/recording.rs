@@ -2,8 +2,8 @@
 //!
 //! Brings capture-stream frames to `NV12` (NV12 frames pass through, YUYV is
 //! re-subsampled, decoded MJPEG is converted from RGBA), encodes them through
-//! `waterkit-codec` (hardware encoders first, software AV1 when no hardware
-//! encoder exists), and muxes the packets with `waterkit-video-container`.
+//! `mediax-codec` (hardware encoders first, software AV1 when no hardware
+//! encoder exists), and muxes the packets with `mediax-container`.
 //! Raw recording writes uncompressed WKRV version 2 RGBA frames.
 
 use std::fs::File;
@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 
-use waterkit_codec::{CodecType, Encoder, EncoderProfile, annex_b_to_length_prefixed};
-use waterkit_video_container::{MuxerCodecType, VideoWriter};
+use mediax_codec::{CodecType, Encoder, EncoderProfile, annex_b_to_length_prefixed};
+use mediax_container::{MuxerCodecType, VideoWriter};
 use yuv::{
     YuvBiPlanarImage, YuvBiPlanarImageMut, YuvChromaSubsampling, YuvConversionMode, YuvPackedImage,
     YuvPlanarImageMut, YuvRange, YuvStandardMatrix,
@@ -680,11 +680,11 @@ mod tests {
     use super::super::UVC_YCBCR_COLOR;
     use super::*;
     use crate::{MatrixCoefficients, RawVideoLayout, RawVideoReader};
+    use mediax_codec::{DecodePacket, Decoder};
+    use mediax_container::{VideoReader, probe_mp4_color_info};
     use std::path::Path;
     use std::sync::Arc;
     use std::time::Duration;
-    use waterkit_codec::{DecodePacket, Decoder};
-    use waterkit_video_container::{VideoReader, probe_mp4_color_info};
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -724,7 +724,7 @@ mod tests {
         }
     }
 
-    fn decoded_av1_color(path: &Path, width: u32, height: u32) -> waterkit_video_core::CicpColor {
+    fn decoded_av1_color(path: &Path, width: u32, height: u32) -> mediax_core::CicpColor {
         let mut reader = VideoReader::open(path).expect("recorded file must reopen");
         let timescale = u128::from(reader.timescale());
         let samples: Vec<_> = reader

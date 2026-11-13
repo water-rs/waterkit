@@ -6,19 +6,19 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use num_traits::ToPrimitive as _;
-use waterkit_video_container::{
+use mediax_container::{
     CmafChunkDemuxer, CmafDemuxer, CmafInitialization, EncodedSample, SubtitleCue, TimedMetadata,
     TrackId, TrackInfo, TrackKind, decode_cmaf_subtitle_sample, parse_pssh_init_data,
     parse_ttml_document, parse_webvtt_document,
 };
-use waterkit_video_core::{Error, ProtectionInitData};
-use waterkit_video_streaming::{
+use mediax_core::{Error, ProtectionInitData};
+use mediax_streaming::{
     AdaptiveTrackSelector, DashAdaptationSet, DashAvailabilityTimeOffset, DashInitialization,
     DashManifest, DashManifestKind, DashPlannedSegment, DashRepresentation, DashSegmentSource,
     DashTrackKind, MediaRequest, SegmentLoader, SegmentResource, SegmentStream,
     fetch_dash_manifest,
 };
+use num_traits::ToPrimitive as _;
 
 use crate::streaming::{SubtitleTrackSelection, VideoTrackSelection};
 use crate::{
@@ -1494,7 +1494,7 @@ fn segment_is_available(
 
 fn presentation_window(
     manifest: &DashManifest,
-    period: &waterkit_video_streaming::DashPeriod,
+    period: &mediax_streaming::DashPeriod,
     now: SystemTime,
 ) -> Result<(Duration, Duration), Error> {
     if manifest.kind == DashManifestKind::Static {
@@ -1513,7 +1513,7 @@ fn presentation_window(
 
 fn live_window(
     manifest: &DashManifest,
-    period: &waterkit_video_streaming::DashPeriod,
+    period: &mediax_streaming::DashPeriod,
     now: SystemTime,
 ) -> Result<Option<LiveWindow>, Error> {
     if manifest.kind == DashManifestKind::Static {
@@ -1563,7 +1563,7 @@ fn live_window(
 
 fn live_playback_rate_range(
     manifest: &DashManifest,
-    period: &waterkit_video_streaming::DashPeriod,
+    period: &mediax_streaming::DashPeriod,
 ) -> Result<Option<LivePlaybackRateRange>, Error> {
     if manifest.kind == DashManifestKind::Static {
         return Ok(None);
@@ -1585,10 +1585,10 @@ fn live_playback_rate_range(
     };
     let minimum = range
         .min
-        .map_or(1.0, waterkit_video_streaming::DashPlaybackRate::as_f64);
+        .map_or(1.0, mediax_streaming::DashPlaybackRate::as_f64);
     let maximum = range
         .max
-        .map_or(1.0, waterkit_video_streaming::DashPlaybackRate::as_f64);
+        .map_or(1.0, mediax_streaming::DashPlaybackRate::as_f64);
     let minimum = minimum.to_f32().ok_or_else(|| {
         Error::Streaming(String::from(
             "DASH minimum playback rate does not fit an f32 multiplier",
@@ -1625,13 +1625,13 @@ mod tests {
         time::{Duration, SystemTime},
     };
 
+    use mediax_streaming::{
+        AdaptiveSelectionPolicy, DashAdaptationSet, DashLatency, DashManifest, DashManifestKind,
+        DashPeriod, DashServiceDescription, DashTrackKind, MediaRequest, Url,
+    };
     use transmux::{
         AVCConfigurationBox, AVCDecoderConfigurationRecord, AvcPps, AvcSps, CodecConfig,
         FragmentTrackData, Sample, TrackSpec, build_init_segment, build_media_segment,
-    };
-    use waterkit_video_streaming::{
-        AdaptiveSelectionPolicy, DashAdaptationSet, DashLatency, DashManifest, DashManifestKind,
-        DashPeriod, DashServiceDescription, DashTrackKind, MediaRequest, Url,
     };
 
     use super::{

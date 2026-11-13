@@ -16,7 +16,8 @@ use crate::playback_rate::{
     PitchStretchEngine, PlaybackParams, clamp_playback_rate, should_use_pitch_stretch,
     sink_speed_for_playback,
 };
-use crate::{AudioOutput, DecodedAudioFrame, PlayerError};
+use crate::{AudioOutput, PlayerError};
+use mediax_codec::audio::DecodedAudioFrame;
 
 struct PresentationClockSource {
     samples: SamplesBuffer,
@@ -1233,8 +1234,8 @@ mod tests {
         PresentationClockSource, SilenceOutput, SilenceSkipping, SilenceSkippingProcessor,
         StreamingRateProcessor,
     };
-    use crate::DecodedAudioFrame;
     use crate::playback_rate::PlaybackParams;
+    use mediax_codec::audio::DecodedAudioFrame;
 
     fn decoded_frame() -> DecodedAudioFrame {
         DecodedAudioFrame::from_interleaved_pcm(

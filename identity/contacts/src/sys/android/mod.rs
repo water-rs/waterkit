@@ -248,8 +248,7 @@ fn serialize_contact_data(data: &ContactData) -> String {
     let birthday = data
         .birthday
         .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_default();
+        .map_or_else(String::new, ToString::to_string);
     format!(
         "{}\t{}\t{}\t{}\t{}\t{}\t{}",
         data.given_name.as_deref().unwrap_or(""),

@@ -784,15 +784,14 @@ fn normalize_representation(
         .codecs
         .as_ref()
         .or(adaptation.codecs.as_ref())
-        .map(|codecs| {
+        .map_or_else(Vec::new, |codecs| {
             codecs
                 .split(',')
                 .map(str::trim)
                 .filter(|codec| !codec.is_empty())
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        });
     let segments = normalize_segments(
         representation,
         adaptation,
@@ -1510,8 +1509,7 @@ fn plan_constant_template_window(
     let segment_duration = template
         .duration
         .ok_or_else(|| Error::Streaming(String::from("DASH template duration is missing")))?;
-    let first_index =
-        duration_to_ticks_floor(window_start, template.timescale)? / segment_duration.get();
+    let first_index = duration_to_ticks_floor(window_start, template.timescale)? / segment_duration;
     let end_ticks = duration_to_ticks_ceil(window_end, template.timescale)?;
     let end_index = end_ticks.div_ceil(segment_duration.get());
     (first_index..end_index)
@@ -1711,13 +1709,13 @@ fn repeated_count_to_boundary(
             "DASH timeline repeat boundary precedes its start",
         ))
     })?;
-    if span % duration.get() != 0 {
+    if span % duration != 0 {
         return Err(Error::Streaming(format!(
             "DASH timeline repeat span {span} is not divisible by duration {}",
             duration.get()
         )));
     }
-    Ok(span / duration.get())
+    Ok(span / duration)
 }
 
 fn duration_to_ticks_ceil(duration: Duration, timescale: NonZeroU64) -> Result<u64, Error> {
@@ -1747,8 +1745,8 @@ fn duration_to_ticks_floor(duration: Duration, timescale: NonZeroU64) -> Result<
 }
 
 fn ticks_to_duration(ticks: u64, timescale: NonZeroU64) -> Duration {
-    let seconds = ticks / timescale.get();
-    let remainder = ticks % timescale.get();
+    let seconds = ticks / timescale;
+    let remainder = ticks % timescale;
     let nanos = u128::from(remainder) * 1_000_000_000 / u128::from(timescale.get());
     let nanos = u32::try_from(nanos)
         .expect("fractional timescale remainder is always below one billion nanoseconds");

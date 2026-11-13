@@ -363,8 +363,7 @@ mod tests {
             let directory = Path::new(NET_CLASS).join(name);
             let devtype = interface
                 .devtype
-                .map(|devtype| format!("DEVTYPE={devtype}\n"))
-                .unwrap_or_default();
+                .map_or_else(String::new, |devtype| format!("DEVTYPE={devtype}\n"));
             let uevent = format!("INTERFACE={name}\nIFINDEX=2\n{devtype}");
             for (attribute, contents) in [
                 ("flags", format!("{}\n", interface.flags)),

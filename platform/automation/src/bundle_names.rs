@@ -148,13 +148,9 @@ fn sorted_dirs(folder: &Path) -> Vec<PathBuf> {
 fn load_bundle(path: PathBuf) -> Bundle {
     let stem = path
         .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
     let info = read_plist(&path.join("Contents/Info.plist"));
-    let own = info
-        .as_ref()
-        .map(|info| named(info, ""))
-        .unwrap_or_default();
+    let own = info.as_ref().map_or_else(Vec::new, |info| named(info, ""));
     let title = own
         .first()
         .map_or_else(|| stem.clone(), |name| name.text.clone());

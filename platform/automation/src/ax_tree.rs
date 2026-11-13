@@ -500,12 +500,11 @@ pub fn holds_web_content(window: &AXUIElement) -> bool {
         visits = remaining;
         let children = copy(&node, "AXChildren")
             .and_then(|value| value.downcast::<CFArray>().ok())
-            .map(|children| {
+            .map_or_else(Vec::new, |children| {
                 // SAFETY: `AXChildren` is an array of elements.
                 let children: &CFArray<AXUIElement> = unsafe { children.cast_unchecked() };
                 children.iter().collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+            });
         if string(copy(&node, "AXRole")).as_deref() == Some(WEB_AREA) {
             if !children.is_empty() {
                 return true;

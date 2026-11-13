@@ -361,8 +361,7 @@ mod mac {
             fn key_down(&self, event: &NSEvent) {
                 let characters = event
                     .characters()
-                    .map(|characters| characters.to_string())
-                    .unwrap_or_default();
+                    .map_or_else(String::new, |characters| characters.to_string());
                 self.ivars().record(Report::Key {
                     code: event.keyCode(),
                     characters,
@@ -565,8 +564,7 @@ mod mac {
                 event.keyCode(),
                 event
                     .characters()
-                    .map(|characters| characters.to_string())
-                    .unwrap_or_default()
+                    .map_or_else(String::new, |characters| characters.to_string())
             )
         };
         let other = |name: &str| format!("{name} subtype {} in window {window}", event.subtype().0);
@@ -1983,8 +1981,7 @@ mod mac {
                     field.validateEditing();
                     let placeholder = field
                         .placeholderString()
-                        .map(|placeholder| placeholder.to_string())
-                        .unwrap_or_default();
+                        .map_or_else(String::new, |placeholder| placeholder.to_string());
                     fields.push((placeholder, field.stringValue().to_string()));
                 }
             }

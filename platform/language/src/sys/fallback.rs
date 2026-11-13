@@ -12,6 +12,10 @@ pub async fn pair_status(_pair: &LanguagePair) -> Result<Option<AssetStatus>, Tr
 }
 
 #[derive(Debug)]
+#[expect(
+    clippy::empty_enums,
+    reason = "the fallback translator is uninhabited on unsupported platforms"
+)]
 pub enum Translator {}
 
 impl Translator {

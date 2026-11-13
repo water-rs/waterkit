@@ -30,7 +30,7 @@ fn prop_object_paths(props: &OwnedPropertyMap, key: &str) -> Vec<String> {
     props
         .get(key)
         .and_then(|value| <&Array<'_>>::try_from(value).ok())
-        .map(|items| {
+        .map_or_else(Vec::new, |items| {
             items
                 .iter()
                 .filter_map(|item| {
@@ -40,7 +40,6 @@ fn prop_object_paths(props: &OwnedPropertyMap, key: &str) -> Vec<String> {
                 })
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 fn parse_hex_id(raw: &str) -> Option<Vec<u8>> {

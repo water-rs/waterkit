@@ -160,7 +160,7 @@ fn prop_str_array(props: &OwnedPropertyMap, key: &str) -> Vec<String> {
     props
         .get(key)
         .and_then(|v| <&Array<'_>>::try_from(v).ok())
-        .map(|items| {
+        .map_or_else(Vec::new, |items| {
             items
                 .iter()
                 .filter_map(|item| {
@@ -170,7 +170,6 @@ fn prop_str_array(props: &OwnedPropertyMap, key: &str) -> Vec<String> {
                 })
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 fn signal_prop_str(props: &SignalPropertyMap<'_>, key: &str) -> Option<String> {

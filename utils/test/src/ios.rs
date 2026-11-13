@@ -584,8 +584,7 @@ fn newest_files(dir: &Path) -> std::io::Result<Option<Vec<LogFile>>> {
             Ok(LogFile {
                 name: path
                     .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
+                    .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
                 age: now.duration_since(modified).unwrap_or_default(),
                 tail: std::str::from_utf8(&std::fs::read(&path)?)
                     .ok()

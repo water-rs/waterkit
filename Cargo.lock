@@ -3952,7 +3952,7 @@ dependencies = [
 [[package]]
 name = "mediax-codec"
 version = "0.1.0"
-source = "git+https://github.com/water-rs/mediax?branch=dev#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
+source = "git+https://github.com/water-rs/mediax?branch=main#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
 dependencies = [
  "avif-parse",
  "cfg_aliases 0.2.2",
@@ -3994,7 +3994,7 @@ dependencies = [
 [[package]]
 name = "mediax-container"
 version = "0.1.0"
-source = "git+https://github.com/water-rs/mediax?branch=dev#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
+source = "git+https://github.com/water-rs/mediax?branch=main#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
 dependencies = [
  "broadcast-common",
  "byteorder",
@@ -4009,7 +4009,7 @@ dependencies = [
 [[package]]
 name = "mediax-core"
 version = "0.1.0"
-source = "git+https://github.com/water-rs/mediax?branch=dev#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
+source = "git+https://github.com/water-rs/mediax?branch=main#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -4017,7 +4017,7 @@ dependencies = [
 [[package]]
 name = "mediax-processing"
 version = "0.1.0"
-source = "git+https://github.com/water-rs/mediax?branch=dev#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
+source = "git+https://github.com/water-rs/mediax?branch=main#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
 dependencies = [
  "filtrate",
  "mediax-core",
@@ -4027,7 +4027,7 @@ dependencies = [
 [[package]]
 name = "mediax-streaming"
 version = "0.1.0"
-source = "git+https://github.com/water-rs/mediax?branch=dev#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
+source = "git+https://github.com/water-rs/mediax?branch=main#a6a449d3b5b7d11bc159fe99fd84abf2a5e5e1ca"
 dependencies = [
  "async-channel",
  "async-fs",

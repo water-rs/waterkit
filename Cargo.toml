@@ -177,11 +177,11 @@ waterkit-system = { path = "platform/system", version = "0.2.0" }
 waterkit-video = { path = "multimedia/video", version = "0.2.0" }
 # The media-processing crates live in water-rs/mediax, which has no crates.io
 # release yet. Consumers opt into codec features explicitly.
-mediax-core = { git = "https://github.com/water-rs/mediax", branch = "dev" }
-mediax-codec = { git = "https://github.com/water-rs/mediax", branch = "dev", default-features = false }
-mediax-container = { git = "https://github.com/water-rs/mediax", branch = "dev" }
-mediax-streaming = { git = "https://github.com/water-rs/mediax", branch = "dev" }
-mediax-processing = { git = "https://github.com/water-rs/mediax", branch = "dev" }
+mediax-core = { git = "https://github.com/water-rs/mediax", branch = "main" }
+mediax-codec = { git = "https://github.com/water-rs/mediax", branch = "main", default-features = false }
+mediax-container = { git = "https://github.com/water-rs/mediax", branch = "main" }
+mediax-streaming = { git = "https://github.com/water-rs/mediax", branch = "main" }
+mediax-processing = { git = "https://github.com/water-rs/mediax", branch = "main" }
 waterkit-video-player = { path = "multimedia/video/player", version = "0.2.0" }
 waterkit-regional = { path = "platform/regional", version = "0.2.0" }
 waterkit-bluetooth = { path = "device/bluetooth", version = "0.2.0" }

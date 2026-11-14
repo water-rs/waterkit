@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/water-rs/waterkit/compare/waterkit-language-v0.2.0...waterkit-language-v0.3.0) - 2026-11-14
+
+### Added
+
+- *(build)* compile header-free Swift modules
+
+### Fixed
+
+- satisfy Rust 1.100 clippy lints
+
 ## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-language-v0.0.0...waterkit-language-v0.2.0) - 2026-10-16
 
 ### Added

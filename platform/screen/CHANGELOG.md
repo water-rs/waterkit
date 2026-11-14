@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/water-rs/waterkit/compare/waterkit-screen-v0.2.0...waterkit-screen-v0.3.0) - 2026-11-14
+
+### Added
+
+- *(screen)* stream a display by id as pixel buffers
+
+### Fixed
+
+- *(test)* give each test display a serial from its process id
+- *(screen)* wait for the virtual display and satisfy clippy off macOS
+
+### Other
+
+- *(screen)* read display state from the display lists
+- *(screen)* declare the display-stream harness for every target
+- *(screen)* create the virtual display on the main thread and probe its topology
+- *(screen)* keep the fallback pixel buffer accessors runtime like macOS
+- *(screen)* state that only the macOS backend reads the stream config
+- *(screen)* gate the wgpu stream, desktop screenshots and display streams behind features
+
 ## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-screen-v0.1.4...waterkit-screen-v0.2.0) - 2026-10-16
 
 ### Fixed

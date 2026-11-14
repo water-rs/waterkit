@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/water-rs/waterkit/compare/waterkit-permission-v0.2.0...waterkit-permission-v0.3.0) - 2026-11-14
+
+### Added
+
+- *(permission)* read and request macOS privacy grants in helper instances
+
+### Fixed
+
+- *(permission)* learn a request instance's outcome over a socket
+- *(permission)* const helper entry off macOS, nextest-compatible helper test, accept replayd
+- *(permission)* raise direct-capture consent through ScreenCaptureKit
+
 ## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-permission-v0.1.4...waterkit-permission-v0.2.0) - 2026-10-16
 
 ### Fixed

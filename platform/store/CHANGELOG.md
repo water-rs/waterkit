@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/water-rs/waterkit/compare/waterkit-store-v0.2.0...waterkit-store-v0.3.0) - 2026-11-14
+
+### Added
+
+- *(build)* compile header-free Swift modules
+
+### Fixed
+
+- *(store)* read finish state from the session's record, not Transaction.unfinished
+- *(store)* finish the transaction StoreKit delivered instead of searching unfinished
+
 ## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-store-v0.0.0...waterkit-store-v0.2.0) - 2026-10-16
 
 ### Added

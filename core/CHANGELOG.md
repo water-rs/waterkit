@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/water-rs/waterkit/compare/waterkit-core-v0.2.0...waterkit-core-v0.3.0) - 2026-11-14
+
+### Added
+
+- *(core)* add macOS privacy grant permissions and honest statuses
+
+### Fixed
+
+- *(codec)* restore exact timestamps from Android MediaCodec
+
 ## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-core-v0.1.4...waterkit-core-v0.2.0) - 2026-10-16
 
 ### Added

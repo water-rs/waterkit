@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/water-rs/waterkit/compare/waterkit-video-player-v0.2.0...waterkit-video-player-v0.3.0) - 2026-11-14
+
+### Added
+
+- *(automation)* virtual displays and cursor-free input on macOS
+
+### Fixed
+
+- *(codec)* restore exact timestamps from Android MediaCodec
+- *(codec)* [**breaking**] drop the cros-codecs VA-API backend
+
+### Other
+
+- mark MediaCodec as code in timestamp docs
+
 ## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-video-player-v0.1.4...waterkit-video-player-v0.2.0) - 2026-10-16
 
 ### Added

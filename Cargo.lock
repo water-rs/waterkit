@@ -8017,7 +8017,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "toml",
  "waterkit-audio",
@@ -8058,7 +8058,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-audio"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "block2 0.6.2",
@@ -8114,7 +8114,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-automation"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "block2 0.6.2",
  "dispatch2",
@@ -8141,7 +8141,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-background"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "block2 0.6.2",
@@ -8160,7 +8160,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-biometric"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "block2 0.6.2",
  "futures",
@@ -8187,7 +8187,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-bluetooth"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "dispatch2",
@@ -8209,7 +8209,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-build"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "futures-channel",
  "jni",
@@ -8220,7 +8220,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-calendar"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "block2 0.6.2",
  "blocking",
@@ -8240,7 +8240,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-camera"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "core-graphics-types 0.2.0",
@@ -8293,7 +8293,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-clipboard"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "block2 0.6.2",
@@ -8324,7 +8324,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-codec"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "avif-parse",
  "cfg_aliases",
@@ -8376,7 +8376,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-contacts"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "block2 0.6.2",
  "blocking",
@@ -8396,7 +8396,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "dispatch2",
@@ -8414,7 +8414,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-deeplink"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "block2 0.6.2",
@@ -8437,7 +8437,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-dialog"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "block2 0.6.2",
  "dispatch2",
@@ -8459,7 +8459,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-dialog-demo"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "waterkit-dialog",
 ]
@@ -8474,7 +8474,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-fs"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-fs",
  "dirs 7.0.0",
@@ -8492,7 +8492,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-haptic"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "block2 0.6.2",
  "futures",
@@ -8512,7 +8512,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-health"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "block2 0.6.2",
  "blocking",
@@ -8531,7 +8531,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-language"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "futures",
  "icu_locale_core",
@@ -8548,7 +8548,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-location"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "dispatch2",
@@ -8582,7 +8582,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-menu"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "futures",
@@ -8609,7 +8609,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-nfc"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "block2 0.6.2",
@@ -8630,7 +8630,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-notification"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "block2 0.6.2",
@@ -8670,7 +8670,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-otp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.23.1",
  "futures",
@@ -8686,7 +8686,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-passkey"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -8719,7 +8719,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-permission"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "async-io",
@@ -8757,7 +8757,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-regional"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "iana-time-zone",
  "sys-locale",
@@ -8766,7 +8766,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-screen"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "block2 0.6.2",
@@ -8804,7 +8804,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-secret"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "jni",
  "keyring",
@@ -8817,7 +8817,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-sensor"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "block2 0.6.2",
@@ -8853,7 +8853,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-share"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "block2 0.6.2",
  "futures",
@@ -8873,7 +8873,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-speech"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "async-process",
@@ -8898,7 +8898,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-store"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "futures",
  "jni",
@@ -8916,7 +8916,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-system"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "block2 0.6.2",
  "dispatch2",
@@ -8937,7 +8937,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-test"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cargo_metadata",
  "clap",
@@ -9013,7 +9013,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-test-report"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -9041,7 +9041,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-video"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "waterkit-video-container",
  "waterkit-video-core",
@@ -9052,7 +9052,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-video-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "dirs 7.0.0",
@@ -9070,7 +9070,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-video-container"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "broadcast-common",
  "byteorder",
@@ -9085,14 +9085,14 @@ dependencies = [
 
 [[package]]
 name = "waterkit-video-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "waterkit-video-player"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aes",
  "async-channel",
@@ -9137,7 +9137,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-video-streaming"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "async-fs",
@@ -9161,7 +9161,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-vision"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ab_glyph",
  "barcoders",
@@ -9205,7 +9205,7 @@ dependencies = [
 
 [[package]]
 name = "waterkit-wallet"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.23.1",
  "block2 0.6.2",

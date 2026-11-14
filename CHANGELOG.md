@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/water-rs/waterkit/compare/waterkit-v0.2.0...waterkit-v0.3.0) - 2026-11-14
+
+### Added
+
+- *(automation)* launch an application by its name
+- *(automation)* launch an application in the background onto a virtual display
+- *(automation)* virtual displays and cursor-free input on macOS
+- *(screen)* stream a display by id as pixel buffers
+- *(permission)* read and request macOS privacy grants in helper instances
+
+### Fixed
+
+- *(release)* skip semver_check on remaining crates whose 0.2.0 baseline enables vaapi ([#441](https://github.com/water-rs/waterkit/pull/441))
+- *(release)* skip semver_check on waterkit-codec for 0.2.0 baseline ([#439](https://github.com/water-rs/waterkit/pull/439))
+- *(automation)* keep the user's display on a Mac with no monitor
+- *(codec)* restore exact timestamps from Android MediaCodec
+- *(permission)* learn a request instance's outcome over a socket
+- *(automation)* confirm input reaches another application's window
+- *(wallet)* bump zip to 9.4.1 for the critical advisory
+- *(codec)* [**breaking**] drop the cros-codecs VA-API backend
+- *(permission)* const helper entry off macOS, nextest-compatible helper test, accept replayd
+- *(permission)* raise direct-capture consent through ScreenCaptureKit
+
+### Other
+
+- release from main and retire dev
+- *(automation)* run the display tests one at a time
+- run the tests on the frontmost application one at a time
+- Merge pull request #417 from water-rs/fix/android-codec-timestamp-resolution
+- *(typos)* accept the localized app names in the name-matching tests
+- cache the apt downloads of the Linux jobs
+- Merge pull request #391 from water-rs/feat/383-display-stream
+- *(screen)* create the virtual display on the main thread and probe its topology
+- Merge pull request #386 from water-rs/feat/384-macos-grants
+- Merge remote-tracking branch 'origin/dev' into fix/zip-advisory
+- Merge remote-tracking branch 'origin/dev' into feat/383-display-stream
+- Merge remote-tracking branch 'origin/dev' into feat/384-macos-grants
+
 ## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-v0.1.4...waterkit-v0.2.0) - 2026-10-16
 
 ### Added

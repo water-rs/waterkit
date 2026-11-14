@@ -34,3 +34,23 @@ semver_check = false
 [[package]]
 name = "waterkit-codec"
 semver_check = false
+
+# Their published 0.2.0 baselines on crates.io define a `vaapi` feature that
+# pulls `waterkit-codec/vaapi` -> `cros-libva 0.0.12`, which fails against
+# ubuntu-latest's libva 2.23 headers during baseline rustdoc generation (`vaapi`
+# is already removed on `main`).
+[[package]]
+name = "waterkit"
+semver_check = false
+
+[[package]]
+name = "waterkit-camera"
+semver_check = false
+
+[[package]]
+name = "waterkit-video-player"
+semver_check = false
+
+[[package]]
+name = "waterkit-video-cli"
+semver_check = false

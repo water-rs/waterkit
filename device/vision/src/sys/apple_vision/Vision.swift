@@ -343,7 +343,9 @@ public func vision_recognize_text(
     let tags = (try? JSONDecoder().decode([String].self, from: Data(languages.toString().utf8))) ?? []
     var request = RecognizeTextRequest()
     request.recognitionLevel = level == 0 ? .fast : .accurate
-    request.automaticallyDetectsLanguage = tags.isEmpty
+    // Single-language requests stay strict; multi-language requests keep auto-detect enabled
+    // alongside `recognitionLanguages` so Apple Vision switches scripts across lines.
+    request.automaticallyDetectsLanguage = tags.count != 1
     if !tags.isEmpty {
         request.recognitionLanguages = tags.map { Locale.Language(identifier: $0) }
     }

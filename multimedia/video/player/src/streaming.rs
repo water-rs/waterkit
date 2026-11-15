@@ -1924,7 +1924,8 @@ mod tests {
     use transmux::{
         AVCConfigurationBox, AVCDecoderConfigurationRecord, AvcPps, AvcSps, CodecConfig,
         DecoderConfigDescriptor, DecoderSpecificInfo, ESDescriptor, EsdsBox, FragmentTrackData,
-        SLConfigDescriptor, Sample, TrackSpec, build_init_segment, build_media_segment,
+        SLConfigDescriptor, Sample, TrackId as TransmuxTrackId, TrackSpec, build_init_segment,
+        build_media_segment,
     };
     use waterkit_video_container::{EncodedSample, MediaTime, TrackId, TrackKind};
     use waterkit_video_streaming::{
@@ -2380,7 +2381,7 @@ mod tests {
 
     fn video_track() -> TrackSpec {
         TrackSpec::new(
-            1,
+            TransmuxTrackId::new(1),
             90_000,
             CodecConfig::Avc {
                 config: AVCConfigurationBox::new(AVCDecoderConfigurationRecord {
@@ -2404,7 +2405,7 @@ mod tests {
 
     fn audio_track() -> TrackSpec {
         TrackSpec::new(
-            1,
+            TransmuxTrackId::new(1),
             44_100,
             CodecConfig::Aac {
                 esds: EsdsBox {

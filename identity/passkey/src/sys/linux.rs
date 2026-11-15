@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use zbus::names::BusName;
-use zbus::zvariant::{OwnedValue, Value};
+use zbus::{OwnedVariant, Variant};
 
 use crate::{
     AttestationPreference, AuthenticateOptions, AuthenticationResult, Availability, CredentialId,
@@ -82,7 +82,7 @@ fn origin_from_rp_id(rp_id: &str) -> String {
 
 fn build_create_credential_request(
     options: &RegisterOptions,
-) -> Result<HashMap<String, OwnedValue>, PasskeyError> {
+) -> Result<HashMap<String, OwnedVariant>, PasskeyError> {
     let request_json = serde_json::to_string(&PublicKeyCredentialCreationOptionsWire::from(
         options,
     ))
@@ -104,14 +104,14 @@ fn build_create_credential_request(
         "origin".to_owned(),
         owned_string_value(origin_from_rp_id(options.rp().id().as_str()))?,
     );
-    request.insert("is_same_origin".to_owned(), OwnedValue::from(true));
-    request.insert("publicKey".to_owned(), OwnedValue::from(public_key));
+    request.insert("is_same_origin".to_owned(), OwnedVariant::from(true));
+    request.insert("publicKey".to_owned(), OwnedVariant::from(public_key));
     Ok(request)
 }
 
 fn build_get_credential_request(
     options: &AuthenticateOptions,
-) -> Result<HashMap<String, OwnedValue>, PasskeyError> {
+) -> Result<HashMap<String, OwnedVariant>, PasskeyError> {
     let request_json = serde_json::to_string(&PublicKeyCredentialRequestOptionsWire::from(options))
         .map_err(|error| {
             PasskeyError::OperationFailed(format!(
@@ -131,16 +131,16 @@ fn build_get_credential_request(
         "origin".to_owned(),
         owned_string_value(origin_from_rp_id(options.rp_id().as_str()))?,
     );
-    request.insert("is_same_origin".to_owned(), OwnedValue::from(true));
-    request.insert("publicKey".to_owned(), OwnedValue::from(public_key));
+    request.insert("is_same_origin".to_owned(), OwnedVariant::from(true));
+    request.insert("publicKey".to_owned(), OwnedVariant::from(public_key));
     Ok(request)
 }
 
 async fn call_gateway_method(
     connection: &zbus::Connection,
     method: &str,
-    request: HashMap<String, OwnedValue>,
-) -> Result<HashMap<String, OwnedValue>, PasskeyError> {
+    request: HashMap<String, OwnedVariant>,
+) -> Result<HashMap<String, OwnedVariant>, PasskeyError> {
     let proxy = zbus::Proxy::new(
         connection,
         CREDENTIALSD_BUS_NAME,
@@ -163,7 +163,7 @@ async fn call_gateway_method(
 }
 
 fn parse_registration_gateway_response(
-    mut response: HashMap<String, OwnedValue>,
+    mut response: HashMap<String, OwnedVariant>,
 ) -> Result<RegistrationResult, PasskeyError> {
     validate_response_type(&mut response)?;
     let mut public_key = extract_map(&mut response, "public_key")?;
@@ -200,7 +200,7 @@ fn parse_registration_gateway_response(
 }
 
 fn parse_authentication_gateway_response(
-    mut response: HashMap<String, OwnedValue>,
+    mut response: HashMap<String, OwnedVariant>,
 ) -> Result<AuthenticationResult, PasskeyError> {
     validate_response_type(&mut response)?;
     let mut public_key = extract_map(&mut response, "public_key")?;
@@ -232,7 +232,9 @@ fn parse_authentication_gateway_response(
     ))
 }
 
-fn validate_response_type(response: &mut HashMap<String, OwnedValue>) -> Result<(), PasskeyError> {
+fn validate_response_type(
+    response: &mut HashMap<String, OwnedVariant>,
+) -> Result<(), PasskeyError> {
     let credential_type = extract_string(response, "type")?;
     if credential_type != "public-key" {
         return Err(PasskeyError::Platform(format!(
@@ -243,7 +245,7 @@ fn validate_response_type(response: &mut HashMap<String, OwnedValue>) -> Result<
 }
 
 fn extract_string(
-    values: &mut HashMap<String, OwnedValue>,
+    values: &mut HashMap<String, OwnedVariant>,
     field: &str,
 ) -> Result<String, PasskeyError> {
     let value = values.remove(field).ok_or_else(|| {
@@ -252,7 +254,7 @@ fn extract_string(
         ))
     })?;
 
-    let value = unwrap_variant(Value::from(value));
+    let value = unwrap_variant(Variant::from(value));
     String::try_from(value).map_err(|error| {
         PasskeyError::Platform(format!(
             "failed to decode `{field}` as string in linux credentials gateway response: {error}"
@@ -261,25 +263,25 @@ fn extract_string(
 }
 
 fn extract_map(
-    values: &mut HashMap<String, OwnedValue>,
+    values: &mut HashMap<String, OwnedVariant>,
     field: &str,
-) -> Result<HashMap<String, OwnedValue>, PasskeyError> {
+) -> Result<HashMap<String, OwnedVariant>, PasskeyError> {
     let value = values.remove(field).ok_or_else(|| {
         PasskeyError::Platform(format!(
             "missing `{field}` field in linux credentials gateway response"
         ))
     })?;
 
-    let value = unwrap_variant(Value::from(value));
-    HashMap::<String, OwnedValue>::try_from(value).map_err(|error| {
+    let value = unwrap_variant(Variant::from(value));
+    HashMap::<String, OwnedVariant>::try_from(value).map_err(|error| {
         PasskeyError::Platform(format!(
             "failed to decode `{field}` as map in linux credentials gateway response: {error}"
         ))
     })
 }
 
-fn unwrap_variant(value: Value<'static>) -> Value<'static> {
-    if let Value::Value(inner) = value {
+fn unwrap_variant(value: Variant<'static>) -> Variant<'static> {
+    if let Variant::Variant(inner) = value {
         *inner
     } else {
         value
@@ -310,8 +312,8 @@ fn map_dbus_error(error: &zbus::Error) -> PasskeyError {
     ))
 }
 
-fn owned_string_value(value: impl AsRef<str>) -> Result<OwnedValue, PasskeyError> {
-    Value::from(value.as_ref()).try_into().map_err(|error| {
+fn owned_string_value(value: impl AsRef<str>) -> Result<OwnedVariant, PasskeyError> {
+    Variant::from(value.as_ref()).try_into().map_err(|error| {
         PasskeyError::Platform(format!("failed to encode D-Bus string value: {error}"))
     })
 }

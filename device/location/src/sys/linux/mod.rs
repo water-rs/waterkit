@@ -2,9 +2,8 @@
 
 use crate::{Location, LocationCapabilities, LocationError, LocationProvider, Timestamp};
 use futures::StreamExt;
-use zbus::Connection;
 use zbus::names::WellKnownName;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::{Connection, ObjectPath, OwnedObjectPath, OwnedVariant, Variant};
 
 const GEOCLUE_SERVICE: &str = "org.freedesktop.GeoClue2";
 const CLIENT_INTERFACE: &str = "org.freedesktop.GeoClue2.Client";
@@ -21,10 +20,10 @@ async fn location_property<T>(
     prop: &str,
 ) -> Result<T, LocationError>
 where
-    T: TryFrom<zbus::zvariant::OwnedValue>,
+    T: TryFrom<OwnedVariant>,
     T::Error: std::fmt::Display,
 {
-    let reply: zbus::zvariant::OwnedValue = connection
+    let reply: OwnedVariant = connection
         .call_method(
             Some(GEOCLUE_SERVICE),
             location_path,
@@ -48,7 +47,7 @@ async fn current_location_path(
     connection: &Connection,
     client_path: &str,
 ) -> Result<Option<OwnedObjectPath>, LocationError> {
-    let reply: zbus::zvariant::OwnedValue = connection
+    let reply: OwnedVariant = connection
         .call_method(
             Some(GEOCLUE_SERVICE),
             client_path,
@@ -63,7 +62,7 @@ async fn current_location_path(
         .map_err(|e| LocationError::Platform(format!("Failed to parse location path: {e}")))?;
 
     let path: OwnedObjectPath = reply
-        .downcast_ref::<zbus::zvariant::ObjectPath>()
+        .downcast_ref::<ObjectPath>()
         .map(|p| p.to_owned().into())
         .map_err(|e| {
             LocationError::Platform(format!("GeoClue2 Location was not an object path: {e}"))
@@ -158,11 +157,7 @@ pub async fn get_location() -> Result<Location, LocationError> {
             client_path.as_str(),
             Some("org.freedesktop.DBus.Properties"),
             "Set",
-            &(
-                CLIENT_INTERFACE,
-                "DesktopId",
-                zbus::zvariant::Value::from("waterkit"),
-            ),
+            &(CLIENT_INTERFACE, "DesktopId", Variant::from("waterkit")),
         )
         .await
         .map_err(|e| LocationError::Platform(format!("Failed to set desktop ID: {e}")))?;

@@ -104,7 +104,7 @@ async fn get_default_device(connection: &Connection) -> Option<String> {
     .await
     .ok()?;
 
-    let reply: zbus::zvariant::OwnedObjectPath = manager_proxy
+    let reply: zbus::OwnedObjectPath = manager_proxy
         .call_method("GetDefaultDevice", &())
         .await
         .ok()?

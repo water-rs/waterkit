@@ -11,16 +11,11 @@ use std::{
     thread::JoinHandle,
     time::Duration,
 };
-use zbus::{
-    Connection,
-    connection::Builder as ConnectionBuilder,
-    interface,
-    zvariant::{ObjectPath, Value},
-};
+use zbus::{Connection, ObjectPath, Variant, connection::Builder as ConnectionBuilder, interface};
 
 #[derive(Debug)]
 struct MprisState {
-    metadata: RwLock<HashMap<String, Value<'static>>>,
+    metadata: RwLock<HashMap<String, Variant<'static>>>,
     artwork_file: RwLock<Option<tempfile::NamedTempFile>>,
     status: RwLock<PlaybackStatus>,
     position_micros: RwLock<i64>,
@@ -50,22 +45,22 @@ impl MprisState {
         let mut values = HashMap::new();
         values.insert(
             String::from("mpris:trackid"),
-            Value::new(
+            Variant::new(
                 ObjectPath::try_from("/org/waterkit/media/track")
                     .expect("the WaterKit MPRIS track path must be valid"),
             ),
         );
         if let Some(title) = metadata.title() {
-            values.insert(String::from("xesam:title"), Value::new(title.to_owned()));
+            values.insert(String::from("xesam:title"), Variant::new(title.to_owned()));
         }
         if let Some(artist) = metadata.artist() {
             values.insert(
                 String::from("xesam:artist"),
-                Value::new(vec![artist.to_owned()]),
+                Variant::new(vec![artist.to_owned()]),
             );
         }
         if let Some(album) = metadata.album() {
-            values.insert(String::from("xesam:album"), Value::new(album.to_owned()));
+            values.insert(String::from("xesam:album"), Variant::new(album.to_owned()));
         }
         let artwork_file = if let Some(artwork) = metadata.artwork() {
             let mut file = tempfile::NamedTempFile::new().map_err(|error| {
@@ -83,7 +78,10 @@ impl MprisState {
                     file.path().display()
                 ))
             })?;
-            values.insert(String::from("mpris:artUrl"), Value::new(String::from(url)));
+            values.insert(
+                String::from("mpris:artUrl"),
+                Variant::new(String::from(url)),
+            );
             Some(file)
         } else {
             None
@@ -91,7 +89,7 @@ impl MprisState {
         if let Some(duration) = metadata.duration() {
             values.insert(
                 String::from("mpris:length"),
-                Value::new(duration_micros_i64(duration)?),
+                Variant::new(duration_micros_i64(duration)?),
             );
         }
         *self
@@ -233,7 +231,7 @@ impl MprisPlayer {
     }
 
     #[zbus(property)]
-    fn metadata(&self) -> HashMap<String, Value<'static>> {
+    fn metadata(&self) -> HashMap<String, Variant<'static>> {
         self.state
             .metadata
             .read()
@@ -471,10 +469,10 @@ fn poisoned_lock(context: &str, error: impl Display) -> MediaError {
 }
 
 async fn start_dbus_service(state: Arc<MprisState>) -> Result<Connection, zbus::Error> {
-    ConnectionBuilder::session()?
-        .name("org.mpris.MediaPlayer2.waterkit")?
-        .serve_at("/org/mpris/MediaPlayer2", MediaPlayer2)?
-        .serve_at("/org/mpris/MediaPlayer2", MprisPlayer { state })?
+    ConnectionBuilder::session()
+        .name("org.mpris.MediaPlayer2.waterkit")
+        .serve_at("/org/mpris/MediaPlayer2", MediaPlayer2)
+        .serve_at("/org/mpris/MediaPlayer2", MprisPlayer { state })
         .build()
         .await
 }

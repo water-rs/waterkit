@@ -5,7 +5,7 @@ use futures::executor::block_on;
 use std::collections::HashMap;
 use std::thread;
 use zbus::Connection;
-use zbus::zvariant::OwnedValue;
+use zbus::OwnedVariant;
 
 const FEEDBACK_BUS_NAME: &str = "org.sigxcpu.Feedback";
 const FEEDBACK_OBJECT_PATH: &str = "/org/sigxcpu/Feedback";
@@ -69,7 +69,7 @@ async fn trigger_feedback_event_async(event: &str) -> Result<(), HapticError> {
         HapticError::InitFailed(format!("failed to create feedback proxy: {error}"))
     })?;
 
-    let hints: HashMap<&str, OwnedValue> = HashMap::new();
+    let hints: HashMap<&str, OwnedVariant> = HashMap::new();
     if feedback_proxy
         .call_method("TriggerFeedback", &(APP_ID, event, hints, -1_i32))
         .await

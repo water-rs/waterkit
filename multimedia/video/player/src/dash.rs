@@ -1627,7 +1627,7 @@ mod tests {
 
     use transmux::{
         AVCConfigurationBox, AVCDecoderConfigurationRecord, AvcPps, AvcSps, CodecConfig,
-        FragmentTrackData, Sample, TrackSpec, build_init_segment, build_media_segment,
+        FragmentTrackData, Sample, TrackId, TrackSpec, build_init_segment, build_media_segment,
     };
     use waterkit_video_streaming::{
         AdaptiveSelectionPolicy, DashAdaptationSet, DashLatency, DashManifest, DashManifestKind,
@@ -1947,7 +1947,7 @@ mod tests {
 
     fn video_track() -> TrackSpec {
         TrackSpec::new(
-            1,
+            TrackId::new(1),
             90_000,
             CodecConfig::Avc {
                 config: AVCConfigurationBox::new(AVCDecoderConfigurationRecord {

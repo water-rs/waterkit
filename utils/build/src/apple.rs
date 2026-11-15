@@ -756,13 +756,33 @@ fn swiftc_args(
     args
 }
 
+/// Filters build inputs to exclude files generated into `out_dir`, whose own
+/// sources are tracked separately and whose mtime follows script start.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn rerun_inputs<'a>(
+    sources: &'a [PathBuf],
+    bridging_header: Option<&'a Path>,
+    out_dir: &Path,
+) -> Vec<&'a Path> {
+    sources
+        .iter()
+        .map(PathBuf::as_path)
+        .chain(bridging_header)
+        .filter(|path| !path.starts_with(out_dir))
+        .collect()
+}
+
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 impl SwiftModule {
     /// Compiles every declared source into `OUT_DIR` as the module,
     /// archives the object as `lib<name>.a`, links that archive, the Swift
     /// runtime and each declared framework into the crate, and emits
-    /// `rerun-if-changed` for `build.rs`, every source and the private
-    /// bridging header when one was supplied.
+    /// `rerun-if-changed` for `build.rs` and each source or private
+    /// bridging header outside `OUT_DIR`.
+    ///
+    /// Generated files inside `OUT_DIR` (such as `SwiftBridges` glue) are
+    /// excluded because their mtime is newer than Cargo's pre-script
+    /// fingerprint reference and their inputs are already tracked.
     ///
     /// # Panics
     ///
@@ -781,11 +801,8 @@ impl SwiftModule {
             .iter()
             .map(|source| manifest_dir.join(source))
             .collect();
-        for source in &sources {
-            println!("cargo:rerun-if-changed={}", source.display());
-        }
-        if let Some(header) = &self.bridging_header {
-            println!("cargo:rerun-if-changed={}", header.display());
+        for path in rerun_inputs(&sources, self.bridging_header.as_deref(), &out_dir) {
+            println!("cargo:rerun-if-changed={}", path.display());
         }
 
         let target = SwiftTarget::from_cargo_env();
@@ -940,6 +957,30 @@ mod module_tests {
     #[should_panic(expected = "for module EmptyModule has no Swift sources")]
     fn a_sourceless_module_fails_naming_the_module() {
         SwiftModule::new("EmptyModule").assert_sources();
+    }
+
+    #[test]
+    fn rerun_inputs_skip_out_dir_outputs_and_keep_workspace_sources() {
+        let out_dir = Path::new("/target/debug/build/waterkit-vision/out");
+        let sources = vec![
+            out_dir.join("SwiftBridgeCore.swift"),
+            out_dir.join("waterkit-vision/waterkit-vision.swift"),
+            PathBuf::from("/workspace/src/sys/apple_vision/Vision.swift"),
+        ];
+        let generated_header = out_dir.join("Bridging-Header.h");
+        assert_eq!(
+            rerun_inputs(&sources, Some(&generated_header), out_dir),
+            vec![Path::new("/workspace/src/sys/apple_vision/Vision.swift")]
+        );
+
+        let user_header = Path::new("/workspace/src/Bridging.h");
+        assert_eq!(
+            rerun_inputs(&sources, Some(user_header), out_dir),
+            vec![
+                Path::new("/workspace/src/sys/apple_vision/Vision.swift"),
+                Path::new("/workspace/src/Bridging.h"),
+            ]
+        );
     }
 }
 

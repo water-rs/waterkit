@@ -219,9 +219,7 @@ async fn has_neard_owner(conn: &Connection) -> Result<bool, NfcError> {
 async fn first_adapter_path(conn: &Connection) -> Result<String, NfcError> {
     let object_manager = zbus::fdo::ObjectManagerProxy::builder(conn)
         .destination(NEARD_SERVICE)
-        .map_err(|error| NfcError::Platform(format!("set destination failed: {error}")))?
         .path(OBJECT_MANAGER_PATH)
-        .map_err(|error| NfcError::Platform(format!("set object manager path failed: {error}")))?
         .build()
         .await
         .map_err(|error| {
@@ -278,12 +276,11 @@ fn run_tag_listener(
 
         let object_manager = match zbus::fdo::ObjectManagerProxy::builder(&conn)
             .destination(NEARD_SERVICE)
-            .and_then(|builder| builder.path(OBJECT_MANAGER_PATH))
+            .path(OBJECT_MANAGER_PATH)
+            .build()
+            .await
         {
-            Ok(builder) => match builder.build().await {
-                Ok(proxy) => proxy,
-                Err(_) => return,
-            },
+            Ok(proxy) => proxy,
             Err(_) => return,
         };
 

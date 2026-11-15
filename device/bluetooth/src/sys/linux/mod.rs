@@ -202,9 +202,7 @@ pub async fn adapter_state() -> Result<AdapterState, BluetoothError> {
     let conn = get_connection().await?;
     let proxy = zbus::fdo::PropertiesProxy::builder(&conn)
         .destination(BLUEZ_SERVICE)
-        .map_err(|e| BluetoothError::Platform(e.to_string()))?
         .path(ADAPTER_PATH)
-        .map_err(|e| BluetoothError::Platform(e.to_string()))?
         .build()
         .await
         .map_err(|e| BluetoothError::Platform(e.to_string()))?;
@@ -260,9 +258,7 @@ impl BleScannerInner {
                 // Listen for InterfacesAdded signals
                 let object_manager = zbus::fdo::ObjectManagerProxy::builder(&conn)
                     .destination(BLUEZ_SERVICE)
-                    .unwrap()
                     .path("/")
-                    .unwrap()
                     .build()
                     .await
                     .unwrap();
@@ -340,9 +336,7 @@ impl BleConnectionInner {
     pub async fn discover_services(&self) -> Result<Vec<GattService>, BluetoothError> {
         let object_manager = zbus::fdo::ObjectManagerProxy::builder(&self.connection)
             .destination(BLUEZ_SERVICE)
-            .map_err(|e| BluetoothError::GattError(e.to_string()))?
             .path("/")
-            .map_err(|e| BluetoothError::GattError(e.to_string()))?
             .build()
             .await
             .map_err(|e| BluetoothError::GattError(e.to_string()))?;
@@ -460,12 +454,11 @@ impl BleConnectionInner {
             futures::executor::block_on(async move {
                 let object_manager = match zbus::fdo::ObjectManagerProxy::builder(&conn)
                     .destination(BLUEZ_SERVICE)
-                    .and_then(|builder| builder.path("/"))
+                    .path("/")
+                    .build()
+                    .await
                 {
-                    Ok(builder) => match builder.build().await {
-                        Ok(proxy) => proxy,
-                        Err(_) => return,
-                    },
+                    Ok(proxy) => proxy,
                     Err(_) => return,
                 };
 
@@ -541,9 +534,7 @@ impl BleConnectionInner {
     async fn find_char_path(&self, uuid: &Uuid) -> Result<String, BluetoothError> {
         let object_manager = zbus::fdo::ObjectManagerProxy::builder(&self.connection)
             .destination(BLUEZ_SERVICE)
-            .map_err(|e| BluetoothError::GattError(e.to_string()))?
             .path("/")
-            .map_err(|e| BluetoothError::GattError(e.to_string()))?
             .build()
             .await
             .map_err(|e| BluetoothError::GattError(e.to_string()))?;
@@ -604,12 +595,11 @@ impl ClassicBluetoothInner {
 
                 let object_manager = match zbus::fdo::ObjectManagerProxy::builder(&conn)
                     .destination(BLUEZ_SERVICE)
-                    .and_then(|builder| builder.path("/"))
+                    .path("/")
+                    .build()
+                    .await
                 {
-                    Ok(builder) => match builder.build().await {
-                        Ok(proxy) => proxy,
-                        Err(_) => return,
-                    },
+                    Ok(proxy) => proxy,
                     Err(_) => return,
                 };
                 let Ok(mut stream) = object_manager.receive_interfaces_added().await else {
@@ -670,9 +660,7 @@ impl ClassicBluetoothInner {
     pub async fn paired_devices(&self) -> Result<Vec<ClassicDevice>, BluetoothError> {
         let object_manager = zbus::fdo::ObjectManagerProxy::builder(&self.connection)
             .destination(BLUEZ_SERVICE)
-            .map_err(|e| BluetoothError::Platform(e.to_string()))?
             .path("/")
-            .map_err(|e| BluetoothError::Platform(e.to_string()))?
             .build()
             .await
             .map_err(|e| BluetoothError::Platform(e.to_string()))?;

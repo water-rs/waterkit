@@ -13,30 +13,26 @@ use sysinfo::{
     Components, CpuRefreshKind, MINIMUM_CPU_UPDATE_INTERVAL, MemoryRefreshKind, RefreshKind, System,
 };
 
-#[expect(
-    clippy::unused_async,
-    reason = "the public signature is async on every platform; this one resolves synchronously"
-)]
 pub async fn connectivity() -> Result<ConnectivityInfo, SystemError> {
-    let transport = os::transport()?;
+    let transport = os::transport().await?;
     Ok(ConnectivityInfo::new(
         transport,
         transport != ConnectionType::None,
     ))
 }
 
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "every platform shares the fallible signature; sysinfo reports no failure here"
-)]
 pub fn thermal_state() -> Result<Option<ThermalState>, SystemError> {
     // Very simple heuristic: the hottest component's temperature. A machine
     // whose components report no temperature has no thermal state to derive.
-    let components = Components::new_with_refreshed_list();
+    let components = Components::new_with_refreshed_list().map_err(|error| {
+        SystemError::Platform(format!("sysinfo could not read thermal sensors: {error}"))
+    })?;
     let Some(max_temp) = components
         .iter()
         .filter_map(sysinfo::Component::temperature)
-        .reduce(f32::max)
+        .fold(None, |hottest, temp| {
+            Some(hottest.map_or(temp, |current: f32| current.max(temp)))
+        })
     else {
         return Ok(None);
     };
@@ -57,7 +53,12 @@ pub async fn load() -> Result<SystemLoad, SystemError> {
         RefreshKind::nothing()
             .with_cpu(CpuRefreshKind::everything())
             .with_memory(MemoryRefreshKind::everything()),
-    );
+    )
+    .map_err(|error| {
+        SystemError::Platform(format!(
+            "sysinfo could not initialize system statistics: {error}"
+        ))
+    })?;
     // CPU usage is the difference between two samples taken at least
     // `MINIMUM_CPU_UPDATE_INTERVAL` apart. `system` is `Send`, so the
     // future stays `Send` across the timer.

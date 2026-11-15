@@ -27,7 +27,11 @@ use windows::Win32::System::Com::{
 /// typical machine's table in one call.
 const INITIAL_ADAPTER_TABLE_BYTES: u32 = 15 * 1024;
 
-pub fn transport() -> Result<ConnectionType, SystemError> {
+#[expect(
+    clippy::unused_async,
+    reason = "the public signature is async on every desktop platform; Windows resolves synchronously"
+)]
+pub async fn transport() -> Result<ConnectionType, SystemError> {
     if !connected_to_internet()? {
         return Ok(ConnectionType::None);
     }

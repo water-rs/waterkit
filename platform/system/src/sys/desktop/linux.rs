@@ -13,10 +13,10 @@ use crate::sys::network::{kernel, network_manager};
 use crate::{ConnectionType, SystemError};
 use std::io;
 use std::path::Path;
+use zbus::Connection;
 use zbus::address::transport::{Transport, UnixSocket};
-use zbus::blocking::Connection;
-use zbus::blocking::connection::Builder;
-use zbus::blocking::fdo::{DBusProxy, PropertiesProxy};
+use zbus::connection::Builder;
+use zbus::fdo::{DBusProxy, PropertiesProxy};
 use zbus::names::{InterfaceName, WellKnownName};
 
 /// The D-Bus name `NetworkManager` owns on the system bus.
@@ -34,11 +34,11 @@ enum Source {
     Kernel,
 }
 
-pub fn transport() -> Result<ConnectionType, SystemError> {
-    match source()? {
+pub async fn transport() -> Result<ConnectionType, SystemError> {
+    match source().await? {
         Source::NetworkManager(bus) => {
             tracing::debug!("reading connectivity from NetworkManager");
-            network_manager_transport(&bus)
+            network_manager_transport(&bus).await
         }
         Source::Kernel => {
             tracing::debug!("NetworkManager is not running; reading connectivity from the kernel");
@@ -48,7 +48,7 @@ pub fn transport() -> Result<ConnectionType, SystemError> {
 }
 
 /// `NetworkManager` when it runs on the system bus, the kernel otherwise.
-fn source() -> Result<Source, SystemError> {
+async fn source() -> Result<Source, SystemError> {
     let address = zbus::Address::system().map_err(|error| {
         SystemError::Platform(format!("resolving the system bus address: {error}"))
     })?;
@@ -67,7 +67,8 @@ fn source() -> Result<Source, SystemError> {
     }
 
     let bus = Builder::address(address)
-        .and_then(Builder::build)
+        .build()
+        .await
         .map_err(|error| SystemError::Platform(format!("connecting to the system bus: {error}")))?;
     let asking = |error: &dyn std::fmt::Display| {
         SystemError::Platform(format!(
@@ -75,8 +76,10 @@ fn source() -> Result<Source, SystemError> {
         ))
     };
     let running = DBusProxy::new(&bus)
+        .await
         .map_err(|error| asking(&error))?
         .name_has_owner(WellKnownName::from_static_str_unchecked(NM_SERVICE).into())
+        .await
         .map_err(|error| asking(&error))?;
     Ok(if running {
         Source::NetworkManager(bus)
@@ -85,19 +88,21 @@ fn source() -> Result<Source, SystemError> {
     })
 }
 
-fn network_manager_transport(bus: &Connection) -> Result<ConnectionType, SystemError> {
+async fn network_manager_transport(bus: &Connection) -> Result<ConnectionType, SystemError> {
     let failed = |error: &dyn std::fmt::Display| {
         SystemError::Platform(format!("reading NetworkManager's state: {error}"))
     };
     let properties = PropertiesProxy::builder(bus)
         .destination(NM_SERVICE)
-        .and_then(|builder| builder.path(NM_PATH))
-        .and_then(zbus::blocking::proxy::Builder::build)
+        .path(NM_PATH)
+        .build()
+        .await
         .map_err(|error| failed(&error))?;
     // One call, so the state and the primary connection describe the same
     // moment.
     let mut all = properties
         .get_all(InterfaceName::from_static_str_unchecked(NM_INTERFACE))
+        .await
         .map_err(|error| failed(&error))?;
     let mut take = |name: &str| {
         all.remove(name)

@@ -105,6 +105,7 @@ struct RealtimeStretch {
     channels: usize,
     sample_rate: u32,
     stretch_ratio: f64,
+    #[cfg(all(feature = "playback", not(target_os = "ios")))]
     command_id: u64,
     finished: bool,
 }
@@ -128,6 +129,7 @@ impl RealtimeStretch {
             channels,
             sample_rate,
             stretch_ratio,
+            #[cfg(all(feature = "playback", not(target_os = "ios")))]
             command_id: 1,
             finished: false,
         }

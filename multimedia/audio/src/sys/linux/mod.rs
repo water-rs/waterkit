@@ -471,10 +471,10 @@ fn poisoned_lock(context: &str, error: impl Display) -> MediaError {
 }
 
 async fn start_dbus_service(state: Arc<MprisState>) -> Result<Connection, zbus::Error> {
-    ConnectionBuilder::session()?
-        .name("org.mpris.MediaPlayer2.waterkit")?
-        .serve_at("/org/mpris/MediaPlayer2", MediaPlayer2)?
-        .serve_at("/org/mpris/MediaPlayer2", MprisPlayer { state })?
+    ConnectionBuilder::session()
+        .name("org.mpris.MediaPlayer2.waterkit")
+        .serve_at("/org/mpris/MediaPlayer2", MediaPlayer2)
+        .serve_at("/org/mpris/MediaPlayer2", MprisPlayer { state })
         .build()
         .await
 }

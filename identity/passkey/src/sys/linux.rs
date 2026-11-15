@@ -279,7 +279,7 @@ fn extract_map(
 }
 
 fn unwrap_variant(value: Value<'static>) -> Value<'static> {
-    if let Value::Value(inner) = value {
+    if let Value::Variant(inner) = value {
         *inner
     } else {
         value

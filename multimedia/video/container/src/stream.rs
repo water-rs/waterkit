@@ -48,6 +48,10 @@ impl TrackId {
     pub const fn get(self) -> u32 {
         self.0.get()
     }
+
+    fn from_transmux(id: transmux::TrackId) -> Result<Self, Error> {
+        Self::new(id.value())
+    }
 }
 
 /// Exact signed media time with its source time scale retained.
@@ -686,7 +690,7 @@ impl CmafInitialization {
         }
         let movie = parse_movie_box(data)?;
         for track in &movie.tracks {
-            let id = TrackId::new(track.tkhd.track_id)?;
+            let id = TrackId::from_transmux(track.tkhd.track_id)?;
             if tracks.iter().any(|known| known.id() == id) {
                 continue;
             }
@@ -705,7 +709,7 @@ impl CmafInitialization {
             .ok_or_else(|| Error::Container(String::from("CMAF initialization has no mvex")))?
             .trex
             .into_iter()
-            .map(|defaults| Ok((TrackId::new(defaults.track_id)?, defaults)))
+            .map(|defaults| Ok((TrackId::from_transmux(defaults.track_id)?, defaults)))
             .collect::<Result<BTreeMap<_, _>, Error>>()?;
         for track in &tracks {
             if !defaults.contains_key(&track.id()) {
@@ -791,7 +795,7 @@ fn parse_protected_track_entry(
 ) -> Result<Option<ProtectedTrackEntry>, Error> {
     let track = TrackBox::parse(&data[track_box.range.clone()])
         .map_err(|error| Error::Container(error.to_string()))?;
-    let track_id = TrackId::new(track.tkhd.track_id)?;
+    let track_id = TrackId::from_transmux(track.tkhd.track_id)?;
     let media = required_child_box(data, track_box, *b"mdia", "trak has no mdia")?;
     let information = required_child_box(data, &media, *b"minf", "mdia has no minf")?;
     let table = required_child_box(data, &information, *b"stbl", "minf has no stbl")?;
@@ -998,7 +1002,7 @@ fn subtitle_track_info(track: &TrackBox) -> Result<Option<TrackInfo>, Error> {
         ))
     })?;
     Ok(Some(TrackInfo {
-        id: TrackId::new(track.tkhd.track_id)?,
+        id: TrackId::from_transmux(track.tkhd.track_id)?,
         kind: TrackKind::Subtitle,
         timescale,
         codec,
@@ -1087,7 +1091,7 @@ impl CmafDemuxer {
             })?;
 
             for (traf, encryption) in moof.traf.iter().zip(&fragment_encryption) {
-                let track_id = TrackId::new(traf.tfhd.track_id)?;
+                let track_id = TrackId::from_transmux(traf.tfhd.track_id)?;
                 let starts_discontinuity = discontinuity && discontinuity_tracks.insert(track_id);
                 let (mut track_samples, data_end) = self.demux_track_fragment(
                     segment,
@@ -1134,7 +1138,7 @@ impl CmafDemuxer {
         location: CmafFragmentLocation,
         encryption: Option<&[SampleEncryption]>,
     ) -> Result<(Vec<EncodedSample>, Option<u64>), Error> {
-        let track_id = TrackId::new(fragment.tfhd.track_id)?;
+        let track_id = TrackId::from_transmux(fragment.tfhd.track_id)?;
         let track = self
             .initialization
             .tracks
@@ -1254,7 +1258,7 @@ impl CmafDemuxer {
             .iter()
             .zip(raw_tracks)
             .map(|(track_fragment, raw_track)| {
-                let track_id = TrackId::new(track_fragment.tfhd.track_id)?;
+                let track_id = TrackId::from_transmux(track_fragment.tfhd.track_id)?;
                 let track = self
                     .initialization
                     .tracks
@@ -1373,6 +1377,7 @@ fn validate_sample_auxiliary_information(
                     Error::Container(String::from("CENC sample auxiliary data exceeds 255 bytes"))
                 })
             })
+            .map(|size| size.map(u32::from))
             .collect::<Result<Vec<_>, Error>>()?;
         if sizes.default_sample_info_size == 0 {
             if sizes.sample_info_sizes != expected_sizes {
@@ -1927,7 +1932,7 @@ impl MpegTsDemuxer {
                 TransmuxDemuxEvent::Sample {
                     track_id, sample, ..
                 } => {
-                    let track_id = TrackId::new(track_id)?;
+                    let track_id = TrackId::from_transmux(track_id)?;
                     let track = self.tracks.get(&track_id).ok_or_else(|| {
                         Error::Container(format!(
                             "MPEG-TS emitted a sample before track {} was configured",
@@ -1977,13 +1982,13 @@ impl MpegTsDemuxer {
                     }));
                 }
                 TransmuxDemuxEvent::TrackRemoved { track_id, .. } => {
-                    let track_id = TrackId::new(track_id)?;
+                    let track_id = TrackId::from_transmux(track_id)?;
                     self.tracks.remove(&track_id);
                     self.next_decode_time.remove(&track_id);
                 }
                 TransmuxDemuxEvent::Discontinuity { provenance, .. } => {
                     if let Some(pid) = provenance.pid {
-                        self.discontinuous_pids.insert(pid);
+                        self.discontinuous_pids.insert(u16::from(pid));
                     }
                 }
                 TransmuxDemuxEvent::TracksResolved { .. } => {
@@ -2062,7 +2067,7 @@ fn track_info_from_transmux(track: &TransmuxTrack) -> Result<TrackInfo, Error> {
 }
 
 pub fn track_info_from_spec(spec: &TrackSpec) -> Result<TrackInfo, Error> {
-    let id = TrackId::new(spec.track_id)?;
+    let id = TrackId::from_transmux(spec.track_id)?;
     let timescale = NonZeroU32::new(spec.timescale)
         .ok_or_else(|| Error::Container(format!("track {} declares a zero timescale", id.get())))?;
     let (kind, codec, decoder_configuration, video_dimensions, audio_layout) =
@@ -2077,7 +2082,7 @@ pub fn track_info_from_spec(spec: &TrackSpec) -> Result<TrackInfo, Error> {
         video_color_info: video_dimensions
             .map(|dimensions| super::color::inferred_sdr_color_info(Some(dimensions.height.get()))),
         audio_layout,
-        source_pid: spec.source_pid,
+        source_pid: spec.source_pid.map(u16::from),
         protection: None,
     })
 }
@@ -2376,7 +2381,7 @@ fn usize_range(
 mod tests {
     use std::{num::NonZeroU32, time::Duration};
 
-    use broadcast_common::{Parse, Serialize};
+    use broadcast_common::{Parse, Serialize as _};
     use bytes::Bytes;
     use transmux::{
         AVCConfigurationBox, AVCDecoderConfigurationRecord, AvcPps, AvcSps, CencScheme,
@@ -2435,7 +2440,7 @@ mod tests {
             sps_ext: Vec::new(),
         };
         TrackSpec::new(
-            1,
+            transmux::TrackId::new(1),
             90_000,
             CodecConfig::Avc {
                 config: AVCConfigurationBox::new(record),
@@ -2447,7 +2452,7 @@ mod tests {
 
     fn audio_track() -> TrackSpec {
         TrackSpec::new(
-            2,
+            transmux::TrackId::new(2),
             44_100,
             CodecConfig::Aac {
                 esds: EsdsBox {
@@ -2786,7 +2791,11 @@ mod tests {
     fn cmaf_webvtt_sample_uses_sample_interval() {
         let track = subtitle_track(Codec::WebVtt);
         let cue_box = transmux::VttCueBox::new("CMAF WebVTT");
-        let sample = subtitle_sample(cue_box.to_bytes());
+        let sample = subtitle_sample(
+            cue_box
+                .try_to_bytes()
+                .expect("WebVTT cue box must serialize"),
+        );
 
         let cues =
             decode_cmaf_subtitle_sample(&track, &sample).expect("WebVTT cue box must decode");
@@ -2815,7 +2824,10 @@ mod tests {
         let CodecConfig::Avc { config, .. } = track.config else {
             unreachable!("test track is AVC")
         };
-        let bytes = broadcast_common::Serialize::to_bytes(&config.config);
+        let bytes = config
+            .config
+            .try_to_bytes()
+            .expect("AVC configuration must serialize");
         AVCDecoderConfigurationRecord::parse(&bytes).expect("AVC configuration must round-trip");
     }
 }

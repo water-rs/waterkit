@@ -670,7 +670,7 @@ fn index_fragment_samples(
     let track_defaults = extends
         .trex
         .iter()
-        .find(|defaults| defaults.track_id == track_id)
+        .find(|defaults| defaults.track_id.value() == track_id)
         .ok_or_else(|| {
             VideoError::Container(format!("fragmented track {track_id} has no trex defaults"))
         })?;
@@ -694,7 +694,7 @@ fn index_fragment_samples(
                     traf_data_end.unwrap_or(span.offset)
                 }
             });
-            if traf.tfhd.track_id == track_id {
+            if traf.tfhd.track_id.value() == track_id {
                 let traf_samples = collect_traf_samples(
                     traf,
                     extends,
@@ -1117,14 +1117,14 @@ mod tests {
         AVCConfigurationBox, AVCDecoderConfigurationRecord, AvcPps, AvcSps, CodecConfig, Media,
         MovieFragmentBox, MovieFragmentHeaderBox, ProgressiveMux, Sample, Track,
         TrackFragmentBaseMediaDecodeTimeBox, TrackFragmentBox, TrackFragmentHeaderBox,
-        TrackFragmentRunBox, TrackSpec, TrunSample, build_init_segment,
+        TrackFragmentRunBox, TrackId, TrackSpec, TrunSample, build_init_segment,
     };
 
     use super::VideoReader;
 
     fn video_spec(track_id: u32) -> TrackSpec {
         TrackSpec::new(
-            track_id,
+            TrackId::new(track_id),
             TIMESCALE,
             CodecConfig::Avc {
                 config: AVCConfigurationBox::new(AVCDecoderConfigurationRecord {
@@ -1157,7 +1157,7 @@ mod tests {
         TrackFragmentBox::new(
             TrackFragmentHeaderBox {
                 flags: tfhd_flags,
-                track_id: TRACK_ID,
+                track_id: TrackId::new(TRACK_ID),
                 base_data_offset: None,
                 sample_description_index: None,
                 default_sample_duration,
@@ -1219,7 +1219,7 @@ mod tests {
         moof.traf[0].trun[0].data_offset = Some(0);
         let moof_len = i32::try_from(moof.serialized_len()).expect("moof fits in i32");
         moof.traf[0].trun[0].data_offset = Some(moof_len + 8);
-        let mut bytes = moof.to_bytes();
+        let mut bytes = moof.try_to_bytes().expect("moof must serialize");
         assert_eq!(
             bytes.len(),
             usize::try_from(moof_len).unwrap(),

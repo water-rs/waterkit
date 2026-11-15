@@ -217,7 +217,7 @@ pub struct MediaResponse {
 /// Incremental bounded response body opened through Zenwave.
 pub struct MediaStream {
     effective_url: Url,
-    body: zenwave::Body,
+    body: zenwave::DataStream,
     started: std::time::Instant,
     maximum_response_bytes: NonZeroUsize,
     expected_range_bytes: Option<usize>,
@@ -387,7 +387,7 @@ impl MediaStream {
             .transpose()?;
         Ok(Self {
             effective_url,
-            body: response.into_body(),
+            body: response.into_body().into_data_stream(),
             started: std::time::Instant::now(),
             maximum_response_bytes: request.maximum_response_bytes,
             expected_range_bytes,

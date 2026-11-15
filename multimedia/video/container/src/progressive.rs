@@ -433,7 +433,7 @@ mod tests {
     use transmux::{
         AVCConfigurationBox, AVCDecoderConfigurationRecord, AvcPps, AvcSps, CodecConfig,
         DecoderConfigDescriptor, DecoderSpecificInfo, ESDescriptor, EsdsBox, Media, ProgressiveMux,
-        SLConfigDescriptor, Sample, Track, TrackSpec,
+        SLConfigDescriptor, Sample, Track, TrackId, TrackSpec,
     };
 
     use super::ProgressiveTrackReader;
@@ -547,7 +547,7 @@ mod tests {
 
     fn audio_track(track_id: u32, data: Vec<u8>) -> Track {
         let spec = TrackSpec::new(
-            track_id,
+            TrackId::new(track_id),
             48_000,
             CodecConfig::Aac {
                 esds: EsdsBox {
@@ -579,7 +579,7 @@ mod tests {
 
     fn video_track(track_id: u32, samples: Vec<Sample>) -> Track {
         let spec = TrackSpec::new(
-            track_id,
+            TrackId::new(track_id),
             1_000,
             CodecConfig::Avc {
                 config: AVCConfigurationBox::new(AVCDecoderConfigurationRecord {

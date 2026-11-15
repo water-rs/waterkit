@@ -192,7 +192,7 @@ pub async fn download(
     observe(DownloadEvent::Started(initial));
 
     let result = async {
-        let mut body = response.into_body();
+        let mut body = response.into_body().into_data_stream();
         let mut bytes_written = 0usize;
         let mut last_reported = 0usize;
         while let Some(chunk) = body.next().await {

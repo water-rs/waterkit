@@ -8,9 +8,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 use std::time::Duration;
-use zbus::Connection;
 use zbus::names::InterfaceName;
-use zbus::zvariant::{Array, OwnedValue};
+use zbus::{Array, Connection, OwnedVariant, Str, Variant};
 
 const BLUEZ_SERVICE: &str = "org.bluez";
 const ADAPTER_PATH: &str = "/org/bluez/hci0";
@@ -19,8 +18,8 @@ const DEVICE_IFACE: &str = "org.bluez.Device1";
 const GATT_SERVICE_IFACE: &str = "org.bluez.GattService1";
 const GATT_CHAR_IFACE: &str = "org.bluez.GattCharacteristic1";
 const BTPROTO_RFCOMM: i32 = 3;
-type OwnedPropertyMap = HashMap<String, OwnedValue>;
-type SignalPropertyMap<'a> = HashMap<&'a str, zbus::zvariant::Value<'a>>;
+type OwnedPropertyMap = HashMap<String, OwnedVariant>;
+type SignalPropertyMap<'a> = HashMap<&'a str, Variant<'a>>;
 
 #[repr(C)]
 struct SockAddrRc {
@@ -163,21 +162,15 @@ fn prop_str_array(props: &OwnedPropertyMap, key: &str) -> Vec<String> {
         .map_or_else(Vec::new, |items| {
             items
                 .iter()
-                .filter_map(|item| {
-                    item.downcast_ref::<zbus::zvariant::Str<'_>>()
-                        .ok()
-                        .map(|s| s.to_string())
-                })
+                .filter_map(|item| item.downcast_ref::<Str<'_>>().ok().map(|s| s.to_string()))
                 .collect()
         })
 }
 
 fn signal_prop_str(props: &SignalPropertyMap<'_>, key: &str) -> Option<String> {
-    props.get(key).and_then(|v| {
-        v.downcast_ref::<zbus::zvariant::Str<'_>>()
-            .ok()
-            .map(|s| s.to_string())
-    })
+    props
+        .get(key)
+        .and_then(|v| v.downcast_ref::<Str<'_>>().ok().map(|s| s.to_string()))
 }
 
 fn signal_prop_i16(props: &SignalPropertyMap<'_>, key: &str) -> Option<i16> {
@@ -399,7 +392,7 @@ impl BleConnectionInner {
         )
         .await
         .map_err(|e| BluetoothError::GattError(e.to_string()))?;
-        let opts: HashMap<String, OwnedValue> = HashMap::new();
+        let opts: HashMap<String, OwnedVariant> = HashMap::new();
         let result: Vec<u8> = proxy
             .call_method("ReadValue", &(opts,))
             .await
@@ -425,7 +418,7 @@ impl BleConnectionInner {
         )
         .await
         .map_err(|e| BluetoothError::GattError(e.to_string()))?;
-        let opts: HashMap<String, OwnedValue> = HashMap::new();
+        let opts: HashMap<String, OwnedVariant> = HashMap::new();
         proxy
             .call_method("WriteValue", &(data, opts))
             .await
@@ -452,14 +445,13 @@ impl BleConnectionInner {
 
         std::thread::spawn(move || {
             futures::executor::block_on(async move {
-                let object_manager = match zbus::fdo::ObjectManagerProxy::builder(&conn)
+                let Ok(object_manager) = zbus::fdo::ObjectManagerProxy::builder(&conn)
                     .destination(BLUEZ_SERVICE)
                     .path("/")
                     .build()
                     .await
-                {
-                    Ok(proxy) => proxy,
-                    Err(_) => return,
+                else {
+                    return;
                 };
 
                 let Ok(objects) = object_manager.get_managed_objects().await else {
@@ -493,7 +485,7 @@ impl BleConnectionInner {
 
                 let mut last_value: Option<Vec<u8>> = None;
                 while !tx.is_closed() {
-                    let opts: HashMap<String, OwnedValue> = HashMap::new();
+                    let opts: HashMap<String, OwnedVariant> = HashMap::new();
                     let read_result = char_proxy.call_method("ReadValue", &(opts,)).await;
                     let Ok(reply) = read_result else {
                         break;
@@ -593,14 +585,13 @@ impl ClassicBluetoothInner {
                 };
                 let _ = adapter_proxy.call_method("StartDiscovery", &()).await;
 
-                let object_manager = match zbus::fdo::ObjectManagerProxy::builder(&conn)
+                let Ok(object_manager) = zbus::fdo::ObjectManagerProxy::builder(&conn)
                     .destination(BLUEZ_SERVICE)
                     .path("/")
                     .build()
                     .await
-                {
-                    Ok(proxy) => proxy,
-                    Err(_) => return,
+                else {
+                    return;
                 };
                 let Ok(mut stream) = object_manager.receive_interfaces_added().await else {
                     return;

@@ -4,8 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use zbus::Connection;
-use zbus::zvariant::{Array, OwnedValue, Value};
+use zbus::{Array, Connection, ObjectPath, OwnedObjectPath, OwnedVariant, Variant};
 
 const NEARD_SERVICE: &str = "org.neard";
 const OBJECT_MANAGER_PATH: &str = "/";
@@ -13,11 +12,9 @@ const ADAPTER_IFACE: &str = "org.neard.Adapter";
 const TAG_IFACE: &str = "org.neard.Tag";
 const RECORD_IFACE: &str = "org.neard.Record";
 
-type OwnedPropertyMap = HashMap<String, OwnedValue>;
-type ManagedObjects = HashMap<
-    zbus::zvariant::OwnedObjectPath,
-    HashMap<zbus::names::OwnedInterfaceName, OwnedPropertyMap>,
->;
+type OwnedPropertyMap = HashMap<String, OwnedVariant>;
+type ManagedObjects =
+    HashMap<OwnedObjectPath, HashMap<zbus::names::OwnedInterfaceName, OwnedPropertyMap>>;
 
 fn prop_string(props: &OwnedPropertyMap, key: &str) -> Option<String> {
     props
@@ -34,7 +31,7 @@ fn prop_object_paths(props: &OwnedPropertyMap, key: &str) -> Vec<String> {
             items
                 .iter()
                 .filter_map(|item| {
-                    item.downcast_ref::<zbus::zvariant::ObjectPath<'_>>()
+                    item.downcast_ref::<ObjectPath<'_>>()
                         .ok()
                         .map(|path| path.to_string())
                 })
@@ -159,15 +156,15 @@ fn parse_tag(path: &str, objects: &ManagedObjects) -> Option<NfcTag> {
     })
 }
 
-fn dbus_string_value(value: &str) -> Result<OwnedValue, NfcError> {
-    Value::from(value)
+fn dbus_string_value(value: &str) -> Result<OwnedVariant, NfcError> {
+    Variant::from(value)
         .try_into()
         .map_err(|error| NfcError::Platform(format!("encode D-Bus string value failed: {error}")))
 }
 
 fn encode_neard_records(
     message: &NdefMessage,
-) -> Result<Vec<HashMap<&'static str, OwnedValue>>, NfcError> {
+) -> Result<Vec<HashMap<&'static str, OwnedVariant>>, NfcError> {
     let mut records = Vec::with_capacity(message.records.len());
     for record in &message.records {
         if record.record_type.as_slice() == b"T" {
@@ -274,14 +271,13 @@ fn run_tag_listener(
             return;
         }
 
-        let object_manager = match zbus::fdo::ObjectManagerProxy::builder(&conn)
+        let Ok(object_manager) = zbus::fdo::ObjectManagerProxy::builder(&conn)
             .destination(NEARD_SERVICE)
             .path(OBJECT_MANAGER_PATH)
             .build()
             .await
-        {
-            Ok(proxy) => proxy,
-            Err(_) => return,
+        else {
+            return;
         };
 
         if let Ok(objects) = object_manager.get_managed_objects().await {

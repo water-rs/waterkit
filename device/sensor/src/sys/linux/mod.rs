@@ -16,8 +16,8 @@ const IIO_PROXY_IFACE: &str = "net.hadess.SensorProxy";
 
 async fn get_proxy_property<T>(conn: &Connection, property: &str) -> Result<T, SensorError>
 where
-    T: TryFrom<zbus::zvariant::OwnedValue>,
-    <T as TryFrom<zbus::zvariant::OwnedValue>>::Error: std::fmt::Display,
+    T: TryFrom<zbus::OwnedVariant>,
+    <T as TryFrom<zbus::OwnedVariant>>::Error: std::fmt::Display,
 {
     let proxy = zbus::fdo::PropertiesProxy::builder(conn)
         .destination(IIO_PROXY_BUS)

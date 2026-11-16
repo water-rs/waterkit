@@ -28,6 +28,13 @@ semver_check = false
 name = "waterkit"
 semver_check = false
 
+# Its published 0.2.0 baseline enables `vaapi` (`waterkit-codec/vaapi` ->
+# `cros-libva 0.0.12`) and the removed `filtrate` feature, so cargo-semver-checks
+# cannot build the baseline rustdoc on ubuntu-latest's libva 2.23 headers.
+[[package]]
+name = "waterkit-video"
+semver_check = false
+
 [[package]]
 name = "waterkit-camera"
 semver_check = false

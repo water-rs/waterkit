@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/water-rs/waterkit/compare/waterkit-codec-v0.2.0...waterkit-codec-v0.3.0) - 2026-11-16
+
+### Fixed
+
+- *(codec)* restore exact timestamps from Android MediaCodec
+- *(codec)* [**breaking**] drop the cros-codecs VA-API backend
+
+### Other
+
+- *(deps)* upgrade workspace crates to latest
+- mark MediaCodec as code in timestamp docs
+
 ## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-codec-v0.1.4...waterkit-codec-v0.2.0) - 2026-10-16
 
 ### Added

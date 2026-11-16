@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/water-rs/waterkit/compare/waterkit-video-streaming-v0.2.0...waterkit-video-streaming-v0.3.0) - 2026-11-16
+
+### Added
+
+- *(automation)* virtual displays and cursor-free input on macOS
+
+### Fixed
+
+- satisfy Rust 1.100 clippy lints
+
+### Other
+
+- *(deps)* upgrade workspace crates to latest
+
 ## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-video-streaming-v0.1.4...waterkit-video-streaming-v0.2.0) - 2026-10-16
 
 ### Added

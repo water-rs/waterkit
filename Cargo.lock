@@ -1037,15 +1037,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cherenkov-shader"
-version = "0.0.0"
-source = "git+https://github.com/water-rs/cherenkov?rev=f2209fb4225f7432dd97784c99542f54aca242e6#f2209fb4225f7432dd97784c99542f54aca242e6"
-dependencies = [
- "naga",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2179,40 +2170,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "24516d2611506d5cb1833555adc75f6baf9fe2706b9c13e6fc33a6b22c51ca83"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "filtrate"
-version = "0.2.1"
-source = "git+https://github.com/water-rs/cherenkov?rev=f2209fb4225f7432dd97784c99542f54aca242e6#f2209fb4225f7432dd97784c99542f54aca242e6"
-dependencies = [
- "bytemuck",
- "cherenkov-shader",
- "filtrate-core",
- "filtrate-derive",
- "half",
- "image",
- "thiserror 2.0.21",
- "tracing",
- "web-time",
- "wgpu",
- "wide",
-]
-
-[[package]]
-name = "filtrate-core"
-version = "0.2.0"
-source = "git+https://github.com/water-rs/cherenkov?rev=f2209fb4225f7432dd97784c99542f54aca242e6#f2209fb4225f7432dd97784c99542f54aca242e6"
-
-[[package]]
-name = "filtrate-derive"
-version = "0.1.0"
-source = "git+https://github.com/water-rs/cherenkov?rev=f2209fb4225f7432dd97784c99542f54aca242e6#f2209fb4225f7432dd97784c99542f54aca242e6"
-dependencies = [
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn 3.0.10",
 ]
 
 [[package]]
@@ -6400,15 +6357,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
-name = "safe_arch"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42c6efa15875e6ecb39ca61fb0b0c1a40b84fac5a5ffe71eef7d1000c8eb3f5f"
-dependencies = [
- "bytemuck",
-]
-
-[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9124,7 +9072,6 @@ dependencies = [
 name = "waterkit-video-processing"
 version = "0.1.4"
 dependencies = [
- "filtrate",
  "futures-lite",
  "waterkit-video-core",
  "wgpu",
@@ -9592,16 +9539,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "wide"
-version = "1.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d920ac99c3c8edce110cb8d07dbb324d6d026011dce85b1e9355b70f0adacc4f"
-dependencies = [
- "bytemuck",
- "safe_arch",
 ]
 
 [[package]]

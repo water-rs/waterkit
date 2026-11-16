@@ -6,11 +6,11 @@
 
 #![warn(missing_docs)]
 
-#[cfg(feature = "filtrate")]
-mod gpu_effect;
+#[cfg(feature = "wgpu")]
+mod gpu_frame;
 
-#[cfg(feature = "filtrate")]
-pub use gpu_effect::{GpuEffectProcessor, GpuTextureFrame};
+#[cfg(feature = "wgpu")]
+pub use gpu_frame::{GpuTextureFrame, GpuTexturePool};
 
 use std::future::Future;
 

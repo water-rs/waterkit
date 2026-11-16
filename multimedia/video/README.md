@@ -14,8 +14,8 @@ crate:
 - `waterkit-video-streaming`: progressive download, HLS, LL-HLS, DASH,
   LL-DASH, ABR, caching, offline packages, and license transport. Every network
   request goes through Zenwave.
-- `waterkit-video-processing`: typed asynchronous frame-processing pipelines,
-  with optional Filtrate GPU effects.
+- `waterkit-video-processing`: typed asynchronous frame-processing pipelines
+  and GPU texture frames.
 - `waterkit-video-player`: decode, playback timing, tracks, live playback,
   picture in picture, media sessions, and platform DRM/output integration.
 - `waterkit-video-cli`: media inspection and reproducible decode benchmarks.
@@ -34,7 +34,6 @@ Available umbrella features:
 - `streaming`: Zenwave delivery, HLS, DASH, ABR, and streaming playback.
 - `offline`: persistent media packages and offline download management.
 - `processing`: typed frame processing.
-- `filtrate`: Filtrate-backed GPU processing.
 - `full`: every layer above.
 
 Selecting only `container` does not pull in Zenwave, audio output, GPU

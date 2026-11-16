@@ -1,7 +1,5 @@
 [package]
 name = "waterkit-video-processing"
-# waterkit#367: held out of releases (release-plz.toml), so the version stays
-# at the one crates.io serves instead of following the workspace.
 version = "0.1.4"
 edition.workspace = true
 authors.workspace = true
@@ -14,12 +12,10 @@ categories = ["multimedia::video"]
 
 [dependencies]
 waterkit-video-core.workspace = true
-filtrate = { version = "0.2.1", optional = true }
 wgpu = { workspace = true, optional = true }
 
 [features]
 default = []
-filtrate = ["dep:filtrate", "dep:wgpu"]
 
 [dev-dependencies]
 futures-lite = "2"

@@ -1,0 +1,12 @@
+[advisories]
+ignore = [
+    # All of these are `unmaintained` informational advisories on transitive
+    # dependencies that upstream parents still pin. None have patched releases
+    # to upgrade to; each is re-enabled the moment a fix or replacement lands.
+    "RUSTSEC-2026-0543", # chrono, via dash-mpd-core
+    "RUSTSEC-2024-0436", # paste, via lofty
+    "RUSTSEC-2026-0192", # ttf-parser, via owned_ttf_parser
+    "RUSTSEC-2026-0371", # zbus_names, via zbus -> brightness
+    "RUSTSEC-2026-0370", # zvariant, via zbus -> brightness
+    "RUSTSEC-2026-0372", # zvariant_derive, via zbus -> brightness
+]

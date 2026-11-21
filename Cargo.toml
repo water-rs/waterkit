@@ -16,7 +16,7 @@ categories = ["gui", "development-tools"]
 
 [package]
 name = "waterkit"
-version = "0.3.0"
+version = "0.3.1"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

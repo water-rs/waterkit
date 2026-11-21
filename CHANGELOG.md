@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/water-rs/waterkit/compare/waterkit-v0.3.0...waterkit-v0.3.1) - 2026-11-21
+
+### Other
+
+- Ignore unmaintained advisories on transitive deps with no patched release
+- replace the cargo-machete job with cargo::unused_dependencies
+
 ## [0.3.0](https://github.com/water-rs/waterkit/compare/waterkit-v0.2.0...waterkit-v0.3.0) - 2026-11-16
 
 ### Added

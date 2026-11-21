@@ -251,20 +251,6 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-  unused-deps:
-    name: Unused Dependencies
-    needs: bump
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci-ubuntu
-      - uses: taiki-e/install-action@cargo-machete
-      - run: cargo machete
-
   feature-checks:
     name: Features
     needs: bump
@@ -301,7 +287,7 @@ jobs:
     # job passed or was skipped (release-plz bump pull requests skip all).
     name: CI result
     if: always()
-    needs: [bump, fmt, clippy, cross-clippy, coverage, typos, audit, unused-deps, feature-checks, test]
+    needs: [bump, fmt, clippy, cross-clippy, coverage, typos, audit, feature-checks, test]
     runs-on: ubuntu-latest
     steps:
       - name: Check job results

@@ -25,9 +25,6 @@ cargo test -p waterkit-audio
 
 # Check individual features work
 cargo hack check --each-feature --no-dev-deps
-
-# Check unused dependencies
-cargo machete
 ```
 
 ## Architecture

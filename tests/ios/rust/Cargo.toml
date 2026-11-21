@@ -10,9 +10,6 @@ workspace = true
 [lib]
 crate-type = ["staticlib"]
 
-[package.metadata.cargo-machete]
-ignored = ["waterkit"]
-
 [dependencies]
 futures = { workspace = true, optional = true }
 swift-bridge.workspace = true

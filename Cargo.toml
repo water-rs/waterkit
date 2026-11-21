@@ -394,6 +394,7 @@ clippy.multiple_crate_versions = "allow"
 # rewriting only those to return `impl Future` would make the shim set less
 # uniform, not more honest.
 clippy.unused_async_trait_impl = "allow"
+cargo.unused_dependencies = "warn"
 
 # xcb 1.7.0 still builds with vulnerable quick-xml 0.30. Upstream has migrated
 # to quick-xml 0.41, but has not released that change yet.

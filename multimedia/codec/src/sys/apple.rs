@@ -15,6 +15,8 @@ use objc2_core_video::{
     CVPixelBufferUnlockBaseAddress, kCVPixelBufferPixelFormatTypeKey,
     kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
     kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+    kCVPixelFormatType_420YpCbCr10BiPlanarFullRange,
+    kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
 };
 use objc2_io_surface::IOSurfaceRef;
 use objc2_video_toolbox::{
@@ -53,6 +55,10 @@ unsafe extern "C" {
     static kVTCompressionPropertyKey_ColorPrimaries: *const c_void;
     static kVTCompressionPropertyKey_TransferFunction: *const c_void;
     static kVTCompressionPropertyKey_YCbCrMatrix: *const c_void;
+    static kVTCompressionPropertyKey_ProfileLevel: *const c_void;
+    static kVTProfileLevel_HEVC_Main10_AutoLevel: *const c_void;
+    static kVTCompressionPropertyKey_HDRMetadataInsertionMode: *const c_void;
+    static kVTHDRMetadataInsertionMode_Auto: *const c_void;
     static kCVImageBufferColorPrimaries_ITU_R_709_2: *const c_void;
     static kCVImageBufferColorPrimaries_SMPTE_C: *const c_void;
     static kCVImageBufferColorPrimaries_ITU_R_2020: *const c_void;
@@ -201,6 +207,7 @@ pub struct AppleEncoder {
     height: u32,
     frame_count: i64,
     color: VideoColorInfo,
+    pixel_layout: DecodedPixelLayout,
 }
 
 impl fmt::Debug for AppleEncoder {
@@ -547,6 +554,37 @@ impl AppleEncoder {
         height: u32,
         color: VideoColorInfo,
     ) -> Result<Self, CodecError> {
+        Self::with_layout(codec, width, height, color, DecodedPixelLayout::Nv12)
+    }
+
+    /// Create a 10-bit P010 HEVC Main10 hardware encoder with specific dimensions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CodecError::Unsupported`] for non-HEVC codecs or
+    /// [`CodecError::InitializationFailed`] if `VideoToolbox` session creation
+    /// or Main10 configuration fails.
+    pub fn with_size_p010(
+        codec: CodecType,
+        width: u32,
+        height: u32,
+        color: VideoColorInfo,
+    ) -> Result<Self, CodecError> {
+        if codec != CodecType::H265 {
+            return Err(CodecError::Unsupported(
+                "10-bit P010 hardware encoding requires H.265 (HEVC Main10)".into(),
+            ));
+        }
+        Self::with_layout(codec, width, height, color, DecodedPixelLayout::P010)
+    }
+
+    fn with_layout(
+        codec: CodecType,
+        width: u32,
+        height: u32,
+        color: VideoColorInfo,
+        pixel_layout: DecodedPixelLayout,
+    ) -> Result<Self, CodecError> {
         let codec_type = match codec {
             CodecType::H264 => kCMVideoCodecType_H264,
             CodecType::H265 => kCMVideoCodecType_HEVC,
@@ -583,6 +621,35 @@ impl AppleEncoder {
 
         let session = unsafe { Retained::retain(session_ptr) }
             .ok_or_else(|| CodecError::InitializationFailed("Failed to retain session".into()))?;
+        if pixel_layout == DecodedPixelLayout::P010 {
+            let session_ptr = ptr::from_ref(&*session).cast::<c_void>();
+            let profile_status = unsafe {
+                VTSessionSetProperty(
+                    session_ptr,
+                    kVTCompressionPropertyKey_ProfileLevel,
+                    kVTProfileLevel_HEVC_Main10_AutoLevel,
+                )
+            };
+            if profile_status != 0 {
+                return Err(CodecError::InitializationFailed(format!(
+                    "VTSessionSetProperty HEVC Main10 profile failed: {profile_status}"
+                )));
+            }
+            if matches!(color.transfer, TransferFunction::Pq | TransferFunction::Hlg) {
+                let hdr_status = unsafe {
+                    VTSessionSetProperty(
+                        session_ptr,
+                        kVTCompressionPropertyKey_HDRMetadataInsertionMode,
+                        kVTHDRMetadataInsertionMode_Auto,
+                    )
+                };
+                if hdr_status != 0 {
+                    return Err(CodecError::InitializationFailed(format!(
+                        "VTSessionSetProperty HDRMetadataInsertionMode failed: {hdr_status}"
+                    )));
+                }
+            }
+        }
         set_video_toolbox_color(&session, color)?;
 
         Ok(Self {
@@ -592,6 +659,7 @@ impl AppleEncoder {
             height,
             frame_count: 0,
             color,
+            pixel_layout,
         })
     }
 
@@ -709,33 +777,66 @@ impl AppleEncoder {
 
 impl AppleEncoder {
     /// Encode NV12 data.
-    #[allow(clippy::too_many_lines)]
     pub fn encode_nv12(&mut self, nv12: &[u8]) -> Result<Vec<u8>, CodecError> {
-        let y_size = (self.width * self.height) as usize;
-        let uv_size = y_size / 2;
-        let expected_size = y_size + uv_size;
+        self.encode_biplanar(nv12, DecodedPixelLayout::Nv12)
+    }
 
-        if nv12.len() != expected_size {
+    /// Encode 10-bit P010 data (`width * height * 2` bytes Y plane followed by
+    /// `width * (height / 2) * 2` bytes interleaved UV plane, little-endian
+    /// `u16` samples in the top 10 bits).
+    pub fn encode_p010(&mut self, p010: &[u8]) -> Result<Vec<u8>, CodecError> {
+        self.encode_biplanar(p010, DecodedPixelLayout::P010)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn encode_biplanar(
+        &mut self,
+        data: &[u8],
+        expected_layout: DecodedPixelLayout,
+    ) -> Result<Vec<u8>, CodecError> {
+        if self.pixel_layout != expected_layout {
             return Err(CodecError::EncodingFailed(format!(
-                "NV12 data size {} doesn't match expected {} for {}x{}",
-                nv12.len(),
+                "encoder expects {:?} frames, got {:?}",
+                self.pixel_layout, expected_layout
+            )));
+        }
+
+        let row_bytes = expected_layout.bytes_per_row(self.width);
+        let y_size = row_bytes * self.height as usize;
+        let expected_size = expected_layout.packed_len(self.width, self.height);
+
+        if data.len() != expected_size {
+            return Err(CodecError::EncodingFailed(format!(
+                "{expected_layout:?} data size {} doesn't match expected {} for {}x{}",
+                data.len(),
                 expected_size,
                 self.width,
                 self.height
             )));
         }
 
-        // Create CVPixelBuffer with NV12 format
+        let pixel_format = match (expected_layout, self.color.range) {
+            (DecodedPixelLayout::Nv12, ColorRange::Full) => {
+                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+            }
+            (DecodedPixelLayout::Nv12, ColorRange::Limited) => {
+                kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            }
+            (DecodedPixelLayout::P010, ColorRange::Full) => {
+                kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
+            }
+            (DecodedPixelLayout::P010, ColorRange::Limited) => {
+                kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+            }
+        };
+
         let mut pixel_buffer_ptr: *mut CVPixelBuffer = ptr::null_mut();
         let pixel_buffer = unsafe {
             let status = CVPixelBufferCreate(
                 None,
                 self.width as usize,
                 self.height as usize,
-                match self.color.range {
-                    ColorRange::Full => kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-                    ColorRange::Limited => kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
-                },
+                pixel_format,
                 None,
                 NonNull::new(&raw mut pixel_buffer_ptr).unwrap(),
             );
@@ -751,7 +852,6 @@ impl AppleEncoder {
 
         let pixel_buffer_ref: &CVPixelBuffer = &pixel_buffer;
 
-        // Copy NV12 data to pixel buffer planes
         unsafe {
             use objc2_core_video::{
                 CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane,
@@ -771,9 +871,9 @@ impl AppleEncoder {
             let y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer_ref, 0);
             for row in 0..self.height as usize {
                 ptr::copy_nonoverlapping(
-                    nv12.as_ptr().add(row * self.width as usize),
+                    data.as_ptr().add(row * row_bytes),
                     y_base.cast::<u8>().add(row * y_stride),
-                    self.width as usize,
+                    row_bytes,
                 );
             }
 
@@ -783,9 +883,9 @@ impl AppleEncoder {
             let uv_height = self.height as usize / 2;
             for row in 0..uv_height {
                 ptr::copy_nonoverlapping(
-                    nv12.as_ptr().add(y_size + row * self.width as usize),
+                    data.as_ptr().add(y_size + row * row_bytes),
                     uv_base.cast::<u8>().add(row * uv_stride),
-                    self.width as usize,
+                    row_bytes,
                 );
             }
 
@@ -1374,9 +1474,27 @@ pub fn open_encoder(
     AppleEncoder::with_size(codec, width, height, color).map(crate::EncoderInner::Apple)
 }
 
+/// Open a 10-bit P010 hardware encoder for a crate-level codec type.
+pub fn open_p010_encoder(
+    codec: crate::CodecType,
+    width: u32,
+    height: u32,
+    color: VideoColorInfo,
+) -> Result<crate::EncoderInner, CodecError> {
+    let codec = match codec {
+        crate::CodecType::H264 => CodecType::H264,
+        crate::CodecType::H265 => CodecType::H265,
+        crate::CodecType::Av1 => unreachable!(),
+    };
+    AppleEncoder::with_size_p010(codec, width, height, color).map(crate::EncoderInner::Apple)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AppleDecoder, CodecType};
+    use super::{
+        AppleDecoder, AppleEncoder, CodecType, ColorPrimaries, ColorRange, DecodedPixelLayout,
+        MatrixCoefficients, TransferFunction, VideoColorInfo, decoded_pixel_layout,
+    };
 
     // Big Buck Bunny H.264 avcC from ffprobe.
     const AVC_CONFIG: &[u8] = &[
@@ -1389,5 +1507,48 @@ mod tests {
     fn decoder_init_h264_smoke() {
         let decoder = AppleDecoder::new(CodecType::H264, Some(AVC_CONFIG), 1280, 720);
         assert!(decoder.is_ok(), "decoder init failed: {decoder:?}");
+    }
+
+    #[test]
+    fn encoder_hevc_p010_hdr_pq_produces_main10_config() {
+        let color = VideoColorInfo {
+            primaries: ColorPrimaries::Bt2020,
+            transfer: TransferFunction::Pq,
+            matrix: MatrixCoefficients::Bt2020NonConstantLuminance,
+            range: ColorRange::Limited,
+            content_light_level: None,
+            dolby_vision: false,
+        };
+        assert!(
+            AppleEncoder::with_size_p010(CodecType::H264, 160, 120, color).is_err(),
+            "H.264 must reject 10-bit P010"
+        );
+        let mut encoder = AppleEncoder::with_size_p010(CodecType::H265, 160, 120, color)
+            .expect("macOS VideoToolbox must open 10-bit HEVC Main10 encoder");
+        let y_count = 160 * 120;
+        let uv_count = y_count / 2;
+        let mut p010 = Vec::with_capacity((y_count + uv_count) * 2);
+        // Limited-range 10-bit mid-bright luma (code 600 << 6) and neutral chroma (512 << 6).
+        for _ in 0..y_count {
+            p010.extend_from_slice(&(600_u16 << 6).to_le_bytes());
+        }
+        for _ in 0..uv_count {
+            p010.extend_from_slice(&(512_u16 << 6).to_le_bytes());
+        }
+        let packet = encoder
+            .encode_p010(&p010)
+            .expect("encode 10-bit P010 frame");
+        assert!(
+            !packet.is_empty(),
+            "encoded HEVC Main10 packet must be non-empty"
+        );
+        let config = encoder
+            .get_codec_config()
+            .expect("VideoToolbox must emit hvcC configuration");
+        assert_eq!(
+            decoded_pixel_layout(true, Some(&config)).expect("parse Main10 hvcC"),
+            DecodedPixelLayout::P010,
+            "hvcC must declare 10-bit luma/chroma (Main10)"
+        );
     }
 }

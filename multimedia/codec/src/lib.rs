@@ -847,6 +847,49 @@ impl Encoder {
         }
     }
 
+    /// Create a new 10-bit P010 hardware encoder for HDR/wide-gamut HEVC output.
+    ///
+    /// `color` must describe the colorimetry of the P010 samples passed to
+    /// [`Self::encode_p010`]. Fails fast with [`CodecError::Unsupported`] when
+    /// `codec` is not [`CodecType::H265`] or the platform lacks 10-bit P010
+    /// hardware encoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if no 10-bit P010 hardware encoder is available.
+    pub fn new_p010(
+        codec: CodecType,
+        width: u32,
+        height: u32,
+        profile: EncoderProfile,
+        color: VideoColorInfo,
+    ) -> Result<Self, CodecError> {
+        let _ = profile;
+        #[cfg(not(any(waterkit_hw_codec_apple, waterkit_hw_codec_windows)))]
+        let _ = (width, height, color);
+
+        match codec {
+            #[cfg(waterkit_hw_codec_apple)]
+            CodecType::H265 => Ok(Self {
+                inner: sys::apple::open_p010_encoder(codec, width, height, color)?,
+            }),
+
+            #[cfg(waterkit_hw_codec_windows)]
+            CodecType::H265 => Ok(Self {
+                inner: sys::windows::open_p010_encoder(codec, width, height, color)?,
+            }),
+
+            #[cfg(not(any(waterkit_hw_codec_apple, waterkit_hw_codec_windows)))]
+            CodecType::H265 => Err(CodecError::Unsupported(
+                "10-bit P010 H.265 hardware encoding is not available on this platform".into(),
+            )),
+
+            CodecType::H264 | CodecType::Av1 => Err(CodecError::Unsupported(format!(
+                "10-bit P010 hardware encoding requires H.265, not {codec:?}"
+            ))),
+        }
+    }
+
     /// Encode a frame from NV12 data.
     ///
     /// Returns a streaming iterator yielding encoded packets.
@@ -859,6 +902,52 @@ impl Encoder {
             Err(e) => EncodeStream {
                 inner: EncodeStreamInner::Error(Some(e)),
             },
+        }
+    }
+
+    /// Encode a frame from 10-bit P010 data (`width * height * 2` bytes Y plane
+    /// followed by `width * (height / 2) * 2` bytes interleaved UV plane,
+    /// little-endian 16-bit elements with 10-bit codes in the high bits).
+    ///
+    /// Returns a streaming iterator yielding encoded packets.
+    pub fn encode_p010(&mut self, data: &[u8]) -> EncodeStream {
+        let result = self.encode_p010_inner(data);
+        match result {
+            Ok(packet) => EncodeStream {
+                inner: EncodeStreamInner::Packet(Some(packet)),
+            },
+            Err(e) => EncodeStream {
+                inner: EncodeStreamInner::Error(Some(e)),
+            },
+        }
+    }
+
+    #[cfg(not(any(waterkit_hw_codec_apple, waterkit_hw_codec_windows)))]
+    #[allow(
+        clippy::missing_const_for_fn,
+        clippy::unused_self,
+        reason = "only the non-P010 builds reduce to an unsupported error"
+    )]
+    fn encode_p010_inner(&self, data: &[u8]) -> Result<Vec<u8>, CodecError> {
+        let _ = data;
+        Err(CodecError::Unsupported(String::from(
+            "10-bit P010 hardware encoding is not available on this platform",
+        )))
+    }
+
+    #[cfg(any(waterkit_hw_codec_apple, waterkit_hw_codec_windows))]
+    fn encode_p010_inner(&mut self, data: &[u8]) -> Result<Vec<u8>, CodecError> {
+        match self.inner {
+            #[cfg(waterkit_hw_codec_apple)]
+            EncoderInner::Apple(ref mut enc) => enc.encode_p010(data),
+
+            #[cfg(waterkit_hw_codec_windows)]
+            EncoderInner::Windows(ref mut enc) => enc.encode_p010(data),
+
+            #[cfg(waterkit_av1_software_encode)]
+            EncoderInner::Av1(_) => Err(CodecError::Unsupported(
+                "10-bit P010 encoding is not supported by the AV1 encoder".into(),
+            )),
         }
     }
 

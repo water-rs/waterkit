@@ -409,6 +409,7 @@ pub struct WindowsEncoder {
     frame_count: i64,
     output_stream_info: MFT_OUTPUT_STREAM_INFO,
     codec_config: Option<Vec<u8>>,
+    pixel_layout: DecodedPixelLayout,
     _media_foundation: MediaFoundationSession,
 }
 
@@ -424,19 +425,48 @@ impl fmt::Debug for WindowsEncoder {
 }
 
 impl WindowsEncoder {
-    /// Create a new Windows hardware encoder.
+    /// Create a new Windows hardware encoder for 8-bit NV12 input.
     pub fn new(
         codec_type: CodecType,
         width: u32,
         height: u32,
         color: VideoColorInfo,
     ) -> Result<Self, CodecError> {
+        Self::with_layout(codec_type, width, height, color, DecodedPixelLayout::Nv12)
+    }
+
+    /// Create a new Windows hardware encoder for 10-bit P010 HEVC input.
+    pub fn new_p010(
+        codec_type: CodecType,
+        width: u32,
+        height: u32,
+        color: VideoColorInfo,
+    ) -> Result<Self, CodecError> {
+        if codec_type != CodecType::H265 {
+            return Err(CodecError::Unsupported(
+                "10-bit P010 hardware encoding requires H.265 (HEVC Main10)".into(),
+            ));
+        }
+        Self::with_layout(codec_type, width, height, color, DecodedPixelLayout::P010)
+    }
+
+    fn with_layout(
+        codec_type: CodecType,
+        width: u32,
+        height: u32,
+        color: VideoColorInfo,
+        pixel_layout: DecodedPixelLayout,
+    ) -> Result<Self, CodecError> {
         let media_foundation = MediaFoundationSession::new()?;
+        let input_subtype = match pixel_layout {
+            DecodedPixelLayout::Nv12 => MFVideoFormat_NV12,
+            DecodedPixelLayout::P010 => MFVideoFormat_P010,
+        };
 
         unsafe {
             let transform = activate_hardware_transform(
                 MFT_CATEGORY_VIDEO_ENCODER,
-                create_register_type_info(MFVideoFormat_NV12),
+                create_register_type_info(input_subtype),
                 create_register_type_info(codec_type.subtype()),
                 "encoder",
             )?;
@@ -449,7 +479,7 @@ impl WindowsEncoder {
                 CodecError::InitializationFailed(format!("SetOutputType failed: {e}"))
             })?;
 
-            let input_type = create_video_type(MFVideoFormat_NV12, width, height)?;
+            let input_type = create_video_type(input_subtype, width, height)?;
             set_color_metadata(&input_type, color)?;
             transform.SetInputType(0, &input_type, 0).map_err(|e| {
                 CodecError::InitializationFailed(format!("SetInputType failed: {e}"))
@@ -480,6 +510,7 @@ impl WindowsEncoder {
                 frame_count: 0,
                 output_stream_info,
                 codec_config,
+                pixel_layout,
                 _media_foundation: media_foundation,
             })
         }
@@ -487,14 +518,32 @@ impl WindowsEncoder {
 
     /// Encode NV12 data to compressed video.
     pub fn encode_nv12(&mut self, nv12: &[u8]) -> Result<Vec<u8>, CodecError> {
-        let y_size = self.width as usize * self.height as usize;
-        let uv_size = y_size / 2;
-        let expected_size = y_size + uv_size;
+        self.encode_biplanar(nv12, DecodedPixelLayout::Nv12)
+    }
 
-        if nv12.len() != expected_size {
+    /// Encode 10-bit P010 data to compressed video.
+    pub fn encode_p010(&mut self, p010: &[u8]) -> Result<Vec<u8>, CodecError> {
+        self.encode_biplanar(p010, DecodedPixelLayout::P010)
+    }
+
+    fn encode_biplanar(
+        &mut self,
+        data: &[u8],
+        expected_layout: DecodedPixelLayout,
+    ) -> Result<Vec<u8>, CodecError> {
+        if self.pixel_layout != expected_layout {
             return Err(CodecError::EncodingFailed(format!(
-                "NV12 data size {} doesn't match expected {} for {}x{}",
-                nv12.len(),
+                "encoder expects {:?} frames, got {:?}",
+                self.pixel_layout, expected_layout
+            )));
+        }
+
+        let expected_size = expected_layout.packed_len(self.width, self.height);
+
+        if data.len() != expected_size {
+            return Err(CodecError::EncodingFailed(format!(
+                "{expected_layout:?} data size {} doesn't match expected {} for {}x{}",
+                data.len(),
                 expected_size,
                 self.width,
                 self.height
@@ -502,7 +551,7 @@ impl WindowsEncoder {
         }
 
         unsafe {
-            let input_sample = create_sample(nv12)?;
+            let input_sample = create_sample(data)?;
             let time_100ns = self.frame_count * 333_333;
             self.frame_count += 1;
             input_sample.SetSampleTime(time_100ns).ok();
@@ -1046,6 +1095,21 @@ pub fn open_encoder(
         crate::CodecType::Av1 => unreachable!(),
     };
     WindowsEncoder::new(codec, width, height, color).map(crate::EncoderInner::Windows)
+}
+
+/// Open a 10-bit P010 hardware encoder for a crate-level codec type.
+pub fn open_p010_encoder(
+    codec: crate::CodecType,
+    width: u32,
+    height: u32,
+    color: VideoColorInfo,
+) -> Result<crate::EncoderInner, CodecError> {
+    let codec = match codec {
+        crate::CodecType::H264 => CodecType::H264,
+        crate::CodecType::H265 => CodecType::H265,
+        crate::CodecType::Av1 => unreachable!(),
+    };
+    WindowsEncoder::new_p010(codec, width, height, color).map(crate::EncoderInner::Windows)
 }
 
 #[cfg(test)]

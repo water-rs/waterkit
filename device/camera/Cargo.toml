@@ -142,3 +142,70 @@ ndk = { version = "0.9", default-features = false, features = ["api-level-28"] }
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/CameraHelper.kt"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.camera.CameraHelper"
+members = [
+    "public <init>(android.content.Context)",
+    "public java.lang.String[][] listCameras()",
+    "public void openCamera(java.lang.String, int, int, int, int, int, waterkit.build.NativeCallback)",
+    "public void startCapture(waterkit.build.NativeCallback)",
+    "public void stopCapture()",
+    "public void capturePhoto(waterkit.build.NativeCallback)",
+    "public void captureRawPhoto(waterkit.build.NativeCallback)",
+    "public void startRecording(java.lang.String, waterkit.build.NativeCallback)",
+    "public void stopRecording(waterkit.build.NativeCallback)",
+    "public long getRecordingDurationMs()",
+    "public void startRawRecording(java.lang.String, waterkit.build.NativeCallback)",
+    "public void stopRawRecording(waterkit.build.NativeCallback)",
+    "public long getRawRecordingDurationMs()",
+    "public waterkit.camera.CameraHelper$CapturedFrame waitForNextFrame(int)",
+    "public waterkit.camera.CameraHelper$AnalysisFrame waitForNextAnalysisFrame(int)",
+    "public int getSensorOrientation(java.lang.String)",
+    "public boolean lensFacesBack(java.lang.String)",
+    "public int[] getFrameSize()",
+    "public void closeCamera()",
+    "public int[] getSupportedResolutions(java.lang.String)",
+    "public int[] getSupportedFrameRates(java.lang.String)",
+    "public float[] getZoomRange(java.lang.String)",
+    "public boolean supportsExposureCompensation(java.lang.String)",
+    "public boolean supportsManualFocus(java.lang.String)",
+    "public boolean supportsManualWhiteBalance(java.lang.String)",
+    "public int[] getSupportedDynamicRanges(java.lang.String)",
+    "public boolean supportsStandardStabilization(java.lang.String)",
+    "public boolean supportsCinematicStabilization(java.lang.String)",
+    "public boolean hasFlash(java.lang.String)",
+    "public boolean hasTorch(java.lang.String)",
+    "public boolean supportsRawPhoto(java.lang.String)",
+    "public boolean supportsRawVideo(java.lang.String)",
+    "public boolean supportsConcurrentMultiCamera(java.lang.String)",
+    "public int maxConcurrentCameras(java.lang.String)",
+    "public boolean setZoom(float)",
+    "public boolean setFlashMode(int)",
+    "public boolean setStabilizationMode(int)",
+    "public boolean setDynamicRange(int)",
+    "public boolean setExposureCompensation(float)",
+    "public boolean setFocusMode(int)",
+    "public boolean setFocusDistanceNormalized(float)",
+]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.camera.CameraHelper$CapturedFrame"
+members = [
+    "public android.hardware.HardwareBuffer getHardwareBuffer()",
+    "public long getCaptureTimeNs()",
+    "public int getDisplayRotation()",
+    "public int getDataSpace()",
+    "public int getDynamicRangeProfile()",
+    "public void close()",
+]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.camera.CameraHelper$AnalysisFrame"
+members = [
+    "public android.media.Image getImage()",
+    "public int getDisplayRotation()",
+    "public int getDataSpace()",
+    "public long getCaptureTimeNs()",
+    "public void close()",
+]

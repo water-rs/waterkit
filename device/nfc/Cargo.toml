@@ -52,3 +52,13 @@ zbus.workspace = true
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/NfcHelper.kt"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.nfc.NfcHelper"
+members = [
+    "public static boolean isAvailable(android.content.Context)",
+    "public static java.lang.String getTagId(android.nfc.Tag)",
+    "public static int getTagType(android.nfc.Tag)",
+    "public static java.lang.String readTag(android.nfc.Tag)",
+    "public static java.lang.String writeTag(android.nfc.Tag, java.lang.String)",
+]

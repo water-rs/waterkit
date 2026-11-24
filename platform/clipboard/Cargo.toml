@@ -95,3 +95,40 @@ name = "waterkit.clipboard.ClipboardFileProvider"
 authorities = ["${applicationId}.waterkit.clipboard"]
 exported = false
 grant-uri-permissions = true
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.clipboard.ClipboardHelper"
+members = [
+    "public static boolean hasText(android.content.Context)",
+    "public static boolean hasHtml(android.content.Context)",
+    "public static boolean hasImage(android.content.Context)",
+    "public static boolean hasFiles(android.content.Context)",
+    "public static java.lang.String getText(android.content.Context)",
+    "public static java.lang.String getHtml(android.content.Context)",
+    "public static java.lang.String[] getFiles(android.content.Context)",
+    "public static int getImageWidth(android.content.Context)",
+    "public static int getImageHeight(android.content.Context)",
+    "public static byte[] getImageRgba(android.content.Context)",
+    "public static byte[] getBinary(android.content.Context, java.lang.String)",
+    "public static void setText(android.content.Context, java.lang.String)",
+    "public static void setHtml(android.content.Context, java.lang.String, java.lang.String)",
+    "public static void setFiles(android.content.Context, java.lang.String[])",
+    "public static boolean setImageFromPath(android.content.Context, java.lang.String)",
+    "public static void setBinary(android.content.Context, byte[], java.lang.String)",
+    "public static boolean startWatching(android.content.Context, android.content.ClipboardManager$OnPrimaryClipChangedListener)",
+    "public static void stopWatching(android.content.Context, android.content.ClipboardManager$OnPrimaryClipChangedListener)",
+    "public static void clear(android.content.Context)",
+]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.clipboard.ClipboardWatchCallback"
+members = [
+    "public <init>(android.content.Context)",
+    "public long waterkit_watch_state",
+    "public void releaseNativeState()",
+    "private native void onPrimaryClipChangedNative(boolean, boolean, boolean, boolean)",
+]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.clipboard.ClipboardFileProvider"
+members = ["public <init>()"]

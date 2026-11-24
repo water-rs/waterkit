@@ -68,3 +68,17 @@ name = "waterkit.wallet.SavePassesActivity"
 exported = false
 theme = "@android:style/Theme.Translucent.NoTitleBar"
 exclude-from-recents = true
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.wallet.WalletHelper"
+members = [
+    "public static void requestAvailability(android.content.Context, long)",
+    "public static android.content.Intent savePassesIntent(android.content.Context, java.lang.String)",
+    "public static java.lang.String apiErrorMessage(android.content.Intent)",
+    "public static native void onAvailability(long, boolean)",
+    "public static native void onAvailabilityError(long, java.lang.String)",
+]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.wallet.SavePassesActivity"
+members = ["public <init>()"]

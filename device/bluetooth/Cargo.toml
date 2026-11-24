@@ -78,6 +78,53 @@ zbus.workspace = true
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/BluetoothHelper.kt", "src/sys/android/BleScanBridgeCallback.kt", "src/sys/android/BleGattBridgeCallback.kt", "src/sys/android/ClassicDiscoveryBridgeCallback.kt"]
 
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.bluetooth.BluetoothHelper"
+members = [
+    "public static int getAdapterState(android.content.Context)",
+    "public static android.bluetooth.le.BluetoothLeScanner startBleScan(android.content.Context, java.lang.String[], waterkit.bluetooth.BleScanCallback)",
+    "public static void stopBleScan(android.bluetooth.le.BluetoothLeScanner, android.bluetooth.le.ScanCallback)",
+    "public static android.bluetooth.BluetoothGatt connectGatt(android.content.Context, java.lang.String, android.bluetooth.BluetoothGattCallback)",
+    "public static android.bluetooth.BluetoothDevice[] getPairedDevices(android.content.Context)",
+    "public static boolean startClassicDiscovery(android.content.Context, waterkit.bluetooth.ClassicDiscoveryCallback)",
+    "public static void stopClassicDiscovery(android.content.Context)",
+    "public static android.bluetooth.BluetoothSocket connectSpp(android.content.Context, java.lang.String, java.lang.String)",
+    "public static byte[] readSpp(android.bluetooth.BluetoothSocket, int)",
+    "public static int writeSpp(android.bluetooth.BluetoothSocket, byte[])",
+    "public static void closeSpp(android.bluetooth.BluetoothSocket)",
+]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.bluetooth.BleScanBridgeCallback"
+members = [
+    "public <init>()",
+    "public long waterkit_scan_state",
+    "public void releaseNativeState()",
+    "public native void onScanResultNative(java.lang.String, java.lang.String, int, java.lang.String[])",
+]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.bluetooth.BleGattBridgeCallback"
+members = [
+    "public <init>()",
+    "public long waterkit_gatt_state",
+    "public void releaseNativeState()",
+    "public native void onConnectionStateNative(java.lang.String, boolean, int)",
+    "public native void onServicesDiscoveredNative(java.lang.String, java.lang.String, int)",
+    "public native void onCharacteristicReadNative(java.lang.String, java.lang.String, java.lang.String, byte[], int)",
+    "public native void onCharacteristicWriteNative(java.lang.String, java.lang.String, java.lang.String, int)",
+    "public native void onCharacteristicChangedNative(java.lang.String, java.lang.String, java.lang.String, byte[])",
+]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.bluetooth.ClassicDiscoveryBridgeCallback"
+members = [
+    "public <init>()",
+    "public long waterkit_classic_discovery_state",
+    "public void releaseNativeState()",
+    "public native void onDeviceFoundNative(java.lang.String, java.lang.String, int, boolean)",
+]
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-io-bluetooth = { workspace = true, features = [
     "Bluetooth",

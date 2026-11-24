@@ -183,3 +183,15 @@ url = { version = "2", optional = true }
 # classpath when `media-session` is enabled.
 [package.metadata.waterui.android.feature.media-session]
 kotlin-sources = ["src/sys/android/MediaSessionHelper.kt"]
+
+[[package.metadata.waterui.android.feature.media-session.keep]]
+class = "waterkit.media.MediaSessionHelper"
+members = [
+    "public <init>(android.content.Context)",
+    "public void setMetadata(java.lang.String, java.lang.String, java.lang.String, byte[], long)",
+    "public void setPlaybackState(int, long, float, boolean, boolean)",
+    "public boolean requestAudioFocus()",
+    "public void abandonAudioFocus()",
+    "public void clearSession()",
+    "public java.lang.String takeCommand()",
+]

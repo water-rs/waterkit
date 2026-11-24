@@ -38,3 +38,18 @@ futures.workspace = true
 
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/TranslationHelper.kt"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.language.TranslationHelper"
+members = [
+    "public static boolean isApiSupported()",
+    "public static void getCapabilities(android.content.Context, waterkit.build.NativeCallback)",
+    "public static void createTranslator(android.content.Context, java.lang.String, java.lang.String, waterkit.build.NativeCallback)",
+    "public static android.os.CancellationSignal translate(android.view.translation.Translator, waterkit.build.NativeCallback, java.lang.String)",
+    "public static java.lang.String openDownloadSettings(android.content.Context)",
+    "public static waterkit.language.CapabilityUpdates registerCapabilityUpdates(android.content.Context, waterkit.build.NativeChannel)",
+]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.language.CapabilityUpdates"
+members = ["public void close()"]

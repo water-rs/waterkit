@@ -54,3 +54,12 @@ tokio = { workspace = true, features = ["time"] }
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/BiometricHelper.kt"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.biometric.BiometricHelper"
+members = [
+    "public static boolean isAvailable(android.content.Context)",
+    "public static int getBiometricType(android.content.Context)",
+    "public static void authenticate(android.content.Context, java.lang.String, long)",
+    "public static native void onResult(long, boolean, int, java.lang.String)",
+]

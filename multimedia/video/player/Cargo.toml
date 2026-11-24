@@ -63,3 +63,11 @@ futures.workspace = true
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/PictureInPictureHelper.kt"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.video.PictureInPictureHelper"
+members = [
+    "public static int enterPictureInPicture(android.content.Context, int, int)",
+    "public static void updateControllerState(android.content.Context, boolean, boolean, int, int)",
+    "public static boolean isPictureInPictureActive(android.content.Context)",
+]

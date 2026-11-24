@@ -76,3 +76,27 @@ async-process.workspace = true
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/SpeechHelper.kt", "src/sys/android/SpeechInitCallback.kt"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.speech.SpeechHelper"
+members = [
+    "public static void initTts(android.content.Context, waterkit.speech.SpeechInitCallback)",
+    "public static void speak(java.lang.String, float, float, float, java.lang.String)",
+    "public static void stop()",
+    "public static boolean isSpeaking()",
+    "public static java.lang.String[] getAvailableVoices()",
+    "public static void shutdown()",
+    "public static boolean isRecognitionAvailable(android.content.Context)",
+    "public static boolean startRecognition(android.content.Context, java.lang.String, boolean, long)",
+    "public static void stopRecognition()",
+    "public static native void onRecognitionResult(long, java.lang.String, boolean, float)",
+    "public static native void onRecognitionError(long, int)",
+]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.speech.SpeechInitCallback"
+members = [
+    "public <init>()",
+    "public long waterkit_tts_init_tx",
+    "public native void onTtsInit(boolean)",
+]

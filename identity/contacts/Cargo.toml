@@ -54,3 +54,13 @@ ndk-context.workspace = true
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/ContactsHelper.kt"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.contacts.ContactsHelper"
+members = [
+    "public static java.lang.String[] fetchAll(android.content.Context)",
+    "public static java.lang.String[] search(android.content.Context, java.lang.String)",
+    "public static java.lang.String getContact(android.content.Context, java.lang.String)",
+    "public static java.lang.String createContact(android.content.Context, java.lang.String)",
+    "public static boolean deleteContact(android.content.Context, java.lang.String)",
+]

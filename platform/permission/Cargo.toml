@@ -126,6 +126,13 @@ web-sys = { version = "0.3", features = [
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/PermissionHelper.kt"]
 
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.permission.PermissionHelper"
+members = [
+    "public static int checkPermission(android.app.Activity, int)",
+    "public static void requestPermission(android.app.Activity, int, int)",
+]
+
 [dev-dependencies]
 libtest-mimic = "0.8"
 

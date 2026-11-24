@@ -98,5 +98,12 @@ serde_json.workspace = true
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/NotificationHelper.kt"]
 
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.notification.NotificationHelper"
+members = [
+    "public static void showNotification(android.content.Context, java.lang.String, java.lang.String, int, java.lang.String, java.lang.String)",
+    "public static native void onAction(java.lang.String, java.lang.String)",
+]
+
 [dev-dependencies]
 pollster = "1.0"

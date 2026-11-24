@@ -48,3 +48,14 @@ ndk-context.workspace = true
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/CalendarHelper.kt"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.calendar.CalendarHelper"
+members = [
+    "public static boolean hasCalendarPermission(android.content.Context, boolean)",
+    "public static java.lang.String[] listCalendars(android.content.Context)",
+    "public static java.lang.String[] fetchEvents(android.content.Context, java.lang.String, java.lang.String)",
+    "public static long createEventIso(android.content.Context, java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String, boolean, java.lang.String)",
+    "public static java.lang.String fetchEventById(android.content.Context, long)",
+    "public static boolean deleteEvent(android.content.Context, long)",
+]

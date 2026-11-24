@@ -64,3 +64,13 @@ futures.workspace = true
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/HapticHelper.kt"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.haptic.HapticHelper"
+members = [
+    "public static boolean isAvailable(android.content.Context)",
+    "public static void impact(android.content.Context, float)",
+    "public static void selection(android.content.Context)",
+    "public static void notification(android.content.Context, int)",
+    "public static boolean playPattern(android.content.Context, long[], int[])",
+]

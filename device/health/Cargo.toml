@@ -55,3 +55,11 @@ ndk-context.workspace = true
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/HealthHelper.kt"]
 maven = ["androidx.health.connect:connect-client:1.1.0"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.health.HealthHelper"
+members = [
+    "public static boolean isAvailable()",
+    "public static java.lang.String querySamples(android.content.Context, java.lang.String, java.lang.String, java.lang.String)",
+    "public static java.lang.String writeSample(android.content.Context, java.lang.String, double, java.lang.String, java.lang.String, java.lang.String)",
+]

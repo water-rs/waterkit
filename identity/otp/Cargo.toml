@@ -37,3 +37,37 @@ maven = [
     "com.google.android.gms:play-services-base:18.11.0",
     "androidx.activity:activity:1.13.0",
 ]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.otp.OtpHelper"
+members = [
+    "public static int capabilities(android.content.Context)",
+    "public static byte[] signingCertificate(android.content.Context)",
+]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.otp.OtpRequest"
+members = [
+    "public <init>(android.content.Context, waterkit.build.NativeChannel)",
+    "public void startSmsRetriever()",
+    "public void createAppSpecificSmsToken(waterkit.build.NativeCallback)",
+    "public void startSmsUserConsent(java.lang.String)",
+    "public void cancel()",
+]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.otp.OtpEvent$Started"
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.otp.OtpEvent$Message"
+members = ["public java.lang.String getText()"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.otp.OtpEvent$Timeout"
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.otp.OtpEvent$Denied"
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.otp.OtpEvent$Failed"
+members = ["public java.lang.String getError()"]

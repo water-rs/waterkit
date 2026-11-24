@@ -50,3 +50,19 @@ futures.workspace = true
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/StoreHelper.kt"]
 maven = ["com.android.billingclient:billing:9.1.0"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.store.StoreHelper"
+members = ["public static java.lang.String capabilities(android.content.Context)"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.store.StoreConnection"
+members = [
+    "public <init>(android.content.Context, java.lang.String, waterkit.build.NativeChannel)",
+    "public void connect(waterkit.build.NativeCallback)",
+    "public void products(waterkit.build.NativeCallback)",
+    "public void purchase(java.lang.String, java.lang.String, waterkit.build.NativeCallback)",
+    "public void entitlements(waterkit.build.NativeCallback)",
+    "public void finish(java.lang.String, java.lang.String, waterkit.build.NativeCallback)",
+    "public void disconnect()",
+]

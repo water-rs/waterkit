@@ -44,8 +44,43 @@ thiserror.workspace = true
 kotlin-sources = ["src/android_runtime/ActivityResultHelper.kt"]
 maven = ["androidx.activity:activity:1.11.0"]
 
+[[package.metadata.waterui.android.feature.activity-result.keep]]
+class = "waterkit.build.ActivityResultHelper"
+members = [
+    "public static boolean startActivityForResult(android.content.Context, waterkit.build.NativeCallback, android.content.Intent)",
+    "public static boolean startIntentSenderForResult(android.content.Context, waterkit.build.NativeCallback, android.content.IntentSender)",
+]
+
+[[package.metadata.waterui.android.feature.activity-result.keep]]
+class = "androidx.activity.result.ActivityResult"
+members = [
+    "public int getResultCode()",
+    "public android.content.Intent getData()",
+]
+
 [package.metadata.waterui.android.feature.native-callback]
 kotlin-sources = [
     "src/android_runtime/NativeCallback.kt",
     "src/android_runtime/NativeChannel.kt",
 ]
+
+[[package.metadata.waterui.android.feature.native-callback.keep]]
+class = "waterkit.build.NativeCallback"
+members = [
+    "private <init>(long)",
+    "private native void completeNative(long, java.lang.Object)",
+    "private native void failNative(long, java.lang.String)",
+]
+
+[[package.metadata.waterui.android.feature.native-callback.keep]]
+class = "waterkit.build.NativeChannel"
+members = [
+    "private <init>(long)",
+    "private native void sendNative(long, java.lang.Object)",
+    "private native void closeNative(long)",
+    "private native void failNative(long, java.lang.String)",
+]
+
+[[package.metadata.waterui.android.feature.native-callback.keep]]
+class = "waterkit.build.PeerNatives"
+members = ["public static native void releaseNative(long)"]

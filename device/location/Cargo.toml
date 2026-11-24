@@ -69,3 +69,26 @@ kotlin-sources = ["src/sys/android/LocationHelper.kt"]
 # The thin client of the Fused Location Provider; the provider itself is
 # Google Play services, preinstalled on the device.
 maven = ["com.google.android.gms:play-services-location:21.4.0"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.location.LocationHelper"
+members = [
+    "public static boolean hasGooglePlayServices(android.content.Context)",
+    "public static void getFusedLocation(android.content.Context, waterkit.build.NativeCallback)",
+    "public static void getFrameworkLocation(android.content.Context, waterkit.build.NativeCallback)",
+]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.location.LocationHelper$Result"
+members = [
+    "public int status",
+    "public double latitude",
+    "public double longitude",
+    "public boolean hasAltitude",
+    "public double altitude",
+    "public boolean hasHorizontalAccuracy",
+    "public double horizontalAccuracy",
+    "public boolean hasVerticalAccuracy",
+    "public double verticalAccuracy",
+    "public long timeMillis",
+]

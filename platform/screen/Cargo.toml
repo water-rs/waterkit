@@ -148,3 +148,18 @@ required-features = ["display-stream", "gpu"]
 # classpath (see water-rs/cli's android backend).
 [package.metadata.waterui.android]
 kotlin-sources = ["src/sys/android/ScreenHelper.kt"]
+
+[[package.metadata.waterui.android.keep]]
+class = "waterkit.screen.ScreenHelper"
+members = [
+    "public static boolean initWithContext(android.content.Context)",
+    "public static int[] getFrameDimensions()",
+    "public static float getRefreshRateHz()",
+    "public static boolean hasPermission()",
+    "public static byte[] captureScreenshotPng()",
+    "public static float getBrightness()",
+    "public static boolean setBrightness(float)",
+    "public static byte[] getFrame()",
+    "public static boolean startCapture()",
+    "public static void stopCapture()",
+]

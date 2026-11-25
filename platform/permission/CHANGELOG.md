@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/water-rs/waterkit/compare/waterkit-permission-v0.3.0...waterkit-permission-v0.3.1) - 2026-11-25
+
+### Other
+
+- declare exact R8 keep rules for all Kotlin helpers
+
 ## [0.3.0](https://github.com/water-rs/waterkit/compare/waterkit-permission-v0.2.0...waterkit-permission-v0.3.0) - 2026-11-16
 
 ### Added

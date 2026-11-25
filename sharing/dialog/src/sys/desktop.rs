@@ -1,4 +1,6 @@
-use crate::{Dialog, DialogError, DialogType};
+use core::num::NonZeroUsize;
+
+use crate::{Dialog, DialogError, DialogType, MediaType};
 use futures::channel::oneshot;
 use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 
@@ -143,30 +145,44 @@ pub async fn load_photo_media(
     Ok(crate::loaded_media_from_path(handle.0))
 }
 
-/// Show a photo picker.
-///
-/// # Errors
-/// Returns an error if the native dialog fails to show or is not supported.
-pub async fn show_photo_picker(
-    media_type: crate::MediaType,
-) -> Result<Option<Selection>, DialogError> {
-    if matches!(media_type, crate::MediaType::LivePhoto) {
+fn photo_picker_dialog(media_type: MediaType) -> Result<rfd::AsyncFileDialog, DialogError> {
+    if matches!(media_type, MediaType::LivePhoto) {
         return Err(DialogError::Unsupported(
             "live photo picker is only supported on iOS".into(),
         ));
     }
 
-    let mut builder = rfd::AsyncFileDialog::new();
-
     let exts = match media_type {
-        crate::MediaType::Image => vec!["png", "jpg", "jpeg", "gif", "bmp", "webp", "heic"],
-        crate::MediaType::Video => vec!["mp4", "mov", "avi", "mkv", "webm"],
-        crate::MediaType::LivePhoto => unreachable!("live photo picker must return early"),
+        MediaType::Image => vec!["png", "jpg", "jpeg", "gif", "bmp", "webp", "heic"],
+        MediaType::Video => vec!["mp4", "mov", "avi", "mkv", "webm"],
+        MediaType::LivePhoto => unreachable!("live photo picker must return early"),
     };
 
-    builder = builder.add_filter("Media", &exts);
+    Ok(rfd::AsyncFileDialog::new().add_filter("Media", &exts))
+}
 
-    let result = builder.pick_file().await;
-
+/// Show a photo picker.
+///
+/// # Errors
+/// Returns an error if the native dialog fails to show or is not supported.
+pub async fn show_photo_picker(media_type: MediaType) -> Result<Option<Selection>, DialogError> {
+    let result = photo_picker_dialog(media_type)?.pick_file().await;
     Ok(result.map(|f| Selection(f.path().to_path_buf())))
+}
+
+/// Show a photo picker allowing multiple media selections.
+///
+/// # Errors
+/// Returns an error if the native dialog fails to show or is not supported.
+pub async fn show_photo_picker_multiple(
+    media_type: MediaType,
+    _limit: Option<NonZeroUsize>,
+) -> Result<Option<Vec<Selection>>, DialogError> {
+    let result = photo_picker_dialog(media_type)?.pick_files().await;
+    Ok(result.map(|files| {
+        files
+            .into_iter()
+            .map(|f| Selection(f.path().to_path_buf()))
+            .collect()
+    }))
 }

@@ -81,7 +81,7 @@ class = "waterkit.dialog.DialogHelper"
 members = [
     "public static void showDialog(android.content.Context, java.lang.String, java.lang.String, waterkit.build.NativeCallback)",
     "public static void showConfirm(android.content.Context, java.lang.String, java.lang.String, waterkit.build.NativeCallback)",
-    "public static android.content.Intent photoPickIntent(int)",
+    "public static android.content.Intent photoPickIntent(int, boolean)",
     "public static android.content.Intent openDocumentIntent(java.lang.String[], boolean)",
     "public static java.lang.String selectedUri(android.content.Intent)",
     "public static java.lang.String[] selectedUris(android.content.Intent)",

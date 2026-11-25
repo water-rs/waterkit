@@ -4,7 +4,9 @@
 //! automatically. The activity-result bridge owns picker lifecycle and result
 //! delivery, so host applications do not forward activity results.
 
-use crate::{Dialog, DialogError, FileDialog};
+use core::num::NonZeroUsize;
+
+use crate::{Dialog, DialogError, FileDialog, MediaType};
 use futures::channel::oneshot;
 use jni::objects::{JObject, JObjectArray, JString, JValue, JValueOwned};
 use jni::{Env, jni_sig, jni_str};
@@ -80,6 +82,7 @@ fn build_photo_intent<'local>(
     env: &mut Env<'local>,
     context: &JObject<'_>,
     media_type: crate::MediaType,
+    allow_multiple: bool,
 ) -> Result<JObject<'local>, DialogError> {
     let media_type = match media_type {
         crate::MediaType::Image | crate::MediaType::LivePhoto => 0,
@@ -89,8 +92,8 @@ fn build_photo_intent<'local>(
     env.call_static_method(
         helper_class,
         jni_str!("photoPickIntent"),
-        jni_sig!("(I)Landroid/content/Intent;"),
-        &[JValue::Int(media_type)],
+        jni_sig!("(IZ)Landroid/content/Intent;"),
+        &[JValue::Int(media_type), JValue::Bool(allow_multiple)],
     )
     .map_err(DialogError::from)?
     .l()
@@ -343,7 +346,7 @@ pub async fn show_photo_picker(
     media_type: crate::MediaType,
 ) -> Result<Option<Selection>, DialogError> {
     let pending = with_android_context(|env, context| {
-        let intent = build_photo_intent(env, context, media_type)?;
+        let intent = build_photo_intent(env, context, media_type, false)?;
         start_activity_for_result(env, &intent).map_err(DialogError::from)
     })?;
     let result = pending.await.map_err(DialogError::from)?;
@@ -356,6 +359,36 @@ pub async fn show_photo_picker(
                 with_android_context(|env, context| selected_uri(env, context, data.as_obj()))?
                     .ok_or_else(|| no_selection_error("photo"))?;
             Ok(Some(Selection(uri)))
+        }
+        ResultCode::Canceled => Ok(None),
+        code @ ResultCode::Custom(_) => Err(result_code_error(code)),
+    }
+}
+
+/// Show a photo picker allowing multiple media selections.
+///
+/// # Errors
+/// Returns an error if the picker fails to launch or returns invalid data.
+pub async fn show_photo_picker_multiple(
+    media_type: MediaType,
+    _limit: Option<NonZeroUsize>,
+) -> Result<Option<Vec<Selection>>, DialogError> {
+    let pending = with_android_context(|env, context| {
+        let intent = build_photo_intent(env, context, media_type, true)?;
+        start_activity_for_result(env, &intent).map_err(DialogError::from)
+    })?;
+    let result = pending.await.map_err(DialogError::from)?;
+    match result.code() {
+        ResultCode::Ok => {
+            let data = result
+                .into_data()
+                .ok_or_else(|| no_selection_error("photo"))?;
+            let uris =
+                with_android_context(|env, context| selected_uris(env, context, data.as_obj()))?;
+            if uris.is_empty() {
+                return Err(no_selection_error("photo"));
+            }
+            Ok(Some(uris.into_iter().map(Selection).collect()))
         }
         ResultCode::Canceled => Ok(None),
         code @ ResultCode::Custom(_) => Err(result_code_error(code)),

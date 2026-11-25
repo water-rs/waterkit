@@ -1,6 +1,7 @@
+use core::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
-use crate::{Dialog, DialogError, DialogType};
+use crate::{Dialog, DialogError, DialogType, MediaType};
 use rfd::{AsyncFileDialog, AsyncMessageDialog, MessageButtons, MessageDialogResult, MessageLevel};
 use waterkit_fs::WaterFs;
 
@@ -103,6 +104,28 @@ pub async fn show_photo_picker(
         .await;
 
     Ok(result.map(Selection))
+}
+
+#[expect(
+    clippy::future_not_send,
+    reason = "awaits `AsyncFileDialog::pick_files`, which on wasm is driven by a `<input type=\"file\">` element and its JS change-event closure"
+)]
+pub async fn show_photo_picker_multiple(
+    media_type: MediaType,
+    _limit: Option<NonZeroUsize>,
+) -> Result<Option<Vec<Selection>>, DialogError> {
+    if matches!(media_type, MediaType::LivePhoto) {
+        return Err(DialogError::Unsupported(
+            "live photo picker is only supported on iOS".into(),
+        ));
+    }
+
+    let result = AsyncFileDialog::new()
+        .add_filter("Media", &media_extensions(media_type))
+        .pick_files()
+        .await;
+
+    Ok(result.map(|files| files.into_iter().map(Selection).collect()))
 }
 
 #[expect(

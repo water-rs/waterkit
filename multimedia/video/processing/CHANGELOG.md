@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/water-rs/waterkit/compare/waterkit-video-processing-v0.2.0...waterkit-video-processing-v0.2.1) - 2026-11-25
+
+### Other
+
+- updated the following local packages: waterkit-video-core
+
 ## [0.2.0](https://github.com/water-rs/waterkit/compare/waterkit-video-processing-v0.1.4...waterkit-video-processing-v0.2.0) - 2026-11-16
 
 ### Added

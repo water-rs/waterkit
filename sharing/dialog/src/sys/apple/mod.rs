@@ -9,6 +9,7 @@
 //! photo is handed back as a `Selection` owning the provider, so no global
 //! selection table exists either.
 
+use core::num::NonZeroUsize;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -240,7 +241,7 @@ impl std::fmt::Debug for Selection {
 /// lifetime.
 #[derive(Debug)]
 struct PhotoPickerDelegateIvars {
-    sender: RefCell<Option<oneshot::Sender<Option<Selection>>>>,
+    sender: RefCell<Option<oneshot::Sender<Option<Vec<Selection>>>>>,
     keep_alive: RefCell<Option<Retained<PhotoPickerDelegate>>>,
 }
 
@@ -267,23 +268,33 @@ define_class!(
             let mtm = MainThreadMarker::new()
                 .expect("PHPickerViewControllerDelegate is main-thread bound");
             picker.dismissViewControllerAnimated_completion(true, None);
-            let selection = results.firstObject().map(|result| {
-                // SAFETY: `itemProvider`/`assetIdentifier` are reads on a
-                // live picker result.
-                let (provider, identifier) =
-                    unsafe { (result.itemProvider(), result.assetIdentifier()) };
-                Selection {
-                    provider: Arc::new(MainThreadBound::new(provider, mtm)),
-                    asset_identifier: identifier.as_deref().map(ToString::to_string),
-                }
-            });
-            self.finish(selection);
+            let selections: Vec<Selection> = results
+                .iter()
+                .map(|result| {
+                    // SAFETY: `itemProvider`/`assetIdentifier` are reads on a
+                    // live picker result.
+                    let (provider, identifier) =
+                        unsafe { (result.itemProvider(), result.assetIdentifier()) };
+                    Selection {
+                        provider: Arc::new(MainThreadBound::new(provider, mtm)),
+                        asset_identifier: identifier.as_deref().map(ToString::to_string),
+                    }
+                })
+                .collect();
+            if selections.is_empty() {
+                self.finish(None);
+            } else {
+                self.finish(Some(selections));
+            }
         }
     }
 );
 
 impl PhotoPickerDelegate {
-    fn new(sender: oneshot::Sender<Option<Selection>>, mtm: MainThreadMarker) -> Retained<Self> {
+    fn new(
+        sender: oneshot::Sender<Option<Vec<Selection>>>,
+        mtm: MainThreadMarker,
+    ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(PhotoPickerDelegateIvars {
             sender: RefCell::new(Some(sender)),
             keep_alive: RefCell::new(None),
@@ -299,9 +310,9 @@ impl PhotoPickerDelegate {
     }
 
     /// Delivers the result once and releases the self-retain.
-    fn finish(&self, selection: Option<Selection>) {
+    fn finish(&self, selections: Option<Vec<Selection>>) {
         if let Some(sender) = self.ivars().sender.borrow_mut().take() {
-            let _ = sender.send(selection);
+            let _ = sender.send(selections);
         }
         self.ivars().keep_alive.borrow_mut().take();
     }
@@ -388,7 +399,10 @@ impl FilePickerDelegate {
     }
 }
 
-pub async fn show_photo_picker(media_type: MediaType) -> Result<Option<Selection>, DialogError> {
+async fn present_photo_picker(
+    media_type: MediaType,
+    selection_limit: isize,
+) -> Result<Option<Vec<Selection>>, DialogError> {
     let (sender, receiver) = oneshot::channel();
     waterkit_core::apple::on_main(move |mtm| {
         let Some(top) = top_view_controller(mtm) else {
@@ -398,7 +412,7 @@ pub async fn show_photo_picker(media_type: MediaType) -> Result<Option<Selection
         // SAFETY: `PHPickerConfiguration::new` builds the system-library
         // configuration; setters only store values.
         let configuration = unsafe { PHPickerConfiguration::new() };
-        unsafe { configuration.setSelectionLimit(1) };
+        unsafe { configuration.setSelectionLimit(selection_limit) };
         // SAFETY: `*Filter` are class factory accessors.
         let filter = unsafe {
             match media_type {
@@ -429,6 +443,21 @@ pub async fn show_photo_picker(media_type: MediaType) -> Result<Option<Selection
     })
     .await;
     receiver.await.map_err(|_| DialogError::Cancelled)
+}
+
+pub async fn show_photo_picker(media_type: MediaType) -> Result<Option<Selection>, DialogError> {
+    Ok(present_photo_picker(media_type, 1)
+        .await?
+        .and_then(|items| items.into_iter().next()))
+}
+
+pub async fn show_photo_picker_multiple(
+    media_type: MediaType,
+    limit: Option<NonZeroUsize>,
+) -> Result<Option<Vec<Selection>>, DialogError> {
+    // `PHPickerConfiguration.selectionLimit` uses `0` to mean no limit.
+    let selection_limit = limit.map_or(0, |n| isize::try_from(n.get()).unwrap_or(isize::MAX));
+    present_photo_picker(media_type, selection_limit).await
 }
 
 /// The document-type identifier list the original built: `UTType`

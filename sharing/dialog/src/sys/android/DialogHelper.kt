@@ -66,9 +66,10 @@ class DialogHelper {
         }
 
         @JvmStatic
-        fun photoPickIntent(type: Int): Intent {
+        fun photoPickIntent(type: Int, allowMultiple: Boolean): Intent {
             val intent = Intent(Intent.ACTION_GET_CONTENT)
             intent.addCategory(Intent.CATEGORY_OPENABLE)
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, allowMultiple)
             if (type == 1) {
                 intent.type = "video/*"
             } else {

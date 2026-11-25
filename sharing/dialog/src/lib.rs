@@ -36,6 +36,7 @@ pub mod android {
 mod error;
 pub use error::*;
 
+use core::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
@@ -469,6 +470,43 @@ impl PhotoPicker {
             }))
         })
     }
+
+    /// Show the photo picker and return handles to multiple selected media items.
+    ///
+    /// Pass `Some(limit)` to cap the number of selected items, or `None` for no
+    /// limit. Returns `Ok(None)` when the user cancels without confirming.
+    ///
+    /// # Errors
+    /// Returns an error if the picker fails to show or is not supported.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::future_not_send,
+            reason = "the browser `sys::show_photo_picker_multiple` awaits a `<input type=\"file\">` element through `rfd` and yields JS `File` handles; the same future is `Send` on every other target"
+        )
+    )]
+    pub async fn pick_multiple(
+        self,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<Option<Vec<PhotoHandle>>, DialogError> {
+        let selections = sys::show_photo_picker_multiple(self.media_type, limit).await?;
+        Ok(selections.map(|items| {
+            apply_selection_limit(items, limit)
+                .into_iter()
+                .map(|handle| PhotoHandle {
+                    handle,
+                    requested_media_type: self.media_type,
+                })
+                .collect()
+        }))
+    }
+}
+
+pub(crate) fn apply_selection_limit<T>(mut items: Vec<T>, limit: Option<NonZeroUsize>) -> Vec<T> {
+    if let Some(limit) = limit {
+        items.truncate(limit.get());
+    }
+    items
 }
 
 impl Default for PhotoPicker {
@@ -593,9 +631,11 @@ pub(crate) fn decode_loaded_media_payload(
 mod tests {
     use super::{
         FileDialog, LoadedLivePhoto, LoadedMedia, LoadedMediaKind, PATH_LIST_SEPARATOR,
-        collect_filter_extensions, decode_loaded_media_payload, decode_string_list,
-        finalize_selected_files, infer_loaded_media_kind, loaded_media_from_path,
+        apply_selection_limit, collect_filter_extensions, decode_loaded_media_payload,
+        decode_string_list, finalize_selected_files, infer_loaded_media_kind,
+        loaded_media_from_path,
     };
+    use core::num::NonZeroUsize;
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -665,6 +705,16 @@ mod tests {
         assert_eq!(
             finalize_selected_files(&FileDialog::new(), paths.clone()).unwrap(),
             paths
+        );
+    }
+
+    #[test]
+    fn apply_selection_limit_truncates_only_when_bounded() {
+        let items = vec![1, 2, 3, 4];
+        assert_eq!(apply_selection_limit(items.clone(), None), vec![1, 2, 3, 4]);
+        assert_eq!(
+            apply_selection_limit(items, NonZeroUsize::new(2)),
+            vec![1, 2]
         );
     }
 }
